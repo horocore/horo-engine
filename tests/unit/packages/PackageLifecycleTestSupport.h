@@ -79,10 +79,22 @@ namespace Horo::Packages::Tests::Support {
         return descriptorJson;
     }
 
+    /** @brief Retains complete fixture evidence before the unchanged verification assertion reports failure. */
+    inline void ReportArchiveFailure(const Error &failure, const std::size_t archiveBytes, const PackageValidationLimits &limits,
+                                     const std::vector<std::pair<std::string, std::string>> &files) {
+        UNSCOPED_INFO("Package fixture archive bytes=" << archiveBytes << " file limit=" << limits.fileBytes);
+        for (const auto &[path, bytes] : files)
+            UNSCOPED_INFO("Package fixture file=" << path << " bytes=" << bytes.size());
+        for (const Error *error = &failure; error; error = error->cause.Get())
+            UNSCOPED_INFO("Package verification domain=" << error->domain.Value() << " code=" << error->code.Value()
+                                                         << " detail=" << error->message);
+    }
+
     inline std::shared_ptr<PackageRestoreGraph> Graph(const std::filesystem::path &library, bool declaredArtifact = true,
                                                       bool declaredRoot = true, std::string packageId = "com.example.transaction",
                                                       nlohmann::json customDescriptor = {},
-                                                      std::vector<std::pair<std::string, std::string>> extraFiles = {}) {
+                                                      std::vector<std::pair<std::string, std::string>> extraFiles = {},
+                                                      const PackageValidationLimits &archiveLimits = {}) {
         const std::string root = "extensions/native";
         const std::string nativeName = "module" + library.extension().string();
         auto descriptorJson = NativeDescriptor(packageId, nativeName, library == std::filesystem::path{HORO_PACKAGE_EMPTY_FIXTURE});
@@ -108,15 +120,9 @@ namespace Horo::Packages::Tests::Support {
             REQUIRE(mz_zip_writer_add_mem(&zip, path.c_str(), bytes.data(), bytes.size(), MZ_BEST_COMPRESSION));
         REQUIRE(mz_zip_writer_add_mem(&zip, "files.manifest.json", manifest.data(), manifest.size(), MZ_BEST_COMPRESSION));
         const auto archiveBytes = ::Horo::Tests::Packages::FinalizeArchive(zip);
-        auto verified = ValidatedPackageArchive::Verify(archiveBytes);
-        if (verified.HasError()) {
-            UNSCOPED_INFO("Package fixture archive bytes=" << archiveBytes.size());
-            for (const auto &[path, bytes] : files)
-                UNSCOPED_INFO("Package fixture file=" << path << " bytes=" << bytes.size());
-            for (const Error *error = &verified.ErrorValue(); error; error = error->cause.Get())
-                UNSCOPED_INFO("Package verification domain=" << error->domain.Value() << " code=" << error->code.Value()
-                                                             << " detail=" << error->message);
-        }
+        auto verified = ValidatedPackageArchive::Verify(archiveBytes, archiveLimits);
+        if (verified.HasError())
+            ReportArchiveFailure(verified.ErrorValue(), archiveBytes.size(), archiveLimits, files);
         REQUIRE(verified.HasValue());
         auto archive = std::make_shared<const ValidatedPackageArchive>(std::move(verified).Value());
         LockedPackage lock{.package = Parse<HoroPackageId>(packageId),

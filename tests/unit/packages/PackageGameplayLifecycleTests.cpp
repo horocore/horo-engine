@@ -4,10 +4,17 @@
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 #include "PackageLifecycleTestSupport.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <future>
 using namespace Horo::Packages::Tests::Support;
 
 namespace {
+    /** @brief The measured GCC Debug SDK fixture is 121269368 bytes; authorize at most 128MiB only for this local test image. */
+    PackageValidationLimits GameplayFixtureArchiveLimits() {
+        return {.fileBytes = 128ULL * 1024 * 1024};
+    }
+
     std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false) {
         const auto entry = "module" + std::filesystem::path{HORO_TEST_GAME_MODULE_PATH}.extension().string();
         nlohmann::json descriptor{{"id", "fixture.gameplay"},
@@ -30,7 +37,8 @@ namespace {
             descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", "fixture.backend"}}};
             files.emplace_back("extensions/native/" + backend, FileBytes(HORO_PACKAGE_NATIVE_FIXTURE));
         }
-        return Graph(HORO_TEST_GAME_MODULE_PATH, true, true, "fixture.gameplay", std::move(descriptor), std::move(files));
+        return Graph(HORO_TEST_GAME_MODULE_PATH, true, true, "fixture.gameplay", std::move(descriptor), std::move(files),
+                     GameplayFixtureArchiveLimits());
     }
 
     struct GameplayFixture final {
@@ -197,4 +205,42 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
     });
     REQUIRE(runtime != active->modules.end());
     CHECK(runtime->diagnostic.has_value());
+}
+
+TEST_CASE("Gameplay fixture file policy remains bounded without changing production archive limits", "[packages][gameplay][hybrid]") {
+    const PackageValidationLimits production;
+    const auto fixture = GameplayFixtureArchiveLimits();
+    REQUIRE(production.fileBytes == 64ULL * 1024 * 1024);
+    REQUIRE(fixture.fileBytes == 128ULL * 1024 * 1024);
+    REQUIRE(fixture.archiveBytes == production.archiveBytes);
+    REQUIRE(fixture.expandedBytes == production.expandedBytes);
+    REQUIRE(fixture.manifestBytes == production.manifestBytes);
+    REQUIRE(fixture.entries == production.entries);
+
+    // Scale the same file-ceiling boundary down to an actual tiny archive, avoiding another 120MiB test allocation.
+    const auto bytes = ::Horo::Tests::Packages::ValidPackageArchiveBytes();
+    mz_zip_archive zip{};
+    REQUIRE(mz_zip_reader_init_mem(&zip, bytes.data(), bytes.size(), 0));
+    std::uint64_t maximumEntryBytes = 0;
+    for (mz_uint index = 0; index < mz_zip_reader_get_num_files(&zip); ++index) {
+        mz_zip_archive_file_stat stat{};
+        REQUIRE(mz_zip_reader_file_stat(&zip, index, &stat));
+        maximumEntryBytes = std::max<std::uint64_t>(maximumEntryBytes, stat.m_uncomp_size);
+    }
+    REQUIRE(mz_zip_reader_end(&zip));
+    REQUIRE(maximumEntryBytes > 1);
+    REQUIRE(maximumEntryBytes < 1'024);
+    auto defaultPolicy = production;
+    defaultPolicy.fileBytes = maximumEntryBytes - 1;
+    const auto rejected = ValidatedPackageArchive::Verify(bytes, defaultPolicy);
+    REQUIRE(rejected.HasError());
+    REQUIRE(rejected.ErrorValue().code.Value() == "packages.validation.limit");
+    auto explicitPolicy = defaultPolicy;
+    explicitPolicy.fileBytes = maximumEntryBytes;
+    const auto admitted = ValidatedPackageArchive::Verify(bytes, explicitPolicy);
+    REQUIRE(admitted.HasValue());
+    REQUIRE(explicitPolicy.archiveBytes == defaultPolicy.archiveBytes);
+    REQUIRE(explicitPolicy.expandedBytes == defaultPolicy.expandedBytes);
+    const auto path = Parse<PackagePath>("assets/data.bin");
+    REQUIRE(admitted.Value().ReadDeclaredFile(path, explicitPolicy.fileBytes).HasValue());
 }
