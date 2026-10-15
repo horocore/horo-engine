@@ -23,7 +23,7 @@ namespace Horo::AI {
         TaskId definition;
         AiTaskState state{AiTaskState::Idle};
         std::optional<AiTaskTerminalResult> terminal;
-        Telemetry::OperationContext diagnostics;
+        std::shared_ptr<const Telemetry::OperationContext> diagnostics; /**< Original host-owned immutable capture, empty when omitted. */
     };
 
     /**
@@ -45,8 +45,12 @@ namespace Horo::AI {
          * lifetime.
          * @param diagnostics Copied operation lineage. @return Exact task or typed failure. */
         [[nodiscard]] Result<TaskHandle> StartTask(AgentHandle agent, const AiCapabilityTaskDescriptor &task,
-                                                   CancellationToken cancellation = {},
-                                                   const Telemetry::OperationContext &diagnostics = {}) const;
+                                                   CancellationToken cancellation, const Telemetry::OperationContext &diagnostics) const;
+        /** @brief Starts without constructing a caller-side diagnostic container.
+         * @param agent Exact agent. @param task Registered metadata. @param cancellation Grant lifetime.
+         * @return Exact task execution or typed failure. */
+        [[nodiscard]] Result<TaskHandle> StartTask(AgentHandle agent, const AiCapabilityTaskDescriptor &task,
+                                                   CancellationToken cancellation = {}) const;
         /** @brief Copies current task facts. @param agent Exact agent. @param task Exact execution. @return Owned facts or stale failure.
          */
         [[nodiscard]] Result<AiCapabilityTaskSnapshot> InspectTask(AgentHandle agent, TaskHandle task) const;
@@ -69,6 +73,10 @@ namespace Horo::AI {
         [[nodiscard]] Result<BlackboardCommitResult> CommitBlackboardWrite(AgentHandle agent, BlackboardWriteBatch batch) const;
 
     private:
+        /** @brief Checks common admission and forwards optional diagnostics to original host capture. */
+        [[nodiscard]] Result<TaskHandle> StartTaskCaptured(AgentHandle agent, const AiCapabilityTaskDescriptor &task,
+                                                           CancellationToken cancellation,
+                                                           const Telemetry::OperationContext *diagnostics) const;
         friend class AiSceneRuntime;
 
         AiRuntimeCapability(std::weak_ptr<Detail::AiSceneRuntimeState> state, std::thread::id owner) noexcept

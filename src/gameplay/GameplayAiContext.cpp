@@ -90,6 +90,17 @@ namespace Horo::Gameplay {
     /** @copydoc GameplayAiContext::StartTask */
     Result<AI::TaskHandle> GameplayAiContext::StartTask(AI::AgentHandle agent, AI::TaskId task,
                                                         const Telemetry::OperationContext &diagnostics) const {
+        return StartTaskCaptured(agent, task, &diagnostics);
+    }
+
+    /** @copydoc GameplayAiContext::StartTask */
+    Result<AI::TaskHandle> GameplayAiContext::StartTask(AI::AgentHandle agent, AI::TaskId task) const {
+        return StartTaskCaptured(agent, task, nullptr);
+    }
+
+    /** @copydoc GameplayAiContext::StartTaskCaptured */
+    Result<AI::TaskHandle> GameplayAiContext::StartTaskCaptured(AI::AgentHandle agent, AI::TaskId task,
+                                                                const Telemetry::OperationContext *diagnostics) const {
         if (auto admitted = Check(); admitted.HasError())
             return Result<AI::TaskHandle>::Failure(admitted.ErrorValue());
         const auto descriptor = declarations_.Find(task);
@@ -100,7 +111,8 @@ namespace Horo::Gameplay {
         });
         if (vacant == tasks_.end())
             return Result<AI::TaskHandle>::Failure(MakeError(AI::AIErrors::TaskCapacityExceeded));
-        auto started = capability_.StartTask(agent, *descriptor, cancellation_.Token(), diagnostics);
+        auto started = diagnostics ? capability_.StartTask(agent, *descriptor, cancellation_.Token(), *diagnostics)
+                                   : capability_.StartTask(agent, *descriptor, cancellation_.Token());
         if (started.HasValue())
             *vacant = {agent, started.Value()};
         return started;

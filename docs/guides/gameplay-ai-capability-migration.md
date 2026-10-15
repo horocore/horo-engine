@@ -120,22 +120,12 @@ dispatch rather than merely copying `shared_ptr` values.
 
 ## SDK boundary and integration
 
-This independent layout uses reserved gameplay boundary **11** and
-`gameplay-sdk16`. Rebuild native modules, generated descriptor bundles, runtime
-hosts and public consumers together; boundary 9 modules fail exact compatibility
-validation. The C ABI extension version remains a separate contract.
-
-Navigation's independently reserved boundary 10, Character's reserved boundary
-12 and Runtime UI's reserved boundary 13 are different layouts. After any of those
-branches lands, combining layouts requires a newly allocated boundary **14 or greater**, fresh fingerprints and
-rebuilt module/consumer regressions. Reusing `max(existing versions)` for a new
-combined layout is not compatible.
-
-The independently developed failed-candidate/retirement module host change must
-preserve AI revocation beside Physics in its `RequestRetirement` path. This branch
-uses only current main and does not depend on that unpublished Load result API.
-Character runtime services must likewise be unioned into the canonical options,
-not introduced as a competing constructor or lifetime protocol.
+The current combined Navigation and AI layout uses reserved gameplay boundary
+**18** and `gameplay-sdk18`. Rebuild native modules, generated descriptor bundles,
+runtime hosts and public consumers together. Earlier independent AI11, NAV10,
+combined NAV+AI16, Character15 and Runtime UI17 are distinct incompatible layouts.
+A future union requires a newly allocated epoch; taking the maximum existing
+number does not establish identity. The C ABI extension version remains separate.
 
 ## Additional native module fixture metadata
 
@@ -173,9 +163,40 @@ unchanged, the secondary owns its distinct manifest, and both retain generated
 descriptor bundles, revision paths, module IDs and SDK fingerprints. Python tests
 only verify metadata registration; they no longer launch external commands.
 
-The merged navigation runtime layout used boundary10. This combined Navigation
-and AI layout uses a newly allocated boundary16, not either independent layout's
-identity. Rebuild the host, all modules and generated bundles together. Existing
+The merged navigation runtime layout used boundary10. The previous combined Navigation
+and AI layout used boundary16; the diagnostics representation below requires
+fresh boundary18. Rebuild the host, all modules and generated bundles together. Existing
 navigation-aware three-argument constructors forward into the canonical typed
 options and retain their explicit navigation service; Physics and AI grants remain
 separate fields. Character15 and UI17 reservations do not identify this layout.
+
+
+## Allocation-free internal task context and SDK18
+
+`AiTaskOperationContext::diagnostics` now holds an immutable owned snapshot
+through `shared_ptr<const Telemetry::OperationContext>`; internal graph tasks leave
+it empty. This prevents default/copy/move construction of an empty diagnostic
+vector from allocating MSVC Debug iterator proxies during the existing allocation-
+free traversal, restart and shutdown paths. Consumers of this newly introduced
+field check the pointer before reading it. Task inspection retains the same immutable host-owned diagnostic holder,
+without moving an owning diagnostic vector through Result. Inspect callers check
+`diagnostics` before reading `diagnostics->operationId` or its immutable fields.
+Both omitted-context and explicit-context StartTask overloads preserve existing
+call syntax; omitted diagnostics never construct an owning default argument in
+caller code. These changes preserve native/script lifecycle and diagnostic parity.
+
+Original scene-state construction binds a const private capture function pointer
+to the host's diagnostic copier. Admission invokes that retained host function;
+module code cannot supply or replace it. `make_shared` copies the caller's
+OperationContext in the original host image before publishing any task handle,
+state revision or module ownership record. The context then moves only a
+shared_ptr into the lifecycle. This also removes a concrete failure path where
+MSVC's noexcept vector move constructs an allocating iterator proxy, bypassing
+the caller's bad_alloc recovery. The original exhaustive measured fault-offset
+loop and no-allocation traversal oracle remain unchanged. Source diagnosis is
+separate from fresh Windows execution evidence.
+
+The snapshot's control block and deleter remain host-owned. Module retirement
+revokes its scope and releases tasks before image unload; returned task facts are
+owned values. Internal/default task contexts do not allocate a diagnostic owner,
+and no mutable provider, runtime pointer or callback setter is added.

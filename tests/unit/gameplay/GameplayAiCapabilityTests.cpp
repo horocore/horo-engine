@@ -1,6 +1,7 @@
 #include "../../support/AllocationProbe.h"
 #include "GameplayAiTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 #include <thread>
 
@@ -28,12 +29,14 @@ namespace Horo::Gameplay {
             diagnostics.operationId = 123;
             auto started = fixture.context->StartTask(fixture.agent, MakeIdentity<AI::TaskId>(definition), diagnostics);
             REQUIRE(started.HasValue());
+            diagnostics.operationId = 999;  // Admission owns a detached immutable snapshot.
             ExpectError(fixture.context->StartTask(fixture.agent, MakeIdentity<AI::TaskId>(definition)),
                         AI::AIErrors::TaskTransitionInvalid);
             auto running = fixture.context->InspectTask(fixture.agent, started.Value());
             REQUIRE(running.HasValue());
             CHECK(running.Value().state == AI::AiTaskState::Running);
-            CHECK(running.Value().diagnostics.operationId == 123);
+            REQUIRE(running.Value().diagnostics);
+            CHECK(running.Value().diagnostics->operationId == 123);
             REQUIRE(fixture.context->CompleteTask(fixture.agent, started.Value()).HasValue());
             CHECK(fixture.context->InspectTask(fixture.agent, started.Value()).Value().state == AI::AiTaskState::Succeeded);
             REQUIRE(fixture.context->ReleaseTask(fixture.agent, started.Value()).HasValue());
@@ -124,14 +127,19 @@ namespace Horo::Gameplay {
 
     TEST_CASE("Gameplay AI failed task allocation publishes neither execution nor module ownership",
               "[gameplay][ai][capability][allocation]") {
+        const bool explicitDiagnostics = GENERATE(false, true);
         Fixture fixture;
         const auto definition = MakeIdentity<AI::TaskId>(41);
         Telemetry::OperationContext diagnostics;
+        const auto start = [&] {
+            return explicitDiagnostics ? fixture.context->StartTask(fixture.agent, definition, diagnostics)
+                                       : fixture.context->StartTask(fixture.agent, definition);
+        };
         std::size_t allocations{};
         std::optional<AI::TaskHandle> measuredTask;
         {
             Tests::AllocationProbe::ScopedMeasurement measurement;
-            auto started = fixture.context->StartTask(fixture.agent, definition, diagnostics);
+            auto started = start();
             if (started.HasValue())
                 measuredTask = started.Value();
             allocations = measurement.Snapshot().requests;
@@ -144,15 +152,49 @@ namespace Horo::Gameplay {
             bool rejected{};
             {
                 Tests::AllocationProbe::ScopedFailure failure{offset};
-                auto started = fixture.context->StartTask(fixture.agent, definition, diagnostics);
+                auto started = start();
                 rejected = started.HasError();
             }
             CHECK(rejected);
             CHECK_FALSE(fixture.runtime.Find(fixture.agent).Value().hasRunningTask);
-            auto retry = fixture.context->StartTask(fixture.agent, definition, diagnostics);
+            auto retry = start();
             REQUIRE(retry.HasValue());
             REQUIRE(fixture.context->CancelTask(fixture.agent, retry.Value()).HasValue());
             REQUIRE(fixture.context->ReleaseTask(fixture.agent, retry.Value()).HasValue());
         }
+    }
+
+    TEST_CASE("Gameplay AI task inspection moves immutable diagnostics without allocation or caller storage",
+              "[gameplay][ai][capability][allocation]") {
+        const bool explicitDiagnostics = GENERATE(false, true);
+        Fixture fixture;
+        Telemetry::OperationContext diagnostics;
+        diagnostics.operationId = 123;
+        auto started = explicitDiagnostics ? fixture.context->StartTask(fixture.agent, MakeIdentity<AI::TaskId>(41), diagnostics)
+                                           : fixture.context->StartTask(fixture.agent, MakeIdentity<AI::TaskId>(41));
+        REQUIRE(started.HasValue());
+        diagnostics.operationId = 999;
+        std::optional<AI::AiCapabilityTaskSnapshot> retained;
+        std::size_t requests{};
+        {
+            Tests::AllocationProbe::ScopedMeasurement measurement;
+            Tests::AllocationProbe::ScopedFailure failFirst;
+            auto observed = fixture.context->InspectTask(fixture.agent, started.Value());
+            if (observed.HasValue()) {
+                auto copied = observed.Value();
+                auto moved = std::move(copied);
+                retained.emplace(std::move(moved));
+            }
+            requests = measurement.Snapshot().requests;
+        }
+        REQUIRE(retained);
+        CHECK(requests == 0);
+        REQUIRE(fixture.context->CancelTask(fixture.agent, started.Value()).HasValue());
+        REQUIRE(fixture.context->ReleaseTask(fixture.agent, started.Value()).HasValue());
+        if (explicitDiagnostics) {
+            REQUIRE(retained->diagnostics);
+            CHECK(retained->diagnostics->operationId == 123);
+        } else
+            CHECK_FALSE(retained->diagnostics);
     }
 }  // namespace Horo::Gameplay

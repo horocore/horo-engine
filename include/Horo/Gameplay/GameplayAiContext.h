@@ -61,7 +61,10 @@ namespace Horo::Gameplay {
         /** @brief Starts a registered task under this module lifetime. @param agent Exact agent. @param task Registered identity.
          * @param diagnostics Copied operation lineage. @return Exact task execution or typed failure. */
         [[nodiscard]] Result<AI::TaskHandle> StartTask(AI::AgentHandle agent, AI::TaskId task,
-                                                       const Telemetry::OperationContext &diagnostics = {}) const;
+                                                       const Telemetry::OperationContext &diagnostics) const;
+        /** @brief Starts without diagnostic storage or a caller-side owning default context.
+         * @param agent Exact agent. @param task Registered identity. @return Exact task execution or typed failure. */
+        [[nodiscard]] Result<AI::TaskHandle> StartTask(AI::AgentHandle agent, AI::TaskId task) const;
         /** @brief Copies exact task facts. @param agent Exact agent. @param task Exact task. @return Owned facts or typed failure. */
         [[nodiscard]] Result<AI::AiCapabilityTaskSnapshot> InspectTask(AI::AgentHandle agent, AI::TaskHandle task) const;
         /** @brief Cancels exact work. @param agent Exact agent. @param task Exact task. @return Shared lifecycle transition or failure. */
@@ -81,6 +84,9 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<AI::BlackboardCommitResult> CommitBlackboardWrite(AI::AgentHandle agent, AI::BlackboardWriteBatch batch) const;
 
     private:
+        /** @brief Shares admission while distinguishing absent diagnostics from an explicit captured context. */
+        [[nodiscard]] Result<AI::TaskHandle> StartTaskCaptured(AI::AgentHandle agent, AI::TaskId task,
+                                                               const Telemetry::OperationContext *diagnostics) const;
         friend class GameModuleHost;
         friend class LoadedGameModule;
         friend Result<std::shared_ptr<const GameplayAiContext>> AcquireGameplayAi(const GameRuntimeContext &context);

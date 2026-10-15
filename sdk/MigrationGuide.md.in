@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 16 / `gameplay-sdk16`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 18 / `gameplay-sdk18`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on

@@ -150,7 +150,7 @@ namespace Horo::Gameplay {
         auto resource = Find(binding, request.arguments[0]);
         if (resource.HasError())
             return Result<ScriptCallResult>::Failure(resource.ErrorValue());
-        auto &record = *resource.Value();
+        const auto &record = *resource.Value();
         if (request.functionId == "start-task")
             return StartTask(record, binding, provider, request);
         if (request.functionId == "read-blackboard")

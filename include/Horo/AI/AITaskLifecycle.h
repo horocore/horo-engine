@@ -11,6 +11,7 @@
 #include "Horo/Foundation/Telemetry/Operation.h"
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 
 namespace Horo::AI {
@@ -92,7 +93,8 @@ namespace Horo::AI {
         AgentHandle agent;                        /**< Exact owning agent generation. */
         CancellationToken cancellation;           /**< Cooperative cancellation tied to owner lifetime. */
         CancellationToken capabilityCancellation; /**< Independent module/script grant lifetime; empty for internal tasks. */
-        Telemetry::OperationContext diagnostics;  /**< Copied explicit operation lineage, without runtime or VM references. */
+        std::shared_ptr<const Telemetry::OperationContext>
+            diagnostics; /**< Immutable host-owned admission capture; empty for internal graph tasks. */
 
         /** @brief Observe both task/scene ownership and caller capability revocation. @return True if either owner cancelled. */
         [[nodiscard]] bool IsCancellationRequested() const noexcept {

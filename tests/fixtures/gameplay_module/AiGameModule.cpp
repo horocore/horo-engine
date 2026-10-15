@@ -47,3 +47,22 @@ extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noex
 extern "C" HORO_GAME_EXPORT void DestroyGameModule(Horo::Gameplay::IGameModule *module) noexcept {
     const std::unique_ptr<Horo::Gameplay::IGameModule> owned{module};
 }
+
+/** @brief Exercises the module-emitted frontend while its diagnostic allocator remains host-issued. */
+extern "C" HORO_GAME_EXPORT bool HoroTestStartAiTaskWithDiagnostics(const std::shared_ptr<const Horo::Gameplay::GameplayAiContext> &context,
+                                                                    Horo::AI::AgentHandle agent, Horo::AI::TaskHandle &task,
+                                                                    std::shared_ptr<const Horo::Telemetry::OperationContext> &captured) {
+    Horo::Telemetry::OperationContext diagnostics;
+    diagnostics.operationId = 741;
+    diagnostics.parentOperationId = 740;
+    diagnostics.diagnosticContext = Horo::Log::LogContextSnapshot{{{"module.source", "native-ai-image"}}};
+    auto started = context->StartTask(agent, Horo::AI::TaskId::Create(411).Value(), diagnostics);
+    if (started.HasError())
+        return false;
+    auto snapshot = context->InspectTask(agent, started.Value());
+    if (snapshot.HasError() || !snapshot.Value().diagnostics)
+        return false;
+    task = started.Value();
+    captured = snapshot.Value().diagnostics;
+    return true;
+}

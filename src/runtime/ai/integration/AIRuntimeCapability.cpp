@@ -58,6 +58,19 @@ namespace Horo::AI {
     Result<TaskHandle> AiRuntimeCapability::StartTask(AgentHandle agent, const AiCapabilityTaskDescriptor &task,
                                                       CancellationToken cancellation,
                                                       const Telemetry::OperationContext &diagnostics) const {
+        return StartTaskCaptured(agent, task, std::move(cancellation), &diagnostics);
+    }
+
+    /** @copydoc AiRuntimeCapability::StartTask */
+    Result<TaskHandle> AiRuntimeCapability::StartTask(AgentHandle agent, const AiCapabilityTaskDescriptor &task,
+                                                      CancellationToken cancellation) const {
+        return StartTaskCaptured(agent, task, std::move(cancellation), nullptr);
+    }
+
+    /** @copydoc AiRuntimeCapability::StartTaskCaptured */
+    Result<TaskHandle> AiRuntimeCapability::StartTaskCaptured(AgentHandle agent, const AiCapabilityTaskDescriptor &task,
+                                                              CancellationToken cancellation,
+                                                              const Telemetry::OperationContext *diagnostics) const {
         auto state = Lock();
         if (state.HasError())
             return Result<TaskHandle>::Failure(state.ErrorValue());

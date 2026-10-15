@@ -17,6 +17,11 @@
 
 namespace Horo::AI {
     namespace {
+        /** @brief Copies diagnostics in the original scene-owner image; clients cannot replace this allocator dispatch. */
+        std::shared_ptr<const Telemetry::OperationContext> CaptureHostDiagnostics(const Telemetry::OperationContext &context) {
+            return std::make_shared<const Telemetry::OperationContext>(context);
+        }
+
         template <typename T> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor, std::string message) {
             return Result<T>::Failure(MakeError(descriptor, std::move(message)));
         }
@@ -217,7 +222,7 @@ namespace Horo::AI {
             const std::span<const AiControllerDescriptor> descriptors, const AiCapabilitySet availableCapabilities) {
             std::unique_ptr<Detail::AiSceneRuntimeState> state;
             try {
-                state = std::make_unique<Detail::AiSceneRuntimeState>();
+                state = std::make_unique<Detail::AiSceneRuntimeState>(&CaptureHostDiagnostics);
                 state->binding = binding;
                 state->agents.reserve(agents.size());
                 state->agentsByOwner.reserve(agents.size());
@@ -605,7 +610,7 @@ namespace Horo::AI {
 namespace Horo::AI::Detail {
     /** @copydoc StartOwnedTask */
     Result<TaskHandle> StartOwnedTask(AiSceneRuntimeState &state, const AgentHandle agent, const TaskId taskDefinition,
-                                      CancellationToken capabilityCancellation, const Telemetry::OperationContext &diagnostics) {
+                                      CancellationToken capabilityCancellation, const Telemetry::OperationContext *diagnostics) {
         if (state.revision == std::numeric_limits<std::uint64_t>::max())
             return Result<TaskHandle>::Failure(MakeError(AIErrors::CanonicalRestoreStale, "The AI mutation revision is exhausted."));
         if (!taskDefinition.IsValid())
@@ -628,7 +633,7 @@ namespace Horo::AI::Detail {
                                                         .agent = agent,
                                                         .cancellation = slot->cancellation.Token(),
                                                         .capabilityCancellation = capabilityCancellation,
-                                                        .diagnostics = diagnostics});
+                                                        .diagnostics = diagnostics ? state.captureDiagnostics(*diagnostics) : nullptr});
             started.HasError())
             return Result<TaskHandle>::Failure(started.ErrorValue());
         ++state.nextTaskSlot;

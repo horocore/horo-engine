@@ -37,7 +37,7 @@ namespace Horo::Gameplay {
     class GameplayNavigationContext;
     class GameplayAiContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 16;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 18;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;

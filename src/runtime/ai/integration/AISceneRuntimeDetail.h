@@ -25,6 +25,13 @@ namespace Horo::AI::Detail {
 
     /** @brief One published AI population and its owner-thread mutation fence. */
     struct AiSceneRuntimeState final {
+        /** @brief Original-host copier; no provider or module callback can be installed here. */
+        using DiagnosticCapture = std::shared_ptr<const Telemetry::OperationContext> (*)(const Telemetry::OperationContext &);
+
+        /** @brief Binds original-host allocation authority before exposing any capability. */
+        explicit AiSceneRuntimeState(DiagnosticCapture capture) noexcept : captureDiagnostics(capture) {}
+
+        const DiagnosticCapture captureDiagnostics; /**< Immutable original host image allocation authority. */
         const std::thread::id owner{std::this_thread::get_id()};
         AiSceneActivationBinding binding;
         std::vector<AgentRuntimeState> agents;
@@ -41,7 +48,7 @@ namespace Horo::AI::Detail {
     /** @brief Admits one task through the scene-owned lifecycle and mutation fence. */
     [[nodiscard]] Result<TaskHandle> StartOwnedTask(AiSceneRuntimeState &state, AgentHandle agent, TaskId task,
                                                     CancellationToken capabilityCancellation = {},
-                                                    const Telemetry::OperationContext &diagnostics = {});
+                                                    const Telemetry::OperationContext *diagnostics = nullptr);
     /** @brief Cancels tasks and invalidates blackboard leases before releasing transient resources. @param agent Owned slot. */
     void CancelOwnedWork(AgentRuntimeState &agent) noexcept;
     /** @brief Tears down every owned agent. @param state Detached or active population. */
