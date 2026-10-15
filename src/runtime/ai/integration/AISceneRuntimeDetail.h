@@ -29,7 +29,7 @@ namespace Horo::AI::Detail {
         using DiagnosticCapture = std::shared_ptr<const Telemetry::OperationContext> (*)(const Telemetry::OperationContext &);
 
         /** @brief Binds original-host allocation authority before exposing any capability. */
-        explicit AiSceneRuntimeState(DiagnosticCapture capture) noexcept : captureDiagnostics(capture) {}
+        AiSceneRuntimeState() noexcept;
 
         const DiagnosticCapture captureDiagnostics; /**< Immutable original host image allocation authority. */
         const std::thread::id owner{std::this_thread::get_id()};

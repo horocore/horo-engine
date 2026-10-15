@@ -36,8 +36,9 @@ namespace Horo::Gameplay {
     class GameplayPhysicsContext;
     class GameplayNavigationContext;
     class GameplayAiContext;
+    class GameplayCharacterContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 18;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 20;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -69,6 +70,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayPhysicsContext> physics;       /**< Optional exact module/play-world binding; no discovery. */
         std::shared_ptr<const GameplayNavigationContext> navigation; /**< Optional exact-generation navigation grant. */
         std::shared_ptr<const GameplayAiContext> ai;                 /**< Optional exact-generation AI grant; missing is recoverable. */
+        std::shared_ptr<const GameplayCharacterContext> character;   /**< Exact module-generation Character scope. */
     };
 
     /** @brief Module-global state captured only after owned work and callbacks are quiescent. */

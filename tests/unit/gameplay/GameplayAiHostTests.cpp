@@ -36,7 +36,7 @@ namespace Horo::Gameplay {
         AiTestSupport::Fixture fixture;
         auto anchor = GameplayAiContext::Create({"game.ai.tests", true, true}, fixture.runtime.CapabilityAtSafePoint());
         REQUIRE(anchor.HasValue());
-        GameModuleHost host{GameModuleHostOptions{{}, {{}, anchor.Value()}}};
+        GameModuleHost host{GameModuleHostOptions{{}, {.ai = anchor.Value()}}};
         auto admitted = host.Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
         REQUIRE(admitted.HasValue());
         auto loaded = std::move(admitted).Value();
@@ -66,7 +66,7 @@ namespace Horo::Gameplay {
         AiTestSupport::Fixture fixture;
         auto anchor = GameplayAiContext::Create({"game.ai.tests", true, true}, fixture.runtime.CapabilityAtSafePoint());
         REQUIRE(anchor.HasValue());
-        GameModuleHost host{GameModuleHostOptions{{}, {{}, anchor.Value()}}};
+        GameModuleHost host{GameModuleHostOptions{{}, {.ai = anchor.Value()}}};
         auto admitted = host.Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
         REQUIRE(admitted.HasValue());
         auto loaded = std::move(admitted).Value();
@@ -111,7 +111,7 @@ namespace Horo::Gameplay {
 
     TEST_CASE("Gameplay AI module principal mismatch fails before native startup", "[gameplay][ai][host]") {
         AiTestSupport::Fixture fixture;
-        GameModuleHost host{GameModuleHostOptions{{}, {{}, fixture.context}}};
+        GameModuleHost host{GameModuleHostOptions{{}, {.ai = fixture.context}}};
         auto loaded = host.Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
         AiTestSupport::ExpectError(loaded, AI::AIErrors::CapabilityUnavailable);
     }

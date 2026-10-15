@@ -1,4 +1,5 @@
 #include "GameModuleHostDetail.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -132,12 +133,18 @@ namespace Horo::Gameplay {
         if (activated.HasError())
             return Result<void>::Failure(activated.ErrorValue());
         projectServices = std::move(activated).Value();
-        runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
-        runtimeContext.physics = physics;
-        runtimeContext.ai = ai;
-        runtimeContext.navigation = navigation;
+        PublishRuntimeContext();
         startAttempted = true;
         return InvokeStart(*gameplayModule, runtimeContext);
+    }
+
+    /** @copydoc LoadedGameModule::Impl::PublishRuntimeContext */
+    void LoadedGameModule::Impl::PublishRuntimeContext() {
+        runtimeContext = {projectServices->Cancellation(), projectServices->ActiveServices(), projectServices->Capabilities()};
+        runtimeContext.physics = physics;
+        runtimeContext.character = character;
+        runtimeContext.ai = ai;
+        runtimeContext.navigation = navigation;
     }
 
     Result<GameModuleReloadSnapshot> LoadedGameModule::Impl::PrepareReload() {
@@ -148,6 +155,8 @@ namespace Horo::Gameplay {
             ai->Revoke();
             ai->RetireOwnedTasksAtSafePoint();
         }
+        if (character)
+            character->Revoke();
         if (navigation)
             navigation->Revoke();
         if (physics)
@@ -183,6 +192,8 @@ namespace Horo::Gameplay {
             ai->Revoke();
             ai->RetireOwnedTasksAtSafePoint();
         }
+        if (character)
+            character->Revoke();
         if (navigation)
             navigation->Revoke();
         if (physics)
@@ -201,6 +212,10 @@ namespace Horo::Gameplay {
             runtimeContext.ai.reset();
             gameplayModule = nullptr;
         }
+        runtimeContext.navigation.reset();
+        navigation.reset();
+        runtimeContext.character.reset();
+        character.reset();
         registries.registry.reset();
         registries.systems.reset();
         registries.services.reset();

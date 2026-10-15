@@ -1,6 +1,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 
 #include "GameModuleHostDetail.h"
+#include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
@@ -127,25 +128,8 @@ namespace Horo::Gameplay {
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
         impl->destroy = validated.bundle->lifecycle.destroy;
-        auto physics = ResolvePhysicsContext(physics_, impl->moduleId);
-        if (physics.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(physics.ErrorValue());
-        auto navigation = ResolveNavigationContext(navigation_, impl->moduleId);
-        if (navigation.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(navigation.ErrorValue());
-        if (auto pinned = navigation.Value()->RetainCodeImage(impl->codeImage); pinned.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(pinned.ErrorValue());
-        impl->navigation = std::move(navigation).Value();
-        impl->physics = std::move(physics).Value();
-        if (ai_ && ai_->Binding().moduleId != impl->moduleId)
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
-        // Derive before registration so rollback cannot revoke the reusable host anchor.
-        if (ai_) {
-            auto child = ai_->Derive({});
-            if (child.HasError())
-                return Result<std::unique_ptr<LoadedGameModule>>::Failure(child.ErrorValue());
-            impl->ai = std::move(child).Value();
-        }
+        if (auto bound = BindRuntimeServices(*impl); bound.HasError())
+            return Result<std::unique_ptr<LoadedGameModule>>::Failure(bound.ErrorValue());
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())
@@ -160,6 +144,43 @@ namespace Horo::Gameplay {
             return Result<std::unique_ptr<LoadedGameModule>>::Failure(activated.ErrorValue());
         return Result<std::unique_ptr<LoadedGameModule>>::Success(
             std::unique_ptr<LoadedGameModule>{new LoadedGameModule{std::move(impl)}});  // NOSONAR(cpp:S5950)
+    }
+
+    /** @copydoc GameModuleHost::BindRuntimeServices */
+    Result<void> GameModuleHost::BindRuntimeServices(LoadedGameModule::Impl &impl) const {
+        auto physics = ResolvePhysicsContext(runtimeServices_.physics, impl.moduleId);
+        if (physics.HasError())
+            return Result<void>::Failure(physics.ErrorValue());
+        auto navigation = ResolveNavigationContext(runtimeServices_.navigation, impl.moduleId);
+        if (navigation.HasError())
+            return Result<void>::Failure(navigation.ErrorValue());
+        if (auto pinned = navigation.Value()->RetainCodeImage(impl.codeImage); pinned.HasError())
+            return Result<void>::Failure(pinned.ErrorValue());
+        impl.navigation = std::move(navigation).Value();
+        impl.physics = std::move(physics).Value();
+
+        if (runtimeServices_.character) {
+            if (const auto &binding = runtimeServices_.character->Binding(); binding.moduleId != impl.moduleId)
+                return Result<void>::Failure(MakeError(GameplayErrors::CharacterPermissionDenied));
+            if (auto dependency = runtimeServices_.character->ValidateDependency(impl.physics.get()); dependency.HasError())
+                return Result<void>::Failure(dependency.ErrorValue());
+            auto character = runtimeServices_.character->Derive();
+            if (character.HasError())
+                return Result<void>::Failure(character.ErrorValue());
+            impl.character = std::move(character).Value();
+        } else {
+            impl.character = GameplayCharacterContext::Withheld({.moduleId = impl.moduleId}, GameplayCharacterDenial::Unavailable);
+        }
+        if (runtimeServices_.ai && runtimeServices_.ai->Binding().moduleId != impl.moduleId)
+            return Result<void>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+        // Derive before registration so rollback cannot revoke the reusable host anchor.
+        if (runtimeServices_.ai) {
+            auto child = runtimeServices_.ai->Derive({});
+            if (child.HasError())
+                return Result<void>::Failure(child.ErrorValue());
+            impl.ai = std::move(child).Value();
+        }
+        return Result<void>::Success();
     }
 
 }  // namespace Horo::Gameplay

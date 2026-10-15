@@ -494,6 +494,9 @@ horo_configure_target_header_boundary(HoroGameplayPerceptionIntegration PUBLIC_H
 horo_configure_target_header_boundary(HoroGameplayPhysicsIntegration PUBLIC_HEADERS
     Horo/Gameplay/GameplayPhysicsContext.h
 )
+horo_configure_target_header_boundary(HoroGameplayCharacterIntegration PUBLIC_HEADERS
+    Horo/Gameplay/GameplayCharacterContext.h
+)
 horo_configure_target_header_boundary(HoroGameplayModuleHost PUBLIC_HEADERS
     Horo/Gameplay/GameModuleHost.h
 )
@@ -984,6 +987,7 @@ horo_configure_target_header_boundary(HoroWorldStreaming PUBLIC_HEADERS
     Horo/WorldStreaming/StreamingPriorityPolicy.h
     Horo/WorldStreaming/StreamingEvictionPolicy.h
     Horo/WorldStreaming/StreamingFairQueue.h
+    Horo/WorldStreaming/StreamingSourcePlanner.h
     Horo/WorldStreaming/StreamingSourceDescriptor.h
     Horo/WorldStreaming/StreamingSourcePrefetch.h
     Horo/WorldStreaming/StreamingSourceRange.h

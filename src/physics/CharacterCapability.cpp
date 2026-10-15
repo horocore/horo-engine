@@ -17,6 +17,11 @@ namespace Horo::Character {
                 return Output::Failure(MakeError(CharacterErrors::CapabilityStale));
             return call(*state->world);
         }
+
+        /** @brief Keeps child allocation/control-block destruction and registry dispatch in the original world owner's code image. */
+        Result<CharacterCapability> IssueHostChild(CharacterWorld &world, const CancellationToken &parent) {
+            return world.IssueCapability(parent);
+        }
     }  // namespace
 
     /** @copydoc CharacterCapability::CharacterCapability */
@@ -25,6 +30,25 @@ namespace Horo::Character {
     /** @copydoc CharacterCapability::Identity */
     CharacterCapabilityIdentity CharacterCapability::Identity() const noexcept {
         return state_ ? state_->identity : CharacterCapabilityIdentity{};
+    }
+
+    /** @copydoc CharacterCapability::Validate */
+    Result<void> CharacterCapability::Validate() const {
+        return WithWorld(state_, [](const CharacterWorld &) {
+            return Result<void>::Success();
+        });
+    }
+
+    /** @copydoc CharacterCapability::Derive */
+    Result<CharacterCapability> CharacterCapability::Derive() const {
+        return WithWorld(state_, [this](CharacterWorld &world) {
+            if (state_->derivationDepth == MaximumCharacterCapabilityDerivationDepth)
+                return Result<CharacterCapability>::Failure(MakeError(CharacterErrors::CapacityExceeded));
+            auto child = state_->issueChild(world, state_->revocation.Token());
+            if (child.HasValue())
+                child.Value().state_->derivationDepth = static_cast<std::uint8_t>(state_->derivationDepth + 1);
+            return child;
+        });
     }
 
     /** @copydoc CharacterCapability::CreateController */
@@ -102,7 +126,7 @@ namespace Horo::Character {
             auto state = std::make_shared<CharacterCapabilityState>(world,
                                                                     CharacterCapabilityIdentity{owner.sceneGeneration, owner.identity,
                                                                                                 owner.physicsWorld, nextGeneration_},
-                                                                    ownerThread, parent);
+                                                                    ownerThread, parent, &IssueHostChild);
             if (const auto retired = slot->lock())
                 retired->world = nullptr;
             *slot = state;

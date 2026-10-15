@@ -59,6 +59,9 @@ namespace Horo::AI {
     }  // namespace
 
     namespace Detail {
+        /** @copydoc AiSceneRuntimeState::AiSceneRuntimeState */
+        AiSceneRuntimeState::AiSceneRuntimeState() noexcept : captureDiagnostics(&CaptureHostDiagnostics) {}
+
         /** @copydoc EntityRefHash::operator() */
         std::size_t EntityRefHash::operator()(const Runtime::EntityRef &entity) const noexcept {
             std::size_t result = std::hash<std::uint64_t>{}(entity.runtime.value);
@@ -222,7 +225,7 @@ namespace Horo::AI {
             const std::span<const AiControllerDescriptor> descriptors, const AiCapabilitySet availableCapabilities) {
             std::unique_ptr<Detail::AiSceneRuntimeState> state;
             try {
-                state = std::make_unique<Detail::AiSceneRuntimeState>(&CaptureHostDiagnostics);
+                state = std::make_unique<Detail::AiSceneRuntimeState>();
                 state->binding = binding;
                 state->agents.reserve(agents.size());
                 state->agentsByOwner.reserve(agents.size());

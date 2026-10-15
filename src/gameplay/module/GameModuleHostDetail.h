@@ -80,6 +80,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
         [[nodiscard]] Result<void> RestoreReload(const GameModuleReloadSnapshot &snapshot);
+        /** @brief Expose the already admitted scoped holders only after project service activation succeeds. */
+        void PublishRuntimeContext();
         void Shutdown() noexcept;
 
         std::shared_ptr<Detail::GameModuleCodeImage> codeImage;
@@ -88,6 +90,7 @@ namespace Horo::Gameplay {
         GameRuntimeContext runtimeContext;
         std::shared_ptr<GameplayPhysicsContext> physics;
         std::shared_ptr<GameplayAiContext> ai;
+        std::shared_ptr<GameplayCharacterContext> character;
         std::shared_ptr<GameplayNavigationContext> navigation;
         IGameModule *gameplayModule{};
         DestroyGameModuleFunction destroy{};

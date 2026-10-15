@@ -2,6 +2,7 @@
 
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/LuaBehavior.h"
+#include "LuaReplicationDeclaration.h"
 
 #include <fstream>
 #include <nlohmann/json.hpp>
@@ -14,6 +15,33 @@ extern "C" {
 
 namespace Horo::Gameplay::Detail {
     namespace {
+        /** @brief Preserves existing reload diagnostics at the immutable metadata boundary. */
+        Result<void> ReloadFailure(const std::string &message) {
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, message));
+        }
+
+        /** @brief Preserves existing typed behavior layout admission before a compatible source replacement. */
+        [[nodiscard]] bool Compatible(const BehaviorDescriptor &active, const BehaviorDescriptor &candidate) {
+            if (active.typeId != candidate.typeId || active.schemaVersion != candidate.schemaVersion ||
+                active.allowMultiple != candidate.allowMultiple || active.fields.size() != candidate.fields.size() ||
+                active.phases.size() != candidate.phases.size())
+                return false;
+            for (std::size_t index = 0; index < active.fields.size(); ++index) {
+                if (active.fields[index].name != candidate.fields[index].name ||
+                    active.fields[index].defaultValue.index() != candidate.fields[index].defaultValue.index())
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Reloads preserve gameplay ownership, schema major version and simulation safe points. */
+        bool CompatibleReplicationSchedule(const GameplayReplicationRegistration &active,
+                                           const GameplayReplicationRegistration &replacement) {
+            return active.owner == replacement.owner && active.schema.version.major == replacement.schema.version.major &&
+                   active.schedule.capturePhase == replacement.schedule.capturePhase &&
+                   active.schedule.applyPhase == replacement.schedule.applyPhase;
+        }
+
         /** @brief Borrowed compiler key valid only for one protected metadata lookup. */
         struct TableKey final {
             const char *value;
@@ -130,6 +158,33 @@ namespace Horo::Gameplay::Detail {
             return Result<BehaviorDescriptor>::Failure(
                 MakeError(GameplayErrors::InvalidBehaviorComponent, "Unable to allocate Lua behavior metadata."));
         }
+    }
+
+    /** @copydoc ValidateLuaBehaviorReplacement */
+    Result<void> ValidateLuaBehaviorReplacement(const LuaBehaviorReloadMetadata &active, const LuaBehaviorReloadMetadata *candidate) {
+        if (!candidate || !Compatible(active.descriptor, candidate->descriptor))
+            return ReloadFailure((candidate ? candidate->sourceName : active.sourceName) +
+                                 ": Lua behavior reload requires a schema-compatible candidate or play-session restart.");
+        if (active.replication.has_value() != candidate->replication.has_value())
+            return ReloadFailure(candidate->sourceName + ": Lua replication reload requires the previous schema declaration.");
+        if (active.replication) {
+            const auto &activeDeclaration = *active.replication;
+            const auto &replacement = *candidate->replication;
+            if (!CompatibleReplicationSchedule(activeDeclaration, replacement))
+                return ReloadFailure(candidate->sourceName + ": Lua replication reload changed owner or safe points.");
+            const auto previous = active.replicationRegistry->Acquire().Value();
+            if (const auto compatible = Network::BuildReplicationDescriptorReplacement(previous.Descriptors(), {&replacement.schema, 1},
+                                                                                       GameplayReplicationRegistryLimits{}.descriptors);
+                compatible.HasError()) {
+                auto error = compatible.ErrorValue();
+                error.message = candidate->sourceName + ": " + error.message;
+                return Result<void>::Failure(std::move(error));
+            }
+            const auto codecs = ValidateLuaReplicationCodecs(activeDeclaration, replacement, candidate->sourceName);
+            if (codecs.HasError())
+                return codecs;
+        }
+        return Result<void>::Success();
     }
 }  // namespace Horo::Gameplay::Detail
 

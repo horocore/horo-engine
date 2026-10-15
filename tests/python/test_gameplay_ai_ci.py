@@ -32,7 +32,8 @@ def test_gameplay_ai_dependency_policy_matches_only_the_real_downstream_edges() 
     assert "TARGET HoroGameplayAiScriptBridge DEPENDENCIES HoroGameplayAiIntegration HoroExtensions)" in policy
     host = policy.split("TARGET HoroGameplayModuleHost", 1)[1].split(")", 1)[0].split()
     assert host == ["DEPENDENCIES", "HoroGameplayRuntime", "HoroPlatform",
-                    "HoroGameplayPhysicsIntegration", "HoroGameplayNavigationIntegration", "HoroGameplayAiIntegration"]
+                    "HoroGameplayPhysicsIntegration", "HoroGameplayCharacterIntegration",
+                    "HoroGameplayNavigationIntegration", "HoroGameplayAiIntegration"]
 
 
 def test_native_ai_module_links_only_position_independent_static_owners() -> None:

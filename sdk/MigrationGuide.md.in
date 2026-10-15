@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 18 / `gameplay-sdk18`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 20 / `gameplay-sdk20`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -188,3 +188,44 @@ with `poll()` and `cancel()`. Missing services return `navigation.capability_una
 
 Rollback: stop play, restore the coherent previous engine, SDK and rebuilt module
 set, then restart. Never mix SDK9 and SDK10 module binaries.
+
+## Gameplay SDK10 → SDK15 (Character and Navigation runtime boundary 10 → 15)
+
+Rebuild every native gameplay module, descriptor bundle and host with the exact
+`gameplay-sdk15` fingerprint. This layout preserves the merged SDK10 Navigation
+context and appends the Character holder and behavior backend accessor. The
+minimal GameplayApi target retains forward declarations only; native Character
+consumers opt into the existing `Physics` SDK component.
+
+Hosts supply inert anchors through `GameModuleHostOptions` and
+`GameModuleRuntimeServices` (Physics, Character, Navigation). Legacy Physics and
+Navigation constructors forward into the same composition. Each loaded module
+and behavior runtime receives its independently revocable Character child.
+Authoritative holders revoke before callbacks and release exposed copies before
+native image retirement; omitted dependencies remain typed failures.
+
+SDK15 also includes host-owned Physics batch and Prefab operation allocation and
+immutable private issuer dispatch. These opaque cross-image contracts require a
+new epoch even when public handle sizes do not change. SDK12/14 artifacts and
+SDK10 artifacts must not be mixed with this combined layout. Parallel AI SDK16
+and UI SDK17 layouts are independent; a future union requires a fresh epoch18+
+and complete consumer/lifecycle revalidation, not the maximum prior number.
+
+Rollback: restore a coherent previous engine, SDK and rebuilt module set, then
+restart play. Never edit fingerprints or force-load a mismatched binary.
+
+## Gameplay SDK15 / AI18 → SDK20
+
+This snapshot combines current-main Character15 and Navigation with the AI18
+host-owned immutable diagnostic snapshot layout as boundary20 / `gameplay-sdk20`.
+It excludes the separately reserved Runtime UI19 layout. SDK15, AI18 and UI19
+modules and descriptor bundles are rejected before native factory activation.
+Rebuild the engine hosts, every native module, descriptor bundles and public
+consumers together; changing only a fingerprint never migrates a binary.
+
+The canonical `GameModuleRuntimeServices` retains Physics, Character and Navigation
+anchors and adds AI. Migrate earlier positional AI aggregates to designated `.ai`
+fields. Legacy empty, Physics and Navigation host constructors retain their meaning.
+Each module receives independently revocable AI and Character children; AI tasks
+retire before module callbacks/image unload, while Navigation retains its exact
+code-image pin and Physics/Character allocation authority remains host-owned.

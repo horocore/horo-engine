@@ -27,7 +27,9 @@ child-derivation method. Missing context is reported by `AcquireGameplayAi` as
 `AIErrors::CapabilityUnavailable`.
 
 The canonical constructor is `GameModuleHost(GameModuleHostOptions)`.
-`GameModuleRuntimeServices` contains explicit Physics and AI bindings. The old
+`GameModuleRuntimeServices` contains explicit Physics, Character, Navigation and AI bindings.
+Use designated fields (for example `{.ai = anchor}`) rather than positional service
+aggregates when migrating earlier AI-only composition. The old
 vector and vector/Physics constructors thin-forward to those options. Options
 require both constructor arguments, preserving the meaning of `GameModuleHost({})`
 and `GameModuleHost({}, {})`. Existing callers may migrate when they compose AI;
@@ -120,10 +122,12 @@ dispatch rather than merely copying `shared_ptr` values.
 
 ## SDK boundary and integration
 
-The current combined Navigation and AI layout uses reserved gameplay boundary
-**18** and `gameplay-sdk18`. Rebuild native modules, generated descriptor bundles,
+The current combined Navigation, Character and AI layout uses reserved gameplay boundary
+**20** and `gameplay-sdk20`. Rebuild native modules, generated descriptor bundles,
 runtime hosts and public consumers together. Earlier independent AI11, NAV10,
-combined NAV+AI16, Character15 and Runtime UI17 are distinct incompatible layouts.
+combined NAV+AI16, Character15, host-owned-diagnostics AI18 and Runtime UI19 are
+distinct incompatible layouts. Boundary20 includes current-main Physics and
+Character allocation authority and Navigation image pinning, and excludes Runtime UI19.
 A future union requires a newly allocated epoch; taking the maximum existing
 number does not establish identity. The C ABI extension version remains separate.
 
@@ -165,13 +169,13 @@ only verify metadata registration; they no longer launch external commands.
 
 The merged navigation runtime layout used boundary10. The previous combined Navigation
 and AI layout used boundary16; the diagnostics representation below requires
-fresh boundary18. Rebuild the host, all modules and generated bundles together. Existing
+boundary18. The current-main Character union now requires fresh boundary20.
+Rebuild the host, all modules and generated bundles together. Existing
 navigation-aware three-argument constructors forward into the canonical typed
 options and retain their explicit navigation service; Physics and AI grants remain
 separate fields. Character15 and UI17 reservations do not identify this layout.
 
-
-## Allocation-free internal task context and SDK18
+## Allocation-free internal task context and SDK20
 
 `AiTaskOperationContext::diagnostics` now holds an immutable owned snapshot
 through `shared_ptr<const Telemetry::OperationContext>`; internal graph tasks leave
