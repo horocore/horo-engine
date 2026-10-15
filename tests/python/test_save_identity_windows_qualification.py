@@ -66,3 +66,16 @@ def test_save_junit_capture_qualifies_default_truncation_and_bounded_complete_ou
     assert 'NOT default_xml MATCHES "1024 bytes"' in fixture
     assert '"--test-output-size-passed" "16384"' in fixture
     assert '"save-junit-path-qualified")' in fixture
+
+
+def test_save_nested_ctest_uses_the_current_multi_config_configuration() -> None:
+    source = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    fixture = (ROOT / "tests/cmake/RunSaveJunitOutputPathTest.cmake").read_text(encoding="utf-8")
+    assert '"-DHORO_TEST_CONFIG=$<CONFIG>"' in source
+    assert fixture.count('"${ctest}" "-C" "${HORO_TEST_CONFIG}"') == 2
+
+
+def test_sonar_real_ctest_uses_the_existing_safe_xml_interpreter() -> None:
+    workflow = (ROOT / ".github/workflows/sonar.yml").read_text(encoding="utf-8")
+    assert "defusedxml==0.7.1" in workflow
+    assert "cmake --preset sonar -DPython3_EXECUTABLE=/tmp/horo-coverage/bin/python" in workflow

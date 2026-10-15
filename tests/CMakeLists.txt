@@ -1,5 +1,5 @@
 add_test(NAME HoroSaveJunitOutputPathTest
-    COMMAND "${CMAKE_COMMAND}" "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-junit-output-path"
+    COMMAND "${CMAKE_COMMAND}" "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-junit-output-path" "-DHORO_TEST_CONFIG=$<CONFIG>"
     -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveJunitOutputPathTest.cmake")
 set_tests_properties(HoroSaveJunitOutputPathTest PROPERTIES LABELS "unit;save;cmake;ci-windows" TIMEOUT 90)
 

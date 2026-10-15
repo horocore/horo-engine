@@ -14,7 +14,10 @@ PREFIX = "HoroRuntimeSaveSlotLifecycleTests::"
 
 def verify_report(path: Path) -> None:
     """Reject missing, skipped, failed or incompletely exercised allocation cases."""
-    data = path.read_bytes()
+    report = path.resolve()
+    if not report.is_relative_to(Path.cwd().resolve()):
+        raise ValueError("Qualification report must be inside the current workspace")
+    data = report.read_bytes()
     root = etree.fromstring(data, forbid_dtd=True)
     if root.tag != "testsuite" or any(root.get(key) != value for key, value in
                                      (("tests", "2"), ("failures", "0"), ("skipped", "0"))):

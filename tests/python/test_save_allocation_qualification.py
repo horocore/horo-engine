@@ -19,6 +19,12 @@ QUALIFICATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(QUALIFICATION)
 
 
+@pytest.fixture(autouse=True)
+def explicit_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each direct parser caller owns an explicit workspace, like the real CI composition."""
+    monkeypatch.chdir(tmp_path)
+
+
 def report(tmp_path: Path, *, omitted: str = "", outcome: str = "") -> Path:
     cases = []
     for name, phase in QUALIFICATION.CASES.items():
@@ -115,3 +121,12 @@ def test_cli_rejects_report_paths_outside_its_workspace(tmp_path: Path, monkeypa
         QUALIFICATION.main()
     assert error.value.code == 2
     assert "inside the current workspace" in capsys.readouterr().err
+
+
+def test_direct_verifier_rejects_an_outside_workspace_before_reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    outside = report(tmp_path)
+    workspace = tmp_path / "nested workspace"
+    workspace.mkdir()
+    monkeypatch.chdir(workspace)
+    with pytest.raises(ValueError, match="inside the current workspace"):
+        QUALIFICATION.verify_report(outside)

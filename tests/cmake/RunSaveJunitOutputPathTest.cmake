@@ -1,3 +1,6 @@
+if(NOT HORO_TEST_CONFIG)
+    set(HORO_TEST_CONFIG Debug)
+endif()
 if(NOT HORO_TEST_BINARY_DIR)
     message(FATAL_ERROR "HORO_TEST_BINARY_DIR is required")
 endif()
@@ -26,7 +29,7 @@ file(REMOVE "${report}" "${outer}/save-allocation-ctest.xml")
 get_filename_component(cmake_directory "${CMAKE_COMMAND}" DIRECTORY)
 find_program(ctest NAMES ctest HINTS "${cmake_directory}" REQUIRED NO_DEFAULT_PATH)
 # The default 1024-byte passed-output limit must reproduce the missing late evidence.
-execute_process(COMMAND "${ctest}" "--test-dir" "${build}" "--no-tests=error"
+execute_process(COMMAND "${ctest}" "-C" "${HORO_TEST_CONFIG}" "--test-dir" "${build}" "--no-tests=error"
     "--output-on-failure" "--output-junit" "save-allocation-ctest.xml"
     WORKING_DIRECTORY "${outer}" RESULT_VARIABLE default_tested OUTPUT_VARIABLE output ERROR_VARIABLE error)
 if(NOT default_tested EQUAL 0 OR NOT EXISTS "${report}")
@@ -37,7 +40,7 @@ if(default_xml MATCHES "save-junit-path-qualified" OR NOT default_xml MATCHES "1
     message(FATAL_ERROR "Default passed-output capture did not reproduce truncation of the late marker")
 endif()
 file(REMOVE "${report}")
-execute_process(COMMAND "${ctest}" "--test-dir" "${build}" "--no-tests=error"
+execute_process(COMMAND "${ctest}" "-C" "${HORO_TEST_CONFIG}" "--test-dir" "${build}" "--no-tests=error"
     "--output-on-failure" "--test-output-size-passed" "16384" "--output-junit" "save-allocation-ctest.xml"
     WORKING_DIRECTORY "${outer}" RESULT_VARIABLE tested OUTPUT_VARIABLE output ERROR_VARIABLE error)
 if(NOT tested EQUAL 0 OR NOT EXISTS "${report}" OR EXISTS "${outer}/save-allocation-ctest.xml")
