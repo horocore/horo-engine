@@ -50,7 +50,6 @@ namespace Horo::Tests::UiAccess {
             UiSceneInstanceDescriptor descriptor{Instance(), {}};
             if (sceneOwned) {
                 descriptor.owner = {.kind = UiOwnerScopeKind::Scene, .scene = Runtime::SceneRuntimeId{101}};
-                descriptor.providerScene = Runtime::SceneRuntimeId{101};
             }
             REQUIRE(service.Admit(descriptor, std::move(publisher), Lifecycle).HasValue());
         }

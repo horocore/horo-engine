@@ -39,16 +39,20 @@ extern "C" HORO_GAME_EXPORT void HoroTestCopyRuntimeUiClient(std::shared_ptr<con
 }
 
 /** @brief Executes the statically linked native frontend; only owned typed route input enters the host mailbox. */
-extern "C" HORO_GAME_EXPORT Result<Runtime::Ui::RuntimeUiRequestId> HoroTestQueueRuntimeUiScreen() {
+extern "C" HORO_GAME_EXPORT void HoroTestQueueRuntimeUiScreen(Result<Runtime::Ui::RuntimeUiRequestId> *output) {
     using namespace Runtime::Ui;
     SerializedUiId bytes{};
     bytes.back() = 9;
     auto route = UiRouteId::Create(bytes);
-    if (route.HasError())
-        return Result<RuntimeUiRequestId>::Failure(route.ErrorValue());
-    if (!retainedUiClient)
-        return Result<RuntimeUiRequestId>::Failure(MakeError(UiErrors::CapabilityUnavailable));
-    return retainedUiClient->Screen(UiRouteOperationRequest::Push(route.Value()));
+    if (route.HasError()) {
+        *output = Result<RuntimeUiRequestId>::Failure(route.ErrorValue());
+        return;
+    }
+    if (!retainedUiClient) {
+        *output = Result<RuntimeUiRequestId>::Failure(MakeError(UiErrors::CapabilityUnavailable));
+        return;
+    }
+    *output = retainedUiClient->Screen(UiRouteOperationRequest::Push(route.Value()));
 }
 #endif
 
@@ -435,6 +439,10 @@ namespace {
         }
 
         void Stop(GameRuntimeContext &) noexcept override {
+#if defined(HORO_TEST_GAMEPLAY_UI) && HORO_TEST_GAMEPLAY_UI
+            // Module-owned holders drain at Stop; native image residency is not a resource lifetime boundary.
+            retainedUiClient.reset();
+#endif
             // The module host retires the registration-only fixture's services and descriptors.
         }
 

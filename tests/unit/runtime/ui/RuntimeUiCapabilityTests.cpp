@@ -41,13 +41,14 @@ namespace Horo::Tests::UiAccess {
         CHECK(child->Validate().HasError());
         REQUIRE(root->Validate().HasValue());
         REQUIRE(sibling->Validate().HasValue());
-        auto depth = root;
-        for (int i = 1; i < 8; ++i)
-            depth = Take(depth->Derive());
-        CHECK(depth->Derive().HasError());
+        std::array<std::shared_ptr<const RuntimeUiClient>, 8> chain;
+        chain[0] = root;
+        for (std::size_t i = 1; i < chain.size(); ++i)
+            chain[i] = Take(chain[i - 1]->Derive());
+        CHECK(chain.back()->Derive().HasError());
         root->Revoke();
         CHECK(sibling->Validate().HasError());
-        CHECK(depth->Validate().HasError());
+        CHECK(chain.back()->Validate().HasError());
     }
 
     TEST_CASE("Runtime UI screen commands use canonical outcomes and reserve terminal slots", "[runtime-ui][screen]") {
@@ -149,11 +150,13 @@ namespace Horo::Tests::UiAccess {
         Fixture fixture{true};
         auto client = fixture.Client();
         auto presentation = Take(fixture.service.Acquire(Instance()));
-        auto prepared = Take(fixture.service.PrepareTransition({Runtime::SceneRuntimeId{101}, {}}, {}));
-        REQUIRE(client->Validate().HasValue());
-        REQUIRE(fixture.service.CanCommitTransition(prepared, Lifecycle).HasValue());
-        auto committed = Take(fixture.service.CommitTransition(prepared, Lifecycle));
-        CHECK(committed.retiredSceneInstances == 1);
+        {
+            auto prepared = Take(fixture.service.PrepareTransition({Runtime::SceneRuntimeId{101}, {}}, {}));
+            REQUIRE(client->Validate().HasValue());
+            REQUIRE(fixture.service.CanCommitTransition(prepared, Lifecycle).HasValue());
+            auto committed = Take(fixture.service.CommitTransition(prepared, Lifecycle));
+            CHECK(committed.retiredSceneInstances == 1);
+        }
         CHECK(client->Validate().HasError());
         CHECK(fixture.service.Acquire(Instance()).HasError());
         REQUIRE(presentation.Get() != nullptr);
@@ -161,6 +164,66 @@ namespace Horo::Tests::UiAccess {
         CHECK_FALSE(Take(fixture.service.CanReclaim()));
         presentation = {};
         client.reset();
+        REQUIRE(fixture.service.CollectRetired().HasValue());
+        CHECK(Take(fixture.service.CanReclaim()));
+    }
+
+    TEST_CASE("Runtime UI shutdown releases internal dispatch leases while external presentations still fence reclamation",
+              "[runtime-ui][lifetime]") {
+        Fixture fixture;
+        auto client = fixture.Client();
+        auto presentation = Take(fixture.service.Acquire(Instance()));
+        fixture.service.Shutdown();
+        CHECK(client->Validate().HasError());
+        CHECK_FALSE(Take(fixture.service.CanReclaim()));
+        client.reset();
+        CHECK_FALSE(Take(fixture.service.CanReclaim()));
+        presentation = {};
+        REQUIRE(fixture.service.CollectRetired().HasValue());
+        CHECK(Take(fixture.service.CanReclaim()));
+    }
+
+    TEST_CASE("Runtime UI event shutdown defers internal lease release until the borrowed callback returns",
+              "[runtime-ui][events][callback][lifetime]") {
+        Fixture fixture;
+        auto client = fixture.Client();
+        auto presentation = Take(fixture.service.Acquire(Instance()));
+        const auto element = Take(client->Find(Stable<UiElementId>(11)));
+        const UiEventRoute route{fixture.actionOwner.instance,
+                                 fixture.actionOwner.canvas,
+                                 fixture.actionOwner.document,
+                                 fixture.actionOwner.treeRevision,
+                                 fixture.actionOwner.interaction,
+                                 element,
+                                 {}};
+
+        struct Handler final : UiEventHandler {
+            RuntimeUiService &service;
+            bool called{};
+
+            explicit Handler(RuntimeUiService &service) : service(service) {}
+
+            Result<UiEventResponse> Handle(UiElementHandle, UiEventPhase, const UiRoutedEvent &) override {
+                called = true;
+                service.Shutdown();
+                CHECK(service.CollectRetired().HasError());
+                CHECK_FALSE(Take(service.CanReclaim()));
+                return Result<UiEventResponse>::Success({true, false, false});
+            }
+
+            Result<void> ApplyDefault(UiElementHandle, const UiRoutedEvent &) override {
+                return Result<void>::Success();
+            }
+        } handler{fixture.service};
+
+        REQUIRE(fixture.service.DispatchEvent(Stable<UiCanvasId>(2), route, {UiEventKind::Submit, 1}, handler).HasValue());
+        CHECK(handler.called);
+        CHECK(client->Validate().HasError());
+        client.reset();
+        REQUIRE(fixture.service.CollectRetired().HasValue());
+        CHECK_FALSE(Take(fixture.service.CanReclaim()));
+        REQUIRE(presentation.Get() != nullptr);
+        presentation = {};
         REQUIRE(fixture.service.CollectRetired().HasValue());
         CHECK(Take(fixture.service.CanReclaim()));
     }
@@ -251,6 +314,10 @@ namespace Horo::Tests::UiAccess {
         CHECK(Take(fixture.service.DispatchActions(Instance(), Stable<UiCanvasId>(2), handler)) == 1);
         CHECK(handler.called);
         CHECK(client->Validate().HasError());
+        CHECK_FALSE(Take(fixture.service.CanReclaim()));
+        client.reset();
+        REQUIRE(fixture.service.CollectRetired().HasValue());
+        CHECK(Take(fixture.service.CanReclaim()));
     }
 
 }  // namespace Horo::Tests::UiAccess

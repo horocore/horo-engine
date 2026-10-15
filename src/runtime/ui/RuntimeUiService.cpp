@@ -46,6 +46,16 @@ namespace Horo::Runtime::Ui::Detail {
         }
     }  // namespace
 
+    /** @copydoc FinishShutdown */
+    void FinishShutdown(RuntimeUiServiceState &owner) noexcept {
+        owner.active = false;
+        owner.registry.Shutdown();
+        for (auto &dispatcher : owner.dispatchers)
+            dispatcher = {};
+        for (auto &action : owner.actions)
+            action = {};
+    }
+
     /** @brief Immutable host issuer route: module-emitted Derive frontends can never select its allocator or deleter. */
     ClientResult RuntimeUiAccess::Issue(const std::shared_ptr<RuntimeUiServiceState> &owner, const RuntimeUiGrant &grant,
                                         std::shared_ptr<const RuntimeUiScope> parent, const CancellationToken &cancellation) {
@@ -182,7 +192,6 @@ namespace Horo::Runtime::Ui {
         state_->shutdownRequested = true;
         if (state_->dispatching)
             return;
-        state_->active = false;
-        state_->registry.Shutdown();
+        Detail::FinishShutdown(*state_);
     }
 }  // namespace Horo::Runtime::Ui

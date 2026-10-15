@@ -22,9 +22,9 @@ namespace Horo::Tests::UiAccess {
               "[runtime-ui][native][lifetime]") {
         Fixture fixture;
         auto anchor = fixture.Client();
-        Gameplay::GameModuleHost host{Gameplay::GameModuleHostOptions{{}, {.runtimeUi = anchor}}};
-        auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", Gameplay::CurrentGameplayBuildFingerprint(),
-                                                             ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)});
+        auto host = std::make_unique<Gameplay::GameModuleHost>(Gameplay::GameModuleHostOptions{{}, {.runtimeUi = anchor}});
+        auto loaded = host->Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                                              ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)});
         REQUIRE(loaded.HasValue());
         auto module = std::move(loaded).Value();
         REQUIRE(module->RuntimeUiContext() != nullptr);
@@ -32,14 +32,16 @@ namespace Horo::Tests::UiAccess {
         REQUIRE(library.HasValue());
         auto image = std::move(library).Value();
         using Copy = void (*)(std::shared_ptr<const RuntimeUiClient> *);
-        using Queue = Result<RuntimeUiRequestId> (*)();
+        using Queue = void (*)(Result<RuntimeUiRequestId> *);
         auto copy = Export<Copy>(*image, "HoroTestCopyRuntimeUiClient");
         auto queue = Export<Queue>(*image, "HoroTestQueueRuntimeUiScreen");
         std::shared_ptr<const RuntimeUiClient> escaped;
         copy(&escaped);
         REQUIRE(escaped != nullptr);
         REQUIRE(escaped->Validate().HasValue());
-        REQUIRE(queue().HasValue());
+        auto queued = Result<RuntimeUiRequestId>::Failure(MakeError(UiErrors::CapabilityUnavailable));
+        queue(&queued);
+        REQUIRE(queued.HasValue());
         REQUIRE(module->PrepareReload().HasValue());
         CHECK(escaped->Validate().HasError());
         module.reset();
@@ -50,7 +52,11 @@ namespace Horo::Tests::UiAccess {
         CHECK(anchor->Validate().HasValue());
         CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
         CHECK(Take(anchor->ScreenGuard()).revision.Value() == 1);
+        std::weak_ptr<const RuntimeUiClient> weak = escaped;
         escaped.reset();
+        CHECK(weak.expired());
+        weak.reset();
+        host.reset();
         anchor.reset();
         fixture.service.Shutdown();
         REQUIRE(fixture.service.CollectRetired().HasValue());

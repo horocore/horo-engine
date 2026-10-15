@@ -32,7 +32,10 @@ namespace {
             return request.HasError() ? Result<void>::Failure(request.ErrorValue()) : Result<void>::Success();
         }
 
-        void Stop(GameRuntimeContext &) noexcept override {}
+        void Stop(GameRuntimeContext &) noexcept override {
+            // The host copy survives Stop and image release; the module must drain its own holder explicitly.
+            retained.reset();
+        }
     };
 }  // namespace
 

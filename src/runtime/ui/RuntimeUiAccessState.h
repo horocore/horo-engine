@@ -88,6 +88,9 @@ namespace Horo::Runtime::Ui::Detail {
                                                 std::shared_ptr<const RuntimeUiScope> parent, const CancellationToken &cancellation);
     };
 
+    /** @brief Releases internal generation leases after the final borrowed dispatch has unwound; external leases still fence reclaim. */
+    void FinishShutdown(RuntimeUiServiceState &owner) noexcept;
+
     /** @brief Pins the host state across a borrowed callback and defers recursive service destruction until dispatch returns. */
     class RuntimeUiDispatchGuard final {
     public:
@@ -97,10 +100,8 @@ namespace Horo::Runtime::Ui::Detail {
 
         ~RuntimeUiDispatchGuard() {
             owner_->dispatching = false;
-            if (owner_->shutdownRequested) {
-                owner_->active = false;
-                owner_->registry.Shutdown();
-            }
+            if (owner_->shutdownRequested)
+                FinishShutdown(*owner_);
         }
 
         RuntimeUiDispatchGuard(const RuntimeUiDispatchGuard &) = delete;

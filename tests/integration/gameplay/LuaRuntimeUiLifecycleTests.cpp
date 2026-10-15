@@ -74,7 +74,7 @@ namespace Horo::Tests::UiAccess {
     TEST_CASE("Real Lua missing UI retains typed diagnostics instead of selecting an ambient owner", "[runtime-ui][lua]") {
         const auto source = R"(
             return horo.behavior {type_id='game.tests.runtime_ui',display_name='Runtime UI',
-                on_create=function(ctx)
+                on_fixed_update=function(ctx)
                     local value,err=ctx.ui:screen_guard()
                     assert(value==nil and err.code=='runtime_ui.capability.unavailable')
                     ctx.transform.set_position(7,0,0)
@@ -94,7 +94,7 @@ namespace Horo::Tests::UiAccess {
         auto client = fixture.Client(RuntimeUiPermission::Elements);
         const auto source = R"(
             return horo.behavior {type_id='game.tests.runtime_ui',display_name='Runtime UI',
-                on_create=function(ctx)
+                on_fixed_update=function(ctx)
                     local value,err=ctx.ui:screen_guard()
                     assert(value==nil and err.code=='runtime_ui.capability.denied')
                     ctx.transform.set_position(9,0,0)

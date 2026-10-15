@@ -18,8 +18,8 @@ TEST_CASE("External Runtime UI SDK retains only host-issued storage after actual
     auto grant = fixture.Grant();
     grant.moduleId = "game.ui_sdk";
     auto anchor = Take(fixture.service.Issue(grant));
-    Gameplay::GameModuleHost host{Gameplay::GameModuleHostOptions{{}, {.runtimeUi = anchor}}};
-    auto module = Take(host.Load(artifact, {"game.ui_sdk", Gameplay::CurrentGameplayBuildFingerprint(), revision}));
+    auto host = std::make_unique<Gameplay::GameModuleHost>(Gameplay::GameModuleHostOptions{{}, {.runtimeUi = anchor}});
+    auto module = Take(host->Load(artifact, {"game.ui_sdk", Gameplay::CurrentGameplayBuildFingerprint(), revision}));
     auto image = Take(Platform::LoadDynamicLibrary(module->LoadedArtifactPath().string()));
     void *symbol = image->GetSymbol("HoroRuntimeUiSdkCopyClient");
     REQUIRE(symbol != nullptr);
@@ -37,7 +37,11 @@ TEST_CASE("External Runtime UI SDK retains only host-issued storage after actual
     CHECK(escaped->Validate().HasError());
     CHECK(Take(fixture.service.ApplyQueuedCommands(RuntimeUiCommandCutoff::OwnerCommands)) == 1);
     CHECK(Take(anchor->ScreenGuard()).revision.Value() == 1);
+    std::weak_ptr<const RuntimeUiClient> weak = escaped;
     escaped.reset();
+    CHECK(weak.expired());
+    weak.reset();
+    host.reset();
     anchor.reset();
     fixture.service.Shutdown();
     REQUIRE(fixture.service.CollectRetired().HasValue());
