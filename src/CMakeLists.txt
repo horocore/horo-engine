@@ -2061,6 +2061,14 @@ else()
 endif()
 
 add_library(HoroWorldStreaming STATIC
+        runtime/world_streaming/StreamingCellEncoding.cpp
+        runtime/world_streaming/StreamingCellInspection.cpp
+        runtime/world_streaming/WorldIndexEncoding.cpp
+        runtime/world_streaming/WorldIndexDecoding.cpp
+        runtime/world_streaming/WorldDependencyArtifactEncoding.cpp
+        runtime/world_streaming/WorldDependencyArtifactDecoding.cpp
+        runtime/world_streaming/WorldDependencyArtifactModel.cpp
+        runtime/world_streaming/WorldArtifactErrors.cpp
         runtime/world_streaming/CellAttachmentManifest.cpp
         runtime/world_streaming/CellAttachmentErrors.cpp
         runtime/world_streaming/NetworkStreamingAuthority.cpp
@@ -2133,10 +2141,11 @@ add_library(HoroWorldStreaming STATIC
 )
 add_library(HoroEngine::WorldStreaming ALIAS HoroWorldStreaming)
 target_compile_features(HoroWorldStreaming PUBLIC cxx_std_20)
-target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngine::Assets)
+target_link_libraries(HoroWorldStreaming PUBLIC HoroEngine::Foundation HoroEngine::Assets PRIVATE utf8proc)
 
 # Scene owns CoreEcs baseline semantics; this host-composed seam leaves streaming policy and ECS targets independent.
 add_library(HoroSceneCellPayload STATIC
+        runtime/scene/SceneCellPayloadCodec.cpp
         runtime/scene/RuntimeSceneCellAttachment.cpp
         runtime/scene/SceneCellAttachments.cpp
         runtime/scene/RuntimeSceneCellPayload.cpp
@@ -2148,6 +2157,17 @@ add_library(HoroSceneCellPayload STATIC
 add_library(HoroEngine::SceneCellPayload ALIAS HoroSceneCellPayload)
 target_compile_features(HoroSceneCellPayload PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneCellPayload PUBLIC HoroEngine::RuntimeScene HoroEngine::WorldStreaming)
+
+# Offline tooling composition above the three independent semantic, format and durable owners.
+# This target is deliberately non-installed; applications explicitly supply source, release and I/O authority.
+add_library(HoroWorldCookIntegration STATIC
+        world_cook/WorldCookEncoding.cpp
+        world_cook/WorldCookInventory.cpp
+        world_cook/WorldCookValidation.cpp
+        world_cook/WorldCookPublication.cpp)
+add_library(HoroEngine::WorldCookIntegration ALIAS HoroWorldCookIntegration)
+target_compile_features(HoroWorldCookIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroWorldCookIntegration PUBLIC HoroEngine::SceneCellPayload HoroEngine::WorldStreaming HoroEngine::Assets)
 
 # Narrow non-installed wire helper: neither a repository-wide include root nor a public API.
 add_library(HoroJsonEncodingInternal INTERFACE)
@@ -2177,6 +2197,12 @@ add_library(HoroEngine::PrefabRuntime ALIAS HoroPrefabRuntime)
 target_compile_features(HoroPrefabRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroPrefabRuntime PUBLIC HoroEngine::Prefab HoroEngine::RuntimeScene)
 
+# Inert source-model data; keeps Scene models independent from executable authoring services.
+add_library(HoroPrefabOverrideModel INTERFACE)
+add_library(HoroEngine::PrefabOverrideModel ALIAS HoroPrefabOverrideModel)
+target_compile_features(HoroPrefabOverrideModel INTERFACE cxx_std_20)
+target_link_libraries(HoroPrefabOverrideModel INTERFACE HoroEngine::Prefab HoroEngine::Application)
+
 add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
@@ -2188,12 +2214,18 @@ add_library(HoroPrefabAuthoring STATIC
         runtime/prefab/PrefabDocumentSerialization.cpp
         runtime/prefab/PrefabSceneIdentityRemap.cpp
         runtime/prefab/PrefabSourceResolver.cpp
+        runtime/prefab/PrefabValueOverrideAddresses.cpp
+        runtime/prefab/PrefabValueOverrideBindings.cpp
+        runtime/prefab/PrefabValueOverrideResolution.cpp
+        runtime/prefab/PrefabValueOverrideSerialization.cpp
+        runtime/prefab/PrefabValueOverrideValues.cpp
+        runtime/prefab/PrefabValueSchemas.cpp
         runtime/prefab/PrefabTemplateCook.cpp
 )
 add_library(HoroEngine::PrefabAuthoring ALIAS HoroPrefabAuthoring)
 target_compile_features(HoroPrefabAuthoring PUBLIC cxx_std_20)
 target_include_directories(HoroPrefabAuthoring PRIVATE ${PROJECT_SOURCE_DIR}/src/foundation/json)
-target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application
+target_link_libraries(HoroPrefabAuthoring PUBLIC HoroEngine::Prefab HoroEngine::Application HoroEngine::PrefabOverrideModel
         PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal)
 
 # Load/cook bridge. RuntimeScene never depends on prefab source authoring or Editor.
@@ -2561,6 +2593,7 @@ add_library(HoroSceneSourceModel INTERFACE)
 add_library(HoroEngine::SceneSourceModel ALIAS HoroSceneSourceModel)
 target_compile_features(HoroSceneSourceModel INTERFACE cxx_std_20)
 target_link_libraries(HoroSceneSourceModel INTERFACE
+        HoroEngine::PrefabOverrideModel
         HoroEngine::Foundation
         HoroEngine::AI
         HoroEngine::Prefab
@@ -2583,7 +2616,7 @@ add_library(HoroEngine::SceneSource ALIAS HoroSceneSource)
 target_compile_features(HoroSceneSource PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneSource
         PUBLIC HoroEngine::SceneSourceModel
-        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal
+        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal HoroEngine::PrefabAuthoring
 )
 
 # Non-installed, narrow codec bridge for existing Editor JSON adapters.
@@ -2599,6 +2632,7 @@ target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
 # Shared headless conversion owner. Editor is a downstream snapshot adapter, not a cook dependency.
 add_library(HoroSceneRuntimeConversion STATIC
         scene/source/ScenePrefabCachedConversion.cpp
+        scene/source/ScenePrefabValueProjection.cpp
         scene/source/SceneRuntimeConversion.cpp
         scene/source/ScenePrefabExpansionOwner.cpp)
 add_library(HoroEngine::SceneRuntimeConversion ALIAS HoroSceneRuntimeConversion)
@@ -2622,6 +2656,8 @@ add_library(HoroEditorModel STATIC
         editor/document/SceneDocumentTransaction.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
+        editor/document/SceneDocumentHistoryCommands.cpp
+        editor/document/SceneDocumentPrefabValueCommands.cpp
         editor/document/RuntimeSceneConversion.cpp
         editor/project_model/EditorModelErrors.cpp
         editor/project_model/EditorSelectionModel.cpp
@@ -2941,6 +2977,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/asset_import/AssetImportModalPresentation.cpp
             editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
             editor/modals/play_topology/PlayTopologyModal.cpp
+            editor/modals/packages/PackageModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
             editor/screens/welcome/WelcomeView.cpp
@@ -3155,6 +3192,34 @@ add_library(HoroPackageLifecycle STATIC
 add_library(HoroEngine::PackageLifecycle ALIAS HoroPackageLifecycle)
 target_compile_features(HoroPackageLifecycle PUBLIC cxx_std_20)
 target_link_libraries(HoroPackageLifecycle PUBLIC HoroEngine::Foundation HoroEngine::PackageSecurity HoroEngine::Extensions HoroEngine::Assets)
+
+# Application coordination is shared; adapters depend on it, never the inverse.
+add_library(HoroPackageApplication STATIC
+        application/packages/PackageApplication.cpp
+        application/packages/PackageApplicationProgress.cpp
+        application/packages/PackageApplicationPlan.cpp
+)
+add_library(HoroEngine::PackageApplication ALIAS HoroPackageApplication)
+target_compile_features(HoroPackageApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroPackageApplication PUBLIC HoroEngine::PackageLifecycle)
+
+add_library(HoroCliPackageAdapters STATIC cli/PackageCommands.cpp)
+add_library(HoroEngine::CliPackageAdapters ALIAS HoroCliPackageAdapters)
+target_compile_features(HoroCliPackageAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroCliPackageAdapters PUBLIC HoroEngine::CliHost HoroEngine::PackageApplication)
+
+add_library(HoroMcpPackageAdapters STATIC mcp/PackageTools.cpp)
+add_library(HoroEngine::McpPackageAdapters ALIAS HoroMcpPackageAdapters)
+target_compile_features(HoroMcpPackageAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpPackageAdapters PUBLIC HoroEngine::McpRegistry HoroEngine::PackageApplication)
+
+add_library(HoroEditorPackageAdapters STATIC editor/modals/packages/PackageModalSession.cpp)
+add_library(HoroEngine::EditorPackageAdapters ALIAS HoroEditorPackageAdapters)
+target_compile_features(HoroEditorPackageAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroEditorPackageAdapters PUBLIC HoroEngine::EditorServices HoroEngine::PackageApplication)
+if (HORO_BUILD_EDITOR_GUI)
+    target_link_libraries(HoroGui PUBLIC HoroEngine::PackageApplication PRIVATE HoroEngine::EditorPackageAdapters)
+endif ()
 
 # Host-side bridge: sequence model and runtime remain independent of Extensions.
 add_library(HoroGameplayAiScriptBridge STATIC

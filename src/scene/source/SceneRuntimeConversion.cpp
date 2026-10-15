@@ -423,7 +423,8 @@ namespace Horo::SceneSource {
     /** @copydoc BuildScenePrefabProjection */
     Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneSourceView &document,
                                                              const Prefab::PrefabSourceResolverSnapshot &resolver,
-                                                             const Prefab::PrefabLimitProfile &limits) {
+                                                             const Prefab::PrefabLimitProfile &limits,
+                                                             const Prefab::PrefabValueSchemaSnapshot *schemas) {
         ScenePrefabProjection projection;
         projection.instances.reserve(document.prefabInstances.size());
         for (const ScenePrefabInstance &instance : document.prefabInstances) {
@@ -434,6 +435,7 @@ namespace Horo::SceneSource {
                 entry.failure = std::move(error);
             } else
                 entry.expanded = std::move(candidate).Value();
+            Detail::ApplyInstanceValues(entry, schemas, limits);
             projection.instances.push_back(std::move(entry));
         }
         return Result<ScenePrefabProjection>::Success(std::move(projection));
@@ -456,12 +458,10 @@ namespace Horo::SceneSource {
     }
 
     /** @copydoc ConvertScenePrefabProjectionToRuntime */
-    Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(const SceneSourceView &document,
-                                                                                  const Runtime::SceneDefinitionId sceneId,
-                                                                                  const Runtime::SceneDefinitionRevision revision,
-                                                                                  const ScenePrefabProjection &projection,
-                                                                                  const Prefab::PrefabSourceResolverSnapshot &resolver,
-                                                                                  const Prefab::PrefabLimitProfile &limits) {
+    Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(
+        const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId, const Runtime::SceneDefinitionRevision revision,
+        const ScenePrefabProjection &projection, const Prefab::PrefabSourceResolverSnapshot &resolver,
+        const Prefab::PrefabLimitProfile &limits, const Prefab::PrefabValueSchemaSnapshot *schemas) {
         if (projection.instances.size() != document.prefabInstances.size())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
         auto prepared = BeginSceneAssembly(document, sceneId, revision);
@@ -475,6 +475,8 @@ namespace Horo::SceneSource {
             if (entry.authored != document.prefabInstances[index] || !entry.IsSynchronized())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(
                     entry.failure.value_or(MakeError(Prefab::PrefabErrors::ResolutionStale)));
+            if (auto values = Detail::ValidateInstanceValues(entry, schemas, limits); values.HasError())
+                return InstanceFailure(values.ErrorValue(), entry);
             const auto &candidate = *entry.expanded;
             if (auto valid = resolver.ValidateRevisionPublication(candidate.RootAsset(), candidate.Revision(), {}, limits);
                 valid.HasError())
@@ -509,11 +511,12 @@ namespace Horo::SceneSource {
                                                                         const Runtime::SceneDefinitionId sceneId,
                                                                         const Runtime::SceneDefinitionRevision revision,
                                                                         const Prefab::PrefabSourceResolverSnapshot &resolver,
-                                                                        const Prefab::PrefabLimitProfile &limits) {
-        auto projection = BuildScenePrefabProjection(document, resolver, limits);
+                                                                        const Prefab::PrefabLimitProfile &limits,
+                                                                        const Prefab::PrefabValueSchemaSnapshot *schemas) {
+        auto projection = BuildScenePrefabProjection(document, resolver, limits, schemas);
         if (projection.HasError())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(projection.ErrorValue());
-        return ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits);
+        return ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits, schemas);
     }
 
 }  // namespace Horo::SceneSource

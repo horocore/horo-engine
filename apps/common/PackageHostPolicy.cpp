@@ -1,0 +1,31 @@
+#include "PackageHostPolicy.h"
+
+#include "Horo/Extensions/ExtensionAbi.h"
+
+#include <format>
+
+namespace Horo::Application::Internal {
+    /** @copydoc NativePackagePlatform */
+    Result<Packages::PackagePlatform> NativePackagePlatform() {
+#if (!defined(_WIN32) && !defined(__APPLE__) && !defined(__linux__)) ||                                                                    \
+    (!defined(__aarch64__) && !defined(_M_ARM64) && !defined(__x86_64__) && !defined(_M_X64))
+        return Result<Packages::PackagePlatform>::Failure(
+            Error{ErrorCode{"packages.host.platform_unavailable"}, ErrorDomainId{"packages.host"}});
+#else
+#if defined(_WIN32)
+        const char *system = "windows";
+#elif defined(__APPLE__)
+        const char *system = "macos";
+#else
+        const char *system = "linux";
+#endif
+#if defined(__aarch64__) || defined(_M_ARM64)
+        const char *architecture = "arm64";
+#else
+        const char *architecture = "x64";
+#endif
+        return Result<Packages::PackagePlatform>::Success(
+            {system, architecture, std::format("horo-extension-abi-{}", static_cast<unsigned>(HORO_EXTENSION_ABI_VERSION))});
+#endif
+    }
+}  // namespace Horo::Application::Internal
