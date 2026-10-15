@@ -265,13 +265,24 @@ namespace Horo::Character::Detail {
     [[nodiscard]] Result<CharacterShapeMovementCandidate> ResolveMovementShape(auto &impl, const CharacterMovementRequest &command,
                                                                                const CharacterFixedTickInput &input,
                                                                                const CharacterControllerMotionInput &previous,
-                                                                               const CharacterControllerDescriptor &descriptor) {
+                                                                               const CharacterControllerDescriptor &descriptor,
+                                                                               const Math::Vec3 carryDisplacement) {
         CharacterShapeMovementCandidate candidate{previous.publication, previous.capsule};
         if (!command.shapeChange && command.stance == CharacterStanceIntent::Keep)
             return Result<CharacterShapeMovementCandidate>::Success(candidate);
-        const auto shape = ResolveShapeChange(impl, command, input, previous.publication, descriptor, previous.capsule, previous.stance);
+        auto capturedInput = input;
+        capturedInput.query.bodyPoseFrame.reset();
+        auto shape = ResolveShapeChange(impl, command, capturedInput, previous.publication, descriptor, previous.capsule, previous.stance);
         if (shape.HasError())
             return Result<CharacterShapeMovementCandidate>::Failure(shape.ErrorValue());
+        if (shape.Value().status == CharacterShapeChangeStatus::Applied && input.query.bodyPoseFrame &&
+            Math::LengthSquared(carryDisplacement) > 0.0F && !SameCapsule(previous.capsule, shape.Value().effectiveCapsule)) {
+            auto transported = previous.publication;
+            transported.position += carryDisplacement;
+            shape = ResolveShapeChange(impl, command, input, transported, descriptor, previous.capsule, previous.stance);
+            if (shape.HasError())
+                return Result<CharacterShapeMovementCandidate>::Failure(shape.ErrorValue());
+        }
         candidate.change = shape.Value();
         candidate.geometryChanged = !SameCapsule(previous.capsule, candidate.change->effectiveCapsule);
         if (candidate.geometryChanged)
@@ -300,18 +311,21 @@ namespace Horo::Character::Detail {
                                                                             CharacterControllerDescriptor descriptor) {
         if (command.filterChange)
             descriptor.selectors = *command.filterChange;
-        const auto shape = ResolveMovementShape(impl, command, input, previous, descriptor);
+        const auto carry = PreparePlatformCarry(impl, previous.publication, previous.platformAttachment, descriptor, input);
+        if (carry.HasError())
+            return Result<CharacterMovementResult>::Failure(carry.ErrorValue());
+        auto framedInput = input;
+        framedInput.query.bodyPoseFrame = carry.Value().bodyPoseFrame;
+        const auto shape = ResolveMovementShape(impl, command, framedInput, previous, descriptor,
+                                                command.detachPlatformRequested ? Math::Vec3{} : carry.Value().displacement);
         if (shape.HasError())
             return Result<CharacterMovementResult>::Failure(shape.ErrorValue());
         const auto &candidate = shape.Value();
         descriptor.capsule = candidate.capsule;
         // The crouch profile is authored against standing geometry, not the temporary query capsule.
         descriptor.crouchedCapsule.reset();
-        const auto carry = PreparePlatformCarry(impl, previous.publication, previous.platformAttachment, descriptor, input);
-        if (carry.HasError())
-            return Result<CharacterMovementResult>::Failure(carry.ErrorValue());
         const auto resolved =
-            ResolveMovementResult(impl, command, candidate.publication, input, descriptor, previous.gravityVelocity, carry.Value());
+            ResolveMovementResult(impl, command, candidate.publication, framedInput, descriptor, previous.gravityVelocity, carry.Value());
         if (resolved.HasError())
             return Result<CharacterMovementResult>::Failure(resolved.ErrorValue());
         CharacterMovementResult movement = std::move(resolved).Value();
@@ -319,8 +333,8 @@ namespace Horo::Character::Detail {
         if (candidate.geometryChanged && !input.query.sweep) {
             ClearGroundEvidence(movement, descriptor.up);
         }
-        if (const auto attachment =
-                ResolveValidatedPlatformAttachment(impl, movement, input, descriptor, previous.platformAttachment, carry.Value().predicted);
+        if (const auto attachment = ResolveValidatedPlatformAttachment(impl, movement, framedInput, descriptor, previous.platformAttachment,
+                                                                       carry.Value().predicted);
             attachment.HasError())
             return Result<CharacterMovementResult>::Failure(attachment.ErrorValue());
         FinalizePlatformDeparture(movement, command, carry.Value(), previous.gravityVelocity, descriptor.up);

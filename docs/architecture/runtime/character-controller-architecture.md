@@ -638,6 +638,24 @@ A kinematic body without a new target remains at its captured pose. The Physics 
 adapter copies completed-snapshot linear/angular velocity for admitted dynamic carry;
 Character predicts exactly one fixed quantum. Neither path reads presentation poses.
 
+A prepared moving support also stages one owned `PhysicsQueryBodyPoseFrame`: its
+captured source pose and publication, exact body/shape generations, predicted pose
+and consuming tick. The same frame reaches every carry, shape-clearance, intent,
+step and ground capsule query. Only the carry-phase copy selects typed `CoMovingCarry`
+participation to omit its own transport support; unrelated obstacles and the original
+exclusion remain effective. All later probes use `PredictedPose` participation.
+A simultaneous stance or explicit shape change first retains captured-start clearance,
+then also checks the bottom-preserving transported endpoint against the predicted
+frame. Both must admit the new geometry; its actual carry remains swept against
+unrelated obstacles. This prevents a rising support from falsely blocking the old
+root while preserving an old ceiling or a blocked destination.
+The canonical adapter queries that body privately at
+the predicted pose while unrelated obstacles retain captured poses; native transforms
+and publications remain unchanged. Custom providers must explicitly advertise
+`PredictedBodyPose` and honor both overlap and sweep frames. Captured-only providers
+fail closed before carry. This extends resident Physics query admission under the
+installed Project collision schema; see the Physics architecture migration contract.
+
 Carry shares the ordinary query/iteration budget and is swept before desired motion.
 `platformCarriedDisplacement` records checked travel, while total achieved velocity
 continues to include carry and intent. Blocked carry detaches with

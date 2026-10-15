@@ -281,8 +281,11 @@ namespace Horo::Character::Detail {
         carryDescriptor.maximumStepHeightMeters = 0.0F;
         auto carryCommand = command;
         carryCommand.desiredVelocityMetersPerSecond = Math::Vec3{};
-        const auto swept = ResolveDesiredDisplacement(impl, result, carryCommand, input, carryDescriptor, motion);
-        if (swept.HasError())
+        auto carryInput = input;
+        if (carryInput.query.bodyPoseFrame)
+            carryInput.query.bodyPoseFrame->participation = Physics::PhysicsQueryFrameParticipation::CoMovingCarry;
+        if (const auto swept = ResolveDesiredDisplacement(impl, result, carryCommand, carryInput, carryDescriptor, motion);
+            swept.HasError())
             return swept;
         result.platformCarriedDisplacement = motion.position - start;
         result.platformCarryRejected = Math::LengthSquared(result.platformCarriedDisplacement - carry.displacement) > 1.0e-10F;
@@ -327,10 +330,7 @@ namespace Horo::Character::Detail {
                                                                                   const CharacterControllerDescriptor &descriptor,
                                                                                   const Math::Vec3 previousGravityVelocity,
                                                                                   const CharacterPlatformCarry &carry) {
-        const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
-                                                         impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
-                                                         impl.descriptor.originGeneration,       input.tick,
-                                                         impl.descriptor.physicsSnapshotRevision};
+        const auto expected = QueryExpectations(impl, input.tick);
         if (const auto valid = ValidateCharacterPhysicsQueryContext(input.query, expected); valid.HasError())
             return Result<CharacterMovementResult>::Failure(valid.ErrorValue());
 

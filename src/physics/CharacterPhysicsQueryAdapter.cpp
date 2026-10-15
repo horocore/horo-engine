@@ -31,7 +31,8 @@ namespace Horo::Character {
                     .geometry = geometry,
                     .filter = MovementFilter(request.queryChannel, request.selectors),
                     .collection = Physics::PhysicsQueryCollection::All,
-                    .maximumHitCount = MaximumCharacterSweepHits};
+                    .maximumHitCount = MaximumCharacterSweepHits,
+                    .bodyPoseFrame = request.bodyPoseFrame};
         }
     }  // namespace
 
@@ -60,7 +61,8 @@ namespace Horo::Character {
                 expected.tick,
                 expected.physicsSnapshotRevision,
                 sweep,
-                platformBody};
+                platformBody,
+                CharacterQueryFrameCapability::PredictedBodyPose};
     }
 
     /** @copydoc CharacterPhysicsQueryAdapter::PlatformBody */

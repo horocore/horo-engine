@@ -42,6 +42,8 @@ namespace Horo::Physics {
     /** @copydoc CharacterClearanceQuery::Probe */
     Result<Character::CharacterOverlapProbeResult> CharacterClearanceQuery::Probe(
         const Character::CharacterOverlapProbeRequest &request) const noexcept {
+        if (request.bodyPoseFrame)
+            return Result<Character::CharacterOverlapProbeResult>::Failure(MakeError(Character::CharacterErrors::OperationUnsupported));
         if (request.sceneGeneration != expected_.sceneGeneration || request.characterWorld != expected_.characterWorld ||
             request.physicsWorld != expected_.physicsWorld)
             return Result<Character::CharacterOverlapProbeResult>::Failure(MakeError(Character::CharacterErrors::HandleWorldMismatch));

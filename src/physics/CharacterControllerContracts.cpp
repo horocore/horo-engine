@@ -407,29 +407,6 @@ namespace Horo::Character {
         return ValidateDescriptorPolicy(descriptor);
     }
 
-    /** @copydoc ValidateCharacterPhysicsQueryContext */
-    Result<void> ValidateCharacterPhysicsQueryContext(const CharacterPhysicsQueryContext &context,
-                                                      const CharacterPhysicsQueryExpectations &expected) {
-        if (const std::array expectedValid{expected.sceneGeneration != 0, expected.characterWorld.IsValid(),
-                                           expected.physicsWorld.IsValid(), expected.collisionFilterGeneration != 0,
-                                           expected.originGeneration != 0, expected.physicsSnapshotRevision != 0};
-            !std::ranges::all_of(expectedValid, std::identity{}))
-            return Result<void>::Failure(MakeError(CharacterErrors::WorldInvalid));
-        if (const std::array ownerMatches{context.sceneGeneration == expected.sceneGeneration,
-                                          context.characterWorld == expected.characterWorld, context.physicsWorld == expected.physicsWorld};
-            !std::ranges::all_of(ownerMatches, std::identity{}))
-            return Result<void>::Failure(MakeError(CharacterErrors::HandleWorldMismatch));
-        if (const std::array snapshotMatches{context.collisionFilterGeneration == expected.collisionFilterGeneration,
-                                             context.originGeneration == expected.originGeneration, context.tick == expected.tick,
-                                             context.physicsSnapshotRevision == expected.physicsSnapshotRevision};
-            !std::ranges::all_of(snapshotMatches, std::identity{}))
-            return Result<void>::Failure(MakeError(CharacterErrors::QuerySnapshotStale));
-        if (context.overlap == nullptr && context.sweep == nullptr)
-            return Result<void>::Failure(
-                MakeError(CharacterErrors::OperationUnsupported, "Character movement requires a Physics overlap or sweep probe."));
-        return Result<void>::Success();
-    }
-
     /** @copydoc ValidateCharacterOverlapProbeResult */
     Result<void> ValidateCharacterOverlapProbeResult(const CharacterOverlapProbeResult &result) {
         if (!Math::IsFinite(result.recoveryDisplacement))

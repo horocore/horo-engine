@@ -11,6 +11,7 @@ namespace Horo::Character::Detail {
         Math::Vec3 startLeaveVelocity{};
         std::optional<CharacterPlatformBodyEvidence> predicted;
         bool stale{};
+        std::optional<Physics::PhysicsQueryBodyPoseFrame> bodyPoseFrame;
     };
 
     /** @brief Validates the complete bounded host target inventory before consulting a support body. */
@@ -56,8 +57,7 @@ namespace Horo::Character::Detail {
                                                           const Math::Quaternion rotation) {
         const auto projected = up * Math::Dot(Math::Vec3{rotation.x, rotation.y, rotation.z}, up);
         const Math::Quaternion twist{projected.x, projected.y, projected.z, rotation.w};
-        const float squared = Math::LengthSquared(projected) + rotation.w * rotation.w;
-        if (!std::isfinite(squared) || squared < 1.0e-12F)
+        if (const float squared = Math::LengthSquared(projected) + rotation.w * rotation.w; !std::isfinite(squared) || squared < 1.0e-12F)
             return Result<Math::Quaternion>::Failure(MakeError(CharacterErrors::RequestInvalid));
         return Result<Math::Quaternion>::Success((twist.Normalized() * heading).Normalized());
     }
@@ -91,7 +91,7 @@ namespace Horo::Character::Detail {
                                                                     const CharacterFixedTickInput &input, const float maximum) {
         CharacterPlatformCarry result;
         result.heading = previous.heading;
-        const float seconds = static_cast<float>(static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
+        const auto seconds = static_cast<float>(static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0);
         if (!std::isfinite(seconds) || seconds <= 0.0F || !Math::IsFinite(body.linearVelocityMetersPerSecond) ||
             !Math::IsFinite(body.angularVelocityRadiansPerSecond))
             return Result<CharacterPlatformCarry>::Failure(MakeError(CharacterErrors::RequestInvalid));
@@ -122,6 +122,8 @@ namespace Horo::Character::Detail {
         if (!Math::IsFinite(result.displacement) || !Math::IsFinite(result.leaveVelocity) || !Math::IsFinite(result.startLeaveVelocity) ||
             Math::Length(result.displacement) > maximum)
             return Result<CharacterPlatformCarry>::Failure(MakeError(CharacterErrors::PlacementInvalid));
+        result.bodyPoseFrame =
+            Physics::PhysicsQueryBodyPoseFrame{body.body, body.shape, body.pose, target, input.query.physicsSnapshotRevision, input.tick};
         return Result<CharacterPlatformCarry>::Success(result);
     }
 
@@ -134,12 +136,10 @@ namespace Horo::Character::Detail {
         empty.heading = previous.heading;
         if (!attachment || attachment->motion == Physics::PhysicsMotionType::Static)
             return Result<CharacterPlatformCarry>::Success(empty);
-        if (!input.query.platformBody || !input.query.sweep || input.observer.movementResult)
+        if (!input.query.platformBody || !input.query.sweep || input.observer.movementResult ||
+            input.query.frameCapability != CharacterQueryFrameCapability::PredictedBodyPose)
             return Result<CharacterPlatformCarry>::Failure(MakeError(CharacterErrors::OperationUnsupported));
-        const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
-                                                         impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
-                                                         impl.descriptor.originGeneration,       input.tick,
-                                                         impl.descriptor.physicsSnapshotRevision};
+        const auto expected = QueryExpectations(impl, input.tick);
         if (const auto valid = ValidateCharacterPhysicsQueryContext(input.query, expected); valid.HasError())
             return Result<CharacterPlatformCarry>::Failure(valid.ErrorValue());
         CharacterMovementResult support;

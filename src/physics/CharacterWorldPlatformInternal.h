@@ -110,10 +110,7 @@ namespace Horo::Character::Detail {
                                                                   const CharacterControllerDescriptor &descriptor,
                                                                   const std::optional<CharacterPlatformAttachment> &previous,
                                                                   const std::optional<CharacterPlatformBodyEvidence> &predicted) {
-        const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
-                                                         impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
-                                                         impl.descriptor.originGeneration,       input.tick,
-                                                         impl.descriptor.physicsSnapshotRevision};
+        const auto expected = QueryExpectations(impl, input.tick);
         if (input.query.platformBody) {
             if (const auto valid = ValidateCharacterPhysicsQueryContext(input.query, expected); valid.HasError())
                 return valid;

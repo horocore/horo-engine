@@ -223,6 +223,7 @@ namespace Horo::Character {
         Physics::PhysicsQueryChannelId queryChannel;
         std::uint32_t iteration{};
         CharacterCollisionSelectors selectors;
+        std::optional<Physics::PhysicsQueryBodyPoseFrame> bodyPoseFrame; /**< Same immutable support view for this tick's probes. */
     };
 
     /**
@@ -271,6 +272,7 @@ namespace Horo::Character {
         Physics::PhysicsQueryChannelId queryChannel;
         std::uint32_t iteration{};
         CharacterCollisionSelectors selectors;
+        std::optional<Physics::PhysicsQueryBodyPoseFrame> bodyPoseFrame; /**< Same immutable support view for this tick's probes. */
     };
 
     /**
@@ -315,6 +317,12 @@ namespace Horo::Character {
     using CharacterPlatformBodyProbe = Result<std::optional<CharacterPlatformBodyEvidence>> (*)(
         void *context, Physics::BodyHandle body, Physics::ShapeHandle shape, std::uint64_t physicsSnapshotRevision) noexcept;
 
+    /** @brief Explicit provider support for side-effect-free predicted support queries. */
+    enum class CharacterQueryFrameCapability : std::uint8_t {
+        CapturedOnly,
+        PredictedBodyPose,
+    };
+
     /**
      * @brief World- and tick-affine read-only query context for placement and movement resolution.
      *
@@ -333,6 +341,8 @@ namespace Horo::Character {
         std::uint64_t physicsSnapshotRevision{};
         CharacterSweepProbe sweep{};
         CharacterPlatformBodyProbe platformBody{}; /**< Absent means attachment evidence is unavailable, not a static pose. */
+        CharacterQueryFrameCapability frameCapability{CharacterQueryFrameCapability::CapturedOnly};
+        std::optional<Physics::PhysicsQueryBodyPoseFrame> bodyPoseFrame; /**< Owner-staged copied view, never a native mutation. */
     };
 
     /** @brief Exact world and snapshot identity expected by one Character query operation. */

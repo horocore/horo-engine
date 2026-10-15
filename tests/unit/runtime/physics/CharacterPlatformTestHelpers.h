@@ -18,6 +18,7 @@ namespace Horo::Character::TestDetail {
         bool bodyPresent{true};
         bool fail{};
         bool wall{};
+        std::optional<CharacterPlatformAttachment> referenceAttachment;
         CharacterWorld *shutdownWorld{};
         std::uint32_t bodyReads{};
         std::uint32_t failOnRead{};
@@ -25,8 +26,25 @@ namespace Horo::Character::TestDetail {
         static Result<CharacterSweepProbeResult> Sweep(void *context, const CharacterSweepProbeRequest &request) noexcept {
             const auto &probe = *static_cast<PlatformProbe *>(context);
             CharacterSweepProbeResult result;
-            if (probe.groundPresent && request.direction.y < -0.5F && probe.ground.distanceMeters <= request.maximumDistanceMeters) {
-                result.hits[0] = probe.ground;
+            auto ground = probe.ground;
+            float distance = ground.distanceMeters;
+            if (request.bodyPoseFrame && probe.referenceAttachment) {
+                const auto &frame = *request.bodyPoseFrame;
+                const auto rotation = frame.predictedPose.rotation * frame.sourcePose.rotation.Inverse();
+                ground.point = frame.predictedPose.translation + rotation.Rotate(ground.point - frame.sourcePose.translation);
+                ground.normal = rotation.Rotate(ground.normal);
+                const auto root =
+                    frame.predictedPose.translation + frame.predictedPose.rotation.Rotate(probe.referenceAttachment->localRoot.translation);
+                const float approach = -Math::Dot(request.direction, ground.normal);
+                if (approach > 0.0F)
+                    distance = (ground.distanceMeters + Math::Dot(request.position - root, ground.normal)) / approach;
+            }
+            const bool coMoving =
+                request.bodyPoseFrame && request.bodyPoseFrame->participation == Physics::PhysicsQueryFrameParticipation::CoMovingCarry;
+            if (!coMoving && probe.groundPresent && Math::Dot(request.direction, ground.normal) < -0.5F && distance >= 0.0F &&
+                distance <= request.maximumDistanceMeters) {
+                ground.distanceMeters = distance;
+                result.hits[0] = ground;
                 result.hitCount = 1;
             }
             if (probe.wall && request.direction.x > 0.5F) {
@@ -61,7 +79,8 @@ namespace Horo::Character::TestDetail {
                     tick,
                     world.physicsSnapshotRevision,
                     Sweep,
-                    Body};
+                    Body,
+                    CharacterQueryFrameCapability::PredictedBodyPose};
         }
     };
 
@@ -107,7 +126,13 @@ namespace Horo::Character::TestDetail {
             }
         }
 
+        void CaptureAttachmentReference() {
+            const auto saved = world->ControllerLocomotionSnapshot(controller);
+            probe.referenceAttachment = saved.HasValue() ? saved.Value().movement.platformAttachment : std::nullopt;
+        }
+
         CharacterFixedTickInput QueuedTick(const std::uint64_t tick) {
+            CaptureAttachmentReference();
             REQUIRE(world->QueueMovementCommand(Movement(controller, tick, tick)).HasValue());
             auto input = FixedTick(tick);
             input.query = probe.Context(world->Descriptor(), tick);
@@ -117,6 +142,7 @@ namespace Horo::Character::TestDetail {
         Result<void> Tick(const std::uint64_t tick, const bool jump = false,
                           const std::span<const Physics::PhysicsKinematicTargetCommand> targets = {}, const bool detach = false,
                           const Math::Vec3 velocity = {}) {
+            CaptureAttachmentReference();
             auto command = Movement(controller, tick, tick);
             command.jumpRequested = jump;
             command.detachPlatformRequested = detach;
