@@ -3,7 +3,7 @@
 
 namespace Horo::SceneSource {
     namespace {
-        using namespace Prefab::ValueTestSupport;
+        using namespace Prefab::RuntimeValueTestSupport;
 
         /** @brief Retained publication rejects substituted source-only candidates and unavailable current schema context. */
         void CheckProjectionFences(const SceneSourceDocument &document, const Prefab::PrefabSourceResolverSnapshot &sources,
@@ -23,13 +23,28 @@ namespace Horo::SceneSource {
             CHECK(unavailable.Value().instances[0].rebasedValues->orphans.size() == 1);
         }
 
+        /** @brief Checks actual typed enablement and keeps unsupported raw prefab components rejected. */
+        void CheckSupportedProjection(const Prefab::PrefabSourceResolverSnapshot &sources, const Prefab::PrefabInstanceId instance) {
+            SceneSourceDocument original;
+            original.prefabInstances.push_back({instance, Prefab::PrefabAssetReference::Create(Asset()).Value(), {}, {}});
+            const auto baseline = ConvertSceneSourceToRuntime({original.objects, original.prefabInstances}, {19}, {1}, sources, Limits());
+            REQUIRE(baseline.HasValue());
+            REQUIRE(baseline.Value().Entities()[0].components.navigationAgent);
+            CHECK(baseline.Value().Entities()[0].components.navigationAgent->enabled);
+            const auto unsupported = ConvertSceneSourceToRuntime({original.objects, original.prefabInstances}, {19}, {1},
+                                                                 Prefab::ValueTestSupport::Sources(), Limits());
+            REQUIRE(unsupported.HasError());
+            CHECK(unsupported.ErrorValue().code.Value() == "scene_conversion.prefab_component_projection_unsupported");
+        }
+
         TEST_CASE("Fresh cached and actual worker Scene conversion apply identical typed instance overrides",
                   "[unit][scene][prefab][override]") {
             const auto sources = Sources();
             const auto schemas = Schemas();
             const auto instance = Prefab::PrefabInstanceId::Create(9).Value();
             const auto source = sources.Resolve(Asset(), instance, Limits()).Value();
-            auto values = Prefab::PreparePrefabValueEdit(source, std::nullopt, {Prefab::PrefabValueEditKind::Assign, Property(), 5.0},
+            CheckSupportedProjection(sources, instance);
+            auto values = Prefab::PreparePrefabValueEdit(source, std::nullopt, {Prefab::PrefabValueEditKind::Assign, Property(), false},
                                                          &schemas, Limits())
                               .Value()
                               .rebased;
@@ -47,8 +62,8 @@ namespace Horo::SceneSource {
                 ConvertSceneSourceToRuntime({document.objects, document.prefabInstances}, {19}, {1}, sources, Limits(), &schemas);
             REQUIRE(runtime.HasValue());
             REQUIRE(runtime.Value().Entities().size() == 1);
-            const auto &payload = runtime.Value().Entities()[0].components.gameplayComponents[0].payload;
-            CHECK(std::string(reinterpret_cast<const char *>(payload.data()), payload.size()) == "{\"speed\":5.0}");
+            const auto &agent = runtime.Value().Entities()[0].components.navigationAgent;
+            CHECK_FALSE(agent);  // Canonical runtime conversion omits explicitly disabled Navigation components.
             CheckProjectionFences(document, sources, schemas, fresh.Value(), source);
             JobSystem jobs;
             ScenePrefabExpansionOwner owner{jobs};
@@ -58,7 +73,7 @@ namespace Horo::SceneSource {
             auto completed = owner.TakeCompleted(request);
             REQUIRE(completed.HasValue());
             REQUIRE(completed.Value());
-            CHECK(completed.Value()->Entities()[0].components.gameplayComponents[0].payload == payload);
+            CHECK(completed.Value()->Entities()[0].components.navigationAgent == agent);
             REQUIRE(owner.Submit(request).HasValue());
             REQUIRE(owner.Join(ExpansionTestSupport::TestJoin).HasValue());
             request.valueSchemas.reset();

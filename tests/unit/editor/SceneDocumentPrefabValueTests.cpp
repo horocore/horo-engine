@@ -4,7 +4,7 @@
 
 namespace Horo::Editor {
     namespace {
-        using namespace Prefab::ValueTestSupport;
+        using namespace Prefab::RuntimeValueTestSupport;
 
         /** @brief Verify one rejected operation preserves both committed revision and the exact owned authoring intent. */
         void CheckRejectedEdit(const SceneDocument &document, const Result<SceneCommandResult> &result, const DocumentRevision revision,
@@ -26,8 +26,8 @@ namespace Horo::Editor {
             auto runtime = ConvertSceneDocumentToRuntime(snapshot, {20}, sources, Limits(), &schemas);
             REQUIRE(runtime.HasValue());
             REQUIRE(runtime.Value().Entities().size() == 1);
-            const auto &payload = runtime.Value().Entities()[0].components.gameplayComponents[0].payload;
-            CHECK(std::string(reinterpret_cast<const char *>(payload.data()), payload.size()) == "{\"speed\":5.0}");
+            const auto &agent = runtime.Value().Entities()[0].components.navigationAgent;
+            CHECK_FALSE(agent);  // Canonical runtime conversion omits explicitly disabled Navigation components.
             const auto bytes = SceneSource::EncodeSceneSource({document.Objects(), document.PrefabInstances()});
             auto decoded = SceneSource::DecodeSceneSource(bytes);
             REQUIRE(decoded.HasValue());
@@ -50,7 +50,7 @@ namespace Horo::Editor {
                                             document.Revision(),
                                             source.Revision(),
                                             schemas.Revision(),
-                                            {Prefab::PrefabValueEditKind::Assign, Property(), 5.0},
+                                            {Prefab::PrefabValueEditKind::Assign, Property(), false},
                                             document.ReplacementEpoch()};
             REQUIRE(commands.Execute(old, sources, &schemas, Limits()).HasValue());
             REQUIRE(document.LoadSaved({}, placements).HasValue());
@@ -84,7 +84,7 @@ namespace Horo::Editor {
                                                 document.Revision(),
                                                 source.Revision(),
                                                 schemas.Revision(),
-                                                {Prefab::PrefabValueEditKind::Assign, Property(), 5.0},
+                                                {Prefab::PrefabValueEditKind::Assign, Property(), false},
                                                 document.ReplacementEpoch()};
             const auto before = document.Revision();
             auto assigned = commands.Execute(command, sources, &schemas, Limits());
@@ -110,7 +110,7 @@ namespace Horo::Editor {
             command.expectedRevision = unchanged;
             command.edit.kind = Prefab::PrefabValueEditKind::Assign;
             command.edit.value = 11.0;
-            CHECK(commands.Execute(command, Sources("{\"speed\":2.0}", 2), &schemas, Limits()).HasError());
+            CHECK(commands.Execute(command, Sources(2.0, 2), &schemas, Limits()).HasError());
             CheckRejectedEdit(document, commands.Execute(command, sources, &schemas, Limits()), unchanged, retained);
             CancellationSource cancelled;
             cancelled.RequestCancellation();

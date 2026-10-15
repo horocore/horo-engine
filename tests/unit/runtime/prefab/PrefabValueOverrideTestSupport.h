@@ -23,8 +23,8 @@ namespace Horo::Prefab::ValueTestSupport {
         return PrefabObjectAddress::Create({}, LocalObjectId{0}).Value();
     }
 
-    inline PrefabPropertyAddress Property() {
-        return PrefabPropertyAddress::Create(Object(), Type(), PrefabComponentInstanceId::Create(1).Value(),
+    inline PrefabPropertyAddress Property(const Gameplay::ComponentTypeId &type = Type()) {
+        return PrefabPropertyAddress::Create(Object(), type, PrefabComponentInstanceId::Create(1).Value(),
                                              PrefabPropertyId::Create(7).Value())
             .Value();
     }
@@ -37,14 +37,15 @@ namespace Horo::Prefab::ValueTestSupport {
             .Value();
     }
 
-    inline PrefabSourceResolverSnapshot Sources(const std::string_view payload = "{\"speed\":2.0}", const std::uint8_t revision = 1) {
+    inline PrefabSourceResolverSnapshot Sources(const std::string_view payload = "{\"speed\":2.0}", const std::uint8_t revision = 1,
+                                                const Gameplay::ComponentTypeId &type = Type()) {
         Assets::AssetRegistry registry;
         REQUIRE(registry
                     .Publish({{Asset(), Assets::AssetTypeId::Parse("core.prefab").Value(),
                                ProjectPath::Parse("assets/value.prefab").Value(), ProjectPath::Parse("assets/value.prefab.horo").Value()}})
                     .status == Assets::AssetRegistryBuildStatus::Complete);
         Gameplay::SerializedComponent component;
-        component.typeId = Type();
+        component.typeId = type;
         component.payload.assign(reinterpret_cast<const std::byte *>(payload.data()),
                                  reinterpret_cast<const std::byte *>(payload.data() + payload.size()));
         PrefabObjectNode object{.localId = {0}, .name = "Root"};
@@ -68,3 +69,34 @@ namespace Horo::Prefab::ValueTestSupport {
         return Sources(payload, revision).Resolve(Asset(), PrefabInstanceId::Create(9).Value(), Limits()).Value();
     }
 }  // namespace Horo::Prefab::ValueTestSupport
+
+namespace Horo::Prefab::RuntimeValueTestSupport {
+    using ValueTestSupport::Asset;
+    using ValueTestSupport::Limits;
+
+    /** @brief Selects a real component supported by the canonical prefab-to-runtime projector. */
+    inline Gameplay::ComponentTypeId Type() {
+        return Gameplay::ComponentTypeId::Parse("game.horo.navigation_agent").Value();
+    }
+
+    /** @brief Addresses the stable enablement property of the actual typed Navigation component. */
+    inline PrefabPropertyAddress Property() {
+        return ValueTestSupport::Property(Type());
+    }
+
+    /** @brief Supplies actual owned boolean schema evidence for runtime projection. */
+    inline PrefabValueSchemaSnapshot Schemas() {
+        return PrefabValueSchemaSnapshot::Create({{Type(), PrefabPropertyId::Create(7).Value(),
+                                                   Gameplay::ComponentPropertyId::Parse("enabled").Value(), 1,
+                                                   Gameplay::ComponentPropertyKind::Boolean, true}},
+                                                 Limits())
+            .Value();
+    }
+
+    /** @brief Publishes valid complete Navigation payloads rather than assuming arbitrary raw components are executable. */
+    inline PrefabSourceResolverSnapshot Sources(const double radius = 2.0, const std::uint8_t revision = 1) {
+        const std::string payload = "{\"schemaVersion\":1,\"profile\":1,\"filter\":1,\"radiusOverride\":" + std::to_string(radius) +
+                                    ",\"movementCapability\":\"grounded\",\"enabled\":true}";
+        return ValueTestSupport::Sources(payload, revision, Type());
+    }
+}  // namespace Horo::Prefab::RuntimeValueTestSupport
