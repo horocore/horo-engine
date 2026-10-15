@@ -28,14 +28,18 @@ namespace Horo::WorldStreaming {
             bool predicting{};
             std::optional<WorldPartitionSpatialCursor> cursor;
             std::optional<StreamingSourceShape> queryShape;
-        } cycle;
+        };
+
+        Cycle cycle;
 
         /** @brief Complete published plan stamps, replaced together only at a successful cycle boundary. */
         struct Publication final {
             std::uint64_t publishedRevision{};
             std::uint64_t planSequence{};
             std::uint64_t publishedTime{};
-        } publication;
+        };
+
+        Publication publication;
 
         StreamingSourcePlannerConfig config;
         WorldPartitionRegistrySnapshot partition;
