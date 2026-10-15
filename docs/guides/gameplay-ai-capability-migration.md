@@ -66,6 +66,27 @@ and preserved opaque values. Native object memory, padding and addresses are nev
 serialized. Script operation diagnostics come from the admitted binding, not VM
 supplied identity fields.
 
+## Canonical script identities
+
+The new version-1 script surface uses canonical lowercase, dot-separated identities
+with hyphens inside segments. Functions include `resolve-agent`, `start-task`,
+`task-state`, `cancel-task`, `complete-task`, `read-blackboard` and
+`write-blackboard`. Logical projections use `ai-scalar`, `ai-value`, `ai-write`,
+`element-kind`, `opaque-version` and `opaque-type`. Script/Lua callers must use
+these names; the earlier unmerged underscore spellings never admitted a descriptor
+generation and are not retained as aliases. The common descriptor validator is
+unchanged.
+
+Native AI error descriptors remain unchanged. A closed, explicit mapping declares
+the script error identities, for example `ai.scene.capability-unavailable` for
+native `ai.scene.capability_unavailable`. Failure transport preserves the native
+domain, message and copied cause details, and includes the original exact code in
+`native-code` evidence. Descriptor declarations and invocation failure transport
+share that same mapping. An unmapped native error becomes declared `ai.native-error`
+with its original domain, exact code and cause evidence retained; no arbitrary
+error identity is normalized. Native callers
+continue to receive the original typed AI error.
+
 ## Reload and image lifetime
 
 Module cancellation and AI revocation occur before native prepare-reload/stop

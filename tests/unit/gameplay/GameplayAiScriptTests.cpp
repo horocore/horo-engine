@@ -1,6 +1,7 @@
 #include "GameplayAiTestSupport.h"
 #include "Horo/Gameplay/GameplayAiScriptBridge.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace Horo::Gameplay {
@@ -28,6 +29,8 @@ namespace Horo::Gameplay {
                 for (const auto &function : api.functions)
                     functions.push_back(function.id);
                 auto descriptors = BuildScriptExportDescriptorSnapshot(std::array{api});
+                if (descriptors.HasError())
+                    INFO(descriptors.ErrorValue().message);
                 REQUIRE(descriptors.HasValue());
                 auto grant = admission.Grant({"horo.ai"});
                 REQUIRE(grant.HasValue());
@@ -99,7 +102,7 @@ namespace Horo::Gameplay {
             }
 
             ScriptValue Agent() {
-                return Value("resolve_agent", {ScriptValue{std::uint64_t{1}}});
+                return Value("resolve-agent", {ScriptValue{std::uint64_t{1}}});
             }
         };
 
@@ -112,26 +115,55 @@ namespace Horo::Gameplay {
                     for (auto &[id, item] : scalar)
                         if (id == "boolean")
                             item = ScriptValue{boolean};
-                    field = ScriptValue::Struct("ai_scalar", std::move(scalar));
+                    field = ScriptValue::Struct("ai-scalar", std::move(scalar));
                 }
-            return ScriptValue::Struct("ai_value", std::move(value));
+            return ScriptValue::Struct("ai-value", std::move(value));
         }
     }  // namespace
+
+    TEST_CASE("Script AI descriptor admits canonical names and rejects underscore declarations", "[gameplay][ai][script]") {
+        auto api = MakeGameplayAiScriptDescriptor("com.example.module", {"horo.ai"});
+        auto snapshot = BuildScriptExportDescriptorSnapshot(std::array{api});
+        if (snapshot.HasError())
+            INFO(snapshot.ErrorValue().message);
+        REQUIRE(snapshot.HasValue());
+        const auto *admitted = snapshot.Value()->Find(GameplayAiScriptApiId);
+        REQUIRE(admitted);
+        CHECK(admitted->functions.size() == 8);
+        CHECK(admitted->errors.size() == 17);
+        CHECK(std::ranges::any_of(admitted->errors, [](const auto &error) {
+            return error.id == "ai.native-error";
+        }));
+        CHECK(std::ranges::any_of(admitted->functions, [](const auto &function) {
+            return function.id == "resolve-agent";
+        }));
+        CHECK(std::ranges::any_of(admitted->errors, [](const auto &error) {
+            return error.id == "ai.scene.capability-unavailable";
+        }));
+
+        SECTION("Types retain strict canonical admission") {
+            api.types.front().id = "ai_scalar";
+        }
+        SECTION("Native error codes require an explicit script identity") {
+            api.errors.front().id = AI::AIErrors::CapabilityUnavailable.code.Value();
+        }
+        CHECK(BuildScriptExportDescriptorSnapshot(std::array{api}).HasError());
+    }
 
     TEST_CASE("Script AI opaque operations mutate the same native scene task lifecycle", "[gameplay][ai][script]") {
         ScriptFixture fixture;
         auto agent = fixture.Agent();
-        auto task = fixture.Value("start_task", {agent, ScriptValue{std::uint64_t{42}}});
+        auto task = fixture.Value("start-task", {agent, ScriptValue{std::uint64_t{42}}});
         REQUIRE(task.AsHandle());
         CHECK(task.AsHandle()->type == "horo.ai.task");
         CHECK(fixture.native.runtime.Find(fixture.native.agent).Value().hasRunningTask);
-        auto running = fixture.Value("task_state", {task});
+        auto running = fixture.Value("task-state", {task});
         REQUIRE(running.AsUnsignedInteger());
         CHECK(*running.AsUnsignedInteger() == static_cast<std::uint64_t>(AI::AiTaskState::Running));
-        REQUIRE(fixture.Call("complete_task", {task}).IsSuccess());
-        CHECK(*fixture.Value("task_state", {task}).AsUnsignedInteger() == static_cast<std::uint64_t>(AI::AiTaskState::Succeeded));
+        REQUIRE(fixture.Call("complete-task", {task}).IsSuccess());
+        CHECK(*fixture.Value("task-state", {task}).AsUnsignedInteger() == static_cast<std::uint64_t>(AI::AiTaskState::Succeeded));
         REQUIRE(fixture.Call("release", {task}).IsSuccess());
-        CHECK(fixture.Call("task_state", {task}).IsFailure());
+        CHECK(fixture.Call("task-state", {task}).IsFailure());
         auto native = fixture.native.context->StartTask(fixture.native.agent, AiTestSupport::MakeIdentity<AI::TaskId>(41));
         REQUIRE(native.HasValue());
         REQUIRE(fixture.native.context->CancelTask(fixture.native.agent, native.Value()).HasValue());
@@ -142,17 +174,17 @@ namespace Horo::Gameplay {
         ScriptFixture fixture;
         auto agent = fixture.Agent();
         const ScriptValue key{std::uint64_t{71}};
-        auto old = fixture.Value("read_blackboard", {agent, key});
+        auto old = fixture.Value("read-blackboard", {agent, key});
         const auto write = [&](std::uint64_t identity, bool value) {
-            return ScriptValue::Struct("ai_write", {{"key", ScriptValue{identity}}, {"value", BooleanValue(old, value)}});
+            return ScriptValue::Struct("ai-write", {{"key", ScriptValue{identity}}, {"value", BooleanValue(old, value)}});
         };
-        auto committed = fixture.Call("write_blackboard", {agent, ScriptValue::Array({write(71, true)})});
+        auto committed = fixture.Call("write-blackboard", {agent, ScriptValue::Array({write(71, true)})});
         REQUIRE(committed.IsSuccess());
         auto native = fixture.native.context->ReadBlackboard(fixture.native.agent, AiTestSupport::MakeIdentity<AI::BlackboardKeyId>(71));
         REQUIRE(native.HasValue());
         REQUIRE(native.Value());
         CHECK(std::get<bool>(std::get<AI::BlackboardScalarValue>(*native.Value())));
-        auto rejected = fixture.Call("write_blackboard", {agent, ScriptValue::Array({write(71, false), write(999, false)})});
+        auto rejected = fixture.Call("write-blackboard", {agent, ScriptValue::Array({write(71, false), write(999, false)})});
         REQUIRE(rejected.IsFailure());
         CHECK(rejected.error->domain == "horo.ai");
         CHECK(std::get<bool>(std::get<AI::BlackboardScalarValue>(
@@ -162,7 +194,7 @@ namespace Horo::Gameplay {
     TEST_CASE("Script AI reload and provider retirement cancel owned work and reject retained handles", "[gameplay][ai][script]") {
         ScriptFixture fixture;
         auto agent = fixture.Agent();
-        auto task = fixture.Value("start_task", {agent, ScriptValue{std::uint64_t{42}}});
+        auto task = fixture.Value("start-task", {agent, ScriptValue{std::uint64_t{42}}});
         SECTION("script reload") {
             fixture.context->Reset();
         }
@@ -174,7 +206,7 @@ namespace Horo::Gameplay {
         }
         fixture.bridge.ReapRevokedAtSafePoint();
         CHECK_FALSE(fixture.native.runtime.Find(fixture.native.agent).Value().hasRunningTask);
-        CHECK(fixture.bridge.InvokeAtSafePoint(*fixture.binding, fixture.provider, {.functionId = "task_state", .arguments = {task}})
+        CHECK(fixture.bridge.InvokeAtSafePoint(*fixture.binding, fixture.provider, {.functionId = "task-state", .arguments = {task}})
                   .HasError());
         CHECK(fixture.native.context->StartTask(fixture.native.agent, AiTestSupport::MakeIdentity<AI::TaskId>(41)).HasValue());
     }
@@ -182,13 +214,16 @@ namespace Horo::Gameplay {
     TEST_CASE("Script AI missing runtime and undeclared tasks produce owned typed errors", "[gameplay][ai][script]") {
         ScriptFixture fixture;
         auto agent = fixture.Agent();
-        auto unknown = fixture.Call("start_task", {agent, ScriptValue{std::uint64_t{999}}});
+        auto unknown = fixture.Call("start-task", {agent, ScriptValue{std::uint64_t{999}}});
         REQUIRE(unknown.IsFailure());
-        CHECK(unknown.error->code == AI::AIErrors::CapabilityUnavailable.code.Value());
+        CHECK(unknown.error->code == "ai.scene.capability-unavailable");
+        REQUIRE(unknown.error->details.size() == 1);
+        CHECK(unknown.error->details.front().id == "native-code");
+        CHECK(unknown.error->details.front().value.AsString() == AI::AIErrors::CapabilityUnavailable.code.Value());
         fixture.native.context->Revoke();
-        auto revoked = fixture.Call("resolve_agent", {ScriptValue{std::uint64_t{1}}});
+        auto revoked = fixture.Call("resolve-agent", {ScriptValue{std::uint64_t{1}}});
         REQUIRE(revoked.IsFailure());
-        CHECK(revoked.error->code == AI::AIErrors::CapabilityUnavailable.code.Value());
+        CHECK(revoked.error->code == "ai.scene.capability-unavailable");
     }
 
     TEST_CASE("Script AI typed blackboard projection round trips exact scalar and maximum collection values", "[gameplay][ai][script]") {
@@ -211,9 +246,9 @@ namespace Horo::Gameplay {
         for (const auto &original : values) {
             ScriptFixture fixture{original};
             auto agent = fixture.Agent();
-            auto copied = fixture.Value("read_blackboard", {agent, ScriptValue{std::uint64_t{71}}});
-            auto write = ScriptValue::Struct("ai_write", {{"key", ScriptValue{std::uint64_t{71}}}, {"value", copied}});
-            auto committed = fixture.Call("write_blackboard", {agent, ScriptValue::Array({std::move(write)})});
+            auto copied = fixture.Value("read-blackboard", {agent, ScriptValue{std::uint64_t{71}}});
+            auto write = ScriptValue::Struct("ai-write", {{"key", ScriptValue{std::uint64_t{71}}}, {"value", copied}});
+            auto committed = fixture.Call("write-blackboard", {agent, ScriptValue::Array({std::move(write)})});
             REQUIRE(committed.IsSuccess());
             auto native =
                 fixture.native.context->ReadBlackboard(fixture.native.agent, AiTestSupport::MakeIdentity<AI::BlackboardKeyId>(71));

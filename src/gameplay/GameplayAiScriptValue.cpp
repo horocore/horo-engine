@@ -46,7 +46,7 @@ namespace Horo::Gameplay::Detail {
                     z = mm[2];
                 }
             }, value);
-            return ScriptValue::Struct("ai_scalar", {{"kind", ScriptValue{static_cast<std::uint64_t>(value.index())}},
+            return ScriptValue::Struct("ai-scalar", {{"kind", ScriptValue{static_cast<std::uint64_t>(value.index())}},
                                                      {"boolean", ScriptValue{boolean}},
                                                      {"integer", ScriptValue{integer}},
                                                      {"number", ScriptValue{number}},
@@ -112,7 +112,7 @@ namespace Horo::Gameplay::Detail {
             const auto bad = [] {
                 return Result<AI::BlackboardScalarValue>::Failure(MakeError(AI::AIErrors::BlackboardValueInvalid));
             };
-            if (value.StructType() != "ai_scalar")
+            if (value.StructType() != "ai-scalar")
                 return bad();
             const auto *kind = Field(value, "kind");
             if (!kind || !kind->AsUnsignedInteger())
@@ -156,7 +156,7 @@ namespace Horo::Gameplay::Detail {
                 return Result<AI::BlackboardValue>::Failure(MakeError(AI::AIErrors::BlackboardValueInvalid));
             };
 
-            const auto *type = Field(value, "element_kind"), *elements = Field(value, "elements");
+            const auto *type = Field(value, "element-kind"), *elements = Field(value, "elements");
             if (!type || !elements || !type->AsUnsignedInteger() ||
                 *type->AsUnsignedInteger() >= static_cast<std::uint64_t>(AI::BlackboardValueKind::Count) ||
                 elements->GetKind() != ScriptValue::Kind::Array || elements->AsArray().size() > AI::MaximumBlackboardCollectionElements)
@@ -179,7 +179,7 @@ namespace Horo::Gameplay::Detail {
             const auto bad = [] {
                 return Result<AI::BlackboardValue>::Failure(MakeError(AI::AIErrors::BlackboardValueInvalid));
             };
-            const auto *version = Field(value, "opaque_version"), *type = Field(value, "opaque_type"), *bytes = Field(value, "opaque");
+            const auto *version = Field(value, "opaque-version"), *type = Field(value, "opaque-type"), *bytes = Field(value, "opaque");
             if (!version || !type || !bytes || !version->AsUnsignedInteger() || !type->AsUnsignedInteger() ||
                 *version->AsUnsignedInteger() == 0 || *version->AsUnsignedInteger() > std::numeric_limits<std::uint32_t>::max() ||
                 *type->AsUnsignedInteger() == 0 || *type->AsUnsignedInteger() > std::numeric_limits<std::uint32_t>::max() ||
@@ -212,12 +212,12 @@ namespace Horo::Gameplay::Detail {
             type = opaqueValue.serializedType;
             opaque.assign(opaqueValue.bytes.begin(), opaqueValue.bytes.begin() + opaqueValue.size);
         }
-        return ScriptValue::Struct("ai_value", {{"kind", ScriptValue{static_cast<std::uint64_t>(value.index())}},
+        return ScriptValue::Struct("ai-value", {{"kind", ScriptValue{static_cast<std::uint64_t>(value.index())}},
                                                 {"scalar", Scalar(scalar)},
-                                                {"element_kind", ScriptValue{elementKind}},
+                                                {"element-kind", ScriptValue{elementKind}},
                                                 {"elements", ScriptValue::Array(std::move(elements))},
-                                                {"opaque_version", ScriptValue{version}},
-                                                {"opaque_type", ScriptValue{type}},
+                                                {"opaque-version", ScriptValue{version}},
+                                                {"opaque-type", ScriptValue{type}},
                                                 {"opaque", ScriptValue{std::move(opaque)}}});
     }
 
@@ -227,7 +227,7 @@ namespace Horo::Gameplay::Detail {
             return Result<AI::BlackboardValue>::Failure(MakeError(AI::AIErrors::BlackboardValueInvalid));
         };
         const auto *kind = Field(value, "kind");
-        if (value.StructType() != "ai_value" || !kind || !kind->AsUnsignedInteger())
+        if (value.StructType() != "ai-value" || !kind || !kind->AsUnsignedInteger())
             return bad();
         if (*kind->AsUnsignedInteger() == 0) {
             const auto *v = Field(value, "scalar");

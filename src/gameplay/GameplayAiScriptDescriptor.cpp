@@ -1,3 +1,4 @@
+#include "GameplayAiScriptValue.h"
 #include "Horo/Gameplay/GameplayAiScriptBridge.h"
 
 namespace Horo::Gameplay {
@@ -19,7 +20,7 @@ namespace Horo::Gameplay {
         std::vector<ScriptExportTypeDescriptor> ValueTypes() {
             using P = ScriptExportPrimitiveKind;
             using K = ScriptExportNamedTypeKind;
-            ScriptExportTypeDescriptor scalar{.id = "ai_scalar", .kind = K::Struct, .introducedVersion = Version};
+            ScriptExportTypeDescriptor scalar{.id = "ai-scalar", .kind = K::Struct, .introducedVersion = Version};
             scalar.fields = {PrimitiveField("kind", P::UnsignedInteger),
                              PrimitiveField("boolean", P::Boolean),
                              PrimitiveField("integer", P::SignedInteger),
@@ -31,25 +32,25 @@ namespace Horo::Gameplay {
                              PrimitiveField("x", P::SignedInteger),
                              PrimitiveField("y", P::SignedInteger),
                              PrimitiveField("z", P::SignedInteger)};
-            ScriptExportTypeDescriptor elements{.id = "ai_elements",
+            ScriptExportTypeDescriptor elements{.id = "ai-elements",
                                                 .kind = K::Array,
                                                 .introducedVersion = Version,
-                                                .elementType = {.namedType = "ai_scalar"},
+                                                .elementType = {.namedType = "ai-scalar"},
                                                 .maximumElements = AI::MaximumBlackboardCollectionElements};
-            ScriptExportTypeDescriptor value{.id = "ai_value", .kind = K::Struct, .introducedVersion = Version};
+            ScriptExportTypeDescriptor value{.id = "ai-value", .kind = K::Struct, .introducedVersion = Version};
             value.fields = {PrimitiveField("kind", P::UnsignedInteger),
-                            NamedField("scalar", "ai_scalar"),
-                            PrimitiveField("element_kind", P::UnsignedInteger),
-                            NamedField("elements", "ai_elements"),
-                            PrimitiveField("opaque_version", P::UnsignedInteger),
-                            PrimitiveField("opaque_type", P::UnsignedInteger),
+                            NamedField("scalar", "ai-scalar"),
+                            PrimitiveField("element-kind", P::UnsignedInteger),
+                            NamedField("elements", "ai-elements"),
+                            PrimitiveField("opaque-version", P::UnsignedInteger),
+                            PrimitiveField("opaque-type", P::UnsignedInteger),
                             PrimitiveField("opaque", P::Bytes)};
-            ScriptExportTypeDescriptor write{.id = "ai_write", .kind = K::Struct, .introducedVersion = Version};
-            write.fields = {PrimitiveField("key", P::UnsignedInteger), NamedField("value", "ai_value")};
-            ScriptExportTypeDescriptor writes{.id = "ai_writes",
+            ScriptExportTypeDescriptor write{.id = "ai-write", .kind = K::Struct, .introducedVersion = Version};
+            write.fields = {PrimitiveField("key", P::UnsignedInteger), NamedField("value", "ai-value")};
+            ScriptExportTypeDescriptor writes{.id = "ai-writes",
                                               .kind = K::Array,
                                               .introducedVersion = Version,
-                                              .elementType = {.namedType = "ai_write"},
+                                              .elementType = {.namedType = "ai-write"},
                                               .maximumElements = AI::MaximumBlackboardWritesPerBatch};
             return {std::move(scalar), std::move(elements), std::move(value), std::move(write), std::move(writes)};
         }
@@ -69,6 +70,28 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
+    /** @copydoc Detail::GameplayAiScriptErrorIdentities */
+    std::span<const Detail::GameplayAiScriptErrorIdentity> Detail::GameplayAiScriptErrorIdentities() noexcept {
+        static const std::array
+            identities{GameplayAiScriptErrorIdentity{&AI::AIErrors::CapabilityUnavailable, "ai.scene.capability-unavailable"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::RuntimeUnavailable, "ai.runtime.unavailable"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::HandleInvalid, "ai.handle.invalid"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::IdentityInvalid, "ai.identity.invalid"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::TaskContextInvalid, "ai.task.context-invalid"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::TaskTransitionInvalid, "ai.task.transition-invalid"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::TaskCapacityExceeded, "ai.task.capacity-exceeded"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::CanonicalRestoreStale, "ai.canonical.restore-stale"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::BlackboardValueInvalid, "ai.blackboard.value-invalid"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::BlackboardValueTypeMismatch, "ai.blackboard.value-type-mismatch"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::BlackboardInstanceStale, "ai.blackboard.instance-stale"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::BlackboardBatchInvalid, "ai.blackboard.batch-invalid"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::BlackboardUnknownValueRejected, "ai.blackboard.unknown-value-rejected"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::BlackboardReentrantMutation, "ai.blackboard.reentrant-mutation"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::BlackboardStorageUnavailable, "ai.blackboard.storage-unavailable"},
+                       GameplayAiScriptErrorIdentity{&AI::AIErrors::BlackboardRevisionExhausted, "ai.blackboard.revision-exhausted"}};
+        return identities;
+    }
+
     /** @copydoc MakeGameplayAiScriptDescriptor */
     Extensions::ScriptExportDescriptor MakeGameplayAiScriptDescriptor(std::string moduleId, Extensions::ExtensionCapabilityId capability) {
         using namespace Extensions;
@@ -81,35 +104,23 @@ namespace Horo::Gameplay {
                                    .compatibility = {Version, Version},
                                    .service = {std::move(capability), "horo.gameplay.ai", "horo.gameplay.ai.v1", Version}};
         api.types = ValueTypes();
-        api.functions = {Function("resolve_agent", {integer}, handle),
-                         Function("start_task", {handle, integer}, handle),
-                         Function("task_state", {handle}, integer),
-                         Function("cancel_task", {handle}),
-                         Function("complete_task", {handle}),
+        api.functions = {Function("resolve-agent", {integer}, handle),
+                         Function("start-task", {handle, integer}, handle),
+                         Function("task-state", {handle}, integer),
+                         Function("cancel-task", {handle}),
+                         Function("complete-task", {handle}),
                          Function("release", {handle}),
-                         Function("read_blackboard", {handle, integer},
-                                  ScriptExportTypeReference{.namedType = "ai_value", .nullability = ScriptExportNullability::Nullable}),
-                         Function("write_blackboard", {handle, ScriptExportTypeReference{.namedType = "ai_writes"}}, integer)};
-        const std::array errors{&AI::AIErrors::CapabilityUnavailable,
-                                &AI::AIErrors::RuntimeUnavailable,
-                                &AI::AIErrors::HandleInvalid,
-                                &AI::AIErrors::IdentityInvalid,
-                                &AI::AIErrors::TaskContextInvalid,
-                                &AI::AIErrors::TaskTransitionInvalid,
-                                &AI::AIErrors::TaskCapacityExceeded,
-                                &AI::AIErrors::CanonicalRestoreStale,
-                                &AI::AIErrors::BlackboardValueInvalid,
-                                &AI::AIErrors::BlackboardValueTypeMismatch,
-                                &AI::AIErrors::BlackboardInstanceStale,
-                                &AI::AIErrors::BlackboardBatchInvalid,
-                                &AI::AIErrors::BlackboardUnknownValueRejected,
-                                &AI::AIErrors::BlackboardReentrantMutation,
-                                &AI::AIErrors::BlackboardStorageUnavailable,
-                                &AI::AIErrors::BlackboardRevisionExhausted};
-        for (const auto *error : errors) {
-            api.errors.push_back({.id = error->code.Value(), .introducedVersion = Version, .retryable = error->retryable});
+                         Function("read-blackboard", {handle, integer},
+                                  ScriptExportTypeReference{.namedType = "ai-value", .nullability = ScriptExportNullability::Nullable}),
+                         Function("write-blackboard", {handle, ScriptExportTypeReference{.namedType = "ai-writes"}}, integer)};
+        api.errors.push_back({.id = std::string{Detail::GameplayAiNativeErrorId}, .introducedVersion = Version});
+        for (auto &function : api.functions)
+            function.errorIds.emplace_back(Detail::GameplayAiNativeErrorId);
+        for (const auto &identity : Detail::GameplayAiScriptErrorIdentities()) {
+            api.errors.push_back(
+                {.id = std::string{identity.scriptId}, .introducedVersion = Version, .retryable = identity.native->retryable});
             for (auto &function : api.functions)
-                function.errorIds.push_back(error->code.Value());
+                function.errorIds.emplace_back(identity.scriptId);
         }
         return api;
     }
