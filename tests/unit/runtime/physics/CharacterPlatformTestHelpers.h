@@ -37,7 +37,8 @@ namespace Horo::Character::TestDetail {
                     frame.predictedPose.translation + frame.predictedPose.rotation.Rotate(probe.referenceAttachment->localRoot.translation);
                 const float approach = -Math::Dot(request.direction, ground.normal);
                 if (approach > 0.0F)
-                    distance = (ground.distanceMeters + Math::Dot(request.position - root, ground.normal)) / approach;
+                    // The stored clearance is cast travel; only the displaced origin needs normal-to-ray conversion.
+                    distance = ground.distanceMeters + Math::Dot(request.position - root, ground.normal) / approach;
             }
             const bool coMoving =
                 request.bodyPoseFrame && request.bodyPoseFrame->participation == Physics::PhysicsQueryFrameParticipation::CoMovingCarry;
