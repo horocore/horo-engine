@@ -69,7 +69,16 @@ namespace Horo::Platform::Android {
             return check;
         if (state > PermissionState::Revoked)
             return InputAdmission::Invalid;
+        const bool lostGrant = permission_ == PermissionState::Granted && state != PermissionState::Granted;
         permission_ = state;
+        if (lostGrant) {
+            collector_.Neutralize();
+            for (auto &pad : pads_) {
+                pad.directionKeys = {};
+                pad.directionHat = {};
+            }
+            sensors_ = {};
+        }
         RefreshSensors();
         return InputAdmission::Accepted;
     }

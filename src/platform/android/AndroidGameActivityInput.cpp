@@ -123,7 +123,17 @@ namespace Horo::Platform::Android {
         while (read != written) {
             const auto event = messages_[read % messages_.size()];
             if (event.kind == 1) {
-                static_cast<void>(session_.SetPermission(static_cast<PermissionState>(event.value)));
+                const auto permission = static_cast<PermissionState>(event.value);
+                const bool lostGrant = session_.Permission() == PermissionState::Granted && permission != PermissionState::Granted;
+                static_cast<void>(session_.SetPermission(permission));
+                if (lostGrant) {
+                    touches_ = {};
+                    timespec now{};
+                    if (clock_gettime(CLOCK_MONOTONIC, &now) == 0)
+                        minimumInputTimestamp_ = now.tv_sec * 1'000'000'000LL + now.tv_nsec;
+                    if (clock_gettime(CLOCK_BOOTTIME, &now) == 0)
+                        minimumSensorTimestamp_.fill(now.tv_sec * 1'000'000'000LL + now.tv_nsec);
+                }
                 UpdateSensors();
             } else if (event.kind == 2) {
                 static_cast<void>(session_.DisconnectGamepad(event.value));
@@ -133,6 +143,8 @@ namespace Horo::Platform::Android {
                 timespec now{};
                 if (clock_gettime(CLOCK_MONOTONIC, &now) == 0)
                     minimumInputTimestamp_ = now.tv_sec * 1'000'000'000LL + now.tv_nsec;
+                if (clock_gettime(CLOCK_BOOTTIME, &now) == 0)
+                    minimumSensorTimestamp_.fill(now.tv_sec * 1'000'000'000LL + now.tv_nsec);
             }
             ++read;
         }

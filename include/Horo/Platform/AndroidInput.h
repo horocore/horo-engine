@@ -47,7 +47,8 @@ namespace Horo::Platform::Android {
         /** @brief Apply activity/window focus; loss immediately neutralizes controls and sensor evidence. @param resumed Activity is
          * resumed. @param focused Its window owns focus. @return Typed admission. */
         [[nodiscard]] InputAdmission SetFocus(bool resumed, bool focused) noexcept;
-        /** @brief Apply current Activity Recognition grant before sensor publication. @param state Current platform-observed grant state.
+        /** @brief Apply current Activity Recognition grant; loss neutralizes controls and prior sensor evidence before publication.
+         * @param state Current platform-observed grant state.
          * @return Typed admission. */
         [[nodiscard]] InputAdmission SetPermission(PermissionState state) noexcept;
         /** @brief Project a normalized physical key. @param key Canonical physical key. @param down Held state. @return Typed admission. */

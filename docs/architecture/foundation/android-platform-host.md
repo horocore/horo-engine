@@ -174,7 +174,10 @@ Permission denial, permanent denial, revocation, requesting and settings return
 remain explicit. Step-counter access requires both explicit host admission and
 `ACTIVITY_RECOGNITION`; ordinary collection never prompts. Accelerometer and
 gyroscope require explicit host admission. Focus/pause/device loss neutralizes
-controls and sensor samples before the next committed Input frame.
+controls and sensor samples before the next committed Input frame. A granted-to-
+non-granted permission transition independently neutralizes held controls and all
+prior sensor samples, even when no focus callback arrives. Native input/sensor
+time fences reject pre-revocation buffers before fresh observations resume.
 
 The existing Android qualification application now composes this actual bridge
 with explicit motion-sensor admission and step-counter disabled by default. Its

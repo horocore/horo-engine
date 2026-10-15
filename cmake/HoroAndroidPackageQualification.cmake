@@ -33,12 +33,15 @@ target_include_directories(HoroAndroidPackageQualification PRIVATE "${_horo_acti
     "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/android")
 target_link_libraries(HoroAndroidPackageQualification PRIVATE HoroAndroidInputIntegration
     "-Wl,--whole-archive" "${_horo_activity_library}" "-Wl,--no-whole-archive" android log)
-target_compile_options(HoroAndroidPackageQualification PRIVATE
-    "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=horo-source"
-    "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=horo-build"
-    "-fdebug-prefix-map=$ENV{HORO_GAME_ACTIVITY_ROOT}=game-activity"
-    "-fdebug-prefix-map=$ENV{ANDROID_NDK_ROOT}=android-ndk"
-    "-fdebug-compilation-dir=horo-build")
+# Every contributing object needs deterministic source/debug paths, including static collector dependencies.
+foreach(target HoroFoundation HoroInput HoroAndroidInputIntegration HoroAndroidPackageQualification)
+    target_compile_options(${target} PRIVATE
+        "-ffile-prefix-map=${CMAKE_CURRENT_SOURCE_DIR}=horo-source"
+        "-ffile-prefix-map=${CMAKE_CURRENT_BINARY_DIR}=horo-build"
+        "-fdebug-prefix-map=$ENV{HORO_GAME_ACTIVITY_ROOT}=game-activity"
+        "-fdebug-prefix-map=$ENV{ANDROID_NDK_ROOT}=android-ndk"
+        "-fdebug-compilation-dir=horo-build")
+endforeach()
 target_link_options(HoroAndroidPackageQualification PRIVATE
     "-Wl,--build-id=sha1" "-Wl,-z,max-page-size=16384" "-Wl,--no-undefined")
 set_target_properties(HoroAndroidPackageQualification PROPERTIES OUTPUT_NAME horo-package-qualification)

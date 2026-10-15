@@ -125,3 +125,34 @@ TEST_CASE("Android gamepad hats and physical direction keys retain independent h
     CHECK(session.Hat(9, std::numeric_limits<float>::infinity(), 0) == InputAdmission::Invalid);
     CHECK(session.Hat(99, 0, 0) == InputAdmission::Stale);
 }
+
+TEST_CASE("Android permission loss neutralizes held controls and all prior samples without requiring a focus callback") {
+    Input::RawInputCollector collector;
+    AndroidInputSession session{collector};
+    collector.BeginFrame(1);
+    REQUIRE(session.SetFocus(true, true) == InputAdmission::Accepted);
+    REQUIRE(session.SetPermission(PermissionState::Granted) == InputAdmission::Accepted);
+    REQUIRE(session.ConfigureSensor(SensorKind::Accelerometer, true, true) == InputAdmission::Accepted);
+    REQUIRE(session.Sample(SensorKind::Accelerometer, {1, 2, 3}, 100) == InputAdmission::Accepted);
+    REQUIRE(session.Key(Input::Key::A, true) == InputAdmission::Accepted);
+    REQUIRE(session.Touch({1, 1}, 3, 4, true) == InputAdmission::Accepted);
+    REQUIRE(session.ConnectGamepad(9) == InputAdmission::Accepted);
+    REQUIRE(session.Button(9, Input::GamepadButton::DPadUp, true) == InputAdmission::Accepted);
+    static_cast<void>(collector.Commit());
+    collector.BeginFrame(2);
+    REQUIRE(session.SetPermission(PermissionState::Revoked) == InputAdmission::Accepted);
+    const auto &revoked = collector.Commit();
+    CHECK_FALSE(revoked.State(Input::Key::A).down);
+    CHECK(revoked.State(Input::Key::A).released);
+    CHECK(revoked.touches[0].cancelled);
+    CHECK_FALSE(revoked.gamepads[0].buttons[static_cast<std::size_t>(Input::GamepadButton::DPadUp)].down);
+    CHECK(revoked.sensors[0].availability == SensorAvailability::AwaitingSample);
+    CHECK(revoked.sensors[0].timestampNanoseconds == 0);
+    CHECK((revoked.sensors[0].value == std::array<float, 3>{}));
+    collector.BeginFrame(3);
+    REQUIRE(session.Hat(9, 0, 0) == InputAdmission::Accepted);
+    REQUIRE(session.Key(Input::Key::B, true) == InputAdmission::Accepted);
+    const auto &fresh = collector.Commit();
+    CHECK_FALSE(fresh.gamepads[0].buttons[static_cast<std::size_t>(Input::GamepadButton::DPadUp)].down);
+    CHECK(fresh.State(Input::Key::B).down);
+}
