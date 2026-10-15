@@ -15,6 +15,8 @@ namespace Horo::Character {
 
     /** @brief Finite number of simultaneously retained client grants per Character world. */
     inline constexpr std::uint32_t MaximumCharacterCapabilitiesPerWorld = 256;
+    /** @brief Fixed bound on cancellation-chain traversal for delegated host/module/runtime/script grants. */
+    inline constexpr std::uint8_t MaximumCharacterCapabilityDerivationDepth = 8;
 
     /** @brief Immutable routing evidence; identity alone grants no access. */
     struct CharacterCapabilityIdentity final {
@@ -39,6 +41,16 @@ namespace Horo::Character {
         CharacterCapability() noexcept = default;
         /** @brief Returns copied routing evidence from any thread. @return Invalid identity for an inert/moved-from client. */
         [[nodiscard]] CharacterCapabilityIdentity Identity() const noexcept;
+        /** @brief Checks owner-thread access and the complete grant/world retirement fence without retaining world storage.
+         * @return Success or the original unavailable, revoked, stale or affinity error. */
+        [[nodiscard]] Result<void> Validate() const;
+        /** @brief Issues an independently revocable child at a host lifecycle safe point.
+         * @return Bounded child grant or the original admission/capacity error.
+         * @details The child inherits this grant's cancellation chain. Revoking the child never revokes its parent;
+         * revoking the parent also discards unfrozen child commands. No world pointer or consumer callback escapes.
+         * @pre Owner thread, outside tick/placement callbacks; load-time allocation only.
+         * @details Derivation beyond MaximumCharacterCapabilityDerivationDepth fails with CapacityExceeded. */
+        [[nodiscard]] Result<CharacterCapability> Derive() const;
         /**
          * @brief Installs a controller only during the prepared owner phase.
          * @param descriptor Owned inert descriptor matching the issued scene, Character and Physics worlds.
