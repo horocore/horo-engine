@@ -373,6 +373,77 @@ namespace Horo::WorldStreaming {
         }
     }
 
+    /** @copydoc WorldPartitionRegistrySnapshot::Grid */
+    const WorldCellQuantizationPolicy *WorldPartitionRegistrySnapshot::Grid() const noexcept {
+        return state_ ? &state_->descriptor.Grid() : nullptr;
+    }
+
+    /** @copydoc WorldPartitionRegistrySnapshot::Layers */
+    std::span<const WorldLayerDescriptor> WorldPartitionRegistrySnapshot::Layers() const noexcept {
+        return state_ ? state_->descriptor.Layers() : std::span<const WorldLayerDescriptor>{};
+    }
+
+    /** @copydoc WorldPartitionRegistrySnapshot::BeginQuery */
+    Result<WorldPartitionSpatialCursor> WorldPartitionRegistrySnapshot::BeginQuery(const WorldPartitionSpatialQuery &query) const {
+        if (!IsValid() || !Ordered(query.bounds) || (query.layer && !query.layer->IsValid()))
+            return Failure<WorldPartitionSpatialCursor>(WorldStreamingErrors::PartitionRegistryInvalid);
+        if ((query.layer && !IsDeclaredLayer(state_->descriptor, *query.layer)) ||
+            (query.lod && *query.lod >= state_->descriptor.Grid().LodLevels()))
+            return Failure<WorldPartitionSpatialCursor>(WorldStreamingErrors::PartitionRegistryUnsupported);
+        WorldPartitionSpatialCursor cursor;
+        cursor.binding_ = state_->binding;
+        cursor.query_ = query;
+        cursor.complete_ = state_->spatialIndex.nodes.empty();
+        cursor.pendingCount_ = cursor.complete_ ? 0 : 1;
+        return Result<WorldPartitionSpatialCursor>::Success(cursor);
+    }
+
+    /** @copydoc WorldPartitionRegistrySnapshot::QueryNext */
+    Result<WorldPartitionSpatialBatch> WorldPartitionRegistrySnapshot::QueryNext(WorldPartitionSpatialCursor &cursor,
+                                                                                 const WorldPartitionSpatialWorkBudget budget,
+                                                                                 const std::span<WorldPartitionCellHandle> output) const {
+        if (!IsValid() || !cursor.binding_.IsValid() || budget.nodes == 0 || budget.candidates == 0 || output.empty())
+            return Failure<WorldPartitionSpatialBatch>(WorldStreamingErrors::PartitionRegistryInvalid);
+        if (cursor.binding_ != state_->binding)
+            return Failure<WorldPartitionSpatialBatch>(WorldStreamingErrors::PartitionRegistryStale);
+        WorldPartitionSpatialBatch batch{};
+        const auto &index = state_->spatialIndex;
+        const auto cells = Cells();
+        while (cursor.pendingCount_ != 0 && batch.matches < output.size()) {
+            const auto &node = index.nodes[cursor.pending_[cursor.pendingCount_ - 1]];
+            if (cursor.leafOffset_ == 0) {
+                if (batch.nodesVisited == budget.nodes)
+                    break;
+                ++batch.nodesVisited;
+                if (!Intersects(node.bounds, cursor.query_.bounds)) {
+                    --cursor.pendingCount_;
+                    continue;
+                }
+                if (!node.IsLeaf()) {
+                    --cursor.pendingCount_;
+                    cursor.pending_[cursor.pendingCount_++] = node.right;
+                    cursor.pending_[cursor.pendingCount_++] = node.left;
+                    continue;
+                }
+            }
+            while (cursor.leafOffset_ < node.count && batch.candidatesExamined < budget.candidates && batch.matches < output.size()) {
+                const auto slot = index.cellSlots[node.first + cursor.leafOffset_++];
+                ++batch.candidatesExamined;
+                if (Matches(cells[slot], index.cellBounds[slot], cursor.query_))
+                    output[batch.matches++] = {state_->binding, slot, cells[slot].id};
+            }
+            if (cursor.leafOffset_ != node.count)
+                break;
+            cursor.leafOffset_ = 0;
+            --cursor.pendingCount_;
+            if (batch.candidatesExamined == budget.candidates)
+                break;
+        }
+        cursor.complete_ = cursor.pendingCount_ == 0;
+        batch.complete = cursor.complete_;
+        return Result<WorldPartitionSpatialBatch>::Success(batch);
+    }
+
     /** @copydoc WorldPartitionRegistry::Publish */
     Result<void> WorldPartitionRegistry::Publish(WorldPartitionDescriptor &&descriptor, const WorldPartitionRegistryRevision revision) {
         if (Lifecycle() != WorldPartitionRegistryState::Active)

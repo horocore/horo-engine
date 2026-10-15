@@ -317,4 +317,128 @@ namespace Horo::WorldStreaming {
             return Intersects(value, bounds.Value());
         }, shape));
     }
+
+    namespace {
+        /** @brief Applies signed inward margins to the same concrete geometry used by ordinary range evaluation. */
+        [[nodiscard]] bool MarginIntersects(const StreamingSourceShape &shape, const ExactBounds &cell, const std::int64_t inward) {
+            return std::visit([&]<typename Shape>(const Shape &original) {
+                auto value = original;
+                if constexpr (std::is_same_v<Shape, StreamingSourceSphere>) {
+                    value.radiusMillimeters -= inward;
+                    if (value.radiusMillimeters < 0)
+                        return false;
+                } else if constexpr (std::is_same_v<Shape, StreamingSourceBox>) {
+                    auto minimum = value.minimum.Millimeters();
+                    auto maximum = value.maximum.Millimeters();
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        minimum[axis] = AddSaturated(minimum[axis], inward);
+                        maximum[axis] = AddSaturated(maximum[axis], -inward);
+                        if (minimum[axis] > maximum[axis])
+                            return false;
+                    }
+                    value.minimum = Math::WorldCoordinate64::FromMillimeters(minimum[0], minimum[1], minimum[2]);
+                    value.maximum = Math::WorldCoordinate64::FromMillimeters(maximum[0], maximum[1], maximum[2]);
+                } else if constexpr (std::is_same_v<Shape, StreamingSourceFrustum>) {
+                    value.maximumExtentMillimeters -= inward;
+                    if (value.maximumExtentMillimeters < 0)
+                        return false;
+                    for (auto &plane : value.planes)
+                        plane.distanceMillimeters -= static_cast<float>(inward);
+                } else {
+                    value.halfExtentMillimeters -= inward;
+                    if (value.halfExtentMillimeters < 0)
+                        return false;
+                }
+                return Intersects(value, cell);
+            }, shape);
+        }
+    }  // namespace
+
+    /** @copydoc StreamingSourceCellDistance */
+    Result<std::uint64_t> StreamingSourceCellDistance(const StreamingSourceShape &shape, const WorldCellQuantizationPolicy &policy,
+                                                      const StreamingCellId cell) {
+        if (const auto valid = ValidateStreamingSourceShape(shape); valid.HasError())
+            return Result<std::uint64_t>::Failure(valid.ErrorValue());
+        const auto bounds = CellBounds(policy, cell);
+        if (bounds.HasError())
+            return Result<std::uint64_t>::Failure(bounds.ErrorValue());
+        const auto anchor = std::visit(
+                                []<typename Shape>(const Shape &value) {
+            if constexpr (std::is_same_v<Shape, StreamingSourceSphere>)
+                return value.center;
+            else if constexpr (std::is_same_v<Shape, StreamingSourceBox>)
+                return value.minimum;
+            else if constexpr (std::is_same_v<Shape, StreamingSourceFrustum>)
+                return value.anchor;
+            else
+                return value.points[0];
+        }, shape)
+                                .Millimeters();
+        std::uint64_t distance{};
+        for (std::size_t axis = 0; axis < anchor.size(); ++axis)
+            distance = std::max(distance, AxisDistanceFromBounds(anchor[axis], bounds.Value().minimum[axis], bounds.Value().maximum[axis]));
+        return Result<std::uint64_t>::Success(distance);
+    }
+
+    /** @copydoc StreamingSourceQueryBounds */
+    Result<WorldPartitionBounds> StreamingSourceQueryBounds(const StreamingSourceShape &shape, const std::int64_t expansionMillimeters) {
+        if (const auto valid = ValidateStreamingSourceShape(shape); valid.HasError())
+            return Result<WorldPartitionBounds>::Failure(valid.ErrorValue());
+        if (expansionMillimeters < 0 || expansionMillimeters > StreamingSourceRangeLimits::MaximumExtentMillimeters)
+            return Result<WorldPartitionBounds>::Failure(MakeError(WorldStreamingErrors::SourceShapeInvalid));
+        const auto bounds = std::visit([]<typename Shape>(const Shape &value) -> ExactBounds {
+            if constexpr (std::is_same_v<Shape, StreamingSourceBox>) {
+                return {value.minimum.Millimeters(), value.maximum.Millimeters()};
+            } else if constexpr (std::is_same_v<Shape, StreamingSourcePathVolume>) {
+                ExactBounds result{value.points[0].Millimeters(), value.points[0].Millimeters()};
+                for (std::size_t index = 1; index < value.pointCount; ++index)
+                    for (std::size_t axis = 0; axis < 3; ++axis) {
+                        result.minimum[axis] = std::min(result.minimum[axis], value.points[index].Millimeters()[axis]);
+                        result.maximum[axis] = std::max(result.maximum[axis], value.points[index].Millimeters()[axis]);
+                    }
+                for (std::size_t axis = 0; axis < 3; ++axis) {
+                    result.minimum[axis] = AddSaturated(result.minimum[axis], -value.halfExtentMillimeters);
+                    result.maximum[axis] = AddSaturated(result.maximum[axis], value.halfExtentMillimeters);
+                }
+                return result;
+            } else {
+                ExactBounds result;
+                if constexpr (std::is_same_v<Shape, StreamingSourceSphere>)
+                    static_cast<void>(ExpandChecked(value.center.Millimeters(), value.radiusMillimeters, result));
+                else
+                    static_cast<void>(ExpandChecked(value.anchor.Millimeters(), value.maximumExtentMillimeters, result));
+                return result;
+            }
+        }, shape);
+        auto minimum = bounds.minimum;
+        auto maximum = bounds.maximum;
+        for (std::size_t axis = 0; axis < 3; ++axis) {
+            minimum[axis] = AddSaturated(minimum[axis], -expansionMillimeters);
+            maximum[axis] = AddSaturated(maximum[axis], expansionMillimeters);
+        }
+        return Result<WorldPartitionBounds>::Success({Math::WorldCoordinate64::FromMillimeters(minimum[0], minimum[1], minimum[2]),
+                                                      Math::WorldCoordinate64::FromMillimeters(maximum[0], maximum[1], maximum[2])});
+    }
+
+    /** @copydoc EvaluateStreamingSourceCellBoundary */
+    Result<std::int64_t> EvaluateStreamingSourceCellBoundary(const StreamingSourceShape &shape, const WorldCellQuantizationPolicy &policy,
+                                                             const StreamingCellId cell, const std::int64_t enterMarginMillimeters,
+                                                             const std::int64_t exitMarginMillimeters) {
+        if (enterMarginMillimeters < 0 || exitMarginMillimeters < 0 ||
+            enterMarginMillimeters > StreamingSourceRangeLimits::MaximumExtentMillimeters ||
+            exitMarginMillimeters > StreamingSourceRangeLimits::MaximumExtentMillimeters)
+            return Result<std::int64_t>::Failure(MakeError(WorldStreamingErrors::SourceShapeInvalid));
+        if (const auto valid = ValidateStreamingSourceShape(shape); valid.HasError())
+            return Result<std::int64_t>::Failure(valid.ErrorValue());
+        const auto bounds = CellBounds(policy, cell);
+        if (bounds.HasError())
+            return Result<std::int64_t>::Failure(bounds.ErrorValue());
+        if (MarginIntersects(shape, bounds.Value(), enterMarginMillimeters))
+            return Result<std::int64_t>::Success(enterMarginMillimeters);
+        if (MarginIntersects(shape, bounds.Value(), 0))
+            return Result<std::int64_t>::Success(0);
+        if (MarginIntersects(shape, bounds.Value(), -exitMarginMillimeters))
+            return Result<std::int64_t>::Success(-exitMarginMillimeters);
+        return Result<std::int64_t>::Success(-exitMarginMillimeters - 1);
+    }
 }  // namespace Horo::WorldStreaming
