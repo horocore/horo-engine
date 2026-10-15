@@ -13,7 +13,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "save_qualification", ROOT / "scripts/verify_save_allocation_qualification.py")
-assert SPEC and SPEC.loader
+assert SPEC
+assert SPEC.loader
 QUALIFICATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(QUALIFICATION)
 
@@ -41,16 +42,18 @@ def test_both_variants_and_completed_cleanup_qualify(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("outcome", ["skipped", "failure", "error"])
 def test_nonpassing_case_cannot_qualify(tmp_path: Path, outcome: str) -> None:
+    path = report(tmp_path, outcome=outcome)
     with pytest.raises(ValueError, match="did not pass"):
-        QUALIFICATION.verify_report(report(tmp_path, outcome=outcome))
+        QUALIFICATION.verify_report(path)
 
 
 @pytest.mark.parametrize("omitted", ["lifecycle-sync-failure", "retention-sync-success",
                                      "lifecycle-reopen-returned", "retention-reconcile-returned",
                                      "fixture-scope-exited"])
 def test_partial_or_unfinished_variant_cannot_qualify(tmp_path: Path, omitted: str) -> None:
+    path = report(tmp_path, omitted=omitted)
     with pytest.raises(ValueError, match="Incomplete"):
-        QUALIFICATION.verify_report(report(tmp_path, omitted=omitted))
+        QUALIFICATION.verify_report(path)
 
 
 def test_missing_case_cannot_qualify(tmp_path: Path) -> None:
@@ -77,3 +80,38 @@ def test_xml_entity_declarations_cannot_qualify(tmp_path: Path) -> None:
     path.write_text('<!DOCTYPE testsuite [<!ENTITY injected "expanded">]><testsuite>&injected;</testsuite>', encoding="utf-8")
     with pytest.raises(DefusedXmlException):
         QUALIFICATION.verify_report(path)
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_cli_qualifies_reports_in_the_explicit_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                       capsys: pytest.CaptureFixture[str], absolute: bool) -> None:
+    workspace = tmp_path / "workspace with spaces"
+    workspace.mkdir()
+    path = report(workspace)
+    monkeypatch.chdir(workspace)
+    argument = str(path) if absolute else path.name
+    monkeypatch.setattr("sys.argv", ["verify_save_allocation_qualification.py", argument])
+    QUALIFICATION.main()
+    assert "2 passed cases, both variants completed, zero skips" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("escape_kind", ["parent", "absolute", "symlink"])
+def test_cli_rejects_report_paths_outside_its_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                                                      capsys: pytest.CaptureFixture[str], escape_kind: str) -> None:
+    outside = report(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    if escape_kind == "symlink":
+        link = workspace / "linked.xml"
+        link.symlink_to(outside)
+        argument = link.name
+    elif escape_kind == "absolute":
+        argument = str(outside)
+    else:
+        argument = "../qualification.xml"
+    monkeypatch.chdir(workspace)
+    monkeypatch.setattr("sys.argv", ["verify_save_allocation_qualification.py", argument])
+    with pytest.raises(SystemExit) as error:
+        QUALIFICATION.main()
+    assert error.value.code == 2
+    assert "inside the current workspace" in capsys.readouterr().err

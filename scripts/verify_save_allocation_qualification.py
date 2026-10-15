@@ -49,9 +49,20 @@ def require_variants(output: str, phase: str) -> None:
         cursor = position + len(literal)
 
 
+def workspace_path(value: str) -> Path:
+    """Keep CLI report reads inside the caller's explicit workspace, including symlink resolution."""
+    root = Path.cwd().resolve()
+    candidate = Path(value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Qualification report must be inside the current workspace") from error
+    return candidate
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("report", type=Path)
+    parser.add_argument("report", type=workspace_path)
     args = parser.parse_args()
     verify_report(args.report)
     print("Save allocation qualification: 2 passed cases, both variants completed, zero skips")

@@ -14,7 +14,8 @@ def test_windows_save_identity_allocation_has_build_and_discovery_closure() -> N
     assert declaration
     assert {"support/AllocationProbe.cpp", "unit/runtime/save/SaveIdentityTests.cpp"} <= set(declaration.group(1).split())
     registration = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", source, re.S)
-    assert registration and target in registration.group(1).split()
+    assert registration
+    assert target in registration.group(1).split()
 
 
 def test_release_save_qualification_is_mandatory_and_debug_skips_are_explicit() -> None:
