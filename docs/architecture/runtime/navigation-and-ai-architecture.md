@@ -359,6 +359,38 @@ down the coordinator/JobSystem before provider code unload. The additive public
 need no migration or dependency changes. Headless hosts compose the same lifecycle;
 Null navigation remains typed unavailable rather than fabricating movement.
 
+`HoroNavigationCharacterIntegration` is the downstream NAV-004.9 composition
+boundary. It depends on `HoroNavigationRuntime` and `HoroCharacterInput`; neither
+Character nor Physics imports Navigation. The host creates a
+`NavigationCharacterAdapter` with a dedicated Character capability, a permitted
+`ExternalIntent` principal, and exact controller/Scene/Character revision evidence.
+The borrowed velocity pipeline outlives the bridge. Its
+`ValidatePublicationAtSafePoint` checks the complete latest safe publication and
+reuses movement authority/path checks immediately before Character queue admission.
+
+The bridge captures an immutable fixed-tick work value, submits it through the
+existing desired-motion adapter, and never advances simulation or writes a root.
+Full/busy leaves the work with the caller for retry. Exactly one deferred command
+may await feedback. After the host advances the same Character tick and common
+fixed quantum, the bridge copies the matching locomotion snapshot and forwards
+achieved velocity times that quantum to the existing NAV-006.4 feedback policy.
+Command sequence, controller, operation/path, Character revision and root
+publication must match. Ground/step/root-motion resolution stays Character-owned;
+feedback returns the complete owned Character snapshot instead of flattening it
+into a second locomotion model. Sides/solver limits supply blockage evidence;
+existing hysteresis, cooldown and movement query ceilings remain the only repath
+policy. The host must not advance another Character tick or replace the root
+before collecting this feedback.
+
+Shutdown revokes the dedicated grant, withdrawing its commands before Character
+queue closure. It does not recall commands already frozen by Character or retire
+the borrowed Navigation owner. On teleport, replacement or reload, the host closes
+the bridge, resets/rebinds Navigation at its safe point and composes a fresh bridge
+with a fresh grant and strictly newer Character revision. Failure authorizes no
+motion; explicit stop composition remains host-owned. The integration is additive;
+existing Navigation-only and generic CharacterInput consumers need no migration.
+See `docs/guides/navigation-character-adapter-migration.md` for host sequencing.
+
 ADR-018 `OwnerThreadNextFrame` console handlers submit typed navigation commands for this
 phase; they do not introduce a second mutation phase in `PreUpdate` / `DebugPhase`. Heavy
 bake/export commands use asynchronous `OperationId` progress per ADR-010. The application

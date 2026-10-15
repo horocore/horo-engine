@@ -112,6 +112,14 @@ namespace Horo::Navigation {
                                                                    const NavigationAvoidanceOutcome &outcome,
                                                                    const NavigationCrowdSnapshot &current,
                                                                    const NavigationMovementObservation &observation);
+        /** @brief Revalidate the complete current safe publication immediately before external Character admission.
+         * @param publication Unmodified value returned by Commit.
+         * @param current Fresh same-tick owner observation with the same fixed quantum and no injected feedback.
+         * @return Success or typed stale/lifecycle failure; no movement is committed.
+         */
+        [[nodiscard]] Result<void> ValidatePublicationAtSafePoint(const NavigationVelocityPublication &publication,
+                                                                  const NavigationMovementObservation &current) const;
+
         /** @brief Discard exact cancelled/failed solver work without publishing motion or resetting blockage history.
          * @param work Latest owner-issued work identity.
          * @return True only when that pending work was retired; late completion is subsequently stale.
