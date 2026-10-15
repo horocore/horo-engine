@@ -21,9 +21,9 @@ namespace Horo::Physics::Detail {
         const auto &body = lock.GetBody();
         const auto position = body.GetPosition();
         const auto rotation = body.GetRotation();
-        const PhysicsPose actual{{position.GetX(), position.GetY(), position.GetZ()},
-                                 {rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()}};
-        if (actual != frame.sourcePose)
+        if (const PhysicsPose actual{{position.GetX(), position.GetY(), position.GetZ()},
+                                     {rotation.GetX(), rotation.GetY(), rotation.GetZ(), rotation.GetW()}};
+            actual != frame.sourcePose)
             return Result<JPH::BodyID>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
         return Result<JPH::BodyID>::Success(found->nativeBody);
     }

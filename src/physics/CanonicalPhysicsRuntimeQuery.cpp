@@ -300,7 +300,7 @@ namespace Horo::Physics::Detail {
                     return Result<void>::Success();
                 if (candidateCount == candidates.size())
                     return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
-                candidates[candidateCount++] = std::move(*projected.Value());
+                candidates[candidateCount++] = *projected.Value();
                 return Result<void>::Success();
             }
             const auto *compound = std::get_if<PhysicsCompoundShapeDescriptor>(&fixture->descriptor.shape);
