@@ -118,5 +118,5 @@ namespace Horo::Runtime::Ui::Detail {
                                                                             RuntimeUiPermission permission = {});
     [[nodiscard]] UiReloadCanvas *Canvas(RuntimeUiServiceState &owner, const RuntimeUiGrant &grant) noexcept;
     [[nodiscard]] Result<RuntimeUiRequestId> Queue(RuntimeUiScope &scope, RuntimeUiPermission permission, Command command);
-    [[nodiscard]] RuntimeUiCommandResult Execute(RuntimeUiServiceState &owner, RuntimeUiScope &scope, Command &command);
+    [[nodiscard]] RuntimeUiCommandResult Execute(RuntimeUiServiceState &owner, const RuntimeUiScope &scope, Command &command);
 }  // namespace Horo::Runtime::Ui::Detail

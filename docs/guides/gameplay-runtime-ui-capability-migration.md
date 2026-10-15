@@ -13,8 +13,8 @@ and at most sixteen writable provider incarnations. The application alone owns
 the registry/factory and any cancellation source supplied to `Issue`.
 
 Pass the issued client through `GameplayWorldSelection::runtimeUi`,
-`GameModuleHostOptions{capabilities, GameModuleRuntimeServices{physics, runtimeUi}}`
-or the corresponding `BehaviorRuntime::Create` argument. Existing Physics
+`GameModuleHostOptions{capabilities, GameModuleRuntimeServices{.physics = physics, .runtimeUi = runtimeUi}}`
+or `BehaviorRuntimeServiceBindings::runtimeUi` at the behavior factory. Existing Physics
 constructors forward into the same options authority; `{}`, `{{}}` and `{{}, {}}`
 callers retain their meaning. There is no ambient lookup or module registration
 side effect. Absent native `GameRuntimeContext::runtimeUi` means the caller returns
@@ -114,8 +114,8 @@ authored tests or compile-only checkpoints do not establish runtime qualificatio
 Rebuild all native modules, generated descriptor bundles, SDK consumers and host
 artifacts against SDK19 and its exact `gameplay-sdk19` fingerprint. The combined layout
 preserves main Character SDK15 (including Navigation SDK10) and adds UI SDK17.
-`GameRuntimeContext` appends UI after Physics/Navigation/Character. The runtime
-constructor places Character before UI; use an empty Character argument when absent.
+`GameRuntimeContext` appends UI after Physics/Navigation/Character. Host behavior factories accept designated `BehaviorRuntimeServiceBindings` fields;
+no empty positional Character argument is needed when absent.
 Host service aggregates preserve Physics/Character/Navigation and append UI; use
 designated fields. Old SDK10/15/17/18 layouts are rejected before factory activation.
 AI18/20 identify independent layouts; a future combined UI+AI layout requires a fresh
@@ -154,3 +154,49 @@ commands logically const. The architecture contract records the eleven exact
 S5817 exceptions and paired compile-time authority checks. Lua allocator opaque
 pointers follow `lua_Alloc`; Runtime UI callback exception containment remains
 `noexcept` with errors propagated only after native catch frames unwind.
+
+## Host behavior factory migration
+
+The independent Physics, Navigation, Character and UI arguments of both
+context-bearing `BehaviorRuntime::Create` overloads are replaced by the inert
+`BehaviorRuntimeServiceBindings` value:
+
+```cpp
+BehaviorRuntime::Create(scene, registry, limits,
+    {.physics = physics, .navigation = navigation, .character = character,
+     .runtimeUi = runtimeUi});
+BehaviorRuntime::Create(sceneService, registry, limits,
+    {.physics = physics, .navigation = navigation, .character = character,
+     .runtimeUi = runtimeUi}, prefabs);
+```
+
+Prefab admission stays separate and SceneService-only. The existing three-argument
+bare-Scene convenience overload retains its explicit withheld Physics context;
+missing fields in a supplied bindings value retain the previous explicit absent
+scope semantics. Factories still validate Physics/Character Scene identity before
+registry acquisition, then Navigation/UI identity, UI child derivation,
+Physics-dependent Character child derivation and final activation in the same
+order. Existing scope moves and rollback/revocation remain unchanged. Copying the
+value shares holders; it does not derive or select services.
+
+Affected callers are `GameplayWorldComposition`'s bare-Scene and SceneService
+factories, Lua Physics/Character/UI lifecycle fixtures, Gameplay Character context
+fixtures and Gameplay Navigation host fixtures. Simple editor and core-runtime
+callers of the three-argument overload require no source changes. Host applications
+using positional services must migrate to designated fields and rebuild/relink:
+the two context-bearing C++ host factory symbols change, with no compatibility
+shim retaining a second source of activation truth. The public prefab consumer
+checks both new factories, rejects old positional signatures through dependent
+concepts, and proves bare-Scene creation cannot accept prefab scope.
+
+This repair does not change the native module ABI. `BehaviorRuntime.h` belongs to
+`HoroGameplayRuntime` in `cmake/HoroPublicHeaderOwnership.cmake`; that host target is
+absent from every build-tree gameplay SDK export in the root `CMakeLists.txt`.
+The exported core `HoroRuntime` target is a distinct owner. The default SDK exports
+Foundation/NetworkApi/SaveApi/GameplayApi, with separate optional Physics,
+Navigation and RuntimeUi components. Their export sets do not expose this host
+factory or its header. `GameRuntimeContext`, behavior/backend vtables, native
+module descriptors, their field order and the SDK fingerprint definition are
+byte-identical to the SDK19 repair head. SDK19 therefore remains the reserved
+NAV+Character+UI module boundary; this source migration requires host callers to
+rebuild, rather than inventing a new native layout epoch.

@@ -32,11 +32,26 @@ namespace Horo::Gameplay {
         std::size_t maximumQueuedEvents{4'096};
     };
 
+    /**
+     * @brief Inert host-supplied service scopes for one BehaviorRuntime activation.
+     * @details Copying these holders grants no new authority and selects no service/backend.
+     * Create validates their exact Scene bindings and derives independent Character/UI children.
+     * An absent holder preserves the corresponding unavailable context; prefab scope remains
+     * explicit and is accepted only by the RuntimeSceneService factory.
+     */
+    struct BehaviorRuntimeServiceBindings final {
+        std::shared_ptr<const GameplayPhysicsContext> physics;         /**< Explicit module/world Physics admission. */
+        std::shared_ptr<const GameplayNavigationContext> navigation;   /**< Exact module/Scene Navigation scope. */
+        std::shared_ptr<const GameplayCharacterContext> character;     /**< Character scope dependent on the admitted Physics scope. */
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact host UI grant, independently derived by the runner. */
+    };
+
     /** @brief Owns every behavior instance attached to one active runtime scene. */
     class BehaviorRuntime final {
     public:
         /**
          * @brief Constructs and activates all known scene behavior instances.
+         * @details Uses an explicitly withheld Physics context; service-bearing hosts use the typed bindings overload.
          * @param scene Runtime scene that outlives this runner.
          * @param registry Frozen registry that outlives this runner and its module factories.
          * @param limits Explicit admission budgets.
@@ -44,39 +59,31 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                              BehaviorRuntimeLimits limits = {});
-        /** @brief Activates callbacks with an explicitly permitted Physics context for this exact scene.
+        /** @brief Activates callbacks with explicitly admitted service scopes for this exact scene.
          * @param scene Runtime scene that outlives the runner.
          * @param registry Frozen module registry.
          * @param limits Admission budgets.
-         * @param navigation Explicit module/Scene navigation scope.
-         * @param runtimeUi Optional exact host UI grant, privately derived and revoked before shutdown callbacks.
-         * @param physics Host-admitted module/world binding; revoked before shutdown callbacks.
-         * @param character Optional module Character scope; a fresh runtime child is revoked before teardown.
+         * @param services Inert host bindings validated before activation; Character/UI children are revoked before teardown.
          * @return Active runner or typed foreign-scene/activation error without partial clients.
          */
-        [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(
-            Runtime::RuntimeScene &scene, const BehaviorRegistry &registry, BehaviorRuntimeLimits limits,
-            std::shared_ptr<const GameplayPhysicsContext> physics, std::shared_ptr<const GameplayNavigationContext> navigation = {},
-            std::shared_ptr<const GameplayCharacterContext> character = {},
-            std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi = {});
+        [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
+                                                                             BehaviorRuntimeLimits limits,
+                                                                             BehaviorRuntimeServiceBindings services);
         /** @brief Activates Gameplay against the actual Scene service and explicitly admitted prefab scope.
          * @param scenes Scene authority outliving the runner; callbacks retain no mutable Scene storage.
          * @param registry Frozen module registry outliving the runner.
          * @param limits Bounded behavior/event admission.
-         * @param navigation Explicit module/Scene navigation scope.
-         * @param physics Optional explicitly admitted Physics scope.
-         * @param runtimeUi Optional exact UI grant, independently derived for this runner.
-         * @param prefabs Explicitly admitted cooked-prefab scope for the same Scene incarnation.
-         * @param character Optional module Character scope for the same Scene incarnation.
+         * @param services Inert host bindings for the same Scene incarnation; no service is discovered or granted implicitly.
+         * @param prefabs Explicitly admitted cooked-prefab scope for the same Scene incarnation; available only with Scene service
+         * authority.
          * @return Active runner or typed activation failure with complete instance rollback.
          * @pre The host registered the Gameplay structural participant before Scene service startup.
          */
-        [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(
-            Runtime::RuntimeSceneService &scenes, const BehaviorRegistry &registry, BehaviorRuntimeLimits limits = {},
-            std::shared_ptr<const GameplayPhysicsContext> physics = {}, std::shared_ptr<const GameplayPrefabContext> prefabs = {},
-            std::shared_ptr<const GameplayNavigationContext> navigation = {},
-            std::shared_ptr<const GameplayCharacterContext> character = {},
-            std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi = {});
+        [[nodiscard]] static Result<std::unique_ptr<BehaviorRuntime>> Create(Runtime::RuntimeSceneService &scenes,
+                                                                             const BehaviorRegistry &registry,
+                                                                             BehaviorRuntimeLimits limits = {},
+                                                                             BehaviorRuntimeServiceBindings services = {},
+                                                                             std::shared_ptr<const GameplayPrefabContext> prefabs = {});
         ~BehaviorRuntime();
         BehaviorRuntime(const BehaviorRuntime &) = delete;
         BehaviorRuntime &operator=(const BehaviorRuntime &) = delete;

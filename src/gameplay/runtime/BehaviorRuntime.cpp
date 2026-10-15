@@ -7,16 +7,15 @@ namespace Horo::Gameplay {
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                      const BehaviorRuntimeLimits limits) {
         return Create(scene, registry, limits,
-                      GameplayPhysicsContext::Withheld({.scene = scene.View().RuntimeId().value}, GameplayPhysicsDenial::Unavailable));
+                      {.physics = GameplayPhysicsContext::Withheld({.scene = scene.View().RuntimeId().value},
+                                                                   GameplayPhysicsDenial::Unavailable)});
     }
 
     /** @copydoc BehaviorRuntime::Create */
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeScene &scene, const BehaviorRegistry &registry,
                                                                      const BehaviorRuntimeLimits limits,
-                                                                     std::shared_ptr<const GameplayPhysicsContext> physics,
-                                                                     std::shared_ptr<const GameplayNavigationContext> navigation,
-                                                                     std::shared_ptr<const GameplayCharacterContext> character,
-                                                                     std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi) {
+                                                                     BehaviorRuntimeServiceBindings services) {
+        auto &[physics, navigation, character, runtimeUi] = services;
         if (physics && physics->Binding().scene != scene.View().RuntimeId().value)
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Physics::PhysicsErrors::HandleWorldMismatch));
         if (character && character->Binding().scene != 0 && character->Binding().scene != scene.View().RuntimeId().value)
@@ -52,11 +51,9 @@ namespace Horo::Gameplay {
     /** @copydoc BehaviorRuntime::Create */
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::Create(Runtime::RuntimeSceneService &scenes, const BehaviorRegistry &registry,
                                                                      const BehaviorRuntimeLimits limits,
-                                                                     std::shared_ptr<const GameplayPhysicsContext> physics,
-                                                                     std::shared_ptr<const GameplayPrefabContext> prefabs,
-                                                                     std::shared_ptr<const GameplayNavigationContext> navigation,
-                                                                     std::shared_ptr<const GameplayCharacterContext> character,
-                                                                     std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi) {
+                                                                     BehaviorRuntimeServiceBindings services,
+                                                                     std::shared_ptr<const GameplayPrefabContext> prefabs) {
+        auto &[physics, navigation, character, runtimeUi] = services;
         if (const auto active = scenes.ActiveScene(); !active || (prefabs && prefabs->Binding().scene != active->RuntimeId()) ||
                                                       (physics && physics->Binding().scene != active->RuntimeId().value))
             return Result<std::unique_ptr<BehaviorRuntime>>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));

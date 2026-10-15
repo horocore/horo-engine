@@ -49,7 +49,7 @@ namespace Horo::Runtime::Ui::Detail {
     }  // namespace
 
     /** @brief Execute one command at its named cutoff; all spans are borrowed only for this canonical owner call. */
-    RuntimeUiCommandResult Execute(RuntimeUiServiceState &owner, RuntimeUiScope &scope, Command &command) {
+    RuntimeUiCommandResult Execute(RuntimeUiServiceState &owner, const RuntimeUiScope &scope, Command &command) {
         auto *canvas = Canvas(owner, scope.grant);
         if (!canvas)
             return MakeError(UiErrors::CapabilityRevoked);

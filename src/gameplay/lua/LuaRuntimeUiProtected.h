@@ -98,7 +98,7 @@ namespace Horo::Gameplay::Detail::UiScript {
         }
         // No active C++ catch or nontrivial automatic may remain when Lua performs its C longjmp.
         if (failure == FailureKind::Memory) {
-            if (const auto result = MemoryFailure(state))
+            if (const auto result = MemoryFailure(state); result.has_value())
                 return *result;
             return luaL_error(state, "Runtime UI transport memory capacity exceeded.");
         }

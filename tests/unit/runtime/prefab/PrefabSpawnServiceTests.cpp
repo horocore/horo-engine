@@ -6,6 +6,21 @@
 namespace Horo::Prefab {
     using namespace SpawnTest;
 
+    TEST_CASE("Returned prefab fixture frames retain a live host cancellation borrow across later statements",
+              "[prefab][spawn][lifetime]") {
+        Fixture fixture;
+        const auto retained = fixture.Frame();
+        REQUIRE(fixture.scenes.ActiveScene().has_value());
+        const auto later = fixture.Frame();
+        REQUIRE(&retained.cancellation == &fixture.cancellationToken);
+        REQUIRE(&later.cancellation == &fixture.cancellationToken);
+        REQUIRE_FALSE(retained.cancellation.IsCancellationRequested());
+        REQUIRE_FALSE(later.cancellation.IsCancellationRequested());
+        fixture.cancellation.RequestCancellation();
+        CHECK(retained.cancellation.IsCancellationRequested());
+        CHECK(later.cancellation.IsCancellationRequested());
+    }
+
     TEST_CASE("Gameplay prefab capability commits complete typed groups and despawns through the Scene owner",
               "[prefab][spawn][gameplay]") {
         Fixture fixture;

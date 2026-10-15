@@ -19,6 +19,24 @@ This host edge grants no Prefab dependency to Network runtime or Physics
 integration. Module descriptors remain inert; the host supplies the provider,
 Scene service and independent permission before activating gameplay.
 
+## Behavior host factory bindings
+
+`BehaviorRuntimeServiceBindings` is an inert Gameplay-owned host value containing
+explicit Physics, Navigation, Character and Runtime UI holders. Both context-bearing
+`BehaviorRuntime::Create` factories consume this value; they validate the exact Scene
+and preserve independent runtime child derivation, error precedence and revocation.
+The value selects no backend, discovers no service and grants no authority by itself.
+`RuntimeSceneService` creation accepts the prefab scope as a separate argument because
+only that owner supplies structural transaction authority. A bare `RuntimeScene`
+factory cannot accept prefab scope. The three-argument bare-Scene convenience factory
+continues to construct the explicit withheld Physics context.
+
+This replaces positional service arguments in the host Runtime API, avoiding two
+competing activation contracts. Header ownership remains `HoroGameplayRuntime`;
+there is no reverse dependency on `GameModuleHost` service aggregates. Callers and
+binary/source migration scope are recorded in the
+[Runtime UI capability migration](../../guides/gameplay-runtime-ui-capability-migration.md#host-behavior-factory-migration).
+
 ## Purpose
 
 This document defines how project-owned gameplay modules integrate with runtime systems: game-owned assets, input actions, scheduled systems, scene/play lifecycle, game-owned component persistence, and deferred runtime extension points.

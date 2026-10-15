@@ -88,7 +88,7 @@ namespace Horo::Runtime::Ui::Detail {
         auto lease = publisher ? publisher->Acquire() : Result<UiReloadLease>::Failure(MakeError(UiErrors::CapabilityUnavailable));
         if (lease.HasError())
             return ClientResult::Failure(lease.ErrorValue());
-        auto *canvas = Canvas(*owner, grant);
+        const auto *canvas = Canvas(*owner, grant);
         if (!canvas)
             return ClientResult::Failure(MakeError(UiErrors::CapabilityUnavailable));
         try {

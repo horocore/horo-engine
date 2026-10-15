@@ -32,7 +32,7 @@ namespace Horo::Tests::UiAccess {
             REQUIRE(registry.Freeze().HasValue());
             auto definition = SingleBehaviorSceneDefinition({1}, {1}, {1}, {1}, Type());
             auto scene = Take(Runtime::RuntimeScene::Create(definition, {101}));
-            auto runtime = Take(BehaviorRuntime::Create(*scene, registry, {}, {}, {}, {}, client));
+            auto runtime = Take(BehaviorRuntime::Create(*scene, registry, {}, {.runtimeUi = client}));
             return {std::move(scene), std::move(runtime)};
         }
     }  // namespace
