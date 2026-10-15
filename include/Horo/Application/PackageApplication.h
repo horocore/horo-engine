@@ -95,7 +95,20 @@ namespace Horo::Application {
      * and returns busy while admitted work remains; abandoning a busy service violates its lifetime precondition.
      */
     class PackageApplication final {
+        struct Impl;
+
     public:
+        /** @brief Non-aggregate allocation authority issued only by the validating factory. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class PackageApplication;
+        };
+
+        /** @brief Adopts factory-validated state through standard RAII allocation.
+         * @param key Private factory authority. @param impl Complete validated state and its existing lifetime owners.
+         * @details Clients continue to use Create; the allocation constructor cannot be called with a default key. */
+        PackageApplication(const ConstructionKey &key, std::unique_ptr<Impl> impl) noexcept;
+
         /** @brief Binds existing authorities without restoring, installing, loading or discovering services.
          * @param jobs Existing job owner with explicit I/O capacity.
          * @param restore Existing verified graph restore authority.
@@ -146,8 +159,6 @@ namespace Horo::Application {
         [[nodiscard]] Result<void> Close();
 
     private:
-        struct Impl;
-        explicit PackageApplication(std::unique_ptr<Impl> impl);
         std::unique_ptr<Impl> impl_;
     };
 }  // namespace Horo::Application

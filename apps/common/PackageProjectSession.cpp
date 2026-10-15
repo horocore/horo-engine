@@ -20,42 +20,42 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PackageProjectSession::Create */
     Result<std::shared_ptr<PackageProjectSession>> PackageProjectSession::Create(
-        JobSystem &jobs, DurableFileSystem &files, const WallClock &clock, const Packages::IPackageExtensionTrust &trust,
-        PackageProjectPolicy policy, PreparedPackageProject prepared, Packages::IPackageRestoreSource *source,
-        Packages::PackagePublisherVerificationService *publishers) {
-        const auto &request = prepared.application.restore;
-        if (request.projectRoot != policy.projectRoot || request.platform != policy.platform || request.mode != policy.mode ||
-            request.requirePublisherVerification != policy.requirePublisherVerification)
+        PackageProjectHostServices services, PackageProjectPolicy policy, PreparedPackageProject prepared,
+        Packages::IPackageRestoreSource *source, Packages::PackagePublisherVerificationService *publishers) {
+        if (const auto &request = prepared.application.restore; request.projectRoot != policy.projectRoot ||
+                                                                request.platform != policy.platform || request.mode != policy.mode ||
+                                                                request.requirePublisherVerification != policy.requirePublisherVerification)
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(SessionError("packages.host.policy_mismatch"));
         auto impl = std::make_unique<Impl>();
-        auto cache = Packages::PackageCacheStore::Create(files, policy.cacheRoot, policy.limits.validation);
+        auto cache = Packages::PackageCacheStore::Create(services.files, policy.cacheRoot, policy.limits.validation);
         if (cache.HasError())
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(cache.ErrorValue());
         impl->cache.emplace(std::move(cache).Value());
-        auto restore = Packages::PackageRestoreService::Create(jobs, files, *impl->cache, source, publishers, policy.limits);
+        auto restore =
+            Packages::PackageRestoreService::Create(services.jobs, services.files, *impl->cache, source, publishers, policy.limits);
         if (restore.HasError())
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(restore.ErrorValue());
         impl->restore.emplace(std::move(restore).Value());
-        auto install = Packages::PackageInstallService::Create(files, policy.projectRoot);
+        auto install = Packages::PackageInstallService::Create(services.files, policy.projectRoot);
         if (install.HasError())
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(install.ErrorValue());
         impl->install.emplace(std::move(install).Value());
-        auto lifecycle = Packages::PackageLifecycleService::Create(*impl->install, trust, std::move(policy.lifecycle));
+        auto lifecycle = Packages::PackageLifecycleService::Create(*impl->install, services.trust, std::move(policy.lifecycle));
         if (lifecycle.HasError())
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(lifecycle.ErrorValue());
         impl->lifecycle = std::move(lifecycle).Value();
-        prepared.application.wallClock = &clock;
+        prepared.application.wallClock = &services.wallClock;
         auto application =
-            PackageApplication::Create(jobs, *impl->restore, *impl->install, *impl->lifecycle, std::move(prepared.application));
+            PackageApplication::Create(services.jobs, *impl->restore, *impl->install, *impl->lifecycle, std::move(prepared.application));
         if (application.HasError())
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(application.ErrorValue());
         impl->application = std::move(application).Value();
         return Result<std::shared_ptr<PackageProjectSession>>::Success(
-            std::shared_ptr<PackageProjectSession>(new PackageProjectSession{std::move(impl)}));
+            std::make_shared<PackageProjectSession>(ConstructionKey{}, std::move(impl)));
     }
 
     /** @copydoc PackageProjectSession::PackageProjectSession */
-    PackageProjectSession::PackageProjectSession(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+    PackageProjectSession::PackageProjectSession(const ConstructionKey &, std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     /** @copydoc PackageProjectSession::~PackageProjectSession */
     PackageProjectSession::~PackageProjectSession() noexcept {

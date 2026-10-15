@@ -90,10 +90,11 @@ namespace Horo::Application::Internal {
                         return BundleResult(request, context);
                     case McpServe: {
                         McpPackageBinding binding;
-                        const bool configured = std::ranges::any_of(request.options, [](const Cli::CliParsedOption &option) {
+                        if (const bool configured = std::ranges::any_of(request.options,
+                                                                        [](const Cli::CliParsedOption &option) {
                             return option.name == "package-cache-root" || option.name == "package-temporary-root";
                         });
-                        if (configured) {
+                            configured) {
                             if (packages_ == nullptr)
                                 return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
                             auto acquired = packages_->BindMcp(request, context);
@@ -189,8 +190,8 @@ namespace Horo::Application::Internal {
             if (SelectCommand(path) == HostCommand::McpServe) {
                 descriptor.summary = "Serve the MCP-owned local protocol on exclusive stdio.";
                 descriptor.requiredCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}, {"horo.package.manage"}};
-                for (const char *path : {"package-cache-root", "package-temporary-root"})
-                    descriptor.options.push_back({.name = path,
+                for (const char *storageOption : {"package-cache-root", "package-temporary-root"})
+                    descriptor.options.push_back({.name = storageOption,
                                                   .summary = "Optional explicit project package host storage root.",
                                                   .valueKind = CliOptionValueKind::Path});
                 descriptor.sideEffects = CliSideEffectPolicy::WritesFiles;

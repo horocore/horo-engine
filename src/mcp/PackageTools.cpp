@@ -70,8 +70,8 @@ namespace Horo::Mcp {
         nlohmann::json Encode(const PackageOperationSnapshot &value) {
             return {{"operationId", std::to_string(value.id.value)},
                     {"revision", std::to_string(value.revision)},
-                    {"installedRevision", value.installedRevision ? std::to_string(*value.installedRevision) : ""},
-                    {"activeGeneration", value.activeGeneration ? std::to_string(*value.activeGeneration) : ""},
+                    {"installedRevision", value.installedRevision.has_value() ? std::to_string(*value.installedRevision) : ""},
+                    {"activeGeneration", value.activeGeneration.has_value() ? std::to_string(*value.activeGeneration) : ""},
                     {"kind", static_cast<unsigned>(value.kind)},
                     {"phase", static_cast<unsigned>(value.phase)},
                     {"outcome", static_cast<unsigned>(value.outcome)},
@@ -84,8 +84,8 @@ namespace Horo::Mcp {
         Result<PackageOperationId> ReadOperation(const nlohmann::json &arguments) {
             const auto value = arguments.at("operationId").get<std::string>();
             std::uint64_t number{};
-            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
-            if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || number == 0 || std::to_string(number) != value)
+            if (const auto parsed = std::from_chars(value.data(), value.data() + value.size(), number);
+                parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || number == 0 || std::to_string(number) != value)
                 return Result<PackageOperationId>::Failure(MakeError(McpErrors::ToolInputInvalid));
             return Result<PackageOperationId>::Success({number});
         }
@@ -100,7 +100,7 @@ namespace Horo::Mcp {
                     return Result<std::vector<Packages::EnabledPackageExtension>>::Failure(package.ErrorValue());
                 if (descriptor.HasError())
                     return Result<std::vector<Packages::EnabledPackageExtension>>::Failure(descriptor.ErrorValue());
-                result.push_back({std::move(package).Value(), std::move(descriptor).Value()});
+                result.emplace_back(std::move(package).Value(), std::move(descriptor).Value());
             }
             return Result<std::vector<Packages::EnabledPackageExtension>>::Success(std::move(result));
         }
@@ -130,28 +130,28 @@ namespace Horo::Mcp {
             }
 
         private:
-            Result<PackageOperationId> Dispatch(const nlohmann::json &arguments, const CancellationToken &cancellation) {
+            Result<PackageOperationId> Dispatch(const nlohmann::json &arguments, const CancellationToken &cancellation) const {
+                using enum Action;
                 switch (action_) {
-                    case Action::Restore:
+                    case Restore:
                         return application_->Restore(cancellation);
-                    case Action::Install:
+                    case Install:
                         return application_->Install(cancellation);
-                    case Action::Disable:
+                    case Disable:
                         return application_->Disable(cancellation);
-                    case Action::Activate: {
+                    case Activate: {
                         auto enabled = ReadEnabled(arguments);
                         if (enabled.HasError())
                             return Result<PackageOperationId>::Failure(enabled.ErrorValue());
                         return application_->Activate(enabled.Value(), cancellation);
                     }
-                    case Action::Query:
+                    case Query:
                         return ReadOperation(arguments);
-                    case Action::Cancel: {
+                    case Cancel: {
                         auto operation = ReadOperation(arguments);
                         if (operation.HasError())
                             return operation;
-                        auto cancelled = application_->RequestCancel(operation.Value());
-                        if (cancelled.HasError())
+                        if (auto cancelled = application_->RequestCancel(operation.Value()); cancelled.HasError())
                             return Result<PackageOperationId>::Failure(cancelled.ErrorValue());
                         return operation;
                     }

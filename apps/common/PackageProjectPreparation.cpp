@@ -10,8 +10,7 @@ namespace Horo::Application::Internal {
         Result<std::string> ReadMetadata(const std::filesystem::path &path, const std::size_t limit,
                                          const CancellationToken &cancellation) {
             std::error_code error;
-            const auto status = std::filesystem::symlink_status(path, error);
-            if (error || !std::filesystem::is_regular_file(status))
+            if (const auto status = std::filesystem::symlink_status(path, error); error || !std::filesystem::is_regular_file(status))
                 return Result<std::string>::Failure(MakeError(Packages::PackageRestoreErrors::LockfileReadFailed));
             const auto size = std::filesystem::file_size(path, error);
             if (error || size > limit)
@@ -42,8 +41,8 @@ namespace Horo::Application::Internal {
         if (error || !policy.projectRoot.is_absolute() || root != policy.projectRoot.lexically_normal())
             return Result<PreparedPackageProject>::Failure(MakeError(Packages::PackageRestoreErrors::InvalidInput));
         const auto metadata = root / ".horo";
-        const auto metadataStatus = std::filesystem::symlink_status(metadata, error);
-        if (error || !std::filesystem::is_directory(metadataStatus))
+        if (const auto metadataStatus = std::filesystem::symlink_status(metadata, error);
+            error || !std::filesystem::is_directory(metadataStatus))
             return Result<PreparedPackageProject>::Failure(MakeError(Packages::PackageRestoreErrors::InvalidInput));
         auto requestBytes = ReadMetadata(root / ".horo" / "packages.json", 1024 * 1024, cancellation);
         if (requestBytes.HasError())

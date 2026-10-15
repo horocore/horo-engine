@@ -2,6 +2,8 @@
 
 #include "Horo/Extensions/ExtensionAbi.h"
 
+#include <format>
+
 namespace Horo::Application::Internal {
     /** @copydoc NativePackagePlatform */
     Result<Packages::PackagePlatform> NativePackagePlatform() {
@@ -23,7 +25,7 @@ namespace Horo::Application::Internal {
         const char *architecture = "x64";
 #endif
         return Result<Packages::PackagePlatform>::Success(
-            {system, architecture, "horo-extension-abi-" + std::to_string(HORO_EXTENSION_ABI_VERSION)});
+            {system, architecture, std::format("horo-extension-abi-{}", static_cast<unsigned>(HORO_EXTENSION_ABI_VERSION))});
 #endif
     }
 }  // namespace Horo::Application::Internal

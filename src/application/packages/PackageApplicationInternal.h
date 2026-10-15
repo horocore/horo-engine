@@ -16,8 +16,7 @@ namespace Horo::Application {
     struct PackageApplication::Impl final {
         Impl(JobSystem &scheduler, Packages::PackageRestoreService &restores, Packages::PackageInstallService &installs,
              Packages::PackageLifecycleService &activations, PackageApplicationConfiguration settings)
-            : jobs(scheduler), restore(restores), install(installs), lifecycle(activations), configuration(std::move(settings)),
-              owner(std::this_thread::get_id()) {}
+            : jobs(scheduler), restore(restores), install(installs), lifecycle(activations), configuration(std::move(settings)) {}
 
         [[nodiscard]] Result<void> CheckLane() const;
         [[nodiscard]] Result<void> CheckAdmission() const;
@@ -34,7 +33,7 @@ namespace Horo::Application {
         Packages::PackageInstallService &install;
         Packages::PackageLifecycleService &lifecycle;
         PackageApplicationConfiguration configuration;
-        const std::thread::id owner;
+        const std::thread::id owner{std::this_thread::get_id()};
         std::uint64_t nextId{1};
         std::shared_ptr<const PackagePlanSnapshot> plan;
         bool closing{};

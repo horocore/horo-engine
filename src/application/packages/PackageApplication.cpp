@@ -52,9 +52,13 @@ namespace Horo::Application {
 
     void PackageApplication::Impl::Finish(Result<void> result, const bool cancelled) {
         operation->phase = PackageOperationPhase::Completed;
-        operation->outcome = result.HasValue() ? PackageOperationOutcome::Succeeded
-                             : cancelled       ? PackageOperationOutcome::Cancelled
-                                               : PackageOperationOutcome::Failed;
+        using enum PackageOperationOutcome;
+        if (result.HasValue())
+            operation->outcome = Succeeded;
+        else if (cancelled)
+            operation->outcome = Cancelled;
+        else
+            operation->outcome = Failed;
         operation->completion = result.HasValue() ? 1.0F : operation->completion;
         if (result.HasError())
             operation->diagnostic = std::move(result).ErrorValue();
@@ -77,8 +81,8 @@ namespace Horo::Application {
             if (valid.HasError())
                 return Result<std::unique_ptr<PackageApplication>>::Failure(valid.ErrorValue());
         }
-        auto owner = std::unique_ptr<PackageApplication>{
-            new PackageApplication{std::make_unique<Impl>(jobs, restore, install, lifecycle, std::move(configuration))}};
+        auto owner = std::make_unique<PackageApplication>(ConstructionKey{}, std::make_unique<Impl>(jobs, restore, install, lifecycle,
+                                                                                                    std::move(configuration)));
         if (owner->impl_->configuration.lockedPlan) {
             auto plan = std::make_shared<PackagePlanSnapshot>();
             plan->revision = 1;
@@ -89,7 +93,7 @@ namespace Horo::Application {
         return Result<std::unique_ptr<PackageApplication>>::Success(std::move(owner));
     }
 
-    PackageApplication::PackageApplication(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+    PackageApplication::PackageApplication(const ConstructionKey &, std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     PackageApplication::~PackageApplication() noexcept {
         if (Close().HasError())
@@ -111,8 +115,7 @@ namespace Horo::Application {
         if (admitted.HasError())
             return admitted;
         request.cancellation = cancellation.Token();
-        auto started = restore.Start(request);
-        if (started.HasError())
+        if (auto started = restore.Start(request); started.HasError())
             Finish(Result<void>::Failure(started.ErrorValue()));
         else {
             restoreOperation = std::move(started).Value();

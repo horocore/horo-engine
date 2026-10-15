@@ -142,14 +142,20 @@ namespace Horo::Editor {
             return "NewBehavior";
         }
 
+        /** @brief Borrowed contribution catalogs; application-owned panel/status registrations outlive the screen. */
+        struct WorkspaceContributionRegistries final {
+            WorkspacePanelRegistry &panels;
+            EditorStatusItemRegistry &statusItems;
+        };
+
         class EditorWorkspaceScreen final : public GuiScreen {
         public:
             explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
                 : packages_(std::move(packages)), host_(services.Get<GuiScreenHost>()), services_(services),
                   modalHost_(services.Get<EditorModalHost>()), context_(services.GetConst<EditorGuiContext>()),
-                  registry_(services.Get<WorkspacePanelRegistry>()), statusItems_(services.Get<EditorStatusItemRegistry>()),
+                  contributions_{services.Get<WorkspacePanelRegistry>(), services.Get<EditorStatusItemRegistry>()},
                   input_(services.Get<Input::InputRouter>()),
-                  view_(context_, registry_, services.Get<std::uintptr_t>(), input_.router, input_.context,
+                  view_(context_, contributions_.panels, services.Get<std::uintptr_t>(), input_.router, input_.context,
                         services.TryGet<Extensions::EditorActivityHost>(), services.TryGet<IEditorGuiRenderer>()),
                   viewportSceneState_(services.Get<EditorViewportSceneState>()),
                   runtimeScene_(services.Get<Runtime::RuntimeSceneService>()), settings_(services.Get<EditorSettingsService>()),
@@ -219,10 +225,10 @@ namespace Horo::Editor {
                     .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
                     .networkDebuggerControl = panelServices_.networkDebuggerControl,
                 };
-                registry_.AttachAll(panelContext);
+                contributions_.panels.AttachAll(panelContext);
                 UpdateStatusItems();
                 if (auto committed = activation.Commit(); committed.HasError()) {
-                    registry_.DetachAll();
+                    contributions_.panels.DetachAll();
                     viewportSceneState_.Clear();
                     controller_.reset();
                     return committed;
@@ -457,9 +463,9 @@ namespace Horo::Editor {
                     if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
                         LOG_ERROR("editor.pcg_document", "Graph shutdown recovery is incomplete: %s", graphs.ErrorValue().message.c_str());
                 }
-                static_cast<void>(statusItems_.Update("horo.status.document", EditorStatusItemContent{.available = false}));
-                static_cast<void>(statusItems_.Update("horo.status.selection", EditorStatusItemContent{.available = false}));
-                registry_.DetachAll();
+                static_cast<void>(contributions_.statusItems.Update("horo.status.document", EditorStatusItemContent{.available = false}));
+                static_cast<void>(contributions_.statusItems.Update("horo.status.selection", EditorStatusItemContent{.available = false}));
+                contributions_.panels.DetachAll();
                 if (previousInputProfile_.has_value()) {
                     if (const Result<void> restored = input_.router.SetProfile(std::move(*previousInputProfile_)); restored.HasError()) {
                         LOG_ERROR("editor.input", "Unable to restore editor input profile: %s", restored.ErrorValue().message.c_str());
@@ -825,21 +831,22 @@ namespace Horo::Editor {
                 }
                 const EditorWorkspaceViewModel &viewModel = controller_->ViewModel();
                 static_cast<void>(
-                    statusItems_.Update("horo.status.document",
-                                        EditorStatusItemContent{.iconResourceId = "horo.status.document",
-                                                                .label = context_.localization.Get("editor", viewModel.isDirty
-                                                                                                                 ? "status.document.unsaved"
-                                                                                                                 : "status.document.saved"),
-                                                                .tone = viewModel.isDirty ? EditorStatusItemTone::Warning
-                                                                                          : EditorStatusItemTone::Success,
-                                                                .available = true}));
+                    contributions_.statusItems
+                        .Update("horo.status.document",
+                                EditorStatusItemContent{.iconResourceId = "horo.status.document",
+                                                        .label = context_.localization.Get("editor", viewModel.isDirty
+                                                                                                         ? "status.document.unsaved"
+                                                                                                         : "status.document.saved"),
+                                                        .tone = viewModel.isDirty ? EditorStatusItemTone::Warning
+                                                                                  : EditorStatusItemTone::Success,
+                                                        .available = true}));
                 static_cast<void>(
-                    statusItems_.Update("horo.status.selection",
-                                        EditorStatusItemContent{.value = context_.localization.Get("editor",
-                                                                                                   viewModel.primarySelection.has_value()
-                                                                                                       ? "status.selection.one"
-                                                                                                       : "status.selection.none"),
-                                                                .available = true}));
+                    contributions_.statusItems
+                        .Update("horo.status.selection",
+                                EditorStatusItemContent{.value = context_.localization.Get("editor", viewModel.primarySelection.has_value()
+                                                                                                         ? "status.selection.one"
+                                                                                                         : "status.selection.none"),
+                                                        .available = true}));
             }
 
             PackageWorkspaceAccess packages_;
@@ -847,8 +854,7 @@ namespace Horo::Editor {
             const EditorServiceRegistry &services_;
             EditorModalHost &modalHost_;
             const EditorGuiContext &context_;
-            WorkspacePanelRegistry &registry_;
-            EditorStatusItemRegistry &statusItems_;
+            WorkspaceContributionRegistries contributions_;
             WorkspaceInputState input_;
             EditorWorkspaceView view_;
             EditorViewportSceneState &viewportSceneState_;

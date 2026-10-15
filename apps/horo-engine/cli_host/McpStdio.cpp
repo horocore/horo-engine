@@ -247,7 +247,7 @@ namespace Horo::Application::Internal {
         /** @brief Authenticates the already admitted CLI invocation entirely within its private host composition. */
         Result<Mcp::McpSessionAdmission> LocalAdmission(const std::shared_ptr<Mcp::McpAuthorization> &authorization,
                                                         const std::vector<std::string> &capabilities, const std::uint64_t revision,
-                                                        std::optional<std::string> project = {}) {
+                                                        const std::optional<std::string> &project = {}) {
             if (const auto trusted = authorization->SetTrust(project, 1, true); trusted.HasError())
                 return Result<Mcp::McpSessionAdmission>::Failure(trusted.ErrorValue());
             Mcp::McpSessionAdmission admission{.clientIdentity = "horo.cli.local",
@@ -303,7 +303,7 @@ namespace Horo::Application::Internal {
         if (packages.application) {
             if (!context.HasCapability(Cli::CliCapabilityId{"horo.package.manage"}))
                 return Result<void>::Failure(MakeError(Cli::CliErrors::CapabilityUnauthorized));
-            capabilities.push_back("horo.package.manage");
+            capabilities.emplace_back("horo.package.manage");
         }
         auto authorization = std::make_shared<Mcp::McpAuthorization>(Platform::CreateNativeSecureRandomSource());
         auto registry = std::make_shared<Mcp::McpToolRegistry>(authorization);

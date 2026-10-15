@@ -31,8 +31,7 @@ namespace Horo::Editor {
             return Result<PackageModalGeneration>::Failure(ViewError("editor.packages.view_busy"));
         ++generation_.value;
         open_ = true;
-        const auto refreshed = Refresh(generation_);
-        if (refreshed.HasError()) {
+        if (const auto refreshed = Refresh(generation_); refreshed.HasError()) {
             open_ = false;
             return Result<PackageModalGeneration>::Failure(refreshed.ErrorValue());
         }
@@ -53,8 +52,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PackageModalSession::Submit */
-    Result<Application::PackageOperationId> PackageModalSession::Submit(const PackageModalGeneration generation,
-                                                                        const Application::PackageOperationKind kind) {
+    Result<Application::PackageOperationId> PackageModalSession::Submit(  // NOSONAR S5817: retain mutable command authority.
+        const PackageModalGeneration generation, const Application::PackageOperationKind kind) {
         if (const auto valid = Validate(generation); valid.HasError())
             return Result<Application::PackageOperationId>::Failure(valid.ErrorValue());
         switch (kind) {
@@ -71,7 +70,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PackageModalSession::Activate */
-    Result<Application::PackageOperationId> PackageModalSession::Activate(
+    Result<Application::PackageOperationId> PackageModalSession::Activate(  // NOSONAR S5817: retain mutable command authority.
         const PackageModalGeneration generation, const std::span<const Packages::EnabledPackageExtension> enabled) {
         if (const auto valid = Validate(generation); valid.HasError())
             return Result<Application::PackageOperationId>::Failure(valid.ErrorValue());

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <thread>
 
 namespace Horo::Application::Internal {
@@ -31,7 +32,7 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     /** @copydoc PackageCliHost::PackageCliHost */
-    PackageCliHost::PackageCliHost() : jobs_({.workerCount = 1, .maxQueuedJobs = 32, .ioWorkerCount = 1}) {}
+    PackageCliHost::PackageCliHost() = default;
 
     /** @copydoc PackageCliHost::~PackageCliHost */
     PackageCliHost::~PackageCliHost() noexcept {
@@ -39,7 +40,9 @@ namespace Horo::Application::Internal {
         try {
             if (project_)
                 static_cast<void>(project_->Close());
-        } catch (...) { /* Keep the owner through scheduler cancellation even if diagnostic allocation failed. */
+        } catch (...) {
+            // This fallback still retains the owner until scheduler cancellation joins borrowed callbacks.
+            std::fputs("Package close raised before scheduler cancellation; retaining the owner.\n", stderr);
         }
         jobs_.Shutdown(ShutdownPolicy::Cancel);
         if (project_) {
@@ -54,7 +57,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PackageCliHost::Bind */
     Result<std::shared_ptr<PackageApplication>> PackageCliHost::Bind(const Cli::CliCommandRequest &request,
-                                                                     Cli::CliExecutionContext &context) {
+                                                                     const Cli::CliExecutionContext &context) {
         auto root = PathOption(request, "project");
         if (root.HasError())
             return Result<std::shared_ptr<PackageApplication>>::Failure(root.ErrorValue());
@@ -84,8 +87,7 @@ namespace Horo::Application::Internal {
         } else if (root.Value() != projectRoot_ || cache.Value() != cacheRoot_ || temporary.Value() != temporaryRoot_)
             return Result<std::shared_ptr<PackageApplication>>::Failure(MakeError(Cli::CliErrors::ExecutionContextInvalid));
         while (!context.IsStopRequested()) {
-            auto acquired = project_->Acquire(projectRoot_);
-            if (acquired.HasValue() || !Preparing(acquired.ErrorValue()))
+            if (auto acquired = project_->Acquire(projectRoot_); acquired.HasValue() || !Preparing(acquired.ErrorValue()))
                 return acquired;
             // Tooling-only owner polling; deadline/cancellation remain those of the real dispatcher invocation.
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
@@ -97,7 +99,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc PackageCliHost::BindMcp */
-    Result<McpPackageBinding> PackageCliHost::BindMcp(const Cli::CliCommandRequest &request, Cli::CliExecutionContext &context) {
+    Result<McpPackageBinding> PackageCliHost::BindMcp(const Cli::CliCommandRequest &request, const Cli::CliExecutionContext &context) {
         auto application = Bind(request, context);
         if (application.HasError())
             return Result<McpPackageBinding>::Failure(application.ErrorValue());

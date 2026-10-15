@@ -3,15 +3,6 @@
 #include "PackageProjectSession.h"
 
 namespace Horo::Application::Internal {
-    /** @brief Explicit borrowed application services; all remain alive until host Close completes. */
-    struct PackageProjectHostServices final {
-        JobSystem &jobs;
-        DurableFileSystem &files;
-        const Clock &clock;
-        const WallClock &wallClock;
-        const Packages::IPackageExtensionTrust &trust;
-    };
-
     /** @brief Fixed-capacity owner of one live/retiring project and one bounded metadata preparation.
      * @details The executable pumps this owner even without a modal or MCP call. Complete metadata samples
      * linearize policy generations. An observed change/error revokes old admission before any further activation.
@@ -19,7 +10,20 @@ namespace Horo::Application::Internal {
      * owner-lane composition retains existing canonical path admission.
      */
     class PackageProjectHost final {
+        struct Impl;
+
     public:
+        /** @brief Non-aggregate allocation authority issued only by the validating factory. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class PackageProjectHost;
+        };
+
+        /** @brief Adopts factory-validated state through standard RAII allocation.
+         * @param key Private factory authority. @param impl Complete validated state and its existing lifetime owners.
+         * @details Clients continue to use Create; the allocation constructor cannot be called with a default key. */
+        PackageProjectHost(const ConstructionKey &key, std::unique_ptr<Impl> impl) noexcept;
+
         /** @brief Binds explicit borrowed services and positive host-selected metadata age without discovering providers.
          * @param services Explicit borrowed scheduler, filesystem, clocks and execution trust.
          * @param policy Cache/platform/native policy.
@@ -50,8 +54,6 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Close();
 
     private:
-        struct Impl;
-        explicit PackageProjectHost(std::unique_ptr<Impl> impl);
         std::unique_ptr<Impl> impl_;
     };
 }  // namespace Horo::Application::Internal

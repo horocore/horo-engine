@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <format>
 #include <thread>
 
 namespace Horo::Cli {
@@ -37,22 +38,33 @@ namespace Horo::Cli {
                     return Result<std::vector<Packages::EnabledPackageExtension>>::Failure(package.ErrorValue());
                 if (descriptor.HasError())
                     return Result<std::vector<Packages::EnabledPackageExtension>>::Failure(descriptor.ErrorValue());
-                enabled.push_back({std::move(package).Value(), std::move(descriptor).Value()});
+                enabled.emplace_back(std::move(package).Value(), std::move(descriptor).Value());
             }
             return Result<std::vector<Packages::EnabledPackageExtension>>::Success(std::move(enabled));
         }
 
         CliCommandResult Encode(const Application::PackageOperationSnapshot &snapshot) {
-            return {.fields = {{"operationId", std::to_string(snapshot.id.value)},
-                               {"revision", std::to_string(snapshot.revision)},
-                               {"installedRevision", snapshot.installedRevision ? std::to_string(*snapshot.installedRevision) : ""},
-                               {"activeGeneration", snapshot.activeGeneration ? std::to_string(*snapshot.activeGeneration) : ""},
-                               {"kind", static_cast<std::int64_t>(snapshot.kind)},
-                               {"phase", static_cast<std::int64_t>(snapshot.phase)},
-                               {"outcome", static_cast<std::int64_t>(snapshot.outcome)},
-                               {"completion", static_cast<double>(snapshot.completion)},
-                               {"completedPackages", static_cast<std::int64_t>(snapshot.completedPackages)},
-                               {"totalPackages", static_cast<std::int64_t>(snapshot.totalPackages)}}};
+            return {
+                .fields = {{"operationId", std::to_string(snapshot.id.value)},
+                           {"revision", std::to_string(snapshot.revision)},
+                           {"installedRevision", snapshot.installedRevision.has_value() ? std::to_string(*snapshot.installedRevision) : ""},
+                           {"activeGeneration", snapshot.activeGeneration.has_value() ? std::to_string(*snapshot.activeGeneration) : ""},
+                           {"kind", static_cast<std::int64_t>(snapshot.kind)},
+                           {"phase", static_cast<std::int64_t>(snapshot.phase)},
+                           {"outcome", static_cast<std::int64_t>(snapshot.outcome)},
+                           {"completion", static_cast<double>(snapshot.completion)},
+                           {"completedPackages", static_cast<std::int64_t>(snapshot.completedPackages)},
+                           {"totalPackages", static_cast<std::int64_t>(snapshot.totalPackages)}}};
+        }
+
+        /** @brief Presents a terminal package result without replacing an earlier invocation presentation failure. */
+        Result<CliCommandResult> CompleteOperation(const Application::PackageOperationSnapshot &snapshot,
+                                                   const Result<void> &presentation) {
+            if (presentation.HasError())
+                return Result<CliCommandResult>::Failure(presentation.ErrorValue());
+            if (snapshot.diagnostic)
+                return Result<CliCommandResult>::Failure(*snapshot.diagnostic);
+            return Result<CliCommandResult>::Success(Encode(snapshot));
         }
 
         class Adapter final : public ICliCommandAdapter {
@@ -78,9 +90,9 @@ namespace Horo::Cli {
                 const auto admittedBoundary = boundary_();
                 if (admittedBoundary.HasError())
                     return Result<CliCommandResult>::Failure(admittedBoundary.ErrorValue());
-                const auto boundary = admittedBoundary.Value();
-                if (boundary != Packages::PackageActivationBoundary::Startup &&
-                    boundary != Packages::PackageActivationBoundary::Quiescent && boundary != Packages::PackageActivationBoundary::Running)
+                if (const auto boundary = admittedBoundary.Value(); boundary != Packages::PackageActivationBoundary::Startup &&
+                                                                    boundary != Packages::PackageActivationBoundary::Quiescent &&
+                                                                    boundary != Packages::PackageActivationBoundary::Running)
                     return Result<CliCommandResult>::Failure(MakeError(CliErrors::ExecutionContextInvalid));
                 auto operation = Start(request, context.Cancellation());
                 if (operation.HasError())
@@ -92,15 +104,16 @@ namespace Horo::Cli {
             }
 
         private:
-            Result<Application::PackageOperationId> Start(const CliCommandRequest &request, const CancellationToken &cancellation) {
+            Result<Application::PackageOperationId> Start(const CliCommandRequest &request, const CancellationToken &cancellation) const {
+                using enum Action;
                 switch (action_) {
-                    case Action::Restore:
+                    case Restore:
                         return application_->Restore(cancellation);
-                    case Action::Install:
+                    case Install:
                         return application_->Install(cancellation);
-                    case Action::Disable:
+                    case Disable:
                         return application_->Disable(cancellation);
-                    case Action::Activate: {
+                    case Activate: {
                         auto enabled = ReadEnabled(request);
                         if (enabled.HasError())
                             return Result<Application::PackageOperationId>::Failure(enabled.ErrorValue());
@@ -111,7 +124,7 @@ namespace Horo::Cli {
             }
 
             Result<CliCommandResult> Observe(const Application::PackageOperationId operation, CliExecutionContext &context,
-                                             Result<void> presentation) {
+                                             Result<void> presentation) const {
                 std::uint64_t revision{};
                 while (true) {
                     const auto boundary = boundary_();
@@ -127,16 +140,11 @@ namespace Horo::Cli {
                     if (current.HasError())
                         return Result<CliCommandResult>::Failure(current.ErrorValue());
                     const auto &snapshot = current.Value();
-                    if (snapshot.outcome != Application::PackageOperationOutcome::Running) {
-                        if (presentation.HasError())
-                            return Result<CliCommandResult>::Failure(presentation.ErrorValue());
-                        if (snapshot.diagnostic)
-                            return Result<CliCommandResult>::Failure(*snapshot.diagnostic);
-                        return Result<CliCommandResult>::Success(Encode(snapshot));
-                    }
+                    if (snapshot.outcome != Application::PackageOperationOutcome::Running)
+                        return CompleteOperation(snapshot, presentation);
                     if (snapshot.revision != revision && presentation.HasValue()) {
-                        presentation = context.ReportProgress({.phase = "package." + std::to_string(static_cast<unsigned>(snapshot.phase)),
-                                                               .completion = snapshot.completion});
+                        presentation = context.ReportProgress(
+                            {.phase = std::format("package.{}", static_cast<unsigned>(snapshot.phase)), .completion = snapshot.completion});
                         revision = snapshot.revision;
                     }
                     // Tooling-only observation; no UI/runtime frame waits or unrelated job pumping.

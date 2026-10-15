@@ -5,6 +5,8 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "PackageProjectHost.h"
 
+#include <cstdio>
+
 namespace Horo::Editor {
     /** @copydoc EditorWorkerShutdown::EditorWorkerShutdown */
     EditorWorkerShutdown::EditorWorkerShutdown(JobSystem &jobs, Application::ShaderBuildService &shaderBuild, GuiScreenHost *screens,
@@ -18,6 +20,8 @@ namespace Horo::Editor {
             if (packages_)
                 static_cast<void>(packages_->Close());
         } catch (...) {
+            // This fallback still retains the owner until scheduler cancellation joins borrowed callbacks.
+            std::fputs("Package close raised before scheduler cancellation; retaining the owner.\n", stderr);
         }
         jobs_.StopAccepting();
         if (screens_ != nullptr)

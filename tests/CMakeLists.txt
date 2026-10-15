@@ -1,3 +1,8 @@
+add_test(NAME HoroSaveJunitOutputPathTest
+    COMMAND "${CMAKE_COMMAND}" "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-junit-output-path" "-DHORO_TEST_CONFIG=$<CONFIG>"
+    -P "${PROJECT_SOURCE_DIR}/tests/cmake/RunSaveJunitOutputPathTest.cmake")
+set_tests_properties(HoroSaveJunitOutputPathTest PROPERTIES LABELS "unit;save;cmake;ci-windows" TIMEOUT 90)
+
 add_test(NAME HoroSaveObservabilityDependencyPolicyTest
     COMMAND "${CMAKE_COMMAND}" "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
     "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/save-observability-dependency"
@@ -1446,6 +1451,9 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/StreamingPriorityPolicyTests.cpp
         unit/runtime/world_streaming/StreamingEvictionPolicyTests.cpp
         unit/runtime/world_streaming/StreamingFairQueueTests.cpp
+        unit/runtime/world_streaming/StreamingSourcePlannerTests.cpp
+        unit/runtime/world_streaming/StreamingSourcePlannerQualificationTests.cpp
+        unit/runtime/world_streaming/StreamingSourcePlannerClockTests.cpp
         unit/runtime/world_streaming/StreamingSourceDescriptorTests.cpp
         unit/runtime/world_streaming/StreamingSourcePrefetchTests.cpp
         unit/runtime/world_streaming/StreamingSourceRangeTests.cpp
@@ -1467,6 +1475,15 @@ add_executable(HoroWorldStreamingTests
         unit/runtime/world_streaming/WorldStreamingMetricsTests.cpp
         unit/runtime/world_streaming/WorldStreamingTraceTests.cpp
 )
+target_include_directories(HoroWorldStreamingTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_sources(HoroWorldStreamingPublicHeaderConsumer PRIVATE support/StreamingSourcePlannerPublicContract.cpp)
+add_executable(HoroStreamingSourcePlannerBenchmark benchmarks/world_streaming/SourcePlannerBenchmark.cpp)
+target_compile_features(HoroStreamingSourcePlannerBenchmark PRIVATE cxx_std_20)
+target_compile_definitions(HoroStreamingSourcePlannerBenchmark PRIVATE HORO_BENCHMARK_BUILD_MODE="$<CONFIG>")
+target_include_directories(HoroStreamingSourcePlannerBenchmark PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroStreamingSourcePlannerBenchmark PRIVATE HoroEngine::WorldStreaming)
+add_test(NAME HoroStreamingSourcePlannerQualification COMMAND HoroStreamingSourcePlannerBenchmark 256)
+set_tests_properties(HoroStreamingSourcePlannerQualification PROPERTIES LABELS "unit;world_streaming;headless;qualification;ci-windows" TIMEOUT 90)
 target_compile_features(HoroWorldStreamingTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldStreamingTests PRIVATE HoroEngine::WorldStreaming)
 horo_register_catch_test(HoroWorldStreamingTests LABELS "unit;world_streaming;headless")
@@ -3001,6 +3018,7 @@ target_include_directories(HoroAndroidStorageTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroAndroidStorageTests PRIVATE HoroEngine::Platform)
 add_executable(HoroRuntimeSaveIdentityTests
+        support/AllocationProbe.cpp
         unit/runtime/save/SaveIdentityTests.cpp
 )
 target_compile_features(HoroRuntimeSaveIdentityTests PRIVATE cxx_std_20)

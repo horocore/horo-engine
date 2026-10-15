@@ -10,7 +10,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(Failure("packages.host.project_stale"));
         if (diagnostic)
             return Result<void>::Failure(*diagnostic);
-        if (!Fresh(clock.MonotonicNow()))
+        if (!Fresh(services.clock.MonotonicNow()))
             return Result<void>::Failure(Failure("packages.host.metadata_unavailable"));
         return Result<void>::Success();
     }
@@ -19,9 +19,9 @@ namespace Horo::Application::Internal {
     Result<void> PackageProjectHost::Impl::StartMetadata() {
         auto destination = std::make_shared<PackageHost::Completion>();
         auto captured = policy;
-        const auto sampleTime = clock.MonotonicNow();
-        auto submitted = jobs.SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
-                                           [destination, captured = std::move(captured)](const CancellationToken &cancellation) {
+        const auto sampleTime = services.clock.MonotonicNow();
+        auto submitted = services.jobs.SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
+                                                    [destination, captured = std::move(captured)](const CancellationToken &cancellation) {
             auto result = PreparePackageProject(captured, cancellation);
             std::lock_guard guard(destination->mutex);
             destination->result.emplace(std::move(result));
@@ -107,7 +107,7 @@ namespace Horo::Application::Internal {
         };
         const auto nextRequest = prepared->application.restore.expectedRequestHash;
         const auto nextLock = prepared->lockDigest;
-        auto session = PackageProjectSession::Create(jobs, files, wallClock, trust, policy, std::move(*prepared), source, publishers);
+        auto session = PackageProjectSession::Create(services, policy, std::move(*prepared), source, publishers);
         prepared.reset();
         if (session.HasError()) {
             diagnostic = session.ErrorValue();

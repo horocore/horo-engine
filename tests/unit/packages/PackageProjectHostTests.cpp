@@ -3,12 +3,23 @@
 #include "PackageProjectHost.h"
 
 #include <fstream>
+#include <type_traits>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Application;
     using namespace Horo::Application::Internal;
     using namespace Horo::Tests::PackageApplicationService;
+
+    static_assert(!std::is_default_constructible_v<PackageApplication::ConstructionKey>);
+    static_assert(!std::is_aggregate_v<PackageApplication::ConstructionKey>);
+    static_assert(!std::is_default_constructible_v<PackageProjectHost::ConstructionKey>);
+    static_assert(!std::is_aggregate_v<PackageProjectHost::ConstructionKey>);
+    static_assert(!std::is_default_constructible_v<PackageProjectSession::ConstructionKey>);
+    static_assert(!std::is_aggregate_v<PackageProjectSession::ConstructionKey>);
+    static_assert(!std::is_constructible_v<PackageApplication, std::nullptr_t>);
+    static_assert(!std::is_constructible_v<PackageProjectHost, std::nullptr_t>);
+    static_assert(!std::is_constructible_v<PackageProjectSession, std::nullptr_t>);
 
     class ManualClock final : public Clock {
     public:

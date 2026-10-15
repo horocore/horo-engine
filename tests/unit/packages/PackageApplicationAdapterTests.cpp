@@ -5,11 +5,21 @@
 #include "PackageApplicationServiceTestSupport.h"
 
 #include <algorithm>
+#include <type_traits>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Application;
     using namespace Horo::Tests::PackageApplicationService;
+
+    static_assert(std::is_invocable_v<decltype(&Editor::PackageModalSession::Submit), Editor::PackageModalSession &,
+                                      Editor::PackageModalGeneration, PackageOperationKind>);
+    static_assert(!std::is_invocable_v<decltype(&Editor::PackageModalSession::Submit), const Editor::PackageModalSession &,
+                                       Editor::PackageModalGeneration, PackageOperationKind>);
+    static_assert(std::is_invocable_v<decltype(&Editor::PackageModalSession::Activate), Editor::PackageModalSession &,
+                                      Editor::PackageModalGeneration, std::span<const Packages::EnabledPackageExtension>>);
+    static_assert(!std::is_invocable_v<decltype(&Editor::PackageModalSession::Activate), const Editor::PackageModalSession &,
+                                       Editor::PackageModalGeneration, std::span<const Packages::EnabledPackageExtension>>);
 
     // Fixture outlives every adapter; production roots issue owning alias leases instead.
     std::shared_ptr<PackageApplication> Borrow(Fixture &fixture) {

@@ -43,6 +43,21 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] constexpr auto operator<=>(const StreamingDesiredStateContribution &) const noexcept = default;
     };
 
+    /** @brief Allocation-free commutative residency/retention accumulator shared by owned and staged reductions. */
+    struct StreamingDesiredStateSummary final {
+        StreamingDesiredResidency effectiveResidency{StreamingDesiredResidency::Unloaded};
+        std::optional<StreamingDesiredResidency> pinnedResidencyFloor{};
+    };
+
+    /**
+     * @brief Folds one already validated source request into the canonical residency/retention algebra.
+     * @param summary Previous reduction; an empty summary is the identity element.
+     * @param desiredState Structurally validated source request; identity admission remains the owner's responsibility.
+     * @return Order-independent strongest residency and strongest independently pinned floor without allocation.
+     */
+    [[nodiscard]] StreamingDesiredStateSummary CombineStreamingDesiredState(StreamingDesiredStateSummary summary,
+                                                                            const StreamingSourceDesiredState &desiredState) noexcept;
+
     /** @brief Owned immutable, order-independent desired-state reduction for one cell. */
     class StreamingDesiredStateReduction final {
     public:

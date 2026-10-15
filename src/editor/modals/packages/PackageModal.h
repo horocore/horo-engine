@@ -35,13 +35,15 @@ namespace Horo::Editor {
         PackageModalGeneration generation_;
 
         struct PlanRow final {
-            std::string package, version;
+            std::string package;
+            std::string version;
             Application::PackagePlanVerification verification{};
         };
 
         std::shared_ptr<const Application::PackagePlanSnapshot> displayedPlan_;
         std::vector<PlanRow> planRows_;
-        std::string package_, descriptor_;
+        std::string package_;
+        std::string descriptor_;
         std::optional<Error> error_;
     };
 }  // namespace Horo::Editor

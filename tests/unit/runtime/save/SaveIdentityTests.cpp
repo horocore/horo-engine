@@ -1,3 +1,4 @@
+#include "../../../support/AllocationProbe.h"
 #include "Horo/Runtime/Save/SaveIdentity.h"
 
 #include <array>
@@ -37,6 +38,37 @@ namespace Horo::Runtime {
             static_assert(!std::is_same_v<SlotGenerationId, CapturedStateId>);
             static_assert(!std::is_convertible_v<std::string_view, SaveGameSlotId>);
             static_assert(std::is_trivially_copyable_v<SaveGameSlotId>);
+        }
+
+        TEST_CASE("Save identity formatting propagates every allocation failure without terminating",
+                  "[unit][save][identity][allocation]") {
+            const auto identity = ParseIdentity<SlotGenerationId>(kFirstUuid);
+            // A default string is noexcept even when MSVC Debug allocates a container proxy inside it.
+            static_assert(noexcept(std::string{}));
+            Horo::Tests::AllocationProbe::Measurement measurement;
+            {
+                Horo::Tests::AllocationProbe::ScopedMeasurement measured;
+                const auto formatted = identity.ToString();
+                measurement = measured.Snapshot();
+            }
+            REQUIRE(measurement.requests > 0);
+            for (std::size_t offset = 0; offset < measurement.requests; ++offset) {
+                bool caught{};
+                bool recovered{};
+                {
+                    Horo::Tests::AllocationProbe::ScopedFailure failure{offset};
+                    try {
+                        const auto formatted = identity.ToString();
+                    } catch (const std::bad_alloc &) {
+                        caught = true;
+                    }
+                    // The injection is one-shot; recovery remains possible before the scope leaves.
+                    recovered = identity.ToString() == kFirstUuid;
+                }
+                CHECK(caught);
+                CHECK(recovered);
+            }
+            CHECK(identity.ToString() == kFirstUuid);
         }
 
         TEST_CASE("Persistent save identities reject missing reserved and malformed values", "[unit][save][identity]") {

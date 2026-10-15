@@ -883,6 +883,12 @@ namespace Horo::Editor {
             Render::FramebufferExtent committedOutputExtent{};
         };
 
+        /** @brief Borrowed lifecycle authorities; both remain bound until participant shutdown completes. */
+        struct EditorRuntimeAuthorities final {
+            Runtime::RuntimeHost *runtime;
+            Application::Internal::PackageProjectHost *packages;
+        };
+
         class EditorRuntimeParticipant final : public Runtime::RuntimeLifecycleParticipant, public EditorSurfaceRealizer {
         public:
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
@@ -890,7 +896,7 @@ namespace Horo::Editor {
                                      std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock,
                                      Application::Internal::PackageProjectHost &packages) noexcept
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), packages_(&packages), pacing_{clock}
+                  rendererRestart_(&rendererRestart), authorities_{nullptr, &packages}, pacing_{clock}
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                   ,
                   qualification_{params.options.qualifySurfaceLifecycle}
@@ -899,7 +905,7 @@ namespace Horo::Editor {
             }
 
             void BindHost(Runtime::RuntimeHost &host) noexcept {
-                host_ = &host;
+                authorities_.runtime = &host;
             }
 
             Result<void> Startup(const CancellationToken &cancellation) override {
@@ -990,8 +996,10 @@ namespace Horo::Editor {
 
             void Shutdown() noexcept override {
                 try {
-                    static_cast<void>(packages_->Close());
+                    static_cast<void>(authorities_.packages->Close());
                 } catch (...) {
+                    // Retain the package owner until scheduler cancellation joins borrowed callbacks.
+                    std::fputs("Package close raised before scheduler cancellation; retaining the owner.\n", stderr);
                 }
                 p_->background.jobs.StopAccepting();
                 static_cast<void>(pacing_.pacer.Stop());
@@ -1017,7 +1025,7 @@ namespace Horo::Editor {
                 p_->operationServices.shaderBuild.Shutdown();
                 p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
                 try {
-                    if (packages_->Close().HasError())
+                    if (authorities_.packages->Close().HasError())
                         std::terminate();
                 } catch (...) {
                     std::terminate();
@@ -1121,7 +1129,7 @@ namespace Horo::Editor {
 
                 if (IsHostCloseRequest(event)) {
                     static_cast<void>(screenHost_->RequestCloseApplication());
-                    host_->RequestShutdown();
+                    authorities_.runtime->RequestShutdown();
                 }
             }
 
@@ -1177,7 +1185,7 @@ namespace Horo::Editor {
                 p_->modalHost.OnUpdate(deltaSeconds);
                 screenHost_->OnUpdate(deltaSeconds);
                 // Independent owner pumping continues after modal closure or project route departure.
-                static_cast<void>(packages_->Pump(Packages::PackageActivationBoundary::Running));
+                static_cast<void>(authorities_.packages->Pump(Packages::PackageActivationBoundary::Running));
                 return Result<void>::Success();
             }
 
@@ -1435,8 +1443,7 @@ namespace Horo::Editor {
             EditorViewportSceneState *viewportSceneState_{};
             EditorSettingsSnapshot *settingsSnapshot_{};
             std::optional<EditorRendererRestartRequest> *rendererRestart_{};
-            Application::Internal::PackageProjectHost *packages_{};
-            Runtime::RuntimeHost *host_{};
+            EditorRuntimeAuthorities authorities_;
             EditorPacingState pacing_;
             bool surfaceClosed_{};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)

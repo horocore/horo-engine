@@ -39,11 +39,11 @@ namespace Horo::Application::Internal {
             return Result<std::unique_ptr<PackageProjectHost>>::Failure(Failure("packages.host.invalid_policy"));
         auto impl = std::make_unique<Impl>(services, std::move(policy), metadataMaximumAge, source, publishers);
         return Result<std::unique_ptr<PackageProjectHost>>::Success(
-            std::unique_ptr<PackageProjectHost>(new PackageProjectHost{std::move(impl)}));
+            std::make_unique<PackageProjectHost>(ConstructionKey{}, std::move(impl)));
     }
 
     /** @copydoc PackageProjectHost::PackageProjectHost */
-    PackageProjectHost::PackageProjectHost(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+    PackageProjectHost::PackageProjectHost(const ConstructionKey &, std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     /** @copydoc PackageProjectHost::~PackageProjectHost */
     PackageProjectHost::~PackageProjectHost() noexcept {
@@ -78,7 +78,7 @@ namespace Horo::Application::Internal {
             return Result<std::shared_ptr<PackageApplication>>::Failure(pumped.ErrorValue());
         if (impl_->diagnostic)
             return Result<std::shared_ptr<PackageApplication>>::Failure(*impl_->diagnostic);
-        if (!impl_->current || impl_->retiring || !impl_->Fresh(impl_->clock.MonotonicNow()))
+        if (!impl_->current || impl_->retiring || !impl_->Fresh(impl_->services.clock.MonotonicNow()))
             return Result<std::shared_ptr<PackageApplication>>::Failure(Failure("packages.host.preparing"));
         return impl_->current->Application();
     }
@@ -89,7 +89,7 @@ namespace Horo::Application::Internal {
             return valid;
         if (impl_->closed || impl_->closing)
             return Result<void>::Failure(Failure("packages.host.closed"));
-        const auto now = impl_->clock.MonotonicNow();
+        const auto now = impl_->services.clock.MonotonicNow();
         impl_->ReceiveMetadata(now);
         if (impl_->retiring) {
             if (auto retired = impl_->RetireCurrent(); retired.HasError())
@@ -153,8 +153,8 @@ namespace Horo::Application::Internal {
         impl_->prepared.reset();
         if (impl_->metadataJob) {
             static_cast<void>(impl_->metadataJob->RequestCancel());
-            const auto snapshot = impl_->metadataJob->Snapshot();
-            if (!snapshot || snapshot->state == JobState::Queued || snapshot->state == JobState::Running)
+            if (const auto snapshot = impl_->metadataJob->Snapshot();
+                !snapshot || snapshot->state == JobState::Queued || snapshot->state == JobState::Running)
                 return Result<void>::Failure(Failure("packages.host.busy"));
             impl_->metadataJob.reset();
             impl_->completion.reset();

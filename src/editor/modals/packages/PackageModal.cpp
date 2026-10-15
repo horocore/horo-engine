@@ -83,7 +83,7 @@ namespace Horo::Editor {
             std::vector<PlanRow> rows;
             rows.reserve(plan->packages.size());
             for (const auto &entry : plan->packages)
-                rows.push_back({entry.locked.package.Value(), entry.locked.version.ToString(), entry.verification});
+                rows.emplace_back(entry.locked.package.Value(), entry.locked.version.ToString(), entry.verification);
             planRows_.swap(rows);
             displayedPlan_ = plan;
         }
