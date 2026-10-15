@@ -95,3 +95,20 @@ def test_unexpected_template_instantiation_is_not_silently_omitted():
     names.append(QUALIFICATION.PREFIX + "Canonical moves retire every wire alternative without allocation - ExtraWire")
     with pytest.raises(ValueError):
         QUALIFICATION.verify_discovery(discovery(names))
+
+
+def test_actual_ctest_path_contract_is_registered_and_matches_workflow():
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    step = workflow.split("- name: Test Windows Release Scene allocation qualification", 1)[1]
+    step = step.split("\n      - name:", 1)[0]
+    assert '--output-junit "scene-allocation-ctest.xml"' in step
+    assert '--output-junit "$root/' not in step
+    cmake = (ROOT / "tests/cmake/SceneAllocationJunitPathContract.cmake").read_text(encoding="utf-8")
+    assert '--test-dir "build/ci-audio-release"' in cmake
+    assert '--output-junit "scene-allocation-ctest.xml"' in cmake
+    assert 'WORKING_DIRECTORY "${TEST_ROOT}"' in cmake
+    registration = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert registration.index("add_test(NAME HoroSceneAllocationJunitPathContract") < registration.index(
+        "horo_finalize_ci_suites()"
+    )
+    assert "HoroSceneAllocationJunitPathContract" in (ROOT / "tests/cmake/HoroCiSuites.cmake").read_text(encoding="utf-8")

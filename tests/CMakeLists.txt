@@ -4683,6 +4683,12 @@ target_link_libraries(HoroPCGSceneOutputContractConsumer PRIVATE HoroEngine::PCG
 add_test(NAME HoroPCGSceneOutputContractConsumer COMMAND HoroPCGSceneOutputContractConsumer)
 set_tests_properties(HoroPCGSceneOutputContractConsumer PROPERTIES LABELS "unit;pcg;headless;public_headers;ci-windows")
 
+add_test(NAME HoroSceneAllocationJunitPathContract
+    COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/scene_junit_path_contract"
+        "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SceneAllocationJunitPathContract.cmake")
+set_tests_properties(HoroSceneAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
+
 horo_finalize_ci_suites()
 
 add_library(HoroXRProjectSettingsConsumer OBJECT public_headers/XRProjectSettingsConsumer.cpp)
