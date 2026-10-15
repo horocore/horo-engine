@@ -79,6 +79,8 @@ namespace Horo::Character {
             if (descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Stop &&
                 descriptor.steepSlopePolicy != CharacterSteepSlopePolicy::Slide)
                 return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
+            if (descriptor.platformLeaveVelocity > CharacterPlatformLeaveVelocityPolicy::Point)
+                return Result<void>::Failure(MakeError(CharacterErrors::DescriptorInvalid));
             if (descriptor.maximumContacts == 0 || descriptor.maximumContacts > MaximumCharacterContacts)
                 return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
             return Result<void>::Success();
@@ -140,6 +142,7 @@ namespace Horo::Character {
         [[nodiscard]] bool IsMovementPoseValid(const CharacterMovementResult &result) noexcept {
             return result.tick != 0 && result.sequence != 0 && Math::IsFinite(result.finalPosition) && IsUnit(result.finalHeading) &&
                    Math::IsFinite(result.achievedVelocityMetersPerSecond) && Math::IsFinite(result.gravityVelocityMetersPerSecond) &&
+                   Math::IsFinite(result.platformCarriedDisplacement) && Math::IsFinite(result.platformLeaveVelocityMetersPerSecond) &&
                    IsUnit(result.up) && IsFiniteNonNegative(result.groundSlopeDegrees) && result.groundSlopeDegrees <= 180;
         }
 

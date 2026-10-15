@@ -145,6 +145,13 @@ namespace Horo::Character {
         Slide, /**< Integrates committed Character gravity velocity along the steep surface. */
     };
 
+    /** @brief Velocity transferred once when a valid moving support is left. */
+    enum class CharacterPlatformLeaveVelocityPolicy : std::uint8_t {
+        None,   /**< No support velocity enters free-flight continuation. */
+        Linear, /**< Transfer only the supporting body's center-of-mass linear velocity. */
+        Point,  /**< Transfer linear velocity plus angular velocity at the attachment point. */
+    };
+
     /**
      * @brief Owned inert controller creation policy for one exact scene/Character/Physics generation.
      *
@@ -174,6 +181,8 @@ namespace Horo::Character {
         std::optional<Physics::PhysicsCapsuleShape> crouchedCapsule; /**< Same radius and lower cylindrical height than standing. */
         float jumpSpeedMetersPerSecond{5.0F};                        /**< Finite nonnegative impulse along up; zero disables jumping. */
         bool allowDynamicPlatformAttachment{};                       /**< Dynamic support is ineligible unless explicitly admitted. */
+        bool inheritPlatformHeading{}; /**< Admit only platform twist about Character up; pitch/roll never tilt the capsule. */
+        CharacterPlatformLeaveVelocityPolicy platformLeaveVelocity{CharacterPlatformLeaveVelocityPolicy::None};
     };
 
     /** @brief Operation that may publish a new collision-root transform. */
@@ -291,6 +300,8 @@ namespace Horo::Character {
         Physics::ShapeHandle shape;
         Physics::PhysicsMotionType motion{Physics::PhysicsMotionType::Static};
         Physics::PhysicsPose pose;
+        Math::Vec3 linearVelocityMetersPerSecond{};   /**< Copied completed-snapshot center-of-mass velocity. */
+        Math::Vec3 angularVelocityRadiansPerSecond{}; /**< Copied world-space angular velocity. */
     };
 
     /**
@@ -455,7 +466,8 @@ namespace Horo::Character {
         CharacterStanceIntent stance{CharacterStanceIntent::Keep};
         std::optional<CharacterShapeChangeRequest> shapeChange; /**< Requires Keep stance; conflicts publish Invalid. */
         std::optional<CharacterCollisionSelectors>
-            filterChange; /**< Applies to every probe of this command and persists only on tick commit. */
+            filterChange;               /**< Applies to every probe of this command and persists only on tick commit. */
+        bool detachPlatformRequested{}; /**< Explicitly leave support; the configured transfer policy applies once. */
     };
 
     /** @brief Fixed-tick outcome of movement-base tracking; no callback or presentation event is emitted. */
@@ -473,8 +485,8 @@ namespace Horo::Character {
      *
      * Body, shape and optional authored child generations form one exact binding. The sampled pose
      * is in the captured Physics origin frame. Full rotation transports these local values; it does
-     * not rotate capsule up or authorize a second Character move. Motion carry belongs to CHR-003.4.
-     * These process-local handles are not durable checkpoint identity and retain no body lifetime.
+     * not rotate capsule up or authorize a second Character move. Carry is swept before intent, using the next admitted fixed-tick motion
+     * sample. These process-local handles are not durable checkpoint identity and retain no body lifetime.
      */
     struct CharacterPlatformAttachment final {
         Physics::BodyHandle body;
@@ -559,6 +571,9 @@ namespace Horo::Character {
         CharacterGroundTransition groundTransition{CharacterGroundTransition::None}; /**< Exactly one post-commit support fact. */
         std::optional<CharacterPlatformAttachment> platformAttachment;               /**< Present exactly when platformAttached is true. */
         CharacterPlatformAttachmentChange platformAttachmentChange{CharacterPlatformAttachmentChange::None};
+        Math::Vec3 platformCarriedDisplacement{};          /**< Collision-resolved carry, included exactly once in achieved velocity. */
+        Math::Vec3 platformLeaveVelocityMetersPerSecond{}; /**< Transfer admitted once on jump, walk-off or explicit detach. */
+        bool platformCarryRejected{};                      /**< Carry was blocked or stopped at a solver bound; support is detached. */
         CharacterMovementTermination termination{
             CharacterMovementTermination::Complete}; /**< Owned solver-limit diagnostic, not contact truncation. */
     };

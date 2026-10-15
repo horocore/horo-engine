@@ -630,6 +630,33 @@ Rules:
 - detachment happens when the character leaves the platform, becomes airborne, or
   is teleported
 
+The implemented fixed-tick seam accepts a bounded borrowed `platformTargets` span of
+already-admitted `PhysicsKinematicTargetCommand` values. The host supplies its frozen
+stage-3 inventory for the exact scene/world/tick; Character rejects duplicates,
+foreign generations, invalid poses and capacity overflow before consuming commands.
+A kinematic body without a new target remains at its captured pose. The Physics query
+adapter copies completed-snapshot linear/angular velocity for admitted dynamic carry;
+Character predicts exactly one fixed quantum. Neither path reads presentation poses.
+
+Carry shares the ordinary query/iteration budget and is swept before desired motion.
+`platformCarriedDisplacement` records checked travel, while total achieved velocity
+continues to include carry and intent. Blocked carry detaches with
+`platformCarryRejected`; failed queries roll back the whole staged tick. The staged
+attachment uses the predicted target frame so the next tick cannot replay the same
+motion. Capsule up remains fixed; `inheritPlatformHeading` admits only twist about up.
+
+`platformLeaveVelocity` explicitly selects `None`, body `Linear`, or full attachment
+`Point` velocity. A jump transfers it before free-flight integration; walk-off and
+`detachPlatformRequested` record it once in committed free-flight continuation for
+the next quantum. No later airborne tick repeats that transfer. Stale bindings,
+blocked carry and teleport do not invent departure velocity. Teleport clears the
+attachment and continuation through the existing placement lifecycle.
+
+This adds Horo-only data to existing Character contracts. Existing aggregate callers
+keep their default no-transfer policy; hosts supplying kinematic motion must forward
+the same admitted target inventory to Character and Physics. There is no second
+platform simulation owner or post-Physics corrective movement.
+
 [ADR-108](../../adr/108-dynamic-overlay-carving-and-tile-rebuild-policy.md)
 keeps moving-platform motion and attachment under Character/Physics authority.
 Navigation may expose a stable timed or conditional link for a platform transfer,

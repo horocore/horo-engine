@@ -79,7 +79,8 @@ namespace Horo::Character::Detail {
     [[nodiscard]] Result<void> ResolvePlatformAttachment(auto &impl, CharacterMovementResult &movement,
                                                          const CharacterFixedTickInput &input,
                                                          const CharacterControllerDescriptor &descriptor,
-                                                         const std::optional<CharacterPlatformAttachment> &previous) {
+                                                         const std::optional<CharacterPlatformAttachment> &previous,
+                                                         const std::optional<CharacterPlatformBodyEvidence> &predicted) {
         using enum CharacterPlatformAttachmentChange;
         movement.platformAttachment.reset();
         movement.platformAttached = false;
@@ -97,14 +98,18 @@ namespace Horo::Character::Detail {
             movement.platformAttachmentChange = previous && SamePlatformBase(*previous, movement) ? Stale : Unavailable;
             return Result<void>::Success();
         }
-        return StagePlatformAttachment(movement, *evidence.Value(), input, descriptor, previous);
+        auto finalEvidence = *evidence.Value();
+        if (predicted && predicted->body == finalEvidence.body && predicted->shape == finalEvidence.shape)
+            finalEvidence.pose = predicted->pose;
+        return StagePlatformAttachment(movement, finalEvidence, input, descriptor, previous);
     }
 
     /** @brief Admits the exact query view and validates the staged support binding before publication preflight. */
     [[nodiscard]] Result<void> ResolveValidatedPlatformAttachment(auto &impl, CharacterMovementResult &movement,
                                                                   const CharacterFixedTickInput &input,
                                                                   const CharacterControllerDescriptor &descriptor,
-                                                                  const std::optional<CharacterPlatformAttachment> &previous) {
+                                                                  const std::optional<CharacterPlatformAttachment> &previous,
+                                                                  const std::optional<CharacterPlatformBodyEvidence> &predicted) {
         const CharacterPhysicsQueryExpectations expected{impl.descriptor.sceneGeneration,        impl.descriptor.identity,
                                                          impl.descriptor.physicsWorld,           impl.descriptor.collisionFilterGeneration,
                                                          impl.descriptor.originGeneration,       input.tick,
@@ -113,7 +118,8 @@ namespace Horo::Character::Detail {
             if (const auto valid = ValidateCharacterPhysicsQueryContext(input.query, expected); valid.HasError())
                 return valid;
         }
-        if (const auto attachment = ResolvePlatformAttachment(impl, movement, input, descriptor, previous); attachment.HasError())
+        if (const auto attachment = ResolvePlatformAttachment(impl, movement, input, descriptor, previous, predicted);
+            attachment.HasError())
             return attachment;
         return ValidateCharacterMovementResult(movement, descriptor);
     }

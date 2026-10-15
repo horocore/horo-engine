@@ -1283,6 +1283,7 @@ add_library(HoroPhysics STATIC
         physics/CharacterWorldSweepInternal.h
         physics/CharacterWorldStepInternal.h
         physics/CharacterWorldPlatformInternal.h
+        physics/CharacterWorldCarryInternal.h
         physics/CharacterSweepPlanesInternal.h
         physics/CharacterWorldInternal.h
         physics/CharacterWorldPlacementInternal.h

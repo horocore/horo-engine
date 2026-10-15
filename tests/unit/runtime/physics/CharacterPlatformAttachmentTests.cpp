@@ -21,6 +21,7 @@ namespace Horo::Character {
             bool groundPresent{true};
             bool bodyPresent{true};
             bool fail{};
+            bool wall{};
             CharacterWorld *shutdownWorld{};
             std::uint32_t bodyReads{};
             std::uint32_t failOnRead{};
@@ -30,6 +31,12 @@ namespace Horo::Character {
                 CharacterSweepProbeResult result;
                 if (probe.groundPresent && request.direction.y < -0.5F && probe.ground.distanceMeters <= request.maximumDistanceMeters) {
                     result.hits[0] = probe.ground;
+                    result.hitCount = 1;
+                }
+                if (probe.wall && request.direction.x > 0.5F) {
+                    result.hits[0] = probe.ground;
+                    result.hits[0].normal = {-1, 0, 0};
+                    result.hits[0].distanceMeters = 0.05F;
                     result.hitCount = 1;
                 }
                 return Result<CharacterSweepProbeResult>::Success(result);
@@ -70,12 +77,17 @@ namespace Horo::Character {
             PlatformProbe probe;
 
             explicit PlatformScenario(const bool dynamicAllowed = false, const std::uint32_t queries = 64,
-                                      const bool twoControllers = false) {
+                                      const bool twoControllers = false,
+                                      const CharacterPlatformLeaveVelocityPolicy policy = CharacterPlatformLeaveVelocityPolicy::None,
+                                      const bool inheritHeading = false, const Math::Vec3 root = {}) {
                 auto settings = Settings().Values();
                 settings.work.maximumQueriesPerTick = queries;
                 world = CharacterWorld::Prepare(WorldDescriptor(), CharacterWorldSettings::Capture(settings).Value()).Value();
                 auto descriptor = ControllerDescriptor(world->Descriptor());
                 descriptor.gravity = {};
+                descriptor.platformLeaveVelocity = policy;
+                descriptor.inheritPlatformHeading = inheritHeading;
+                descriptor.collisionRootPosition = root;
                 descriptor.allowDynamicPlatformAttachment = dynamicAllowed;
                 controller = world->CreateController(descriptor).Value();
                 if (twoControllers)
@@ -108,12 +120,17 @@ namespace Horo::Character {
                 return input;
             }
 
-            Result<void> Tick(const std::uint64_t tick, const bool jump = false) {
+            Result<void> Tick(const std::uint64_t tick, const bool jump = false,
+                              const std::span<const Physics::PhysicsKinematicTargetCommand> targets = {}, const bool detach = false,
+                              const Math::Vec3 velocity = {}) {
                 auto command = Movement(controller, tick, tick);
                 command.jumpRequested = jump;
+                command.detachPlatformRequested = detach;
+                command.desiredVelocityMetersPerSecond = velocity;
                 REQUIRE(world->QueueMovementCommand(command).HasValue());
                 auto input = FixedTick(tick);
                 input.query = probe.Context(world->Descriptor(), tick);
+                input.platformTargets = targets;
                 return world->AdvanceFixedTick(input);
             }
 
@@ -154,10 +171,10 @@ namespace Horo::Character {
             REQUIRE(saved.movement.platformAttachment->localContactPoint == attachment.localContactPoint);
             REQUIRE(scenario.Tick(2).HasValue());
             REQUIRE(scenario.Snapshot().movement.platformAttachmentChange == CharacterPlatformAttachmentChange::None);
-            REQUIRE(scenario.probe.bodyReads == 2);
+            REQUIRE(scenario.probe.bodyReads == 3);
         }
 
-        TEST_CASE("Rotating the support preserves the body local contact frame without tilting or moving the Character root",
+        TEST_CASE("Rotating support transports the root while preserving body local contact and Character up",
                   "[physics][character][platform]") {
             PlatformScenario scenario;
             REQUIRE(scenario.Tick(1).HasValue());
@@ -174,7 +191,8 @@ namespace Horo::Character {
                 const auto rotated = scenario.Snapshot();
                 RequireNear(rotated.movement.platformAttachment->localContactPoint, local.localContactPoint);
                 RequireNear(rotated.movement.platformAttachment->localContactNormal, local.localContactNormal);
-                REQUIRE(rotated.transform.position == previous.transform.position);
+                RequireNear(rotated.transform.position,
+                            scenario.probe.body.pose.translation + rotation.Rotate(local.localRoot.translation));
                 REQUIRE(rotated.transform.heading == previous.transform.heading);
                 REQUIRE(rotated.transform.up == previous.transform.up);
                 REQUIRE(rotated.movement.platformAttachmentChange == CharacterPlatformAttachmentChange::None);
@@ -375,10 +393,10 @@ namespace Horo::Character {
             const auto debugBefore = scenario.world->CaptureDebugSnapshot(debugRequest);
             REQUIRE(debugBefore.snapshot.has_value());
             REQUIRE(scenario.probe.bodyReads == 2);
-            scenario.probe.failOnRead = 4;
+            scenario.probe.failOnRead = 6;
             REQUIRE(scenario.world->QueueMovementCommand(Movement(second, 2, 2)).HasValue());
             REQUIRE(scenario.Tick(2).HasError());
-            REQUIRE(scenario.probe.bodyReads == 4);
+            REQUIRE(scenario.probe.bodyReads == 6);
             const auto firstAfter = scenario.Snapshot();
             const auto secondAfter = scenario.world->ControllerLocomotionSnapshot(second).Value();
             REQUIRE(firstAfter.stateRevision == firstBefore.stateRevision);
@@ -391,6 +409,160 @@ namespace Horo::Character {
             REQUIRE(debugAfter.snapshot->Probes().size() == debugBefore.snapshot->Probes().size());
             REQUIRE(debugAfter.snapshot->Probes()[0].position == debugBefore.snapshot->Probes()[0].position);
             REQUIRE(debugAfter.snapshot->Locomotion()->movement.platformAttachment->sourceTick == 1);
+        }
+
+        Physics::PhysicsKinematicTargetCommand Target(const PlatformScenario &scenario, const std::uint64_t tick,
+                                                      const Physics::PhysicsPose pose) {
+            return {{Physics::PhysicsTransformAuthorityProtocolVersion, tick, scenario.world->Descriptor().sceneGeneration,
+                     scenario.probe.body.body, Physics::PhysicsCommandSourceId::Create(7).Value(), tick},
+                    pose};
+        }
+
+        TEST_CASE("Kinematic carry precedes intent and is not replayed on the following fixed tick", "[physics][character][platform]") {
+            PlatformScenario scenario;
+            REQUIRE(scenario.Tick(1).HasValue());
+            const std::array first{Target(scenario, 2, {{1, 0, 0}, Math::Quaternion::Identity()})};
+            REQUIRE(scenario.Tick(2, false, first, false, {3, 0, 0}).HasValue());
+            const auto moved = scenario.Snapshot();
+            RequireNear(moved.movement.platformCarriedDisplacement, {1, 0, 0});
+            RequireNear(moved.transform.position, {1.05F, 0, 0});
+            RequireNear(moved.movement.achievedVelocityMetersPerSecond, {63, 0, 0});
+            REQUIRE_FALSE(moved.movement.platformCarryRejected);
+            scenario.probe.body.pose = first[0].targetPose;
+            const std::array second{Target(scenario, 3, {{2, 0, 0}, Math::Quaternion::Identity()})};
+            REQUIRE(scenario.Tick(3, false, second).HasValue());
+            RequireNear(scenario.Snapshot().movement.platformCarriedDisplacement, {1, 0, 0});
+            RequireNear(scenario.Snapshot().transform.position, {2.05F, 0, 0});
+        }
+
+        TEST_CASE("Full platform rotation transports an offset root but only explicit twist changes heading",
+                  "[physics][character][platform]") {
+            for (const bool inherit : {false, true}) {
+                PlatformScenario scenario(false, 64, false, CharacterPlatformLeaveVelocityPolicy::None, inherit, {2, 0, 0});
+                REQUIRE(scenario.Tick(1).HasValue());
+                const auto yaw = Math::Quaternion::FromAxisAngle({0, 1, 0}, Math::Pi * 0.5F);
+                const std::array targets{Target(scenario, 2, {{}, yaw})};
+                REQUIRE(scenario.Tick(2, false, targets).HasValue());
+                const auto moved = scenario.Snapshot();
+                RequireNear(moved.transform.position, yaw.Rotate({2, 0, 0}));
+                RequireNear(moved.transform.up, {0, 1, 0});
+                RequireNear(moved.transform.heading.Rotate({0, 0, 1}), inherit ? yaw.Rotate({0, 0, 1}) : Math::Vec3{0, 0, 1});
+            }
+        }
+
+        TEST_CASE("Dynamic platform prediction integrates copied linear and angular motion for exactly one quantum",
+                  "[physics][character][platform]") {
+            PlatformScenario scenario(true, 64, false, CharacterPlatformLeaveVelocityPolicy::None, false, {2, 0, 0});
+            scenario.probe.body.motion = Physics::PhysicsMotionType::Dynamic;
+            REQUIRE(scenario.Tick(1).HasValue());
+            scenario.probe.body.linearVelocityMetersPerSecond = {3, 0, 0};
+            scenario.probe.body.angularVelocityRadiansPerSecond = {0, Math::Pi * 30.0F, 0};
+            REQUIRE(scenario.Tick(2).HasValue());
+            const auto yaw = Math::Quaternion::FromAxisAngle({0, 1, 0}, Math::Pi * 0.5F);
+            RequireNear(scenario.Snapshot().transform.position, Math::Vec3{0.05F, 0, 0} + yaw.Rotate({2, 0, 0}));
+        }
+
+        TEST_CASE("Jump walk off and forced detach transfer only the configured support velocity once", "[physics][character][platform]") {
+            for (const auto policy : {CharacterPlatformLeaveVelocityPolicy::None, CharacterPlatformLeaveVelocityPolicy::Linear,
+                                      CharacterPlatformLeaveVelocityPolicy::Point}) {
+                for (const int departure : {0, 1, 2}) {
+                    PlatformScenario scenario(true, 64, false, policy, false, {2, 0, 0});
+                    scenario.probe.body.motion = Physics::PhysicsMotionType::Dynamic;
+                    REQUIRE(scenario.Tick(1).HasValue());
+                    scenario.probe.body.linearVelocityMetersPerSecond = {3, 2, 0};
+                    scenario.probe.body.angularVelocityRadiansPerSecond = {0, 1, 0};
+                    scenario.probe.groundPresent = departure == 2;
+                    REQUIRE(scenario.Tick(2, departure == 0, {}, departure == 2).HasValue());
+                    const auto moved = scenario.Snapshot();
+                    const auto expected = policy == CharacterPlatformLeaveVelocityPolicy::None     ? Math::Vec3{}
+                                          : policy == CharacterPlatformLeaveVelocityPolicy::Linear ? Math::Vec3{3, 2, 0}
+                                                                                                   : Math::Vec3{3, 2, -2};
+                    RequireNear(moved.movement.platformLeaveVelocityMetersPerSecond, expected);
+                    REQUIRE_FALSE(moved.movement.platformAttachment);
+                    REQUIRE_FALSE(moved.transform.grounded);
+                    scenario.probe.groundPresent = false;
+                    REQUIRE(scenario.Tick(3).HasValue());
+                    RequireNear(scenario.Snapshot().movement.platformLeaveVelocityMetersPerSecond, {});
+                    REQUIRE(scenario.Snapshot().movement.gravityVelocityMetersPerSecond.x == Catch::Approx(expected.x));
+                }
+            }
+        }
+
+        TEST_CASE("Blocked carry is swept and detaches rather than transporting through a wall", "[physics][character][platform]") {
+            PlatformScenario scenario;
+            REQUIRE(scenario.Tick(1).HasValue());
+            scenario.probe.wall = true;
+            const std::array targets{Target(scenario, 2, {{1, 0, 0}, Math::Quaternion::Identity()})};
+            REQUIRE(scenario.Tick(2, false, targets).HasValue());
+            const auto moved = scenario.Snapshot();
+            REQUIRE(moved.movement.platformCarryRejected);
+            REQUIRE(moved.transform.position.x < 0.05F);
+            REQUIRE_FALSE(moved.movement.platformAttached);
+            REQUIRE(moved.movement.platformAttachmentChange == CharacterPlatformAttachmentChange::Detached);
+        }
+
+        TEST_CASE("Malformed stale and duplicate platform targets fail before publishing a carried candidate",
+                  "[physics][character][platform]") {
+            for (const int failure : {0, 1, 2, 3}) {
+                PlatformScenario scenario;
+                REQUIRE(scenario.Tick(1).HasValue());
+                const auto saved = scenario.Snapshot();
+                std::array targets{Target(scenario, 2, {{1, 0, 0}, Math::Quaternion::Identity()}),
+                                   Target(scenario, 2, {{1, 0, 0}, Math::Quaternion::Identity()})};
+                std::size_t count = 1;
+                if (failure == 0)
+                    ++targets[0].identity.sceneGeneration;
+                else if (failure == 1)
+                    targets[0].identity.simulationTick = 1;
+                else if (failure == 2)
+                    targets[0].targetPose.translation.x = std::numeric_limits<float>::infinity();
+                else
+                    count = 2;
+                REQUIRE(scenario.Tick(2, false, std::span{targets}.first(count)).HasError());
+                REQUIRE(scenario.Snapshot().stateRevision == saved.stateRevision);
+                REQUIRE(scenario.Snapshot().transform.position == saved.transform.position);
+            }
+        }
+
+        TEST_CASE("Platform carry rejects nonfinite velocity and oversized motion without altering committed state",
+                  "[physics][character][platform]") {
+            for (const bool invalidVelocity : {false, true}) {
+                PlatformScenario scenario(true);
+                scenario.probe.body.motion = Physics::PhysicsMotionType::Dynamic;
+                REQUIRE(scenario.Tick(1).HasValue());
+                const auto saved = scenario.Snapshot();
+                scenario.probe.body.linearVelocityMetersPerSecond = {invalidVelocity ? std::numeric_limits<float>::quiet_NaN() : 1.0e8F, 0,
+                                                                     0};
+                REQUIRE(scenario.Tick(2).HasError());
+                REQUIRE(scenario.Snapshot().stateRevision == saved.stateRevision);
+            }
+        }
+
+        TEST_CASE("Moving attachment without a query provider fails explicitly and retains its committed state",
+                  "[physics][character][platform]") {
+            PlatformScenario scenario;
+            REQUIRE(scenario.Tick(1).HasValue());
+            const auto saved = scenario.Snapshot();
+            auto input = scenario.QueuedTick(2);
+            input.query.platformBody = nullptr;
+            RequireError(scenario.world->AdvanceFixedTick(input), CharacterErrors::OperationUnsupported);
+            REQUIRE(scenario.Snapshot().stateRevision == saved.stateRevision);
+            REQUIRE(scenario.Snapshot().movement.platformAttachment->sourceTick == 1);
+        }
+
+        TEST_CASE("Unknown leave policy and nonfinite copied motion diagnostics are rejected", "[physics][character][platform]") {
+            PlatformScenario scenario;
+            REQUIRE(scenario.Tick(1).HasValue());
+            auto descriptor = ControllerDescriptor(scenario.world->Descriptor());
+            descriptor.platformLeaveVelocity = static_cast<CharacterPlatformLeaveVelocityPolicy>(255);
+            REQUIRE(ValidateCharacterControllerDescriptor(descriptor).HasError());
+            descriptor.platformLeaveVelocity = CharacterPlatformLeaveVelocityPolicy::None;
+            auto snapshot = scenario.Snapshot();
+            snapshot.movement.platformCarriedDisplacement.x = std::numeric_limits<float>::quiet_NaN();
+            REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasError());
+            snapshot = scenario.Snapshot();
+            snapshot.movement.platformLeaveVelocityMetersPerSecond.x = std::numeric_limits<float>::infinity();
+            REQUIRE(ValidateCharacterLocomotionSnapshot(snapshot, descriptor).HasError());
         }
 
     }  // namespace
