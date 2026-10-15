@@ -373,6 +373,10 @@ namespace {
         }
 
         Result<void> Start(GameRuntimeContext &context) override {
+#if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
+            if (context.navigation && !context.navigation->Binding().queryGranted)
+                return Result<void>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
+#endif
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
             if (!context.physics)
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsUnavailable));

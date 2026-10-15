@@ -2,7 +2,6 @@
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
-#include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "navigation/NavigationCoordinatorTestFixtures.h"
@@ -325,18 +324,17 @@ TEST_CASE("Failed native startup retains an owned shadow image only until the re
     Fixture fixture;
     const auto root = std::filesystem::temp_directory_path() /
                       ("horo nav failed image " + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-    auto physics = GameplayPhysicsContext::Withheld({.moduleId = "game.tests",
-                                                     .scene = fixture.binding.scene.Value(),
-                                                     .sceneGeneration = fixture.binding.sceneGeneration.Value(),
-                                                     .moduleEnabled = true,
-                                                     .permissionGranted = true},
-                                                    GameplayPhysicsDenial::Unavailable);
+    auto denied = GameplayNavigationContext::Create({"game.tests", fixture.binding, false, false}, &fixture.world, &fixture.coordinator,
+                                                    fixture.movement.get(), Input());
+    REQUIRE(denied.HasValue());
+    fixture.context = std::move(denied).Value();
     {
-        GameModuleHost host{{}, physics, fixture.context};
+        GameModuleHost host{{}, nullptr, fixture.context};
         const GameModuleLoadExpectation expected{"game.tests", CurrentGameplayBuildFingerprint(),
                                                  Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
         auto failed = host.LoadShadowCopy(HORO_TEST_GAME_MODULE_PATH, root, expected);
         REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().code.Value() == NavigationCapabilityErrors::PermissionDenied.code.Value());
         REQUIRE_FALSE(fixture.context->IsUsable());
         REQUIRE(std::distance(std::filesystem::directory_iterator{root}, std::filesystem::directory_iterator{}) == 1);
         REQUIRE(fixture.context->DrainRetired().Value());
