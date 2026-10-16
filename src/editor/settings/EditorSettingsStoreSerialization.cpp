@@ -202,6 +202,9 @@ namespace Horo::Editor::SettingsStoreInternal {
             const EditorSettings &source = settings.source;
             out << "  \"rendering\": {\n";
             out << R"(    "viewportMode": ")" << ToString(source.viewportMode) << "\",\n";
+            out << R"(    "navigationShowAreas": )" << BoolString(source.navigationOverlay.showAreas) << ",\n";
+            out << R"(    "navigationShowPaths": )" << BoolString(source.navigationOverlay.showPaths) << ",\n";
+            out << R"(    "navigationShowAgents": )" << BoolString(source.navigationOverlay.showAgents) << ",\n";
             out << R"(    "gridOverlay": )" << BoolString(source.gridOverlay) << ",\n";
             out << R"(    "renderingTier": ")" << ToString(source.renderingTier) << "\",\n";
             out << R"(    "textureStreamingBudget": ")" << EscapeJsonString(source.textureStreamingBudget) << "\"\n";

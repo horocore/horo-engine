@@ -25,11 +25,14 @@ namespace Horo::SceneSource {
 
     /**
      * @brief Decodes the existing Scene schema-1 representation without migration or activation.
-     * @param contents Canonical Scene JSON, at most 16 MiB.
+     * @param contents Canonical Scene JSON, at most 16 MiB, with unique object keys and parser depths below 64.
      * @return Detached values or the existing typed scene-persistence error.
      * Decoding preserves existing component validation and diagnostic semantics. The project host must
      * inspect project compatibility and authorize file access first; decoding grants no trust or write authority.
-     * Scene graph/document admission remains a separate operation.
+     * Scene graph/document admission remains a separate operation. Unknown fields remain ignored within the same
+     * depth bound; duplicate keys and deeper inputs are rejected rather than resolved implicitly.
+     * @throws std::bad_alloc If allocation fails during decoding. Completed DOM cleanup does not allocate;
+     * persistent exhaustion during upstream partial-parser cleanup is outside this guarantee.
      */
     [[nodiscard]] Result<SceneSourceDocument> DecodeSceneSource(std::string_view contents);
     /**

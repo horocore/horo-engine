@@ -39,7 +39,9 @@ namespace Horo::Editor::SettingsModalInternal {
         else if (st.statusIsError)
             textColor = Err();
         ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-        const char *message = "Apply writes user preferences to ~/.horo/editor_settings.json";
+        const auto navigationHint = ctx.localization.Get("editor", "settings.navigation.save_policy_first");
+        const char *message =
+            st.navigationProjectDraftDirty ? navigationHint.c_str() : "Apply writes user preferences to ~/.horo/editor_settings.json";
         if (hasFeedback)
             message = st.modalFeedback.c_str();
         else if (!st.statusMessage.empty())

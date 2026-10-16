@@ -204,6 +204,8 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorStatusItemRegistry &StatusItems() const noexcept;
 
     private:
+        /** @brief Opens settings with the active screen's borrowed navigation session and preserves admission diagnostics. */
+        void OpenEditorSettingsModal();
         /** @brief Registers the already-initialized host and borrowed application services without activating native packages. */
         void RegisterApplicationServices(const GuiScreenHostComposition &composition);
         /** @brief Creates and activates extension/importer owners in their existing rollback and destruction order. */

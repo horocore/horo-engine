@@ -236,6 +236,10 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             }
 
+            Result<NavigationProjectSettingsSession *> NavigationSettings() override {
+                return controller_ ? controller_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
+            }
+
             void OnUpdate(float dt) override {
                 if (controller_) {
                     while (const auto destination = view_.UpdateExtensionActivities())
@@ -250,6 +254,7 @@ namespace Horo::Editor {
                                                   : Packages::PackageActivationBoundary::Running;
                         static_cast<void>(packages_.pump(std::filesystem::path{model.projectRoot}, boundary));
                     }
+                    controller_->UpdateNavigationSettingsProjection();
                     controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
                     controller_->UpdateExternalSceneWatch(dt);
                     controller_->UpdateGameplaySources(dt);
@@ -399,7 +404,8 @@ namespace Horo::Editor {
             LeaveDecision CanLeave(const LeaveTarget &) const override {
                 using enum LeaveAction;
                 using enum LeaveDisposition;
-                if (controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments())) {
+                if (controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() ||
+                                    controller_->HasDirtyNavigationDocuments())) {
                     auto graphs = controller_->PCGDocuments().Snapshots();
                     if (graphs.HasError())
                         return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
@@ -425,6 +431,8 @@ namespace Horo::Editor {
                 }
                 if (resolution.action == Save) {
                     if (controller_) {
+                        if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
+                            return Result<LeaveDecision>::Failure(navigation.ErrorValue());
                         EditorWorkspaceViewCommandData command;
                         command.command = EditorWorkspaceViewCommand::SaveScene;
                         controller_->ProcessCommand(command);
@@ -432,6 +440,8 @@ namespace Horo::Editor {
                             controller_->HasDirtyPCGDocuments()) {
                             return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Deny, .requirement = std::nullopt});
                         }
+                        if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
+                            return Result<LeaveDecision>::Failure(navigation.ErrorValue());
                         if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
                             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
                     }
@@ -442,6 +452,8 @@ namespace Horo::Editor {
                         EditorWorkspaceViewCommandData command;
                         command.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
                         controller_->ProcessCommand(command);
+                        if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
+                            return Result<LeaveDecision>::Failure(navigation.ErrorValue());
                         if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
                             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
                     }
@@ -460,6 +472,9 @@ namespace Horo::Editor {
                         static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
                     SaveExtensionWorkspace();
                     controller_->FlushAutosave();
+                    if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
+                        LOG_ERROR("editor.navigation_document", "Navigation document shutdown is incomplete: %s",
+                                  navigation.ErrorValue().message.c_str());
                     if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
                         LOG_ERROR("editor.pcg_document", "Graph shutdown recovery is incomplete: %s", graphs.ErrorValue().message.c_str());
                 }
