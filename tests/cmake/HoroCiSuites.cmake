@@ -204,6 +204,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNavigationRuntimeTests
     HoroNavigationTransportReservationTests
     HoroNavigationCharacterAdapterTests
+    HoroNavigationRuntimeQualificationTests
     HoroNavigationCharacterAdapterPublicConsumer
     HoroNavigationCharacterIntegrationPublicHeaderConsumer
     HoroNavigationCoordinatorPublicConsumer
@@ -237,6 +238,7 @@ set(HORO_CI_NAVIGATION_TARGETS
     HoroNavigationBakeServicePublicHeaderConsumer
     HoroNavigationBakeDiagnosticsPublicConsumer
     HoroNavigationCharacterAdapterTests
+    HoroNavigationRuntimeQualificationTests
     HoroNavigationCharacterAdapterPublicConsumer
     HoroNavigationCharacterIntegrationPublicHeaderConsumer
 )

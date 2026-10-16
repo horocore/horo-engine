@@ -220,6 +220,10 @@ its exact Scene/world/topology fences and be drained without publication. Queue 
 admit exactly the platform-specific `RequiredStorageBytes` projection and instrument
 all prepared command, query, and completion directions for zero frame-hot allocation.
 
+The integrated native query/crowd → Character → CanonicalV1 Physics regression
+corpus and its finite workload, measurement exclusions and omitted-provider
+reporting are defined in [Navigation runtime qualification](../../guides/navigation-runtime-qualification.md).
+
 ## Subsystem Decoupling
 
 Editor viewport camera navigation remains in Gui; orbit/pan/fly/focus code never depends

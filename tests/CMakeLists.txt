@@ -1217,6 +1217,29 @@ target_include_directories(HoroNavigationCharacterAdapterTests PRIVATE
 target_link_libraries(HoroNavigationCharacterAdapterTests PRIVATE HoroEngine::NavigationCharacterIntegration)
 horo_register_catch_test(HoroNavigationCharacterAdapterTests LABELS "unit;navigation;character;headless;ci-navigation")
 
+# This target remains discoverable in omitted-provider compositions, but actual
+# movement qualification is compiled only when both real native providers exist.
+add_executable(HoroNavigationRuntimeQualificationTests
+        integration/navigation/NavigationRuntimeQualificationAvailabilityTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroNavigationRuntimeQualificationTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationRuntimeQualificationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
+target_compile_definitions(HoroNavigationRuntimeQualificationTests PRIVATE
+        HORO_QUALIFICATION_NAV_NATIVE=$<BOOL:${HORO_BUILD_NAVIGATION_RECAST_DETOUR}>
+        HORO_QUALIFICATION_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
+        HORO_QUALIFICATION_BUILD_TYPE="$<CONFIG>"
+        HORO_QUALIFICATION_PLATFORM="${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}"
+        HORO_QUALIFICATION_COMPILER="${CMAKE_CXX_COMPILER_ID}/${CMAKE_CXX_COMPILER_VERSION}")
+target_link_libraries(HoroNavigationRuntimeQualificationTests PRIVATE
+        HoroEngine::NavigationCharacterIntegration HoroEngine::NavigationRecastDetour
+        HoroEngine::NavigationCrowdDetour HoroEngine::Physics)
+if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
+    target_sources(HoroNavigationRuntimeQualificationTests PRIVATE
+            integration/navigation/NavigationRuntimeQualificationTests.cpp
+            integration/navigation/NavigationRuntimePressureQualificationTests.cpp)
+endif()
+horo_register_catch_test(HoroNavigationRuntimeQualificationTests LABELS "integration;navigation;character;headless;qualification;ci-navigation")
+
 add_executable(HoroNavigationCharacterAdapterPublicConsumer support/NavigationCharacterAdapterPublicConsumer.cpp)
 target_link_libraries(HoroNavigationCharacterAdapterPublicConsumer PRIVATE HoroEngine::NavigationCharacterIntegration)
 add_test(NAME HoroNavigationCharacterAdapterPublicConsumer COMMAND HoroNavigationCharacterAdapterPublicConsumer)
