@@ -68,7 +68,7 @@ namespace Horo::Runtime {
         REQUIRE(bytes.size() > 16);
         CHECK(bytes[0] == std::byte{'H'});
         CHECK(bytes[7] == std::byte{'S'});
-        CHECK(bytes[8] == std::byte{1});
+        CHECK(bytes[8] == std::byte{2});
         auto decoded = DecodeSceneCellPayload(fixture.manifest.Descriptor(), bytes, Identity(), fixture.schemas, {}, Limits());
         if (decoded.HasError())
             INFO(decoded.ErrorValue().message);

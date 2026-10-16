@@ -126,9 +126,10 @@ namespace Horo::SceneCook {
                                                                const Runtime::SceneDefinitionRevision revision,
                                                                const CookedSceneLimits &limits) {
             if (!Foundation::HasAllowedFields(root, {"format", "scene", "revision", "entities", "dependencies", "triggerMigration"}) ||
-                root["format"] != CookedSceneFormat || !root["scene"].is_number_unsigned() || root["scene"] != scene.value ||
-                !root["revision"].is_number_unsigned() || root["revision"] != revision.value || !root["entities"].is_array() ||
-                !root["dependencies"].is_array() || !root["triggerMigration"].is_array())
+                !root["format"].is_string() || std::string_view{root["format"].get_ref<const Json::string_t &>()} != CookedSceneFormat ||
+                !root["scene"].is_number_unsigned() || root["scene"] != scene.value || !root["revision"].is_number_unsigned() ||
+                root["revision"] != revision.value || !root["entities"].is_array() || !root["dependencies"].is_array() ||
+                !root["triggerMigration"].is_array())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
             if (!WithinLimits(root["entities"].size(), root["dependencies"].size(), limits) ||
                 root["triggerMigration"].size() > root["entities"].size())
