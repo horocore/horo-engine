@@ -22,6 +22,7 @@ namespace Horo::Editor::AudioPreviewTest {
         bool closedAtDestruction{};
         std::size_t cancellations{};
         std::size_t acknowledgements{};
+        std::size_t idleControlRejections{};
     };
 
     class ObservedNull final : public Audio::Backend::AudioBackend {
@@ -100,10 +101,14 @@ namespace Horo::Editor::AudioPreviewTest {
             return result;
         }
 
-        Result<void> Advance() {
-            const auto controlled = output->AdvanceControl();
-            if (controlled.HasError())
-                return controlled;
+        Result<void> AdvanceControl() {
+            auto result = output->AdvanceControl();
+            if (result.HasError() && result.ErrorValue().code.Value() == Audio::AudioErrors::RuntimeInactive.code.Value())
+                ++evidence->idleControlRejections;
+            return result;
+        }
+
+        Result<void> AdvanceCallback() {
             using enum Audio::Backend::NullAudioBackendState;
             if (output->State() == Priming || output->State() == Rendering || output->State() == Quiescing) {
                 auto rendered = output->AdvanceCallback();
@@ -120,7 +125,9 @@ namespace Horo::Editor::AudioPreviewTest {
             auto output = std::make_unique<ObservedNull>(owner, evidence);
             auto *driver = output.get();
             return Result<EditorAudioPreviewBackend>::Success({std::move(output), [driver] {
-                return driver->Advance();
+                return driver->AdvanceControl();
+            }, [driver] {
+                return driver->AdvanceCallback();
             }});
         };
     }
@@ -155,8 +162,12 @@ namespace Horo::Editor::AudioPreviewTest {
     };
 
     inline ClipProject::ClipProject() {
-        std::filesystem::create_directories(root / "Assets/çok ses");
-        const std::string source = "Assets/çok ses/tone.wav";
+        const std::filesystem::path nativeSource{u8"Assets/çok ses/tone.wav"};
+        std::filesystem::create_directories(root / nativeSource.parent_path());
+        const auto utf8 = nativeSource.generic_u8string();
+        std::string source;
+        for (const char8_t byte : utf8)
+            source.push_back(static_cast<char>(byte));
         std::vector<unsigned char> wav;
         const auto text = [&wav](std::string_view value) {
             wav.insert(wav.end(), value.begin(), value.end());
@@ -179,7 +190,7 @@ namespace Horo::Editor::AudioPreviewTest {
         word(8192, 4);
         for (std::size_t i = 0; i < 4096; ++i)
             word(16384, 2);
-        std::ofstream output{root / std::filesystem::path{source}, std::ios::binary};
+        std::ofstream output{root / nativeSource, std::ios::binary};
         output.write(reinterpret_cast<const char *>(wav.data()), static_cast<std::streamsize>(wav.size()));
         output.close();
         const auto report = registry.Publish({{clip, Assets::AssetTypeId::Parse("core.audio").Value(), ProjectPath::Parse(source).Value(),

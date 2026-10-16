@@ -149,3 +149,26 @@ A failed or incomplete host-control step cancels, polls and acknowledges that
 closed-peer operation before backend destruction, preserving the original error.
 Unproven cancellation or a Retained disposition invokes the same process-fatal
 ownership policy; it never discards the backend or pretends cleanup completed.
+
+The application-private output adapter tracks the exact accepted operation until
+terminal acknowledgement. It advances native control only while that operation
+is nonterminal. Explicit headless callback progression runs independently, so an
+idle Active lane continues producing PCM without an invented control operation.
+RuntimeInactive is never suppressed as an idle heuristic: unexpected driver
+failures retain their original error and request normal output retirement.
+
+Invalid or busy Start admission returns a caller-local error and leaves the
+existing owner's workspace/object/revision, output and failure snapshot intact.
+Only an admitted new capture rebinds that snapshot and records its own preparation
+or startup error. A rejected same-owner Start has no diagnostic mutation authority.
+
+Pump continues ordered cleanup after a driver failure, returns that current-call
+failure even when the frontend cleanup step succeeds, and retains the first
+capture failure with its message/cause through teardown. A stored past failure
+does not turn later successful cleanup calls into repeated current-call failures.
+
+The request retains the source-open service's native project-root path. Asset
+registry paths are portable UTF-8 and are converted explicitly to native paths,
+including on Windows; symlink resolution and project-root containment still apply.
+The Unicode WAV fixture constructs its native filename from a UTF-8 literal,
+independently of the decoder's conversion, so mojibake cannot satisfy both sides.

@@ -36,13 +36,29 @@ namespace Horo::Editor::AudioPreviewHostDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Converts the portable UTF-8 asset path without using the Windows narrow code page. */
+        Result<std::filesystem::path> NativeSourcePath(const std::string_view portable) {
+            std::u8string utf8;
+            utf8.reserve(portable.size());
+            for (const char byte : portable)
+                utf8.push_back(static_cast<char8_t>(byte));
+            try {
+                return Result<std::filesystem::path>::Success(std::filesystem::path{utf8});
+            } catch (const std::filesystem::filesystem_error &error) {
+                return Result<std::filesystem::path>::Failure(MakeError(AudioComponentPreviewErrors::MissingAsset, error.what()));
+            }
+        }
+
         /** @brief Resolves symlinks before permitting a project-scoped source read. */
         Result<std::filesystem::path> Resolve(const AudioComponentPreviewRequest &request, const Assets::AssetRecord &record) {
             std::error_code error;
             const auto root = std::filesystem::canonical(request.projectRoot, error);
             if (error)
                 return Result<std::filesystem::path>::Failure(MakeError(AudioComponentPreviewErrors::MissingAsset));
-            const auto source = std::filesystem::canonical(root / record.sourcePath.String(), error);
+            const auto nativeSource = NativeSourcePath(record.sourcePath.String());
+            if (nativeSource.HasError())
+                return Result<std::filesystem::path>::Failure(nativeSource.ErrorValue());
+            const auto source = std::filesystem::canonical(root / nativeSource.Value(), error);
             const auto relative = source.lexically_relative(root);
             if (error || relative.empty() || relative.is_absolute() || *relative.begin() == "..")
                 return Result<std::filesystem::path>::Failure(MakeError(AudioComponentPreviewErrors::MissingAsset));

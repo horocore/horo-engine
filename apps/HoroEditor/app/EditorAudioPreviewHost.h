@@ -8,7 +8,9 @@ namespace Horo::Editor {
     /** @brief One explicitly selected private output peer and its owning control driver. */
     struct EditorAudioPreviewBackend final {
         std::unique_ptr<Audio::Backend::AudioBackend> output;
-        std::function<Result<void>()> advance;
+        std::function<Result<void>()> advanceControl; /**< Executes only an accepted nonterminal operation. */
+        std::function<Result<void>()>
+            advanceCallback; /**< Optional explicit headless callback clock; native SDL3 drives its own callbacks. */
     };
 
     /** @brief Application output preparation policy; it never runs inside widget drawing. */

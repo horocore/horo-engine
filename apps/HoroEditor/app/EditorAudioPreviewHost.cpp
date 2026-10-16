@@ -20,6 +20,78 @@ namespace Horo::Editor {
                         2'000'000'000ULL};
         }
 
+        /** @brief Control-owner adapter tracking exact operation admission and acknowledgement.
+         * @details Idle output never calls peer AdvanceControl. Headless callback progression is
+         * independent of control work, so steady Rendering continues without inventing an operation.
+         * The selected peer and both borrowed driver closures share this one retained owner.
+         */
+        class DrivenOutput final : public Audio::Backend::AudioBackend {
+        public:
+            explicit DrivenOutput(EditorAudioPreviewBackend selected) : selected_(std::move(selected)) {}
+
+            Audio::AudioBackendKind Kind() const noexcept override {
+                return selected_.output->Kind();
+            }
+
+            Audio::AudioRuntimeId Owner() const noexcept override {
+                return selected_.output->Owner();
+            }
+
+            Result<Audio::Backend::OperationId> Begin(const Audio::Backend::Request &request,
+                                                      const Audio::AudioMonotonicTimestamp &deadline) override {
+                auto result = selected_.output->Begin(request, deadline);
+                if (result.HasValue())
+                    operation_ = result.Value();
+                return result;
+            }
+
+            Result<void> CommitRendering(const Audio::AudioDeviceEpoch &epoch) override {
+                return selected_.output->CommitRendering(epoch);
+            }
+
+            Result<Audio::Backend::CancelDisposition> Cancel(const Audio::Backend::OperationId &operation) override {
+                return selected_.output->Cancel(operation);
+            }
+
+            Result<std::optional<Audio::Backend::Completion>> Poll(const Audio::Backend::OperationId &operation) override {
+                return selected_.output->Poll(operation);
+            }
+
+            Result<void> AcknowledgeCompletion(const Audio::Backend::OperationId &operation) override {
+                auto result = selected_.output->AcknowledgeCompletion(operation);
+                if (result.HasValue())
+                    operation_.reset();
+                return result;
+            }
+
+            std::size_t DrainEvents(std::span<Audio::Backend::Event> events) noexcept override {
+                return selected_.output->DrainEvents(events);
+            }
+
+            Audio::Backend::AudioCallbackViolationDrain DrainSafetyViolations(
+                std::span<Audio::Backend::AudioCallbackViolation> violations) noexcept override {
+                return selected_.output->DrainSafetyViolations(violations);
+            }
+
+            Result<void> Advance() {
+                if (operation_) {
+                    const auto completion = selected_.output->Poll(*operation_);
+                    if (completion.HasError())
+                        return Result<void>::Failure(completion.ErrorValue());
+                    if (!completion.Value()) {
+                        auto advanced = selected_.advanceControl();
+                        if (advanced.HasError())
+                            return advanced;
+                    }
+                }
+                return selected_.advanceCallback ? selected_.advanceCallback() : Result<void>::Success();
+            }
+
+        private:
+            EditorAudioPreviewBackend selected_;
+            std::optional<Audio::Backend::OperationId> operation_;
+        };
+
         /** @brief Reconciles an accepted closed-peer discovery operation before its backend can be destroyed.
          * @details Enumerate has no Open/render port or lifecycle events. AudioBackend requires every
          * operation acknowledged even when the original query fails. Unproven/Retained cancellation
@@ -65,13 +137,12 @@ namespace Horo::Editor {
         };
 
         /** @brief Captures one closed-peer catalog through the actual bounded native protocol. */
-        Result<Audio::AudioDeviceSnapshot> Discover(EditorAudioPreviewBackend &selected) {
-            auto &backend = *selected.output;
+        Result<Audio::AudioDeviceSnapshot> Discover(DrivenOutput &backend) {
             auto operation = backend.Begin(Audio::Backend::Enumerate{}, Deadline());
             if (operation.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(operation.ErrorValue());
             DiscoveryOperation pending{backend, operation.Value()};
-            auto advanced = selected.advance();
+            auto advanced = backend.Advance();
             if (advanced.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(advanced.ErrorValue());
             auto completion = backend.Poll(operation.Value());
@@ -105,10 +176,11 @@ namespace Horo::Editor {
             auto selectedBackend = factory(owner);
             if (selectedBackend.HasError())
                 return Result<PreparedLane>::Failure(selectedBackend.ErrorValue());
-            auto backend = std::move(selectedBackend).Value();
-            if (!backend.output || !backend.advance)
+            auto selectedOutput = std::move(selectedBackend).Value();
+            if (!selectedOutput.output || !selectedOutput.advanceControl)
                 return Result<PreparedLane>::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
-            auto catalog = Discover(backend);
+            auto backend = std::make_unique<DrivenOutput>(std::move(selectedOutput));
+            auto catalog = Discover(*backend);
             if (catalog.HasError())
                 return Result<PreparedLane>::Failure(catalog.ErrorValue());
             const auto selected = Audio::ResolveAudioDevice(catalog.Value(), Audio::AudioDefaultDeviceRole::Multimedia);
@@ -119,9 +191,12 @@ namespace Horo::Editor {
                 return Result<PreparedLane>::Failure(preparation.ErrorValue());
             auto prepared = std::move(preparation).Value();
             const Audio::AudioDeviceEpoch epoch{selected.device, 1, 1};
-            auto advance = std::move(backend.advance);
+            auto *driver = backend.get();
+            const auto advance = [driver] {
+                return driver->Advance();
+            };
             Audio::Internal::AudioFrontendOutput
-                output{std::move(backend.output),
+                output{std::move(backend),
                        {epoch,
                         {selected.device, {48'000, Audio::MakeAudioSpeakerLayout(Audio::AudioSpeakerPreset::Stereo)}, {}, {256, 256, 256}}},
                        std::move(catalog).Value(),
@@ -158,9 +233,8 @@ namespace Horo::Editor {
             return Result<EditorAudioPreviewBackend>::Failure(created.ErrorValue());
         auto *backend = created.Value().get();
         return Result<EditorAudioPreviewBackend>::Success({std::move(created).Value(), [backend] {
-            const auto advanced = backend->AdvanceControl();
-            if (advanced.HasError())
-                return advanced;
+            return backend->AdvanceControl();
+        }, [backend] {
             using enum Audio::Backend::NullAudioBackendState;
             if (backend->State() == Priming || backend->State() == Rendering || backend->State() == Quiescing) {
                 const auto rendered = backend->AdvanceCallback();
@@ -199,15 +273,15 @@ namespace Horo::Editor {
 
     /** @copydoc IAudioComponentPreview::Start */
     Result<void> EditorAudioPreviewHost::Start(const AudioComponentPreviewRequest &request) {
+        if (!request.workspace.IsValid() || request.revision == 0 || request.object == 0)
+            return Result<void>::Failure(MakeError(AudioComponentPreviewErrors::Stale));
+        if (state_->frontend)
+            return Result<void>::Failure(MakeError(AudioComponentPreviewErrors::Busy));
+        state_->snapshot = {.workspace = request.workspace, .revision = request.revision, .object = request.object};
         const auto fail = [this](const Error &error) {
             state_->snapshot.failure = error;
             return Result<void>::Failure(error);
         };
-        if (!request.workspace.IsValid() || request.revision == 0 || request.object == 0)
-            return fail(MakeError(AudioComponentPreviewErrors::Stale));
-        if (state_->frontend)
-            return fail(MakeError(AudioComponentPreviewErrors::Busy));
-        state_->snapshot = {.workspace = request.workspace, .revision = request.revision, .object = request.object};
         if (request.source.playback.spatialMode == Audio::AudioSpatialMode::ThreeD && !request.listener)
             return fail(MakeError(AudioComponentPreviewErrors::MissingListener));
         if (auto valid = Audio::ValidateAudioSoundReference(request.source.sound); valid.HasError())
@@ -247,19 +321,23 @@ namespace Horo::Editor {
     Result<void> EditorAudioPreviewHost::Pump() {
         if (!state_->frontend)
             return Result<void>::Success();
+        const auto recordFailure = [this](const Error &error) {
+            if (!state_->snapshot.failure)
+                state_->snapshot.failure = error;
+        };
         const auto advanced = state_->advance();
         if (advanced.HasError()) {
-            state_->snapshot.failure = advanced.ErrorValue();
+            recordFailure(advanced.ErrorValue());
             state_->frontend->Close();
         }
         auto pumped = state_->frontend->Pump(Deadline());
         if (pumped.HasError())
-            state_->snapshot.failure = pumped.ErrorValue();
+            recordFailure(pumped.ErrorValue());
         state_->snapshot.output = state_->frontend->Snapshot();
         if (state_->startVoice && state_->snapshot.output->phase == Audio::AudioFrontendPhase::Active) {
             auto admitted = state_->frontend->Transport({state_->snapshot.output->voice, Audio::AudioVoiceControl::Start});
             if (admitted.HasError()) {
-                state_->snapshot.failure = admitted.ErrorValue();
+                recordFailure(admitted.ErrorValue());
                 state_->frontend->Close();
             } else if (admitted.Value().status == Audio::AudioCommandStagingStatus::Ok)
                 state_->startVoice = false;
@@ -268,12 +346,12 @@ namespace Horo::Editor {
         const auto count = state_->frontend->DrainTransportResults(results);
         for (std::size_t i = 0; i < count; ++i)
             if (results[i].error)
-                state_->snapshot.failure = MakeError(*results[i].error);
+                recordFailure(MakeError(*results[i].error));
         if (state_->snapshot.output->phase == Audio::AudioFrontendPhase::Closed) {
             state_->frontend.reset();
             state_->advance = {};
         }
-        return pumped;
+        return advanced.HasError() ? Result<void>::Failure(advanced.ErrorValue()) : std::move(pumped);
     }
 
     /** @copydoc IAudioComponentPreview::Snapshot */

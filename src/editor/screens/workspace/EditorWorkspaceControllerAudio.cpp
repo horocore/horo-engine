@@ -64,7 +64,7 @@ namespace Horo::Editor {
         AudioComponentPreviewRequest request{m_audioPreviewWorkspace,
                                              revision.value,
                                              object.value,
-                                             std::filesystem::path{m_viewModel.projectRoot},
+                                             m_sourceOpenService.ProjectRoot(),
                                              m_assetRegistry,
                                              *source,
                                              listeners.empty() ? std::nullopt : std::optional{listeners.front()}};
