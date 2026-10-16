@@ -53,6 +53,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroLightCullingTests
     HoroLightFramePoolTests
     HoroAITaskSchedulerTests
+    HoroAIFoundationQualificationTests
     HoroAITaskSchedulerPublicConsumer
     HoroGameplayAiTests
     HoroGameplayAiContractConsumer
@@ -133,6 +134,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCharacterInputPublicHeaderConsumer
     HoroInputSdlTests
     HoroRuntimeUiInputTests
+    HoroRuntimeUiInputDebuggerTests
+    HoroRuntimeUiInputDebuggerContractConsumer
     HoroRuntimeUiAnimationIntegrationTests
     HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer
     HoroRuntimeUiHitTestingTests
@@ -203,6 +206,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNavigationRuntimeTests
     HoroNavigationTransportReservationTests
     HoroNavigationCharacterAdapterTests
+    HoroNavigationRuntimeQualificationTests
     HoroNavigationCharacterAdapterPublicConsumer
     HoroNavigationCharacterIntegrationPublicHeaderConsumer
     HoroNavigationCoordinatorPublicConsumer
@@ -236,6 +240,7 @@ set(HORO_CI_NAVIGATION_TARGETS
     HoroNavigationBakeServicePublicHeaderConsumer
     HoroNavigationBakeDiagnosticsPublicConsumer
     HoroNavigationCharacterAdapterTests
+    HoroNavigationRuntimeQualificationTests
     HoroNavigationCharacterAdapterPublicConsumer
     HoroNavigationCharacterIntegrationPublicHeaderConsumer
 )
