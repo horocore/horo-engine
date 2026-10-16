@@ -27,7 +27,7 @@ namespace Horo::Editor {
                                {"settings", {{"renderBackend", "opengl"}, {"defaultScene", "Assets/Scene.horo"}}}};
             Write(project.root / ".horo/project.json", source.dump());
             const auto loaded = LoadProjectDefaultScene(project.root);
-            INFO(loaded.HasError() ? loaded.ErrorValue().message : "Default scene loaded");
+            INFO((loaded.HasError() ? loaded.ErrorValue().message : "Default scene loaded"));
             REQUIRE(loaded.HasValue());
             REQUIRE(loaded.Value().has_value());
         }
