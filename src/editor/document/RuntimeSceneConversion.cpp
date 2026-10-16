@@ -18,7 +18,7 @@ namespace Horo::Editor {
         const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding) {
         return SceneSource::ConvertScenePrefabProjectionToRuntime({document.objects, document.prefabInstances}, sceneId,
                                                                   Runtime::SceneDefinitionRevision{document.state.value}, projection,
-                                                                  resolver, limits, schemas, triggerBinding);
+                                                                  {resolver, limits, schemas}, triggerBinding);
     }
 
     /** @copydoc ConvertSceneDocumentToRuntime */

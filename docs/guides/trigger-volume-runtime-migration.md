@@ -40,6 +40,21 @@ prefab conversion, `ScenePrefabExpansionRequest`, editor conversion adapters and
 context. No conversion function discovers services, selects a solver or loads a
 material. Existing callers without enabled legacy triggers may omit the context.
 
+Retained `SceneSource::ConvertScenePrefabProjectionToRuntime` now groups its
+resolver, limit profile and optional property schema in the borrowed
+`ScenePrefabResolutionContext`. This keeps one coherent source publication and
+policy explicit rather than extending a positional argument list for each host
+capability. Replace `(projection, resolver, limits, schemas, triggerBinding)` with
+`(projection, {resolver, limits, schemas}, triggerBinding)`; omit the schema member
+when it is unavailable. All referenced values must stay alive and immutable until
+the synchronous call returns. The context is never retained and adds no snapshot
+copy, allocation or discovery. Stale-source/schema checks and all-or-nothing
+publication are unchanged. Cached conversion, expansion workers and the editor
+adapter migrate together; editor-facing signatures remain unchanged. Existing
+compiled SceneSource consumers must rebuild. The public-header consumer and real
+retained-conversion/schema-staleness regressions cover the new call shape. This
+host API change does not alter authored/cooked formats or GameModule SDK21.
+
 An enabled legacy trigger without a binding returns
 `scene_conversion.trigger_volume_project_binding_missing`. Invalid shape and
 legacy/canonical conflict diagnostics retain precedence. Disabled valid legacy

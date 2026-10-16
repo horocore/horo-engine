@@ -233,8 +233,9 @@ namespace Horo::SceneSource {
                 return JobCancelled();
             auto converted =
                 ConvertScenePrefabProjectionToRuntime({request.document.objects, placements}, request.scene, request.revision, projection,
-                                                      request.resolver, request.limits,
-                                                      request.valueSchemas ? &*request.valueSchemas : nullptr, request.triggerBinding);
+                                                      {request.resolver, request.limits,
+                                                       request.valueSchemas ? &*request.valueSchemas : nullptr},
+                                                      request.triggerBinding);
             if (converted.HasError())
                 return Result<void>::Failure(converted.ErrorValue());
             if (token.IsCancellationRequested())

@@ -51,8 +51,7 @@ namespace Horo::Application {
             return Result<SceneSource::TriggerVolumeConversionContext>::Failure(
                 MakeError(Physics::PhysicsErrors::DescriptorInvalid,
                           "Capture the explicit installed Project collision schema before converting triggers."));
-        const auto selected = simulation.schema->ResolveStaticSensorProfile(profile);
-        if (selected.HasError())
+        if (const auto selected = simulation.schema->ResolveStaticSensorProfile(profile); selected.HasError())
             return Result<SceneSource::TriggerVolumeConversionContext>::Failure(selected.ErrorValue());
         if (!material.IsValid() || artifact.id != material.Id().Asset() || artifact.type.Value() != Physics::PhysicsMaterialAssetTypeName ||
             artifact.payload.empty() || artifact.sourceDigest == Sha256Digest{} ||

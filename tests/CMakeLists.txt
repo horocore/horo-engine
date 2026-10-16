@@ -11,6 +11,13 @@ set_tests_properties(HoroSaveObservabilityDependencyPolicyTest PROPERTIES LABELS
 include(Catch)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroCiSuites.cmake")
 
+# A portable lease consumer must link without the native Platform archive or its ordering.
+add_executable(HoroPublicationLockFoundationConsumer support/PublicationLockFoundationConsumer.cpp)
+target_compile_features(HoroPublicationLockFoundationConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPublicationLockFoundationConsumer PRIVATE HoroEngine::Foundation)
+add_test(NAME HoroPublicationLockFoundationConsumer COMMAND HoroPublicationLockFoundationConsumer)
+set_tests_properties(HoroPublicationLockFoundationConsumer PROPERTIES LABELS "unit;foundation;headless;ci-windows;sonar-coverage")
+
 add_test(NAME HoroDependencyDirectionNegativeConfigureTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"

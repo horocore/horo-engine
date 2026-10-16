@@ -18,6 +18,7 @@ set(HORO_CI_AUDIO_TARGETS
 set(HORO_CI_WINDOWS_TARGETS
     HoroProjectCollisionSettingsTests
     HoroCollisionSettingsPublicConsumer
+    HoroPublicationLockFoundationConsumer
     HoroProjectCollisionSettingsPublicHeaderConsumer
     HoroPhysicsTests
     HoroPrefabSceneCookHostTests
