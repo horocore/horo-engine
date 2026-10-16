@@ -2654,6 +2654,7 @@ add_library(HoroEditorModel STATIC
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentTransaction.cpp
+        editor/document/InspectorBehaviorBinding.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
         editor/document/SceneDocumentHistoryCommands.cpp
@@ -2989,6 +2990,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/hierarchy/HierarchyEditSession.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorEditSession.cpp
+            editor/screens/workspace/panels/inspector/InspectorContributionView.cpp
+            editor/screens/workspace/panels/inspector/InspectorContributionProjection.cpp
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
@@ -3037,6 +3040,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSourcePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
+            editor/screens/workspace/EditorWorkspaceControllerInspectorContributions.cpp
+            editor/screens/workspace/EditorWorkspaceControllerInspectorApproval.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserGameplay.cpp
@@ -3111,12 +3116,16 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorActivitySession.cpp
         extensions/host/EditorActivityAction.cpp
         extensions/host/EditorPageHost.cpp
+        extensions/host/EditorInspectorHost.cpp
+        extensions/host/EditorInspectorNativeSession.cpp
+        extensions/host/EditorInspectorAbiConversion.cpp
         extensions/host/EditorPageOperations.cpp
         extensions/host/EditorPageWork.cpp
         extensions/host/EditorPageAbiConversion.cpp
         extensions/host/EditorPageNativeOperations.cpp
         extensions/host/EditorPageNativeSession.cpp
         extensions/manifest/EditorPageDefinition.cpp
+        extensions/manifest/EditorInspectorDefinition.cpp
         extensions/host/EditorSurfaceRegistry.cpp
         extensions/host/EditorSurfaceRegistryOperations.cpp
         extensions/host/EditorSurfaceRegistryPersistence.cpp

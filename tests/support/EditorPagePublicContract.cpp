@@ -5,7 +5,7 @@
 #include <type_traits>
 
 namespace {
-    static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 5);
+    static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 6);
     static_assert(offsetof(HoroExtensionHostApi, registerEditorPage) ==
                   offsetof(HoroExtensionHostApi, registerEditorActivity) + sizeof(HoroRegisterEditorActivityFunc));
     static_assert(std::is_standard_layout_v<HoroEditorPageValue> && std::is_trivially_copyable_v<HoroEditorPageValue>);

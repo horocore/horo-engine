@@ -123,6 +123,10 @@ namespace Horo::Editor {
          */
         [[nodiscard]] static Result<SceneDocumentTransactions> Bind(SceneDocument &document, EditorHistory &history,
                                                                     SceneTransactionSession session);
+        /** @brief Checks this exact borrowed owner/thread/replacement epoch without copying authored state; success allocates nothing.
+         * @return Success or original closed/wrong-thread/stale error; no edit authority or snapshot is granted.
+         */
+        [[nodiscard]] Result<void> CheckCurrent() const;
         /** @brief Copy one complete owner snapshot.
          * @param limits Finite snapshot allocation and object ceilings.
          * @return Owned authored/ownership values or lifecycle/thread/capacity error.

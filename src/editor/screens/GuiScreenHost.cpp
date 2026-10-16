@@ -12,6 +12,8 @@
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/EditorActivityAbi.h"
 #include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Extensions/EditorInspectorAbi.h"
+#include "Horo/Extensions/EditorInspectorHost.h"
 #include "Horo/Extensions/EditorPageAbi.h"
 #include "Horo/Extensions/EditorPageHost.h"
 #include "Horo/Extensions/ExtensionInventory.h"
@@ -131,12 +133,14 @@ namespace Horo::Editor {
         editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs);
         services_.Register<Extensions::EditorActivityHost>(*editorActivityHost_);
         InitializeExtensionPages(composition, capabilities);
+        InitializeExtensionInspectors(composition, capabilities);
         extensionManager_ =
             std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get(), Extensions::ExtensionHostProfile::Interactive,
                                                            std::move(capabilities), composition.extensionArtifactGate,
                                                            Extensions::ExtensionManager::NativeLibraryLoader{},
-                                                           Extensions::ExtensionPlatformProviderCommit{}, editorActivityHost_,
-                                                           editorPageHost_);
+                                                           Extensions::ExtensionPlatformProviderCommit{},
+                                                           Extensions::ExtensionEditorHosts{editorActivityHost_, editorPageHost_,
+                                                                                            editorInspectorHost_});
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
         if (extensionInventory_ != nullptr)
             ActivateUserExtensions(*extensionManager_, *extensionInventory_);
@@ -165,6 +169,23 @@ namespace Horo::Editor {
             services_.Register<Extensions::EditorPageHost>(*editorPageHost_);
             capabilities.push_back(HORO_EDITOR_PAGE_HOST_CAPABILITY);
         }
+    }
+
+    /** @copydoc GuiScreenHost::InitializeExtensionInspectors */
+    void GuiScreenHost::InitializeExtensionInspectors(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities) {
+        if (!composition.extensionInspectorPolicy.revision)
+            return;
+        if (!extensionPageTheme_)
+            extensionPageTheme_ = std::make_unique<EditorPageThemeCapture>();
+        if (auto captured = extensionPageTheme_->Update(*context_); captured.HasError()) {
+            LOG_ERROR("editor.extensions", "Inspector theme capture unavailable: %s", captured.ErrorValue().message.c_str());
+            return;
+        }
+        editorInspectorHost_ =
+            std::make_shared<Extensions::EditorInspectorHost>(editorActivityHost_->Registry(), composition.extensionInspectorPolicy);
+        services_.Register<Extensions::EditorInspectorHost>(*editorInspectorHost_);
+        services_.RegisterConst<Extensions::EditorThemeFrame>(*extensionPageTheme_->Frame());
+        capabilities.push_back(HORO_EDITOR_INSPECTOR_HOST_CAPABILITY);
     }
 
     /** @copydoc GuiScreenHost::InitializeStatusItems */
@@ -249,6 +270,8 @@ namespace Horo::Editor {
             activeScreen_->OnLeave();
             activeScreen_.reset();
         }
+        if (editorInspectorHost_)
+            editorInspectorHost_->BeginShutdown();
         if (editorPageHost_)
             editorPageHost_->BeginShutdown();
         if (editorActivityHost_)
@@ -471,8 +494,9 @@ namespace Horo::Editor {
             context_->updates->Poll();
         if (editorActivityHost_)
             editorActivityHost_->Update();
-        if (editorPageHost_) {
+        if (extensionPageTheme_)
             static_cast<void>(extensionPageTheme_->Update(*context_));
+        if (editorPageHost_) {
             editorPageHost_->Update();
             PumpEditorPageModals(*context_, editorPageHost_, extensionPageTheme_->Frame(), *modalHost_);
             if (!modalHost_->HasOpenModal())

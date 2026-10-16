@@ -352,3 +352,12 @@ C++ consumers rebuild against the new additive controller contract. The GUI
 adapter consumes validated `BuildEditorUiRenderSnapshot` from the actual shared
 design tokens/fonts. A private owner-boundary structural capture generation
 tracks real theme changes; it is neither persisted nor a second theme authority.
+
+## External C ABI 1.5 → 1.6
+
+`EditorInspectorAbi.h` describes copied inspector/property-drawer declarations.
+Require ABI 1.6 and `HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR`
+before using the appended registration callback. The 1.5 page prefix and 1.4
+activity prefix retain their negotiated behavior. Declaration permission never
+grants document ownership: the application must explicitly approve the current
+provider for the exact behavior schema and fields before typed edits are admitted.

@@ -117,7 +117,7 @@ namespace {
                                              Horo::Tests::CreateAcceptingArtifactGate(),
                                              {},
                                              {},
-                                             host};
+                                             {.activities = host}};
         REQUIRE(manager.LoadExtension(package.root.string()).HasValue());
         host->Update();
         Gui gui;
@@ -286,7 +286,7 @@ namespace {
                                              Horo::Tests::CreateAcceptingArtifactGate(),
                                              {},
                                              {},
-                                             host};
+                                             {.activities = host}};
         REQUIRE(manager.LoadExtension(package.root.string()).HasValue());
         host->Update();
         Runtime::RuntimeSceneService runtimeScene;

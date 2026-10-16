@@ -9,6 +9,7 @@
 namespace Horo::Editor {
 
     void EditorWorkspaceController::RefreshSceneProjections() {
+        RefreshInspectorDocumentPort();
         const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
         m_viewModel.documentRevision = documentSnapshot.revision;
         m_viewModel.objects.clear();

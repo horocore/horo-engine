@@ -162,3 +162,12 @@ without a layout/version change; external host/theme validators should rebuild
 and accept zero rather than substitute an invented positive outline. Affected
 callers are the real GUI theme capture, canonical theme validator, public theme
 header consumers and page view/render tests.
+
+## External C ABI 1.5 → 1.6 inspector declarations
+
+ABI 1.6 appends `registerEditorInspector` after the unchanged 1.5 page prefix.
+Inspector declarations require explicit 1.6 negotiation and document-owner
+approval; a 1.5 module retains its existing page behavior and cannot use the new
+callback. Rebuild host composition callers with `ExtensionEditorHosts`. See
+[the inspector migration guide](extension-inspector-migration.md) for the scalar
+profile, approval lifetime, actual document transactions and affected consumers.

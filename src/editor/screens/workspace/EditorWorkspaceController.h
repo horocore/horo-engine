@@ -32,6 +32,10 @@
 #include <utility>
 #include <vector>
 
+namespace Horo::Extensions {
+    class EditorInspectorHost;
+}
+
 namespace Horo::Editor {
     class ILocalizationService;
     struct EditorViewportPickResult;
@@ -56,6 +60,7 @@ namespace Horo::Editor {
         Application::NetworkDebuggerService *networkDebugger{};
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
+        Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
     };
 
@@ -245,6 +250,14 @@ namespace Horo::Editor {
         SceneDocument m_document;
         EditorHistory m_history;
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
+        Assets::AssetId m_inspectorDocumentOwner;
+        SceneDocumentTransactions m_inspectorDocument;
+        std::uint64_t m_inspectorDocumentGeneration{};
+        std::uint64_t m_inspectorBehaviorRegistryRevision{};
+        std::uint64_t m_inspectorApprovalRevision{};
+        bool m_inspectorAdmissionClosed{};
+        Extensions::EditorInspectorHost *m_inspectorHost{};
+        std::vector<InspectorProviderApproval> m_inspectorApprovals;
         CreateSceneObjectUseCase m_createSceneObject{m_document, m_documentCommands};
         InstantiateSceneAssetUseCase m_instantiateSceneAsset{m_document, m_documentCommands};
         EditorSelectionModel m_selection{m_document, m_dataBus};
@@ -383,6 +396,19 @@ namespace Horo::Editor {
                                     const std::vector<std::string> &displacedPanelIds);
         void MovePanelActivitySlot(const EditorWorkspaceViewCommandData &cmd);
         void RefreshSceneProjections();
+        /** @brief Rebinds the sole borrowed transaction port at canonical Scene projection refresh with a never-reused host epoch. */
+        void RefreshInspectorDocumentPort();
+        /** @brief Retires approvals before an actual project behavior catalog publication; epochs never wrap. */
+        void InvalidateInspectorBehaviorBindings();
+        /** @brief Revalidates provider/selection/schema/current owner and submits exactly one existing atomic transaction. */
+        [[nodiscard]] Result<SceneTransactionResult> ApplyInspectorBehaviorEdit(const InspectorExtensionEdit &request);
+        /** @brief Admits only explicit current user approval for a resolved selected type and exact provider/declaration fields. */
+        [[nodiscard]] Result<void> ApproveInspectorContribution(const InspectorExtensionEdit &request);
+        /** @brief Routes explicit provider approval and typed edit gestures through the canonical owner lane. */
+        bool ProcessInspectorContributionCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Prepares bounded overlap replacement and copied projection before atomically publishing explicit owner approval. */
+        [[nodiscard]] Result<void> PublishInspectorApproval(const InspectorExtensionEdit &request,
+                                                            const Extensions::EditorInspectorContribution &contribution);
         /** @brief Atomically commits the current default-scene snapshot and updates dirty state on
          * success. */
         /** @brief Routes typed source publication/close intent through workspace-owned document services. */

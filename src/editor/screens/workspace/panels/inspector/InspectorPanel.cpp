@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "InspectorContributionView.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanelInternal.h"
 
 #include <algorithm>
@@ -17,11 +18,19 @@
 namespace Horo::Editor {
     using namespace InspectorPanelDetail;
 
+    /** @copydoc InspectorPanel::InspectorPanel */
+    InspectorPanel::InspectorPanel() = default;
+    /** @copydoc InspectorPanel::~InspectorPanel */
+    InspectorPanel::~InspectorPanel() = default;
+
     void InspectorPanel::OnAttach(PanelContext &ctx) {
+        if (ctx.extensionInspectors && ctx.extensionTheme)
+            m_contributions = std::make_unique<InspectorContributionView>(*ctx.extensionInspectors, *ctx.extensionTheme);
         m_inputRouter = ctx.inputRouter;
     }
 
     void InspectorPanel::OnDetach() {
+        m_contributions.reset();
         m_nameInputContext.Reset();
         m_inputRouter = nullptr;
     }
@@ -78,6 +87,8 @@ namespace Horo::Editor {
 
     void InspectorPanel::DrawSelection(const EditorWorkspaceViewModel &viewModel, const std::span<const SceneObjectId> selectedObjects,
                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+        if (m_contributions)
+            m_contributions->Synchronize(viewModel, selectedObjects);
         AdoptCommand(command, m_editSession.BeginSelection(viewModel.objects, selectedObjects, viewModel.primarySelection,
                                                            viewModel.documentRevision));
         const SceneObject *primaryObject = FindSelectedObject(viewModel);
@@ -103,6 +114,8 @@ namespace Horo::Editor {
 
         if (m_editSession.Draft().selectedObjectCount == 1)
             DrawComponentEditors(*primaryObject, viewModel, command, context);
+        else if (m_contributions)
+            m_contributions->DrawMulti(viewModel, command, context);
     }
 
     void InspectorPanel::DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
@@ -150,7 +163,9 @@ namespace Horo::Editor {
             const Gameplay::BehaviorDescriptor *descriptor =
                 descriptorIt == viewModel.availableBehaviors.end() ? nullptr : std::to_address(descriptorIt);
             ImGui::PushID(static_cast<int>(attached.instanceId.value));
-            BehaviorCardResult result = DrawBehaviorCard(attached, descriptor, enabledEntries, context);
+            BehaviorCardResult result = DrawBehaviorCard(attached, descriptor, enabledEntries, context,
+                                                         m_contributions ? m_contributions->CoveredFields(attached.instanceId, context)
+                                                                         : std::span<const std::string>{});
             using enum EditorWorkspaceViewCommand;
             if (result.removeRequested && command.command == None) {
                 command.command = RemoveBehaviorFromObject;
@@ -164,6 +179,8 @@ namespace Horo::Editor {
                 command.objectPayload = object.id;
                 command.behaviorPayload = std::move(result.edited);
             }
+            if (m_contributions)
+                m_contributions->Draw(attached.instanceId, viewModel, command, context);
             ImGui::PopID();
         }
     }

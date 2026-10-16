@@ -68,7 +68,7 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 host};
+                                 {.activities = host}};
         RequirePackageLoad(manager, package.root);
         host->Update();
         REQUIRE(host->Prepared().size() == 1);
@@ -136,7 +136,7 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 host};
+                                 {.activities = host}};
         RequirePackageLoad(manager, package.root);
         host->Update();
         const auto provider = host->Prepared().front().surface.descriptor.provider;
@@ -185,7 +185,7 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 host};
+                                 {.activities = host}};
         const auto rejected = manager.LoadExtension(package.root.string());
         REQUIRE(rejected.HasError());
         CHECK(rejected.ErrorValue().code.Value() == "invalid_manifest");
@@ -193,7 +193,13 @@ namespace Horo::Extensions::Tests {
     }
 
     void CheckMissingCapability(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
-        ExtensionManager manager{nullptr, ExtensionHostProfile::Interactive, {}, Horo::Tests::CreateAcceptingArtifactGate(), {}, {}, host};
+        ExtensionManager manager{nullptr,
+                                 ExtensionHostProfile::Interactive,
+                                 {},
+                                 Horo::Tests::CreateAcceptingArtifactGate(),
+                                 {},
+                                 {},
+                                 {.activities = host}};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         host->Update();
         CHECK(host->Prepared().empty());
@@ -208,14 +214,15 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 host};
+                                 {.activities = host}};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         host->Update();
         CHECK(host->Prepared().empty());
     }
 
     void CheckMissingTrust(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
-        ExtensionManager manager{nullptr, ExtensionHostProfile::Interactive, {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY}, {}, {}, {}, host};
+        ExtensionManager
+            manager{nullptr, ExtensionHostProfile::Interactive, {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY}, {}, {}, {}, {.activities = host}};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         host->Update();
         CHECK(host->Prepared().empty());
@@ -229,7 +236,7 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 host};
+                                 {.activities = host}};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         host->Update();
         CHECK(host->Prepared().empty());

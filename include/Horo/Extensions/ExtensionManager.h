@@ -23,6 +23,7 @@ namespace Horo::Extensions {
     struct ExtensionModuleLifetime;
     class EditorActivityHost;
     class EditorPageHost;
+    class EditorInspectorHost;
 
     /** @brief Represents a loaded extension instance. */
     struct LoadedExtension {
@@ -39,6 +40,13 @@ namespace Horo::Extensions {
     /**
      * @brief Manages loading and lifecycle of extensions.
      */
+    /** @brief Explicit upper-host editor composition; omitted authorities never advertise native transport. */
+    struct ExtensionEditorHosts final {
+        std::shared_ptr<EditorActivityHost> activities;
+        std::shared_ptr<EditorPageHost> pages;
+        std::shared_ptr<EditorInspectorHost> inspectors;
+    };
+
     class ExtensionManager {
     public:
         using NativeLibraryLoader = std::function<Result<std::unique_ptr<Platform::DynamicLibrary>>(const std::string &)>;
@@ -53,15 +61,14 @@ namespace Horo::Extensions {
          * load.
          * @param libraryLoader Explicit native loader boundary; empty uses the platform loader after security verification.
          * @param platformProviderCommit Optional host-owned commit for one staged provider-only extension.
-         * @param editorActivityHost Explicit editor surface authority; omitted hosts reject ABI editor publication.
+         * @param editorHosts Explicit editor authorities; omitted hosts reject their corresponding native publication.
          */
         explicit ExtensionManager(Assets::AssetImporterCatalog *importerCatalog = nullptr,
                                   ExtensionHostProfile hostProfile = ExtensionHostProfile::Interactive,
                                   std::vector<std::string> hostCapabilities = {},
                                   std::shared_ptr<const Security::NativeArtifactGate> artifactGate = {},
                                   NativeLibraryLoader libraryLoader = {}, ExtensionPlatformProviderCommit platformProviderCommit = {},
-                                  std::shared_ptr<EditorActivityHost> editorActivityHost = {},
-                                  std::shared_ptr<EditorPageHost> editorPageHost = {});
+                                  ExtensionEditorHosts editorHosts = {});
         /** @brief Withdraws publications on the owner lane; busy native closures require process restart. */
         ~ExtensionManager();
         ExtensionManager(const ExtensionManager &) = delete;
@@ -134,8 +141,7 @@ namespace Horo::Extensions {
         std::shared_ptr<const Security::NativeArtifactGate> m_artifactGate;
         NativeLibraryLoader m_libraryLoader;
         ExtensionPlatformProviderCommit m_platformProviderCommit;
-        std::shared_ptr<EditorActivityHost> m_editorActivityHost;
-        std::shared_ptr<EditorPageHost> m_editorPageHost;
+        ExtensionEditorHosts m_editorHosts;
         TransparentStringMap<std::unique_ptr<LoadedExtension>> m_loadedExtensions;
         std::vector<std::string> m_activationOrder;
         std::vector<std::shared_ptr<ExtensionRetirement>> m_failedActivations;

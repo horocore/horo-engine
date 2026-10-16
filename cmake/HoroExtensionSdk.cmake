@@ -47,6 +47,10 @@ function(horo_configure_extension_sdk)
         "${package_root}/include/Horo/Extensions/EditorPageAbi.h"
         COPYONLY)
     configure_file(
+        "${PROJECT_SOURCE_DIR}/include/Horo/Extensions/EditorInspectorAbi.h"
+        "${package_root}/include/Horo/Extensions/EditorInspectorAbi.h"
+        COPYONLY)
+    configure_file(
         "${PROJECT_SOURCE_DIR}/LICENSE"
         "${package_root}/LICENSE"
         COPYONLY)

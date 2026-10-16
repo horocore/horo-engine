@@ -29,6 +29,11 @@ namespace Horo {
     class IOperationQuery;
 }  // namespace Horo
 
+namespace Horo::Extensions {
+    class EditorInspectorHost;
+    struct EditorThemeFrame;
+}  // namespace Horo::Extensions
+
 namespace Horo::Editor {
     class EditorDataBus;
     class IEditorGuiRenderer;
@@ -52,6 +57,8 @@ namespace Horo::Editor {
         EditorSurfaceEventContext *surfaceEvents{nullptr};
         const Application::INetworkDebuggerQuery *networkDebuggerQuery{};
         Application::INetworkDebuggerControl *networkDebuggerControl{};
+        Extensions::EditorInspectorHost *extensionInspectors{}; /**< Explicit owner-lane host, outliving panel attachment. */
+        const Extensions::EditorThemeFrame *extensionTheme{};   /**< Current host theme capture; no panel-owned authority. */
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */
