@@ -1,6 +1,7 @@
 #include "Horo/Assets/AssetCookInputSnapshot.h"
 #include "assets/AssetCookServiceFixture.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 
 namespace {
@@ -250,4 +251,49 @@ TEST_CASE("Dependent factory failure or cancellation never selects a resource-on
     const auto retained = ResolveCurrentCookGeneration(fixture.request.cookedRoot);
     REQUIRE(retained.HasValue());
     CHECK(retained.Value().manifestDigest == previous.Value().generation.manifestDigest);
+}
+
+TEST_CASE("Selected source capture pins the original registry without reading unrelated registered files", "[native][prefab-cook]") {
+    TestProject project;
+    const auto unrelated = AddSecondMesh(project);
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord(), unrelated}).status == AssetRegistryBuildStatus::Complete);
+    const auto publication = registry.Snapshot();
+    REQUIRE(std::filesystem::remove(project.dir.path / unrelated.sourcePath.String()));
+    const std::array selected{TestMeshRecord().id};
+    auto captured = AssetCookInputSnapshot::CaptureSelected(project.dir.path, publication, selected, {}, 4096);
+    REQUIRE(captured.HasValue());
+    CHECK(captured.Value().Registry().Revision() == publication.Revision());
+    CHECK(captured.Value().Registry().Records().size() == 2);
+    REQUIRE(captured.Value().Sources().size() == 1);
+    CHECK(captured.Value().Find(unrelated.id) == nullptr);
+    CHECK(captured.Value().VerifyUnchanged().HasValue());
+    WriteFile(project.sourceFile, std::vector<std::uint8_t>{7});
+    CHECK(captured.Value().VerifyUnchanged().HasError());
+    CHECK(captured.Value().Sources().front().bytes == std::vector<std::uint8_t>{1, 2, 3, 4, 5});
+}
+
+TEST_CASE("Selected source capture rejects missing duplicate cancelled and foreign identity inputs", "[native][prefab-cook]") {
+    TestProject project;
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+    std::vector<AssetId> selected{TestMeshRecord().id};
+    CancellationSource cancellation;
+    SECTION("duplicate") {
+        selected.push_back(selected.front());
+    }
+    SECTION("missing identity") {
+        selected = {AssetId{}};
+    }
+    SECTION("cancelled") {
+        cancellation.RequestCancellation();
+    }
+    SECTION("deleted source") {
+        REQUIRE(std::filesystem::remove(project.sourceFile));
+    }
+    SECTION("foreign sidecar") {
+        WriteMetadata(project, SidecarJson("00000000-0000-0000-0000-0000000000a2", "core.mesh"));
+    }
+    CHECK(AssetCookInputSnapshot::CaptureSelected(project.dir.path, registry.Snapshot(), selected, {}, 4096, cancellation.Token())
+              .HasError());
 }

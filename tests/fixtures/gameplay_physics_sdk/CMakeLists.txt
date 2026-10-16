@@ -6,5 +6,5 @@ if(TARGET HoroEngine::Physics OR TARGET HoroEngine::GameplayPhysicsIntegration O
 endif()
 find_package(HoroEngineGameplay REQUIRED COMPONENTS Physics)
 horo_add_gameplay_module(HoroPhysicsSdkModule MODULE_ID game.physics_sdk NO_MANIFEST SOURCES PhysicsModule.cpp)
-target_link_libraries(HoroPhysicsSdkModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration)
+target_link_libraries(HoroPhysicsSdkModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::Assets)
 file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/artifact-$<CONFIG>.txt" CONTENT "$<TARGET_FILE:HoroPhysicsSdkModule>")
