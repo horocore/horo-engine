@@ -1,6 +1,14 @@
 #include "RuntimeSceneErrors.h"
 
 namespace Horo::Runtime::SceneErrors {
+    const ErrorCodeDescriptor
+        CharacterStructuralUnsupported{.domain = ErrorDomainId{"horo.scene"},
+                                       .code = ErrorCode{"scene.character.structural_unsupported"},
+                                       .defaultSeverity = ErrorSeverity::Error,
+                                       .summary = "Active Character structural or authored-transform mutation is unsupported.",
+                                       .remediationHint =
+                                           "Replace the whole Scene candidate, or use the explicit Character movement/teleport authority."};
+
     namespace {
         const ErrorDomainId kDomain{"horo.scene"};
         constexpr auto kError = ErrorSeverity::Error;

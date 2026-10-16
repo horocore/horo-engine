@@ -192,12 +192,12 @@ namespace Horo::Runtime {
                 hash.Add(*value);
         }
 
-        /** @brief Computes the complete separate Scene-baseline key version 2 over
+        /** @brief Computes the complete separate Scene-baseline key version 3 over
          * actual typed source fields. */
         Result<Sha256Digest> Key(const SceneCellPayloadSource &source, const DependencyGraph &graph, const Sha256Digest &settings,
                                  std::size_t maximumBytes, const CancellationToken &cancellation) {
             CellCookDetail::ContentHasher hash{cancellation, maximumBytes};
-            hash.Fields(std::string_view{"Horo.SceneCellCook.Key.v2"}, settings, source.identity, source.entities);
+            hash.Fields(std::string_view{"Horo.SceneCellCook.Key.v3"}, settings, source.identity, source.entities);
             HashSorted(hash, source.dependencies, [](const auto &d) {
                 return std::pair{d.id, d.expectedType};
             });

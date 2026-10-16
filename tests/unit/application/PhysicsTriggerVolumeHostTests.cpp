@@ -94,6 +94,9 @@ namespace {
 
         Assets::AssetCookReport CookValid() {
             auto result = CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, artifact);
+            INFO((result.HasError() ? result.ErrorValue().message : "Cook succeeded"));
+            INFO((result.HasError() ? result.ErrorValue().code.Value() : std::string_view{}));
+            INFO((result.HasError() ? result.ErrorValue().domain.Value() : std::string_view{}));
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }
@@ -107,6 +110,9 @@ TEST_CASE_METHOD(TriggerCookFixture, "Public project Physics capture supplies re
     REQUIRE(capture.Value().binding.materialSourceRevision == 7);
     REQUIRE(capture.Value().materialSourceDigest == artifact.sourceDigest);
     const auto cooked = CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, artifact);
+    INFO((cooked.HasError() ? cooked.ErrorValue().message : "Cook succeeded"));
+    INFO((cooked.HasError() ? cooked.ErrorValue().code.Value() : std::string_view{}));
+    INFO((cooked.HasError() ? cooked.ErrorValue().domain.Value() : std::string_view{}));
     REQUIRE(cooked.HasValue());
     const auto inventory = Assets::ReadCookGenerationContents(cooked.Value().generation, 1024U * 1024U);
     REQUIRE(inventory.HasValue());
@@ -186,4 +192,52 @@ TEST_CASE_METHOD(TriggerCookFixture, "Actual material source and cooker output p
         REQUIRE(CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, artifact).HasError());
         fixture.AssertRetained(cooked.generation);
     }
+}
+
+TEST_CASE_METHOD(TriggerCookFixture, "Direct trigger material dependencies reject missing or foreign registry authority",
+                 "[host][trigger][cook]") {
+    const auto previous = CookValid();
+    std::vector<Assets::AssetRecord> records{TestMeshRecord(),
+                                             TriggerAssetRecord(fixture.prefabId, "core.prefab", "assets/hierarchy.prefab"),
+                                             TriggerAssetRecord(fixture.sceneId, "core.scene", "assets/level.scene")};
+    SECTION("Missing material registry identity") {}
+    SECTION("Wrong material registry type") {
+        records.push_back(TriggerAssetRecord(materialId, "core.mesh", "assets/trigger.material"));
+    }
+    REQUIRE(fixture.registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+    const auto result = CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, artifact);
+    REQUIRE(result.HasError());
+    fixture.AssertRetained(previous.generation);
+}
+
+TEST_CASE_METHOD(TriggerCookFixture, "Mixed authored trigger and actual Prefab roots retain the same material closure",
+                 "[host][trigger][cook]") {
+    const std::array objects{
+        SceneSource::SceneObjectSnapshot{.id = {874}, .components = {.triggerVolume = Runtime::TriggerVolumeComponent{}}}};
+    const std::array placements{
+        SceneSource::ScenePrefabInstance{.instanceId = Prefab::PrefabInstanceId::Create(7).Value(),
+                                         .sourcePrefab = Prefab::PrefabAssetReference::Create(fixture.prefabId).Value(),
+                                         .parent = SceneSource::SceneObjectId{874}}};
+    fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({objects, placements}));
+    const auto cooked = CookValid();
+    const auto inventory = Assets::ReadCookGenerationContents(cooked.generation, 1024U * 1024U);
+    REQUIRE(inventory.HasValue());
+    bool foundScene{}, foundMaterial{};
+    for (const auto &encoded : inventory.Value().artifacts) {
+        const auto decoded = Assets::DecodeCookedArtifact(encoded);
+        REQUIRE(decoded.HasValue());
+        if (decoded.Value().id == materialId) {
+            foundMaterial = true;
+            CHECK(decoded.Value().payloadDigest == artifact.payloadDigest);
+        }
+        if (decoded.Value().id == fixture.sceneId) {
+            foundScene = true;
+            const auto document = nlohmann::json::parse(decoded.Value().payload);
+            CHECK(document["entities"].size() == 3);
+            CHECK(document["dependencies"].size() == 1);
+            CHECK(document["triggerMigration"].size() == 1);
+        }
+    }
+    REQUIRE(foundScene);
+    REQUIRE(foundMaterial);
 }

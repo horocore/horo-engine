@@ -23,6 +23,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace Horo::Editor {
@@ -294,7 +295,8 @@ namespace Horo::Editor {
         Camera,
         Light,
         TriggerVolume,
-        AudioSource
+        AudioSource,
+        CharacterController
     };
 
     /** @brief Typed request to add a default-initialized component to an object. */
@@ -308,6 +310,16 @@ namespace Horo::Editor {
         SceneObjectId object;
         ComponentType type;
     };
+
+    /** @brief Replaces one existing durable Character configuration without granting runtime ownership. */
+    struct SetSceneObjectCharacterCommand {
+        SceneObjectId object;
+        Runtime::CharacterControllerComponent character;
+    };
+
+    /** @brief Related optional-component lifecycle and Character edit commands, dispatched by the same history owner. */
+    using SceneOptionalComponentCommand =
+        std::variant<AddSceneObjectComponentCommand, RemoveSceneObjectComponentCommand, SetSceneObjectCharacterCommand>;
 
     /** @brief Undoable request to attach one descriptor-derived behavior to an object. */
     struct AttachSceneObjectBehaviorCommand {
@@ -618,8 +630,11 @@ namespace Horo::Editor {
 
         /** @brief Atomically commits local editor visibility/lock state without changing runtime activation. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectEditorStateCommand &command);
-        [[nodiscard]] Result<SceneCommandResult> Execute(const AddSceneObjectComponentCommand &command);
-        [[nodiscard]] Result<SceneCommandResult> Execute(const RemoveSceneObjectComponentCommand &command);
+        /** @brief Validates and commits one optional-component lifecycle/edit command through the sole document history.
+         * @param command Fixed owning typed alternative; existing Add/Remove calls convert without allocation.
+         * @return No-op, committed history result, or typed validation/ownership failure with document and redo preserved.
+         */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const SceneOptionalComponentCommand &command);
         /** @brief Validates and atomically attaches one behavior with a generated stable instance ID. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const AttachSceneObjectBehaviorCommand &command);
         /** @brief Validates and atomically replaces one existing behavior attachment. */

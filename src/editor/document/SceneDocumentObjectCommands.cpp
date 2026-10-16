@@ -185,24 +185,44 @@ namespace Horo::Editor {
                              DocumentChangeKind::EditorStateChanged});
     }
 
-    /** @copydoc SceneDocumentCommandExecutor::Execute(const AddSceneObjectComponentCommand&) */
-    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const AddSceneObjectComponentCommand &command) {
-        return WithEditableObject(m_document, m_document.m_objects, command.object, [this, &command](const SceneObjectSnapshot &object) {
-            if (HasComponent(object.components, command.type))
-                return ComponentNoOpResult(m_document, object.id);
-            return CommitObject({ComponentAddedDelta{object.id, command.type}, command.object, DocumentChangeKind::ComponentChanged});
-        });
-    }
-
-    /** @copydoc SceneDocumentCommandExecutor::Execute(const RemoveSceneObjectComponentCommand&) */
-    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const RemoveSceneObjectComponentCommand &command) {
-        return WithEditableObject(m_document, m_document.m_objects, command.object, [this, &command](const SceneObjectSnapshot &object) {
-            if (!HasComponent(object.components, command.type))
-                return ComponentNoOpResult(m_document, object.id);
-            return CommitObject({ComponentRemovedDelta{object.id, command.type, object.components.camera, object.components.light,
-                                                       object.components.triggerVolume, object.components.audioSource},
-                                 command.object, DocumentChangeKind::ComponentChanged});
-        });
+    /** @copydoc SceneDocumentCommandExecutor::Execute(const SceneOptionalComponentCommand&) */
+    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SceneOptionalComponentCommand &request) {
+        return std::visit([this](const auto &command) -> Result<SceneCommandResult> {
+            using Command = std::decay_t<decltype(command)>;
+            if constexpr (std::is_same_v<Command, SetSceneObjectCharacterCommand>) {
+                if (auto valid = Runtime::ValidateCharacterControllerComponent(command.character); valid.HasError())
+                    return Result<SceneCommandResult>::Failure(valid.ErrorValue());
+                return WithEditableObject(m_document, m_document.m_objects, command.object,
+                                          [this, &command](const SceneObjectSnapshot &object) {
+                    const auto &current = object.components.characterController;
+                    if (!current || current->id != command.character.id)
+                        return Result<SceneCommandResult>::Failure(
+                            MakeDocumentError(SceneDocumentErrors::InvalidCharacter,
+                                              "Character replacement requires its existing stable component identity."));
+                    if (*current == command.character)
+                        return ComponentNoOpResult(m_document, object.id);
+                    return CommitObject(
+                        {CharacterChangedDelta{object.id, *current, command.character}, object.id, DocumentChangeKind::ComponentChanged});
+                });
+            } else {
+                return WithEditableObject(m_document, m_document.m_objects, command.object,
+                                          [this, &command](const SceneObjectSnapshot &object) {
+                    if constexpr (std::is_same_v<Command, AddSceneObjectComponentCommand>) {
+                        if (HasComponent(object.components, command.type))
+                            return ComponentNoOpResult(m_document, object.id);
+                        return CommitObject(
+                            {ComponentAddedDelta{object.id, command.type}, command.object, DocumentChangeKind::ComponentChanged});
+                    } else {
+                        if (!HasComponent(object.components, command.type))
+                            return ComponentNoOpResult(m_document, object.id);
+                        return CommitObject({ComponentRemovedDelta{object.id, command.type, object.components.camera,
+                                                                   object.components.light, object.components.triggerVolume,
+                                                                   object.components.audioSource, object.components.characterController},
+                                             command.object, DocumentChangeKind::ComponentChanged});
+                    }
+                });
+            }
+        }, request);
     }
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const AttachSceneObjectBehaviorCommand&) */

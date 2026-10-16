@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 
 namespace Horo::Physics {
@@ -7,6 +8,10 @@ namespace Horo::Physics {
     struct PhysicsSceneContainmentTestAccess final {
         static PhysicsWorld &World(PhysicsSceneActivationCandidate &candidate) {
             return *candidate.physics_;
+        }
+
+        static Character::CharacterWorld &CharacterWorld(PhysicsSceneActivationCandidate &candidate) {
+            return *candidate.character_;
         }
     };
 

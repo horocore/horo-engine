@@ -7,7 +7,7 @@
 
 namespace Horo::Runtime {
     /** @brief CoreEcs wire version carrying required portable trigger migration proof; older payloads require recook. */
-    inline constexpr std::uint32_t SceneCellPayloadCodecVersion = 2;
+    inline constexpr std::uint32_t SceneCellPayloadCodecVersion = 3;
 
     /** @brief Independent wire and allocation ceilings alongside the existing semantic payload bounds. */
     struct SceneCellPayloadCodecLimits final {

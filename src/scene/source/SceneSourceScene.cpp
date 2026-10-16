@@ -1,11 +1,33 @@
 #include "Horo/Prefab/PrefabValueOverrides.h"
+#include "JsonUtils.h"
 #include "SceneSourceInternal.h"
 
+#include <algorithm>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <utility>
 
 namespace Horo::SceneSource::Detail {
+    namespace {
+        /** @brief Empties a depth-admitted DOM before flattening destruction; checked-iterator proxy allocation remains STL-specific. */
+        void ClearSceneJson(Json &value) noexcept {
+            if (value.is_structured())
+                for (auto &child : value)
+                    ClearSceneJson(child);
+            value.clear();
+        }
+
+        /** @brief Owns only the completed, at-most-64-level parse tree; partial parser state remains upstream-owned. */
+        struct BoundedSceneJson final {
+            Json value;
+
+            ~BoundedSceneJson() {
+                ClearSceneJson(value);
+            }
+        };
+    }  // namespace
+
     [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot) {
         WireJson objects = WireJson::array();
         for (const SceneObjectSnapshot &object : snapshot.objects) {
@@ -40,7 +62,10 @@ namespace Horo::SceneSource::Detail {
             }
             prefabInstances.push_back(std::move(value));
         }
-        return WireJson{{"schemaVersion", kSceneSchemaVersion},
+        const bool character = std::ranges::any_of(snapshot.objects, [](const auto &object) {
+            return object.components.characterController.has_value();
+        });
+        return WireJson{{"schemaVersion", character ? kCharacterSceneSchemaVersion : kSceneSchemaVersion},
                         {"objects", std::move(objects)},
                         {"prefabInstances", std::move(prefabInstances)}};
     }
@@ -91,13 +116,15 @@ namespace Horo::SceneSource::Detail {
             SceneObjectEditorState{.visible = editor["visible"].get<bool>(), .locked = editor["locked"].get<bool>()});
     }
 
-    [[nodiscard]] Result<SceneObjectSnapshot> ParseSceneObjectSnapshot(const Json &value) {
+    [[nodiscard]] Result<SceneObjectSnapshot> ParseSceneObjectSnapshot(const Json &value, bool &unsupportedComponents) {
+        unsupportedComponents = false;
         if (!value.is_object() || !value.contains("id") || !value["id"].is_number_unsigned() || !value.contains("name") ||
             !value["name"].is_string() || !value.contains("parent") || !value.contains("transform") || !value.contains("primitiveMesh") ||
             !value.contains("components"))
             return Result<SceneObjectSnapshot>::Failure(PersistenceError(SceneInvalid, "Scene object schema is incomplete."));
         auto transform = ParseTransform(value["transform"]);
-        auto components = ParseComponents(value["components"]);
+        std::size_t recognized{};
+        auto components = ParseComponents(value["components"], recognized);
         if (transform.HasError() || components.HasError())
             return Result<SceneObjectSnapshot>::Failure(PersistenceError(SceneInvalid, "Scene object values are invalid."));
         auto parent = ParseSceneObjectParent(value);
@@ -115,6 +142,7 @@ namespace Horo::SceneSource::Detail {
             return Result<SceneObjectSnapshot>::Failure(editorState.ErrorValue());
         if (generated.HasError())
             return Result<SceneObjectSnapshot>::Failure(generated.ErrorValue());
+        unsupportedComponents = recognized != value["components"].size();
         return Result<SceneObjectSnapshot>::Success(SceneObjectSnapshot{
             .id = SceneObjectId{value["id"].get<std::uint64_t>()},
             .parent = parent.Value(),
@@ -170,25 +198,47 @@ namespace Horo::SceneSource::Detail {
             ScenePrefabInstance{instanceId.Value(), sourcePrefab.Value(), parent, rootTransform.Value(), std::move(overrides)});
     }
 
+    namespace {
+        /** @brief Admits only complete bounded legacy or Character-capable document roots. */
+        bool InvalidSceneRoot(const Json &document) {
+            return !document.is_object() || !document.contains("schemaVersion") ||
+                   (document["schemaVersion"] != kSceneSchemaVersion && document["schemaVersion"] != kCharacterSceneSchemaVersion) ||
+                   !document.contains("objects") || !document["objects"].is_array() || document["objects"].size() > kMaximumSceneObjects ||
+                   (document.contains("prefabInstances") &&
+                    (!document["prefabInstances"].is_array() || document["prefabInstances"].size() > kMaximumSceneObjects));
+        }
+    }  // namespace
+
     [[nodiscard]] Result<ParsedScene> ParseScene(const std::string_view contents) {
         try {
-            const Json document = Json::parse(contents);
-            if (!document.is_object() || !document.contains("schemaVersion") || document["schemaVersion"] != kSceneSchemaVersion ||
-                !document.contains("objects") || !document["objects"].is_array() || document["objects"].size() > kMaximumSceneObjects ||
-                (document.contains("prefabInstances") &&
-                 (!document["prefabInstances"].is_array() || document["prefabInstances"].size() > kMaximumSceneObjects))) {
+            Foundation::JsonParseGuard guard{64};
+            BoundedSceneJson parsed;
+            parsed.value = Json::parse(contents, [&guard](const int depth, const Json::parse_event_t event, Json &value) {
+                return guard(depth, event, value);
+            });
+            if (guard.IsTooDeep() || guard.HasDuplicate())
+                return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Scene JSON nesting or duplicate keys are invalid."));
+            const Json &document = parsed.value;
+            if (InvalidSceneRoot(document))
                 return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Scene schema is unsupported or incomplete."));
-            }
 
             ParsedScene scene;
             scene.objects.reserve(document["objects"].size());
             for (const Json &value : document["objects"]) {
-                auto object = ParseSceneObjectSnapshot(value);
+                bool unsupported{};
+                auto object = ParseSceneObjectSnapshot(value, unsupported);
                 if (object.HasError()) {
                     return Result<ParsedScene>::Failure(object.ErrorValue());
                 }
+                if (unsupported)
+                    scene.unsupportedComponentOwners.push_back(object.Value().id);
                 scene.objects.push_back(std::move(object).Value());
             }
+            const bool character = std::ranges::any_of(scene.objects, [](const auto &object) {
+                return object.components.characterController.has_value();
+            });
+            if (character && document["schemaVersion"] != kCharacterSceneSchemaVersion)
+                return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Character components require Scene source schema2."));
             if (document.contains("prefabInstances")) {
                 scene.prefabInstances.reserve(document["prefabInstances"].size());
                 for (const Json &value : document["prefabInstances"]) {
@@ -198,6 +248,10 @@ namespace Horo::SceneSource::Detail {
                     scene.prefabInstances.push_back(std::move(instance).Value());
                 }
             }
+            std::ranges::sort(scene.unsupportedComponentOwners, {}, &SceneObjectId::value);
+            scene.unsupportedComponentOwners.erase(std::unique(scene.unsupportedComponentOwners.begin(),
+                                                               scene.unsupportedComponentOwners.end()),
+                                                   scene.unsupportedComponentOwners.end());
             return Result<ParsedScene>::Success(std::move(scene));
         } catch (const Json::exception &exception) {
             return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Invalid scene JSON: " + std::string{exception.what()}));

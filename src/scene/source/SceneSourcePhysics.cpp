@@ -126,6 +126,8 @@ namespace Horo::SceneSource::Detail {
     }
 
     void AppendPhysicsComponents(WireJson &value, const SceneObjectComponentSet &components) {
+        if (components.characterController)
+            AppendCharacterController(value, *components.characterController);
         if (components.rigidBody)
             AppendRigidBody(value, *components.rigidBody);
         AppendColliders(value, components.colliders);

@@ -204,6 +204,8 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorStatusItemRegistry &StatusItems() const noexcept;
 
     private:
+        /** @brief Opens settings with a weak borrow of the active collision document or its exact opening error. */
+        void OpenSettingsModal();
         /** @brief Registers the already-initialized host and borrowed application services without activating native packages. */
         void RegisterApplicationServices(const GuiScreenHostComposition &composition);
         /** @brief Creates and activates extension/importer owners in their existing rollback and destruction order. */

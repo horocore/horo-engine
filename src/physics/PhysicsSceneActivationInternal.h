@@ -103,9 +103,20 @@ namespace Horo::Physics::Detail {
         std::optional<std::size_t> secondBody;
     };
 
+    /** @brief Fully resolved durable Character policy; world identities are bound only during native staging. */
+    struct PlannedCharacter final {
+        Runtime::SceneObjectId object;
+        Runtime::PhysicsComponentId component;
+        Runtime::EntityRef owner;
+        Character::CharacterControllerDescriptor descriptor;
+        Math::Quaternion heading;
+        std::optional<Runtime::PhysicsBodyReference> excludedBody;
+    };
+
     struct PhysicsScenePlan final {
         std::vector<PlannedBody> bodies;
         std::vector<PlannedConstraint> constraints;
+        std::vector<PlannedCharacter> characters;
     };
 
     struct StagedPhysicsScene final {
@@ -114,6 +125,8 @@ namespace Horo::Physics::Detail {
         std::vector<PhysicsSceneBodyBinding> bodyBindings;
         std::vector<PhysicsSceneShapeBinding> shapeBindings;
         std::vector<PhysicsSceneConstraintBinding> constraintBindings;
+        std::vector<PhysicsSceneCharacterBinding> characterBindings;
+        std::vector<Runtime::SceneInitialPlacement> placements;
     };
 
     /** @brief Adds the authored object/component context to a transactional activation error. */
@@ -123,6 +136,22 @@ namespace Horo::Physics::Detail {
     /** @brief Verifies the capabilities required by the active authored physics portions of a scene. */
     [[nodiscard]] Result<void> RequirePhysicsSceneCapabilities(const PhysicsRuntime &runtime,
                                                                const Runtime::RuntimeSceneDefinition &definition);
+
+    /** @brief Resolves a representable world TRS with a caller-owned per-slot hierarchy cache. */
+    [[nodiscard]] Result<Math::Transform> ResolveSceneWorldTransform(Runtime::RuntimeSceneView scene, std::size_t slot,
+                                                                     std::vector<std::uint8_t> &states,
+                                                                     std::vector<std::optional<Math::Transform>> &cache);
+    /** @brief Resolves authored Character geometry, bindings, heading and supported native topology. */
+    [[nodiscard]] Result<std::vector<PlannedCharacter>> BuildPlannedCharacters(const Runtime::RuntimeSceneDefinition &definition,
+                                                                               Runtime::RuntimeSceneView scene);
+
+    /** @brief Resolves every Character project selector before native staging or public identity issuance.
+     * @param characters Detached plans with validated stable authored identities.
+     * @param simulation Exact immutable Project capture; absence is unsupported for enabled Character.
+     * @return Success or the original typed unknown/disabled binding failure with owning component context.
+     */
+    [[nodiscard]] Result<void> ValidateCharacterProjectBindings(std::span<const PlannedCharacter> characters,
+                                                                const PhysicsWorldSimulationBinding &simulation);
 
     /** @brief Builds a deterministic, fully validated authored Physics scene plan. */
     [[nodiscard]] Result<PhysicsScenePlan> BuildPhysicsScenePlan(const Runtime::RuntimeSceneDefinition &definition,

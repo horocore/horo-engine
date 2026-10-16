@@ -5,6 +5,17 @@
 #include <utility>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Discards superseded recovery state before any canonical Scene owner replacement. */
+        bool DiscardSupersededRecovery(const std::filesystem::path &root, ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+            if (const Result<void> recoveryDiscarded = DiscardProjectSceneRecovery(root, mutations, files); recoveryDiscarded.HasError()) {
+                LOG_ERROR("editor.scene_recovery", "External reload could not discard superseded recovery state: %s",
+                          recoveryDiscarded.ErrorValue().message.c_str());
+                return false;
+            }
+            return true;
+        }
+    }  // namespace
 
     /** @copydoc EditorWorkspaceController::ReloadExternalScene */
     void EditorWorkspaceController::ReloadExternalScene() {
@@ -23,13 +34,14 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.scene_document", "External scene validation failed: %s", validated.ErrorValue().message.c_str());
                 return;
             }
-            if (const Result<void> recoveryDiscarded =
-                    DiscardProjectSceneRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles);
-                recoveryDiscarded.HasError()) {
-                LOG_ERROR("editor.scene_recovery", "External reload could not discard superseded recovery state: %s",
-                          recoveryDiscarded.ErrorValue().message.c_str());
+            if (HasDirtyCollisionSettings()) {
+                LOG_ERROR("editor.collision", "Save or discard collision settings before reloading the Scene owner.");
                 return;
             }
+            if (!DiscardSupersededRecovery(std::filesystem::path{m_viewModel.projectRoot}, *m_mutations, *m_durableFiles))
+                return;
+            if (auto closed = ShutdownCollisionSettings(); closed.HasError())
+                return;
             if (const Result<void> installed = m_document.LoadSaved(std::move(external.objects), std::move(external.prefabInstances));
                 installed.HasError()) {
                 LOG_ERROR("editor.scene_document", "External scene validation failed: %s", installed.ErrorValue().message.c_str());
@@ -68,6 +80,14 @@ namespace Horo::Editor {
             return;
         }
         std::optional<ProjectSceneRecoveryRecord> recoveryRecord = std::move(recovery).Value();
+        SceneDocument validatedRecovery;
+        if (auto validated = validatedRecovery.LoadRecovered(recoveryRecord->objects, recoveryRecord->prefabInstances);
+            validated.HasError())
+            return;
+        if (auto closed = ShutdownCollisionSettings(); closed.HasError()) {
+            LOG_ERROR("editor.collision", "%s", closed.ErrorValue().message.c_str());
+            return;
+        }
         if (const Result<void> restored =
                 m_document.LoadRecovered(std::move(recoveryRecord->objects), std::move(recoveryRecord->prefabInstances));
             restored.HasError()) {

@@ -42,6 +42,8 @@ namespace Horo::Runtime {
                     {type, 1, Gameplay::ComponentPayloadEncoding::CanonicalJson, {std::byte{'{'}, std::byte{'}'}}});
                 RuntimeEntityDefinition child{.object = {2}, .parent = SceneObjectId{1}};
                 child.localTransform.scale = {2.0F, 3.0F, 4.0F};
+                child.components.characterController = CharacterControllerComponent{.id = {7}};
+                child.components.characterController->movement.maximumContacts = 8;
                 return {std::move(parent), std::move(child)};
             }
 
@@ -68,7 +70,7 @@ namespace Horo::Runtime {
         REQUIRE(bytes.size() > 16);
         CHECK(bytes[0] == std::byte{'H'});
         CHECK(bytes[7] == std::byte{'S'});
-        CHECK(bytes[8] == std::byte{1});
+        CHECK(bytes[8] == std::byte{3});
         auto decoded = DecodeSceneCellPayload(fixture.manifest.Descriptor(), bytes, Identity(), fixture.schemas, {}, Limits());
         if (decoded.HasError())
             INFO(decoded.ErrorValue().message);
@@ -78,6 +80,7 @@ namespace Horo::Runtime {
         CHECK(definition.Entities()[0].localTransform.translation.x == -1.25F);
         CHECK(definition.Entities()[1].parent == SceneObjectId{1});
         CHECK(definition.Entities()[1].localTransform.scale.z == 4.0F);
+        CHECK(definition.Entities()[1].components.characterController == fixture.entities[1].components.characterController);
         REQUIRE(definition.Entities()[0].components.camera);
         REQUIRE(definition.Entities()[0].components.light);
         REQUIRE(definition.Entities()[0].components.gameplayComponents.size() == 1);

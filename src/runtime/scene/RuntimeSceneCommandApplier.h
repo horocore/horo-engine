@@ -384,9 +384,40 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        /** @brief Rejects unsupported active Character lifecycle or ancestor-pose changes before any owner or topology publishes. */
+        [[nodiscard]] Result<void> ValidateCharacterStructuralChanges() const {
+            const auto enabled = [](const auto &slot) {
+                return slot.active && slot.components.characterController && slot.components.characterController->enabled;
+            };
+            for (std::size_t index = 0; index < candidate.slots.size(); ++index) {
+                const auto &slot = candidate.slots[index];
+                if (enabled(slot) && (index >= scene.storage_.slots.size() || !enabled(scene.storage_.slots[index]) ||
+                                      slot.generation != scene.storage_.slots[index].generation))
+                    return Result<void>::Failure(MakeError(SceneErrors::CharacterStructuralUnsupported));
+            }
+            for (std::size_t index = 0; index < scene.storage_.slots.size(); ++index) {
+                if (!enabled(scene.storage_.slots[index]))
+                    continue;
+                if (index >= candidate.slots.size() || !enabled(candidate.slots[index]) ||
+                    candidate.slots[index].generation != scene.storage_.slots[index].generation)
+                    return Result<void>::Failure(MakeError(SceneErrors::CharacterStructuralUnsupported));
+                std::optional<std::size_t> ancestor = index;
+                while (ancestor) {
+                    const auto &before = scene.storage_.slots[*ancestor];
+                    const auto &after = candidate.slots[*ancestor];
+                    if (before.parent != after.parent || before.localTransform != after.localTransform)
+                        return Result<void>::Failure(MakeError(SceneErrors::CharacterStructuralUnsupported));
+                    ancestor = before.parent ? std::optional<std::size_t>{before.parent->index} : std::nullopt;
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Prepares and validates all owner candidates before Scene's final admission fence. */
         Result<void> PrepareOwners(const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
                                    std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+            if (auto characters = ValidateCharacterStructuralChanges(); characters.HasError())
+                return characters;
             if (const auto valid = ValidateGroupReferences(); valid.HasError())
                 return valid;
             std::vector<RuntimeEntityView> created;

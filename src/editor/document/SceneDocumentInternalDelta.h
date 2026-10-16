@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor/document/SceneDocumentCharacterDefaults.h"
 #include "editor/document/SceneDocumentInternalCore.h"
 
 namespace Horo::Editor::SceneDocumentDetail {
@@ -196,6 +197,9 @@ namespace Horo::Editor::SceneDocumentDetail {
             case AudioSource:
                 components.audioSource = Runtime::AudioSourceComponent{};
                 break;
+            case CharacterController:
+                components.characterController = DefaultCharacter(components);
+                break;
             default:
                 break;
         }
@@ -212,6 +216,8 @@ namespace Horo::Editor::SceneDocumentDetail {
                 return components.triggerVolume.has_value();
             case AudioSource:
                 return components.audioSource.has_value();
+            case CharacterController:
+                return components.characterController.has_value();
             default:
                 return false;
         }
@@ -232,6 +238,9 @@ namespace Horo::Editor::SceneDocumentDetail {
             case AudioSource:
                 components.audioSource = std::nullopt;
                 break;
+            case CharacterController:
+                components.characterController = std::nullopt;
+                break;
             default:
                 break;
         }
@@ -251,6 +260,9 @@ namespace Horo::Editor::SceneDocumentDetail {
                 break;
             case AudioSource:
                 components.audioSource = delta.audioSource;
+                break;
+            case CharacterController:
+                components.characterController = delta.characterController;
                 break;
             default:
                 break;
@@ -315,6 +327,10 @@ namespace Horo::Editor::SceneDocumentDetail {
     inline void ApplyTypedDelta(std::vector<SceneObjectSnapshot> &objects, const AudioSourceChangedDelta &delta) {
         if (const auto object = FindObject(objects, delta.object); object != objects.end())
             object->components.audioSource = delta.after;
+    }
+
+    inline void ApplyTypedDelta(std::vector<SceneObjectSnapshot> &objects, const CharacterChangedDelta &delta) {
+        FindObject(objects, delta.object)->components.characterController = delta.after;
     }
 
     inline void ApplyTypedDelta(std::vector<SceneObjectSnapshot> &objects, const NavigationComponentsChangedDelta &delta) {
@@ -436,6 +452,10 @@ namespace Horo::Editor::SceneDocumentDetail {
     inline void RevertTypedDelta(std::vector<SceneObjectSnapshot> &objects, const AudioSourceChangedDelta &delta) {
         if (const auto object = FindObject(objects, delta.object); object != objects.end())
             object->components.audioSource = delta.before;
+    }
+
+    inline void RevertTypedDelta(std::vector<SceneObjectSnapshot> &objects, const CharacterChangedDelta &delta) {
+        FindObject(objects, delta.object)->components.characterController = delta.before;
     }
 
     inline void RevertTypedDelta(std::vector<SceneObjectSnapshot> &objects, const NavigationComponentsChangedDelta &delta) {

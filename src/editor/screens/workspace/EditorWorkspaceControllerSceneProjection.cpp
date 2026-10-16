@@ -8,12 +8,9 @@
 
 namespace Horo::Editor {
 
-    void EditorWorkspaceController::RefreshSceneProjections() {
-        const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
-        m_viewModel.documentRevision = documentSnapshot.revision;
-        m_viewModel.objects.clear();
-        m_viewModel.objects.reserve(documentSnapshot.objects.size());
-        for (const SceneObjectSnapshot &object : documentSnapshot.objects) {
+    namespace {
+        /** @brief Classifies the complete typed authored component set for hierarchy presentation. */
+        SceneObjectKind PresentedKind(const SceneObjectSnapshot &object) {
             int componentCount = 0;
             using enum SceneObjectKind;
             SceneObjectKind singleComponentKind = GameObject;
@@ -39,7 +36,22 @@ namespace Horo::Editor {
                 singleComponentKind = AudioSource;
             }
 
-            const SceneObjectKind kind = (componentCount == 1) ? singleComponentKind : GameObject;
+            if (object.components.characterController) {
+                ++componentCount;
+                singleComponentKind = GameObject;
+            }
+
+            return componentCount == 1 ? singleComponentKind : GameObject;
+        }
+    }  // namespace
+
+    void EditorWorkspaceController::RefreshSceneProjections() {
+        const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
+        m_viewModel.documentRevision = documentSnapshot.revision;
+        m_viewModel.objects.clear();
+        m_viewModel.objects.reserve(documentSnapshot.objects.size());
+        for (const SceneObjectSnapshot &object : documentSnapshot.objects) {
+            const SceneObjectKind kind = PresentedKind(object);
             const ResolvedSceneObjectEditorState editorState = *ResolveSceneObjectEditorState(documentSnapshot.objects, object.id);
             m_viewModel.objects.push_back(SceneObject{.id = object.id,
                                                       .parent = object.parent,

@@ -232,10 +232,12 @@ namespace Horo::Physics {
 
         class AssetSceneFixture final {
         public:
-            AssetSceneFixture() : material(Asset(91)), materialType(AssetType()), loads(jobs, provider), service(registry, loads) {
+            explicit AssetSceneFixture(bool start = true, Runtime::SceneRuntimeId initialScene = {1})
+                : material(Asset(91)), materialType(AssetType()), loads(jobs, provider), service(registry, loads, {}, initialScene) {
                 REQUIRE(registry.Publish({Record(material, materialType)}).status == AssetRegistryBuildStatus::Complete);
                 provider.Insert(material, {1, 2, 3});
-                REQUIRE(service.Startup(cancellation.Token()).HasValue());
+                if (start)
+                    REQUIRE(service.Startup(cancellation.Token()).HasValue());
             }
 
             ~AssetSceneFixture() {

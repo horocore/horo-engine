@@ -64,6 +64,9 @@ namespace Horo::Editor {
 
         struct WorkspaceProjectServices {
             Assets::AssetRegistry *assetRegistry{nullptr};
+            CollisionInventoryEvidence *collisionInventory{};
+            CollisionActivationEvidence *collisionActivation{};
+            const EditorPreviewCollisionReceiptSource *previewCollisionReceipt{};
             const Assets::AssetImporterCatalogSnapshot *importerCatalog{nullptr};
             ProjectMutationCoordinator *mutations{nullptr};
             DurableFileSystem *durableFiles{nullptr};
@@ -173,6 +176,9 @@ namespace Horo::Editor {
                   },
                   projectServices_{
                       .assetRegistry = services.TryGet<Assets::AssetRegistry>(),
+                      .collisionInventory = services.TryGet<CollisionInventoryEvidence>(),
+                      .collisionActivation = services.TryGet<CollisionActivationEvidence>(),
+                      .previewCollisionReceipt = services.TryGetConst<EditorPreviewCollisionReceiptSource>(),
                       .importerCatalog = services.TryGetConst<Assets::AssetImporterCatalogSnapshot>(),
                       .mutations = services.TryGet<ProjectMutationCoordinator>(),
                       .durableFiles = services.TryGet<DurableFileSystem>(),
@@ -396,14 +402,21 @@ namespace Horo::Editor {
                 return true;
             }
 
+            Result<std::shared_ptr<CollisionProjectSettingsSession>> CollisionSettings() override {
+                return controller_ ? controller_->CollisionSettings() : GuiScreen::CollisionSettings();
+            }
+
             LeaveDecision CanLeave(const LeaveTarget &) const override {
                 using enum LeaveAction;
                 using enum LeaveDisposition;
-                if (controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments())) {
+                if (controller_ &&
+                    (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() || controller_->HasDirtyCollisionSettings())) {
                     auto graphs = controller_->PCGDocuments().Snapshots();
                     if (graphs.HasError())
                         return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
                     leavePCGDocuments_ = std::move(graphs).Value();
+                    if (const auto collision = CaptureLeaveCollision(); collision.HasError())
+                        return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
                     LeaveRequirement requirement{.kind = LeaveRequirementKind::DirtyDocument,
                                                  .subject = 1,
                                                  .revision = 1,
@@ -422,14 +435,16 @@ namespace Horo::Editor {
                 if (controller_ && resolution.action != Stay) {
                     if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
                         return Result<LeaveDecision>::Failure(current.ErrorValue());
+                    if (const auto current = ValidateLeaveCollision(); current.HasError())
+                        return Result<LeaveDecision>::Failure(current.ErrorValue());
                 }
                 if (resolution.action == Save) {
                     if (controller_) {
                         EditorWorkspaceViewCommandData command;
                         command.command = EditorWorkspaceViewCommand::SaveScene;
                         controller_->ProcessCommand(command);
-                        if (controller_->ViewModel().isDirty || controller_->SavePCGDocuments().HasError() ||
-                            controller_->HasDirtyPCGDocuments()) {
+                        if (controller_->ViewModel().isDirty || controller_->SaveCollisionSettings().HasError() ||
+                            controller_->SavePCGDocuments().HasError() || controller_->HasDirtyPCGDocuments()) {
                             return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Deny, .requirement = std::nullopt});
                         }
                         if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
@@ -442,6 +457,8 @@ namespace Horo::Editor {
                         EditorWorkspaceViewCommandData command;
                         command.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
                         controller_->ProcessCommand(command);
+                        if (const auto collision = controller_->ShutdownCollisionSettings(true); collision.HasError())
+                            return Result<LeaveDecision>::Failure(collision.ErrorValue());
                         if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
                             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
                     }
@@ -456,6 +473,7 @@ namespace Horo::Editor {
             void OnLeave() override {
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
                 if (controller_) {
+                    static_cast<void>(controller_->ShutdownCollisionSettings(true));
                     if (packages_.retire)
                         static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
                     SaveExtensionWorkspace();
@@ -480,6 +498,39 @@ namespace Horo::Editor {
 
         private:
             /** @brief Requires the exact graph sessions and revisions captured by the dirty-leave prompt. */
+            /** @brief Captures the cached dirty draft at the explicit leave decision, without filesystem access. */
+            Result<void> CaptureLeaveCollision() const {
+                leaveCollisionOwner_.reset();
+                leaveCollisionRoot_.reset();
+                if (!controller_->HasDirtyCollisionSettings())
+                    return Result<void>::Success();
+                auto owner = controller_->CollisionSettings();
+                if (owner.HasError())
+                    return Result<void>::Failure(owner.ErrorValue());
+                auto root = owner.Value()->Snapshot();
+                if (root.HasError())
+                    return Result<void>::Failure(root.ErrorValue());
+                leaveCollisionOwner_ = owner.Value();
+                leaveCollisionRoot_ = std::move(root).Value();
+                return Result<void>::Success();
+            }
+
+            /** @brief Refuses a delayed save/discard decision after its exact collision draft or opening changed. */
+            Result<void> ValidateLeaveCollision() const {
+                if (controller_->HasDirtyCollisionSettings() != static_cast<bool>(leaveCollisionRoot_))
+                    return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                if (!leaveCollisionRoot_)
+                    return Result<void>::Success();
+                const auto owner = leaveCollisionOwner_.lock();
+                const auto currentOwner = controller_->CollisionSettings();
+                if (!owner || currentOwner.HasError() || currentOwner.Value() != owner)
+                    return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                const auto snapshot = owner->Snapshot();
+                if (snapshot.HasError() || snapshot.Value() != leaveCollisionRoot_)
+                    return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                return Result<void>::Success();
+            }
+
             Result<void> ValidateLeavePCGDocuments() const {
                 const auto graphs = controller_->PCGDocuments().Snapshots();
                 if (graphs.HasError())
@@ -494,6 +545,24 @@ namespace Horo::Editor {
                         return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 }
                 return Result<void>::Success();
+            }
+
+            /** @brief Owns the exact project path and app closure across asynchronous Play preparation. */
+            EditorPlaySceneFactory BindPlayFactory(const std::string &projectRoot) const {
+                EditorPlaySceneFactory playSceneFactory;
+                if (const auto *projectFactory = services_.TryGet<EditorProjectPlaySceneFactory>()) {
+                    // Copy the application closure and exact project path into the workspace. No
+                    // reference to this screen or its activation stack survives asynchronous Start.
+                    playSceneFactory =
+                        [factory = *projectFactory,
+                         root =
+                             std::filesystem::path{std::u8string{projectRoot.begin(),
+                                                                 projectRoot.end()}}](const Runtime::SceneRuntimeId identity,
+                                                                                      const Runtime::RuntimeSceneDefinition &definition) {
+                        return factory(root, identity, definition);
+                    };
+                }
+                return playSceneFactory;
             }
 
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
@@ -513,6 +582,9 @@ namespace Horo::Editor {
                     std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                                 EditorWorkspaceDependencies{
                                                                     .mutableAssetRegistry = projectServices_.assetRegistry,
+                                                                    .collisionInventory = projectServices_.collisionInventory,
+                                                                    .collisionActivation = projectServices_.collisionActivation,
+                                                                    .previewCollisionReceipt = projectServices_.previewCollisionReceipt,
                                                                     .mutations = projectServices_.mutations,
                                                                     .durableFiles = projectServices_.durableFiles,
                                                                     .importerCatalog = projectServices_.importerCatalog,
@@ -527,6 +599,7 @@ namespace Horo::Editor {
                                                                     .networkDebugger =
                                                                         services_.TryGet<Application::NetworkDebuggerService>(),
                                                                     .documentSessionOwner = sessionOwner,
+                                                                    .playSceneFactory = BindPlayFactory(projectRoot),
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
@@ -866,6 +939,8 @@ namespace Horo::Editor {
             WorkspacePublishedRevisions publishedRevisions_{};
             std::unique_ptr<EditorWorkspaceController> controller_;
             mutable std::vector<PCGDocumentSnapshot> leavePCGDocuments_;
+            mutable std::weak_ptr<CollisionProjectSettingsSession> leaveCollisionOwner_;
+            mutable std::shared_ptr<const Application::ProjectCollisionSettings> leaveCollisionRoot_;
             std::unique_ptr<EditorSnackbarHost> snackbarHost_;
             std::optional<Input::InputBindingProfile> previousInputProfile_;
         };

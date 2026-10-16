@@ -1,4 +1,5 @@
 #include "Horo/Prefab/PrefabAssetDependencyClosure.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
 #include "PrefabSceneCookState.h"
@@ -73,7 +74,7 @@ namespace Horo::Application::PrefabCookDetail {
                 : scenes_(std::move(scenes)), settings_(settings), limits_(limits) {}
 
             Assets::CookerCacheIdentity CacheIdentity() const noexcept override {
-                return {.version = "horo.scene.prefab-inline.v2", .settingsDigest = settings_, .settingsSchemaVersion = 1};
+                return {.version = "horo.scene.prefab-inline.v3", .settingsDigest = settings_, .settingsSchemaVersion = 1};
             }
 
             Result<Assets::CookOutputSink> Cook(const Assets::CookSourceView &source,
@@ -228,23 +229,53 @@ namespace Horo::Application::PrefabCookDetail {
             }
         }
 
+        /** @brief Validates the same typed Scene requirements against the pinned registry even when no Prefab is authored. */
+        Result<std::vector<Runtime::SceneAssetDependency>> SceneDependencies(const Runtime::RuntimeSceneDefinition &definition,
+                                                                             const Assets::AssetRegistrySnapshot &registry,
+                                                                             const Prefab::PrefabDependencyGraphSnapshot &graph,
+                                                                             const std::span<const Assets::AssetId> roots,
+                                                                             const std::size_t maximumDependencies) {
+            if (!roots.empty()) {
+                std::vector<Prefab::PrefabAssetDependency> existing;
+                for (const auto &dependency : definition.AssetDependencies())
+                    existing.push_back({dependency.id, dependency.expectedType, {}});
+                auto closure = Prefab::BuildPrefabAssetDependencyClosure(registry, graph, roots, existing, maximumDependencies);
+                if (closure.HasError())
+                    return Result<std::vector<Runtime::SceneAssetDependency>>::Failure(closure.ErrorValue());
+                const auto dependencies = closure.Value().RuntimeDependencies();
+                return Result<std::vector<Runtime::SceneAssetDependency>>::Success({dependencies.begin(), dependencies.end()});
+            }
+            if (registry.Revision() != graph.RegistryRevision())
+                return Result<std::vector<Runtime::SceneAssetDependency>>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
+            if (maximumDependencies == 0 || definition.AssetDependencies().size() > maximumDependencies)
+                return Result<std::vector<Runtime::SceneAssetDependency>>::Failure(
+                    MakeError(Prefab::PrefabErrors::DependencyClosureCapacityExceeded));
+            for (const auto &dependency : definition.AssetDependencies()) {
+                const auto *record = registry.Find(dependency.id);
+                if (!record)
+                    return Result<std::vector<Runtime::SceneAssetDependency>>::Failure(
+                        MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+                if (record->type != dependency.expectedType)
+                    return Result<std::vector<Runtime::SceneAssetDependency>>::Failure(MakeError(Prefab::PrefabErrors::DependencyConflict));
+            }
+            const auto dependencies = definition.AssetDependencies();
+            return Result<std::vector<Runtime::SceneAssetDependency>>::Success({dependencies.begin(), dependencies.end()});
+        }
+
         /** @brief Builds the complete source-free dependency closure and bounded cooked payload after Scene conversion. */
         Result<PreparedScene> FinishScene(const Assets::AssetCookPinnedSource &input, const Runtime::RuntimeSceneDefinition &definition,
                                           const Assets::AssetRegistrySnapshot &registry, const Prefab::PrefabDependencyGraphSnapshot &graph,
                                           const std::span<const Assets::AssetId> roots, const SceneCook::CookedSceneLimits &limits) {
             if (definition.Entities().size() > limits.maximumEntities)
                 return Result<PreparedScene>::Failure(MakeError(SceneCook::SceneCookErrors::TooLarge));
-            std::vector<Prefab::PrefabAssetDependency> existing;
-            for (const auto &dependency : definition.AssetDependencies())
-                existing.push_back({dependency.id, dependency.expectedType, {}});
-            auto closure = Prefab::BuildPrefabAssetDependencyClosure(registry, graph, roots, existing, limits.maximumDependencies);
+            auto closure = SceneDependencies(definition, registry, graph, roots, limits.maximumDependencies);
             if (closure.HasError())
                 return Result<PreparedScene>::Failure(closure.ErrorValue());
             Runtime::SceneDefinitionBuilder builder{definition.Id(), definition.Revision()};
             for (const auto &entity : definition.Entities())
                 builder.Add(entity);
             PreparedScene prepared{input.record.id, input.sourceDigest, definition.Id(), definition.Revision(), {}, {}};
-            for (const auto &dependency : closure.Value().RuntimeDependencies()) {
+            for (const auto &dependency : closure.Value()) {
                 if (auto admitted = builder.RequireAsset(dependency); admitted.HasError())
                     return Result<PreparedScene>::Failure(admitted.ErrorValue());
                 prepared.dependencies.push_back(dependency.id);
@@ -277,7 +308,7 @@ namespace Horo::Application::PrefabCookDetail {
                 return Result<PreparedScene>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
             if (auto admitted = AdmitSceneObjects(source.objects, context.request.schemas); admitted.HasError())
                 return Result<PreparedScene>::Failure(admitted.ErrorValue());
-            const Runtime::SceneDefinitionId id{Compact(ComputeSha256(std::as_bytes(std::span{input.record.id.Bytes()})))};
+            const Runtime::SceneDefinitionId id = SceneCook::SceneDefinitionIdForAsset(input.record.id);
             const std::string revisionInput = FormatSha256(input.sourceDigest) + FormatSha256(context.settings);
             const Runtime::SceneDefinitionRevision revision{Compact(ComputeSha256(std::as_bytes(std::span{revisionInput})))};
             const auto definition = ExpandScene(source, resolver, limits, context, id, revision);

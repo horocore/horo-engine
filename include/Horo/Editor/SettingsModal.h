@@ -27,10 +27,13 @@ namespace Horo::Editor {
          * @param logo Presentation logo texture.
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional registry-backed extension marketplace.
+         * @param collision Weak exact project opening; never extends canonical Scene or project lifetime.
+         * @param collisionError Original typed opening failure for actionable project settings presentation.
          */
         SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, std::uintptr_t logo,
                       Extensions::ExtensionInventory *extensionInventory = nullptr,
-                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr) noexcept;
+                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
+                      std::weak_ptr<CollisionProjectSettingsSession> collision = {}, std::optional<Error> collisionError = {}) noexcept;
 
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;

@@ -170,11 +170,8 @@ namespace Horo::Editor {
         }
 
         m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
-        std::unique_ptr<Runtime::RuntimeScene> preparedScene;
-        if (auto cloned = m_runtimeScene.CloneActive(Runtime::SceneRuntimeId{0x8000000000000001ULL}); cloned.HasValue())
-            preparedScene = std::move(cloned).Value();
         const Result<void> started = m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(),
-                                                         m_gameplayRegistry->Components(), std::move(preparedScene), m_triggerBinding);
+                                                         m_gameplayRegistry->Components(), m_playSceneFactory, m_triggerBinding);
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())
@@ -185,6 +182,7 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::StopPlaySession() {
         m_playSession.Stop();
+        RefreshCollisionActivation();
         m_nativeGameplayReloadPending = false;
         if (m_pendingGameplayRegistry && !m_pendingGameplayRegistry->HasBlockingDiagnostics()) {
             m_gameplayRegistry = std::move(m_pendingGameplayRegistry);
@@ -200,6 +198,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshPlayStateProjection() {
+        RefreshCollisionActivation();
         switch (m_playSession.State()) {
             case EditorPlaySessionState::Idle:
                 m_viewModel.playState = EditorPlayState::Idle;
@@ -230,6 +229,7 @@ namespace Horo::Editor {
         if (!std::isfinite(elapsedSeconds) || elapsedSeconds < 0.0F)
             return;
         m_playSession.PresentationUpdate(Gameplay::FrameDeltaTime{static_cast<double>(elapsedSeconds)});
+        RefreshPlayStateProjection();
         ExtractPlayViewportScene();
     }
 
@@ -268,10 +268,10 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ExtractPlayViewportScene() {
-        const Runtime::RuntimeScene *scene = m_playSession.Scene();
-        if (scene == nullptr)
+        const auto playScene = m_playSession.SceneView();
+        if (!playScene)
             return;
-        const Runtime::RuntimeSceneView runtimeView = scene->View();
+        const Runtime::RuntimeSceneView runtimeView = *playScene;
         const EditorViewportCamera camera = ResolvePlayViewportCamera(runtimeView);
         LoadDocumentAssetMeshes();
         const SceneDocumentSnapshot document = m_document.Snapshot();

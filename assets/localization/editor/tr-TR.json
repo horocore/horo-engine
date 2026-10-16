@@ -1487,6 +1487,105 @@
     "workspace.inspector.audio_source_kind": {"text": "Kaynak türü"},
     "workspace.inspector.audio_source_kind_native_clip": {"text": "Yerel Klip"},
     "workspace.inspector.audio_source_kind_middleware_event": {"text": "Ara Katman Olayı"},
+    "workspace.inspector.character.title": {
+      "text": "Karakter denetleyicisi"
+    },
+    "workspace.inspector.character.invalid": {
+      "text": "Karakter ayarları geçersiz. Etkin denetleyici için gerçek çarpışma profili, sorgu kanalı ve malzeme varlığı/yuvası gerekir."
+    },
+    "workspace.inspector.character.radius": {
+      "text": "Ayakta yarıçap (m)"
+    },
+    "workspace.inspector.character.half_height": {
+      "text": "Ayakta silindirik yarı yükseklik (m)"
+    },
+    "workspace.inspector.character.crouched_radius": {
+      "text": "Çömelme yarıçapı (m)"
+    },
+    "workspace.inspector.character.crouched_half_height": {
+      "text": "Çömelme silindirik yarı yüksekliği (m)"
+    },
+    "workspace.inspector.character.up": {
+      "text": "Dünya yukarı yönü"
+    },
+    "workspace.inspector.character.gravity": {
+      "text": "Dünya yerçekimi (m/sn²)"
+    },
+    "workspace.inspector.character.crouch": {
+      "text": "Çömelme kapsülü"
+    },
+    "workspace.inspector.character.skin": {
+      "text": "Kabuk genişliği (m)"
+    },
+    "workspace.inspector.character.minimum_move": {
+      "text": "En az hareket (m)"
+    },
+    "workspace.inspector.character.step": {
+      "text": "En yüksek basamak (m)"
+    },
+    "workspace.inspector.character.slope": {
+      "text": "En yüksek eğim (derece)"
+    },
+    "workspace.inspector.character.jump": {
+      "text": "Zıplama hızı (m/sn)"
+    },
+    "workspace.inspector.character.preserve_speed": {
+      "text": "Yatay hızı koru"
+    },
+    "workspace.inspector.character.dynamic_platform": {
+      "text": "Dinamik platform desteği"
+    },
+    "workspace.inspector.character.platform_heading": {
+      "text": "Platform yönünü devral"
+    },
+    "workspace.inspector.character.stop": {
+      "text": "Dur"
+    },
+    "workspace.inspector.character.slide": {
+      "text": "Kay"
+    },
+    "workspace.inspector.character.steep_policy": {
+      "text": "Dik eğim ilkesi"
+    },
+    "workspace.inspector.character.none": {
+      "text": "Yok"
+    },
+    "workspace.inspector.character.linear": {
+      "text": "Doğrusal hız"
+    },
+    "workspace.inspector.character.point": {
+      "text": "Nokta hızı"
+    },
+    "workspace.inspector.character.leave_velocity": {
+      "text": "Platformdan ayrılma hızı"
+    },
+    "workspace.inspector.character.profile": {
+      "text": "Çarpışma profili UUID"
+    },
+    "workspace.inspector.character.query": {
+      "text": "Sorgu kanalı UUID"
+    },
+    "workspace.inspector.character.material": {
+      "text": "Fiziksel malzeme varlığı UUID"
+    },
+    "workspace.inspector.character.slot": {
+      "text": "Malzeme yuvası kimliği"
+    },
+    "workspace.inspector.character.required_layer": {
+      "text": "Gerekli katman UUID (isteğe bağlı)"
+    },
+    "workspace.inspector.character.required_profile": {
+      "text": "Gerekli profil UUID (isteğe bağlı)"
+    },
+    "workspace.inspector.character.excluded_object": {
+      "text": "Dışlanan gövde nesne kimliği (isteğe bağlı)"
+    },
+    "workspace.inspector.character.excluded_body": {
+      "text": "Dışlanan gövde yuvası (isteğe bağlı)"
+    },
+    "workspace.inspector.character.contacts": {
+      "text": "En çok temas (1–32)"
+    },
     "workspace.inspector.audio_source_gain": {"text": "Kazanç"},
     "workspace.inspector.audio_source_pitch": {"text": "Perde"},
     "workspace.inspector.audio_source_spatial": {"text": "Uzamsal"},
@@ -2298,6 +2397,48 @@
     },
     "workspace.packages.recovery_hint": {
       "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
-    }
+    },
+    "settings.collision.title": {"text": "Proje Çarpışma Ayarları"},
+    "settings.collision.authority": {"text": "Proje ilkesi yalnızca .horo/collision.json dosyasında saklanır. Düzenleyici tercihleri derlenen çarpışma davranışını değiştirmez. İşlemeden önce başvuruları inceleyin; kaydetme yalnızca bu belgeyi yayımlar."},
+    "settings.collision.unavailable": {"text": "Çarpışma düzenleme kullanılamıyor. Geçerli çarpışma belgesi ve açık sahiplik kanıtı olan bir proje açın."},
+    "settings.collision.name": {"text": "Görünen ad"},
+    "settings.collision.description": {"text": "Açıklama"},
+    "settings.collision.new_name": {"text": "Yeni tanım adı"},
+    "settings.collision.layers": {"text": "Katmanlar"},
+    "settings.collision.profiles": {"text": "Profiller"},
+    "settings.collision.channels": {"text": "Sorgu kanalları"},
+    "settings.collision.initial_response": {"text": "Her yeni çift/kanal için ilk yanıt"},
+    "settings.collision.ignore": {"text": "Yok say"},
+    "settings.collision.overlap": {"text": "Örtüş"},
+    "settings.collision.block": {"text": "Engelle"},
+    "settings.collision.static": {"text": "Statik gövdeleri kabul et"},
+    "settings.collision.kinematic": {"text": "Kinematik gövdeleri kabul et"},
+    "settings.collision.dynamic": {"text": "Dinamik gövdeleri kabul et"},
+    "settings.collision.create": {"text": "Aday tanım oluştur"},
+    "settings.collision.remove_candidate": {"text": "Adaydan kaldır (inceleme gerekli)"},
+    "settings.collision.matrix": {"text": "Tam simetrik simülasyon matrisi"},
+    "settings.collision.layer": {"text": "Profil katmanı"},
+    "settings.collision.simulation": {"text": "Simülasyon etkin"},
+    "settings.collision.queries": {"text": "Sorgular etkin"},
+    "settings.collision.events": {"text": "Yaşam döngüsü olayları etkin"},
+    "settings.collision.default": {"text": "Açık düzenleme oluşturma işlemleri için varsayılan"},
+    "settings.collision.review": {"text": "Başvuruları ve etkinleştirmeyi incele"},
+    "settings.collision.commit": {"text": "İncelenen adayı işle"},
+    "settings.collision.undo": {"text": "Çarpışma düzenlemesini geri al"},
+    "settings.collision.redo": {"text": "Çarpışma düzenlemesini yinele"},
+    "settings.collision.reset_candidate": {"text": "Adayı oturumdan yeniden yükle"},
+    "settings.collision.save": {"text": "Çarpışma belgesini kaydet"},
+    "settings.collision.stop_play": {"text": "Simülasyon davranışını değiştirmeden önce oynatmayı durdurun. Kaydetme etkin dünyayı değiştirmez; yeniden başlatma gerekir."},
+    "settings.collision.activation.unknown": {"text": "Geçerli çalışma zamanı sahipliği bilinmiyor; anlamsal etkinleştirme doğrulanamaz."},
+    "settings.collision.activation.no_physics": {"text": "Sunucu açıkça fizik olmadan çalışmayı seçti. Bu belge yerel bir dünyada etkin değil."},
+    "settings.collision.activation.inactive": {"text": "Fizik sahibi açıkça etkin değil. Sonraki etkinleştirme bu kaydedilmiş belgenin tam kopyasını almalıdır."},
+    "settings.collision.activation.active": {"text": "Etkin kopya: belge sürümü / nesil / anlamsal parmak izi. Değişiklikler durdurmayı ve yeniden başlatmayı gerektirir."},
+    "settings.collision.impact.layer": {"text": "Katman sahibi: kaldırmadan önce tür güvenli başvurusunu taşıyın"},
+    "settings.collision.impact.channel": {"text": "Sorgu kanalı sahibi: kaldırmadan önce tür güvenli başvurusunu taşıyın"},
+    "settings.collision.impact.profile": {"text": "Profil sahibi: silmeden önce tür güvenli başvurusunu taşıyın"},
+    "settings.collision.impact.opaque": {"text": "Desteklenmeyen prefab/özel sahip: tür güvenli bir sağlayıcı çözene kadar silme engellenir"},
+    "settings.collision.impact.inventory": {"text": "Eksik veya değişmiş proje envanteri: silmeden önce kaynakları yenileyin"},
+    "settings.collision.impact.trigger": {"text": "Tetikleyici kopyası yok veya eski: silmeden önce tam derlenmiş bağı sağlayın"},
+    "settings.collision.impact.active": {"text": "Etkin nesil veya oynatma oturumu anlamsal değiştirmeyi engelliyor"}
   }
 }

@@ -1,4 +1,5 @@
 #include "PhysicsWorldInternal.h"
+#include "internal/CharacterScenePlacement.h"
 
 namespace Horo::Physics {
     /** @copydoc PhysicsWorld::Query */
@@ -25,3 +26,23 @@ namespace Horo::Physics {
     }
 
 }  // namespace Horo::Physics
+
+namespace Horo::Character::Detail {
+    /** @copydoc CharacterScenePlacement::BindInitialQueries */
+    Result<void> CharacterScenePlacement::BindInitialQueries(Physics::PhysicsWorld &physics, const CharacterWorld &character,
+                                                             const Runtime::SceneRuntimeId scene) {
+        auto &owner = *physics.impl_;
+        if (owner.runtime->ownerThread != std::this_thread::get_id())
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
+        if (!scene.IsValid() || character.Descriptor().sceneGeneration != scene.value ||
+            character.Descriptor().physicsWorld != physics.Identity())
+            return Result<void>::Failure(
+                MakeError(Physics::PhysicsErrors::QuerySnapshotStale, "Initial query owners do not name the same candidate Scene."));
+        if (owner.state != Physics::PhysicsWorldState::ActiveSolver || owner.stepping || owner.publication.Snapshot().completedTick != 0 ||
+            owner.querySceneGeneration != 0 || character.State() != CharacterWorldState::Prepared)
+            return Result<void>::Failure(
+                MakeError(Physics::PhysicsErrors::InvalidState, "Initial queries require unbound, unticked prepared Scene owners."));
+        owner.querySceneGeneration = scene.value;
+        return Result<void>::Success();
+    }
+}  // namespace Horo::Character::Detail

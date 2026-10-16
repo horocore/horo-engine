@@ -113,6 +113,7 @@ namespace Horo::Editor {
         UpdateLightComponent,
         UpdateTriggerVolumeComponent,
         UpdateAudioSourceComponent,
+        UpdateCharacterComponent,
         UpdateObjectEditorState,
         AddComponentToObject,
         RemoveComponentFromObject,
@@ -242,6 +243,7 @@ namespace Horo::Editor {
         std::optional<Runtime::LightComponent> lightPayload = std::nullopt;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
+        std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
         std::optional<SceneObjectEditorState> editorStatePayload = std::nullopt;
         std::optional<ComponentType> componentTypePayload = std::nullopt;
         std::optional<Gameplay::BehaviorTypeId> behaviorTypePayload = std::nullopt;

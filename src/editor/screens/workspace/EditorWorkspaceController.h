@@ -3,6 +3,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Cinematic/CameraCutRuntime.h"
+#include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/NotificationService.h"
@@ -43,6 +44,9 @@ namespace Horo::Editor {
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
+        CollisionInventoryEvidence *collisionInventory{};
+        CollisionActivationEvidence *collisionActivation{};
+        const EditorPreviewCollisionReceiptSource *previewCollisionReceipt{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
@@ -57,6 +61,7 @@ namespace Horo::Editor {
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        EditorPlaySceneFactory playSceneFactory{}; /**< Explicit host composition; captures/pins selected native and asset authorities. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -67,6 +72,17 @@ namespace Horo::Editor {
                                   const Assets::AssetRegistrySnapshot &assetRegistry = {},
                                   const EditorWorkspaceDependencies &dependencies = {});
         ~EditorWorkspaceController();
+
+        /** @brief Opens cached project collision authoring bound to this exact canonical Scene opening.
+         * @return Shared owner or typed unavailable/source failure; presentation retains weak references only. */
+        [[nodiscard]] Result<std::shared_ptr<CollisionProjectSettingsSession>> CollisionSettings();
+        /** @brief Includes collision semantics and uncertain durability in the workspace leave guard. */
+        [[nodiscard]] bool HasDirtyCollisionSettings() const noexcept;
+        /** @brief Saves the exact collision draft with complete reference review. @return Original typed outcome. */
+        [[nodiscard]] Result<void> SaveCollisionSettings();
+        /** @brief Revokes modal access before Scene owners retire. @param discardDirty Explicit discard decision.
+         * @return Unchanged dirty rejection or successful owner shutdown. */
+        [[nodiscard]] Result<void> ShutdownCollisionSettings(bool discardDirty = false);
 
         /** @brief Starts a camera-only authored preview using the same runtime hard-cut composition as a packaged view.
          * @param activation Owned camera-only plan and player descriptor. @param cuts Required camera bindings/end policy.
@@ -215,6 +231,7 @@ namespace Horo::Editor {
     private:
         Runtime::RuntimeSceneService &m_runtimeScene;
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
+        EditorPlaySceneFactory m_playSceneFactory;
         Assets::AssetRegistrySnapshot m_assetRegistry;
         DocumentIdentityRegistry m_documentRegistry;
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
@@ -223,6 +240,11 @@ namespace Horo::Editor {
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
         Assets::AssetRegistry *m_mutableAssetRegistry{};
+        CollisionInventoryEvidence *m_collisionInventory{};
+        CollisionActivationEvidence *m_collisionActivation{};
+        const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
+        Assets::AssetId m_collisionSceneOwner;
+        std::uint64_t m_collisionSceneGeneration{};
         ProjectMutationCoordinator *m_mutations{};
         DurableFileSystem *m_durableFiles{};
         const Assets::AssetImporterCatalogSnapshot *m_importerCatalog{};
@@ -247,6 +269,8 @@ namespace Horo::Editor {
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
         SceneDocument m_document;
         EditorHistory m_history;
+        std::optional<SceneDocumentTransactions> m_collisionScene;
+        std::shared_ptr<CollisionProjectSettingsSession> m_collisionSettings;
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
         CreateSceneObjectUseCase m_createSceneObject{m_document, m_documentCommands};
         InstantiateSceneAssetUseCase m_instantiateSceneAsset{m_document, m_documentCommands};
@@ -329,6 +353,9 @@ namespace Horo::Editor {
 
         using ContentBrowserPathMoves = std::vector<std::pair<std::filesystem::path, std::filesystem::path>>;
 
+        [[nodiscard]] Result<Assets::AssetRegistryBuildReport> RebuildProjectAssetRegistry(const std::filesystem::path &root);
+        void RefreshCollisionActivation();
+        [[nodiscard]] Result<void> BindCollisionScene();
         void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
         void ScheduleContentBrowserPreviews();
         void PollContentBrowserPreviews();
@@ -402,6 +429,9 @@ namespace Horo::Editor {
         void InspectInitialSceneRecovery(const std::filesystem::path &absoluteProjectRoot);
         [[nodiscard]] bool CommitSceneSave(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
                                            const std::optional<std::filesystem::path> &newActivePath = std::nullopt);
+        /** @brief Updates the default-scene metadata after a successful Save As, then retires collision and commits document identity. */
+        void CommitSceneSaveAs(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
+                               const std::filesystem::path &destination);
         /** @brief Replaces the active session from the validated external canonical scene. */
         void ReloadExternalScene();
         /** @brief Restores validated recovery content into a new dirty document session. */

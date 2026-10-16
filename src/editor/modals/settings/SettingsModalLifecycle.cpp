@@ -8,9 +8,13 @@
 namespace Horo::Editor {
     SettingsModal::SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, const std::uintptr_t logo,
                                  Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace) noexcept
+                                 Extensions::ExtensionMarketplaceService *extensionMarketplace,
+                                 std::weak_ptr<CollisionProjectSettingsSession> collision, std::optional<Error> collisionError) noexcept
         : m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
-          m_extensionMarketplace(extensionMarketplace) {}
+          m_extensionMarketplace(extensionMarketplace) {
+        m_draft.collision.owner = std::move(collision);
+        m_draft.collision.error = std::move(collisionError);
+    }
 
     ModalId SettingsModal::Id() const {
         return ModalId{kModalId};
@@ -30,6 +34,13 @@ namespace Horo::Editor {
         LoadSettingsForModal(m_draft, m_settings);
         m_draft.extensionInventory = m_extensionInventory;
         m_draft.extensionMarketplace = m_extensionMarketplace;
+        if (const auto owner = m_draft.collision.owner.lock()) {
+            const auto snapshot = owner->Snapshot();
+            if (snapshot.HasError())
+                m_draft.collision.error = snapshot.ErrorValue();
+            else
+                m_draft.collision.input = snapshot.Value()->Input();
+        }
         const auto rev = m_settings.Snapshot().revision;
         m_logCtx =
             std::make_unique<Log::LogContext>("modal", "settings", "modal_id", std::to_string(kModalId), "revision", std::to_string(rev));
@@ -60,6 +71,7 @@ namespace Horo::Editor {
                 EditorSettingsChangedEvent{m_settings.Snapshot().revision, SettingsChangePhase::Reverted, SettingsDomain::All});
             m_revertedPublished = true;
         }
+        m_draft.collision = {};
         m_logCtx.reset();  // pop MDC frame
     }
 

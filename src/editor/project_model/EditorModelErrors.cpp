@@ -8,6 +8,12 @@ namespace Horo::Editor {
     }  // namespace
 
     namespace SceneDocumentErrors {
+        const ErrorCodeDescriptor InvalidCharacter{.domain = ErrorDomainId{"horo.editor.scene"},
+                                                   .code = ErrorCode{"editor.scene.character.invalid"},
+                                                   .defaultSeverity = ErrorSeverity::Error,
+                                                   .summary = "Character component is missing or invalid.",
+                                                   .remediationHint =
+                                                       "Select an existing Character component and supply valid explicit settings."};
         const ErrorCodeDescriptor HistoryEntryTooLarge{
             .domain = SceneDocumentDomain,
             .code = ErrorCode{"scene_document.history_entry_too_large"},

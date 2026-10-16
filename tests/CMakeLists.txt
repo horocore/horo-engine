@@ -214,6 +214,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
             gui/EditorUiAutomationHarnessTests.cpp
             gui/FullEditorUiAutomationScenarios.cpp
             gui/PackageModalUiTests.cpp
+            gui/InspectorCharacterUiTests.cpp
             helpers/editor_ui/EditorUiTestHarness.cpp
             helpers/editor_ui/EditorUiTestSurface.cpp
             helpers/editor_ui/InteractiveEditorUiTestRenderer.cpp
@@ -769,6 +770,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsQueryEventCapabilityTests.cpp
         unit/runtime/physics/PhysicsReferenceSceneCorpusTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
+        unit/runtime/physics/CharacterSceneActivationTests.cpp
         unit/runtime/physics/PhysicsTriggerVolumeRuntimeTests.cpp
         unit/runtime/physics/RuntimeSceneBaselinePhysicsTests.cpp
         unit/runtime/physics/PrefabPhysicsStructuralTests.cpp
@@ -789,6 +791,7 @@ target_compile_features(HoroPhysicsTests PRIVATE cxx_std_20)
 target_include_directories(HoroPhysicsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/physics ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_definitions(HoroPhysicsTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
 target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::PhysicsTriggerVolumeHost HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
+target_link_libraries(HoroPhysicsTests PRIVATE HoroCharacterScenePlacementInternal HoroPhysicsSceneHostInternal HoroScenePhysicsHost)
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
 add_executable(HoroPrefabPhysicsGroupTests unit/runtime/physics/PrefabPhysicsGroupTests.cpp)
@@ -1582,6 +1585,29 @@ target_compile_features(HoroSceneRuntimeConversionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneRuntimeConversionTests PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook nlohmann_json::nlohmann_json HoroSceneSourceCodecInternal)
 horo_register_catch_test(HoroSceneRuntimeConversionTests LABELS "unit;scene;prefab;headless")
 
+add_executable(HoroCharacterSceneProductTests integration/gameplay/CharacterSceneProductTests.cpp
+        integration/gameplay/HeadlessCharacterSceneTests.cpp
+        integration/gameplay/CharacterSceneProductFixture.h)
+target_compile_features(HoroCharacterSceneProductTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroCharacterSceneProductTests PRIVATE
+        HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
+        HORO_TEST_CHARACTER_CLI_PATH="$<TARGET_FILE:horo-engine>"
+        HORO_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}")
+target_include_directories(HoroCharacterSceneProductTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/unit/application
+        ${CMAKE_CURRENT_SOURCE_DIR}/support
+        ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
+target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroNetworkProductHost HoroEngine::PhysicsTriggerVolumeHost HoroEngine::Platform
+        nlohmann_json::nlohmann_json miniz)
+add_dependencies(HoroCharacterSceneProductTests horo-engine)
+horo_register_catch_test(HoroCharacterSceneProductTests LABELS "integration;character;scene;editor;headless;product")
+
+add_executable(HoroProjectPhysicsCaptureBoundaryConsumer support/ProjectPhysicsCapturePublicHeaderConsumer.cpp)
+target_compile_features(HoroProjectPhysicsCaptureBoundaryConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroProjectPhysicsCaptureBoundaryConsumer PRIVATE HoroEngine::ProjectPhysicsCapture)
+add_test(NAME HoroProjectPhysicsCaptureBoundaryConsumer COMMAND HoroProjectPhysicsCaptureBoundaryConsumer)
+set_tests_properties(HoroProjectPhysicsCaptureBoundaryConsumer PROPERTIES LABELS "unit;physics;headless;public_headers")
+
 add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
 add_executable(HoroPrefabSceneCookHostTests
         unit/application/PrefabSceneCookHostTests.cpp
@@ -1760,6 +1786,8 @@ add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTest
     integration/gameplay/GameplayCharacterContextTests.cpp
     integration/gameplay/LuaCharacterLifecycleTests.cpp
     integration/gameplay/GameplayPhysicsHostTests.cpp
+    integration/gameplay/GameplayServiceSceneTests.cpp
+    integration/gameplay/HeadlessSceneLoadBoundaryTests.cpp
     integration/gameplay/PrefabGameplayHostTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
     integration/gameplay/GameplayCharacterAirborneTests.cpp
@@ -1855,6 +1883,15 @@ target_link_libraries(HoroLuaBehaviorTests PRIVATE HoroEngine::GameplayLua)
 add_executable(HoroEditorPlaySessionControllerTests
         unit/editor/EditorPlaySessionControllerTests.cpp
 )
+target_sources(HoroEditorPlaySessionControllerTests PRIVATE unit/editor/EditorCharacterSceneProductTests.cpp)
+target_include_directories(HoroEditorPlaySessionControllerTests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/integration/gameplay
+        ${CMAKE_CURRENT_SOURCE_DIR}/unit/application
+        ${CMAKE_CURRENT_SOURCE_DIR}/support
+        ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
+target_compile_definitions(HoroEditorPlaySessionControllerTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEditorSceneProductHost
+        HoroEngine::PhysicsTriggerVolumeHost nlohmann_json::nlohmann_json miniz)
 target_compile_features(HoroEditorPlaySessionControllerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroUpdateExperienceSessionTests
@@ -2297,6 +2334,26 @@ target_link_libraries(HoroProjectCreationServiceTests
         PRIVATE
         HoroEngine::EditorServices
 )
+add_executable(HoroProjectCollisionSettingsTests
+        unit/editor/ProjectCollisionSettingsTests.cpp
+        unit/editor/CollisionProjectSettingsSessionTests.cpp
+        unit/editor/CollisionReferenceReviewTests.cpp
+        unit/editor/CharacterCollisionReferenceTests.cpp
+        unit/editor/CollisionInventoryFreshnessTests.cpp
+        unit/editor/CollisionSceneParserFailureTests.cpp
+        unit/editor/CollisionStorePublicationTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroProjectCollisionSettingsTests PRIVATE cxx_std_20)
+target_include_directories(HoroProjectCollisionSettingsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroProjectCollisionSettingsTests PRIVATE Catch2::Catch2WithMain
+        HoroEngine::ProjectCollisionSettings HoroEngine::EditorServices HoroEngine::SceneSource nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroProjectCollisionSettingsTests LABELS "unit;project;physics;headless;ci-windows;sonar-coverage")
+add_executable(HoroCollisionSettingsPublicConsumer support/CollisionSettingsPublicConsumer.cpp)
+target_compile_features(HoroCollisionSettingsPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroCollisionSettingsPublicConsumer PRIVATE HoroEngine::ProjectCollisionSettings HoroEngine::EditorServices)
+add_test(NAME HoroCollisionSettingsPublicConsumer COMMAND HoroCollisionSettingsPublicConsumer)
+set_tests_properties(HoroCollisionSettingsPublicConsumer PROPERTIES LABELS "unit;project;physics;headless;ci-windows;sonar-coverage")
+
 add_executable(HoroEditorSettingsStoreTests
         unit/editor/EditorSettingsStoreTests.cpp
 )
@@ -2360,6 +2417,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
             unit/editor/EditorWorkspaceControllerTests.cpp
             unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
+            unit/editor/EditorWorkspaceControllerCollisionTests.cpp
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
             unit/editor/EditorWorkspaceControllerDockingTests.cpp
             unit/editor/EditorWorkspaceControllerInspectorTests.cpp
@@ -2375,7 +2433,8 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceNativeGameplayReloadTests.cpp
     )
 
-    target_include_directories(HoroEditorWorkspaceControllerTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
+    target_include_directories(HoroEditorWorkspaceControllerTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers"
+        "${PROJECT_SOURCE_DIR}/tests/support")
     target_compile_features(HoroEditorWorkspaceControllerTests PRIVATE cxx_std_20)
     target_compile_definitions(HoroEditorWorkspaceControllerTests PRIVATE
             HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
@@ -2479,6 +2538,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroInspectorEditSessionTests
             unit/editor/InspectorEditSessionTests.cpp
+            unit/editor/InspectorCharacterEditSessionTests.cpp
     )
 
     target_compile_features(HoroInspectorEditSessionTests PRIVATE cxx_std_20)
@@ -2810,6 +2870,7 @@ target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentTests.cpp
+        unit/editor/CharacterAuthoringTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/SceneDocumentExtractionTests.cpp
@@ -2831,7 +2892,10 @@ add_executable(HoroSceneDocumentPersistenceTests
 )
 target_compile_features(HoroSceneDocumentPersistenceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentPersistenceTests PRIVATE HoroEngine::EditorServices)
-add_executable(HoroSceneSourceTests unit/scene/SceneSourceTests.cpp)
+add_executable(HoroSceneSourceTests
+        unit/scene/SceneSourceTests.cpp
+        unit/scene/CharacterSceneSourceTests.cpp
+)
 target_compile_features(HoroSceneSourceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneSourceTests PRIVATE HoroEngine::SceneSource Catch2::Catch2WithMain)
 catch_discover_tests(HoroSceneSourceTests TEST_PREFIX "HoroSceneSourceTests::"
@@ -3803,6 +3867,7 @@ add_executable(HoroRuntimeSceneTests
         unit/runtime/scene/AudioSceneExtractionTests.cpp
         unit/runtime/scene/NavigationSceneComponentsTests.cpp
         unit/runtime/scene/NavigationSceneActivationTests.cpp
+        unit/runtime/scene/SceneInitialPlacementTests.cpp
         unit/runtime/scene/NavigationSceneLinkCaptureTests.cpp
         unit/runtime/scene/PhysicsSceneComponentsTests.cpp
         unit/runtime/scene/RuntimeSceneLifecycleTests.cpp

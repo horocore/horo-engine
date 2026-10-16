@@ -2,6 +2,7 @@
 
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
 namespace Horo::Application::Internal {
@@ -150,6 +151,27 @@ namespace Horo::Application::Internal {
         Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider &templates, Physics::PhysicsWorld *world,
         const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
         Character::CharacterWorld *character) {
+        return CreateServiceBacked(scenes, &templates, world, sceneGeneration, selection, components, character);
+    }
+
+    /** @copydoc GameplayWorldComposition::Create */
+    Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::Create(Runtime::RuntimeSceneService &scenes,
+                                                                                       Physics::PhysicsWorld *world,
+                                                                                       const std::uint64_t sceneGeneration,
+                                                                                       const GameplayWorldSelection &selection,
+                                                                                       Character::CharacterWorld *character) {
+        return CreateServiceBacked(scenes, nullptr, world, sceneGeneration, selection, nullptr, character);
+    }
+
+    /** @copydoc GameplayWorldComposition::CreateServiceBacked */
+    Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::CreateServiceBacked(
+        Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
+        const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
+        Character::CharacterWorld *character) {
+        if (selection.prefabPermission == GameplayPrefabPermission::Granted && templates == nullptr)
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(
+                MakeError(Prefab::PrefabErrors::AdmissionRejected,
+                          "This host selected no cooked prefab provider; a prefab grant cannot be activated."));
         const auto active = scenes.ActiveScene();
         if (!active || !selection.enabled || selection.moduleId.empty() || sceneGeneration == 0 ||
             (selection.nativeArtifact.empty() == selection.scriptSource.empty()))
@@ -172,7 +194,7 @@ namespace Horo::Application::Internal {
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(selectedCharacter.ErrorValue());
         composition->character_ = std::move(selectedCharacter).Value();
         if (selection.prefabPermission == GameplayPrefabPermission::Granted) {
-            composition->prefabs_ = std::make_unique<Prefab::PrefabSpawnService>(templates, scenes, components);
+            composition->prefabs_ = std::make_unique<Prefab::PrefabSpawnService>(*templates, scenes, components);
             auto admitted = composition->prefabs_->Acquire({selection.moduleId, active->RuntimeId(), true, true});
             if (admitted.HasError())
                 return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(admitted.ErrorValue());

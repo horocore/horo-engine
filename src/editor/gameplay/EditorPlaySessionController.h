@@ -5,6 +5,7 @@
  * @brief Isolated editor play-session state machine and runtime-scene ownership.
  */
 
+#include "EditorPlaySceneHost.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
@@ -31,7 +32,7 @@ namespace Horo::Editor {
         EditorPlaySessionState priorState{EditorPlaySessionState::Playing};
     };
 
-    /** @brief Owns a runtime clone and gameplay runner without mutating its authoring document. */
+    /** @brief Owns one isolated Scene service host and gameplay runner without mutating the authoring document. */
     class EditorPlaySessionController final {
     public:
         /** @brief Borrows optional host diagnostics for the complete Play controller lifetime.
@@ -43,22 +44,30 @@ namespace Horo::Editor {
             Stop();
         }
 
-        /** @brief Creates and starts an isolated runtime clone from one committed authoring snapshot. */
+        /** @brief Admits isolated Play preparation from one committed authoring snapshot.
+         * @param authoring Committed immutable document. @param registry Frozen registry outliving pending preparation and active Play.
+         * @param factory Explicit application composition; absence supports assetless private callers only.
+         * @param triggerBinding Exact conversion capture. @return Success for accepted preparation or typed rejection.
+         * @details Assetless preparation may finish immediately. Required assets retain Starting until owner update pumping completes.
+         */
         [[nodiscard]] Result<void> Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
-                                         std::unique_ptr<Runtime::RuntimeScene> preparedScene = nullptr,
+                                         const EditorPlaySceneFactory &factory = {},
                                          const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
         /**
          * @brief Creates and starts an isolated runtime clone after gating authored gameplay components against a module snapshot.
          * @param authoring Immutable committed authoring snapshot.
          * @param registry Frozen behavior registry for the active project generation.
          * @param components Frozen component descriptor registry for the active project generation.
-         * @param preparedScene Optional already-converted runtime clone.
+         * @param factory Explicit host composition; absence admits only assetless private callers with no optional native services.
          * @param triggerBinding Exact project capture used when conversion is required.
-         * @return Success or a typed Play-gate/conversion/runtime activation error.
+         * @return Accepted preparation or a typed Play-gate/conversion/runtime activation error.
+         * @pre Registry/module ownership outlives pending preparation and Play; reload waits until readiness.
+         * @details No normal-frame wait: presentation/fixed updates pump bounded Scene progress while Starting.
+         * Stop/failure cancels accepted work and closes its native admission before releasing the private Scene.
+
          */
         [[nodiscard]] Result<void> Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
-                                         const Gameplay::ComponentRegistry &components,
-                                         std::unique_ptr<Runtime::RuntimeScene> preparedScene = nullptr,
+                                         const Gameplay::ComponentRegistry &components, const EditorPlaySceneFactory &factory = {},
                                          const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
         /** @brief Pauses fixed simulation while leaving presentation active. */
         [[nodiscard]] Result<void> Pause();
@@ -99,22 +108,36 @@ namespace Horo::Editor {
 
         [[nodiscard]] EditorPlaySessionState State() const noexcept;
         [[nodiscard]] bool IsActive() const noexcept;
-        [[nodiscard]] Runtime::RuntimeScene *Scene() noexcept;
-        [[nodiscard]] const Runtime::RuntimeScene *Scene() const noexcept;
+        /** @brief Borrows only a ready isolated Play Scene; pending/closed sessions expose no Scene.
+         * @return Read-only current view or absence. Never transfers mutable Scene ownership.
+         */
+        [[nodiscard]] std::optional<Runtime::RuntimeSceneView> SceneView() const noexcept;
+        /** @brief Borrows the actual Play host receipt synchronously; absence never implies no Physics. */
+        [[nodiscard]] std::optional<EditorSceneCollisionReceipt> CollisionReceipt() const noexcept;
         [[nodiscard]] const std::optional<Error> &LastError() const noexcept;
         [[nodiscard]] DocumentRevision AuthoringRevision() const noexcept;
 
     private:
+        /** @brief Acquires one configured owner and admits its asynchronous Scene preparation without waiting. */
+        [[nodiscard]] Result<void> BeginPreparation(Runtime::RuntimeSceneDefinition definition, const Gameplay::BehaviorRegistry &registry,
+                                                    const EditorPlaySceneFactory &factory);
+        /** @brief Advances only owned asynchronous Scene preparation and admits behaviors after readiness. */
+        [[nodiscard]] Result<void> AdvancePreparation();
+        /** @brief Commits the isolated Play host's queued commands after callbacks close and before native stepping. */
+        [[nodiscard]] Result<void> CommitSceneChanges();
         void Fail(Error error) noexcept;
 
         Application::NetworkDebuggerService *debugger_{};
         std::uint64_t diagnosticGeneration_{};
         EditorPlaySessionState state_{EditorPlaySessionState::Idle};
-        std::unique_ptr<Runtime::RuntimeScene> scene_;
+        std::unique_ptr<EditorPlaySceneHost> sceneHost_;
+        const Gameplay::BehaviorRegistry *pendingRegistry_{}; /**< Frozen module owner remains alive while Starting. */
+        CancellationSource preparationCancellation_;
+        std::uint64_t preparationFrame_{1};
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
         std::optional<Error> lastError_;
         DocumentRevision authoringRevision_{};
         bool stepPending_{false};
-        std::uint64_t nextRuntimeId_{1};
+        std::uint64_t nextRuntimeId_{EditorFirstPlayScene.value};
     };
 }  // namespace Horo::Editor

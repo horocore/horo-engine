@@ -107,6 +107,8 @@ namespace Horo::Runtime {
                 return false;
             if (components.aiController && AI::ValidateAiControllerComponent(*components.aiController).HasError())
                 return false;
+            if (components.characterController && ValidateCharacterControllerComponent(*components.characterController).HasError())
+                return false;
             if (!ValidBehaviors(components.behaviors) || !ValidGameplayComponents(components.gameplayComponents))
                 return false;
             return true;
@@ -132,6 +134,24 @@ namespace Horo::Runtime {
             std::vector<PhysicsSceneComponentView> physicsComponents;
             physicsComponents.reserve(entities.size());
             for (const RuntimeEntityDefinition &entity : entities) {
+                if (const auto &character = entity.components.characterController; character) {
+                    if ((entity.components.rigidBody && entity.components.rigidBody->id == character->id) ||
+                        std::ranges::any_of(entity.components.colliders,
+                                            [&](const auto &value) {
+                        return value.id == character->id;
+                    }) ||
+                        std::ranges::any_of(entity.components.physicsConstraints, [&](const auto &value) {
+                        return value.id == character->id;
+                    }))
+                        return Failure(SceneErrors::InvalidDefinition, "Character and Physics component identities collide on one object.");
+                    if (character->enabled && character->collision.excludedBody) {
+                        const auto &reference = *character->collision.excludedBody;
+                        const auto target = std::ranges::find(entities, reference.object, &RuntimeEntityDefinition::object);
+                        if (target == entities.end() || !target->components.rigidBody || !target->components.rigidBody->enabled ||
+                            target->components.rigidBody->body != reference.body)
+                            return Failure(SceneErrors::InvalidDefinition, "Character excluded body reference is absent or disabled.");
+                    }
+                }
                 physicsComponents.push_back({.owner = entity.object,
                                              .rigidBody = entity.components.rigidBody ? &*entity.components.rigidBody : nullptr,
                                              .colliders = entity.components.colliders,
@@ -317,6 +337,15 @@ namespace Horo::Runtime {
                 continue;
             const auto required = RequireAsset({entity.components.navigationSurface->definition, navMeshType.Value()});
             if (required.HasError())
+                return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
+        }
+
+        const auto materialType = Assets::AssetTypeId::Parse("core.physics_material");
+        for (const auto &entity : entities_) {
+            const auto &character = entity.components.characterController;
+            if (!character || !character->enabled || !character->collision.defaultMaterial)
+                continue;
+            if (auto required = RequireAsset({character->collision.defaultMaterial->material, materialType.Value()}); required.HasError())
                 return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
         }
 

@@ -518,6 +518,12 @@ namespace Horo::Editor {
         }
         m_draft.triggerVolume = m_baselines.size() == 1 ? primaryObject->components.triggerVolume : std::nullopt;
         m_draft.audioSource = m_baselines.size() == 1 ? primaryObject->components.audioSource : std::nullopt;
+        if (m_baselines.size() == 1)
+            ResetCharacterDraft(*primaryObject);
+        else {
+            m_draft.characterController.reset();
+            m_draft.characterBindings = {};
+        }
         ResetTransformDraft();
     }
 
