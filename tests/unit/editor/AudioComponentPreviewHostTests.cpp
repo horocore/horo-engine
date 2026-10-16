@@ -1,5 +1,7 @@
 #include "AudioPreviewHostTestSupport.h"
 
+#include <limits>
+
 namespace {
     using namespace Horo;
     using namespace Horo::Editor;
@@ -221,5 +223,149 @@ namespace {
         RequireOriginalError(*host.Snapshot().failure, failure);
         CHECK(capture->destroyed);
         CHECK(capture->idleControlRejections == 0);
+    }
+
+    TEST_CASE("Inspector rejects invalid registered source bytes before selecting output", "[audio][editor][preview][headless]") {
+        ClipProject project;
+        const ErrorCodeDescriptor *expected = &AudioComponentPreviewErrors::MissingAsset;
+        SECTION("missing source") {
+            REQUIRE(std::filesystem::remove(project.Source()));
+        }
+        SECTION("empty source") {
+            std::filesystem::resize_file(project.Source(), 0);
+        }
+        SECTION("source exceeds the owning 16 MiB admission ceiling") {
+            std::filesystem::resize_file(project.Source(), (16U << 20U) + 1U);
+        }
+        SECTION("malformed WAV has no format or sample chunks") {
+            const std::array<char, 12> bytes{'R', 'I', 'F', 'F', 4, 0, 0, 0, 'W', 'A', 'V', 'E'};
+            std::ofstream output{project.Source(), std::ios::binary | std::ios::trunc};
+            output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+            output.close();
+            REQUIRE(output.good());
+            expected = &Audio::AudioErrors::SourceInvalid;
+        }
+        std::size_t factories{};
+        EditorAudioPreviewHost host{[&](Audio::AudioRuntimeId owner) {
+            ++factories;
+            return MakeNullAudioPreviewOutput(owner);
+        }};
+        const auto rejected = host.Start(project.Request());
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().domain.Value() == expected->domain.Value());
+        CHECK(rejected.ErrorValue().code.Value() == expected->code.Value());
+        CHECK(factories == 0);
+        CHECK_FALSE(host.Snapshot().output);
+        REQUIRE(host.Snapshot().failure);
+        RequireOriginalError(*host.Snapshot().failure, rejected.ErrorValue());
+        CHECK(host.Pump().HasValue());
+        CHECK(factories == 0);
+    }
+
+    TEST_CASE("Inspector invalid request identity never replaces retained idle status or creates output",
+              "[audio][editor][preview][headless]") {
+        ClipProject project;
+        auto request = project.Request();
+        SECTION("missing workspace") {
+            request.workspace = {};
+        }
+        SECTION("zero revision") {
+            request.revision = 0;
+        }
+        SECTION("zero object") {
+            request.object = 0;
+        }
+        std::size_t factories{};
+        EditorAudioPreviewHost host{[&](Audio::AudioRuntimeId owner) {
+            ++factories;
+            return MakeNullAudioPreviewOutput(owner);
+        }};
+        const auto before = host.Snapshot();
+        const auto rejected = host.Start(request);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == AudioComponentPreviewErrors::Stale.code.Value());
+        const auto after = host.Snapshot();
+        CHECK(after.workspace == before.workspace);
+        CHECK(after.revision == before.revision);
+        CHECK(after.object == before.object);
+        CHECK_FALSE(after.failure);
+        CHECK_FALSE(after.output);
+        CHECK(factories == 0);
+    }
+
+    TEST_CASE("Inspector preserves canonical sound and playback validation before output selection", "[audio][editor][preview][headless]") {
+        ClipProject project;
+        auto request = project.Request();
+        const ErrorCodeDescriptor *expected = &Audio::AudioErrors::SoundDefinitionInvalid;
+        SECTION("unknown sound reference kind") {
+            request.source.sound.kind = static_cast<Audio::AudioSoundReferenceKind>(255);
+            expected = &Audio::AudioErrors::SoundReferenceInvalid;
+        }
+        SECTION("nonfinite authored gain") {
+            request.source.playback.gain = std::numeric_limits<float>::quiet_NaN();
+        }
+        SECTION("zero authored pitch") {
+            request.source.playback.pitch = 0;
+        }
+        std::size_t factories{};
+        EditorAudioPreviewHost host{[&](Audio::AudioRuntimeId owner) {
+            ++factories;
+            return MakeNullAudioPreviewOutput(owner);
+        }};
+        const auto rejected = host.Start(request);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().domain.Value() == expected->domain.Value());
+        CHECK(rejected.ErrorValue().code.Value() == expected->code.Value());
+        CHECK(factories == 0);
+        CHECK_FALSE(host.Snapshot().output);
+        REQUIRE(host.Snapshot().failure);
+        RequireOriginalError(*host.Snapshot().failure, rejected.ErrorValue());
+    }
+
+    TEST_CASE("Inspector factory failures preserve causes and reject incomplete driver ownership", "[audio][editor][preview][headless]") {
+        ClipProject project;
+        const auto capture = std::make_shared<OutputEvidence>();
+        const auto original = WithCause(MakeError(Audio::AudioErrors::BackendFailed, "Explicit output preparation failure"),
+                                        MakeError(Audio::AudioErrors::DeviceUnavailable, "Retained device cause"));
+        bool typedFailure{};
+        bool missingDriver{};
+        SECTION("original typed factory failure") {
+            typedFailure = true;
+        }
+        SECTION("successful tuple has no backend") {}
+        SECTION("real closed Null peer has no control driver") {
+            missingDriver = true;
+        }
+        std::size_t factories{};
+        EditorAudioPreviewHost host{[&](Audio::AudioRuntimeId owner) -> Result<EditorAudioPreviewBackend> {
+            ++factories;
+            if (typedFailure)
+                return Result<EditorAudioPreviewBackend>::Failure(original);
+            if (!missingDriver)
+                return Result<EditorAudioPreviewBackend>::Success({{}, [] {
+                    return Result<void>::Success();
+                }, {}});
+            auto result = ObservedOutput(capture)(owner);
+            REQUIRE(result.HasValue());
+            auto backend = std::move(result).Value();
+            backend.advanceControl = {};
+            return Result<EditorAudioPreviewBackend>::Success(std::move(backend));
+        }};
+        const auto rejected = host.Start(project.Request());
+        REQUIRE(rejected.HasError());
+        CHECK(factories == 1);
+        if (typedFailure)
+            RequireOriginalError(rejected.ErrorValue(), original);
+        else
+            CHECK(rejected.ErrorValue().code.Value() == AudioComponentPreviewErrors::ProviderUnavailable.code.Value());
+        REQUIRE(host.Snapshot().failure);
+        RequireOriginalError(*host.Snapshot().failure, rejected.ErrorValue());
+        CHECK_FALSE(host.Snapshot().output);
+        CHECK(capture->renderingBlocks == 0);
+        if (missingDriver) {
+            CHECK(capture->destroyed);
+            CHECK(capture->closedAtDestruction);
+        }
+        CHECK(host.Pump().HasValue());
     }
 }  // namespace

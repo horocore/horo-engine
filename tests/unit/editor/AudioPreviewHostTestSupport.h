@@ -141,6 +141,11 @@ namespace Horo::Editor::AudioPreviewTest {
         Assets::AssetId workspace = Assets::AssetId::Parse("22222222-2222-4222-8222-222222222222").Value();
         ClipProject();
 
+        /** @brief Returns the exact registered native fixture path without narrowing its non-ASCII UTF-8 spelling. */
+        std::filesystem::path Source() const {
+            return root / std::filesystem::path{u8"Assets/çok ses/tone.wav"};
+        }
+
         ~ClipProject() {
             std::error_code error;
             std::filesystem::remove_all(root, error);
@@ -162,7 +167,7 @@ namespace Horo::Editor::AudioPreviewTest {
     };
 
     inline ClipProject::ClipProject() {
-        const std::filesystem::path nativeSource{u8"Assets/çok ses/tone.wav"};
+        const auto nativeSource = Source().lexically_relative(root);
         std::filesystem::create_directories(root / nativeSource.parent_path());
         const auto utf8 = nativeSource.generic_u8string();
         std::string source;
