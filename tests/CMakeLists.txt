@@ -849,6 +849,26 @@ target_link_libraries(HoroAITaskSchedulerTests PRIVATE HoroEngine::AISceneIntegr
 target_include_directories(HoroAITaskSchedulerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")
 
+# Owning lifecycle qualification needs only this existing private state contract.
+# Stage the exact header closure into a non-installed build interface; never expose a src root or add a public test hook.
+set(horo_ai_qualification_internal_dir "${CMAKE_CURRENT_BINARY_DIR}/internal/ai-foundation-qualification")
+file(MAKE_DIRECTORY "${horo_ai_qualification_internal_dir}")
+configure_file("${PROJECT_SOURCE_DIR}/src/runtime/ai/integration/AISceneRuntimeDetail.h"
+        "${horo_ai_qualification_internal_dir}/AISceneRuntimeDetail.h" COPYONLY)
+add_library(HoroAISceneQualificationInternal INTERFACE)
+target_include_directories(HoroAISceneQualificationInternal INTERFACE
+        "$<BUILD_INTERFACE:${horo_ai_qualification_internal_dir}>")
+target_link_libraries(HoroAISceneQualificationInternal INTERFACE HoroEngine::AISceneIntegration)
+add_executable(HoroAIFoundationQualificationTests
+        support/AllocationProbe.cpp
+        unit/runtime/ai/AIFoundationLifecycleQualificationTests.cpp
+        unit/runtime/ai/AIFoundationObserverQualificationTests.cpp
+)
+target_compile_features(HoroAIFoundationQualificationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAIFoundationQualificationTests PRIVATE HoroAISceneQualificationInternal)
+target_include_directories(HoroAIFoundationQualificationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
+horo_register_catch_test(HoroAIFoundationQualificationTests LABELS "unit;ai;headless;qualification")
+
 add_executable(HoroAITaskSchedulerPublicConsumer support/AITaskSchedulerPublicConsumer.cpp)
 target_compile_features(HoroAITaskSchedulerPublicConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroAITaskSchedulerPublicConsumer PRIVATE HoroEngine::AISceneIntegration)

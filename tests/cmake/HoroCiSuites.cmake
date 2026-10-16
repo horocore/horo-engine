@@ -53,6 +53,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroLightCullingTests
     HoroLightFramePoolTests
     HoroAITaskSchedulerTests
+    HoroAIFoundationQualificationTests
     HoroAITaskSchedulerPublicConsumer
     HoroGameplayAiTests
     HoroGameplayAiContractConsumer
