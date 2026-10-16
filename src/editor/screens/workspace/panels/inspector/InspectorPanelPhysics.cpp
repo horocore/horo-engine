@@ -99,12 +99,38 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc InspectorPanel::DrawAddPhysicsComponents */
+    void InspectorPanel::DrawAddPhysicsComponents(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
+                                                  const EditorGuiContext &context) {
+        using namespace PhysicsInspectorWidgets;
+        const bool canEdit = viewModel.physicsContext.canEdit && !object.effectivelyLocked;
+        const auto item = [&](const char *key, const char *id, bool available) {
+            const auto label = std::string{Label(context, key)} + id;
+            return Ui::ContextMenuItem(label.c_str(), nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, {},
+                                       canEdit && available);
+        };
+        Ui::ContextMenuSeparator();
+        if (!canEdit)
+            Ui::Hint(Label(context, "workspace.physics.unavailable"), context.theme.fonts);
+        if (item("workspace.physics.add_body", "###inspector_physics_body", !m_physicsSession.body))
+            m_physicsSession.AddBody();
+        if (item("workspace.physics.add_collider", "###inspector_physics_collider",
+                 m_physicsSession.colliders.size() < Runtime::MaximumPhysicsCollidersPerBody))
+            m_physicsSession.AddCollider();
+        if (item("workspace.physics.add_constraint", "###inspector_physics_constraint",
+                 m_physicsSession.constraints.size() < Runtime::MaximumPhysicsConstraintsPerObject))
+            m_physicsSession.AddConstraint();
+    }
+
     /** @copydoc InspectorPanel::DrawPhysicsInspector */
     void InspectorPanel::DrawPhysicsInspector(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
                                               EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         using namespace PhysicsInspectorWidgets;
         if (m_physicsSession.Begin(object, viewModel.physicsContext, viewModel.physicsSelectionRevision))
             m_physicsInputError = false;
+        // Absent components use the normal add-component route. A dirty empty draft still needs Apply/Cancel for removal.
+        if (!m_physicsSession.body && m_physicsSession.colliders.empty() && m_physicsSession.constraints.empty() && !m_physicsSession.dirty)
+            return;
         Ui::FieldLabel(Label(context, "workspace.physics.title"), context.theme.fonts);
         Ui::Hint(Label(context, "workspace.physics.authoring_only"), context.theme.fonts);
         Stable(context, "workspace.physics.object_id", object.id.value);

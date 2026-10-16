@@ -1,4 +1,5 @@
 #include "EditorActivityPackageSupport.h"
+#include "GameplayRetirementTestSupport.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
@@ -15,6 +16,7 @@
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "SecurityTestSupport.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/update/UpdateExperienceSession.h"
@@ -24,6 +26,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <future>
 #include <memory>
 #include <thread>
 #include <type_traits>
@@ -40,6 +43,8 @@ namespace {
         int enters = 0;
         int leaves = 0;
         int destructions = 0;
+        GuiScreenHost *closeFromUpdate{};
+        bool closeCallbackStayedAlive{};
     };
 
     class RecordingScreen final : public GuiScreen {
@@ -65,7 +70,12 @@ namespace {
         }
 
         void OnUpdate(float) override {
-            // Lifecycle-only screen: it owns no frame-updated model.
+            if (stats_.closeFromUpdate) {
+                auto &stats = stats_;
+                auto *host = std::exchange(stats.closeFromUpdate, nullptr);
+                (void)host->RequestCloseApplication();
+                stats.closeCallbackStayedAlive = stats.leaves == 0 && stats.destructions == 0;
+            }
         }
 
         void Draw(const GuiContentRegion &) override {
@@ -279,6 +289,53 @@ namespace {
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
+    void CheckCallbackClose(GuiScreenHost &host, ScreenStats &stats) {
+        stats.closeFromUpdate = &host;
+        host.OnUpdate(0.0F);
+        CHECK(stats.closeCallbackStayedAlive);
+        CHECK(host.IsApplicationCloseRequested());
+        CHECK(stats.leaves == 1);
+        CHECK(stats.destructions == 1);
+    }
+
+    void CheckNativeCallbackClose(GuiScreenHost &host, ScreenStats &stats) {
+        Horo::Tests::NativeGameplayFailureControl native{2};
+        auto queue = host.GameplayRetirements();
+        auto reserved = queue->Reserve();
+        REQUIRE(reserved.HasValue());
+        Gameplay::GameModuleHost loader;
+        auto loaded = loader.Load(HORO_TEST_GAME_MODULE_PATH, Horo::Tests::NativeRetirementExpectation());
+        REQUIRE(loaded.HasValue());
+        auto candidate = std::move(loaded).Value();
+        REQUIRE(candidate.diagnostic);
+        REQUIRE(native.callback);
+        auto admission = std::move(reserved).Value();
+        admission.Retain(std::move(candidate.owner));
+        CHECK(host.RequestCloseApplication().HasError());
+        CHECK_FALSE(host.IsApplicationCloseRequested());
+        CHECK(stats.leaves == 1);
+        CHECK(stats.destructions == 1);
+        CHECK(native.control.destroyed == 0);
+        std::async(std::launch::async, [callback = std::move(native.callback)]() mutable {
+            callback.reset();
+        }).get();
+        CHECK(native.control.destroyed == 0);
+        host.OnFixedUpdate(1, 1.0 / 60.0);
+        CHECK(host.IsApplicationCloseRequested());
+        CHECK(queue->Close().HasValue());
+        CHECK(native.control.destroyed == 1);
+    }
+
+    void CheckRetirementCloseAndShutdown(GuiScreenHost &host, ScreenStats &stats, JobSystem &jobs) {
+        SECTION("Application close requested inside a screen callback defers destruction") {
+            CheckCallbackClose(host, stats);
+        }
+        SECTION("Application close retains a failed native callback until its worker completes") {
+            CheckNativeCallbackClose(host, stats);
+        }
+        ShutdownAndCheckGuiScreenHost(host, stats, jobs);
+    }
+
     TEST_CASE("Gui Screen Host Registers Core Status And Shuts Down Safely", "[unit][editor]") {
         EngineDataBus engineEvents;
         EditorDataBus editorEvents;
@@ -330,7 +387,7 @@ namespace {
         SECTION("Closed settings does not stop discovery, automatic download, or install-on-exit") {
             CheckUpdatesAfterSettingsClose(host, modals, gui, settings, jobs);
         }
-        ShutdownAndCheckGuiScreenHost(host, stats, jobs);
+        CheckRetirementCloseAndShutdown(host, stats, jobs);
     }
 
 }  // namespace

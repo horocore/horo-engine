@@ -74,3 +74,20 @@ TEST_CASE("Physics Inspector exhausted local identities cannot leave a partial s
     CHECK(session.colliders.front().value == collider);
     CHECK_FALSE(session.dirty);
 }
+
+TEST_CASE("Physics Inspector authority revocation discards an unpublished creation draft", "[unit][editor][physics][inspector]") {
+    PhysicsInspectorSession session;
+    const SceneObject object{.id = {7}, .name = "Object"};
+    auto context = Context();
+    REQUIRE(session.Begin(object, context, 1));
+    session.AddBody();
+    REQUIRE(session.body);
+    context.canEdit = false;
+    CHECK(session.Begin(object, context, 1));
+    CHECK_FALSE(session.body);
+    CHECK(session.colliders.empty());
+    CHECK_FALSE(session.dirty);
+    context.canEdit = true;
+    CHECK(session.Begin(object, context, 1));
+    CHECK_FALSE(session.body);
+}

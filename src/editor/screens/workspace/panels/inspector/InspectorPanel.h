@@ -40,7 +40,10 @@ namespace Horo::Editor {
         void DrawComponentEditors(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
-                              const EditorGuiContext &context) const;
+                              const EditorGuiContext &context);
+        /** @brief Stages explicit Physics creation in the existing add-component route without document publication. */
+        void DrawAddPhysicsComponents(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
+                                      const EditorGuiContext &context);
 
         /** @brief Draw cached portable Physics drafts and submit only explicit complete gestures to the host. */
         void DrawPhysicsInspector(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,

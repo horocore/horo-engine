@@ -56,7 +56,7 @@ namespace Horo::Editor {
     bool PhysicsInspectorSession::Begin(const SceneObject &object, const SceneTransactionContext &context,
                                         const std::uint64_t selectionRevision) {
         if (object_ == object.id && context_.session == context.session && context_.revision == context.revision &&
-            context_.state == context.state && selectionRevision_ == selectionRevision)
+            context_.state == context.state && context_.canEdit == context.canEdit && selectionRevision_ == selectionRevision)
             return false;
         object_ = object.id;
         context_ = context;

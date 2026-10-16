@@ -72,6 +72,8 @@ namespace Horo::AI {
             std::size_t changedCount{};
             std::uint64_t revision{};
             std::size_t calls{};
+            const BlackboardWriteBatch *observedCommitBatch{};
+            bool writesAliveDuringPublication{};
             bool beginRejected{};
             bool commitRejected{};
             bool resetRejected{};
@@ -85,6 +87,10 @@ namespace Horo::AI {
         void Observe(void *context, const BlackboardNotificationBatch &notification) noexcept {
             auto &probe = *static_cast<ObserverProbe *>(context);
             ++probe.calls;
+            if (probe.observedCommitBatch)
+                probe.writesAliveDuringPublication = probe.observedCommitBatch->Binding().IsValid() &&
+                                                     probe.observedCommitBatch->BaseRevision() != 0 &&
+                                                     !probe.observedCommitBatch->Writes().empty();
             probe.revision = notification.Revision();
             probe.changedCount = notification.Changes().size();
             std::ranges::copy(notification.Changes(), probe.changes.begin());
@@ -104,6 +110,14 @@ namespace Horo::AI {
             probe.teardownRejected = isReentrant(probe.instance->TeardownAtBlackboardSync());
         }
 
+        /** @brief Verifies every terminal commit consumes the candidate and prevents later staging. */
+        void CheckConsumed(BlackboardWriteBatch &batch) {
+            CHECK_FALSE(batch.Binding().IsValid());
+            CHECK(batch.BaseRevision() == 0);
+            CHECK(batch.Writes().empty());
+            ExpectError(batch.Stage({MakeIdentity<BlackboardKeyId>(1), Bool(true)}), AIErrors::BlackboardBatchInvalid);
+        }
+
         /** @brief Stages and commits true values for the requested test keys. */
         void CommitTrueValues(BlackboardInstance &instance, std::initializer_list<std::uint64_t> keyIds) {
             auto batch = instance.BeginWriteBatch().Value();
@@ -112,6 +126,24 @@ namespace Horo::AI {
             REQUIRE(instance.CommitAtBlackboardSync(std::move(batch)).HasValue());
         }
     }  // namespace
+
+    TEST_CASE("Blackboard consumption keeps staged writes alive through observer publication then invalidates the batch",
+              "[unit][ai][blackboard-instance][blackboard-observer]") {
+        auto instance = Instance(Schema({Key(1, BlackboardValueKind::Boolean)}));
+        auto batch = instance->BeginWriteBatch().Value();
+        REQUIRE(batch.Stage({MakeIdentity<BlackboardKeyId>(1), Bool(true)}).HasValue());
+        ObserverProbe probe{.observedCommitBatch = &batch};
+        const BlackboardObserverRegistration observer{instance->Snapshot().Value().Binding().agent, Task(),
+                                                      MakeIdentity<BlackboardKeyId>(1), Observe, &probe};
+        REQUIRE(instance->RegisterObserverAtBlackboardSync(observer).HasValue());
+        const auto committed = instance->CommitAtBlackboardSync(std::move(batch));
+        REQUIRE(committed.HasValue());
+        CHECK(probe.calls == 1);
+        CHECK(probe.writesAliveDuringPublication);
+        CHECK(committed.Value().revision == 2);
+        CHECK(instance->Snapshot().Value().Read(MakeIdentity<BlackboardKeyId>(1)).Value() == std::optional{Bool(true)});
+        CheckConsumed(batch);
+    }
 
     TEST_CASE("Blackboard instance materializes typed schema defaults", "[unit][ai][blackboard-instance]") {
         auto schema = Schema({Key(2, BlackboardValueKind::Boolean, Bool(true)), Key(1, BlackboardValueKind::SignedInteger, Integer(9))});
@@ -155,6 +187,7 @@ namespace Horo::AI {
         REQUIRE(batch.Stage({MakeIdentity<BlackboardKeyId>(1), Bool(true)}).HasValue());
         auto committed = instance->CommitAtBlackboardSync(std::move(batch));
         REQUIRE(committed.HasValue());
+        CheckConsumed(batch);
         CHECK(committed.Value().revision == 2);
         CHECK(std::ranges::equal(committed.Value().Changes(),
                                  std::array{MakeIdentity<BlackboardKeyId>(1), MakeIdentity<BlackboardKeyId>(3)}));
@@ -166,8 +199,13 @@ namespace Horo::AI {
         auto before = instance->Snapshot().Value();
         auto batch = instance->BeginWriteBatch().Value();
         REQUIRE(batch.Stage({MakeIdentity<BlackboardKeyId>(1), Bool(true)}).HasValue());
-        REQUIRE(batch.Stage({MakeIdentity<BlackboardKeyId>(2), Bool(true)}).HasValue());
+        auto authorization = std::make_shared<BlackboardValueAuthorization>();
+        std::weak_ptr<const BlackboardValueAuthorization> retained = authorization;
+        REQUIRE(batch.Stage({MakeIdentity<BlackboardKeyId>(2), Bool(true), authorization}).HasValue());
+        authorization.reset();
         ExpectError(instance->CommitAtBlackboardSync(std::move(batch)), AIErrors::BlackboardValueTypeMismatch);
+        CHECK(retained.expired());
+        CheckConsumed(batch);
         CHECK(before.Revision().Value() == 1);
         CHECK(before.Read(MakeIdentity<BlackboardKeyId>(1)).Value() == std::optional{Bool(false)});
     }
@@ -193,6 +231,24 @@ namespace Horo::AI {
         REQUIRE(winner.Stage({MakeIdentity<BlackboardKeyId>(1), Bool(false)}).HasValue());
         REQUIRE(instance->CommitAtBlackboardSync(std::move(winner)).HasValue());
         ExpectError(instance->CommitAtBlackboardSync(std::move(stale)), AIErrors::BlackboardInstanceStale);
+        CheckConsumed(stale);
+    }
+
+    TEST_CASE("Rejected stale Blackboard consumption releases authorization before caller batch destruction",
+              "[unit][ai][blackboard-instance]") {
+        auto instance = Instance(Schema({Key(1, BlackboardValueKind::Boolean)}));
+        auto stale = instance->BeginWriteBatch().Value();
+        auto authorization = std::make_shared<BlackboardValueAuthorization>();
+        std::weak_ptr<const BlackboardValueAuthorization> retained = authorization;
+        REQUIRE(stale.Stage({MakeIdentity<BlackboardKeyId>(1), Bool(false), authorization}).HasValue());
+        authorization.reset();
+        REQUIRE_FALSE(retained.expired());
+        CommitTrueValues(*instance, {1});
+        ExpectError(instance->CommitAtBlackboardSync(std::move(stale)), AIErrors::BlackboardInstanceStale);
+        // stale remains in this scope: consumption, not its eventual destructor, must release the lease.
+        CHECK(retained.expired());
+        CheckConsumed(stale);
+        CHECK(instance->Snapshot().Value().Read(MakeIdentity<BlackboardKeyId>(1)).Value() == std::optional{Bool(true)});
     }
 
     TEST_CASE("Blackboard batch enforces exact and one-over write capacity", "[unit][ai][blackboard-instance]") {
@@ -413,6 +469,8 @@ namespace Horo::AI {
         CHECK(probe.calls == 1);
         CHECK(probe.beginRejected);
         CHECK(probe.commitRejected);
+        REQUIRE(probe.pendingBatch.has_value());
+        CheckConsumed(*probe.pendingBatch);
         CHECK(probe.resetRejected);
         CHECK(probe.registrationRejected);
         CHECK(probe.removalRejected);

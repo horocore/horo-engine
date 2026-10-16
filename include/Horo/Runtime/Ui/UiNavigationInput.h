@@ -103,6 +103,16 @@ namespace Horo::Runtime::Ui {
         void Suspend() noexcept;
         /** @brief Idempotently closes adapter admission without invoking any borrowed owner. */
         void Shutdown() noexcept;
+        /** @brief Borrows this adapter's actual focus/player/layer source fencing; no input authority is transferred.
+         * @return Last admitted owner, retained after shutdown as historical evidence.
+         */
+        [[nodiscard]] const UiFocusOwnerContext &Owner() const noexcept;
+        /** @brief Returns the explicitly configured canonical Input player, distinct from UiFocusPlayerId.
+         * @return Input assignment captured at composition; never inferred from the UI player handle.
+         */
+        [[nodiscard]] std::optional<Input::PlayerId> Player() const noexcept;
+        /** @brief Reports explicit adapter shutdown. @return True after explicit Shutdown. */
+        [[nodiscard]] bool IsStopped() const noexcept;
         /** @brief Returns an immutable copied glyph/modality projection. @return Current presentation evidence. */
         [[nodiscard]] UiInputPresentation Presentation() const noexcept;
 

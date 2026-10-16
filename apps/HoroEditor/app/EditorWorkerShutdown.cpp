@@ -3,6 +3,7 @@
 #include "Horo/Application/ShaderBuildService.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "PackageProjectHost.h"
 
 #include <cstdio>
@@ -28,6 +29,8 @@ namespace Horo::Editor {
             screens_->Shutdown();
         shaderBuild_.Shutdown();
         jobs_.Shutdown(ShutdownPolicy::Cancel);
+        if (screens_ != nullptr)
+            (void)screens_->GameplayRetirements()->Close();
         if (packages_) {
             try {
                 if (packages_->Close().HasError())

@@ -155,7 +155,7 @@ namespace Horo::Editor {
         StopCameraCutPreview();
         LOG_INFO("editor.play_session", "Beginning play session for '%s'...", m_viewModel.projectRoot.c_str());
         if (m_gameplayRegistry == nullptr)
-            m_gameplayRegistry = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot);
+            m_gameplayRegistry = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot, m_gameplayRetirements);
         if (m_gameplayRegistry->HasBlockingDiagnostics()) {
             const std::string diagMsg = m_gameplayRegistry->Diagnostics().front().error.message;
             LOG_ERROR("editor.play_session", "Play session blocked by gameplay diagnostic: %s", diagMsg.c_str());

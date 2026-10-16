@@ -109,7 +109,7 @@ namespace Horo::Editor {
     }
 
     void InspectorPanel::DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
-                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const {
+                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         const std::string addComponentLabel =
             "+  " + context.localization.Get("editor", "workspace.inspector.add_component") + "###InspectorAddComponent";
         ImGui::PushStyleColor(ImGuiCol_Border, Theme::Accent());
@@ -128,6 +128,7 @@ namespace Horo::Editor {
 
         if (Ui::BeginMenuPopup("AddComponentPopup")) {
             DrawAddComponentMenuItems(object, viewModel, command, context);
+            DrawAddPhysicsComponents(object, viewModel, context);
             Ui::EndMenuPopup();
         }
     }

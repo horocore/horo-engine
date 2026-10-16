@@ -30,6 +30,15 @@ Text parsing occurs on input changes; the complete candidate is assembled only
 for an explicit Apply gesture. Discard/Escape restores the captured baseline;
 cancellation wins over Apply in the same frame.
 
+An ordinary non-Physics selection keeps the generic **Add Component** route visible;
+it does not render an empty Physics form ahead of that action. The existing popup
+stages an explicitly chosen body/collider/constraint in the same transient session.
+Owned or staged components render their full cards, and a dirty empty removal draft
+retains Apply/Discard until resolved. No placeholder component or project identity
+is published merely by opening the popup. Permission revocation discards an
+unpublished draft even when the document/selection numeric revisions are unchanged;
+existing owned cards remain visible with their disabled-owner explanation.
+
 New body creation stages its body and initial box collider together. Collider and
 constraint additions are also staged. The author must supply actual project
 profile/material identities and valid endpoint references before Apply. Removal
