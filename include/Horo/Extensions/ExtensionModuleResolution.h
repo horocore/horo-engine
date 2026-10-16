@@ -102,7 +102,8 @@ namespace Horo::Extensions {
         [[nodiscard]] bool IsRequired() const noexcept;
 
     private:
-        friend Result<ExtensionModulePlan> ResolveExtensionModules(const ExtensionManifest &manifest, const ExtensionHostEnvironment &host);
+        friend Result<ExtensionModulePlan> ResolveExtensionModules(const ExtensionManifest &manifest, const ExtensionHostEnvironment &host,
+                                                                   std::span<const std::string> selectedModules);
 
         /** @brief Complete construction payload produced only by the validated module resolver. */
         struct Fields {
@@ -153,8 +154,10 @@ namespace Horo::Extensions {
      * @brief Resolves a fully parsed package manifest without loading code or mutating ambient state.
      * @param manifest Owned parsed package metadata whose module graph is resolved.
      * @param host Explicit host shape and compatibility facts; headless resolution excludes presentation-only modules.
+     * @param selectedModules Optional explicit role roots; compatibility is checked only for their dependency closure. Empty selects all.
      * @return A stable dependency-first plan, or a typed extension error naming every involved module.
      */
     [[nodiscard]] Result<ExtensionModulePlan> ResolveExtensionModules(const ExtensionManifest &manifest,
-                                                                      const ExtensionHostEnvironment &host);
+                                                                      const ExtensionHostEnvironment &host,
+                                                                      std::span<const std::string> selectedModules = {});
 }  // namespace Horo::Extensions

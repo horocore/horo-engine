@@ -151,6 +151,40 @@ namespace Horo::Runtime::Ui {
             return false;
         }
 
+        struct NavigationDecision final {
+            std::optional<std::size_t> target;
+            UiFocusChangeReason reason;
+            bool admitted{};
+        };
+
+        /** @brief Sole next-focus resolver, shared with read-only debugger edges. */
+        [[nodiscard]] NavigationDecision ResolveNavigation(UiNavigationDirection direction) const {
+            if (!focusedIndex.has_value())
+                return {ResolveInitial(), UiFocusChangeReason::Default, true};
+            const auto current = *focusedIndex;
+            if (current >= nodes.size() || !IsAllowed(current)) {
+                RestorationEntry recovery;
+                CollectPath(focusedIndex, recovery);
+                recovery.focused = {};
+                return {ResolveRestoration(recovery), UiFocusChangeReason::InvalidTarget, true};
+            }
+            const auto id = nodes[current].descriptor.links.Target(direction);
+            if (!id.IsValid()) {
+                const auto spatial = SpatialTarget(current, direction);
+                return {spatial, spatial.has_value() ? UiFocusChangeReason::Spatial : UiFocusChangeReason::InvalidTarget,
+                        spatial.has_value()};
+            }
+            if (const auto next = ResolveAllowed(id); next.has_value())
+                return {next, UiFocusChangeReason::Link, true};
+            if (const auto target = FindNode(id); target != InvalidIndex && !IsWithinModal(target))
+                return {{}, UiFocusChangeReason::InvalidTarget, false};
+            RestorationEntry recovery;
+            CollectPath(focusedIndex, recovery);
+            recovery.focused = {};
+            const auto next = ResolveRestoration(recovery);
+            return {next, UiFocusChangeReason::InvalidTarget, next.has_value()};
+        }
+
         [[nodiscard]] std::optional<UiFocusTarget> CurrentTarget() const noexcept {
             if (!focusedIndex.has_value() || *focusedIndex >= nodes.size())
                 return std::nullopt;

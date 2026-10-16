@@ -44,7 +44,8 @@ namespace Horo::Tests::CharacterIntegration {
             const GameplayWorldSelection selection{.moduleId = "game.tests",
                                                    .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
                                                    .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
-                                                   .physicsPermission = GameplayPhysicsPermission::Granted};
+                                                   .physicsPermission = GameplayPhysicsPermission::Granted,
+                                                   .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>()};
             gameplay = GameplayWorldComposition::Create(*scene, physics.get(), 1, selection).Value();
             CharacterWorldSettingsDescriptor settings;
             settings.capacities.maximumControllers = 1;

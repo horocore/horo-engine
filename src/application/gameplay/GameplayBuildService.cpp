@@ -361,18 +361,11 @@ namespace Horo::Application {
             return Result<std::filesystem::path>::Success(manifest["artifactPath"].get<std::string>());
         }
 
-        [[nodiscard]] Result<void> ValidateArtifactLoad(const std::filesystem::path &artifact, const std::filesystem::path &buildRoot,
-                                                        const nlohmann::json &manifest) {
+        [[nodiscard]] Result<void> ValidateArtifactLoad(const std::filesystem::path &artifact, const nlohmann::json &manifest) {
             Gameplay::GameModuleHost host;
-            auto loaded = host.LoadShadowCopy(artifact, buildRoot / "validation-shadow",
-                                              {.moduleId = manifest.value("moduleId", ""),
-                                               .buildFingerprint = Gameplay::CurrentGameplayBuildFingerprint(),
-                                               .descriptorRevision = manifest.value("descriptorRevision", std::uint64_t{0})});
-            if (loaded.HasError())
-                return Result<void>::Failure(loaded.ErrorValue());
-            std::unique_ptr<Gameplay::LoadedGameModule> validatedModule = std::move(loaded).Value();
-            validatedModule.reset();
-            return Result<void>::Success();
+            return host.ValidateArtifact(artifact, {.moduleId = manifest.value("moduleId", ""),
+                                                    .buildFingerprint = Gameplay::CurrentGameplayBuildFingerprint(),
+                                                    .descriptorRevision = manifest.value("descriptorRevision", std::uint64_t{0})});
         }
 
         struct PublishedArtifactIdentity {
@@ -497,7 +490,7 @@ namespace Horo::Application {
             Result<std::filesystem::path> artifact = ValidateCandidateManifest(manifest.Value());
             if (artifact.HasError())
                 return Result<void>::Failure(artifact.ErrorValue());
-            if (Result<void> loaded = ValidateArtifactLoad(artifact.Value(), buildRoot, manifest.Value()); loaded.HasError())
+            if (Result<void> loaded = ValidateArtifactLoad(artifact.Value(), manifest.Value()); loaded.HasError())
                 return loaded;
 
             Result<std::string> postHash = ComputeInputHash(session->request);

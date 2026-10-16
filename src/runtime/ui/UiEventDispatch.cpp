@@ -120,23 +120,52 @@ namespace Horo::Runtime::Ui {
             return tree.State() == UiElementTreeState::Active && tree.Revision() == source.tree;
         }
 
-        [[nodiscard]] Result<void> Invoke(const UiElementTree &tree, const UiEventRoute &source, const UiRoutedEvent &event,
-                                          UiEventHandler &handler, const UiElementHandle element, const UiEventPhase phase,
-                                          UiEventDispatchResult &result) const {
+        /** @brief Borrows one synchronous dispatch transaction; optional observation never owns or changes routing authority. */
+        struct DispatchContext final {
+            const UiElementTree &tree;
+            const UiEventRoute &source;
+            const UiRoutedEvent &event;
+            UiEventHandler &handler;
+            UiEventDispatchResult &result;
+            UiEventDispatchObservation *observation;
+        };
+
+        /** @brief Executes one phase against the exact admitted transaction and records only actual handler results. */
+        [[nodiscard]] Result<void> Invoke(const DispatchContext &context, const UiElementHandle element, const UiEventPhase phase) const {
+            const auto &[tree, source, event, handler, result, observation] = context;
             if (!RouteStillCurrent(tree, source))
                 return Result<void>::Failure(DispatchError(UiErrors::EventDispatchRouteInvalidated));
+            UiEventPhaseObservation *entry{};
+            if (observation) {
+                if (observation->written < observation->phases.size()) {
+                    entry = &observation->phases[observation->written++];
+                    *entry = {element, phase, {}, false, false};
+                } else
+                    ++observation->omitted;
+            }
             std::optional<Result<UiEventResponse>> response;
             try {
                 response.emplace(handler.Handle(element, phase, event));
             } catch (...) {
+                if (entry)
+                    entry->failed = true;
                 return Result<void>::Failure(DispatchError(UiErrors::EventDispatchHandlerFailed));
             }
-            if (response->HasError())
+            if (response->HasError()) {
+                if (entry)
+                    entry->failed = true;
                 return Result<void>::Failure(response->ErrorValue());
+            }
+            if (entry) {
+                entry->response = response->Value();
+                entry->responded = true;
+            }
             ++result.phasesVisited;
             result.handled = result.handled || response->Value().handled;
             result.defaultPrevented = result.defaultPrevented || response->Value().preventDefault;
             result.propagationStopped = response->Value().stopPropagation;
+            if (observation)
+                observation->partial = result;
             return RouteStillCurrent(tree, source) ? Result<void>::Success()
                                                    : Result<void>::Failure(DispatchError(UiErrors::EventDispatchRouteInvalidated));
         }
@@ -150,6 +179,34 @@ namespace Horo::Runtime::Ui {
             } catch (...) {
                 return Result<void>::Failure(DispatchError(UiErrors::EventDispatchHandlerFailed));
             }
+        }
+
+        /** @brief Runs capture/target/bubble/default in canonical order under the caller-held reentrancy guard. */
+        [[nodiscard]] Result<UiEventDispatchResult> DispatchRoute(const DispatchContext &context) const {
+            const auto &[tree, source, event, handler, result, observation] = context;
+            for (std::size_t index = route.size(); index > 1 && !result.propagationStopped; --index)
+                if (const auto invoked = Invoke(context, route[index - 1], UiEventPhase::Capture); invoked.HasError())
+                    return Result<UiEventDispatchResult>::Failure(invoked.ErrorValue());
+            if (!result.propagationStopped)
+                if (const auto invoked = Invoke(context, route.front(), UiEventPhase::Target); invoked.HasError())
+                    return Result<UiEventDispatchResult>::Failure(invoked.ErrorValue());
+            for (std::size_t index = 1; index < route.size() && !result.propagationStopped; ++index)
+                if (const auto invoked = Invoke(context, route[index], UiEventPhase::Bubble); invoked.HasError())
+                    return Result<UiEventDispatchResult>::Failure(invoked.ErrorValue());
+
+            if (!result.defaultPrevented) {
+                if (observation)
+                    observation->defaultAttempted = true;
+                if (const auto applied = ApplyDefault(tree, source, event, handler); applied.HasError()) {
+                    if (observation)
+                        observation->defaultFailed = true;
+                    return Result<UiEventDispatchResult>::Failure(applied.ErrorValue());
+                }
+                result.defaultApplied = true;
+                if (observation)
+                    observation->partial = result;
+            }
+            return Result<UiEventDispatchResult>::Success(result);
         }
     };
 
@@ -187,6 +244,25 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiEventDispatcher::Dispatch */
     Result<UiEventDispatchResult> UiEventDispatcher::Dispatch(const UiElementTree &tree, const UiEventRoute &route,
                                                               const UiRoutedEvent &event, UiEventHandler &handler) {
+        return DispatchObserved(tree, route, event, handler, nullptr);
+    }
+
+    /** @copydoc UiEventDispatcher::Dispatch */
+    Result<UiEventDispatchResult> UiEventDispatcher::Dispatch(const UiElementTree &tree, const UiEventRoute &route,
+                                                              const UiRoutedEvent &event, UiEventHandler &handler,
+                                                              UiEventDispatchObservation &observation) {
+        observation.written = 0;
+        observation.omitted = 0;
+        observation.defaultAttempted = false;
+        observation.defaultFailed = false;
+        observation.partial = {};
+        return DispatchObserved(tree, route, event, handler, &observation);
+    }
+
+    /** @copydoc UiEventDispatcher::DispatchObserved */
+    Result<UiEventDispatchResult> UiEventDispatcher::DispatchObserved(const UiElementTree &tree, const UiEventRoute &route,
+                                                                      const UiRoutedEvent &event, UiEventHandler &handler,
+                                                                      UiEventDispatchObservation *observation) {
         if (!storage_ || storage_->state != UiEventDispatcherState::Active)
             return Result<UiEventDispatchResult>::Failure(DispatchError(UiErrors::EventDispatchLifecycleUnavailable));
         if (storage_->dispatching)
@@ -202,26 +278,7 @@ namespace Horo::Runtime::Ui {
 
         DispatchGuard guard{storage_->dispatching};
         UiEventDispatchResult result;
-        for (std::size_t index = storage_->route.size(); index > 1 && !result.propagationStopped; --index)
-            if (const auto invoked =
-                    storage_->Invoke(tree, route, event, handler, storage_->route[index - 1], UiEventPhase::Capture, result);
-                invoked.HasError())
-                return Result<UiEventDispatchResult>::Failure(invoked.ErrorValue());
-        if (!result.propagationStopped)
-            if (const auto invoked = storage_->Invoke(tree, route, event, handler, storage_->route.front(), UiEventPhase::Target, result);
-                invoked.HasError())
-                return Result<UiEventDispatchResult>::Failure(invoked.ErrorValue());
-        for (std::size_t index = 1; index < storage_->route.size() && !result.propagationStopped; ++index)
-            if (const auto invoked = storage_->Invoke(tree, route, event, handler, storage_->route[index], UiEventPhase::Bubble, result);
-                invoked.HasError())
-                return Result<UiEventDispatchResult>::Failure(invoked.ErrorValue());
-
-        if (!result.defaultPrevented) {
-            if (const auto applied = storage_->ApplyDefault(tree, route, event, handler); applied.HasError())
-                return Result<UiEventDispatchResult>::Failure(applied.ErrorValue());
-            result.defaultApplied = true;
-        }
-        return Result<UiEventDispatchResult>::Success(result);
+        return storage_->DispatchRoute({tree, route, event, handler, result, observation});
     }
 
     /** @copydoc UiEventDispatcher::BeginRetirement */

@@ -1323,6 +1323,42 @@ dependency-neutral scalar projections used only as evidence and never establish
 new identity authority. The operation `Error` remains control-flow authority. A
 diagnostic record is inert and owns no log sink, store, renderer or runtime state.
 
+### Optional input debugger
+
+`HoroRuntimeUiInput` owns `UiInputDebugger`, an explicitly composed observer of
+actual targeting, routed event dispatch, focus navigation, pointer capture and
+canonical Input modality. It uses the existing `UiDiagnostics` error vocabulary;
+operation `Result`/`Error` values remain authoritative and are returned unchanged.
+It does not register a service, invoke callbacks independently, select a renderer,
+or mutate focus/capture/input state for inspection.
+
+Creation requires an active `UiFocusGraph` matching the exact instance, canvas,
+document, player/layer and revision scope. History capacities are fixed before
+frame execution. Capture is disabled initially. Successful observation uses only
+preallocated rows and shared immutable leases. Retaining every history slot drops
+new evidence without delaying or changing actual input. Candidate and phase row
+truncation is explicit and never truncates targeting or propagation. Work is bounded
+by the underlying declared element/route/capture limits; optional candidate capture
+scans the full bounded paint list instead of stopping at the first hit.
+
+The projection is usable by a host overlay, timeline or focus graph: it contains
+actual local target rectangles, inverse transforms, clip rectangles, hit slop and
+selection/exclusion decisions; ordered callback attempts and response/default
+outcomes; focus/modal and resolved navigation edges; active capture routes and
+canonical Input player/modality evidence. It retains neither a renderer nor a
+callback, Input context token, capture release token, platform object or owner.
+The host chooses how to draw it. Snapshot spans require a live snapshot lease;
+leases remain immutable across reload and owner shutdown/destruction.
+
+All owner operations and debugger controls are serialized on the creating thread.
+Foreign-scope or disabled observation forwards ordinary targeting/dispatch without
+recording. State capture rejects stale scope rather than fabricating a projection.
+`Rebind` requires a real current focus owner in the same static scope and refuses
+revision rollback; new instances/player scopes require a new debugger. Reloaded
+history retains its original lineage. Destroying/moving the debugger or borrowed
+owners during synchronous callbacks is forbidden; shutdown occurs outside calls.
+See [input debugger integration](../../guides/runtime-ui-input-debugger.md).
+
 ## Testing
 
 Required tests cover:

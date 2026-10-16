@@ -81,6 +81,8 @@ namespace Horo::Editor {
           m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
           m_playSession(dependencies.networkDebugger) {
+        if (dependencies.gameplayRetirements)
+            m_gameplayRetirements = dependencies.gameplayRetirements;
         if (dependencies.engineEvents != nullptr) {
             m_engineEventBridge = std::make_unique<EditorEngineEventBridge>(*dependencies.engineEvents, m_dataBus);
             m_engineEventBridge->Attach();
@@ -109,7 +111,7 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.project_validator", "Project integrity repair failed for '%s': %s", absoluteProjectRoot.string().c_str(),
                           repaired.ErrorValue().message.c_str());
         }
-        m_gameplayRegistry = ProjectGameplayRegistry::Discover(absoluteProjectRoot);
+        m_gameplayRegistry = ProjectGameplayRegistry::Discover(absoluteProjectRoot, m_gameplayRetirements);
         for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->Diagnostics())
             LOG_ERROR("editor.gameplay", "Gameplay source '%s' is invalid: %s", diagnostic.source.string().c_str(),
                       diagnostic.error.message.c_str());
@@ -246,6 +248,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::UpdateGameplaySources(const float elapsedSeconds) {
+        (void)m_gameplayRetirements->Drain();
         UpdateGameplayBuild(elapsedSeconds);
         if (m_nativeGameplayReloadQuarantined || m_gameplayRegistry == nullptr || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F)
             return;
@@ -262,7 +265,8 @@ namespace Horo::Editor {
             m_nativeGameplayReloadPending = true;
             return;
         }
-        std::unique_ptr<ProjectGameplayRegistry> candidate = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot);
+        std::unique_ptr<ProjectGameplayRegistry> candidate =
+            ProjectGameplayRegistry::Discover(m_viewModel.projectRoot, m_gameplayRetirements);
         if (candidate->HasBlockingDiagnostics()) {
             for (const ProjectGameplayDiagnostic &diagnostic : candidate->Diagnostics())
                 LOG_ERROR("editor.gameplay", "Native reload kept the last working module for '%s': %s", diagnostic.source.string().c_str(),

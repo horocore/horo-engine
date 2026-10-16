@@ -301,3 +301,27 @@ namespace Horo::Extensions::Tests {
         RequireResolutionError(ResolveExtensionModules(manifest, Host()), "compatibility authority cannot compete");
     }
 }  // namespace Horo::Extensions::Tests
+
+namespace Horo::Extensions::Tests {
+    TEST_CASE("Explicit module roots isolate optional incompatibility and retain required dependencies",
+              "[Extensions][Resolution][Hybrid]") {
+        auto backend = Module("com.example.backend", ExtensionModuleRole::BackendCapability);
+        auto script = Module("com.example.script", ExtensionModuleRole::ScriptProvider);
+        script.dependencies = {backend.id};
+        auto gui = Module("com.example.gui", ExtensionModuleRole::EditorPresentation);
+        gui.abi = ExtensionAbiRequirement{99, 0};
+        gui.imports = {{"com.example.missing", "com.example.absent", "com.example.contract", "1.0.0", true}};
+        ExtensionManifest manifest;
+        manifest.id = "com.example.hybrid";
+        manifest.modules = {gui, script, backend};
+        const std::array selected{script.id};
+        const auto healthy = ResolveExtensionModules(manifest, Host(), selected);
+        REQUIRE(healthy.HasValue());
+        CHECK(healthy.Value().moduleIds == std::vector<std::string>{backend.id, script.id});
+        CHECK(ResolveExtensionModules(manifest, Host()).HasError());
+        const std::array invalid{std::string{"missing.module"}};
+        CHECK(ResolveExtensionModules(manifest, Host(), invalid).HasError());
+        manifest.modules[2].abi = ExtensionAbiRequirement{99, 0};
+        CHECK(ResolveExtensionModules(manifest, Host(), selected).HasError());
+    }
+}  // namespace Horo::Extensions::Tests

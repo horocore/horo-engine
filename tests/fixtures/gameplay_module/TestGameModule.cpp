@@ -1,3 +1,4 @@
+#include "GameplayRetirementFixture.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
@@ -113,56 +114,6 @@ public:
 
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
 
-/** @brief Native behavior consumer of the same Character context and owned command used by scripts. */
-class CharacterClientBehavior final : public IBehaviorInstance {
-public:
-    static BehaviorDescriptor DescribeBehavior() {
-        BehaviorDescriptor descriptor;
-        descriptor.displayName = "Character Client";
-        descriptor.fields = {{"slot", std::int64_t{0}}, {"generation", std::int64_t{1}}};
-        descriptor.phases.push_back({BehaviorPhase::Gameplay, "game.tests.character_client", {}, {}, {}});
-        return descriptor;
-    }
-
-    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
-#if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
-        if (submitted_)
-            return;
-        const auto holder = context.CharacterContext();
-        if (!holder)
-            throw std::runtime_error("Native Character context is missing.");
-        const auto &binding = holder->Binding();
-        auto granted = holder->Acquire("game.tests", binding.scene, binding.sceneGeneration);
-        if (granted.HasError())
-            throw std::runtime_error(granted.ErrorValue().code.Value());
-        const auto identity = granted.Value().Identity();
-        Character::CharacterControllerHandle handle{identity.sceneGeneration, identity.world, {0, 1}};
-        for (const auto &field : context.Fields()) {
-            if (field.name == "slot")
-                handle.slot.index = static_cast<std::uint32_t>(std::get<std::int64_t>(field.value));
-            if (field.name == "generation")
-                handle.slot.generation = static_cast<std::uint32_t>(std::get<std::int64_t>(field.value));
-        }
-        auto queued = granted.Value().QueueMovementCommand(
-            {.controller = handle, .tick = 1, .sequence = 968, .desiredVelocityMetersPerSecond = Math::Vec3{1, 0, 0}});
-        if (queued.HasError())
-            throw std::runtime_error(queued.ErrorValue().code.Value());
-        auto transform = context.LocalTransform().Value();
-        transform.translation.x = 21;
-        if (context.SetLocalTransform(transform).HasError())
-            throw std::runtime_error("Native Character marker rejected.");
-        submitted_ = true;
-#else
-        static_cast<void>(context);
-        throw std::runtime_error("Character fixture requires the explicit Physics SDK component.");
-#endif
-    }
-
-private:
-    bool submitted_{};
-};
-HORO_BEHAVIOR(CharacterClientBehavior, "game.tests.character_client")
-
 #if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
 namespace {
     std::shared_ptr<const GameplayNavigationResult> navigationClientCompleted;
@@ -265,6 +216,8 @@ private:
 HORO_BEHAVIOR(PrefabSpawnerBehavior, "game.tests.prefab_spawner")
 
 namespace {
+    Tests::GameplayRetirementFixture *retirementFixture{};
+
     class DurableCandidate final : public IPreparedPersistenceState {
     public:
         DurableCandidate(std::vector<std::byte> &active, std::vector<std::byte> candidate)
@@ -390,7 +343,20 @@ namespace {
 
     class Module final : public IGameModule {
     public:
+        ~Module() override {
+            if (retirement_) {
+                ++retirement_->destroyed;
+                retirement_->destroyedOn = std::this_thread::get_id();
+            }
+        }
+
         Result<void> Register(GameRegistrationContext &context) override {
+            retirement_ = retirementFixture;
+            if (retirement_)
+                ++retirement_->registered;
+            events_ = &context.events;
+            if (retirement_ && retirement_->failPhase == 1)
+                return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed));
             if (auto registered = context.events.Register({90, 1, 91, 1, BorrowedCallbackContext{this}, &CompleteQuest});
                 registered.HasError())
                 return registered;
@@ -484,6 +450,22 @@ namespace {
         }
 
         Result<void> Start(GameRuntimeContext &context) override {
+            if (retirement_) {
+                ++retirement_->started;
+                retirement_->physics = context.physics;
+            }
+            if (retirement_ && (retirement_->failPhase == 2 || retirement_->failPhase == 5)) {
+                auto acquired = events_->Acquire(90, 1, 91, 1, context.cancellation);
+                if (acquired.HasError())
+                    return Result<void>::Failure(acquired.ErrorValue());
+                retirement_->publish(retirement_->callbackOwner, std::move(acquired).Value());
+                if (retirement_->failPhase == 5) {
+                    retirement_->armAllocationFailure(retirement_->allocationOwner);
+                    throw 5;
+                }
+                return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed));
+            }
+
 #if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
             if (context.navigation && !context.navigation->Binding().queryGranted)
                 return Result<void>::Failure(MakeError(NavigationCapabilityErrors::PermissionDenied));
@@ -536,10 +518,22 @@ namespace {
             // Module-owned holders drain at Stop; native image residency is not a resource lifetime boundary.
             retainedUiClient.reset();
 #endif
+            if (retirement_) {
+                ++retirement_->stopped;
+                if (retirement_->onStop)
+                    retirement_->onStop(retirement_->stopOwner);
+            }
             // The module host retires the registration-only fixture's services and descriptors.
         }
 
         Result<GameModuleReloadSnapshot> PrepareReload(GameRuntimeContext &context) override {
+            if (retirement_) {
+                ++retirement_->prepared;
+                if (retirement_->failPhase == 3)
+                    return IGameModule::PrepareReload(context);
+                if (retirement_->failPhase == 4)
+                    return Result<GameModuleReloadSnapshot>::Success({0, {}});
+            }
             if (!context.cancellation.IsCancellationRequested())
                 return Result<GameModuleReloadSnapshot>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired));
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
@@ -582,15 +576,23 @@ namespace {
             return Accepted;
         }
 
+        Tests::GameplayRetirementFixture *retirement_{};
+        GameEventRegistry *events_{};
         std::uint64_t completedQuests_{};
     };
 
 }  // namespace
 
 extern "C" HORO_GAME_EXPORT IGameModule *CreateGameModule() noexcept {
+    if (retirementFixture)
+        ++retirementFixture->created;
     return std::make_unique<Module>().release();
 }
 
 extern "C" HORO_GAME_EXPORT void DestroyGameModule(IGameModule *gameModule) noexcept {
     const std::unique_ptr<IGameModule> owned{gameModule};
+}
+
+extern "C" HORO_GAME_EXPORT void ConfigureGameplayRetirementFixture(Tests::GameplayRetirementFixture *control) noexcept {
+    retirementFixture = control;
 }
