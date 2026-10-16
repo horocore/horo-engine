@@ -550,6 +550,36 @@ namespace Horo::Runtime::Ui {
         return !storage_ || storage_->IsDrained();
     }
 
+    /** @copydoc UiPointerCaptureStore::Inspect */
+    Result<std::size_t> UiPointerCaptureStore::Inspect(const UiPointerCaptureContext &context,
+                                                       const std::span<UiPointerCaptureInspection> output) const {
+        if (!storage_ || storage_->lifecycle != UiPointerCaptureStoreState::Active)
+            return Failure<std::size_t>(UiErrors::PointerCaptureLifecycleUnavailable);
+        if (!context.IsValid())
+            return Failure<std::size_t>(UiErrors::PointerCaptureInvalid);
+        if (context.instance.ownership != storage_->ownership)
+            return Failure<std::size_t>(UiErrors::HandleOwnerMismatch);
+        const auto matches = [&](const auto &slot) {
+            const auto &r = slot.request;
+            return slot.state == Detail::CaptureSlotState::Active && r.context == context.context && r.view == context.view &&
+                   r.route.instance == context.instance && r.route.canvas == context.canvas && r.route.document == context.document;
+        };
+        std::size_t count{};
+        for (const auto &slot : storage_->slots)
+            if (matches(slot))
+                ++count;
+        if (count > output.size())
+            return Failure<std::size_t>(UiErrors::CapacityExceeded);
+        std::size_t index{};
+        for (const auto &slot : storage_->slots)
+            if (matches(slot)) {
+                const auto &r = slot.request;
+                output[index++] = {r.context, r.pointer, r.button,
+                                   r.view,    r.route,   r.route.tree == context.tree && r.route.interaction == context.interaction};
+            }
+        return Result<std::size_t>::Success(count);
+    }
+
     /** @copydoc UiPointerCaptureStore::ActiveCount */
     std::uint32_t UiPointerCaptureStore::ActiveCount() const noexcept {
         return storage_ ? storage_->ActiveCount() : 0;

@@ -295,6 +295,20 @@ target_include_directories(HoroRuntimeUiInputTests PRIVATE ${PROJECT_SOURCE_DIR}
 target_include_directories(HoroRuntimeUiInputTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiInputTests PRIVATE HoroEngine::RuntimeUiInput)
 horo_register_catch_test(HoroRuntimeUiInputTests LABELS "unit;input;runtime_ui;headless")
+add_executable(HoroRuntimeUiInputDebuggerTests
+        unit/runtime/input/UiInputDebuggerTests.cpp
+        unit/runtime/input/UiInputDebuggerLifecycleTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiInputDebuggerTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiInputDebuggerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiInputDebuggerTests PRIVATE HoroEngine::RuntimeUiInput)
+horo_register_catch_test(HoroRuntimeUiInputDebuggerTests LABELS "unit;input;runtime_ui;headless;lifecycle")
+add_executable(HoroRuntimeUiInputDebuggerContractConsumer support/RuntimeUiInputDebuggerContractConsumer.cpp)
+target_compile_features(HoroRuntimeUiInputDebuggerContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiInputDebuggerContractConsumer PRIVATE HoroEngine::RuntimeUiInput)
+add_test(NAME HoroRuntimeUiInputDebuggerContractConsumer COMMAND HoroRuntimeUiInputDebuggerContractConsumer)
+set_tests_properties(HoroRuntimeUiInputDebuggerContractConsumer PROPERTIES LABELS "unit;input;runtime_ui;headless;public_headers;ci-windows")
 add_executable(HoroRuntimeUiNavigationPublicHeaderConsumer support/RuntimeUiNavigationPublicHeaderConsumer.cpp)
 target_compile_features(HoroRuntimeUiNavigationPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiNavigationPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUiInput)
