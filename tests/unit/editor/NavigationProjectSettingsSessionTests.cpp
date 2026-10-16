@@ -14,7 +14,22 @@ namespace {
     /** @brief Injects uncertainty only after a genuine native replacement; source identities still advance. */
     class SessionFiles final : public TestSupport::NativePublicationFiles {
     public:
-        bool uncertain{};
+        enum class ReplacementMode {
+            Durable,
+            Uncertain
+        };
+
+        void SetReplacementMode(const ReplacementMode mode) noexcept {
+            mode_ = mode;
+        }
+
+        [[nodiscard]] std::size_t UncertainReplacements() const noexcept {
+            return uncertainReplacements_;
+        }
+
+        [[nodiscard]] std::size_t DurableReplacements() const noexcept {
+            return durableReplacements_;
+        }
 
         Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
                                          const std::filesystem::perms mode) override {
@@ -24,10 +39,20 @@ namespace {
         Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                           AtomicFileReplacementReceipt &receipt) override {
             auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
-            if (replaced.HasValue() && uncertain)
+            if (replaced.HasError())
+                return replaced;
+            if (mode_ == ReplacementMode::Uncertain) {
+                ++uncertainReplacements_;
                 return Result<void>::Failure(MakeError(N::NavigationSettingsError(N::NavigationSettingsFailure::Invalid)));
+            }
+            ++durableReplacements_;
             return replaced;
         }
+
+    private:
+        ReplacementMode mode_{ReplacementMode::Durable};
+        std::size_t uncertainReplacements_{};
+        std::size_t durableReplacements_{};
     };
 
     /** @brief Real project sources, registered identities and canonical active Scene owner. */
@@ -265,7 +290,7 @@ TEST_CASE("Navigation independent document saves retain dirty tickets after repl
     auto review = session->Preview(Asset(1), edits);
     REQUIRE(review.HasValue());
     REQUIRE(session->Commit(review.Value()).HasValue());
-    project.files.uncertain = true;
+    project.files.SetReplacementMode(SessionFiles::ReplacementMode::Uncertain);
     const auto uncertain = session->SaveDocuments();
     REQUIRE(uncertain.HasValue());
     REQUIRE(uncertain.Value().size() == 2);
@@ -274,7 +299,9 @@ TEST_CASE("Navigation independent document saves retain dirty tickets after repl
         REQUIRE(outcome.error);
     }
     REQUIRE(session->IsDirty());
-    project.files.uncertain = false;
+    REQUIRE(project.files.UncertainReplacements() == 2);
+    REQUIRE(project.files.DurableReplacements() == 0);
+    project.files.SetReplacementMode(SessionFiles::ReplacementMode::Durable);
     // A retry must compare against the replaced bytes, not the pre-publication source identity.
     const auto retry = session->SaveDocuments();
     REQUIRE(retry.HasValue());
@@ -283,5 +310,7 @@ TEST_CASE("Navigation independent document saves retain dirty tickets after repl
         REQUIRE(outcome.durable);
         REQUIRE_FALSE(outcome.error);
     }
+    REQUIRE(project.files.UncertainReplacements() == 2);
+    REQUIRE(project.files.DurableReplacements() == 2);
     REQUIRE_FALSE(session->IsDirty());
 }

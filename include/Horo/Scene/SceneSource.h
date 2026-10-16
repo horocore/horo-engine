@@ -31,8 +31,9 @@ namespace Horo::SceneSource {
      * inspect project compatibility and authorize file access first; decoding grants no trust or write authority.
      * Scene graph/document admission remains a separate operation. Unknown fields remain ignored within the same
      * depth bound; duplicate keys and deeper inputs are rejected rather than resolved implicitly.
-     * @throws std::bad_alloc If allocation fails during decoding. Completed DOM cleanup does not allocate;
-     * persistent exhaustion during upstream partial-parser cleanup is outside this guarantee.
+     * @throws std::bad_alloc If allocation fails during decoding. Completed DOM cleanup avoids child-flattening scratch allocations in
+     * supported production-STL compositions; MSVC checked-iterator Debug can still allocate proxies inside noexcept standard-container
+     * constructors. Persistent exhaustion during upstream partial-parser cleanup is outside this guarantee.
      */
     [[nodiscard]] Result<SceneSourceDocument> DecodeSceneSource(std::string_view contents);
     /**

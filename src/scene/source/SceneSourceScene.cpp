@@ -8,7 +8,7 @@
 
 namespace Horo::SceneSource::Detail {
     namespace {
-        /** @brief Retires a depth-admitted DOM without the codec's allocating flattening destructor. */
+        /** @brief Empties the depth-admitted DOM before flattening destruction; checked-iterator proxy allocations remain STL-specific. */
         void ClearSceneJson(Json &value) noexcept {
             if (value.is_structured())
                 for (auto &child : value)

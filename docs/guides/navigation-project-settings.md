@@ -152,3 +152,27 @@ its services and physically contained `.horo` destination before closing a clean
 navigation group; rejected basic destinations preserve all owners. Replacing the
 active identity, reloading or restoring recovery still requires an explicit
 save/discard resolution of every dirty navigation owner.
+
+### Windows allocation qualification
+
+The three exhaustive commit, grouped replay and completed-Scene-DOM failure sweeps
+use the existing `SceneAllocationQualification` admission and the existing
+`ci-audio-release` Windows composition. The entire engine and test executable use
+that same Release STL ABI. Windows checked-iterator Debug still exercises regular
+functional, lifecycle and unchanged-projection cases; these three global failure
+sweeps explicitly report unsupported there and are mandatory in Release.
+MSVC 14.44's default `std::vector` constructor allocates an iterator proxy inside a
+`noexcept` function. Injecting failure into that implementation-specific allocation
+can terminate even before the operation's throwable allocation boundary. A single
+target ABI override, exempted allocator size, sampled positions and longer timeout
+are not substitutes for the consistent qualification composition.
+
+No 4096-request assumption bounds the sweeps. Every request measured in the exact
+composition is injected once, and the existing shared qualification runner checks
+all three exact discovered names, zero disabled/failed/skipped Release cases, and
+matching nonzero measured/completed-position markers in actual JUnit output.
+The completed-DOM guard removes child-flattening scratch growth in these supported
+compositions; it does not promise allocation-free checked-iterator proxy machinery
+or persistent-OOM-safe cleanup of an upstream partially constructed parser tree.
+The earlier Windows timeout has no captured stack; this compatibility mechanism is
+source evidence, not a claim that its precise timeout position was observed.

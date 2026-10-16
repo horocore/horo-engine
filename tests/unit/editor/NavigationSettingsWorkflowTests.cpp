@@ -1,7 +1,9 @@
 #include "AllocationProbe.h"
 #include "Horo/Scene/SceneSource.h"
 #include "NavigationSettingsTestSupport.h"
+#include "SceneAllocationQualification.h"
 
+#include <cstdio>
 #include <thread>
 
 using namespace Horo;
@@ -103,6 +105,7 @@ TEST_CASE("Navigation second-owner validation failure preserves first owner and 
 }
 
 TEST_CASE("Every navigation commit allocation failure precedes all owner publication", "[navigation][settings][allocation][rollback]") {
+    Tests::RequireSupportedSceneAllocationInjection();
     std::size_t allocations{};
     {
         Fixture f;
@@ -116,7 +119,7 @@ TEST_CASE("Every navigation commit allocation failure precedes all owner publica
         REQUIRE(committed);
     }
     REQUIRE(allocations > 10);
-    REQUIRE(allocations < 4096);
+    std::size_t completed{};
     for (std::size_t failure = 0; failure < allocations; ++failure) {
         Fixture f;
         const auto review = f.Removal();
@@ -130,7 +133,10 @@ TEST_CASE("Every navigation commit allocation failure precedes all owner publica
         REQUIRE(f.definition.Snapshot().Value().revision == 1);
         REQUIRE(f.first.Snapshot().Value().revision == 0);
         REQUIRE(f.second.Snapshot().Value().revision == 0);
+        ++completed;
     }
+    std::fprintf(stderr, "[navigation-allocation] commit measured=%zu completed=%zu\n", allocations, completed);
+    REQUIRE(completed == allocations);
 }
 
 TEST_CASE("Navigation area removal repairs definition filter costs and Scene modifiers", "[navigation][settings][area]") {
@@ -194,6 +200,7 @@ TEST_CASE("Navigation grouped undo rejects independently advanced or retired sce
 
 TEST_CASE("Every navigation grouped replay allocation failure preserves all owner histories",
           "[navigation][settings][allocation][history]") {
+    Tests::RequireSupportedSceneAllocationInjection();
     std::size_t count{};
     {
         Fixture f;
@@ -208,7 +215,7 @@ TEST_CASE("Every navigation grouped replay allocation failure preserves all owne
         REQUIRE(success);
     }
     REQUIRE(count > 0);
-    REQUIRE(count < 4096);
+    std::size_t completed{};
     for (std::size_t position = 0; position < count; ++position) {
         Fixture f;
         auto review = f.Removal();
@@ -223,7 +230,10 @@ TEST_CASE("Every navigation grouped replay allocation failure preserves all owne
         REQUIRE(f.definition.Snapshot().Value().revision == 2);
         REQUIRE(f.first.Snapshot().Value().revision == 1);
         REQUIRE(f.second.Snapshot().Value().revision == 1);
+        ++completed;
     }
+    std::fprintf(stderr, "[navigation-allocation] replay measured=%zu completed=%zu\n", count, completed);
+    REQUIRE(completed == count);
 }
 
 TEST_CASE("Navigation unsupported prefab owners are enumerated and prevent every destruction", "[navigation][settings][inventory]") {
@@ -310,6 +320,7 @@ TEST_CASE("Navigation cancellation before publication preserves every canonical 
 }
 
 TEST_CASE("Scene decoding releases completed DOM without allocating during retirement", "[navigation][settings][allocation][scene]") {
+    Tests::RequireSupportedSceneAllocationInjection();
     const std::string source = R"({"schemaVersion":1,"objects":[],"unknown":{"nested":[1,2,{"value":"preserved"}]}})";
     std::size_t count{};
     {
@@ -318,7 +329,7 @@ TEST_CASE("Scene decoding releases completed DOM without allocating during retir
         count = measure.Snapshot().requests;
     }
     REQUIRE(count > 0);
-    REQUIRE(count < 4096);
+    std::size_t completed{};
     for (std::size_t position = 0; position < count; ++position) {
         bool failed{};
         {
@@ -331,6 +342,9 @@ TEST_CASE("Scene decoding releases completed DOM without allocating during retir
         }
         INFO(position);
         REQUIRE(failed);
+        ++completed;
     }
     REQUIRE(SceneSource::DecodeSceneSource(source).HasValue());
+    std::fprintf(stderr, "[navigation-allocation] scene measured=%zu completed=%zu\n", count, completed);
+    REQUIRE(completed == count);
 }
