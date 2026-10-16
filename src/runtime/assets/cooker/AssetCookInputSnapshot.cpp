@@ -84,7 +84,7 @@ namespace Horo::Assets {
             return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::TooLarge));
         std::vector<AssetId> identities(selected.begin(), selected.end());
         std::ranges::sort(identities);
-        if (std::adjacent_find(identities.begin(), identities.end()) != identities.end())
+        if (std::ranges::adjacent_find(identities) != identities.end())
             return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::MalformedArtifact));
         std::vector<AssetRecord> records;
         records.reserve(identities.size());

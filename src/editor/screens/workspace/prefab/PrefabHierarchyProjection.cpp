@@ -12,22 +12,22 @@ namespace Horo::Editor {
                              const Prefab::PrefabSceneIdentityMap *identities, const std::optional<Error> &failure) {
             const PrefabHierarchyTarget root{placement.authored.instanceId, std::nullopt};
             const bool overridden = placement.authored.valueOverrides.has_value();
-            rows.push_back({root, std::nullopt, placement.authored.sourcePrefab.Asset(),
-                            placement.expanded && !placement.expanded->Objects().empty()
-                                ? placement.expanded->Objects().front().object.name
-                                : placement.authored.sourcePrefab.Asset().ToString(),
-                            placement.authored.sourcePrefab.Asset().ToString(), overridden, failure,
-                            identities && placement.expanded && !placement.expanded->Objects().empty()
-                                ? identities->Find(placement.expanded->Objects().front().key)
-                                : std::nullopt});
+            rows.emplace_back(root, std::nullopt, placement.authored.sourcePrefab.Asset(),
+                              placement.expanded && !placement.expanded->Objects().empty()
+                                  ? placement.expanded->Objects().front().object.name
+                                  : placement.authored.sourcePrefab.Asset().ToString(),
+                              placement.authored.sourcePrefab.Asset().ToString(), overridden, failure,
+                              identities && placement.expanded && !placement.expanded->Objects().empty()
+                                  ? identities->Find(placement.expanded->Objects().front().key)
+                                  : std::nullopt);
             if (!placement.expanded)
                 return;
             for (const auto &object : placement.expanded->Objects()) {
                 const PrefabHierarchyTarget target{placement.authored.instanceId, object.key};
                 const PrefabHierarchyTarget parent =
                     object.parent ? PrefabHierarchyTarget{placement.authored.instanceId, *object.parent} : root;
-                rows.push_back({target, parent, object.sourcePrefab, object.object.name, object.sourcePrefab.ToString(), overridden,
-                                failure, identities ? identities->Find(object.key) : std::nullopt});
+                rows.emplace_back(target, parent, object.sourcePrefab, object.object.name, object.sourcePrefab.ToString(), overridden,
+                                  failure, identities ? identities->Find(object.key) : std::nullopt);
             }
         }
 
@@ -58,7 +58,7 @@ namespace Horo::Editor {
     /** @copydoc PrefabHierarchyProjection::Find */
     const PrefabHierarchyEntry *PrefabHierarchyProjection::Find(const PrefabHierarchyTarget &target) const noexcept {
         const auto found = std::ranges::find(entries, target, &PrefabHierarchyEntry::target);
-        return found == entries.end() ? nullptr : &*found;
+        return found == entries.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc BuildPrefabHierarchyProjection */

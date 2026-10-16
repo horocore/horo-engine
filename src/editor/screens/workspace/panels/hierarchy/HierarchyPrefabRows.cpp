@@ -54,7 +54,7 @@ namespace Horo::Editor {
             return;
         static_cast<void>(m_model.Select(row->second));
         auto parent = ParentId(row->second);
-        while (parent) {
+        while (parent.has_value()) {
             static_cast<void>(m_model.SetExpanded(*parent, true));
             parent = ParentId(*parent);
         }
@@ -75,8 +75,8 @@ namespace Horo::Editor {
         for (const auto &entry : m_prefabProjection->entries) {
             const auto old = prior.find(entry.target);
             if (old != prior.end() && old->second != 0 && occupied.insert(old->second).second) {
-                m_prefabNodeByTarget.emplace(entry.target, old->second);
-                m_prefabEntryByNode.emplace(old->second, &entry);
+                m_prefabNodeByTarget.try_emplace(entry.target, old->second);
+                m_prefabEntryByNode.try_emplace(old->second, &entry);
             }
         }
         auto next = std::numeric_limits<HierarchyNodeId>::max();
@@ -87,8 +87,8 @@ namespace Horo::Editor {
                 --next;
             const auto alias = next--;
             occupied.insert(alias);
-            m_prefabNodeByTarget.emplace(entry.target, alias);
-            m_prefabEntryByNode.emplace(alias, &entry);
+            m_prefabNodeByTarget.try_emplace(entry.target, alias);
+            m_prefabEntryByNode.try_emplace(alias, &entry);
         }
     }
 
@@ -114,7 +114,7 @@ namespace Horo::Editor {
                                 .parent = parent,
                                 .name = entry.name,
                                 .type = entry.target.member ? HierarchyNodeType::PrefabMember : HierarchyNodeType::PrefabInstance});
-            m_parentByNode.emplace(alias, parent);
+            m_parentByNode.try_emplace(alias, parent);
         }
     }
 }  // namespace Horo::Editor

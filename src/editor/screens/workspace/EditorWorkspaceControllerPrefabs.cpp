@@ -66,11 +66,12 @@ namespace Horo::Editor {
         /** @brief Delegates only placement-owned mutations to the existing canonical history executor. */
         Result<SceneCommandResult> ApplyMutation(SceneDocumentCommandExecutor &commands, const PrefabHierarchyCommand &request) {
             switch (request.action) {
-                case PrefabHierarchyAction::DuplicateInstance:
+                using enum PrefabHierarchyAction;
+                case DuplicateInstance:
                     return commands.Execute(DuplicateScenePrefabInstanceCommand{request.target.instance});
-                case PrefabHierarchyAction::DeleteInstance:
+                case DeleteInstance:
                     return commands.Execute(DeleteScenePrefabInstanceCommand{request.target.instance});
-                case PrefabHierarchyAction::ReparentInstance:
+                case ReparentInstance:
                     return commands.Execute(ReparentScenePrefabInstanceCommand{request.target.instance, request.destinationParent});
                 default:
                     return Result<SceneCommandResult>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
@@ -164,8 +165,11 @@ namespace Horo::Editor {
             return true;
         }
         if (request.action == PrefabHierarchyAction::OpenSource) {
-            if (const auto *record = m_assetRegistry.Find(admitted.Value()->source))
-                OpenSourceFile({.path = std::filesystem::u8path(record->sourcePath.String()), .origin = SourceOpenOrigin::Command});
+            if (const auto *record = m_assetRegistry.Find(admitted.Value()->source)) {
+                const auto &encoded = record->sourcePath.String();
+                const std::u8string utf8{encoded.begin(), encoded.end()};
+                OpenSourceFile({.path = std::filesystem::path{utf8}, .origin = SourceOpenOrigin::Command});
+            }
             return true;
         }
         if (m_viewModel.sceneExternalConflict || m_playSession.IsActive())

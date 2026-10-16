@@ -83,3 +83,14 @@ actual controller history/persistence, protected actions, cached selection and
 localized narrow panel rendering. Windows GUI execution is not configured by the
 existing Windows preset and must not be reported as passed. Local and hosted
 validation receipts identify actual executed tests separately from pending scopes.
+
+## Selection and host-path maintenance
+
+Inclusive authored-object range selection excludes every source-owned Prefab row,
+retains visible ordering and falls back to the clicked authored object when a
+filtered range endpoint is absent. Source/open and context actions construct
+commands from immutable cached provenance; their read-only helpers carry no
+mutable document authority. The host retains the native project path through
+controller creation, and portable source paths are converted explicitly from
+UTF-8 bytes when opening a file. No runtime descriptor, module vtable or exported
+layout changes are part of these private helper updates.

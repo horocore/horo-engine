@@ -97,6 +97,10 @@ namespace Horo::Editor {
         [[nodiscard]] static bool IsDeleteShortcut(Input::Key key, const Input::ModifierState &modifiers) noexcept;
 
     private:
+        /** @brief Returns the same inclusive visible range while excluding source-owned Prefab aliases.
+         * @param id Current ordinary target. @return Authored Scene identities in visible order; empty if either endpoint is unavailable.
+         */
+        [[nodiscard]] std::vector<SceneObjectId> RangeSelection(HierarchyNodeId id) const;
         /** @brief Expands projected ancestors for a new controller reveal request. */
         void RevealObjectAncestors(const EditorWorkspaceViewModel &viewModel);
 

@@ -927,7 +927,7 @@ namespace Horo::Editor {
                                    EditorWorkspaceViewCommandData &cmd, const EditorGuiContext &ctx) {
         static_cast<void>(pos);
         editSession_.Synchronize(vm);
-        if (renamingId_ && (editSession_.PrefabTarget(*renamingId_) != nullptr || editSession_.Find(*renamingId_) == nullptr))
+        if (renamingId_.has_value() && (editSession_.PrefabTarget(*renamingId_) != nullptr || editSession_.Find(*renamingId_) == nullptr))
             renamingId_.reset();
         const float uiScale = Theme::GetActiveTokens().sizes.uiScale;
         const float tabHeight = kTabHeight * uiScale;

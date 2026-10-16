@@ -72,10 +72,9 @@ namespace Horo::Editor {
         };
 
         /** @brief Composes the explicit project loader and retains its cooperative lease through cache publication. */
-        PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, ProjectMutationCoordinator *mutations) {
+        PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations) {
             return [root, mutations](const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
-                                     const Prefab::PrefabLimitProfile &limits,
-                                     const CancellationToken &cancellation) -> Result<PreparedPrefabHierarchySources> {
+                                     const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation) {
                 if (mutations == nullptr)
                     return Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
                 auto lease = mutations->TryAcquire({root, ProjectMutationOwner::Asset, "prefab.hierarchy.capture"});
@@ -215,7 +214,7 @@ namespace Horo::Editor {
                     return Result<void>::Failure(reserved.ErrorValue());
                 }
                 ProjectSessionActivationLease activation = std::move(reserved).Value();
-                std::string projectRoot = activation.Candidate().projectRoot.string();
+                const std::filesystem::path &projectRoot = activation.Candidate().projectRoot;
 
                 if (auto initialized = InitializeController(projectRoot); initialized.HasError())
                     return initialized;
@@ -520,7 +519,7 @@ namespace Horo::Editor {
             }
 
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
-            Result<void> InitializeController(const std::string &projectRoot) {
+            Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =

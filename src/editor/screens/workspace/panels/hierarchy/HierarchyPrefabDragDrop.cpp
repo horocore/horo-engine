@@ -37,8 +37,7 @@ namespace Horo::Editor {
         }
         if (target->member || !ImGui::BeginDragDropSource())
             return;
-        const auto source = editSession_.PrefabCommand(id, PrefabHierarchyAction::ReparentInstance);
-        if (source.prefabHierarchy) {
+        if (const auto source = editSession_.PrefabCommand(id, PrefabHierarchyAction::ReparentInstance); source.prefabHierarchy) {
             ImGui::SetDragDropPayload(PlacementPayload, &*source.prefabHierarchy, sizeof(PrefabHierarchyCommand));
             Ui::Hint(context.localization.Get("editor", "workspace.hierarchy.prefab.instance").c_str(), context.theme.fonts);
         }

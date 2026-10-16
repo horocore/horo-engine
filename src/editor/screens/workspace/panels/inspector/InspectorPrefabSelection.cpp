@@ -38,10 +38,10 @@ namespace Horo::Editor {
 
     /** @copydoc InspectorPanel::DrawPrefabOwnershipActions */
     void InspectorPanel::DrawPrefabOwnershipActions(const PrefabHierarchyEntry &entry, const PrefabHierarchyProjection &projection,
-                                                    EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        for (const auto action : {PrefabHierarchyAction::OpenSource, PrefabHierarchyAction::LocateInstance}) {
-            const auto key = action == PrefabHierarchyAction::OpenSource ? "workspace.hierarchy.prefab.open_source"
-                                                                         : "workspace.hierarchy.prefab.locate_instance";
+                                                    EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const {
+        using enum PrefabHierarchyAction;
+        for (const auto action : {OpenSource, LocateInstance}) {
+            const auto key = action == OpenSource ? "workspace.hierarchy.prefab.open_source" : "workspace.hierarchy.prefab.locate_instance";
             if (Ui::Button({.label = context.localization.Get("editor", key).c_str(),
                             .variant = Ui::ButtonVariant::Secondary,
                             .font = context.theme.fonts.sans,

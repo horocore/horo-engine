@@ -66,7 +66,8 @@ namespace Horo::Editor {
         void DrawPrefabDragDrop(HierarchyNodeId id, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const;
         /** @brief Accepts a root placement move to the containing scene root. */
         void AcceptPrefabRootDrop(EditorWorkspaceViewCommandData &command) const;
-        void DrawPrefabContext(HierarchyNodeId id, bool eligible, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+        void DrawPrefabContext(HierarchyNodeId id, bool eligible, EditorWorkspaceViewCommandData &command,
+                               const EditorGuiContext &context) const;
         void DrawRowContextMenu(const RowFrame &frame, bool workspaceEligible, bool &pendingDelete, EditorWorkspaceViewCommandData &command,
                                 const EditorGuiContext &context);
         [[nodiscard]] RowControls DrawRowControls(const RowFrame &frame, bool workspaceEligible, const EditorGuiContext &context);

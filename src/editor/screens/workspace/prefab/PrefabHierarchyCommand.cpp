@@ -13,13 +13,14 @@ namespace Horo::Editor {
         if (entry == nullptr)
             return Result<const PrefabHierarchyEntry *>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
         switch (command.action) {
-            case PrefabHierarchyAction::Select:
-            case PrefabHierarchyAction::OpenSource:
-            case PrefabHierarchyAction::LocateInstance:
+            using enum PrefabHierarchyAction;
+            case Select:
+            case OpenSource:
+            case LocateInstance:
                 break;
-            case PrefabHierarchyAction::DuplicateInstance:
-            case PrefabHierarchyAction::DeleteInstance:
-            case PrefabHierarchyAction::ReparentInstance:
+            case DuplicateInstance:
+            case DeleteInstance:
+            case ReparentInstance:
                 if (command.target.member.has_value())
                     return Result<const PrefabHierarchyEntry *>::Failure(MakeError(Prefab::PrefabErrors::OverrideInvalid));
                 break;
