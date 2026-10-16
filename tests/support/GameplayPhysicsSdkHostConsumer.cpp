@@ -52,6 +52,18 @@ namespace {
         return 0;         // The caller subsequently destroys capability registry weak entries with the host world.
     }
 
+    /** @brief Loads the SDK fixture and verifies image retirement while the caller retains its world and host owners. */
+    int LoadAndVerifyRetirement(Horo::Gameplay::GameModuleHost &host, const char *artifact, std::uint64_t revision,
+                                Horo::Physics::PhysicsWorld *world) {
+        auto loaded = host.Load(artifact, {"game.physics_sdk", Horo::Gameplay::CurrentGameplayBuildFingerprint(), revision});
+        if (loaded.HasError())
+            return 7;
+        auto candidate = std::move(loaded).Value();
+        if (candidate.diagnostic)
+            return 7;
+        return VerifyBatchImageRetirement(std::move(candidate.owner), world);
+    }
+
 #if HORO_TEST_PHYSICS_NATIVE
     /** @brief Captures the fixed bounded Physics setup used by actual external SDK dependency admission. */
     Horo::Physics::PhysicsWorldSettingsDescriptor SdkWorldSettings() {
@@ -125,15 +137,9 @@ int main(int argc, char **argv) {
     character = std::move(characterContext).Value();
 #endif
     GameModuleHost host{GameModuleHostOptions{{}, {.physics = context, .character = character}}};
-    auto loaded = host.Load(argv[1], {"game.physics_sdk", CurrentGameplayBuildFingerprint(), revision});
-    if (loaded.HasError())
-        return 7;
-    auto candidate = std::move(loaded).Value();
-    if (candidate.diagnostic)
-        return 7;
 #if HORO_TEST_PHYSICS_NATIVE
-    return VerifyBatchImageRetirement(std::move(candidate.owner), world.Value().get());
+    return LoadAndVerifyRetirement(host, argv[1], revision, world.Value().get());
 #else
-    return VerifyBatchImageRetirement(std::move(candidate.owner), nullptr);
+    return LoadAndVerifyRetirement(host, argv[1], revision, nullptr);
 #endif
 }
