@@ -90,12 +90,14 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshAssets(const Assets::AssetRegistrySnapshot &assetRegistry) {
         if (assetRegistry.Revision() == m_viewModel.assetRegistryRevision)
             return;
+        m_prefabSources.reset();
         m_assetRegistry = assetRegistry;
         m_viewModel.assetRegistryRevision = assetRegistry.Revision();
         m_contentBrowserRefreshPending = false;
         m_contentBrowserLoadingPresented = false;
         RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         ReconcileContentBrowserNavigation();
+        RefreshPrefabHierarchy(m_document.Snapshot());
     }
 
     void EditorWorkspaceController::UpdateContentBrowser() {

@@ -10,7 +10,8 @@
 
 namespace Horo::Editor {
     /** @file HierarchyModel.h
-     *  @brief Typed hierarchy presentation model projected from stable scene-object identities.
+     *  @brief Typed hierarchy presentation model with owner-assigned stable row identities.
+     * Row aliases are presentation identities, never authorization to mutate a Scene object or Prefab source.
      */
 
     using HierarchyNodeId = std::uint64_t;
@@ -27,6 +28,8 @@ namespace Horo::Editor {
         Camera,
         TriggerVolume,
         AudioSource,
+        PrefabInstance, /**< Whole containing-scene placement; members remain source-owned. */
+        PrefabMember,   /**< Source-qualified expanded member, protected from ordinary object mutations. */
     };
 
     /** @brief Result of a hierarchy mutation that can be rejected without changing the tree. */
@@ -58,7 +61,7 @@ namespace Horo::Editor {
         std::uint32_t depth{0};
     };
 
-    /** @brief Flat authoritative input used to rebuild hierarchy presentation without owning scene state. */
+    /** @brief Flat owner-projected input used to rebuild hierarchy presentation without owning document mutation authority. */
     struct HierarchyNodeInput {
         HierarchyNodeId id{0};
         std::optional<HierarchyNodeId> parent;

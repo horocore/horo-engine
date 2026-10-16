@@ -4,6 +4,7 @@
 #include "Horo/Runtime/Input.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
+#include <map>
 #include <optional>
 #include <string_view>
 #include <unordered_map>
@@ -34,6 +35,8 @@ namespace Horo::Editor {
     public:
         /** @brief Reconciles the derived tree, reveal request, and selection. */
         void Synchronize(const EditorWorkspaceViewModel &viewModel);
+        /** @brief Releases all borrowed source cache state at panel detach; later synchronization starts a fresh projection. */
+        void Close() noexcept;
 
         /** @brief Builds and returns visible rows for the supplied search query. */
         [[nodiscard]] const std::vector<HierarchyVisibleRow> &VisibleRows(std::string_view query);
@@ -83,6 +86,13 @@ namespace Horo::Editor {
         /** @brief Snapshots the complete current selection into one typed batch-deletion command. */
         [[nodiscard]] EditorWorkspaceViewCommandData DeleteSelectionCommand() const;
 
+        /** @brief Looks up prefab provenance for a presentation-only row alias. @return Exact target or null. */
+        [[nodiscard]] const PrefabHierarchyTarget *PrefabTarget(HierarchyNodeId id) const noexcept;
+        /** @brief Borrows cached ownership/status metadata without per-frame lookup allocation or source access. */
+        [[nodiscard]] const PrefabHierarchyEntry *PrefabEntry(HierarchyNodeId id) const noexcept;
+        /** @brief Captures a revision-fenced prefab action without granting the panel mutation authority. */
+        [[nodiscard]] EditorWorkspaceViewCommandData PrefabCommand(HierarchyNodeId id, PrefabHierarchyAction action) const;
+
         /** @brief Reports whether a key/modifier pair is a supported hierarchy deletion shortcut. */
         [[nodiscard]] static bool IsDeleteShortcut(Input::Key key, const Input::ModifierState &modifiers) noexcept;
 
@@ -90,7 +100,17 @@ namespace Horo::Editor {
         /** @brief Expands projected ancestors for a new controller reveal request. */
         void RevealObjectAncestors(const EditorWorkspaceViewModel &viewModel);
 
+        /** @brief Adds cached immutable prefab rows using collision-checked presentation aliases, never SceneObject IDs. */
+        void AppendPrefabRows(const EditorWorkspaceViewModel &viewModel);
+        /** @brief Preserves surviving row aliases before assigning collision-free aliases to new source keys. */
+        void PreparePrefabAliases(const EditorWorkspaceViewModel &viewModel);
+        /** @brief Reconciles source-qualified selection after a cache refresh. */
+        void SynchronizePrefabSelection(const EditorWorkspaceViewModel &viewModel);
         HierarchyModel m_model;
+        std::shared_ptr<const PrefabHierarchyProjection> m_prefabProjection;
+        std::map<PrefabHierarchyTarget, HierarchyNodeId> m_prefabNodeByTarget;
+        std::unordered_map<HierarchyNodeId, const PrefabHierarchyEntry *> m_prefabEntryByNode;
+
         std::vector<HierarchyNodeInput> m_inputs;
         std::unordered_map<HierarchyNodeId, std::optional<HierarchyNodeId>> m_parentByNode;
         std::vector<HierarchyVisibleRow> m_visibleRows;

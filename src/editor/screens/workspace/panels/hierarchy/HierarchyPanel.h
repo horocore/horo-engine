@@ -61,10 +61,18 @@ namespace Horo::Editor {
         [[nodiscard]] RowFrame BuildRowFrame(const HierarchyVisibleRow &row, const RowDrawLayout &layout,
                                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                              ImDrawList &drawList, const EditorGuiContext &context) const;
+        /** @brief Draws source-owned actions with explicit protected member boundaries. */
+        /** @brief Captures a root drag and accepts only ordinary scene parents through typed workspace intent. */
+        void DrawPrefabDragDrop(HierarchyNodeId id, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const;
+        /** @brief Accepts a root placement move to the containing scene root. */
+        void AcceptPrefabRootDrop(EditorWorkspaceViewCommandData &command) const;
+        void DrawPrefabContext(HierarchyNodeId id, bool eligible, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawRowContextMenu(const RowFrame &frame, bool workspaceEligible, bool &pendingDelete, EditorWorkspaceViewCommandData &command,
                                 const EditorGuiContext &context);
         [[nodiscard]] RowControls DrawRowControls(const RowFrame &frame, bool workspaceEligible, const EditorGuiContext &context);
         static void DrawRowPresentation(const RowFrame &frame, const RowControls &controls, const EditorGuiContext &context);
+        /** @brief Displays cached source failures and placement override status in the reserved row action strip. */
+        void DrawPrefabStatus(const RowFrame &frame, const EditorGuiContext &context) const;
         static void DrawRowBackground(const RowFrame &frame, bool hovered);
         static void DrawRowTree(const RowFrame &frame, const RowControls &controls, float centerY);
         static void DrawRowTypeIcon(const RowFrame &frame, const EditorGuiContext &context, float centerY);

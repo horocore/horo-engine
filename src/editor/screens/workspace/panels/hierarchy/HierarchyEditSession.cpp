@@ -55,7 +55,8 @@ namespace Horo::Editor {
 
     /** @copydoc HierarchyEditSession::Synchronize */
     void HierarchyEditSession::Synchronize(const EditorWorkspaceViewModel &viewModel) {
-        if (!m_projectionInitialized || m_projectedRevision != viewModel.documentRevision) {
+        if (!m_projectionInitialized || m_projectedRevision != viewModel.documentRevision ||
+            m_prefabProjection != viewModel.prefabHierarchy) {
             m_inputs.clear();
             m_inputs.reserve(viewModel.objects.size());
             m_parentByNode.clear();
@@ -77,6 +78,7 @@ namespace Horo::Editor {
                 });
                 m_parentByNode.try_emplace(object.id.value, parent);
             }
+            AppendPrefabRows(viewModel);
             m_model.Replace(m_inputs);
             m_projectedRevision = viewModel.documentRevision;
             m_projectionInitialized = true;
@@ -89,6 +91,7 @@ namespace Horo::Editor {
         } else {
             m_model.ClearSelection();
         }
+        SynchronizePrefabSelection(viewModel);
         m_selectedObjects = viewModel.selectedObjects;
         if (m_selectedObjects.empty() && viewModel.primarySelection.has_value())
             m_selectedObjects.push_back(*viewModel.primarySelection);
@@ -121,7 +124,8 @@ namespace Horo::Editor {
 
     /** @copydoc HierarchyEditSession::IsSelected */
     bool HierarchyEditSession::IsSelected(const HierarchyNodeId id) const noexcept {
-        return std::ranges::find(m_selectedObjects, SceneObjectId{id}) != m_selectedObjects.end();
+        return (PrefabTarget(id) != nullptr && SelectedId() == id) ||
+               std::ranges::find(m_selectedObjects, SceneObjectId{id}) != m_selectedObjects.end();
     }
 
     /** @copydoc HierarchyEditSession::Select */
@@ -138,6 +142,8 @@ namespace Horo::Editor {
 
     /** @copydoc HierarchyEditSession::SelectCommand */
     EditorWorkspaceViewCommandData HierarchyEditSession::SelectCommand(const HierarchyNodeId id, const HierarchySelectionGesture gesture) {
+        if (PrefabTarget(id) != nullptr)
+            return PrefabCommand(id, PrefabHierarchyAction::Select);
         std::vector<SceneObjectId> selected;
         const SceneObjectId clicked{id};
         if (gesture == HierarchySelectionGesture::Toggle) {
@@ -160,7 +166,8 @@ namespace Horo::Editor {
                 const auto last = std::max(anchor, target);
                 selected.reserve(static_cast<std::size_t>(std::distance(first, last)) + 1);
                 for (auto row = first; row != std::next(last); ++row) {
-                    selected.push_back(SceneObjectId{row->node->id});
+                    if (PrefabTarget(row->node->id) == nullptr)
+                        selected.push_back(SceneObjectId{row->node->id});
                 }
             }
         }
@@ -227,6 +234,8 @@ namespace Horo::Editor {
 
     /** @copydoc HierarchyEditSession::DeleteSelectionCommand */
     EditorWorkspaceViewCommandData HierarchyEditSession::DeleteSelectionCommand() const {
+        if (const auto selected = SelectedId(); selected && PrefabTarget(*selected) != nullptr)
+            return PrefabCommand(*selected, PrefabHierarchyAction::DeleteInstance);
         if (m_selectedObjects.empty())
             return {};
         EditorWorkspaceViewCommandData result;

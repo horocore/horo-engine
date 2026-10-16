@@ -114,6 +114,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
@@ -2352,6 +2353,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerAssetMutationTests.cpp
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
+            unit/editor/EditorWorkspaceControllerPrefabTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
@@ -2436,6 +2438,9 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroHierarchyPanelRenderTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
     )
+    target_sources(HoroHierarchyPanelRenderTests PRIVATE unit/editor/PrefabHierarchyPanelRenderTests.cpp)
+    target_compile_definitions(HoroHierarchyPanelRenderTests PRIVATE
+            HORO_TEST_LOCALIZATION_DIR="${PROJECT_SOURCE_DIR}/assets/localization/editor")
     target_link_libraries(HoroHierarchyPanelRenderTests
             PRIVATE
             HoroEngine::Gui
@@ -2443,6 +2448,8 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroHierarchyEditSessionTests
             unit/editor/HierarchyEditSessionTests.cpp
+            unit/editor/PrefabHierarchyEditSessionTests.cpp
+            support/AllocationProbe.cpp
     )
 
     target_compile_features(HoroHierarchyEditSessionTests PRIVATE cxx_std_20)
@@ -2801,9 +2808,11 @@ add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentExtractionTests.cpp
         unit/editor/SceneDocumentPrefabTests.cpp
         unit/editor/SceneDocumentPrefabValueTests.cpp
+        unit/editor/PrefabHierarchyProjectionTests.cpp
+        unit/editor/PrefabHierarchySourcesTests.cpp
 )
 target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
-target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
+target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction HoroEngine::EditorServices HoroPrefabHierarchyInternal)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
         unit/editor/SceneDocumentRecoveryPathTests.cpp

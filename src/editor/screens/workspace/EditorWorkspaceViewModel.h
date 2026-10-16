@@ -14,6 +14,7 @@
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
+#include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
 
 #include <memory>
 #include <optional>
@@ -96,6 +97,7 @@ namespace Horo::Editor {
         DeleteObject,
         DeleteSelectedObjects,
         SelectObject,
+        PrefabHierarchy,
         PickViewport,
         NavigateViewport,
         AlignViewportToAxis,
@@ -229,6 +231,7 @@ namespace Horo::Editor {
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;
+        std::optional<PrefabHierarchyCommand> prefabHierarchy;
         std::optional<int> targetIndex = std::nullopt;
         std::optional<SceneObjectId> objectPayload = std::nullopt;
         std::optional<Runtime::PrimitiveId> primitivePayload = std::nullopt;
@@ -287,6 +290,10 @@ namespace Horo::Editor {
         bool contentBrowserCanNavigateForward{false};
         DocumentRevision documentRevision;
         std::vector<SceneObject> objects;
+        std::shared_ptr<const PrefabHierarchyProjection> prefabHierarchy; /**< Owner-published bounded cache; no Draw I/O. */
+        std::optional<PrefabHierarchyTarget> prefabSelection;
+        std::optional<Error> prefabHierarchyError;
+        bool prefabHierarchyUnavailable{}; /**< Preparation failed; retained rows are inspection-only, never a fresh publication. */
         std::vector<Gameplay::BehaviorDescriptor> availableBehaviors;
         std::optional<SceneObjectId> hierarchyRevealObject;
         DocumentRevision hierarchyRevealRevision{};

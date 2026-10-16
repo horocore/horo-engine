@@ -72,19 +72,47 @@ namespace Horo::Assets {
     Result<AssetCookInputSnapshot> AssetCookInputSnapshot::Capture(const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry,
                                                                    const AssetCookLimits &limits, const std::uint64_t maximumCapturedBytes,
                                                                    const CancellationToken &cancellation) {
+        const auto records = registry.Records();
+        return CaptureRecords(sourceRoot, std::move(registry), records, limits, maximumCapturedBytes, cancellation);
+    }
+
+    /** @copydoc AssetCookInputSnapshot::CaptureSelected */
+    Result<AssetCookInputSnapshot> AssetCookInputSnapshot::CaptureSelected(
+        const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry, const std::span<const AssetId> selected,
+        const AssetCookLimits &limits, const std::uint64_t maximumCapturedBytes, const CancellationToken &cancellation) {
+        if (selected.size() > limits.maximumAssets)
+            return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::TooLarge));
+        std::vector<AssetId> identities(selected.begin(), selected.end());
+        std::ranges::sort(identities);
+        if (std::adjacent_find(identities.begin(), identities.end()) != identities.end())
+            return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::MalformedArtifact));
+        std::vector<AssetRecord> records;
+        records.reserve(identities.size());
+        for (const auto id : identities) {
+            const auto *record = registry.Find(id);
+            if (record == nullptr)
+                return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::SourceReadFailed));
+            records.push_back(*record);
+        }
+        return CaptureRecords(sourceRoot, std::move(registry), records, limits, maximumCapturedBytes, cancellation);
+    }
+
+    /** @copydoc AssetCookInputSnapshot::CaptureRecords */
+    Result<AssetCookInputSnapshot> AssetCookInputSnapshot::CaptureRecords(
+        const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry, const std::span<const AssetRecord> records,
+        const AssetCookLimits &limits, const std::uint64_t maximumCapturedBytes, const CancellationToken &cancellation) {
         if (std::error_code error; !sourceRoot.is_absolute() || std::filesystem::is_symlink(sourceRoot, error) || error)
             return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::SourceReadFailed));
         if (std::error_code error; !std::filesystem::is_directory(sourceRoot, error) || error || limits.maximumSourceBytes == 0 ||
-                                   limits.maximumAssets == 0 || maximumCapturedBytes == 0 ||
-                                   registry.Records().size() > limits.maximumAssets)
+                                   limits.maximumAssets == 0 || maximumCapturedBytes == 0 || records.size() > limits.maximumAssets)
             return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::SourceReadFailed));
         auto state = std::make_shared<State>();
         state->root = sourceRoot;
         state->registry = std::move(registry);
-        state->sources.reserve(state->registry.Records().size());
-        state->sidecarDigests.reserve(state->registry.Records().size());
+        state->sources.reserve(records.size());
+        state->sidecarDigests.reserve(records.size());
         std::uint64_t retained{};
-        for (const auto &record : state->registry.Records()) {
+        for (const auto &record : records) {
             auto bytes = Read(sourceRoot, record.sourcePath.String(),
                               std::min<std::uint64_t>(limits.maximumSourceBytes, maximumCapturedBytes - retained), cancellation);
             if (bytes.HasError())

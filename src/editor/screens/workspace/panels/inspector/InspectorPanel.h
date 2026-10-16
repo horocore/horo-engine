@@ -64,12 +64,21 @@ namespace Horo::Editor {
 
         void ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit, const SceneObject &object, EditorWorkspaceViewCommandData &command);
 
+        /** @brief Presents source ownership and typed navigation for a cached prefab selection without ordinary object editing. */
+        void DrawPrefabSelection(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                 const EditorGuiContext &context);
+        /** @brief Emits explicit typed source/open and owning-instance navigation intents from the shared controls. */
+        void DrawPrefabOwnershipActions(const PrefabHierarchyEntry &entry, const PrefabHierarchyProjection &projection,
+                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawEmptyState(EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         static void AdoptCommand(EditorWorkspaceViewCommandData &destination, EditorWorkspaceViewCommandData source);
 
         Input::InputRouter *m_inputRouter{nullptr};
         Input::InputContextToken m_nameInputContext;
         InspectorEditSession m_editSession;
+        std::shared_ptr<const PrefabHierarchyProjection> m_prefabPresentation;
+        std::optional<PrefabHierarchyTarget> m_prefabPresentedTarget;
+        const PrefabHierarchyEntry *m_prefabEntry{}; /**< Borrowed only while m_prefabPresentation pins this exact cache. */
         int m_activeTab{0};
     };
 }  // namespace Horo::Editor
