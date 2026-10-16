@@ -90,7 +90,8 @@ namespace Horo::Editor {
         if (baselineBytes > limits.maximumPreparedBytes || viewBytes > limits.maximumPreparedBytes - baselineBytes ||
             !Fits(values, limits.maximumPreparedBytes - baselineBytes - viewBytes))
             return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
-        const auto fingerprint = FingerprintSceneObjectContent(*baseline, limits.maximumPreparedBytes);
+        const auto fingerprint =
+            FingerprintSceneObjectContent(*baseline, std::min(limits.maximumPreparedBytes, MaximumSceneObjectFingerprintBytes));
         if (fingerprint.HasError())
             return Return::Failure(fingerprint.ErrorValue());
         try {

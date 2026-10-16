@@ -82,3 +82,9 @@ foreign owner/selection fences, locked/invalid inputs, owner thread/shutdown,
 transient staging/discard and actual shared-control render/model paths. Render
 records alone are not a GPU smoke or manual interaction result. The delivery
 receipt records actual executed targets, tests, skips and CI-only validation.
+
+The preparation API clamps its object fingerprint reservation to
+`MaximumSceneObjectFingerprintBytes` (16 MiB), independently of the larger
+transaction-wide preparation budget. A caller's smaller byte ceiling remains
+binding. This changes no document wire format or GameModule SDK layout; existing
+callers keep their transaction settings and rebuild against the named public limit.

@@ -245,3 +245,37 @@ TEST_CASE("Physics Inspector authored constraint profile rejects hinge and slide
         CHECK(SceneSource::DecodeSceneSource(unsupported).HasError());
     }
 }
+
+TEST_CASE("Physics Inspector respects object fingerprint ceilings independently of transaction budgets",
+          "[unit][editor][physics][inspector]") {
+    auto created = SceneDocumentTransactions::Create({Asset(1), 1}, {Object(1)});
+    REQUIRE(created.HasValue());
+    auto owner = std::move(created).Value();
+    const auto before = owner.Snapshot().Value();
+    auto values = Values(before.objects.front());
+    values.colliders.front().sensor = true;
+    SceneTransactionLimits limits;
+    SECTION("default transaction budget exceeds the fingerprint ceiling") {
+        REQUIRE(limits.maximumPreparedBytes > MaximumSceneObjectFingerprintBytes);
+    }
+    SECTION("a smaller admitted caller budget still permits the real edit") {
+        limits.maximumPreparedBytes = 4U * 1024U * 1024U;
+    }
+    SECTION("a larger transaction budget does not raise the object ceiling") {
+        limits.maximumPreparedBytes = 64U * 1024U * 1024U;
+        CHECK(FingerprintSceneObjectContent(before.objects.front(), MaximumSceneObjectFingerprintBytes + 1).HasError());
+    }
+    SECTION("an insufficient caller budget remains a zero-mutation rejection") {
+        limits.maximumPreparedBytes = 1;
+        CHECK(PreparePhysicsInspectorEdit(before, {1}, values, limits).HasError());
+        CHECK(Bytes(owner.Snapshot().Value()) == Bytes(before));
+        return;
+    }
+    const auto prepared = PreparePhysicsInspectorEdit(before, {1}, values, limits);
+    INFO((prepared.HasError() ? prepared.ErrorValue().message : std::string{}));
+    REQUIRE(prepared.HasValue());
+    const std::array changes{prepared.Value()};
+    REQUIRE(owner.Execute(Fence(before), changes, limits).HasValue());
+    CHECK(owner.Snapshot().Value().objects.front().components.colliders.front().sensor);
+    CHECK(owner.Snapshot().Value().revision == before.revision + 1);
+}
