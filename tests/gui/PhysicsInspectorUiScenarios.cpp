@@ -99,7 +99,9 @@ namespace {
 
     /** @brief Uses the exact child window so field lookup scrolls the real owning content instead of a global wildcard parent. */
     void SelectContent(ImGuiTestContext &ui) {
-        ui.SetRef("PhysicsInspector/##Content");
+        const auto content = ui.WindowInfo("//PhysicsInspector/##Content");
+        IM_CHECK(content.Window != nullptr);
+        ui.SetRef(content.Window);
     }
 
     /** @brief Creates the paired typed draft using the normal generic component menu, leaving authoring unchanged. */
