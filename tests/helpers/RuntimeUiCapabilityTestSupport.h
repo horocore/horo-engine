@@ -1,0 +1,117 @@
+#pragma once
+
+#include "Horo/Runtime/Ui/RuntimeUiService.h"
+#include "UiHotReloadTestFixture.h"
+
+#include <catch2/catch_test_macros.hpp>
+
+namespace Horo::Tests::UiAccess {
+    using namespace Runtime::Ui;
+    using namespace Runtime::Ui::ReloadTests;
+
+    template <class T> T Take(Result<T> result) {
+        INFO((result.HasError() ? result.ErrorValue().message : ""));
+        REQUIRE(result.HasValue());
+        return std::move(result).Value();
+    }
+
+    inline constexpr auto Lifecycle = UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands;
+    inline constexpr auto All = RuntimeUiPermission::Elements | RuntimeUiPermission::Screens | RuntimeUiPermission::ReadBindings |
+                                RuntimeUiPermission::PublishBindings | RuntimeUiPermission::Actions | RuntimeUiPermission::Events;
+
+    /** @brief Real cooked/Assets-loaded canvas, canonical semantic registry and actual action/tree/route owners. */
+    struct Fixture final {
+        UiElementSlotAllocator slots{Take(UiElementSlotAllocator::Create(Owner()))};
+        RuntimeUiService service{Take(RuntimeUiService::Create(Take(UiSceneReconciliation::Create({Owner()}))))};
+        UiActionOwnerContext actionOwner;
+        bool bindingsEnabled{};
+        UiBindingProviderSchema schema{MakeSchema()};
+
+        static UiBindingProviderInstanceId Provider() {
+            return {Owner(), 7, 1};
+        }
+
+        static UiBindingProviderSchema MakeSchema() {
+            const std::array properties{UiBindingPropertyDescriptor{.id = Take(UiBindingPropertyId::Parse("label")),
+                                                                    .type = UiBindingValueType::BoundedText,
+                                                                    .limits = {.maximumBytes = 128, .maximumElements = 1}}};
+            UiBindingProviderDescriptor descriptor{Take(UiBindingProviderTypeId::Parse("game.tests.ui")),
+                                                   ModuleId{"game.tests"},
+                                                   {1, 0, 0},
+                                                   properties,
+                                                   UiBindingProviderScopeBit(UiBindingProviderScopeKind::GameInstance)};
+            descriptor.schema.fingerprint = ComputeUiBindingSchemaFingerprint(descriptor);
+            return Take(UiBindingProviderSchema::Create(descriptor));
+        }
+
+        explicit Fixture(bool sceneOwned = false, bool bindings = false) : bindingsEnabled(bindings) {
+            auto generation = Make(1);
+            auto publisher = Take(UiHotReload::Create(std::move(generation)));
+            UiSceneInstanceDescriptor descriptor{Instance(), {}};
+            if (sceneOwned) {
+                descriptor.owner = {.kind = UiOwnerScopeKind::Scene, .scene = Runtime::SceneRuntimeId{101}};
+            }
+            REQUIRE(service.Admit(descriptor, std::move(publisher), Lifecycle).HasValue());
+        }
+
+        UiReloadGeneration Make(std::uint64_t version) {
+            auto generation = Generation(slots, version);
+            auto &canvas = *generation.Canvas(Stable<UiCanvasId>(2));
+            actionOwner = {canvas.tree.Instance(),       canvas.tree.Canvas(),
+                           canvas.tree.SourceDocument(), canvas.tree.SourceDocumentRevision(),
+                           canvas.tree.Revision(),       Revision<UiInteractionRevision>(version)};
+            canvas.actions.emplace(Take(UiActionRouter::Create({actionOwner, 128, {}})));
+            if (bindingsEnabled) {
+                const std::array initial{UiBindingPropertyUpdate{0, std::string{"initial"}}};
+                const std::array registrations{UiBindingProviderRegistration{Provider(), UiBindingProviderScopeKind::GameInstance, &schema,
+                                                                             Revision<UiBindingSnapshotRevision>(1), initial}};
+                const auto &property = schema.Properties()[0];
+                const std::array bindings{
+                    UiResolvedBindingDescriptor{Provider(),
+                                                {.id = Stable<UiBindingId>(30),
+                                                 .source = {schema.Type(), property.id, {1, 0}, property.signatureFingerprint},
+                                                 .target = {Stable<UiElementId>(11),
+                                                            UiBindingTargetProperty::Text,
+                                                            {.maximumBytes = 128}}}}};
+                canvas.bindings.emplace(Take(UiBindingStore::Create(canvas.tree, registrations, bindings)));
+            }
+            return generation;
+        }
+
+        RuntimeUiGrant Grant(std::uint64_t scene = 101, RuntimeUiPermission permission = All) const {
+            return {"game.tests",
+                    scene,
+                    1,
+                    Instance(),
+                    Stable<UiCanvasId>(2),
+                    permission,
+                    bindingsEnabled ? std::vector{Provider()} : std::vector<UiBindingProviderInstanceId>{}};
+        }
+
+        std::shared_ptr<const RuntimeUiClient> Client(RuntimeUiPermission permission = All) {
+            return Take(service.Issue(Grant(101, permission)));
+        }
+    };
+
+    struct Actions final : UiActionHandler {
+        std::size_t calls{};
+
+        Result<UiActionResult> Handle(const UiActionRequest &request) override {
+            ++calls;
+            return UiActionResult::Handled(request.id);
+        }
+    };
+
+    struct Events final : UiEventHandler {
+        std::size_t calls{};
+
+        Result<UiEventResponse> Handle(UiElementHandle, UiEventPhase, const UiRoutedEvent &) override {
+            ++calls;
+            return Result<UiEventResponse>::Success({true, false, false});
+        }
+
+        Result<void> ApplyDefault(UiElementHandle, const UiRoutedEvent &) override {
+            return Result<void>::Success();
+        }
+    };
+}  // namespace Horo::Tests::UiAccess

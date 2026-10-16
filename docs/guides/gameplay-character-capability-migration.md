@@ -25,7 +25,10 @@ forwarding paths to the same options authority. A host anchor may issue fresh
 Character children for sequential module generations; the legacy Physics holder
 still needs replacement after its own retirement. Never reuse a retired child.
 
-`BehaviorRuntime::Create` appends an optional Character holder. Application
+`BehaviorRuntime::Create` accepts the optional Character holder through the inert
+`BehaviorRuntimeServiceBindings::character` field; the shared host-factory migration
+is documented in [Runtime UI capability migration](gameplay-runtime-ui-capability-migration.md#host-behavior-factory-migration).
+Application
 `GameplayWorldComposition` appends independent default-denied permission and an
 explicit optional Character-world admission argument. Existing omitted compositions
 return typed unavailable access and never create or tick a replacement world.
@@ -93,3 +96,8 @@ constructor. The producer must return typed RejectedBusy without allocation befo
 the reader resumes; the reader must return HandleStale, and admission must recover
 after lock release. This ordinary Debug case remains enabled on Windows. The
 separate preparation rollback failure sweep remains mandatory in Release.
+
+The current combined Character/Navigation/AI/Runtime UI layout uses SDK21 and
+`gameplay-sdk21`. Rebuild Character modules and Physics SDK consumers together
+with the current host; SDK15 remains a historical independent layout. The union
+retains independent scope revocation and adds no ambient UI authority.

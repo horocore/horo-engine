@@ -321,6 +321,8 @@ horo_configure_target_header_boundary(HoroRuntime PUBLIC_HEADERS
     Horo/Runtime/Save/SaveTestCompositions.h
 )
 horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
+        Horo/Runtime/Ui/RuntimeUiClient.h
+        Horo/Runtime/Ui/RuntimeUiService.h
     Horo/Runtime/Ui/UiErrors.h
     Horo/Runtime/Ui/UiAssetDependency.h
     Horo/Runtime/Ui/UiImageResource.h

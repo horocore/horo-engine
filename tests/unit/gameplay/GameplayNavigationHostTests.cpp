@@ -118,7 +118,7 @@ namespace {
         auto definition = Tests::SingleBehaviorSceneDefinition(Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1},
                                                                Runtime::SceneObjectId{2}, BehaviorInstanceId{1}, Type());
         auto scene = std::move(Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{Activation().scene.Value()})).Value();
-        auto runtime = BehaviorRuntime::Create(*scene, registry, {}, nullptr, std::move(navigation));
+        auto runtime = BehaviorRuntime::Create(*scene, registry, {}, {.navigation = std::move(navigation)});
         REQUIRE(runtime.HasValue());
         return {std::move(scene), std::move(runtime).Value()};
     }
@@ -172,7 +172,7 @@ TEST_CASE("Busy native retirement closes retained navigation admission before ru
         Tests::SingleBehaviorSceneDefinition(Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}, Runtime::SceneObjectId{2},
                                              BehaviorInstanceId{1}, BehaviorTypeId::Parse("game.tests.navigation_client").Value());
     auto scene = std::move(Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{Activation().scene.Value()})).Value();
-    auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, nullptr, retained);
+    auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, {.navigation = retained});
     REQUIRE(creation.HasValue());
     auto runtime = std::move(creation).Value();
     auto pending = retained->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}});
@@ -270,7 +270,7 @@ TEST_CASE("Actual loaded native behavior uses the same Detour result path as Lua
                                              BehaviorInstanceId{1}, BehaviorTypeId::Parse("game.tests.navigation_client").Value());
     auto scene = std::move(Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{Activation().scene.Value()})).Value();
     auto runtime =
-        BehaviorRuntime::Create(*scene, loaded.Value().owner->Registry(), {}, nullptr, loaded.Value().owner->NavigationContext());
+        BehaviorRuntime::Create(*scene, loaded.Value().owner->Registry(), {}, {.navigation = loaded.Value().owner->NavigationContext()});
     REQUIRE(runtime.HasValue());
     CHECK(Tests::FixedUpdateAndReadPosition(*scene, *runtime.Value(), Runtime::SceneObjectId{2}).x == 0);
     fixture.Publish();
@@ -325,7 +325,7 @@ TEST_CASE("Pending actual native behavior navigation keeps SDK code alive throug
         Tests::SingleBehaviorSceneDefinition(Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}, Runtime::SceneObjectId{2},
                                              BehaviorInstanceId{1}, BehaviorTypeId::Parse("game.tests.navigation_client").Value());
     auto scene = std::move(Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{Activation().scene.Value()})).Value();
-    auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, nullptr, module->NavigationContext());
+    auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, {.navigation = module->NavigationContext()});
     REQUIRE(creation.HasValue());
     auto runtime = std::move(creation).Value();
     CHECK(Tests::FixedUpdateAndReadPosition(*scene, *runtime, Runtime::SceneObjectId{2}).x == 0);
@@ -418,7 +418,7 @@ TEST_CASE("Completed native navigation result outlives every module scope and co
                                                                Runtime::SceneObjectId{2}, BehaviorInstanceId{1},
                                                                BehaviorTypeId::Parse("game.tests.navigation_client").Value());
         auto scene = std::move(Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{Activation().scene.Value()})).Value();
-        auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, nullptr, module->NavigationContext());
+        auto creation = BehaviorRuntime::Create(*scene, module->Registry(), {}, {.navigation = module->NavigationContext()});
         REQUIRE(creation.HasValue());
         auto runtime = std::move(creation).Value();
         CHECK(Tests::FixedUpdateAndReadPosition(*scene, *runtime, Runtime::SceneObjectId{2}).x == 0);

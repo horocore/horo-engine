@@ -9,6 +9,8 @@
 #include "LuaNavigationBinding.h"
 #include "LuaPhysicsBinding.h"
 #include "LuaReplicationDeclaration.h"
+#include "LuaRuntimeUiBinding.h"
+#include "LuaRuntimeUiProtected.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -25,28 +27,8 @@ extern "C" {
 
 namespace Horo::Gameplay {
     namespace {
-        struct LuaBudget {
-            std::size_t used{};
-            std::size_t maximum{};
-        };
-
-        void *BudgetAllocate(void *userData, void *pointer, const std::size_t oldSize, const std::size_t newSize) {
-            auto &budget = *static_cast<LuaBudget *>(userData);
-            // For a fresh Lua allocation oldSize is an object-type tag, not an allocation size.
-            const std::size_t accountedOldSize = pointer != nullptr ? oldSize : 0;
-            if (newSize == 0) {
-                budget.used = accountedOldSize > budget.used ? 0 : budget.used - accountedOldSize;
-                std::free(pointer);  // NOSONAR(cpp:S5025) Lua's allocator ABI is the C realloc/free contract.
-                return nullptr;
-            }
-            const std::size_t retained = accountedOldSize > budget.used ? 0 : budget.used - accountedOldSize;
-            if (newSize > budget.maximum || retained > budget.maximum - newSize)
-                return nullptr;
-            void *resized = std::realloc(pointer, newSize);  // NOSONAR(cpp:S5025) Preserves Lua realloc semantics and performance.
-            if (resized != nullptr)
-                budget.used = retained + newSize;
-            return resized;
-        }
+        using Detail::BudgetAllocate;
+        using Detail::LuaBudget;
 
         void InstructionLimitHook(lua_State *state, lua_Debug *) {
             luaL_error(state, "Lua behavior instruction budget exceeded");
@@ -98,6 +80,7 @@ namespace Horo::Gameplay {
         std::string sourceName;
         LuaBehaviorLimits limits;
         std::uint64_t revision{1};
+        Detail::LuaRuntimeUiScopes uiScopes;
         Detail::LuaCharacterScopeRegistry characterScopes;
     };
 
@@ -157,6 +140,9 @@ namespace Horo::Gameplay {
             int behaviorRef{LUA_NOREF};
             std::uint64_t revision{};
             std::optional<CancellationSource> navigationLifetime;
+            CancellationToken navigationToken;
+            std::shared_ptr<const Runtime::Ui::RuntimeUiClient> ui;
+            bool uiBound{};
         };
 
         static BehaviorContext &Context(lua_State *state) {
@@ -271,13 +257,15 @@ namespace Horo::Gameplay {
             character_ = std::move(child).Value();
         }
 
-        void PushContext(lua_State *state, BehaviorContext &context) {
+        void PushContext(lua_State *state, BehaviorContext &context, const std::shared_ptr<const GameplayPhysicsContext> &physics,
+                         const std::shared_ptr<const GameplayNavigationContext> &navigation) const {
             lua_newtable(state);
-            Detail::PushLuaNavigationContext(state, context, vm_.navigationLifetime->Token());
+            Detail::PushLuaNavigationContext(state, navigation, vm_.navigationToken);
             lua_setfield(state, -2, "navigation");
-            Detail::PushLuaPhysicsContext(state, context);
+            Detail::PushLuaPhysicsContext(state, physics);
             lua_setfield(state, -2, "physics");
-            BindCharacter(context);
+            Detail::PushLuaRuntimeUi(state, vm_.ui);
+            lua_setfield(state, -2, "ui");
             Detail::PushLuaCharacterContext(state, character_, characterError_);
             lua_setfield(state, -2, "character");
             lua_newtable(state);
@@ -312,6 +300,8 @@ namespace Horo::Gameplay {
             characterError_.reset();
             if (vm_.navigationLifetime)
                 vm_.navigationLifetime->RequestCancellation();
+            if (vm_.ui)
+                vm_.ui->Revoke();
             if (vm_.state != nullptr)
                 lua_close(vm_.state);
             vm_ = {};
@@ -334,6 +324,7 @@ namespace Horo::Gameplay {
         [[nodiscard]] bool LoadCurrentProgram() {
             const auto &impl = *program_->impl_;
             vm_.navigationLifetime.emplace();
+            vm_.navigationToken = vm_.navigationLifetime->Token();
             vm_.budget = {0, impl.limits.maximumMemoryBytes};
             vm_.state = lua_newstate(BudgetAllocate, &vm_.budget);
             if (vm_.state == nullptr)
@@ -349,6 +340,8 @@ namespace Horo::Gameplay {
         }
 
         bool Fail(const std::string &message) {
+            if (vm_.ui)
+                vm_.ui->Revoke();
             if (character_)
                 character_->Revoke();
             LOG_ERROR("gameplay.lua", "%s", message.c_str());
@@ -391,31 +384,48 @@ namespace Horo::Gameplay {
                   const GameplayInputAction *action = nullptr, const GameplayEvent *event = nullptr) {
             if (!EnsureLoaded())
                 return;
+            if (!vm_.uiBound) {
+                auto ui = program_->impl_->uiScopes.Bind(context.RuntimeUiContext());
+                if (ui.HasError()) {
+                    Fail(ui.ErrorValue().message);
+                    return;
+                }
+                vm_.ui = std::move(ui).Value();
+                vm_.uiBound = true;
+            }
             lua_State *state = vm_.state;
-            lua_rawgeti(state, LUA_REGISTRYINDEX, vm_.behaviorRef);
-            lua_getfield(state, -1, name);
-            if (lua_isnil(state, -1)) {
-                lua_pop(state, 2);
-                return;
-            }
-            PushContext(state, context);
-            int argumentCount = 1;
-            if (delta.has_value()) {
-                lua_pushnumber(state, *delta);
-                ++argumentCount;
-            } else if (action != nullptr) {
-                PushAction(state, *action);
-                ++argumentCount;
-            } else if (event != nullptr) {
-                PushEvent(state, *event);
-                ++argumentCount;
-            }
-            if (lua_pcall(state, argumentCount, 0, 0) != LUA_OK) {
-                const std::string message = lua_isstring(state, -1) ? lua_tostring(state, -1) : "Lua callback failed.";
+            // Every shared owner lives outside the protected inner context constructor and callback.
+            const auto physics = context.PhysicsContext();
+            const auto navigation = context.NavigationContext();
+            try {
+                BindCharacter(context);
+                Detail::UiScript::Protected(state, [this, &context, &physics, &navigation, name, delta, action, event](lua_State *inner) {
+                    lua_rawgeti(inner, LUA_REGISTRYINDEX, vm_.behaviorRef);
+                    lua_getfield(inner, -1, name);
+                    if (lua_isnil(inner, -1))
+                        return 0;
+                    PushContext(inner, context, physics, navigation);
+                    int argumentCount = 1;
+                    if (delta.has_value()) {
+                        lua_pushnumber(inner, *delta);
+                        ++argumentCount;
+                    } else if (action != nullptr) {
+                        PushAction(inner, *action);
+                        ++argumentCount;
+                    } else if (event != nullptr) {
+                        PushEvent(inner, *event);
+                        ++argumentCount;
+                    }
+                    lua_call(inner, argumentCount, 0);
+                    return 0;
+                });
+            } catch (const Detail::UiScript::LuaTransportFailure &) {
+                const std::string message = lua_type(state, -1) == LUA_TSTRING ? lua_tostring(state, -1) : "Lua callback failed.";
                 lua_pop(state, 1);
                 Fail(message);
+            } catch (const std::bad_alloc &) {
+                Fail("Lua callback context exceeded its memory capacity.");
             }
-            lua_pop(state, 1);
         }
 
         LuaBehaviorProgram *program_{};
@@ -428,7 +438,9 @@ namespace Horo::Gameplay {
 
     LuaBehaviorProgram::LuaBehaviorProgram(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
-    LuaBehaviorProgram::~LuaBehaviorProgram() = default;
+    LuaBehaviorProgram::~LuaBehaviorProgram() {
+        impl_->uiScopes.Revoke();
+    }
 
     /** @copydoc LuaBehaviorProgram::Compile(std::string,const BehaviorTypeId&,std::string,LuaBehaviorLimits) */
     Result<std::unique_ptr<LuaBehaviorProgram>> LuaBehaviorProgram::Compile(std::string source, const BehaviorTypeId &canonicalTypeId,
@@ -508,6 +520,7 @@ namespace Horo::Gameplay {
         if (impl_->revision == std::numeric_limits<std::uint64_t>::max())
             return LuaFailure(impl_->sourceName + ": Lua source generations exhausted.");
         impl_->characterScopes.Revoke();
+        impl_->uiScopes.Revoke();
         impl_->replication = std::move(candidate->impl_->replication);
         impl_->replicationRegistry = std::move(candidate->impl_->replicationRegistry);
         impl_->descriptor.displayName = std::move(candidate->impl_->descriptor.displayName);

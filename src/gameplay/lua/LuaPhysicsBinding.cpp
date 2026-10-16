@@ -242,24 +242,25 @@ namespace Horo::Gameplay::Detail {
     }  // namespace
 
     /** @copydoc PushLuaPhysicsContext */
-    void PushLuaPhysicsContext(lua_State *state, const BehaviorContext &context) {
+    void PushLuaPhysicsContext(lua_State *state, const std::shared_ptr<const GameplayPhysicsContext> &physics) {
         lua_newtable(state);
-        const auto physics = context.PhysicsContext();
         if (physics) {
             lua_pushinteger(state, static_cast<lua_Integer>(physics->Binding().scene));
             lua_setfield(state, -2, "scene");
             lua_pushinteger(state, static_cast<lua_Integer>(physics->Binding().sceneGeneration));
             lua_setfield(state, -2, "scene_generation");
         }
-        auto *holder = static_cast<ContextHolder *>(lua_newuserdatauv(state, sizeof(ContextHolder), 0));
-        std::construct_at(holder, physics);
         if (luaL_newmetatable(state, ContextType)) {
             lua_pushboolean(state, false);
             lua_setfield(state, -2, "__metatable");
             lua_pushcfunction(state, Collect<ContextHolder>);
             lua_setfield(state, -2, "__gc");
         }
+        auto *holder = static_cast<ContextHolder *>(lua_newuserdatauv(state, sizeof(ContextHolder), 0));
+        std::construct_at(holder, physics);
+        lua_pushvalue(state, -2);
         lua_setmetatable(state, -2);
+        lua_remove(state, -2);
         lua_pushcclosure(state, Acquire, 1);
         lua_setfield(state, -2, "acquire");
     }

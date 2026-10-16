@@ -615,6 +615,13 @@ if(HORO_BUILD_NETWORK_GNS)
 endif()
 
 add_library(HoroRuntimeUi STATIC
+        runtime/ui/RuntimeUiAccessErrors.cpp
+        runtime/ui/RuntimeUiAccessState.h
+        runtime/ui/RuntimeUiClient.cpp
+        runtime/ui/RuntimeUiService.cpp
+    runtime/ui/RuntimeUiTransitions.cpp
+        runtime/ui/RuntimeUiCommands.cpp
+        runtime/ui/RuntimeUiEvents.cpp
         runtime/ui/UiAssetDependencyInternal.h
         runtime/ui/UiErrors.cpp
         runtime/ui/UiAssetErrors.cpp
@@ -976,7 +983,7 @@ add_library(HoroGameplayRuntime STATIC
 add_library(HoroEngine::GameplayRuntime ALIAS HoroGameplayRuntime)
 target_compile_features(HoroGameplayRuntime PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayRuntime PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene HoroEngine::Runtime PRIVATE HoroEngine::GameplayNavigationIntegration)
+target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene HoroEngine::Runtime PRIVATE HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 
 add_library(HoroGameplayModuleHost STATIC
     gameplay/module/GameModuleRetirement.cpp
@@ -989,7 +996,7 @@ add_library(HoroGameplayModuleHost STATIC
 add_library(HoroEngine::GameplayModuleHost ALIAS HoroGameplayModuleHost)
 target_compile_features(HoroGameplayModuleHost PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayModuleHost PUBLIC ${PROJECT_SOURCE_DIR}/include)
-target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform HoroEngine::GameplayNavigationIntegration)
+target_link_libraries(HoroGameplayModuleHost PUBLIC HoroEngine::GameplayRuntime PRIVATE HoroEngine::Platform HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 
 add_library(HoroGameplayLua STATIC
         gameplay/lua/LuaBehavior.cpp
@@ -1002,7 +1009,26 @@ add_library(HoroGameplayLua STATIC
         gameplay/lua/LuaCharacterCommand.cpp
         gameplay/lua/LuaCharacterBinding.h
         gameplay/lua/LuaNavigationBinding.cpp
+        gameplay/lua/LuaRuntimeUiBinding.cpp
+        gameplay/lua/LuaRuntimeUiBinding.h
+        gameplay/lua/LuaRuntimeUiValues.cpp
+        gameplay/lua/LuaRuntimeUiValues.h
+        gameplay/lua/LuaRuntimeUiProtected.h
+        gameplay/lua/LuaRuntimeUiTransport.h
+        gameplay/lua/LuaRuntimeUiObservation.cpp
 )
+
+# Non-installed fault-injection boundary: only the protected Runtime UI marshalling headers are staged.
+if(BUILD_TESTING)
+    add_library(HoroRuntimeUiLuaTestingInternal INTERFACE)
+    set(_horo_ui_lua_test_headers "${CMAKE_CURRENT_BINARY_DIR}/runtime_ui_lua_testing")
+    file(MAKE_DIRECTORY "${_horo_ui_lua_test_headers}")
+    foreach(header LuaRuntimeUiBinding.h LuaRuntimeUiValues.h LuaRuntimeUiProtected.h LuaNavigationBinding.h)
+        configure_file("gameplay/lua/${header}" "${_horo_ui_lua_test_headers}/${header}" COPYONLY)
+    endforeach()
+    target_include_directories(HoroRuntimeUiLuaTestingInternal INTERFACE "${_horo_ui_lua_test_headers}")
+    target_link_libraries(HoroRuntimeUiLuaTestingInternal INTERFACE HoroEngine::GameplayLua HoroEngine::RuntimeUi HoroEngine::GameplayNavigationIntegration HoroThirdParty::Lua)
+endif()
 
 add_library(HoroGameplayBuild STATIC
         application/gameplay/CompilerDiagnosticParser.cpp
@@ -1022,6 +1048,7 @@ target_include_directories(HoroGameplayLua PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayNavigationIntegration)
 target_link_libraries(HoroGameplayLua
         PUBLIC HoroEngine::GameplayRuntime
+        PRIVATE HoroEngine::RuntimeUi
         PRIVATE HoroThirdParty::Lua nlohmann_json::nlohmann_json
 )
 

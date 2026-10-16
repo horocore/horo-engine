@@ -5,6 +5,7 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
 #include <cstring>
 #include <utility>
@@ -189,6 +190,14 @@ namespace Horo::Gameplay {
             return Result<void>::Failure(pinned.ErrorValue());
         impl.navigation = std::move(navigation).Value();
         impl.physics = std::move(physics).Value();
+        if (runtimeServices_.runtimeUi) {
+            if (runtimeServices_.runtimeUi->Grant().moduleId != impl.moduleId)
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::CapabilityDenied));
+            auto ui = runtimeServices_.runtimeUi->Derive();
+            if (ui.HasError())
+                return Result<void>::Failure(ui.ErrorValue());
+            impl.runtimeUi = std::move(ui).Value();
+        }
 
         if (runtimeServices_.character) {
             if (const auto &binding = runtimeServices_.character->Binding(); binding.moduleId != impl.moduleId)

@@ -30,6 +30,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<GameplayCharacterContext> character;   /**< Character anchor; each loaded generation receives a fresh child. */
         std::shared_ptr<GameplayNavigationContext> navigation; /**< Exact generation navigation anchor. */
         std::shared_ptr<GameplayAiContext> ai;                 /**< AI anchor; each loaded generation receives a fresh child. */
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact independently revocable UI anchor. */
     };
 
     /** @brief Explicit immutable load configuration; requires both values so legacy brace calls stay unambiguous. */
@@ -119,12 +120,17 @@ namespace Horo::Gameplay {
         [[nodiscard]] std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept;
         /** @brief Returns this module generation navigation grant. @return Revocable host context. */
         [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept;
+        /** @brief Returns the authoritative independently revocable UI holder, unaffected by module-facing context replacement.
+         * @return Exact module child or null when UI was not composed.
+         */
+        [[nodiscard]] std::shared_ptr<const Runtime::Ui::RuntimeUiClient> RuntimeUiContext() const noexcept;
         /**
          * @brief Cancels and quiesces module-owned work, captures state, and stops callbacks before unload.
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
          */
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
         /** @brief Closes new runtime admission and requests cancellation without destroying busy callback owners.
+         * @details Revokes generation-scoped service clients, including UI, before existing runtime leases drain.
          * @pre Called on the module composition owner lane.
          */
         void RequestRetirement() noexcept;

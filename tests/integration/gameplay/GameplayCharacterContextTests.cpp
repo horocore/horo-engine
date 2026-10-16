@@ -60,10 +60,11 @@ namespace {
         CharacterModuleHost host;
         BehaviorRegistry registry;
         REQUIRE(registry.Freeze().HasValue());
-        Physics::Test::RequireError(BehaviorRuntime::Create(*host.world.scene, registry, {}, {}, {}, host.character),
+        Physics::Test::RequireError(BehaviorRuntime::Create(*host.world.scene, registry, {}, {.character = host.character}),
                                     GameplayErrors::CharacterUnavailable);
         host.physics->Revoke();
-        Physics::Test::RequireError(BehaviorRuntime::Create(*host.world.scene, registry, {}, host.physics, {}, host.character),
+        Physics::Test::RequireError(BehaviorRuntime::Create(*host.world.scene, registry, {},
+                                                            {.physics = host.physics, .character = host.character}),
                                     Physics::PhysicsErrors::CapabilityRevoked);
         REQUIRE(host.character->Acquire("game.tests", 7, 1).HasValue());
     }
@@ -113,7 +114,8 @@ namespace {
         CharacterModuleHost host;
         auto module = host.Load();
         auto grant = module->CharacterContext()->Acquire("game.tests", 7, 1).Value();
-        auto created = BehaviorRuntime::Create(*host.world.scene, module->Registry(), {}, host.physics, {}, module->CharacterContext());
+        auto created = BehaviorRuntime::Create(*host.world.scene, module->Registry(), {},
+                                               {.physics = host.physics, .character = module->CharacterContext()});
         REQUIRE(created.HasValue());
         auto behavior = std::move(created).Value();
         Physics::Test::RequireError(module->PrepareReload(), GameplayErrors::GameplayReloadRestartRequired);
