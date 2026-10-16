@@ -210,6 +210,23 @@ namespace Horo::AI {
         CheckConsumed(stale);
     }
 
+    TEST_CASE("Rejected stale Blackboard consumption releases authorization before caller batch destruction",
+              "[unit][ai][blackboard-instance]") {
+        auto instance = Instance(Schema({Key(1, BlackboardValueKind::Boolean)}));
+        auto stale = instance->BeginWriteBatch().Value();
+        auto authorization = std::make_shared<BlackboardValueAuthorization>();
+        std::weak_ptr<const BlackboardValueAuthorization> retained = authorization;
+        REQUIRE(stale.Stage({MakeIdentity<BlackboardKeyId>(1), Bool(false), authorization}).HasValue());
+        authorization.reset();
+        REQUIRE_FALSE(retained.expired());
+        CommitTrueValues(*instance, {1});
+        ExpectError(instance->CommitAtBlackboardSync(std::move(stale)), AIErrors::BlackboardInstanceStale);
+        // stale remains in this scope: consumption, not its eventual destructor, must release the lease.
+        CHECK(retained.expired());
+        CheckConsumed(stale);
+        CHECK(instance->Snapshot().Value().Read(MakeIdentity<BlackboardKeyId>(1)).Value() == std::optional{Bool(true)});
+    }
+
     TEST_CASE("Blackboard batch enforces exact and one-over write capacity", "[unit][ai][blackboard-instance]") {
         std::vector<BlackboardKeyDescriptor> keys;
         for (std::uint64_t id = 1; id <= MaximumBlackboardKeys; ++id)

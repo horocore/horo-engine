@@ -261,28 +261,36 @@ namespace Horo::AI {
 
     /** @copydoc BlackboardInstance::CommitAtBlackboardSync */
     Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch &&batch) {
-        // Consume on every exit without move-constructing a vector (MSVC Debug allocates its iterator proxy).
+        // Transfer the consumption obligation, not vector storage: MSVC Debug allocates
+        // an iterator proxy when move-constructing a vector inside this measured boundary.
         struct ConsumeBatch final {
-            BlackboardInstanceBinding &binding;
-            std::uint64_t &revision;
-            std::vector<BlackboardWrite> &writes;
+            explicit ConsumeBatch(BlackboardWriteBatch &&input) noexcept : batch(std::move(input)) {}
+
+            ConsumeBatch(const ConsumeBatch &) = delete;
+            ConsumeBatch &operator=(const ConsumeBatch &) = delete;
+            ConsumeBatch(ConsumeBatch &&) = delete;
+            ConsumeBatch &operator=(ConsumeBatch &&) = delete;
+
+            BlackboardWriteBatch &&batch;
 
             ~ConsumeBatch() {
-                binding = {};
-                revision = 0;
-                writes.clear();
+                batch.binding_ = {};
+                batch.baseRevision_ = 0;
+                batch.writes_.clear();
             }
-        } consumed{batch.binding_, batch.baseRevision_, batch.writes_};
+        };
+
+        const ConsumeBatch consumed{std::move(batch)};
 
         if (publishing_)
             return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardReentrantMutation));
-        if (!active_ || batch.Binding() != binding_ || batch.BaseRevision() != revision_)
+        if (!active_ || consumed.batch.Binding() != binding_ || consumed.batch.BaseRevision() != revision_)
             return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardInstanceStale));
-        std::ranges::sort(batch.writes_, {}, &BlackboardWrite::key);
+        std::ranges::sort(consumed.batch.writes_, {}, &BlackboardWrite::key);
         scratch_ = values_;
         authorizationScratch_ = authorizations_;
         BlackboardCommitResult result{.revision = revision_};
-        for (const auto &write : batch.Writes()) {
+        for (const auto &write : consumed.batch.Writes()) {
             if (write.authorization && !write.authorization->IsCurrent())
                 return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardInstanceStale));
             auto applied = ApplyWrite(*schema_, scratch_, write);
