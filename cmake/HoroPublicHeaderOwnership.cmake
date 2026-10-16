@@ -1341,5 +1341,9 @@ horo_configure_target_header_boundary(HoroCliPackageAdapters PUBLIC_HEADERS Horo
 horo_configure_target_header_boundary(HoroMcpPackageAdapters PUBLIC_HEADERS Horo/Mcp/PackageTools.h)
 horo_configure_target_header_boundary(HoroEditorPackageAdapters PUBLIC_HEADERS Horo/Editor/PackageModalSession.h)
 
+horo_configure_target_header_boundary(HoroPhysicsTriggerVolumeHost PUBLIC_HEADERS
+    Horo/Application/PhysicsTriggerVolumeHost.h
+)
+
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

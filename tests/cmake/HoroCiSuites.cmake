@@ -19,6 +19,13 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroNavigationProjectSettingsTests
     HoroNavigationProjectSettingsPublicConsumer
     HoroPhysicsTests
+    HoroPrefabSceneCookHostTests
+    HoroPhysicsTriggerVolumeHostContractConsumer
+    HoroPhysicsTriggerVolumeHostPublicHeaderConsumer
+    HoroTriggerVolumeConversionPublicHeaderConsumer
+    HoroSceneCookPublicHeaderConsumer
+    HoroPhysicsSceneIntegrationPublicHeaderConsumer
+    HoroPrefabCookHostPublicHeaderConsumer
     HoroPhysicsPublicHeaderConsumer
     HoroGameplayPhysicsTests
     HoroGameplayRuntimeTests

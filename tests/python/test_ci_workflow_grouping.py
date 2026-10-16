@@ -43,6 +43,13 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroNavigationProjectSettingsTests", "HoroNavigationProjectSettingsPublicConsumer",
+    "HoroPrefabSceneCookHostTests",
+    "HoroPhysicsTriggerVolumeHostContractConsumer",
+    "HoroPhysicsTriggerVolumeHostPublicHeaderConsumer",
+    "HoroTriggerVolumeConversionPublicHeaderConsumer",
+    "HoroSceneCookPublicHeaderConsumer",
+    "HoroPhysicsSceneIntegrationPublicHeaderConsumer",
+    "HoroPrefabCookHostPublicHeaderConsumer",
     "HoroWorldStreamingTests", "HoroWorldStreamingPublicHeaderConsumer", "HoroStreamingSourcePlannerBenchmark",
     "HoroDestructionSaveTests", "HoroDestructionSavePublicConsumer",
     "HoroDestructionSaveIntegrationPublicHeaderConsumer", "HoroDestructionApiPublicHeaderConsumer",
@@ -539,3 +546,19 @@ def test_vfx_extraction_has_execution_and_owned_compile_consumer_closure() -> No
     assert 'add_library("${consumer_target}" OBJECT ${generated_sources})' in boundaries
     assert "support/VfxWorldPublicHeaderConsumer.cpp" in tests_cmake
     assert "support/RenderGraphWorkloadPublicHeaderConsumer.cpp" in tests_cmake
+
+
+def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    closure = targets("HORO_CI_WINDOWS_TARGETS")
+    assert {"HoroPhysicsTests", "HoroPrefabSceneCookHostTests", "HoroRuntimeSceneCellPayloadTests",
+            "HoroWorldCookIntegrationTests", "HoroSceneRuntimeConversionTests",
+            "HoroPhysicsTriggerVolumeHostContractConsumer", "HoroTriggerVolumeConversionPublicHeaderConsumer"} <= closure
+    for source in ("unit/runtime/physics/PhysicsTriggerVolumeRuntimeTests.cpp",
+                   "unit/runtime/physics/RuntimeSceneBaselinePhysicsTests.cpp",
+                   "unit/application/PhysicsTriggerVolumeHostTests.cpp"):
+        assert source in tests_cmake
+    for consumer in ("HoroPhysicsTriggerVolumeHostContractConsumer", "HoroTriggerVolumeConversionPublicHeaderConsumer"):
+        registration = re.search(rf'set_tests_properties\({consumer} PROPERTIES LABELS "([^"]+)"\)', tests_cmake)
+        assert registration is not None
+        assert "ci-windows" in registration.group(1).split(";")

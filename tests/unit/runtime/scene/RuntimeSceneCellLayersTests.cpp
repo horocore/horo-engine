@@ -1,6 +1,7 @@
 #include "../world_streaming/WorldStreamingTestUtils.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellLayers.h"
+#include "TriggerVolumeCellTestValues.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -515,5 +516,24 @@ namespace Horo::Runtime {
         service.Shutdown();
         loads.Shutdown();
         jobs.Shutdown(ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Cell layer selection preserves only included trigger producer proof", "[scene][trigger][cell_layers]") {
+        const auto partition = Partition();
+        const Test::TriggerCellValues values;
+        const SceneCellPayloadSource source{.identity = Identity(), .entities = values.entities, .triggerVolumeEvidence = values.proof};
+        auto baseline = CookRuntimeSceneCellPayload(partition, source, Identity(), {8, 8, 1024 * 1024}).Value();
+        bool included = true;
+        SECTION("optional selected trigger retains proof") {}
+        SECTION("server-only trigger is excluded from the client") {
+            included = false;
+        }
+        const std::array membership{SceneCellLayerMembership{{1}, Layer(included ? 2 : 1)}};
+        auto encoded = EncodeRuntimeSceneCellLayers(partition, std::move(baseline), Identity(), Layers(), membership, Limits());
+        REQUIRE(encoded.HasValue());
+        const auto filtered = FilterRuntimeSceneCellLayers(encoded.Value(), Policy(), Candidates(), States(), Context());
+        REQUIRE(filtered.HasValue());
+        REQUIRE(filtered.Value().Definition().TriggerVolumeEvidence().size() == (included ? 1 : 0));
+        REQUIRE(filtered.Value().Definition().Entities().size() == (included ? 1 : 0));
     }
 }  // namespace Horo::Runtime

@@ -56,21 +56,21 @@ TEST_CASE("Headless retained conversion fences source changes until a fresh proj
     const std::vector<ScenePrefabInstance> placements{fixture.Placement(7)};
     const SceneSourceView source{objects, placements};
     auto retained = BuildScenePrefabProjection(source, resolver, fixture.limits).Value();
-    const auto previous = ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, resolver, fixture.limits);
+    const auto previous = ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, {resolver, fixture.limits});
     REQUIRE(previous.HasValue());
 
     const auto current = fixture.Resolver("Edited");
-    REQUIRE(ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, current, fixture.limits).HasError());
+    REQUIRE(ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, {current, fixture.limits}).HasError());
     const std::array changed{fixture.asset};
     InvalidateScenePrefabProjection(retained, current, changed, fixture.limits);
     REQUIRE(retained.instances.front().stale);
     REQUIRE_FALSE(retained.instances.front().IsSynchronized());
     CHECK(retained.instances.front().expanded->Objects().front().object.name == "Root");
     InvalidateScenePrefabProjection(retained, resolver, {}, fixture.limits);
-    REQUIRE(ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, resolver, fixture.limits).HasError());
+    REQUIRE(ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, retained, {resolver, fixture.limits}).HasError());
 
     const auto refreshed = BuildScenePrefabProjection(source, current, fixture.limits).Value();
-    const auto replacement = ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, refreshed, current, fixture.limits);
+    const auto replacement = ConvertScenePrefabProjectionToRuntime(source, {1}, {2}, refreshed, {current, fixture.limits});
     REQUIRE(replacement.HasValue());
     CHECK(replacement.Value().Entities()[1].object == previous.Value().Entities()[1].object);
     CHECK(previous.Value().Entities().size() == 3);
