@@ -254,9 +254,16 @@ horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
     Horo/Packages/PackagePublisherVerification.h
     Horo/Packages/PackagePublisherVerificationErrors.h
 )
+horo_configure_target_header_boundary(HoroPackageContentStagingInternal)
+horo_configure_target_header_boundary(HoroPackageGameplayHost PUBLIC_HEADERS
+    Horo/Packages/GameplayPackageModuleHost.h
+)
 horo_configure_target_header_boundary(HoroPackageLifecycle PUBLIC_HEADERS
     Horo/Packages/PackageLifecycle.h
     Horo/Packages/PackageLifecycleErrors.h
+    Horo/Packages/PackageModuleHost.h
+    Horo/Packages/NativePackageModuleHost.h
+    Horo/Packages/ScriptPackageModuleHost.h
 )
 horo_configure_target_header_boundary(HoroProjectMigrations)
 horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
@@ -500,6 +507,7 @@ horo_configure_target_header_boundary(HoroGameplayCharacterIntegration PUBLIC_HE
     Horo/Gameplay/GameplayCharacterContext.h
 )
 horo_configure_target_header_boundary(HoroGameplayModuleHost PUBLIC_HEADERS
+    Horo/Gameplay/GameModuleRetirement.h
     Horo/Gameplay/GameModuleHost.h
 )
 horo_configure_target_header_boundary(HoroGameplayBuild PUBLIC_HEADERS
