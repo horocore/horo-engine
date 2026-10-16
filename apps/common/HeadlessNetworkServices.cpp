@@ -98,6 +98,8 @@ namespace Horo::Application::Internal {
             }
 
             Result<void> RunPhase(Runtime::RuntimePhase) override {
+                if (owners_->gameplay && owners_->gameplay->moduleRetirements)
+                    (void)owners_->gameplay->moduleRetirements->Drain();
                 return Result<void>::Success();
             }
 
@@ -131,6 +133,8 @@ namespace Horo::Application::Internal {
                 if (gameplay_)
                     gameplay_->Shutdown();
                 gameplay_.reset();
+                if (owners_->gameplay && owners_->gameplay->moduleRetirements)
+                    (void)owners_->gameplay->moduleRetirements->Drain();
                 if (replication_.has_value())
                     replication_->BeginShutdown();
                 if (physicsWorld_ != nullptr)

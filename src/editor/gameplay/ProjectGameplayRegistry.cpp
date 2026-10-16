@@ -107,9 +107,17 @@ namespace Horo::Editor {
         return *this;
     }
 
-    ProjectGameplayRegistry::ProjectGameplayRegistry(ConstructionToken) {
+    ProjectGameplayRegistry::ProjectGameplayRegistry(ConstructionToken, std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements)
+        : moduleRetirements_(retirements ? std::move(retirements) : std::make_shared<Gameplay::GameModuleRetirementQueue>()) {
         static_cast<void>(missingAssetTypes_.Freeze());
         static_cast<void>(missingComponents_.Freeze());
+    }
+
+    ProjectGameplayRegistry::~ProjectGameplayRegistry() {
+        if (nativeModule_ && retirementAdmission_)
+            retirementAdmission_->Retain(std::move(nativeModule_));
+        retirementAdmission_.reset();
+        (void)moduleRetirements_->Drain();
     }
 
     ProjectGameplayRegistry::LuaSourceStat ProjectGameplayRegistry::ReadLuaSourceStat(const std::filesystem::path &source,
@@ -130,18 +138,19 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ProjectGameplayRegistry::Discover */
-    std::unique_ptr<ProjectGameplayRegistry> ProjectGameplayRegistry::Discover(const std::filesystem::path &projectRoot) {
-        auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{});
+    std::unique_ptr<ProjectGameplayRegistry> ProjectGameplayRegistry::Discover(
+        const std::filesystem::path &projectRoot, std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements) {
+        auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->DiscoverNativeModule(projectRoot);
         result->DiscoverLuaPrograms(projectRoot);
         return result;
     }
 
     /** @copydoc ProjectGameplayRegistry::DiscoverRollback */
-    std::unique_ptr<ProjectGameplayRegistry> ProjectGameplayRegistry::DiscoverRollback(const std::filesystem::path &projectRoot,
-                                                                                       const NativeGameplayRollbackArtifact &artifact,
-                                                                                       const ProjectLuaGenerationSnapshot &luaGeneration) {
-        auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{});
+    std::unique_ptr<ProjectGameplayRegistry> ProjectGameplayRegistry::DiscoverRollback(
+        const std::filesystem::path &projectRoot, const NativeGameplayRollbackArtifact &artifact,
+        const ProjectLuaGenerationSnapshot &luaGeneration, std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements) {
+        auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->nativeManifestPath_ = projectRoot / ".horo" / "local" / "gameplay_module.json";
         if (std::error_code manifestError; std::filesystem::is_regular_file(result->nativeManifestPath_, manifestError)) {
             const auto writeTime = std::filesystem::last_write_time(result->nativeManifestPath_, manifestError);
@@ -155,8 +164,9 @@ namespace Horo::Editor {
 
     /** @copydoc ProjectGameplayRegistry::DiscoverNativeGeneration */
     std::unique_ptr<ProjectGameplayRegistry> ProjectGameplayRegistry::DiscoverNativeGeneration(
-        const std::filesystem::path &projectRoot, const ProjectLuaGenerationSnapshot &luaGeneration) {
-        auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{});
+        const std::filesystem::path &projectRoot, const ProjectLuaGenerationSnapshot &luaGeneration,
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements) {
+        auto result = std::make_unique<ProjectGameplayRegistry>(ConstructionToken{}, std::move(retirements));
         result->DiscoverNativeModule(projectRoot);
         result->InstallLuaGeneration(luaGeneration);
         return result;
@@ -215,17 +225,29 @@ namespace Horo::Editor {
 
     void ProjectGameplayRegistry::LoadNativeModule(const std::filesystem::path &projectRoot, const std::filesystem::path &artifactPath,
                                                    const std::string_view moduleId, const std::uint64_t descriptorRevision) {
+        auto admission = moduleRetirements_->Reserve();
+        if (admission.HasError()) {
+            diagnostics_.emplace_back(artifactPath, admission.ErrorValue());
+            return;
+        }
+        retirementAdmission_.emplace(std::move(admission).Value());
         Gameplay::GameModuleHost host;
-        Result<std::unique_ptr<Gameplay::LoadedGameModule>> loaded =
-            host.LoadShadowCopy(artifactPath, projectRoot / ".horo" / "local" / "gameplay_module_shadow",
-                                {.moduleId = moduleId,
-                                 .buildFingerprint = Gameplay::CurrentGameplayBuildFingerprint(),
-                                 .descriptorRevision = descriptorRevision});
+        auto loaded = host.LoadShadowCopy(artifactPath, projectRoot / ".horo" / "local" / "gameplay_module_shadow",
+                                          {.moduleId = moduleId,
+                                           .buildFingerprint = Gameplay::CurrentGameplayBuildFingerprint(),
+                                           .descriptorRevision = descriptorRevision});
         if (loaded.HasError()) {
             diagnostics_.emplace_back(artifactPath, loaded.ErrorValue());
             return;
         }
-        nativeModule_ = std::move(loaded).Value();
+        auto candidate = std::move(loaded).Value();
+        nativeModule_ = std::move(candidate.owner);
+        if (candidate.diagnostic) {
+            diagnostics_.emplace_back(artifactPath, *candidate.diagnostic);
+            retirementAdmission_->Retain(std::move(nativeModule_));
+            retirementAdmission_.reset();
+            return;
+        }
         nativeModuleId_ = std::string{moduleId};
         nativeDescriptorRevision_ = descriptorRevision;
         if (Result<void> contributed = nativeModule_->ContributeBehaviorsTo(registry_); contributed.HasError()) {

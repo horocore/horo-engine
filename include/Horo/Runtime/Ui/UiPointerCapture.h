@@ -9,9 +9,11 @@
 #include "Horo/Runtime/Ui/UiPresentationReceipt.h"
 
 #include <compare>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace Horo::Runtime::Ui {
     inline constexpr std::uint32_t MaximumUiPointerCaptures = 64;
@@ -109,6 +111,16 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Validates typed identities, button vocabulary, and same-owner lineage. */
         [[nodiscard]] bool IsValid() const noexcept;
+    };
+
+    /** @brief Copied active capture evidence; deliberately excludes release/cancellation token authority. */
+    struct UiPointerCaptureInspection final {
+        RuntimeUiInputContextId context;
+        UiPointerId pointer;
+        UiPointerButton button{};
+        UiRenderViewId view;
+        UiEventRoute route;
+        bool currentGeneration{}; /**< False exposes an active lease awaiting ordinary owner reconciliation. */
     };
 
     namespace Detail {
@@ -278,6 +290,14 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Reports whether every capture slot is free or permanently retired. */
         [[nodiscard]] bool IsDrained() const noexcept;
+        /** @brief Copies active captures matching an exact live input/canvas/tree/interaction context.
+         * @param context Exact borrowed observation context. @param output Bounded caller-owned storage.
+         * @return Count or typed invalid/foreign/lifecycle/capacity failure; output unchanged on failure. No allocation.
+         * @pre Serialized on the capture owner's thread. Inspection cannot release, reconcile or cancel a lease.
+         */
+        [[nodiscard]] Result<std::size_t> Inspect(const UiPointerCaptureContext &context,
+                                                  std::span<UiPointerCaptureInspection> output) const;
+
         /** @brief Returns the number of currently active leases. */
         [[nodiscard]] std::uint32_t ActiveCount() const noexcept;
 
