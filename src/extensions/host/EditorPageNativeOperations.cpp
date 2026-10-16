@@ -26,7 +26,7 @@ namespace Horo::Extensions::Detail {
             auto &result = *static_cast<Findings *>(context);
             try {
                 EditorPageFinding finding;
-                if (!input || input->structSize < sizeof(*input) || input->severity > 2 || result.values.size() >= 32 ||
+                if (!HoroEditorPageFindingShape(input) || result.values.size() >= 32 ||
                     !CopyActivityText(input->binding, finding.binding.value) ||
                     !CopyActivityText(input->diagnosticCode, finding.code.value, 128) ||
                     !CopyActivityText(input->messageKey, finding.message.value, 128)) {
@@ -76,11 +76,11 @@ namespace Horo::Extensions::Detail {
         class NativePageOperations final : public IEditorPageOperations {
         public:
             explicit NativePageOperations(const HoroEditorPageDescriptor &descriptor) noexcept
-                : callback_(descriptor.invoke), context_(descriptor.moduleContext) {}
+                : endpoint_{.structSize = sizeof(endpoint_), .moduleContext = descriptor.moduleContext, .invoke = descriptor.invoke} {}
 
             Result<std::vector<EditorPageFinding>> Invoke(EditorPageOperation operation, const EditorPageDraft &draft,
                                                           const EditorUiActionId &action, const CancellationToken &cancellation) override {
-                if (!callback_ || draft.values.size() > MaximumEditorPageFields)
+                if (!endpoint_.invoke || draft.values.size() > MaximumEditorPageFields)
                     return Result<std::vector<EditorPageFinding>>::Failure(MakeError(ExtensionErrors::ContributionRejected));
                 if (std::ranges::any_of(draft.values, [](const auto &field) {
                     return !std::holds_alternative<bool>(field.value) && !std::holds_alternative<std::int64_t>(field.value) &&
@@ -100,7 +100,7 @@ namespace Horo::Extensions::Detail {
                 const HoroEditorPageFindingSink sink{&findings, Append};
                 HoroExtensionStatus status = HORO_EXTENSION_ERROR_INIT_FAILED;
                 try {
-                    status = callback_(context_, &request, &sink);
+                    status = HoroEditorPageInvoke(&endpoint_, &request, &sink);
                 } catch (...) {
                     status = HORO_EXTENSION_ERROR_INIT_FAILED;
                 }
@@ -112,8 +112,7 @@ namespace Horo::Extensions::Detail {
             }
 
         private:
-            HoroEditorPageOperationFunc callback_{};
-            void *context_{};
+            HoroEditorPageDescriptor endpoint_{};
         };
     }  // namespace
 

@@ -10,8 +10,8 @@ namespace Horo::Extensions {
         HoroExtensionStatus Open(void *context) noexcept {
             if (!context)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
-            auto &session = *static_cast<EditorPageNativeSession *>(context);
             try {
+                auto &session = *static_cast<EditorPageNativeSession *>(context);
                 const auto host = session.host.lock();
                 if (!host || session.revoked || !session.committed || session.owner != std::this_thread::get_id())
                     return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
@@ -27,8 +27,8 @@ namespace Horo::Extensions {
         HoroExtensionStatus Close(void *context) noexcept {
             if (!context)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
-            auto &session = *static_cast<EditorPageNativeSession *>(context);
             try {
+                auto &session = *static_cast<EditorPageNativeSession *>(context);
                 const auto host = session.host.lock();
                 if (!host || session.revoked || !session.committed || session.owner != std::this_thread::get_id())
                     return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;

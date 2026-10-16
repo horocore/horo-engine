@@ -136,9 +136,9 @@ namespace Horo::Extensions::Tests::PageSupport {
                                     .labelLocalizationKey = "fixture.title",
                                     .placement = {modal ? EditorSurfacePlacementKind::Modal : EditorSurfacePlacementKind::Settings, {}, 0},
                                     .persistence = EditorSurfacePersistence::None,
-                                    .provider = provider,
                                     .requiredCapabilities = {capability},
-                                    .requiredPermissions = permissions},
+                                    .requiredPermissions = permissions,
+                                    .provider = provider},
                         .state = {{"page.count"}},
                         .localization = {{"fixture.title"}, {"fixture.count"}, {"fixture.invalid"}},
                         .diagnostics = {{"fixture.validation"}}};

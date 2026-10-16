@@ -136,3 +136,29 @@ C++ consumers rebuild against the new additive controller contract. The GUI
 adapter consumes validated `BuildEditorUiRenderSnapshot` from the actual shared
 design tokens/fonts. A private owner-boundary structural capture generation
 tracks real theme changes; it is neither persisted nor a second theme authority.
+
+## Page transport admission and filled icon geometry repair
+
+The ABI1.5 wire layouts and versions remain unchanged. `EditorPageAbi.h` now
+owns the allocation-free C11 structural checks shared by the actual C11 page
+producer and the host ingress/callback adapter. These check complete prefixes
+before tail fields, bounded array extents and pointer/count pairs, exact selected
+value kinds and integer limits. They do not validate arbitrary foreign memory,
+UTF-8 content, manifest ownership, permissions, duplicate identities or FormKit
+semantics; the existing host copy/admission validation remains mandatory.
+Checked invocation retains the caller-held executable lease and exception
+boundary. C11 modules can use the checked session/finding helpers without
+retaining call-lifetime host views. The actual native fixture reports a localized
+negative-value finding, proving the real sink prevents durable publication.
+Existing modules need no binary migration; rebuilt sources can reuse these same
+checks. Old negotiated1.4 sessions still cannot access the appended page callback.
+
+The theme frame's `icons.strokeWidth` now admits finite zero to represent a filled
+font glyph without an outline. Negative and nonfinite widths remain invalid.
+The GUI bridge publishes that zero explicitly; `ImGuiStyle::FrameBorderSize`
+continues to describe control focus/border interaction and is not icon authority.
+The semantic glyph support mask is retained. This is a validity-contract expansion
+without a layout/version change; external host/theme validators should rebuild
+and accept zero rather than substitute an invented positive outline. Affected
+callers are the real GUI theme capture, canonical theme validator, public theme
+header consumers and page view/render tests.

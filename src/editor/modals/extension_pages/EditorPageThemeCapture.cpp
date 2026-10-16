@@ -68,7 +68,7 @@ namespace Horo::Editor {
                              z.modalSidebarWidth / s, z.settingsWidth / s,      z.settingsHeight / s,    small.iconSize / s,
                              medium.iconSize / s,     large.iconSize / s,       small.minimumHeight / s};
             frame.radii = {t.radii.control / s, t.radii.card / s, t.radii.modal / s, t.radii.card / s, t.radii.control / s};
-            frame.icons = {small.iconSize / s, medium.iconSize / s, large.iconSize / s, ImGui::GetStyle().FrameBorderSize / s};
+            frame.icons = {small.iconSize / s, medium.iconSize / s, large.iconSize / s, 0};
             frame.fonts = {EditorThemeFontRole::Sans,
                            EditorThemeFontRole::SansCompact,
                            EditorThemeFontRole::SansEmphasis,

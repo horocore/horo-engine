@@ -267,10 +267,9 @@ namespace Horo::Extensions {
         /** @brief Unwinds all staged publication/code ownership if allocation or later registration fails. */
         struct Rollback {
             std::shared_ptr<EditorPageSession> session;
-            bool committed{};
 
             ~Rollback() {
-                if (!committed)
+                if (session)
                     session->Revoke();
             }
         };
@@ -286,7 +285,7 @@ namespace Horo::Extensions {
             return Result<EditorPageRegistration>::Failure(published.ErrorValue());
         state_->projectionDirty = true;
         state_->sessions.push_back(session);
-        rollback.committed = true;
+        rollback.session.reset();
         return Result<EditorPageRegistration>::Success(EditorPageRegistration{std::move(session)});
     }
 

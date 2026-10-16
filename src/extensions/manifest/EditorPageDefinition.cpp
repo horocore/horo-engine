@@ -122,17 +122,20 @@ namespace Horo::Extensions {
                 if (!text(b.label) || !text(b.description) || !text(b.accessibleLabel))
                     return false;
                 return std::visit([&](const auto &typed) {
-                    bool valid = true;
                     if constexpr (requires { typed.text; })
-                        valid = valid && text(typed.text);
+                        if (!text(typed.text))
+                            return false;
                     if constexpr (requires { typed.message; })
-                        valid = valid && text(typed.message);
+                        if (!text(typed.message))
+                            return false;
                     if constexpr (requires { typed.placeholder; })
-                        valid = valid && text(typed.placeholder);
+                        if (!text(typed.placeholder))
+                            return false;
                     if constexpr (requires { typed.options; })
                         for (const auto &choice : typed.options)
-                            valid = valid && text(choice.label);
-                    return valid;
+                            if (!text(choice.label))
+                                return false;
+                    return true;
                 }, node.payload);
             });
         }

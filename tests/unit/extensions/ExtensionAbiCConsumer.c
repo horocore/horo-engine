@@ -1,4 +1,5 @@
 #include "Horo/Extensions/EditorActivityAbi.h"
+#include "Horo/Extensions/EditorPageAbi.h"
 #include "Horo/Extensions/ExtensionAbi.h"
 
 #include <stddef.h>
@@ -27,11 +28,32 @@ _Static_assert(_Generic((HoroEditorActivityActionFunc)0,
 _Static_assert(offsetof(HoroEditorActivityDescriptor, structSize) == 0, "Activity descriptor starts with its size");
 _Static_assert(offsetof(HoroEditorActivitySessionApi, structSize) == 0, "Activity session starts with its size");
 
+/** @brief Exercises exact C11 page defaults and fail-closed prefix/extent admission before native traversal. */
+static int CheckPageWire(void) {
+    HoroEditorPageField field = {.structSize = sizeof(HoroEditorPageField),
+                                 .flags = HORO_EDITOR_PAGE_INTEGER_MINIMUM | HORO_EDITOR_PAGE_INTEGER_MAXIMUM,
+                                 .defaultValue = {.structSize = sizeof(HoroEditorPageValue),
+                                                  .kind = HORO_EDITOR_PAGE_INTEGER,
+                                                  .integerValue = INT64_MAX},
+                                 .minimumInteger = INT64_MIN,
+                                 .maximumInteger = INT64_MAX};
+    HoroEditorPageDescriptor page = {.structSize = 0, .fieldCount = UINT32_MAX};
+    HoroEditorPageSessionApi session = {.structSize = 0, .sessionVersion = UINT32_MAX};
+    if (!HoroEditorPageFieldShape(&field) || HoroEditorPageDescriptorShape(&page) ||
+        HoroEditorPageSetOpen(&session, 1) == HORO_EXTENSION_SUCCESS)
+        return 0;
+    field.maximumInteger = INT64_MAX - 1;
+    if (HoroEditorPageFieldShape(&field))
+        return 0;
+    field.defaultValue.structSize = 0;
+    return !HoroEditorPageFieldShape(&field) && !HoroEditorPageOperationShape(0) && !HoroEditorPageFindingShape(0);
+}
+
 /** @brief Compile the public ABI as C, independently of C++ language extensions. */
 int main(void) {
     const HoroExtensionHostApi host = {.structSize = sizeof(HoroExtensionHostApi), .abiVersion = HORO_EXTENSION_ABI_VERSION};
     const HoroExtensionModuleApi module = {.structSize = sizeof(HoroExtensionModuleApi)};
-    return host.structSize == sizeof(host) && module.structSize == sizeof(module) &&
+    return CheckPageWire() && host.structSize == sizeof(host) && module.structSize == sizeof(module) &&
                    strcmp(HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, "editor.activity") == 0
                ? 0
                : 1;

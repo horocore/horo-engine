@@ -28,7 +28,7 @@ namespace Horo::Extensions::Detail {
 
         /** @brief Copies one canonical full-width default, without floating-point conversion or coercion. */
         Result<SettingValue> Value(const HoroEditorPageValue &input) {
-            if (input.structSize < sizeof(input))
+            if (!HoroEditorPageValueShape(&input))
                 return Invalid<SettingValue>();
             switch (input.kind) {
                 case HORO_EDITOR_PAGE_BOOLEAN:
@@ -50,7 +50,7 @@ namespace Horo::Extensions::Detail {
 
         /** @brief Couples a canonical setting descriptor to one standard editable primitive, using the same binding identity. */
         Result<EditorPageField> Field(const HoroEditorPageField &input, SettingScope scope, EditorUiForm &form) {
-            if (input.structSize < sizeof(input) || (input.flags & ~uint32_t{15}) != 0 || input.maximumStringBytes > 4096)
+            if (!HoroEditorPageFieldShape(&input))
                 return Invalid<EditorPageField>();
             EditorPageField field;
             EditorUiNodeBase base;
@@ -112,9 +112,7 @@ namespace Horo::Extensions::Detail {
     /** @copydoc CopyPageDefinition */
     Result<EditorPageDefinition> CopyPageDefinition(const HoroEditorPageDescriptor &input, std::string_view surfaceId,
                                                     std::string_view titleKey) {
-        if (input.structSize < sizeof(input) || input.schemaVersion != HORO_EDITOR_PAGE_SCHEMA_VERSION ||
-            input.kind > HORO_EDITOR_PAGE_MODAL_CHILD || input.scope > HORO_EDITOR_PAGE_SESSION ||
-            input.fieldCount > MaximumEditorPageFields || (input.fieldCount && !input.fields))
+        if (!HoroEditorPageDescriptorShape(&input))
             return Invalid<EditorPageDefinition>();
         EditorPageDefinition definition;
         if (input.presentationNodeCount == 0) {

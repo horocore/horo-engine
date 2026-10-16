@@ -57,11 +57,14 @@ namespace Horo::Editor::Tests {
 
     TEST_CASE("Page theme bridge captures actual owner changes and keeps unchanged frame revision", "[editor][EditorPage][Theme]") {
         Gui gui;
+        ImGui::GetStyle().FrameBorderSize = 0;
         EditorPageThemeCapture capture;
         REQUIRE(capture.Frame()->revision == 0);
         REQUIRE(capture.Update(gui.context).HasValue());
         const auto revision = capture.Frame()->revision;
         CHECK(revision != 0);
+        CHECK(capture.Frame()->icons.strokeWidth == 0);
+        CHECK(capture.Frame()->interaction.focusRingWidth == 0);
         REQUIRE(capture.Update(gui.context).HasValue());
         CHECK(capture.Frame()->revision == revision);
         ImGui::GetStyle().DisabledAlpha = 0.42F;

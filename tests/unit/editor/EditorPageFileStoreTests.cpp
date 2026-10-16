@@ -61,9 +61,16 @@ namespace Horo::Editor::Tests {
         EditorPageFileStore store{files, directory.Path()};
         const Extensions::EditorSurfaceProviderIdentity provider{"fixture.package", "fixture.module", 1};
         REQUIRE(store.Write(provider, "page", SettingScope::User, 1, Snapshot()).HasValue());
-        auto entries = std::filesystem::directory_iterator(directory.Path() / "extensions");
-        REQUIRE(entries != std::filesystem::directory_iterator{});
-        const auto path = entries->path();
+        std::filesystem::path path;
+        for (const auto &entry : std::filesystem::directory_iterator(directory.Path() / "extensions")) {
+            if (entry.path().extension() == ".json") {
+                REQUIRE(path.empty());
+                path = entry.path();
+            }
+        }
+        REQUIRE_FALSE(path.empty());
+        REQUIRE(std::filesystem::is_regular_file(path));
+        REQUIRE(store.Read(provider, "page", SettingScope::User).HasValue());
         SECTION("oversized source remains unchanged") {
             {
                 std::ofstream stream{path, std::ios::binary | std::ios::trunc};

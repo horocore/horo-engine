@@ -44,6 +44,23 @@ namespace Horo::Extensions::Tests {
             CHECK(calls(HORO_EDITOR_PAGE_VALIDATE) == 1);
         }
 
+        /** @brief Native C11 localized validation prevents durable publication while retaining the exact editable draft. */
+        void CheckNativeValidation(EditorPageHost &pages, PageSupport::Store &store) {
+            const auto before = Page(pages, "fixture.settings");
+            const auto writes = store.writes;
+            REQUIRE(
+                pages.SetValue(before.surface.provider, before.surface.id, before.revision, {{"page.count"}, std::int64_t{-1}}).HasValue());
+            pages.Update();
+            const auto candidate = Page(pages, before.surface.id);
+            REQUIRE(pages.Apply(candidate.surface.provider, candidate.surface.id, candidate.revision).HasValue());
+            Wait(pages, candidate.surface.id);
+            const auto &after = Page(pages, candidate.surface.id);
+            REQUIRE(after.findings.size() == 1);
+            CHECK(after.findings.front().code.value == "fixture.negative");
+            CHECK(after.findings.front().severity == EditorUiValidationSeverity::Error);
+            CHECK(store.writes == writes);
+        }
+
         /** @brief Exercises native root/child validation, submission and parent cancellation under caller-owned module lifetime. */
         void CheckModals(EditorPageHost &pages, PageSupport::Store &store, EditorSurfaceRegistry &registry,
                          HoroExtensionStatus (*open)(uint32_t), HoroExtensionStatus (*close)(uint32_t), uint32_t (*calls)(uint32_t)) {
@@ -102,6 +119,7 @@ namespace Horo::Extensions::Tests {
         pages->Update();
         CheckSettings(*pages, store, integer, calls);
         CheckModals(*pages, store, activities->Registry(), open, close, calls);
+        CheckNativeValidation(*pages, store);
         manager.UnloadExtension("fixture.package");
         pages->Update();
         CHECK(pages->Prepared().empty());
