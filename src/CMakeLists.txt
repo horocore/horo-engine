@@ -2777,6 +2777,7 @@ add_library(HoroEditorServices STATIC
         editor/pcg/PCGGraphDocumentService.cpp
         editor/document/DocumentRecoveryService.cpp
         editor/audio/AudioEditorDocument.cpp
+        editor/audio/AudioComponentPreview.cpp
         editor/audio/MixerAssetDocument.cpp
         editor/audio/MixerDocumentCommands.cpp
         editor/CinematicPropertyBindings.cpp
@@ -2991,8 +2992,10 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/hierarchy/HierarchyEditSession.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorEditSession.cpp
+            editor/screens/workspace/panels/inspector/InspectorAudioEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelAudioWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
@@ -3025,6 +3028,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/performance/GlobalDockPerformancePane.cpp
             editor/screens/workspace/panels/global_dock/panes/physics/GlobalDockPhysicsPane.cpp
             editor/screens/workspace/EditorWorkspaceController.cpp
+        editor/screens/workspace/EditorWorkspaceControllerAudio.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
             editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp

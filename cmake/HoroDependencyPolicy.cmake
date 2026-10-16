@@ -268,6 +268,7 @@ horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES
+        HoroAudioFrontendComposition HoroAudioImport HoroAudioSdl3 HoroAudioNull
         HoroPackageProjectHost
         HoroShaderBuild
         HoroGui

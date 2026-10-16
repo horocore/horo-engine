@@ -8,6 +8,7 @@
 #include "editor/modals/packages/PackageModal.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <imgui_test_engine/imgui_te_context.h>
 
 namespace {
@@ -220,8 +221,9 @@ namespace {
         }, [&](ImGuiTestContext *ctx) {
             ctx->Yield(2);
             Click(*ctx, "Restore locked packages");
-            for (unsigned frame = 0; frame < 100 && fixture.application.source.calls.load() == 0; ++frame)
-                ctx->Yield();
+            // Fast-mode frames do not acknowledge the real I/O worker entering its blocked fetch.
+            IM_CHECK(fixture.application.source.entered.try_acquire_for(std::chrono::seconds{5}));
+            IM_CHECK_EQ(fixture.application.source.calls.load(), 1U);
             IM_CHECK(fixture.operation.has_value());
             IM_CHECK(fixture.operation->outcome == PackageOperationOutcome::Running);
             original = fixture.operation->id;

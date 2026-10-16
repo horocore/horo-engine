@@ -3,6 +3,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Cinematic/CameraCutRuntime.h"
+#include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/NotificationService.h"
@@ -56,6 +57,7 @@ namespace Horo::Editor {
         Application::NetworkDebuggerService *networkDebugger{};
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
+        IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
         PCGDocumentCatalog pcgCatalog{.revision = 1}; /**< Empty support preserves graph nodes inert until a catalog is composed. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
@@ -68,6 +70,14 @@ namespace Horo::Editor {
                                   const Assets::AssetRegistrySnapshot &assetRegistry = {},
                                   const EditorWorkspaceDependencies &dependencies = {});
         ~EditorWorkspaceController();
+
+        /** @brief Starts captured audio through the injected host, never through a widget/backend bypass.
+         * @param object Exact selected authored source. @param revision Expected document revision. @return Typed admission/failure. */
+        [[nodiscard]] Result<void> StartAudioPreview(SceneObjectId object, DocumentRevision revision);
+        /** @brief Revokes only this workspace's output, retaining native ownership in the application. */
+        void StopAudioPreview() noexcept;
+        /** @brief Reconciles authoring/selection changes and copies current typed preview facts. */
+        void ReconcileAudioPreview();
 
         /** @brief Starts a camera-only authored preview using the same runtime hard-cut composition as a packaged view.
          * @param activation Owned camera-only plan and player descriptor. @param cuts Required camera bindings/end policy.
@@ -369,6 +379,9 @@ namespace Horo::Editor {
         [[nodiscard]] bool ProcessComponentCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessObjectPropertyCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessObjectComponentValueCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Routes typed audio authoring and preview intents on the workspace owner lane.
+         * @param cmd Copied workspace intent. @return True when this is an audio command. */
+        [[nodiscard]] bool ProcessAudioComponentCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessBehaviorCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessContentBrowserCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessContentBrowserNavigationCommand(const EditorWorkspaceViewCommandData &cmd);
@@ -533,5 +546,7 @@ namespace Horo::Editor {
         void RefreshContentBrowserAfterMutation();
         void RequestContentBrowserRefresh();
         void ReconcileContentBrowserNavigation();
+        IAudioComponentPreview *m_audioPreview{};
+        Assets::AssetId m_audioPreviewWorkspace;
     };
 }  // namespace Horo::Editor

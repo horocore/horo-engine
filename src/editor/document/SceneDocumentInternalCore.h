@@ -74,6 +74,12 @@ namespace Horo::Editor::SceneDocumentDetail {
         Runtime::AudioSourceComponent after;
     };
 
+    struct AudioListenerChangedDelta {
+        SceneObjectId object;
+        Runtime::AudioListenerComponent before;
+        Runtime::AudioListenerComponent after;
+    };
+
     struct NavigationComponentsChangedDelta {
         SceneObjectId object;
         std::optional<Runtime::NavigationSurfaceComponent> surfaceBefore;
@@ -106,6 +112,7 @@ namespace Horo::Editor::SceneDocumentDetail {
         std::optional<Runtime::LightComponent> light;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolume;
         std::optional<Runtime::AudioSourceComponent> audioSource;
+        std::optional<Runtime::AudioListenerComponent> audioListener;
     };
 
     struct BehaviorsChangedDelta {
@@ -179,10 +186,11 @@ namespace Horo::Editor::SceneDocumentDetail {
 
     using SceneCommandDelta =
         std::variant<CreatedObjectDelta, RenamedObjectDelta, TransformedObjectDelta, TransformedObjectsDelta, CameraChangedDelta,
-                     LightChangedDelta, TriggerVolumeChangedDelta, AudioSourceChangedDelta, NavigationComponentsChangedDelta,
-                     EditorStateChangedDelta, ComponentAddedDelta, ComponentRemovedDelta, BehaviorsChangedDelta,
-                     GameplayComponentsChangedDelta, DeletedObjectsDelta, CreatedPrefabInstanceDelta, PrefabInstanceTransformDelta,
-                     PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta, SceneObjectsReplacedDelta, PrefabInstanceValuesDelta>;
+                     LightChangedDelta, TriggerVolumeChangedDelta, AudioSourceChangedDelta, AudioListenerChangedDelta,
+                     NavigationComponentsChangedDelta, EditorStateChangedDelta, ComponentAddedDelta, ComponentRemovedDelta,
+                     BehaviorsChangedDelta, GameplayComponentsChangedDelta, DeletedObjectsDelta, CreatedPrefabInstanceDelta,
+                     PrefabInstanceTransformDelta, PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta, SceneObjectsReplacedDelta,
+                     PrefabInstanceValuesDelta>;
 
     struct HistoryRecord {
         DocumentStateId beforeState;
@@ -292,6 +300,9 @@ namespace Horo::Editor::SceneDocumentDetail {
             return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidCamera, "Camera authoring values are invalid."));
         if (components.light.has_value() && !IsValidLightComponent(*components.light))
             return Result<void>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidLight, "Light authoring values are invalid."));
+        if (components.audioListener && !IsValidAudioListenerComponent(*components.audioListener))
+            return Result<void>::Failure(
+                MakeDocumentError(SceneDocumentErrors::InvalidAudioListener, "Audio listener values are invalid."));
         if (components.audioSource.has_value() &&
             (Audio::ValidateAudioSoundReference(components.audioSource->sound).HasError() ||
              Audio::ValidateAudioSoundPlaybackDefaults(components.audioSource->playback).HasError() ||

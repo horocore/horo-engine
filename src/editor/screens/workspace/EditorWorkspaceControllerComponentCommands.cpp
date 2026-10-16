@@ -58,13 +58,6 @@ namespace Horo::Editor {
                                                 "Update trigger volume");
                 }
                 break;
-            case EditorWorkspaceViewCommand::UpdateAudioSourceComponent:
-                if (cmd.objectPayload.has_value() && cmd.audioSourcePayload.has_value()) {
-                    HandleDocumentCommandResult(m_documentCommands.Execute(
-                                                    SetSceneObjectAudioSourceCommand{*cmd.objectPayload, *cmd.audioSourcePayload}),
-                                                "Update audio source");
-                }
-                break;
             case EditorWorkspaceViewCommand::UpdateObjectEditorState:
                 if (cmd.objectPayload.has_value() && cmd.editorStatePayload.has_value()) {
                     HandleDocumentCommandResult(m_documentCommands.Execute(
@@ -73,7 +66,7 @@ namespace Horo::Editor {
                 }
                 break;
             default:
-                return false;
+                return ProcessAudioComponentCommand(cmd);
         }
         return true;
     }

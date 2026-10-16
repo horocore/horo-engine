@@ -1,5 +1,6 @@
 #include "editor/document/SceneDocument.h"
 
+#include "Horo/Audio/AudioSpatialModel.h"
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
@@ -87,6 +88,11 @@ namespace Horo::Editor {
                std::isfinite(light.intensity) && light.intensity >= 0.0F && std::isfinite(light.range) && light.range >= 0.0F &&
                std::isfinite(light.innerConeRadians) && light.innerConeRadians >= 0.0F && std::isfinite(light.outerConeRadians) &&
                light.outerConeRadians >= light.innerConeRadians && light.outerConeRadians <= Math::Pi;
+    }
+
+    /** @copydoc IsValidAudioListenerComponent */
+    bool IsValidAudioListenerComponent(const Runtime::AudioListenerComponent &listener) noexcept {
+        return listener.view <= Audio::MaximumSpatialAudioViews && std::isfinite(listener.weight) && listener.weight > 0.0F;
     }
 
     /** @copydoc IsValidAudioSourceComponent */

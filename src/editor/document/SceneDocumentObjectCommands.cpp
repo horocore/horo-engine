@@ -199,9 +199,10 @@ namespace Horo::Editor {
         return WithEditableObject(m_document, m_document.m_objects, command.object, [this, &command](const SceneObjectSnapshot &object) {
             if (!HasComponent(object.components, command.type))
                 return ComponentNoOpResult(m_document, object.id);
-            return CommitObject({ComponentRemovedDelta{object.id, command.type, object.components.camera, object.components.light,
-                                                       object.components.triggerVolume, object.components.audioSource},
-                                 command.object, DocumentChangeKind::ComponentChanged});
+            return CommitObject(
+                {ComponentRemovedDelta{object.id, command.type, object.components.camera, object.components.light,
+                                       object.components.triggerVolume, object.components.audioSource, object.components.audioListener},
+                 command.object, DocumentChangeKind::ComponentChanged});
         });
     }
 

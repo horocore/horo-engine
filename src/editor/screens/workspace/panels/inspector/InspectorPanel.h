@@ -50,6 +50,9 @@ namespace Horo::Editor {
         [[nodiscard]] InspectorLightEdit DrawLightWidgets(const EditorGuiContext &context);
         [[nodiscard]] InspectorTriggerVolumeEdit DrawTriggerVolumeWidgets(const EditorGuiContext &context);
         [[nodiscard]] InspectorAudioSourceEdit DrawAudioSourceWidgets(const EditorGuiContext &context);
+        [[nodiscard]] InspectorAudioListenerEdit DrawAudioListenerWidgets(const EditorGuiContext &context);
+        void DrawAudioPreview(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                              const EditorGuiContext &context);
         void DrawBehaviors(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                            const EditorGuiContext &context) const;
 
@@ -63,6 +66,8 @@ namespace Horo::Editor {
                                     EditorWorkspaceViewCommandData &command);
 
         void ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit, const SceneObject &object, EditorWorkspaceViewCommandData &command);
+        void ApplyAudioListenerEdit(const InspectorAudioListenerEdit &edit, const SceneObject &object,
+                                    EditorWorkspaceViewCommandData &command);
 
         void DrawEmptyState(EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         static void AdoptCommand(EditorWorkspaceViewCommandData &destination, EditorWorkspaceViewCommandData source);

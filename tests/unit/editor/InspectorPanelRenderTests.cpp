@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -193,4 +194,115 @@ TEST_CASE("Inspector Panel Render Tests", "[unit][editor]") {
     }
 
     ImGui::DestroyContext();
+}
+
+namespace {
+    using namespace Horo;
+    using namespace Horo::Editor;
+
+    struct AudioInspectorFrame final {
+        EngineDataBus engineEvents;
+        EditorDataBus editorEvents;
+        TestLocalization localization;
+        EditorSettingsSnapshot settings;
+        EditorWorkspaceViewModel model;
+        InspectorPanel panel;
+
+        AudioInspectorFrame() {
+            ImGui::CreateContext();
+            auto &io = ImGui::GetIO();
+            io.DisplaySize = {240.0F, 1800.0F};
+            io.DeltaTime = 1.0F / 60.0F;
+            io.Fonts->AddFontDefault();
+            REQUIRE(io.Fonts->Build());
+            localization.Set("workspace.inspector.audio_source", "Ses Kaynağı ve Oynatma Yapılandırması");
+            localization.Set("workspace.inspector.audio_listener", "Dinleyici Görünümü ve Ağırlık Yapılandırması");
+            localization.Set("workspace.inspector.audio.concurrency", "Eşzamanlı Ses Önceliği ve Çakışma Davranışı");
+            model.documentRevision = {3};
+            model.objects = {SceneObject{.id = {7},
+                                         .name = "Ses",
+                                         .kind = SceneObjectKind::Mesh,
+                                         .components = {.audioSource = Runtime::AudioSourceComponent{},
+                                                        .audioListener = Runtime::AudioListenerComponent{}}}};
+            model.primarySelection = SceneObjectId{7};
+            model.selectedObjects = {SceneObjectId{7}};
+        }
+
+        ~AudioInspectorFrame() {
+            ImGui::DestroyContext();
+        }
+
+        EditorWorkspaceViewCommandData Draw() {
+            auto *font = ImGui::GetIO().Fonts->Fonts.front();
+            const Theme::Fonts fonts{.sans = font, .sansCompact = font, .sansEmphasis = font};
+            const ThemeContext theme{.fonts = fonts};
+            const EditorGuiContext context{.engineEvents = engineEvents,
+                                           .editorEvents = editorEvents,
+                                           .localization = localization,
+                                           .theme = theme,
+                                           .settings = settings};
+            EditorWorkspaceViewCommandData command;
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({240, 1800});
+            ImGui::Begin("AudioInspectorRender", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+            panel.DrawPanel(ImGui::GetCursorScreenPos(), {220, 1760}, model, command, context);
+            ImGui::End();
+            ImGui::Render();
+            return command;
+        }
+    };
+}  // namespace
+
+TEST_CASE("Audio inspector draws narrow localized enabled disabled and error states without source commands", "[unit][editor][audio]") {
+    AudioInspectorFrame frame;
+    SECTION("enabled") {}
+    SECTION("disabled authored components") {
+        frame.model.objects.front().components.audioSource->enabled = false;
+        frame.model.objects.front().components.audioListener->enabled = false;
+    }
+    SECTION("typed missing listener outcome") {
+        frame.model.audioPreviewAvailable = true;
+        frame.model.audioPreviewFailure = MakeError(AudioComponentPreviewErrors::MissingListener);
+    }
+    const auto components = frame.model.objects.front().components;
+    REQUIRE(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    REQUIRE(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    CHECK(frame.model.objects.front().components == components);
+    const auto *draw = ImGui::GetDrawData();
+    REQUIRE(draw);
+    REQUIRE(draw->TotalVtxCount > 0);
+    for (const auto *list : draw->CmdLists)
+        for (const auto &command : list->CmdBuffer) {
+            CHECK(command.ClipRect.x >= 0.0F);
+            CHECK(command.ClipRect.z <= 240.0F);
+        }
+}
+
+TEST_CASE("Audio listener inspector reset preserves disabled authoring while restoring defaults", "[unit][editor][audio]") {
+    AudioInspectorFrame frame;
+    auto &components = frame.model.objects.front().components;
+    components.audioSource.reset();
+    components.audioListener = Horo::Runtime::AudioListenerComponent{12, -27, 0.25F, false};
+    const auto original = components.audioListener;
+    REQUIRE(frame.Draw().command == Horo::Editor::EditorWorkspaceViewCommand::None);
+    REQUIRE(frame.Draw().command == Horo::Editor::EditorWorkspaceViewCommand::None);
+    ImGuiWindow *listenerWindow{};
+    for (auto *window : GImGui->Windows)
+        if (std::string_view{window->Name}.find("##AudioListenerCard") != std::string_view::npos)
+            listenerWindow = window;
+    REQUIRE(listenerWindow);
+    REQUIRE(listenerWindow->WasActive);
+    // Activate the real shared card reset action by its scoped widget identity, without depending on pixel offsets.
+    const auto titleScope = ImHashStr("title_bar", 0, listenerWindow->ID);
+    const auto resetScope = ImHashStr("reset", 0, titleScope);
+    ImGui::ActivateItemByID(ImHashStr("##card_action", 0, resetScope));
+    const auto command = frame.Draw();
+    REQUIRE(command.command == Horo::Editor::EditorWorkspaceViewCommand::UpdateAudioListenerComponent);
+    REQUIRE(command.audioListenerPayload.has_value());
+    CHECK_FALSE(command.audioListenerPayload->enabled);
+    CHECK(command.audioListenerPayload->view == 0);
+    CHECK(command.audioListenerPayload->priority == 0);
+    CHECK(command.audioListenerPayload->weight == 1.0F);
+    CHECK(components.audioListener == original);
 }

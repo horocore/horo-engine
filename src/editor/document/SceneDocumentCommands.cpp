@@ -1,5 +1,7 @@
 #include "editor/document/SceneDocumentInternal.h"
 
+#include <type_traits>
+
 namespace Horo::Editor {
     using namespace SceneDocumentDetail;
 
@@ -79,6 +81,34 @@ namespace Horo::Editor {
                     return ComponentNoOpResult(document, object.id);
                 return std::forward<Commit>(commit)(SceneCommandDelta{Delta{object.id, *current, replacement}});
             });
+        }
+
+        /** @brief Validates one typed audio replacement before the existing component/history commit. */
+        template <typename AudioCommand, typename Commit>
+        [[nodiscard]] Result<SceneCommandResult> CommitAudioComponent(SceneDocument &document, std::vector<SceneObjectSnapshot> &objects,
+                                                                      const AudioCommand &command, Commit &&commit) {
+            if constexpr (std::is_same_v<AudioCommand, SetSceneObjectAudioSourceCommand>) {
+                if (!IsValidAudioSourceComponent(command.audioSource))
+                    return Result<SceneCommandResult>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidAudioSource,
+                                                                                 "Audio source reference or playback values are invalid."));
+                return CommitExistingComponent<
+                    Runtime::AudioSourceComponent,
+                    AudioSourceChangedDelta>(document, objects, command.object, command.audioSource, &SceneObjectComponentSet::audioSource,
+                                             ExistingComponentError{SceneDocumentErrors::InvalidAudioSource,
+                                                                    "Scene object has no audio source component."},
+                                             std::forward<Commit>(commit));
+            } else {
+                if (!IsValidAudioListenerComponent(command.audioListener))
+                    return Result<SceneCommandResult>::Failure(
+                        MakeDocumentError(SceneDocumentErrors::InvalidAudioListener, "Audio listener values are invalid."));
+                return CommitExistingComponent<
+                    Runtime::AudioListenerComponent,
+                    AudioListenerChangedDelta>(document, objects, command.object, command.audioListener,
+                                               &SceneObjectComponentSet::audioListener,
+                                               ExistingComponentError{SceneDocumentErrors::InvalidAudioListener,
+                                                                      "Scene object has no audio listener component."},
+                                               std::forward<Commit>(commit));
+            }
         }
 
         /** @brief Carries a validated navigation candidate and its semantic history delta. */
@@ -333,20 +363,13 @@ namespace Horo::Editor {
         });
     }
 
-    /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioSourceCommand&) */
-    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioSourceCommand &command) {
-        if (!IsValidAudioSourceComponent(command.audioSource)) {
-            return Result<SceneCommandResult>::Failure(
-                MakeDocumentError(SceneDocumentErrors::InvalidAudioSource, "Audio source reference or playback values are invalid."));
-        }
-        return CommitExistingComponent<Runtime::AudioSourceComponent,
-                                       AudioSourceChangedDelta>(m_document, m_document.m_objects, command.object, command.audioSource,
-                                                                &SceneObjectComponentSet::audioSource,
-                                                                ExistingComponentError{SceneDocumentErrors::InvalidAudioSource,
-                                                                                       "Scene object has no audio source component."},
-                                                                [this, objectId = command.object](SceneCommandDelta delta) {
-            return CommitObject({std::move(delta), objectId, DocumentChangeKind::ComponentChanged});
-        });
+    /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioComponentCommand&) */
+    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioComponentCommand &command) {
+        return std::visit([this]<typename AudioCommand>(const AudioCommand &value) -> Result<SceneCommandResult> {
+            return CommitAudioComponent(m_document, m_document.m_objects, value, [this, objectId = value.object](SceneCommandDelta delta) {
+                return CommitObject({std::move(delta), objectId, DocumentChangeKind::ComponentChanged});
+            });
+        }, command);
     }
 
     /** @copydoc SceneDocumentCommandExecutor::CommitNavigationComponents */

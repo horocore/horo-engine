@@ -10,6 +10,7 @@ set(HORO_CI_AUDIO_TARGETS
     HoroAudioCommandTests
     HoroAudioMixerTests
     HoroAudioEditorPreviewTests
+    HoroAudioComponentPreviewHostTests
     HoroAudioFrontendPublicHeaderConsumer
 )
 
