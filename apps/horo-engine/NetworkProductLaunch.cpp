@@ -9,6 +9,8 @@
 #include "Horo/Network/NetworkTransport.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "NetworkProductHost.h"
+
+#include <exception>
 #if HORO_PRODUCT_HAS_GNS
 #include "GnsTransportFactory.h"
 #endif
@@ -353,6 +355,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Validate one native artifact's absolute identity and non-zero descriptor revision. */
         Result<void> ParseNativeGameplay(const std::span<char *> arguments, GameplayWorldSelection &selection) {
+            selection.moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             selection.nativeArtifact = arguments[1];
             selection.moduleId = arguments[2];
             const std::string_view revision = arguments[3];
@@ -554,7 +557,16 @@ namespace Horo::Application::Internal {
                       << ", reason " << static_cast<int>(diagnostic.reason) << ")\n";
             return 3;
         }
-        const auto outcome = RunProductFrames(*runtime.Value(), launch.Value(), worlds);
+        auto outcome = RunProductFrames(*runtime.Value(), launch.Value(), worlds);
+        runtime.Value()->Shutdown();
+        if (launch.Value().gameplay && launch.Value().gameplay->moduleRetirements) {
+            auto closed = launch.Value().gameplay->moduleRetirements->Close();
+            if (closed.HasError()) {
+                std::cerr << "horo-engine: gameplay shutdown incomplete: " << closed.ErrorValue().message << '\n';
+                // This closed product composition exposes no external generation leases. An escaped owner violates final shutdown.
+                std::terminate();
+            }
+        }
         if (outcome == 0)
             std::cout << "network product completed " << launch.Value().frames << " frames in mode " << arguments[0] << '\n';
         return outcome;

@@ -459,6 +459,21 @@ namespace Horo::Runtime::Ui {
         SetPresentation(Input::InputModality::Unknown, {});
     }
 
+    /** @copydoc UiNavigationInput::Owner */
+    const UiFocusOwnerContext &UiNavigationInput::Owner() const noexcept {
+        return owner_;
+    }
+
+    /** @copydoc UiNavigationInput::Player */
+    std::optional<Input::PlayerId> UiNavigationInput::Player() const noexcept {
+        return descriptor_.player;
+    }
+
+    /** @copydoc UiNavigationInput::IsStopped */
+    bool UiNavigationInput::IsStopped() const noexcept {
+        return stopped_;
+    }
+
     /** @copydoc UiNavigationInput::Presentation */
     UiInputPresentation UiNavigationInput::Presentation() const noexcept {
         return presentation_;

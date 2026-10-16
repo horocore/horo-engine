@@ -243,6 +243,14 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
+    /** @brief Non-authoritative next-focus edge computed by the same resolver used by Move. */
+    struct UiFocusNavigationPreview final {
+        UiNavigationDirection direction{};
+        std::optional<UiFocusTarget> target;
+        UiFocusChangeReason reason{};
+        bool admitted{}; /**< False means the ordinary move has no target, not that current focus is cleared. */
+    };
+
     /** @brief Owned stable-ID recovery path; contains no tree pointer or transient element handle. */
     struct UiFocusRestoration final {
         UiFocusOwnerContext source; /**< Exact original player/layer and source revisions. */
@@ -298,6 +306,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiElementHandle> Find(UiElementId id) const;
         /** @brief Returns current focus, if any, without allocating. @return Optional target or lifecycle failure. */
         [[nodiscard]] Result<std::optional<UiFocusTarget>> CurrentFocus() const;
+
+        /** @brief Resolves one navigation edge without changing focus, modal, scrolling or restoration state.
+         * @param direction One of the six focus movement directions, excluding Submit/Cancel.
+         * @return The exact ordinary Move decision or typed lifecycle/invalid-direction failure; bounded, allocation-free.
+         */
+        [[nodiscard]] Result<UiFocusNavigationPreview> PreviewMove(UiNavigationDirection direction) const;
 
         /** @brief Copies a bounded restoration path before a context loses focus.
          * @return Owned stable identities or typed lifecycle failure; no allocation or retained borrow.

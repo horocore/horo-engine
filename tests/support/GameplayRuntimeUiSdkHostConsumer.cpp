@@ -19,7 +19,9 @@ TEST_CASE("External Runtime UI SDK retains only host-issued storage after actual
     grant.moduleId = "game.ui_sdk";
     auto anchor = Take(fixture.service.Issue(grant));
     auto host = std::make_unique<Gameplay::GameModuleHost>(Gameplay::GameModuleHostOptions{{}, {.runtimeUi = anchor}});
-    auto module = Take(host->Load(artifact, {"game.ui_sdk", Gameplay::CurrentGameplayBuildFingerprint(), revision}));
+    auto candidate = Take(host->Load(artifact, {"game.ui_sdk", Gameplay::CurrentGameplayBuildFingerprint(), revision}));
+    REQUIRE_FALSE(candidate.diagnostic);
+    auto module = std::move(candidate.owner);
     auto image = Take(Platform::LoadDynamicLibrary(module->LoadedArtifactPath().string()));
     void *symbol = image->GetSymbol("HoroRuntimeUiSdkCopyClient");
     REQUIRE(symbol != nullptr);

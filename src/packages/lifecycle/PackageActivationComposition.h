@@ -1,9 +1,25 @@
 #pragma once
 #include "Horo/Packages/PackageLifecycle.h"
 
+#include <map>
 #include <thread>
 
 namespace Horo::Packages::Detail {
+    /** @brief Owned verified contribution root and inert decoded descriptor. */
+    struct DeclaredPackageDescriptor final {
+        std::string root;
+        Extensions::ExtensionManifest manifest;
+    };
+
+    /** @brief Reads and owner-binds the exact declared descriptor without host work. */
+    [[nodiscard]] Result<DeclaredPackageDescriptor> ReadDeclaredPackageDescriptor(const PackageRestorePackage &package,
+                                                                                  const PackagePath &descriptor);
+    /** @brief Applies the owning native platform suffix to an explicit selected entry. */
+    [[nodiscard]] std::string SelectedPackageNativeEntry(std::string entry);
+    /** @brief Captures the native process compatibility tuple without discovering a host. */
+    [[nodiscard]] Extensions::ExtensionHostEnvironment PackageHostEnvironment(const PackageLifecycleConfiguration &configuration,
+                                                                              std::span<const std::string_view> capabilities);
+
     /** @brief Immutable activation handoff, created only after archive, descriptor, artifact and trust validation. */
     struct PackageActivationCandidate final {
         std::shared_ptr<const VerifiedPackageInstallRecord> install;
@@ -13,21 +29,44 @@ namespace Horo::Packages::Detail {
         Extensions::ExtensionModulePlan plan;
         PackageExtensionTrustApproval trust;
         std::vector<std::string> providers;
+        std::vector<std::string> selectedModules;
+    };
+
+    /** @brief One publication and retirement authority shared by native-only and mixed-role compositions. */
+    class PackageComposition {
+    public:
+        virtual ~PackageComposition() = default;
+        virtual void Retire() noexcept = 0;
+
+        [[nodiscard]] virtual bool HasRetirementReservation() const noexcept {
+            return false;
+        }
+
+        [[nodiscard]] virtual std::vector<PackageModuleReport> Reports() const {
+            return {};
+        }
+
+        [[nodiscard]] virtual bool Finalize() = 0;
+        [[nodiscard]] virtual std::shared_ptr<const PackageActivationSnapshot> Snapshot() const noexcept = 0;
     };
 
     /** @brief Detached complete native host; retirement retains files until its actual work leases drain. */
-    class PackageActivationComposition final {
+    class PackageActivationComposition final : public PackageComposition {
     public:
         PackageActivationComposition(const PackageLifecycleConfiguration &configuration,
                                      std::shared_ptr<const VerifiedPackageInstallRecord> install, std::uint64_t generation);
-        ~PackageActivationComposition() noexcept;
+        ~PackageActivationComposition() noexcept override;
         [[nodiscard]] Result<void> Prepare(std::span<const PackageActivationCandidate> candidates,
                                            const PackageLifecycleConfiguration &configuration, const CancellationToken &cancellation);
-        void Retire() noexcept;
-        [[nodiscard]] bool Finalize();
-        [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Snapshot() const noexcept;
+        void Retire() noexcept override;
+        [[nodiscard]] bool Finalize() override;
+        [[nodiscard]] std::shared_ptr<const PackageActivationSnapshot> Snapshot() const noexcept override;
 
     private:
+        /** @brief Evaluates all grants and stages verified bytes before any executable host callback. */
+        [[nodiscard]] Result<void> PrepareContent(std::span<const PackageActivationCandidate> candidates,
+                                                  const CancellationToken &cancellation,
+                                                  std::map<std::filesystem::path, Sha256Digest> &artifacts);
         [[nodiscard]] Result<void> Materialize(const PackageActivationCandidate &candidate, const std::filesystem::path &root,
                                                const CancellationToken &cancellation) const;
         std::filesystem::path root_;

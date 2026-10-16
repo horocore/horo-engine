@@ -1,7 +1,10 @@
 #include "GameplayAiTestSupport.h"
 #include "GameplayModuleTestSupport.h"
+#include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <cstring>
 #include <memory>
@@ -39,7 +42,8 @@ namespace Horo::Gameplay {
         GameModuleHost host{GameModuleHostOptions{{}, {.ai = anchor.Value()}}};
         auto admitted = host.Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
         REQUIRE(admitted.HasValue());
-        auto loaded = std::move(admitted).Value();
+        REQUIRE_FALSE(admitted.Value().diagnostic);
+        auto loaded = std::move(admitted).Value().owner;
         auto retained = loaded->AiContext();
         REQUIRE(retained);
         std::weak_ptr<const GameplayAiContext> weak = retained;
@@ -57,7 +61,8 @@ namespace Horo::Gameplay {
         weak.reset();
         auto replacement = host.Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
         REQUIRE(replacement.HasValue());
-        auto next = replacement.Value()->AiContext();
+        REQUIRE_FALSE(replacement.Value().diagnostic);
+        auto next = replacement.Value().owner->AiContext();
         REQUIRE(next);
         CHECK(next->StartTask(fixture.agent, AiTestSupport::MakeIdentity<AI::TaskId>(412)).HasValue());
     }
@@ -69,7 +74,8 @@ namespace Horo::Gameplay {
         GameModuleHost host{GameModuleHostOptions{{}, {.ai = anchor.Value()}}};
         auto admitted = host.Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
         REQUIRE(admitted.HasValue());
-        auto loaded = std::move(admitted).Value();
+        REQUIRE_FALSE(admitted.Value().diagnostic);
+        auto loaded = std::move(admitted).Value().owner;
         auto context = loaded->AiContext();
         REQUIRE(context);
         std::weak_ptr<const GameplayAiContext> weakContext = context;
@@ -105,8 +111,49 @@ namespace Horo::Gameplay {
         for (auto *host : {&defaultHost, &emptyVector, &legacyPhysics, &legacyNavigation, &typed}) {
             auto loaded = host->Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
             REQUIRE(loaded.HasValue());
-            CHECK_FALSE(loaded.Value()->AiContext());
+            REQUIRE_FALSE(loaded.Value().diagnostic);
+            CHECK_FALSE(loaded.Value().owner->AiContext());
         }
+    }
+
+    TEST_CASE("Busy native retirement revokes retained AI grants and retires owned tasks before lease drain", "[gameplay][ai][host]") {
+        AiTestSupport::Fixture fixture;
+        auto anchor = GameplayAiContext::Create({"game.ai.tests", true, true}, fixture.runtime.CapabilityAtSafePoint());
+        REQUIRE(anchor.HasValue());
+        GameModuleHost host{GameModuleHostOptions{{}, {.ai = anchor.Value()}}};
+        auto admitted = host.Load(HORO_TEST_AI_MODULE_PATH, AiExpectation());
+        REQUIRE(admitted.HasValue());
+        REQUIRE_FALSE(admitted.Value().diagnostic);
+        auto loaded = std::move(admitted).Value().owner;
+        auto retained = loaded->AiContext();
+        REQUIRE(retained);
+        auto started = retained->StartTask(fixture.agent, AiTestSupport::MakeIdentity<AI::TaskId>(411));
+        REQUIRE(started.HasValue());
+        REQUIRE(fixture.runtime.Find(fixture.agent).Value().hasRunningTask);
+        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{87}, Runtime::SceneDefinitionRevision{1}};
+        Runtime::RuntimeEntityDefinition entity;
+        entity.object = Runtime::SceneObjectId{1};
+        builder.Add(std::move(entity));
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        auto scene = Runtime::RuntimeScene::Create(std::move(definition).Value(), Runtime::SceneRuntimeId{87});
+        REQUIRE(scene.HasValue());
+        {
+            // An actual runtime acquires the module's private generation lease even when no behavior descriptors are registered.
+            auto runtime = BehaviorRuntime::Create(*scene.Value(), loaded->Registry());
+            REQUIRE(runtime.HasValue());
+            loaded->RequestRetirement();
+            CHECK_FALSE(fixture.runtime.Find(fixture.agent).Value().hasRunningTask);
+            CHECK(retained->ResolveAgent(fixture.scene.agent.agent.agent).HasError());
+            CHECK(retained->StartTask(fixture.agent, AiTestSupport::MakeIdentity<AI::TaskId>(412)).HasError());
+            CHECK(BehaviorRuntime::Create(*scene.Value(), loaded->Registry()).HasError());
+            auto busy = loaded->TryRetire();
+            REQUIRE(busy.HasError());
+            CHECK(busy.ErrorValue().code.Value() == GameplayErrors::GameplayReloadRestartRequired.code.Value());
+        }
+        REQUIRE(loaded->TryRetire().HasValue());
+        loaded.reset();
+        CHECK(retained->ResolveAgent(fixture.scene.agent.agent.agent).HasError());
     }
 
     TEST_CASE("Gameplay AI module principal mismatch fails before native startup", "[gameplay][ai][host]") {

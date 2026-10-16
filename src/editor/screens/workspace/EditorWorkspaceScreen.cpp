@@ -461,6 +461,9 @@ namespace Horo::Editor {
                         static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
                     SaveExtensionWorkspace();
                     controller_->FlushAutosave();
+                    if (const auto gameplay = controller_->ShutdownGameplayModules(); gameplay.HasError())
+                        LOG_WARN("editor.gameplay", "Gameplay retirement remains owned by the application: %s",
+                                 gameplay.ErrorValue().message.c_str());
                     if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
                         LOG_ERROR("editor.pcg_document", "Graph shutdown recovery is incomplete: %s", graphs.ErrorValue().message.c_str());
                 }
@@ -529,6 +532,7 @@ namespace Horo::Editor {
                                                                         services_.TryGet<Application::NetworkDebuggerService>(),
                                                                     .documentSessionOwner = sessionOwner,
                                                                     .audioPreview = services_.TryGet<IAudioComponentPreview>(),
+                                                                    .gameplayRetirements = host_.GameplayRetirements(),
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
