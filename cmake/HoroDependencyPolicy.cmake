@@ -202,7 +202,7 @@ horo_allow_target_dependencies(TARGET HoroRenderD3D12 DEPENDENCIES HoroRenderApi
 
 horo_allow_target_dependencies(TARGET HoroSceneSourceModel
     DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroRuntimeScene HoroPrefabOverrideModel)
-horo_allow_target_dependencies(TARGET HoroSceneSource DEPENDENCIES HoroSceneSourceModel HoroPrefabAuthoring)
+horo_allow_target_dependencies(TARGET HoroSceneSource DEPENDENCIES HoroSceneSourceModel HoroPrefabAuthoring HoroFoundationJsonInternal)
 horo_allow_target_dependencies(TARGET HoroSceneRuntimeConversion
     DEPENDENCIES HoroSceneSource HoroPrefabSceneExpansion HoroRuntimeScene HoroSceneSourceCodecInternal)
 horo_allow_target_dependencies(TARGET HoroSceneCook DEPENDENCIES HoroRuntimeScene HoroSceneSourceCodecInternal)
@@ -222,7 +222,7 @@ horo_allow_target_dependencies(TARGET HoroSdlOpenGLPresentationInternal DEPENDEN
 horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard
+    DEPENDENCIES HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
@@ -354,3 +354,6 @@ horo_allow_target_dependencies(TARGET HoroCliPackageAdapters DEPENDENCIES HoroCl
 horo_allow_target_dependencies(TARGET HoroMcpPackageAdapters DEPENDENCIES HoroMcpRegistry HoroPackageApplication)
 horo_allow_target_dependencies(TARGET HoroEditorPackageAdapters DEPENDENCIES HoroEditorServices HoroPackageApplication)
 horo_allow_target_dependencies(TARGET HoroPackageProjectHost DEPENDENCIES HoroPackageApplication)
+
+horo_allow_target_dependencies(TARGET HoroProjectCollisionSettings
+    DEPENDENCIES HoroApplication HoroPhysics HoroAssets HoroFoundationJsonInternal)

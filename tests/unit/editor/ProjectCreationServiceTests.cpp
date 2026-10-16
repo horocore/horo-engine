@@ -1,3 +1,4 @@
+#include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Foundation/DataBus.h"
@@ -114,6 +115,11 @@ namespace {
         const auto compatibility = Horo::Application::InspectProjectCompatibility(root);
         REQUIRE((compatibility.status == Horo::Application::ProjectCompatibilityStatus::Current));
         REQUIRE((compatibility.metadata.has_value()));
+        const auto collision = Horo::Application::LoadProjectCollisionSettings(root, compatibility.metadata->projectId);
+        REQUIRE(collision.HasValue());
+        CHECK(collision.Value().settings->Input().revision == 1);
+        CHECK(collision.Value().settings->Schema()->Profiles().size() == 1);
+        CHECK(collision.Value().settings->Capture(1).HasValue());
         REQUIRE((compatibility.metadata->horoVersion == current));
         const auto *decision = Horo::Application::BuiltInReleaseCompatibilityRegistry().Find(current);
         REQUIRE(decision != nullptr);

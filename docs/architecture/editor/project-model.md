@@ -200,6 +200,13 @@ profile/channel tables before scene or Physics candidate publication. Runtime do
 not fill missing entries, migrate legacy numeric/name data or fall back to the
 authoring default.
 
+The implemented Project capture, editor review/save lifecycle, unsupported-owner
+boundaries and host migration are specified in
+[Project collision settings](../../guides/collision-project-settings.md). The
+editor retains actual registry completeness and explicit runtime ownership
+receipts; neither is inferred from the existence of a service. Active world
+replacement requires the owning host's Stop/restart boundary.
+
 ## Toolchain Profiles
 
 Portable project settings describe build intent and minimum toolchain

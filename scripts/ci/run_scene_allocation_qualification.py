@@ -26,23 +26,31 @@ CASES = frozenset(PREFIX + name for name in (
 ))
 
 
-def verify_discovery(document):
+COLLISION_PHASES = {
+    "HoroProjectCollisionSettingsTests::Collision path admission propagates every allocation failure before owner publication": "paths",
+    "HoroProjectCollisionSettingsTests::Collision history publication exhaustively rolls back every one-shot allocation failure": "commit",
+    "HoroProjectCollisionSettingsTests::Canonical Scene decoder unwinds every single allocation failure without terminating completed DOM cleanup": "scene",
+}
+COLLISION_CASES = frozenset(COLLISION_PHASES)
+
+
+def verify_discovery(document, cases=CASES):
     """Require every exact case and refuse a disabled replacement for executable evidence."""
     tests = document.get("tests", [])
-    families = {name.split(" - ", 1)[0] for name in CASES}
+    families = {name.split(" - ", 1)[0] for name in cases}
     selected = [test for test in tests if any(
         test.get("name") == family or test.get("name", "").startswith(family + " - ")
         for family in families
     )]
     names = [test["name"] for test in selected]
-    if len(names) != len(CASES) or set(names) != CASES:
-        raise ValueError(f"Scene allocation discovery differs: missing={sorted(CASES - set(names))}")
+    if len(names) != len(cases) or set(names) != cases:
+        raise ValueError(f"Scene allocation discovery differs: missing={sorted(cases - set(names))}")
     for test in selected:
         if any(prop.get("name") == "DISABLED" and prop.get("value") for prop in test.get("properties", [])):
             raise ValueError(f"Scene allocation test is disabled: {test['name']}")
 
 
-def verify_junit(path):
+def verify_junit(path, selected_cases=CASES):
     """Count actual cases rather than assertions and reject every skipped or failed execution."""
     path = Path(path).resolve()
     if not path.is_relative_to(Path.cwd().resolve()):
@@ -50,8 +58,8 @@ def verify_junit(path):
     root = ET.parse(path).getroot()
     cases = list(root.iter("testcase"))
     names = [case.get("name") for case in cases]
-    if len(cases) != len(CASES) or set(names) != CASES:
-        raise ValueError(f"Scene allocation execution differs: expected {len(CASES)}, got {len(cases)}")
+    if len(cases) != len(selected_cases) or set(names) != selected_cases:
+        raise ValueError(f"Scene allocation execution differs: expected {len(selected_cases)}, got {len(cases)}")
     for case in cases:
         failed = any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))
         if failed or case.get("status") in ("notrun", "disabled"):
@@ -62,14 +70,28 @@ def verify_junit(path):
                 raise ValueError(f"Scene allocation suite has nonzero {field}")
 
 
-def write_regex(path):
+def write_regex(path, cases=CASES):
     """Write only resolved workspace evidence, including for direct non-CLI callers."""
     path = Path(path).resolve()
     if not path.is_relative_to(Path.cwd().resolve()):
         raise ValueError(WORKSPACE_EVIDENCE_ERROR)
     # CTest uses POSIX extended syntax: noncapturing Python groups are not supported.
-    pattern = "^(" + "|".join(re.escape(name) for name in sorted(CASES)) + ")$"
+    pattern = "^(" + "|".join(re.escape(name) for name in sorted(cases)) + ")$"
     path.write_text(pattern, encoding="utf-8")
+
+
+def verify_collision_positions(path):
+    """Require proof of every measured failure position, including probes above Debug-sized budgets."""
+    verify_junit(path, COLLISION_CASES)
+    for case in ET.parse(path).getroot().iter("testcase"):
+        phase = COLLISION_PHASES[case.get("name")]
+        output = "".join(case.itertext())
+        positions = re.findall(r"\[collision-allocation\] " + phase + r" measured=(\d+) completed=(\d+)", output)
+        if case.get("status") != "run" or len(positions) != 1:
+            raise ValueError("Collision allocation execution has no unique complete position proof")
+        measured, completed = map(int, positions[0])
+        if measured == 0 or completed != measured:
+            raise ValueError("Collision allocation sweep did not execute every measured position")
 
 
 def workspace_path(value):
@@ -90,15 +112,20 @@ def main():
     mode.add_argument("--discovery", type=workspace_path)
     mode.add_argument("--output-junit", type=workspace_path)
     parser.add_argument("--regex-output", type=workspace_path)
+    parser.add_argument("--family", choices=("scene", "collision"), default="scene")
     args = parser.parse_args()
+    cases = COLLISION_CASES if args.family == "collision" else CASES
     if args.discovery:
         if args.regex_output is None:
             parser.error("--discovery requires --regex-output")
-        verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")))
-        write_regex(args.regex_output)
+        verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")), cases)
+        write_regex(args.regex_output, cases)
     else:
-        verify_junit(args.output_junit)
-        print(f"Scene allocation qualification: {len(CASES)} cases passed; zero failures, errors or skips.")
+        if args.family == "collision":
+            verify_collision_positions(args.output_junit)
+        else:
+            verify_junit(args.output_junit)
+        print(f"Scene allocation qualification: {len(cases)} cases passed; zero failures, errors or skips.")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,19 @@
 #include <utility>
 
 namespace Horo::Foundation::Paths {
+    namespace {
+        /** @brief Keeps ordinary filesystem failures as non-equivalence while allowing allocation failure to unwind.
+         * @details The error-code equivalent overload is noexcept. This throwable boundary keeps path allocation
+         * outside that contract, so callers can reject capacity failures before publishing an owner state.
+         */
+        bool ExistingPathsEquivalent(const std::filesystem::path &root, const std::filesystem::path &candidate) {
+            try {
+                return std::filesystem::equivalent(root, candidate);
+            } catch (const std::filesystem::filesystem_error &) {
+                return false;
+            }
+        }
+    }  // namespace
 
     Result<void> EnsureDirectory(const std::filesystem::path &path) {
         std::error_code ec;
@@ -54,6 +67,7 @@ namespace Horo::Foundation::Paths {
         }
     }
 
+    /** @copydoc HasPathPrefix */
     bool HasPathPrefix(const std::filesystem::path &root, const std::filesystem::path &candidate) {
         if (root.empty() || candidate.empty())
             return false;
@@ -69,11 +83,9 @@ namespace Horo::Foundation::Paths {
 
         // Let the host filesystem resolve Windows short names, drive casing, and
         // junctions before falling back to canonical relative-path comparison.
-        std::error_code equivalentError;
         for (std::filesystem::path current = normalizedCandidate; !current.empty();) {
-            if (std::filesystem::equivalent(normalizedRoot, current, equivalentError))
+            if (ExistingPathsEquivalent(normalizedRoot, current))
                 return true;
-            equivalentError.clear();
             const std::filesystem::path parent = current.parent_path();
             if (parent == current)
                 break;

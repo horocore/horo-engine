@@ -9,9 +9,11 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/HostObservability.h"
 #include "Horo/Application/NetworkDebugger.h"
+#include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ShaderBuildService.h"
 #include "Horo/Assets/AssetRegistry.h"
+#include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 #include "Horo/Editor/EditorConfiguration.h"
@@ -151,11 +153,21 @@ namespace Horo::Editor {
 
         class PreparedAssetRegistryState final : public IPreparedProjectOpenDerivedState {
         public:
-            PreparedAssetRegistryState(Assets::AssetRegistry &registry, std::filesystem::path projectRoot,
-                                       Assets::AssetRegistryCandidate candidate)
-                : registry_(registry), projectRoot_(std::move(projectRoot)), candidate_(std::move(candidate)) {}
+            PreparedAssetRegistryState(Assets::AssetRegistry &registry, CollisionInventoryEvidence &evidence,
+                                       std::filesystem::path projectRoot, Assets::AssetRegistryCandidate candidate,
+                                       Application::ProjectCollisionFileSnapshot collision)
+                : registry_(registry), evidence_(evidence), projectRoot_(std::move(projectRoot)), candidate_(std::move(candidate)),
+                  collision_(std::move(collision)) {}
 
             Result<std::string> Install() override {
+                evidence_ = {};
+                auto collision = Application::LoadProjectCollisionSettings(projectRoot_, collision_.settings->Input().projectId);
+                if (collision.HasError())
+                    return Result<std::string>::Failure(collision.ErrorValue());
+                if (collision.Value().identity != collision_.identity)
+                    return Result<std::string>::Failure(
+                        MakeError(ProjectOpenErrors::DerivedStateFailed,
+                                  "Collision settings changed after project preparation; retry project open."));
                 Assets::AssetRegistry validationRegistry;
                 Assets::AssetRegistryCandidate diskCandidate = candidate_;
                 if (const Assets::AssetRegistryBuildReport validated = validationRegistry.Publish(std::move(diskCandidate));
@@ -171,18 +183,22 @@ namespace Horo::Editor {
                 if (report.status == Assets::AssetRegistryBuildStatus::Failed)
                     return Result<std::string>::Failure(
                         MakeError(ProjectOpenErrors::DerivedStateFailed, "Validated asset registry publication failed."));
+                evidence_ = {report.publishedRevision, report.status};
                 return Result<std::string>::Success(std::to_string(report.publishedRevision.value));
             }
 
         private:
             Assets::AssetRegistry &registry_;
+            CollisionInventoryEvidence &evidence_;
             std::filesystem::path projectRoot_;
             Assets::AssetRegistryCandidate candidate_;
+            Application::ProjectCollisionFileSnapshot collision_;
         };
 
         class AssetRegistryProjectOpenContributor final : public IProjectOpenDerivedStateContributor {
         public:
-            explicit AssetRegistryProjectOpenContributor(Assets::AssetRegistry &registry) : registry_(registry) {}
+            AssetRegistryProjectOpenContributor(Assets::AssetRegistry &registry, CollisionInventoryEvidence &evidence)
+                : registry_(registry), evidence_(evidence) {}
 
             std::string_view Id() const noexcept override {
                 return "horo.assets.registry";
@@ -192,15 +208,23 @@ namespace Horo::Editor {
                                                                               const CancellationToken &cancellation) override {
                 if (cancellation.IsCancellationRequested())
                     return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(MakeError(ProjectOpenErrors::Cancelled));
+                auto metadata = Application::LoadProjectMetadata(projectRoot);
+                if (metadata.HasError())
+                    return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(metadata.ErrorValue());
+                auto collision = Application::LoadProjectCollisionSettings(projectRoot, metadata.Value().projectId);
+                if (collision.HasError())
+                    return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(collision.ErrorValue());
                 auto candidate = Assets::PrepareAssetRegistryCandidate(projectRoot);
                 if (candidate.HasError())
                     return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(candidate.ErrorValue());
                 return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Success(
-                    std::make_unique<PreparedAssetRegistryState>(registry_, projectRoot, std::move(candidate).Value()));
+                    std::make_unique<PreparedAssetRegistryState>(registry_, evidence_, projectRoot, std::move(candidate).Value(),
+                                                                 std::move(collision).Value()));
             }
 
         private:
             Assets::AssetRegistry &registry_;
+            CollisionInventoryEvidence &evidence_;
         };
 
         struct EditorGuiOptions {
@@ -1556,7 +1580,8 @@ namespace Horo::Editor {
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
             Assets::AssetRegistry assetRegistry;
-            AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry};
+            CollisionInventoryEvidence collisionInventory;
+            AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry, collisionInventory};
             std::array<IProjectOpenDerivedStateContributor *, 1> projectOpenContributors{&assetRegistryContributor};
             ProjectOpenService projectOpenService{p.background.jobs,      durableFiles,          projectOpenPreflight,
                                                   mutationCoordinator,    migrationTransactions, p.rendererAvailability,
@@ -1579,6 +1604,10 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.runtime", "Scene Physics participant registration failed: %s", added.ErrorValue().message.c_str());
                 return std::nullopt;
             }
+            // Null is explicit; canonical activation needs an exact owner receipt.
+            CollisionActivationEvidence collisionActivation{.revision = 1};
+            if (physicsRuntime.Value()->Mode() == Physics::PhysicsRuntimeMode::Null)
+                collisionActivation.state = CollisionActivationState::NoPhysics;
             ScreenRegistry screenRegistry;
             RegisterWelcomeScreen(screenRegistry);
             RegisterProjectCreationScreen(screenRegistry);
@@ -1629,6 +1658,8 @@ namespace Horo::Editor {
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
+            screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);
+            screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);
             screenHost.Services().Register<DurableFileSystem>(durableFiles);
             screenHost.Services().Register<Application::GameplayBuildService>(gameplayBuildService);

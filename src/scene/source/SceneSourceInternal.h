@@ -85,7 +85,7 @@ namespace Horo::SceneSource::Detail {
 
     [[nodiscard]] WireJson ComponentsJson(const SceneObjectComponentSet &components);
     void AppendPhysicsComponents(WireJson &value, const SceneObjectComponentSet &components);
-    [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value);
+    [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value, std::size_t &recognized);
 
     using ParsedScene = SceneSourceDocument;
     [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot);

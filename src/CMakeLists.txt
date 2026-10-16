@@ -1437,6 +1437,19 @@ else()
     target_sources(HoroPhysics PRIVATE physics/CanonicalPhysicsRuntimeOmitted.cpp physics/CanonicalSolverOmitted.cpp)
 endif()
 
+# Project owns authored collision policy; Physics receives only validated immutable captures.
+add_library(HoroProjectCollisionSettings STATIC
+        application/project/ProjectCollisionSettings.cpp
+        application/project/ProjectCollisionSettingsCodec.cpp
+        application/project/ProjectCollisionSchemaCodec.cpp
+        application/project/ProjectCollisionSettingsLoad.cpp
+)
+add_library(HoroEngine::ProjectCollisionSettings ALIAS HoroProjectCollisionSettings)
+target_compile_features(HoroProjectCollisionSettings PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectCollisionSettings
+        PUBLIC HoroEngine::Application HoroEngine::Physics HoroEngine::Assets
+        PRIVATE HoroFoundationJsonInternal nlohmann_json::nlohmann_json)
+
 add_library(HoroPhysicsSceneIntegration STATIC
         physics/PhysicsCellAttachments.cpp
         physics/PhysicsSceneActivation.cpp
@@ -2616,7 +2629,7 @@ add_library(HoroEngine::SceneSource ALIAS HoroSceneSource)
 target_compile_features(HoroSceneSource PUBLIC cxx_std_20)
 target_link_libraries(HoroSceneSource
         PUBLIC HoroEngine::SceneSourceModel
-        PRIVATE nlohmann_json::nlohmann_json HoroJsonEncodingInternal HoroEngine::PrefabAuthoring
+        PRIVATE HoroFoundationJsonInternal nlohmann_json::nlohmann_json HoroJsonEncodingInternal HoroEngine::PrefabAuthoring
 )
 
 # Non-installed, narrow codec bridge for existing Editor JSON adapters.
@@ -2770,6 +2783,15 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/physics/ProjectCollisionSettingsStore.cpp
+        editor/physics/ProjectCollisionTemplate.cpp
+        editor/physics/CollisionIdentityGeneration.cpp
+        editor/physics/CollisionProjectSettingsSession.cpp
+        editor/physics/CollisionProjectSettingsCommands.cpp
+        editor/physics/CollisionProjectSettingsErrors.cpp
+        editor/physics/CollisionReferenceReview.cpp
+        editor/physics/CollisionReviewFreshness.cpp
+        editor/physics/CollisionSourceInventory.cpp
         editor/pcg/PCGDocumentErrors.cpp
         editor/pcg/PCGGraphDocument.cpp
         editor/pcg/PCGGraphDocumentService.cpp
@@ -2847,6 +2869,9 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::ProjectCollisionSettings
+        HoroEngine::SceneRuntimeConversion
+        HoroEngine::SceneSource
         HoroEngine::ProjectMutationGuard
         HoroEngine::AudioFrontend
         HoroEngine::AudioApi
@@ -2964,6 +2989,10 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalExtensions.cpp
             editor/modals/settings/SettingsModalFooter.cpp
             editor/modals/settings/SettingsModalLifecycle.cpp
+            editor/modals/settings/SettingsModalCollision.cpp
+            editor/modals/settings/SettingsModalCollisionCommands.cpp
+            editor/modals/settings/SettingsModalCollisionDefinitions.cpp
+            editor/modals/settings/SettingsModalCollisionFiltering.cpp
             editor/modals/settings/SettingsModalNavigation.cpp
             editor/modals/settings/SettingsModalUpdates.cpp
             editor/modals/settings/SettingsModalPluginDetails.cpp
@@ -3023,6 +3052,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/performance/GlobalDockPerformancePane.cpp
             editor/screens/workspace/panels/global_dock/panes/physics/GlobalDockPhysicsPane.cpp
             editor/screens/workspace/EditorWorkspaceController.cpp
+        editor/screens/workspace/EditorWorkspaceControllerCollision.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
             editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp
