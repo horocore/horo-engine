@@ -46,7 +46,20 @@ namespace Horo::Gameplay {
 
     /** @brief Loaded module whose registry and callable objects are destroyed before its library unloads. */
     class LoadedGameModule final {
+        struct Impl;
+
     public:
+        /** @brief Non-aggregate construction authority issued only by the validating host. */
+        class ConstructionKey final {
+            ConstructionKey() = default;
+            friend class GameModuleHost;
+        };
+
+        /** @brief Adopts a validated host state into its unique candidate wrapper.
+         * @param key Unforgeable validating-host authority. @param impl Exact retained code-image and partial initialization owner.
+         * @details Public only so standard make_unique can allocate the sealed wrapper before any module factory executes.
+         */
+        LoadedGameModule(const ConstructionKey &key, std::shared_ptr<Impl> impl) noexcept;
         ~LoadedGameModule();
         LoadedGameModule(const LoadedGameModule &) = delete;
         LoadedGameModule &operator=(const LoadedGameModule &) = delete;
@@ -116,6 +129,18 @@ namespace Horo::Gameplay {
          * @return Bounded module snapshot only when the generation proves it is safe to unload.
          */
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
+        /** @brief Closes new runtime admission and requests cancellation without destroying busy callback owners.
+         * @details Revokes generation-scoped service clients, including UI, before existing runtime leases drain.
+         * @pre Called on the module composition owner lane.
+         */
+        void RequestRetirement() noexcept;
+        /** @brief Finalizes an inactive/retired generation only after all exact runtime leases drain.
+         * @return Success after owner-lane native teardown, or a typed busy/quiescence error retaining this owner.
+         * @pre The caller retains the module and its artifact on failure and retries on the composition owner lane.
+         * @details Ordinary retirement calls Stop and destroys services/module after leases drain; it does not request or validate a reload
+         * snapshot.
+         */
+        [[nodiscard]] Result<void> TryRetire();
         /**
          * @brief Restores compatible state into this newly started module generation.
          * @param snapshot State captured from the previous compatible generation.
@@ -125,9 +150,13 @@ namespace Horo::Gameplay {
 
     private:
         friend class GameModuleHost;
-        struct Impl;
-        explicit LoadedGameModule(std::shared_ptr<Impl> impl) noexcept;
         std::shared_ptr<Impl> impl_;
+    };
+
+    /** @brief Actual candidate resource owner, including rejected partial Register/Start work that still needs retirement. */
+    struct GameModuleLoadCandidate final {
+        std::unique_ptr<LoadedGameModule> owner;
+        std::optional<Error> diagnostic; /**< Present when initialization failed; never an active module publication. */
     };
 
     /** @brief Loader used by editor play sessions and packaged runtime composition. */
@@ -152,14 +181,19 @@ namespace Horo::Gameplay {
          */
         GameModuleHost(std::vector<GameplayCapabilityId> hostCapabilities, std::shared_ptr<GameplayPhysicsContext> physics,
                        std::shared_ptr<GameplayNavigationContext> navigation);
-        /**
-         * @brief Loads and starts one gameplay candidate after complete compatibility validation.
-         * @param libraryPath Absolute dynamic-library artifact path.
-         * @param expectation Manifest identity selected by the active engine/toolchain build.
-         * @return Owned active module or a typed failure with no remaining project callable.
+        /** @brief Checks native exports and exact SDK/generated identity without invoking module factories or lifecycle.
+         * @param libraryPath Absolute candidate artifact. @param expectation Exact host-selected compatibility identity.
+         * @return Success or the original load/descriptor failure. No initialized module or callback owner is produced.
          */
-        [[nodiscard]] Result<std::unique_ptr<LoadedGameModule>> Load(const std::filesystem::path &libraryPath,
-                                                                     const GameModuleLoadExpectation &expectation) const;
+        [[nodiscard]] Result<void> ValidateArtifact(const std::filesystem::path &libraryPath,
+                                                    const GameModuleLoadExpectation &expectation) const;
+        /** @brief Loads through the SDK boundary while retaining partial-initialization resources on failure.
+         * @param libraryPath Exact host-owned immutable artifact. @param expectation Exact approved SDK/module identity.
+         * @return Early validation error, or an owned attempt whose diagnostic must be checked before publication.
+         * @pre Retain an attempt with diagnostic until TryRetire succeeds; quiesce prior runtime generations before replacement.
+         */
+        [[nodiscard]] Result<GameModuleLoadCandidate> Load(const std::filesystem::path &libraryPath,
+                                                           const GameModuleLoadExpectation &expectation) const;
         /**
          * @brief Copies a candidate to a unique artifact before validating and loading it.
          * @param libraryPath Absolute source artifact produced by the project build.
@@ -171,19 +205,18 @@ namespace Horo::Gameplay {
          * previous LoadedGameModule have been destroyed. The host does not implicitly sequence
          * generations or make two project modules safe to coexist.
          */
-        [[nodiscard]] Result<std::unique_ptr<LoadedGameModule>> LoadShadowCopy(const std::filesystem::path &libraryPath,
-                                                                               const std::filesystem::path &shadowRoot,
-                                                                               const GameModuleLoadExpectation &expectation) const;
+        [[nodiscard]] Result<GameModuleLoadCandidate> LoadShadowCopy(const std::filesystem::path &libraryPath,
+                                                                     const std::filesystem::path &shadowRoot,
+                                                                     const GameModuleLoadExpectation &expectation) const;
 
     private:
         /** @brief Load one validated artifact with explicit host-owned shadow cleanup from the first code-image lease.
          * @param libraryPath Absolute prepared artifact. @param expectation Exact module compatibility.
          * @param ownedShadow True only for the unique canonical artifact created by LoadShadowCopy.
-         * @return Active module or typed failure with deferred native image cleanup.
+         * @return Owned candidate, including failed initialization, or early failure with deferred native image cleanup.
          */
-        [[nodiscard]] Result<std::unique_ptr<LoadedGameModule>> LoadArtifact(const std::filesystem::path &libraryPath,
-                                                                             const GameModuleLoadExpectation &expectation,
-                                                                             bool ownedShadow) const;
+        [[nodiscard]] Result<GameModuleLoadCandidate> LoadArtifact(const std::filesystem::path &libraryPath,
+                                                                   const GameModuleLoadExpectation &expectation, bool ownedShadow) const;
         /** @brief Admit the selected explicit service anchors before invoking a module factory.
          * @param impl Validated image owner receiving authoritative scoped holders.
          * @return Typed principal/dependency failure or success with the image pin bound by this host authority.

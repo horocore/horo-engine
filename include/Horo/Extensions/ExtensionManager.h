@@ -71,9 +71,11 @@ namespace Horo::Extensions {
          * @brief Loads an extension from the given directory path.
          * @param extensionDir Path to the extension's root directory.
          * @param providerExtensions Package-authority-resolved provider extensions, already activated by this host.
+         * @param selectedModules Explicit independently owned native modules; empty preserves complete-package loading.
          * @return Result containing a reference to the loaded extension ID or an error.
          */
-        Result<std::string> LoadExtension(const std::string &extensionDir, std::span<const std::string> providerExtensions = {});
+        Result<std::string> LoadExtension(const std::string &extensionDir, std::span<const std::string> providerExtensions = {},
+                                          std::span<const std::string> selectedModules = {});
 
         /**
          * @brief Begins terminal retirement of a specific extension; never forcibly unloads held code.

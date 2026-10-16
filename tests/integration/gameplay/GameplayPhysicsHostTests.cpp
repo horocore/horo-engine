@@ -3,6 +3,7 @@
 #include "GameplayWorldComposition.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "PhysicsTestUtils.h"
@@ -20,7 +21,8 @@ namespace {
         return {.moduleId = "game.tests",
                 .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
                 .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
-                .physicsPermission = permission};
+                .physicsPermission = permission,
+                .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>()};
     }
 
     GameplayWorldSelection Script(const GameplayPhysicsPermission permission = GameplayPhysicsPermission::Granted) {

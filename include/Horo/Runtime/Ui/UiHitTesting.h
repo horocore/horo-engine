@@ -99,6 +99,34 @@ namespace Horo::Runtime::Ui {
         float rayDistance{};            /**< World ray distance, or zero for a screen pointer. */
     };
 
+    /** @brief Actual hit-test decision for one element, in front-to-back paint order. */
+    enum class UiHitTestDecision : std::uint8_t {
+        Hidden,
+        Disabled,
+        OutsideClip,
+        OutsideGeometry,
+        Selected,
+        Occluded
+    };
+
+    /** @brief Native-free geometry and decision sufficient to draw an input targeting overlay. */
+    struct UiHitTestCandidate final {
+        UiElementHandle element;
+        UiLogicalRect localBounds;
+        UiLogicalRect clip;
+        std::array<double, 6> canvasToLocal{};
+        UiHitTestDecision decision{};
+        bool hasClip{};
+        UiHitSlop hitSlop; /**< Same expanded bounds used by targeting, for an exact overlay. */
+    };
+
+    /** @brief Optional caller-owned observation buffer; insufficient capacity truncates evidence, never targeting. */
+    struct UiHitTestObservation final {
+        std::span<UiHitTestCandidate> candidates;
+        std::size_t written{};
+        std::size_t omitted{};
+    };
+
     /** @brief Explicit publication lifecycle for one interaction snapshot store. */
     enum class UiHitTestStoreState : std::uint8_t {
         Active,
@@ -124,6 +152,10 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Returns exact immutable ownership and generation evidence. @return Borrowed descriptor. */
         [[nodiscard]] const UiHitTestSnapshotDescriptor &Descriptor() const noexcept;
+        /** @brief Borrows source evidence safely for optional observers, including moved-from values.
+         * @return Exact descriptor while this lease lives, or null after move. No target or presentation authority is implied.
+         */
+        [[nodiscard]] const UiHitTestSnapshotDescriptor *TryDescriptor() const noexcept;
         /** @brief Resolves the topmost target for one physical screen pointer without allocation.
          * @param query Exact canvas and physical viewport evidence.
          * @param presented Last-presentation tracker for the queried view/canvas.
@@ -139,7 +171,30 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<std::optional<UiHitTestResult>> HitTestWorld(const UiWorldRayQuery &query,
                                                                           const UiPresentedInteractionState &presented) const;
 
+        /** @brief Runs the same screen hit test while copying actual decisions into bounded optional evidence.
+         * @param query Actual pointer query. @param presented Actual presentation owner. @param observation Caller-owned output.
+         * @return Unchanged targeting result; evidence is reset even for malformed/stale queries. No allocation or callbacks.
+         */
+        [[nodiscard]] Result<std::optional<UiHitTestResult>> HitTestScreen(const UiScreenPointerQuery &query,
+                                                                           const UiPresentedInteractionState &presented,
+                                                                           UiHitTestObservation &observation) const;
+        /** @brief Runs the same world hit test with bounded actual candidate geometry and decisions.
+         * @param query Actual world query. @param presented Actual presentation owner. @param observation Caller-owned output.
+         * @return Unchanged targeting result. Truncation does not alter the selected target or failure.
+         */
+        [[nodiscard]] Result<std::optional<UiHitTestResult>> HitTestWorld(const UiWorldRayQuery &query,
+                                                                          const UiPresentedInteractionState &presented,
+                                                                          UiHitTestObservation &observation) const;
+
     private:
+        /** @brief Implements ordinary screen admission with a nullable observation buffer. */
+        [[nodiscard]] Result<std::optional<UiHitTestResult>> HitTestScreenObserved(const UiScreenPointerQuery &query,
+                                                                                   const UiPresentedInteractionState &presented,
+                                                                                   UiHitTestObservation *observation) const;
+        /** @brief Implements ordinary world admission with a nullable observation buffer. */
+        [[nodiscard]] Result<std::optional<UiHitTestResult>> HitTestWorldObserved(const UiWorldRayQuery &query,
+                                                                                  const UiPresentedInteractionState &presented,
+                                                                                  UiHitTestObservation *observation) const;
         struct Storage;
         friend class UiHitTestStore;
         explicit UiHitTestSnapshot(std::shared_ptr<const Storage> storage) noexcept;

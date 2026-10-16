@@ -61,6 +61,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroWorldArtifactCodecTests", "HoroWorldArtifactCodecConsumer",
     "HoroLightCullingTests", "HoroLightFramePoolTests",
     "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
+    "HoroAIFoundationQualificationTests",
     "HoroGameplayAiTests", "HoroGameplayAiContractConsumer",
     "HoroGameplayAiIntegrationPublicHeaderConsumer", "HoroGameplayAiScriptBridgePublicHeaderConsumer",
     "HoroGameplayApiPublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
@@ -97,6 +98,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests", "HoroSceneDocumentTests",
     "HoroAssetRegistryTests", "HoroInputTests", "HoroAndroidInputTests", "HoroAndroidInputIntegrationPublicHeaderConsumer",
     "HoroInputSdlTests", "HoroRuntimeUiInputTests",
+    "HoroRuntimeUiInputDebuggerTests", "HoroRuntimeUiInputDebuggerContractConsumer",
     "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
     "HoroRuntimeUiHitTestingTests", "HoroRuntimeUiEventDispatchTests", "HoroRuntimeUiPointerPublicHeaderConsumer",
     "HoroCharacterInputTests", "HoroCharacterInputPublicHeaderConsumer",
@@ -132,7 +134,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroTerrainProducerSnapshotTests", "HoroTerrainProducerSnapshotPublicHeaderConsumer",
     "HoroRuntimeSaveEventTriggersTests", "HoroSaveEventTriggersPublicHeaderConsumer",
     "HoroRuntimeSaveRestoreTransactionTests", "HoroSaveGameplayCheckpointPublicHeaderConsumer",
-    "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests",
+    "HoroNavigationRuntimeTests", "HoroNavigationBakeServiceTests", "HoroNavigationRuntimeQualificationTests",
     "HoroNavigationTransportReservationTests", "HoroNavigationCoordinatorPublicConsumer",
     "HoroNavigationCharacterAdapterTests", "HoroNavigationCharacterAdapterPublicConsumer",
     "HoroNavigationCharacterIntegrationPublicHeaderConsumer",
@@ -221,6 +223,19 @@ def test_ai_scheduler_qualification_has_build_discovery_and_single_source_owners
     assert 'horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")' in tests_cmake
     assert 'add_test(NAME HoroAITaskSchedulerPublicConsumer COMMAND HoroAITaskSchedulerPublicConsumer)' in tests_cmake
     assert 'set_tests_properties(HoroAITaskSchedulerPublicConsumer PROPERTIES LABELS "unit;ai;headless;ci-windows")' in tests_cmake
+
+
+def test_ai_foundation_qualification_keeps_its_owner_header_private() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "HoroAIFoundationQualificationTests" in targets("HORO_CI_WINDOWS_TARGETS")
+    assert "add_library(HoroAISceneQualificationInternal INTERFACE)" in tests_cmake
+    assert '"${horo_ai_qualification_internal_dir}/AISceneRuntimeDetail.h" COPYONLY)' in tests_cmake
+    assert '"$<BUILD_INTERFACE:${horo_ai_qualification_internal_dir}>"' in tests_cmake
+    assert "target_link_libraries(HoroAISceneQualificationInternal INTERFACE HoroEngine::AISceneIntegration)" in tests_cmake
+    assert "target_link_libraries(HoroAIFoundationQualificationTests PRIVATE HoroAISceneQualificationInternal)" in tests_cmake
+    for source in ("AIFoundationLifecycleQualificationTests.cpp", "AIFoundationObserverQualificationTests.cpp"):
+        assert tests_cmake.count(f"unit/runtime/ai/{source}") == 1
+    assert 'horo_register_catch_test(HoroAIFoundationQualificationTests LABELS "unit;ai;headless;qualification")' in tests_cmake
 
 
 def test_windows_manifest_tests_and_consumer_share_the_build_closure() -> None:
