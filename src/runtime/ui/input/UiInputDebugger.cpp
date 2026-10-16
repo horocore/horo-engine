@@ -83,7 +83,7 @@ namespace Horo::Runtime::Ui {
                 return {};
             const std::shared_ptr<UiInputDebugSnapshot::Storage> *oldest{};
             if (!busy)
-                for (auto &slot : slots)
+                for (const auto &slot : slots)
                     if (slot.use_count() == 1 && (!oldest || slot->record.serial < (*oldest)->record.serial))
                         oldest = &slot;
             if (!oldest) {
