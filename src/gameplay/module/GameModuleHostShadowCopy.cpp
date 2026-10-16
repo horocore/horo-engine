@@ -55,21 +55,21 @@ namespace Horo::Gameplay {
     }  // namespace
 
     /** @copydoc GameModuleHost::LoadShadowCopy */
-    Result<std::unique_ptr<LoadedGameModule>> GameModuleHost::LoadShadowCopy(const std::filesystem::path &libraryPath,
-                                                                             const std::filesystem::path &shadowRoot,
-                                                                             const GameModuleLoadExpectation &expectation) const {
+    Result<GameModuleLoadCandidate> GameModuleHost::LoadShadowCopy(const std::filesystem::path &libraryPath,
+                                                                   const std::filesystem::path &shadowRoot,
+                                                                   const GameModuleLoadExpectation &expectation) const {
         if (!IsSafeAbsolutePath(libraryPath) || !IsSafeAbsolutePath(shadowRoot))
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(
+            return Result<GameModuleLoadCandidate>::Failure(
                 ShadowCopyError("source and destination paths must be absolute and without traversal."));
 
         auto canonicalRoot = PrepareShadowRoot(shadowRoot);
         if (canonicalRoot.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(canonicalRoot.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(canonicalRoot.ErrorValue());
         auto shadowPath = MakeShadowPath(libraryPath, canonicalRoot.Value());
         if (shadowPath.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(shadowPath.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(shadowPath.ErrorValue());
         if (const Result<void> copied = CopyShadowArtifact(libraryPath, shadowPath.Value()); copied.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(copied.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(copied.ErrorValue());
 
         return LoadArtifact(shadowPath.Value(), expectation, true);
     }

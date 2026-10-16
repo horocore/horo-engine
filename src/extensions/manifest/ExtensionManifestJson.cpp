@@ -6,6 +6,7 @@
 #include <format>
 #include <optional>
 #include <set>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -50,8 +51,9 @@ namespace Horo::Extensions::ManifestParsing {
             return true;
         }
 
-        [[nodiscard]] std::optional<Error> CheckRawNesting(const std::string_view content, const ExtensionManifestLimits &limits) {
+        [[nodiscard]] Result<std::size_t> CheckRawNesting(const std::string_view content, const ExtensionManifestLimits &limits) {
             std::size_t depth = 0;
+            std::size_t observedDepth = 0;
             bool inString = false;
             bool escaped = false;
             for (const char character : content) {
@@ -59,14 +61,16 @@ namespace Horo::Extensions::ManifestParsing {
                     continue;
                 if (IsOpeningContainer(character)) {
                     ++depth;
+                    observedDepth = std::max(observedDepth, depth);
                     if (depth > limits.maximumNestingDepth) {
-                        return ManifestError("$", "extension.manifest.nesting_limit", "JSON nesting exceeds the configured limit.");
+                        return Result<std::size_t>::Failure(
+                            ManifestError("$", "extension.manifest.nesting_limit", "JSON nesting exceeds the configured limit."));
                     }
                 }
                 if (IsClosingContainer(character) && depth > 0)
                     --depth;
             }
-            return std::nullopt;
+            return Result<std::size_t>::Success(observedDepth);
         }
 
         enum class ContainerKind {
@@ -221,17 +225,68 @@ namespace Horo::Extensions::ManifestParsing {
             });
         }
 
-        [[nodiscard]] Result<Json> ParseJson(const std::string_view content, const ExtensionManifestLimits &limits) {
+        [[nodiscard]] Result<ManifestDocument> ParseJson(const std::string_view content, const ExtensionManifestLimits &limits,
+                                                         const std::size_t observedDepth) {
+            ManifestDocument document{observedDepth};
             try {
-                return Result<Json>::Success(BoundedJsonParser{limits}.Parse(content));
+                document.Adopt(BoundedJsonParser{limits}.Parse(content));
+                return Result<ManifestDocument>::Success(std::move(document));
             } catch (ParserFailure &failure) {
-                return Result<Json>::Failure(std::move(failure.error));
+                return Result<ManifestDocument>::Failure(std::move(failure.error));
             } catch (const Json::parse_error &exception) {
                 const auto [line, column] = LocationAt(content, exception.byte);
-                return Result<Json>::Failure(ManifestError("$", "extension.manifest.invalid_json", "Malformed JSON syntax.", line, column));
+                return Result<ManifestDocument>::Failure(
+                    ManifestError("$", "extension.manifest.invalid_json", "Malformed JSON syntax.", line, column));
             }
         }
     }  // namespace
+
+    static_assert(std::is_nothrow_move_constructible_v<Json>);
+    static_assert(std::is_nothrow_move_constructible_v<std::vector<Json *>>);
+    static_assert(!std::is_copy_constructible_v<ManifestDocument> && std::is_nothrow_move_constructible_v<ManifestDocument>);
+
+    /** @copydoc ManifestDocument::ManifestDocument */
+    ManifestDocument::ManifestDocument(const std::size_t observedDepth) {
+        retirement_.reserve(observedDepth);
+    }
+
+    /** @copydoc ManifestDocument::~ManifestDocument */
+    ManifestDocument::~ManifestDocument() noexcept {
+        if (!document_.is_structured())
+            return;
+        retirement_.push_back(&document_);
+        while (!retirement_.empty()) {
+            Json *const current = retirement_.back();
+            if (current->is_object() && !current->empty()) {
+                auto &object = current->get_ref<Json::object_t &>();
+                const auto child = object.begin();
+                if (child->second.is_structured())
+                    retirement_.push_back(&child->second);
+                else
+                    object.erase(child);
+            } else if (current->is_array() && !current->empty()) {
+                auto &array = current->get_ref<Json::array_t &>();
+                if (array.back().is_structured())
+                    retirement_.push_back(&array.back());
+                else
+                    array.pop_back();
+            } else {
+                // Empty containers can be destroyed without nlohmann's allocating descendant stack.
+                *current = nullptr;
+                retirement_.pop_back();
+            }
+        }
+    }
+
+    /** @copydoc ManifestDocument::Adopt */
+    void ManifestDocument::Adopt(Json &&document) noexcept {
+        document_ = std::move(document);
+    }
+
+    /** @copydoc ManifestDocument::Document */
+    const Json &ManifestDocument::Document() const noexcept {
+        return document_;
+    }
 
     std::string ChildPath(const std::string_view parent, const std::string_view key) {
         if (!IsSimplePathKey(key))
@@ -257,15 +312,17 @@ namespace Horo::Extensions::ManifestParsing {
         return error;
     }
 
-    Result<Json> ParseBoundedJson(const std::string_view content, const ExtensionManifestLimits &limits) {
+    /** @copydoc ParseBoundedJson */
+    Result<ManifestDocument> ParseBoundedJson(const std::string_view content, const ExtensionManifestLimits &limits) {
         if (!HasValidLimits(limits))
-            return Result<Json>::Failure(
+            return Result<ManifestDocument>::Failure(
                 ManifestError("$", "extension.manifest.invalid_limits", "Every parser limit must be greater than zero."));
         if (content.size() > limits.maximumDocumentBytes)
-            return Result<Json>::Failure(
+            return Result<ManifestDocument>::Failure(
                 ManifestError("$", "extension.manifest.document_limit", "Document exceeds the configured byte limit."));
-        if (const std::optional<Error> nestingError = CheckRawNesting(content, limits); nestingError.has_value())
-            return Result<Json>::Failure(*nestingError);
-        return ParseJson(content, limits);
+        const auto nesting = CheckRawNesting(content, limits);
+        if (nesting.HasError())
+            return Result<ManifestDocument>::Failure(nesting.ErrorValue());
+        return ParseJson(content, limits, nesting.Value());
     }
 }  // namespace Horo::Extensions::ManifestParsing

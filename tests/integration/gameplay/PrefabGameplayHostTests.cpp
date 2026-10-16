@@ -147,7 +147,8 @@ TEST_CASE("Production Gameplay composition routes a native module through cooked
     GameplayWorldSelection selection{.moduleId = "game.tests",
                                      .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
                                      .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
-                                     .prefabPermission = GameplayPrefabPermission::Granted};
+                                     .prefabPermission = GameplayPrefabPermission::Granted,
+                                     .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>()};
     auto composition = GameplayWorldComposition::Create(scenes, templates, nullptr, 1, selection);
     REQUIRE(composition.HasValue());
     gameplay = std::move(composition).Value();

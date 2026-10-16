@@ -105,7 +105,7 @@ namespace Horo::AI {
 
     /** @copydoc BlackboardWriteBatch::Stage */
     Result<void> BlackboardWriteBatch::Stage(BlackboardWrite write) {
-        if (!write.key.IsValid())
+        if (!binding_.IsValid() || !write.key.IsValid())
             return Result<void>::Failure(Failure(AIErrors::BlackboardBatchInvalid));
         if (const auto duplicate = std::ranges::find(writes_, write.key, &BlackboardWrite::key); duplicate != writes_.end()) {
             duplicate->value = std::move(write.value);
@@ -259,17 +259,49 @@ namespace Horo::AI {
         return Result<std::size_t>::Success(removed);
     }
 
+    /** @brief Owns only the caller-borrowed batch's reset obligation, never its vector storage.
+     * @details Lifetime is strictly inside CommitAtBlackboardSync, including notification delivery.
+     * Moving vector storage here allocates an MSVC Debug iterator proxy; borrowing preserves
+     * the prepared-commit zero-allocation contract and the caller's empty retained capacity.
+     */
+    class BlackboardWriteBatch::CommitConsumption final {
+    public:
+        explicit CommitConsumption(BlackboardWriteBatch &input) noexcept : batch(input) {}
+
+        CommitConsumption(const CommitConsumption &) = delete;
+        CommitConsumption &operator=(const CommitConsumption &) = delete;
+        CommitConsumption(CommitConsumption &&) = delete;
+        CommitConsumption &operator=(CommitConsumption &&) = delete;
+
+        ~CommitConsumption() {
+            batch.binding_ = {};
+            batch.baseRevision_ = 0;
+            batch.writes_.clear();
+        }
+
+        BlackboardWriteBatch &batch;
+    };
+
+    /** @copydoc BlackboardWriteBatch::ConsumeForCommit */
+    BlackboardWriteBatch::CommitConsumption BlackboardWriteBatch::ConsumeForCommit() && noexcept {
+        // Guaranteed prvalue construction transfers the obligation without moving either
+        // the guard or any vector/proxy. The original rvalue batch lives through this call.
+        return CommitConsumption{*this};
+    }
+
     /** @copydoc BlackboardInstance::CommitAtBlackboardSync */
-    Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch batch) {
+    Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch &&batch) {
+        const auto consumed = std::move(batch).ConsumeForCommit();
+
         if (publishing_)
             return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardReentrantMutation));
-        if (!active_ || batch.Binding() != binding_ || batch.BaseRevision() != revision_)
+        if (!active_ || consumed.batch.Binding() != binding_ || consumed.batch.BaseRevision() != revision_)
             return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardInstanceStale));
-        std::ranges::sort(batch.writes_, {}, &BlackboardWrite::key);
+        std::ranges::sort(consumed.batch.writes_, {}, &BlackboardWrite::key);
         scratch_ = values_;
         authorizationScratch_ = authorizations_;
         BlackboardCommitResult result{.revision = revision_};
-        for (const auto &write : batch.Writes()) {
+        for (const auto &write : consumed.batch.Writes()) {
             if (write.authorization && !write.authorization->IsCurrent())
                 return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardInstanceStale));
             auto applied = ApplyWrite(*schema_, scratch_, write);

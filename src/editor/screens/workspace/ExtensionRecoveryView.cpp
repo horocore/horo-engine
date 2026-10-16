@@ -41,8 +41,8 @@ namespace Horo::Editor {
         for (const auto &surface : registry_->RecoverySnapshot()) {
             if (!surface.intent.open)
                 continue;
-            next.push_back({surface.intent.surfaceId, surface.intent.provider.extensionId + " / " + surface.intent.provider.moduleId,
-                            surface.intent.provider, std::string{context_.localization.Get("editor", ReasonKey(surface.status))}});
+            next.emplace_back(surface.intent.surfaceId, surface.intent.provider.extensionId + " / " + surface.intent.provider.moduleId,
+                              surface.intent.provider, std::string{context_.localization.Get("editor", ReasonKey(surface.status))});
         }
         title_ = context_.localization.Get("editor", "workspace.extensions.recovery") + "###ExtensionRecovery";
         explanation_ = context_.localization.Get("editor", "workspace.extensions.retained");

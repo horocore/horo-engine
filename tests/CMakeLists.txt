@@ -295,6 +295,20 @@ target_include_directories(HoroRuntimeUiInputTests PRIVATE ${PROJECT_SOURCE_DIR}
 target_include_directories(HoroRuntimeUiInputTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(HoroRuntimeUiInputTests PRIVATE HoroEngine::RuntimeUiInput)
 horo_register_catch_test(HoroRuntimeUiInputTests LABELS "unit;input;runtime_ui;headless")
+add_executable(HoroRuntimeUiInputDebuggerTests
+        unit/runtime/input/UiInputDebuggerTests.cpp
+        unit/runtime/input/UiInputDebuggerLifecycleTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroRuntimeUiInputDebuggerTests PRIVATE cxx_std_20)
+target_include_directories(HoroRuntimeUiInputDebuggerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroRuntimeUiInputDebuggerTests PRIVATE HoroEngine::RuntimeUiInput)
+horo_register_catch_test(HoroRuntimeUiInputDebuggerTests LABELS "unit;input;runtime_ui;headless;lifecycle")
+add_executable(HoroRuntimeUiInputDebuggerContractConsumer support/RuntimeUiInputDebuggerContractConsumer.cpp)
+target_compile_features(HoroRuntimeUiInputDebuggerContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroRuntimeUiInputDebuggerContractConsumer PRIVATE HoroEngine::RuntimeUiInput)
+add_test(NAME HoroRuntimeUiInputDebuggerContractConsumer COMMAND HoroRuntimeUiInputDebuggerContractConsumer)
+set_tests_properties(HoroRuntimeUiInputDebuggerContractConsumer PROPERTIES LABELS "unit;input;runtime_ui;headless;public_headers;ci-windows")
 add_executable(HoroRuntimeUiNavigationPublicHeaderConsumer support/RuntimeUiNavigationPublicHeaderConsumer.cpp)
 target_compile_features(HoroRuntimeUiNavigationPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiNavigationPublicHeaderConsumer PRIVATE HoroEngine::RuntimeUiInput)
@@ -769,6 +783,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsQueryEventCapabilityTests.cpp
         unit/runtime/physics/PhysicsReferenceSceneCorpusTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
+        unit/runtime/physics/PhysicsTriggerVolumeRuntimeTests.cpp
         unit/runtime/physics/RuntimeSceneBaselinePhysicsTests.cpp
         unit/runtime/physics/PrefabPhysicsStructuralTests.cpp
         unit/runtime/physics/PhysicsSceneContainmentTests.cpp
@@ -787,7 +802,7 @@ add_executable(HoroPhysicsTests
 target_compile_features(HoroPhysicsTests PRIVATE cxx_std_20)
 target_include_directories(HoroPhysicsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/physics ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_definitions(HoroPhysicsTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
-target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
+target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::PhysicsTriggerVolumeHost HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
 add_executable(HoroPrefabPhysicsGroupTests unit/runtime/physics/PrefabPhysicsGroupTests.cpp)
@@ -848,6 +863,26 @@ target_compile_features(HoroAITaskSchedulerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAITaskSchedulerTests PRIVATE HoroEngine::AISceneIntegration)
 target_include_directories(HoroAITaskSchedulerTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")
+
+# Owning lifecycle qualification needs only this existing private state contract.
+# Stage the exact header closure into a non-installed build interface; never expose a src root or add a public test hook.
+set(horo_ai_qualification_internal_dir "${CMAKE_CURRENT_BINARY_DIR}/internal/ai-foundation-qualification")
+file(MAKE_DIRECTORY "${horo_ai_qualification_internal_dir}")
+configure_file("${PROJECT_SOURCE_DIR}/src/runtime/ai/integration/AISceneRuntimeDetail.h"
+        "${horo_ai_qualification_internal_dir}/AISceneRuntimeDetail.h" COPYONLY)
+add_library(HoroAISceneQualificationInternal INTERFACE)
+target_include_directories(HoroAISceneQualificationInternal INTERFACE
+        "$<BUILD_INTERFACE:${horo_ai_qualification_internal_dir}>")
+target_link_libraries(HoroAISceneQualificationInternal INTERFACE HoroEngine::AISceneIntegration)
+add_executable(HoroAIFoundationQualificationTests
+        support/AllocationProbe.cpp
+        unit/runtime/ai/AIFoundationLifecycleQualificationTests.cpp
+        unit/runtime/ai/AIFoundationObserverQualificationTests.cpp
+)
+target_compile_features(HoroAIFoundationQualificationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroAIFoundationQualificationTests PRIVATE HoroAISceneQualificationInternal)
+target_include_directories(HoroAIFoundationQualificationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
+horo_register_catch_test(HoroAIFoundationQualificationTests LABELS "unit;ai;headless;qualification")
 
 add_executable(HoroAITaskSchedulerPublicConsumer support/AITaskSchedulerPublicConsumer.cpp)
 target_compile_features(HoroAITaskSchedulerPublicConsumer PRIVATE cxx_std_20)
@@ -1196,6 +1231,29 @@ target_include_directories(HoroNavigationCharacterAdapterTests PRIVATE
         "${PROJECT_SOURCE_DIR}/src/physics")
 target_link_libraries(HoroNavigationCharacterAdapterTests PRIVATE HoroEngine::NavigationCharacterIntegration)
 horo_register_catch_test(HoroNavigationCharacterAdapterTests LABELS "unit;navigation;character;headless;ci-navigation")
+
+# This target remains discoverable in omitted-provider compositions, but actual
+# movement qualification is compiled only when both real native providers exist.
+add_executable(HoroNavigationRuntimeQualificationTests
+        integration/navigation/NavigationRuntimeQualificationAvailabilityTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroNavigationRuntimeQualificationTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationRuntimeQualificationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
+target_compile_definitions(HoroNavigationRuntimeQualificationTests PRIVATE
+        HORO_QUALIFICATION_NAV_NATIVE=$<BOOL:${HORO_BUILD_NAVIGATION_RECAST_DETOUR}>
+        HORO_QUALIFICATION_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
+        HORO_QUALIFICATION_BUILD_TYPE="$<CONFIG>"
+        HORO_QUALIFICATION_PLATFORM="${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR}"
+        HORO_QUALIFICATION_COMPILER="${CMAKE_CXX_COMPILER_ID}/${CMAKE_CXX_COMPILER_VERSION}")
+target_link_libraries(HoroNavigationRuntimeQualificationTests PRIVATE
+        HoroEngine::NavigationCharacterIntegration HoroEngine::NavigationRecastDetour
+        HoroEngine::NavigationCrowdDetour HoroEngine::Physics)
+if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
+    target_sources(HoroNavigationRuntimeQualificationTests PRIVATE
+            integration/navigation/NavigationRuntimeQualificationTests.cpp
+            integration/navigation/NavigationRuntimePressureQualificationTests.cpp)
+endif()
+horo_register_catch_test(HoroNavigationRuntimeQualificationTests LABELS "integration;navigation;character;headless;qualification;ci-navigation")
 
 add_executable(HoroNavigationCharacterAdapterPublicConsumer support/NavigationCharacterAdapterPublicConsumer.cpp)
 target_link_libraries(HoroNavigationCharacterAdapterPublicConsumer PRIVATE HoroEngine::NavigationCharacterIntegration)
@@ -1560,6 +1618,18 @@ target_link_libraries(HoroPrefabTemplateCookPublicHeaderConsumer PRIVATE HoroEng
 add_test(NAME HoroPrefabTemplateCookPublicHeaderConsumer COMMAND HoroPrefabTemplateCookPublicHeaderConsumer)
 set_tests_properties(HoroPrefabTemplateCookPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless")
 
+add_executable(HoroPhysicsTriggerVolumeHostContractConsumer support/PhysicsTriggerVolumeHostPublicHeaderConsumer.cpp)
+target_compile_features(HoroPhysicsTriggerVolumeHostContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPhysicsTriggerVolumeHostContractConsumer PRIVATE HoroEngine::PhysicsTriggerVolumeHost)
+add_test(NAME HoroPhysicsTriggerVolumeHostContractConsumer COMMAND HoroPhysicsTriggerVolumeHostContractConsumer)
+set_tests_properties(HoroPhysicsTriggerVolumeHostContractConsumer PROPERTIES LABELS "unit;physics;host;headless;ci-windows")
+
+add_executable(HoroTriggerVolumeConversionPublicHeaderConsumer support/TriggerVolumeConversionPublicHeaderConsumer.cpp)
+target_compile_features(HoroTriggerVolumeConversionPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTriggerVolumeConversionPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook)
+add_test(NAME HoroTriggerVolumeConversionPublicHeaderConsumer COMMAND HoroTriggerVolumeConversionPublicHeaderConsumer)
+set_tests_properties(HoroTriggerVolumeConversionPublicHeaderConsumer PROPERTIES LABELS "unit;physics;scene;headless;ci-windows")
+
 add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp
         unit/scene/ScenePrefabExpansionTests.cpp unit/scene/ScenePrefabExpansionOwnerTests.cpp
         unit/scene/ScenePrefabCanonicalWireTests.cpp unit/scene/ScenePrefabValueOverrideTests.cpp support/AllocationProbe.cpp)
@@ -1572,6 +1642,7 @@ horo_register_catch_test(HoroSceneRuntimeConversionTests LABELS "unit;scene;pref
 add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
 add_executable(HoroPrefabSceneCookHostTests
         unit/application/PrefabSceneCookHostTests.cpp
+        unit/application/PhysicsTriggerVolumeHostTests.cpp
         unit/application/PrefabTemplateCookHostTests.cpp
         unit/application/PrefabCookSchemaContextTests.cpp
         unit/application/PrefabSceneCookQualificationTests.cpp
@@ -1582,7 +1653,7 @@ target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroPrefabSceneCookHostTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
-target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PhysicsTriggerVolumeHost HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPrefabSceneCookHostTests LABELS "unit;prefab;headless;host")
 target_compile_features(HoroPrefabCookPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabCookPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Assets HoroEngine::PrefabCookHost)
@@ -1675,6 +1746,7 @@ horo_add_gameplay_module(HoroTestGameModule
         MODULE_ID game.tests
         NO_MANIFEST
         SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/TestGameModule.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/CharacterClientBehavior.cpp
 )
 target_include_directories(HoroTestGameModule PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
 target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS=1 HORO_TEST_GAMEPLAY_NAVIGATION=1 HORO_TEST_GAMEPLAY_UI=1)
@@ -1704,17 +1776,25 @@ target_link_libraries(HoroGameplayNavigationPublicConsumer PRIVATE HoroEngine::G
 add_test(NAME HoroGameplayNavigationPublicConsumer COMMAND HoroGameplayNavigationPublicConsumer)
 set_tests_properties(HoroGameplayNavigationPublicConsumer PROPERTIES LABELS "unit;gameplay;navigation;headless;public_headers;ci-windows;ci-navigation")
 
+add_executable(HoroGameModuleHostPublicHeaderConsumer support/GameModuleHostPublicHeaderConsumer.cpp)
+target_compile_features(HoroGameModuleHostPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameModuleHostPublicHeaderConsumer PRIVATE HoroEngine::GameplayModuleHost)
+add_test(NAME HoroGameModuleHostPublicHeaderConsumer COMMAND HoroGameModuleHostPublicHeaderConsumer)
+set_tests_properties(HoroGameModuleHostPublicHeaderConsumer PROPERTIES LABELS "unit;gameplay;headless;public_headers")
+
 add_executable(HoroGameModuleHostTests
         unit/gameplay/GameModuleHostTests.cpp
         unit/gameplay/GameModuleContentPersistenceTests.cpp
+        unit/gameplay/GameModuleRetirementTests.cpp
+        support/AllocationProbe.cpp
 )
-target_include_directories(HoroGameModuleHostTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers")
+target_include_directories(HoroGameModuleHostTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/support")
 target_compile_features(HoroGameModuleHostTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroGameModuleHostTests PRIVATE
         HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
         HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
 )
-target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost)
+target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost HoroEngine::Platform)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
 horo_add_gameplay_module(HoroTestAiGameModule
     MODULE_ID game.ai.tests
@@ -1746,6 +1826,7 @@ add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTest
     integration/gameplay/GameplayCharacterContextTests.cpp
     integration/gameplay/LuaCharacterLifecycleTests.cpp
     integration/gameplay/GameplayPhysicsHostTests.cpp
+    integration/gameplay/GameplayRetirementHostTests.cpp
     integration/gameplay/PrefabGameplayHostTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
     integration/gameplay/GameplayCharacterAirborneTests.cpp
@@ -1873,7 +1954,7 @@ target_compile_definitions(HoroProjectGameplayRegistryTests PRIVATE
         HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
         HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
 )
-target_link_libraries(HoroProjectGameplayRegistryTests PRIVATE HoroEngine::EditorServices)
+target_link_libraries(HoroProjectGameplayRegistryTests PRIVATE HoroEngine::EditorServices HoroEngine::Platform)
 add_dependencies(HoroProjectGameplayRegistryTests HoroTestGameModule)
 add_executable(HoroSceneMathTests
         unit/foundation/SceneMathTests.cpp
@@ -1971,8 +2052,12 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GuiScreenHostLifecycleTests.cpp
     )
     target_compile_features(HoroGuiScreenHostLifecycleTests PRIVATE cxx_std_20)
-    target_link_libraries(HoroGuiScreenHostLifecycleTests PRIVATE HoroEngine::Gui HoroEngine::Extensions)
-    target_include_directories(HoroGuiScreenHostLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+    target_link_libraries(HoroGuiScreenHostLifecycleTests PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroEngine::Platform)
+    target_include_directories(HoroGuiScreenHostLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests/helpers)
+    add_dependencies(HoroGuiScreenHostLifecycleTests HoroTestGameModule)
+    target_compile_definitions(HoroGuiScreenHostLifecycleTests PRIVATE
+        HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+        HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
 
     add_executable(HoroSettingsModalLifecycleTests
             unit/editor/SettingsModalLifecycleTests.cpp
@@ -2809,6 +2894,7 @@ add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentPrefabValueTests.cpp
 )
 target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
+target_include_directories(HoroSceneDocumentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
@@ -4056,6 +4142,7 @@ add_test(NAME HoroEditorActivityBoundaryTests COMMAND HoroEditorActivityBoundary
 set_tests_properties(HoroEditorActivityBoundaryTests PROPERTIES LABELS "unit;extensions;headless;sonar-coverage;ci-windows")
 
 add_executable(HoroExtensionManagerTests
+        support/AllocationProbe.cpp
         unit/extensions/ApplicationCapabilityRegistryTests.cpp
         unit/extensions/ExtensionActivationTransactionTests.cpp
         unit/extensions/ExtensionRetirementTests.cpp
@@ -4125,15 +4212,21 @@ target_include_directories(HoroPackageApplicationTests PRIVATE ${PROJECT_SOURCE_
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 horo_register_catch_test(HoroPackageApplicationTests LABELS "packages;application;cli;mcp;editor;headless")
 
-add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp)
-target_link_libraries(HoroPackageLifecycleTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
-target_include_directories(HoroPackageLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
-add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6)
+add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp unit/packages/PackageHybridLifecycleTests.cpp
+    unit/packages/PackageGameplayLifecycleTests.cpp)
+target_link_libraries(HoroPackageLifecycleTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::PackageGameplayHost HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
+target_include_directories(HoroPackageLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests/helpers)
+add_dependencies(HoroPackageLifecycleTests HoroTestGameModule HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6 HoroEditorActivityFixture)
 target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
+        HORO_EDITOR_ACTIVITY_FIXTURE="$<TARGET_FILE:HoroEditorActivityFixture>"
     HORO_PACKAGE_NATIVE_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture4>"
     HORO_PACKAGE_EMPTY_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture0>"
     HORO_PACKAGE_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture6>")
 horo_register_catch_test(HoroPackageLifecycleTests LABELS "packages;extensions;headless")
+add_library(HoroPackageHostSurfacePublicHeaderConsumer OBJECT support/PackageHostPublicHeaderConsumer.cpp)
+target_link_libraries(HoroPackageHostSurfacePublicHeaderConsumer PRIVATE HoroEngine::PackageGameplayHost)
 
 add_library(HoroExtensionAbiMissingLoadFixture MODULE fixtures/extensions/AbiModuleMissingLoad.c)
 target_compile_features(HoroExtensionAbiMissingLoadFixture PRIVATE c_std_11)
@@ -4165,6 +4258,8 @@ foreach(abi_hostile_fixture_mode RANGE 0 7)
 endforeach()
 add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiHostileFixture6)
 target_compile_definitions(HoroPackageLifecycleTests PRIVATE
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
     HORO_PACKAGE_TEARDOWN_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiHostileFixture6>")
 add_test(NAME HoroExtensionAbiConformanceCliSupported
     COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")
@@ -4196,6 +4291,16 @@ if(TARGET HoroAssetImporterBasicExample)
     )
 endif()
 add_test(NAME HoroExtensionManagerTests COMMAND HoroExtensionManagerTests)
+if(NOT MSVC OR CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+    foreach(extension_allocation_case IN ITEMS
+            "Every recovery admission allocation failure precedes native callbacks and preserves independent status"
+            "Completed manifest DOM retirement preserves every allocation failure on valid and rejected schemas")
+        add_test(NAME "HoroExtensionManagerAllocationTests::${extension_allocation_case}"
+                COMMAND HoroExtensionManagerTests "${extension_allocation_case}")
+        set_tests_properties("HoroExtensionManagerAllocationTests::${extension_allocation_case}"
+                PROPERTIES LABELS "unit;extensions;allocation" TIMEOUT 90)
+    endforeach()
+endif()
 
 add_executable(HoroProcessObserverTests unit/extensions/ProcessObserverRegistryTests.cpp)
 target_compile_features(HoroProcessObserverTests PRIVATE cxx_std_20)

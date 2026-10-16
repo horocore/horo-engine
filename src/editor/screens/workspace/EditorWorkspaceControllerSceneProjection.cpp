@@ -65,7 +65,7 @@ namespace Horo::Editor {
             (m_deferredRuntimeSnapshot && m_deferredRuntimeSnapshot->state == snapshot.state))
             return;
 
-        Result<Runtime::RuntimeSceneDefinition> definition = ConvertSceneDocumentToRuntime(snapshot, m_previewSceneId);
+        Result<Runtime::RuntimeSceneDefinition> definition = ConvertSceneDocumentToRuntime(snapshot, m_previewSceneId, m_triggerBinding);
         if (definition.HasError()) {
             LOG_ERROR("editor.runtime_scene", "Scene conversion failed: %s", definition.ErrorValue().message.c_str());
             return;

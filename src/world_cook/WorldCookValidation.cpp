@@ -65,7 +65,7 @@ namespace Horo::WorldCook {
                 return Result<std::shared_ptr<const RuntimeSceneCellPayload>>::Failure(MakeError(Errors::Stale));
             const auto core = std::ranges::find(header.payloads, StreamingCellProvider::CoreEcs, &StreamingCellPayloadHeader::provider);
             if (core == header.payloads.end() || header.payloads.size() != 1 ||
-                core->requirement != StreamingCellPayloadRequirement::Required || core->version != 1)
+                core->requirement != StreamingCellPayloadRequirement::Required || core->version != SceneCellPayloadCodecVersion)
                 return Result<std::shared_ptr<const RuntimeSceneCellPayload>>::Failure(MakeError(SceneCellPayloadErrors::Unsupported));
             const auto bytes =
                 artifact.bytes.subspan(static_cast<std::size_t>(core->offset), static_cast<std::size_t>(core->compressedSize));

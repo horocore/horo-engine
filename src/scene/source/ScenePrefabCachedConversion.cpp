@@ -47,8 +47,8 @@ namespace Horo::SceneSource {
             auto projection = BuildScenePrefabProjection(document, resolver, limits, cache, options.cancellation, options.schemas);
             if (projection.HasError())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(projection.ErrorValue());
-            auto definition =
-                ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits, options.schemas);
+            auto definition = ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(),
+                                                                    {resolver, limits, options.schemas}, options.triggerBinding);
             if (options.cancellation.IsCancellationRequested())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(Prefab::PrefabErrors::Cancelled));
             return definition;

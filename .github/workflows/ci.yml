@@ -224,7 +224,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests
+        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroExtensionManagerTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -234,6 +234,24 @@ jobs:
         id: navigation_build
         if: runner.os == 'Linux'
         run: cmake --build --preset ci-navigation-null
+
+      - name: Configure navigation qualification without Physics
+        if: runner.os == 'Linux'
+        run: cmake --preset ci-navigation-physics-null
+
+      - name: Build navigation qualification without Physics
+        id: navigation_physics_null_build
+        if: runner.os == 'Linux'
+        run: cmake --build --preset ci-navigation-physics-null
+
+      - name: Configure navigation qualification without both native providers
+        if: runner.os == 'Linux'
+        run: cmake --preset ci-navigation-providers-null
+
+      - name: Build navigation qualification without both native providers
+        id: navigation_providers_null_build
+        if: runner.os == 'Linux'
+        run: cmake --build --preset ci-navigation-providers-null
 
       - name: Install macOS network crypto library
         if: ${{ !cancelled() && runner.os == 'macOS' && needs.tooling.outputs.network == 'true' && steps.cache.outcome == 'success' }}
@@ -421,6 +439,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/ci/run_scene_allocation_qualification.py --output-junit "$root/scene-allocation-ctest.xml"
 
+      - name: Test Windows Release extension allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $root = 'build/ci-audio-release'
+          ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/extension-allocation-discovery.json" -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci/run_extension_allocation_qualification.py --discovery "$root/extension-allocation-discovery.json" --regex-output "$root/extension-allocation-regex.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pattern = Get-Content -Raw -LiteralPath "$root/extension-allocation-regex.txt"
+          if (Test-Path -LiteralPath "$root/extension-allocation-ctest.xml") {
+            Remove-Item -LiteralPath "$root/extension-allocation-ctest.xml" -ErrorAction Stop
+          }
+          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "extension-allocation-ctest.xml"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci/run_extension_allocation_qualification.py --output-junit "$root/extension-allocation-ctest.xml"
+
       - name: Test Windows Release Character allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
         shell: pwsh
@@ -461,6 +496,14 @@ jobs:
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
         run: ctest --preset ci-navigation-null
+
+      - name: Test navigation qualification without Physics
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_physics_null_build.outcome == 'success' }}
+        run: ctest --preset ci-navigation-physics-null
+
+      - name: Test navigation qualification without both native providers
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_providers_null_build.outcome == 'success' }}
+        run: ctest --preset ci-navigation-providers-null
 
       - name: Test GNS connections, DNS, delivery and lifecycle
         if: ${{ !cancelled() && steps.network_build.outcome == 'success' }}
@@ -523,6 +566,7 @@ jobs:
             build/ci*/ctest.xml
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
+            build/ci-audio-release/extension-allocation-ctest.xml
             build/ci-audio-release/save-allocation-ctest.xml
           if-no-files-found: warn
           retention-days: 14

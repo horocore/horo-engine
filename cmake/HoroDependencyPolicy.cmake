@@ -206,6 +206,8 @@ horo_allow_target_dependencies(TARGET HoroSceneSource DEPENDENCIES HoroSceneSour
 horo_allow_target_dependencies(TARGET HoroSceneRuntimeConversion
     DEPENDENCIES HoroSceneSource HoroPrefabSceneExpansion HoroRuntimeScene HoroSceneSourceCodecInternal)
 horo_allow_target_dependencies(TARGET HoroSceneCook DEPENDENCIES HoroRuntimeScene HoroSceneSourceCodecInternal)
+horo_allow_target_dependencies(TARGET HoroPhysicsTriggerVolumeHost
+    DEPENDENCIES HoroPrefabCookHost HoroPhysicsSceneIntegration HoroSceneRuntimeConversion)
 horo_allow_target_dependencies(TARGET HoroPrefabCookHost
     DEPENDENCIES HoroApplication HoroAssets HoroEditorServices HoroPackageSecurity HoroPrefabAuthoring HoroSceneCook HoroSceneRuntimeConversion)
 horo_allow_target_dependencies(TARGET HoroSceneSourceCodecInternal DEPENDENCIES HoroSceneSource)
@@ -240,8 +242,12 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderMetal HoroRenderFrontend)
 horo_allow_target_dependencies(TARGET HoroGui
     DEPENDENCIES HoroPackageApplication HoroEditorPackageAdapters HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions)
+horo_allow_target_dependencies(TARGET HoroPackageContentStagingInternal
+    DEPENDENCIES HoroPackageSecurity)
+horo_allow_target_dependencies(TARGET HoroPackageGameplayHost
+    DEPENDENCIES HoroPackageLifecycle HoroGameplayModuleHost HoroPackageContentStagingInternal)
 horo_allow_target_dependencies(TARGET HoroPackageLifecycle
-    DEPENDENCIES HoroFoundation HoroPackageSecurity HoroExtensions HoroAssets)
+    DEPENDENCIES HoroFoundation HoroPackageSecurity HoroExtensions HoroAssets HoroPackageContentStagingInternal)
 horo_allow_target_dependencies(TARGET HoroExtensions
     DEPENDENCIES HoroFoundation HoroPlatform HoroAssets HoroSecurity)
 

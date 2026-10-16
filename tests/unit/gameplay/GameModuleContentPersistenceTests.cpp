@@ -61,7 +61,8 @@ TEST_CASE("actual installed SlotPlayer capture survives native retirement and re
     GameModuleHost host;
     auto loadedResult = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(loadedResult.HasValue());
-    auto loaded = std::move(loadedResult).Value();
+    REQUIRE_FALSE(loadedResult.Value().diagnostic);
+    auto loaded = std::move(loadedResult).Value().owner;
     const auto participant = SaveParticipantId::Parse("game.tests.durable3").Value();
     auto receiptResult = loaded->AcquireInstalledPersistence(participant);
     REQUIRE(receiptResult.HasValue());

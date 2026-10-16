@@ -15,6 +15,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/OperationStore.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Runtime/Input.h"
 #include "NavigationErrors.h"
 #include "editor/project_model/RendererAvailability.h"
@@ -64,7 +65,7 @@ namespace Horo::Editor {
         /** @brief Copies actual inventory availability into the existing surface authority after startup admission.
          * Desired enablement changes remain restart-applied while a provider is active.
          */
-        void PublishRecoveryReasons(Extensions::EditorSurfaceRegistry &registry, const Extensions::ExtensionInventory &inventory) {
+        void PublishRecoveryReasons(const Extensions::EditorSurfaceRegistry &registry, const Extensions::ExtensionInventory &inventory) {
             using enum Extensions::EditorSurfaceProviderStatus;
             for (const auto &entry : inventory.Entries()) {
                 if (entry.runtimeActive)
@@ -77,8 +78,8 @@ namespace Horo::Editor {
                     status = Incompatible;
                 else if (entry.activationOutcome == Extensions::ExtensionActivationOutcome::Failed)
                     status = Failed;
-                for (const auto &module : entry.modules)
-                    if (const auto recorded = registry.SetProviderStatus({entry.packageId, module.id}, status); recorded.HasError())
+                for (const auto &providerModule : entry.modules)
+                    if (const auto recorded = registry.SetProviderStatus({entry.packageId, providerModule.id}, status); recorded.HasError())
                         LOG_WARN("editor.extensions", "Recovery reason admission failed: %s", recorded.ErrorValue().message.c_str());
             }
         }
@@ -111,6 +112,8 @@ namespace Horo::Editor {
           extensionInventory_(composition.extensionInventory), extensionMarketplace_(composition.extensionMarketplace),
           nativeDialogs_(composition.nativeDialogs), screenRegistry_(std::move(composition.screenRegistry)),
           workspacePanelRegistry_(std::move(composition.workspacePanelRegistry)) {
+        gameplayRetirements_ = composition.gameplayRetirements ? std::move(composition.gameplayRetirements)
+                                                               : std::make_shared<Gameplay::GameModuleRetirementQueue>();
         RegisterApplicationServices(composition);
         InitializeExtensions(composition.jobs, std::move(composition.extensionArtifactGate));
         statusBar_ = std::make_unique<EditorStatusBar>(context, statusItemRegistry_);
@@ -250,7 +253,13 @@ namespace Horo::Editor {
             editorActivityHost_->BeginShutdown();
         if (extensionManager_)
             extensionManager_->UnloadAll();
+        (void)gameplayRetirements_->Close();
         services_.Clear();
+    }
+
+    /** @copydoc GuiScreenHost::GameplayRetirements */
+    std::shared_ptr<Gameplay::GameModuleRetirementQueue> GuiScreenHost::GameplayRetirements() const noexcept {
+        return gameplayRetirements_;
     }
 
     bool GuiScreenHost::IsShutdown() const noexcept {
@@ -329,6 +338,8 @@ namespace Horo::Editor {
     }
 
     Result<void> GuiScreenHost::Navigate(GuiRoute destination) {
+        if (gameplayClosePending_)
+            return Result<void>::Failure(MakeError(NavigationErrors::Busy, "Application gameplay retirement is still pending."));
         if (shutdown_)
             return Result<void>::Failure(MakeError(NavigationErrors::HostShutdown));
         if (!started_)
@@ -484,6 +495,7 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::OnFixedUpdate */
     void GuiScreenHost::OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) {
+        (void)gameplayRetirements_->Drain();
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
             activeScreen_->OnFixedUpdate(simulationTick, fixedDeltaSeconds);
@@ -493,6 +505,10 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::FlushPendingNavigation() {
+        if (gameplayClosePending_ && !isScreenCallbackActive_) {
+            (void)CommitApplicationClose();
+            return;
+        }
         if (!pendingNavigation_.has_value()) {
             return;
         }
@@ -668,6 +684,10 @@ namespace Horo::Editor {
     }
 
     Result<void> GuiScreenHost::CommitApplicationClose() {
+        if (isScreenCallbackActive_) {
+            gameplayClosePending_ = true;
+            return Result<void>::Success();
+        }
         if (modalHost_->HasOpenModal()) {
             const Result<void> modalClosed = modalHost_->RequestCloseAllForShutdown();
             if (modalClosed.HasError()) {
@@ -676,6 +696,15 @@ namespace Horo::Editor {
                 return modalClosed;
             }
         }
+        if (activeScreen_) {
+            activeScreen_->OnLeave();
+            activeScreen_.reset();
+        }
+        if (auto closed = gameplayRetirements_->Close(); closed.HasError()) {
+            gameplayClosePending_ = true;
+            return closed;
+        }
+        gameplayClosePending_ = false;
         closeRequested_ = true;
         return Result<void>::Success();
     }

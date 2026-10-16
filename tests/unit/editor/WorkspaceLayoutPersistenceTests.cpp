@@ -4,14 +4,56 @@
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Foundation/Platform.h"
 
+#include <algorithm>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <charconv>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <new>
 #include <type_traits>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 using namespace Horo::Editor;
+
+namespace {
+    enum class SweepTrace {
+        Measured,
+        Index,
+        InjectedBytes,
+        Completed
+    };
+
+    /** @brief Emits bounded fault diagnostics through a stack buffer and raw stderr, outside the C++ allocator. */
+    void TraceWorkspaceAllocation(const SweepTrace event, const std::size_t value) noexcept {
+        constexpr std::array<std::string_view, 4> labels{"measured", "index", "injected-bytes", "completed"};
+        constexpr std::string_view prefix{"[workspace-allocation] "};
+        std::array<char, 96> text{};
+        auto *cursor = std::copy(prefix.begin(), prefix.end(), text.data());
+        const auto label = labels[static_cast<std::size_t>(event)];
+        cursor = std::copy(label.begin(), label.end(), cursor);
+        *cursor++ = '=';
+        const auto converted = std::to_chars(cursor, text.data() + text.size() - 1, value);
+        if (converted.ec != std::errc{})
+            return;
+        *converted.ptr = '\n';
+        const auto bytes = static_cast<std::size_t>(converted.ptr + 1 - text.data());
+#ifdef _WIN32
+        static_cast<void>(::_write(2, text.data(), static_cast<unsigned int>(bytes)));
+#else
+        static_cast<void>(::write(STDERR_FILENO, text.data(), bytes));
+#endif
+    }
+
+    void ObserveWorkspaceAllocationFailure(const std::size_t bytes) noexcept {
+        TraceWorkspaceAllocation(SweepTrace::InjectedBytes, bytes);
+    }
+}  // namespace
 
 static_assert(!std::is_copy_constructible_v<Horo::Tests::OwnedTestDirectory> &&
               !std::is_move_constructible_v<Horo::Tests::OwnedTestDirectory>);
@@ -29,12 +71,15 @@ TEST_CASE("Split parsing releases every owned allocation when any allocation fai
     }
     const auto successfulAllocations = Probe::Count() - before;
     REQUIRE(successfulAllocations >= 2);
+    TraceWorkspaceAllocation(SweepTrace::Measured, successfulAllocations);
+    std::size_t completed{};
     for (std::size_t index = 0; index < successfulAllocations; ++index) {
+        TraceWorkspaceAllocation(SweepTrace::Index, index);
         const auto allocationsBefore = Probe::Count();
         const auto freesBefore = Probe::FreeCount();
         bool failed{};
         {
-            const Probe::ScopedFailure failure{index};
+            const Probe::ScopedFailure failure{index, ObserveWorkspaceAllocationFailure};
             try {
                 static_cast<void>(WorkspaceLayoutPersistence::Deserialize(json));
             } catch (const std::bad_alloc &) {
@@ -46,7 +91,10 @@ TEST_CASE("Split parsing releases every owned allocation when any allocation fai
         CHECK(failed);
         // Count includes the one failed request; all successful requests must have been freed.
         CHECK(allocations == frees + 1);
+        ++completed;
     }
+    TraceWorkspaceAllocation(SweepTrace::Completed, completed);
+    REQUIRE(completed == successfulAllocations);
 }
 
 TEST_CASE("Split children transfer exclusive ownership into the layout variant", "[unit][editor][persistence][ownership]") {

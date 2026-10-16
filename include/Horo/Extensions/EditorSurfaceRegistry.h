@@ -313,6 +313,17 @@ namespace Horo::Extensions {
 
     private:
         friend class EditorSurfaceRegistration;
+        friend class ExtensionManager;
+
+        /**
+         * @brief Stages bounded recovery rows before atomically publishing their statuses; invokes no provider.
+         * @param providers Exact host-admitted stable keys; an empty span does not change the revision.
+         * @param status Process-local recovery reason to publish for every key.
+         * @return Success after publication, or validation/capacity/shutdown error without mutation.
+         * @throws std::bad_alloc Before publication only; all statuses and the revision remain unchanged.
+         */
+        [[nodiscard]] Result<void> SetProviderStatuses(std::span<const EditorSurfaceProviderKey> providers,
+                                                       EditorSurfaceProviderStatus status) const;
 
         static void Remove(const std::shared_ptr<EditorSurfaceRegistryState> &registry,
                            const std::shared_ptr<EditorSurfaceState> &surface) noexcept;

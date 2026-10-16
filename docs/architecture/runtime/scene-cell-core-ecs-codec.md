@@ -11,17 +11,18 @@ The enclosing archive retains provider identity/version, CRC and artifact SHA
 responsibility. Existing Scene source/definition types and semantic validation
 remain authoritative.
 
-## Version-one representation
+## Version-two representation
 
-The fixed 16-byte header contains ASCII `HOCORECS`, uint16 little-endian major1,
+The fixed 16-byte header contains ASCII `HOCORECS`, uint16 little-endian major2,
 uint16 little-endian minor0, and four zero reserved bytes. Other versions and
 nonzero reserved bytes are rejected. The complete body contains, in order:
 
 1. `SceneCellPayloadIdentity`: partition, cell tuple, Scene ID and source revision.
 2. The complete ordered runtime-entity vector.
 3. The canonical complete asset-dependency vector.
+4. Canonical object-ordered portable trigger migration evidence.
 
-The existing Scene-owned `SceneCellContentFields.h` version-one member mapping is
+The existing Scene-owned `SceneCellContentFields.h` version-two member mapping is
 the single definition of member order for all core components and their nested
 values. Const hashing/encoding and mutable decoding borrow the same declared
 fields. Adding, removing or reordering a field requires a deliberate codec version
@@ -70,3 +71,9 @@ components and unsupported schemas. No decoder activates a cell or changes an
 incremental cache, package inventory or durable output pointer. Cancellation is
 observed during preparation and before final owner publication. A failed decode
 cannot partially alter the source or a live Scene.
+
+Version two adds required semantic trigger binding constraints, not runtime state.
+Version-one provider payloads require recook and are rejected; evidence is never
+silently discarded. `SceneCellPayloadCodecVersion` is the one provider-version
+authority used by the Scene writer/reader and WorldCook envelope validation.
+Runtime/filter activation generations and process leases are not serialized.

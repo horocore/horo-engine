@@ -5,6 +5,7 @@
 #include <array>
 #include <fstream>
 #include <span>
+#include <type_traits>
 
 namespace Horo::Editor {
     namespace {
@@ -15,22 +16,34 @@ namespace Horo::Editor {
             const AtomicFileReplacementReceipt &receipt;
             bool created{};
 
+            /** @brief Borrows invocation-owned publication state through the final cleanup decision. */
+            WorkspaceStage(DurableFileSystem &files, const std::filesystem::path &path,
+                           const AtomicFileReplacementReceipt &receipt) noexcept
+                : files(files), path(path), receipt(receipt) {}
+
+            WorkspaceStage(const WorkspaceStage &) = delete;
+            WorkspaceStage &operator=(const WorkspaceStage &) = delete;
+            WorkspaceStage(WorkspaceStage &&) = delete;
+            WorkspaceStage &operator=(WorkspaceStage &&) = delete;
+
             ~WorkspaceStage() noexcept {
                 try {
                     if (created && !receipt.WasCommitted())
                         static_cast<void>(files.RemoveDurable(path));
-                } catch (...) {
+                } catch (...) {  // NOSONAR(cpp:S2486) A destructor must preserve the primary publication failure.
                     // Retain an orphan private stage rather than mask the publication failure or terminate teardown.
                 }
             }
         };
+
+        static_assert(!std::is_copy_constructible_v<WorkspaceStage> && !std::is_move_constructible_v<WorkspaceStage>);
 
     }  // namespace
 
     /** @copydoc WorkspaceLayoutPersistence::Save */
     bool WorkspaceLayoutPersistence::Save(DurableFileSystem &files, AtomicFileReplacementReceipt &receipt,
                                           const std::filesystem::path &path, const WorkspaceLayout &layout, std::string *error) {
-        const auto fail = [error](const std::string &message) {
+        const auto fail = [error](const std::string_view message) {
             if (error)
                 *error = message;
             return false;
@@ -40,9 +53,11 @@ namespace Horo::Editor {
             return fail("workspace candidate or publication path is invalid");
         auto lockPath = path;
         lockPath += ".lock";
-        auto lock = files.TryAcquireExclusive(lockPath, "horo.workspace");
-        if (lock.HasError())
-            return fail(lock.ErrorValue().message);
+        auto lockResult = files.TryAcquireExclusive(lockPath, "horo.workspace");
+        if (lockResult.HasError())
+            return fail(lockResult.ErrorValue().message);
+        // The admitted writer lease must survive the stage write, replacement and cleanup.
+        const auto writerLease = std::move(lockResult).Value();
         auto prepared = path;
         prepared += ".pending";
         WorkspaceStage stage{files, prepared, receipt};

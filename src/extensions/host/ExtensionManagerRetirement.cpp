@@ -80,7 +80,7 @@ namespace Horo::Extensions {
                     std::ranges::find(record->second->providerExtensions, extensionId) != record->second->providerExtensions.end())
                     RetireRecord(*dependent);
             }
-            static_cast<void>(ReportEditorProviderStatus(extension.manifest, EditorSurfaceProviderStatus::Missing));
+            static_cast<void>(ReportEditorProviderStatus(extension.manifest, EditorSurfaceProviderStatus::Missing, extension.moduleIds));
             extension.retirement->CloseAdmission();
             extension.platformProvider.reset();
             if (m_importerCatalog && !m_importerCatalog->WithdrawPackage(extensionId))
