@@ -197,8 +197,7 @@ namespace Horo::Assets {
                                                                const std::filesystem::path &projectRoot) {
             ScannedAssets result;
             std::error_code error;
-            std::filesystem::recursive_directory_iterator iterator(assetRoot, std::filesystem::directory_options::skip_permission_denied,
-                                                                   error);
+            std::filesystem::recursive_directory_iterator iterator(assetRoot, std::filesystem::directory_options::none, error);
             if (error)
                 return Result<ScannedAssets>::Failure(Failure(AssetErrors::RootInvalid, error.message()));
             const std::filesystem::recursive_directory_iterator end;

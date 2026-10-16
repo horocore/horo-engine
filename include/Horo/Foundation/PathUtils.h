@@ -70,7 +70,11 @@ namespace Horo::Foundation::Paths {
      *
      * @param root Base path prefix.
      * @param candidate Target path to check.
-     * @return True if candidate resides within or equals root.
+     * @return True if candidate resides within or equals root. Ordinary filesystem lookup failures retain
+     * the canonical/lexical fallback; they are never interpreted as successful physical equivalence.
+     * @throws std::bad_alloc Path normalization, traversal or comparison could not allocate. Callers that
+     * publish state must complete this fallible admission before publication; allocation failure is not
+     * converted to an ordinary filesystem mismatch.
      */
     [[nodiscard]] bool HasPathPrefix(const std::filesystem::path &root, const std::filesystem::path &candidate);
 

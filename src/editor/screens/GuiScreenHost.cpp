@@ -527,6 +527,21 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc GuiScreenHost::OpenSettingsModal */
+    void GuiScreenHost::OpenSettingsModal() {
+        if (context_ && settingsService_ && modalHost_) {
+            auto collision = activeScreen_ ? activeScreen_->CollisionSettings()
+                                           : Result<std::shared_ptr<CollisionProjectSettingsSession>>::Failure(
+                                                 MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported)));
+            auto modal =
+                std::make_unique<SettingsModal>(*context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
+                                                !collision.HasError() ? std::weak_ptr{collision.Value()}
+                                                                      : std::weak_ptr<CollisionProjectSettingsSession>{},
+                                                collision.HasError() ? std::optional<Error>{collision.ErrorValue()} : std::nullopt);
+            static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
+        }
+    }
+
     /** @copydoc GuiScreenHost::DispatchMenuInvocation */
     void GuiScreenHost::DispatchMenuInvocation(const EditorMenuInvocation &invocation) {
         using enum EditorMenuAction;
@@ -554,11 +569,7 @@ namespace Horo::Editor {
                 }
                 return;
             case OpenEditorSettings:
-                if (context_ && settingsService_ && modalHost_) {
-                    auto modal = std::make_unique<SettingsModal>(*context_, *settingsService_, logoTexture_, extensionInventory_,
-                                                                 extensionMarketplace_);
-                    static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
-                }
+                OpenSettingsModal();
                 return;
             case ExitApplication:
                 static_cast<void>(RequestCloseApplication());

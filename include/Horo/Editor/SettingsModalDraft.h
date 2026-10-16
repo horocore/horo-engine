@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 
 #include <array>
@@ -113,6 +114,32 @@ namespace Horo::Editor {
         int compatMode = 0;
     };
 
+    /** @brief Transient project collision presentation; no runtime authority or user-preference persistence.
+     * @details Weak owner is resolved for each synchronous nonreentrant command/draw. Values are copied only on
+     * opening or explicit refresh/replay/commit. Closing the canonical owner revokes every old modal immediately. */
+    struct SettingsCollisionDraft final {
+        std::weak_ptr<CollisionProjectSettingsSession> owner;
+        std::optional<Application::ProjectCollisionSettingsInput> input;
+        std::optional<CollisionSettingsReview> review;
+        std::optional<Error> error;
+        int kind{};
+        int selected{};
+        int initialResponse{2};
+        int initialLayer{};
+        std::string newName;
+        bool pending{};
+    };
+
+    /** @brief Refreshes one modal projection only for an explicit open/reset/replay command.
+     * @param draft Exact modal-owned candidate. @param owner Owner-thread session resolved for this synchronous call. */
+    void RefreshCollisionDraft(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner);
+    /** @brief Creates one complete candidate definition using the explicitly chosen response; no publication occurs.
+     * @param draft Exact local form. @param owner Live session supplies a fresh typed identity. @return Typed preparation outcome. */
+    [[nodiscard]] Result<void> CreateCollisionItem(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner);
+    /** @brief Removes the selected stable definition from a candidate; review remains mandatory before commit.
+     * @param draft Exact local form. @return Typed selection outcome, leaving active worlds and durable source unchanged. */
+    [[nodiscard]] Result<void> RemoveCollisionItem(SettingsCollisionDraft &draft);
+
     /** @brief Modal-owned mutable draft for the editor settings workflow. */
     struct SettingsState {  // NOSONAR(cpp:S1820)
         using GeneralTab = SettingsGeneralTab;
@@ -141,6 +168,7 @@ namespace Horo::Editor {
         int pendingUpdateChannel = -1;
         std::uint64_t settingsRevision = 0;
 
+        SettingsCollisionDraft collision;
         GeneralTab general{};
         AppearanceTab appearance{};
         InputTab input{};

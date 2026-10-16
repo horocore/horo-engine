@@ -169,6 +169,10 @@ namespace Horo::Editor {
             return;
         }
 
+        if (!copyOnly && HasDirtyCollisionSettings()) {
+            LOG_ERROR("editor.collision", "Save or discard collision settings before changing the active Scene identity.");
+            return;
+        }
         const SceneDocumentSnapshot snapshot = m_document.Snapshot();
         auto saved = SaveProjectSceneToPath(std::filesystem::path{m_viewModel.projectRoot}, *destination, snapshot, true, *m_mutations,
                                             *m_durableFiles);
@@ -189,17 +193,25 @@ namespace Horo::Editor {
             return;
         }
 
+        CommitSceneSaveAs(snapshot, saved.Value().fingerprint, *destination);
+    }
+
+    /** @copydoc EditorWorkspaceController::CommitSceneSaveAs */
+    void EditorWorkspaceController::CommitSceneSaveAs(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
+                                                      const std::filesystem::path &destination) {
         const std::filesystem::path projectRoot{m_viewModel.projectRoot};
-        if (const Result<void> defaultSceneUpdated = SetProjectDefaultScenePath(projectRoot, *destination, *m_mutations, *m_durableFiles);
+        if (const Result<void> defaultSceneUpdated = SetProjectDefaultScenePath(projectRoot, destination, *m_mutations, *m_durableFiles);
             defaultSceneUpdated.HasError()) {
             LOG_ERROR("editor.scene_document", "Scene was written to '%s', but the project's default scene could not be updated: %s",
-                      destination->string().c_str(), defaultSceneUpdated.ErrorValue().message.c_str());
+                      destination.string().c_str(), defaultSceneUpdated.ErrorValue().message.c_str());
             return;
         }
 
-        if (!CommitSceneSave(snapshot, saved.Value().fingerprint, *destination))
+        if (auto closed = ShutdownCollisionSettings(); closed.HasError())
+            return;
+        if (!CommitSceneSave(snapshot, fingerprint, destination))
             return;
         LOG_INFO("editor.scene_document", "Saved scene revision %llu as '%s'; active document identity was updated.",
-                 static_cast<unsigned long long>(snapshot.revision.value), destination->string().c_str());
+                 static_cast<unsigned long long>(snapshot.revision.value), destination.string().c_str());
     }
 }  // namespace Horo::Editor
