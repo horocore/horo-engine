@@ -114,6 +114,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PhysicsInspectorPublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
@@ -213,6 +214,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
     add_executable(HoroEditorUiAutomationTests
             gui/EditorUiAutomationHarnessTests.cpp
             gui/FullEditorUiAutomationScenarios.cpp
+            gui/PhysicsInspectorUiScenarios.cpp
             gui/PackageModalUiTests.cpp
             helpers/editor_ui/EditorUiTestHarness.cpp
             helpers/editor_ui/EditorUiTestSurface.cpp
@@ -2089,6 +2091,7 @@ if (HORO_BUILD_EDITOR_GUI)
 endif ()
 add_executable(HoroEditorLocalizationServiceTests
         unit/editor/LocalizationServiceTests.cpp
+        unit/editor/PhysicsInspectorLocalizationTests.cpp
 )
 
 target_compile_features(HoroEditorLocalizationServiceTests PRIVATE cxx_std_20)
@@ -2420,6 +2423,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
             unit/editor/EditorWorkspaceControllerDockingTests.cpp
             unit/editor/EditorWorkspaceControllerInspectorTests.cpp
+            unit/editor/EditorWorkspaceControllerPhysicsTests.cpp
             unit/editor/EditorWorkspaceControllerAssetMutationTests.cpp
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
@@ -2523,6 +2527,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroInspectorPanelRenderTests
             unit/editor/InspectorPanelRenderTests.cpp
+            unit/editor/PhysicsInspectorRenderTests.cpp
     )
 
     target_compile_features(HoroInspectorPanelRenderTests PRIVATE cxx_std_20)
@@ -2536,6 +2541,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroInspectorEditSessionTests
             unit/editor/InspectorEditSessionTests.cpp
+            unit/editor/PhysicsInspectorSessionTests.cpp
     )
 
     target_compile_features(HoroInspectorEditSessionTests PRIVATE cxx_std_20)
@@ -2867,6 +2873,7 @@ target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentTests.cpp
+        unit/editor/PhysicsInspectorTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/SceneDocumentExtractionTests.cpp
