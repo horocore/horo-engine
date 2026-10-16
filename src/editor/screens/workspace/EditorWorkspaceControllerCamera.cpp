@@ -45,6 +45,15 @@ namespace Horo::Editor {
     EditorWorkspaceController::~EditorWorkspaceController() {
         m_prefabCancellation.RequestCancellation();
         RetirePrefabHierarchy();
+        (void)ShutdownGameplayModules();
+    }
+
+    /** @copydoc EditorWorkspaceController::ShutdownGameplayModules */
+    Result<void> EditorWorkspaceController::ShutdownGameplayModules() {
+        m_playSession.Stop();
+        m_pendingGameplayRegistry.reset();
+        m_gameplayRegistry.reset();
+        return m_gameplayRetirements->Close();
     }
 
     /** @copydoc EditorWorkspaceController::StartCameraCutPreview */

@@ -20,6 +20,10 @@
 #include <variant>
 #include <vector>
 
+namespace Horo::Gameplay {
+    class GameModuleRetirementQueue;
+}
+
 namespace Horo::Security {
     class NativeArtifactGate;
 }
@@ -84,6 +88,7 @@ namespace Horo::Editor {
         Extensions::ExtensionMarketplaceService *extensionMarketplace{};
         NativeDialogs *nativeDialogs{};
         std::shared_ptr<const Security::NativeArtifactGate> extensionArtifactGate;
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
     };
 
     /**
@@ -130,6 +135,9 @@ namespace Horo::Editor {
          * @return Success if allowed, or error if blocked/denied.
          */
         Result<void> RequestCloseApplication();
+
+        /** @brief Returns the explicit application retirement owner injected into workspace module composition. */
+        [[nodiscard]] std::shared_ptr<Gameplay::GameModuleRetirementQueue> GameplayRetirements() const noexcept;
 
         /** @brief Returns the currently active route. */
         [[nodiscard]] const GuiRoute &ActiveRoute() const noexcept;
@@ -245,12 +253,14 @@ namespace Horo::Editor {
         GuiRoute activeRoute_{GuiRouteKind::Welcome, WelcomeRouteParameters{}};
         GuiRouteRevision activeRevision_{0};
 
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements_;
         std::unique_ptr<GuiScreen> activeScreen_;
         std::optional<GuiRoute> pendingNavigation_;
         std::optional<ProjectCreationOperationId> activeCreationId_;
         std::optional<EditorRendererRestartRequest> rendererRestartRequest_;
         std::filesystem::path currentProjectRoot_;
         bool closeRequested_{false};
+        bool gameplayClosePending_{};
         bool navigationBusy_{false};
         bool isScreenCallbackActive_{false};
         bool started_{false};

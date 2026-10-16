@@ -9,6 +9,7 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Gameplay/LuaBehavior.h"
 
 #include <cstdint>
@@ -72,7 +73,8 @@ namespace Horo::Editor {
 
     public:
         /** @brief Discovers the native module and bounded Lua behavior assets for a project. */
-        [[nodiscard]] static std::unique_ptr<ProjectGameplayRegistry> Discover(const std::filesystem::path &projectRoot);
+        [[nodiscard]] static std::unique_ptr<ProjectGameplayRegistry> Discover(
+            const std::filesystem::path &projectRoot, std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements = {});
         /**
          * @brief Loads one host-preserved old artifact for transactional rollback.
          * @param projectRoot Absolute project root used for manifest watching and shadow storage.
@@ -80,9 +82,9 @@ namespace Horo::Editor {
          * @param luaGeneration Exact in-memory Lua generation captured before retirement.
          * @return Owning combined registry with diagnostics when restoration cannot be prepared.
          */
-        [[nodiscard]] static std::unique_ptr<ProjectGameplayRegistry> DiscoverRollback(const std::filesystem::path &projectRoot,
-                                                                                       const NativeGameplayRollbackArtifact &artifact,
-                                                                                       const ProjectLuaGenerationSnapshot &luaGeneration);
+        [[nodiscard]] static std::unique_ptr<ProjectGameplayRegistry> DiscoverRollback(
+            const std::filesystem::path &projectRoot, const NativeGameplayRollbackArtifact &artifact,
+            const ProjectLuaGenerationSnapshot &luaGeneration, std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements = {});
         /**
          * @brief Loads the current native manifest with an exact last-good Lua generation.
          * @param projectRoot Absolute project root used for native discovery and shadow storage.
@@ -90,9 +92,11 @@ namespace Horo::Editor {
          * @return Owning combined registry without rereading Lua source files.
          */
         [[nodiscard]] static std::unique_ptr<ProjectGameplayRegistry> DiscoverNativeGeneration(
-            const std::filesystem::path &projectRoot, const ProjectLuaGenerationSnapshot &luaGeneration);
+            const std::filesystem::path &projectRoot, const ProjectLuaGenerationSnapshot &luaGeneration,
+            std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements = {});
 
-        explicit ProjectGameplayRegistry(ConstructionToken);
+        explicit ProjectGameplayRegistry(ConstructionToken, std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements = {});
+        ~ProjectGameplayRegistry();
 
         ProjectGameplayRegistry(const ProjectGameplayRegistry &) = delete;
         ProjectGameplayRegistry &operator=(const ProjectGameplayRegistry &) = delete;
@@ -156,6 +160,8 @@ namespace Horo::Editor {
         void DiscoverLuaPrograms(const std::filesystem::path &projectRoot);
         void InstallLuaGeneration(const ProjectLuaGenerationSnapshot &snapshot);
 
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> moduleRetirements_;
+        std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
         std::unique_ptr<Gameplay::LoadedGameModule> nativeModule_;
         Gameplay::GameAssetTypeRegistry missingAssetTypes_{"game.missing"};
         Gameplay::ComponentRegistry missingComponents_;

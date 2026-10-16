@@ -1,4 +1,5 @@
 #include "GameplayCharacterContextTestSupport.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Physics/CharacterErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -137,12 +138,14 @@ namespace {
                                                  {{"slot", static_cast<std::int64_t>(world.controller.slot.index)},
                                                   {"generation", static_cast<std::int64_t>(world.controller.slot.generation)}});
         auto scene = Runtime::RuntimeScene::Create(definition, {9}).Value();
+        auto retirements = std::make_shared<GameModuleRetirementQueue>();
         const Application::Internal::GameplayWorldSelection selected{.moduleId = "game.tests",
                                                                      .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
                                                                      .descriptorRevision =
                                                                          Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
                                                                      .physicsPermission =
                                                                          Application::Internal::GameplayPhysicsPermission::Granted,
+                                                                     .moduleRetirements = retirements,
                                                                      .characterPermission =
                                                                          Application::Internal::GameplayCharacterPermission::Granted};
         auto created =
@@ -163,6 +166,7 @@ namespace {
         gameplay->UnloadModule();
         Physics::Test::RequireError(retained.Validate(), CharacterErrors::CapabilityRevoked);
         REQUIRE(world.character->State() == CharacterWorldState::Active);
+        REQUIRE(retirements->Close().HasValue());
     }
 
     TEST_CASE("Module-derived Character client and weak registry storage remain host-owned after the native image unloads",
