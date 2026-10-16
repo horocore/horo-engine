@@ -7,7 +7,7 @@
 #include <type_traits>
 
 namespace Horo::Runtime::CellCookDetail {
-    // Field order is the version-1 semantic key and Scene provider wire contract.
+    // Field order is the version-2 semantic key and Scene provider wire contract.
     // Const and mutable tuples share this single field mapping. Tuples borrow the source;
     // no padding, pointers, or allocations enter the stream. Empty markers are
     // represented by their enclosing variant tag and contribute no payload bytes.
@@ -398,5 +398,17 @@ namespace Horo::Runtime::CellCookDetail {
         requires std::same_as<std::remove_cv_t<T>, SceneCellBehaviorSchema>
     inline auto ContentFields(T &v) {
         return std::tie(v.type, v.version);
+    }
+
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, TriggerVolumeProjectBinding>
+    inline auto ContentFields(T &v) {
+        return std::tie(v.collisionSchemaFingerprint, v.profile, v.material, v.materialSourceRevision, v.materialPayloadDigest);
+    }
+
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, TriggerVolumeMigrationEvidence>
+    inline auto ContentFields(T &v) {
+        return std::tie(v.object, v.body, v.collider, v.binding);
     }
 }  // namespace Horo::Runtime::CellCookDetail

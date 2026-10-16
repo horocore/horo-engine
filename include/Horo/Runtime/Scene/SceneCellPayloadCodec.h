@@ -6,6 +6,9 @@
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 
 namespace Horo::Runtime {
+    /** @brief CoreEcs wire version carrying required portable trigger migration proof; older payloads require recook. */
+    inline constexpr std::uint32_t SceneCellPayloadCodecVersion = 2;
+
     /** @brief Independent wire and allocation ceilings alongside the existing semantic payload bounds. */
     struct SceneCellPayloadCodecLimits final {
         std::size_t maximumEncodedBytes{};          /**< Complete provider bytes, including its versioned header. */
@@ -18,7 +21,7 @@ namespace Horo::Runtime {
      * @param payload Existing owner-admitted complete baseline.
      * @param limits Explicit wire/allocation/semantic bounds.
      * @param cancellation Borrowed observer checked between bounded encoding units.
-     * @return Complete version-one CoreEcs bytes or typed payload failure, without publication or live Scene access.
+     * @return Complete version-two CoreEcs bytes or typed payload failure, without publication or live Scene access.
      * @details Uses the existing canonical Scene field mapping for all core, authored Physics, AI, navigation,
      * behavior and opaque gameplay components. Capability/schema approval is never serialized as authority.
      * @throws std::bad_alloc on bounded output allocation.

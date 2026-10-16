@@ -2,6 +2,8 @@
 
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 
+#include <algorithm>
+#include <bit>
 #include <cmath>
 #include <utility>
 
@@ -119,5 +121,73 @@ namespace Horo::Physics {
         return Result<PhysicsMaterialContactProperties>::Success(
             {.friction = CombineScalar(left.Friction(), right.Friction(), frictionMode),
              .restitution = CombineScalar(left.Restitution(), right.Restitution(), restitutionMode)});
+    }
+
+    namespace {
+        static_assert(PhysicsMaterialAssetSchemaVersion == 1);
+        constexpr std::array MaterialHeader{std::byte{'H'}, std::byte{'O'}, std::byte{'M'}, std::byte{'A'}, std::byte{'T'}, std::byte{'E'},
+                                            std::byte{'R'}, std::byte{'L'}, std::byte{1},   std::byte{0},   std::byte{0},   std::byte{0},
+                                            std::byte{1},   std::byte{0},   std::byte{0},   std::byte{0}};
+
+        /** @brief Writes a fixed-width unsigned field independent of native endianness and padding. */
+        void MaterialWord(PhysicsMaterialPayload &bytes, const std::size_t offset, const std::uint64_t value, const std::size_t width) {
+            for (std::size_t index = 0; index < width; ++index)
+                bytes[offset + index] = static_cast<std::byte>(value >> (8U * index));
+        }
+
+        /** @brief Reads a fixed-width unsigned field after the complete payload size was checked. */
+        std::uint64_t MaterialWord(const std::span<const std::byte> bytes, const std::size_t offset, const std::size_t width) {
+            std::uint64_t value{};
+            for (std::size_t index = 0; index < width; ++index)
+                value |= static_cast<std::uint64_t>(std::to_integer<std::uint8_t>(bytes[offset + index])) << (8U * index);
+            return value;
+        }
+    }  // namespace
+
+    /** @copydoc EncodePhysicsMaterialAsset */
+    Result<PhysicsMaterialPayload> EncodePhysicsMaterialAsset(const PhysicsMaterialAsset &material) {
+        if (!material.IsValid())
+            return Result<PhysicsMaterialPayload>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid));
+        PhysicsMaterialPayload bytes{};
+        std::ranges::copy(MaterialHeader, bytes.begin());
+        const auto &descriptor = material.Descriptor();
+        const auto &identity = descriptor.id.Asset().Bytes();
+        for (std::size_t index = 0; index < identity.size(); ++index)
+            bytes[16 + index] = static_cast<std::byte>(identity[index]);
+        MaterialWord(bytes, 32, descriptor.sourceRevision, 8);
+        MaterialWord(bytes, 40, std::bit_cast<std::uint32_t>(descriptor.friction == 0 ? 0.0F : descriptor.friction), 4);
+        MaterialWord(bytes, 44, std::bit_cast<std::uint32_t>(descriptor.restitution == 0 ? 0.0F : descriptor.restitution), 4);
+        MaterialWord(bytes, 48, std::bit_cast<std::uint32_t>(descriptor.densityKilogramsPerCubicMeter), 4);
+        bytes[52] = static_cast<std::byte>(descriptor.frictionCombine);
+        bytes[53] = static_cast<std::byte>(descriptor.restitutionCombine);
+        return Result<PhysicsMaterialPayload>::Success(bytes);
+    }
+
+    /** @copydoc DecodePhysicsMaterialAsset */
+    Result<PhysicsMaterialAsset> DecodePhysicsMaterialAsset(const std::span<const std::byte> payload) {
+        if (payload.size() != PhysicsMaterialPayloadSize || !std::ranges::equal(payload.first(MaterialHeader.size()), MaterialHeader))
+            return Result<PhysicsMaterialAsset>::Failure(
+                MakeError(PhysicsErrors::MaterialDescriptorInvalid,
+                          "Physics material payload requires the exact canonical schema-1 header and fixed size."));
+        std::array<std::uint8_t, 16> identity{};
+        for (std::size_t index = 0; index < identity.size(); ++index)
+            identity[index] = std::to_integer<std::uint8_t>(payload[16 + index]);
+        PhysicsMaterialAssetDescriptor
+            descriptor{.id = PhysicsMaterialAssetId::FromAssetId(Assets::AssetId::FromBytes(identity)),
+                       .sourceRevision = MaterialWord(payload, 32, 8),
+                       .friction = std::bit_cast<float>(static_cast<std::uint32_t>(MaterialWord(payload, 40, 4))),
+                       .restitution = std::bit_cast<float>(static_cast<std::uint32_t>(MaterialWord(payload, 44, 4))),
+                       .densityKilogramsPerCubicMeter = std::bit_cast<float>(static_cast<std::uint32_t>(MaterialWord(payload, 48, 4))),
+                       .frictionCombine = static_cast<PhysicsMaterialCombineMode>(std::to_integer<std::uint8_t>(payload[52])),
+                       .restitutionCombine = static_cast<PhysicsMaterialCombineMode>(std::to_integer<std::uint8_t>(payload[53]))};
+        auto material = PhysicsMaterialAsset::Create(descriptor);
+        if (material.HasError())
+            return material;
+        if (const auto canonical = EncodePhysicsMaterialAsset(material.Value());
+            canonical.HasError() || !std::ranges::equal(canonical.Value(), payload))
+            return Result<PhysicsMaterialAsset>::Failure(
+                MakeError(PhysicsErrors::MaterialDescriptorInvalid,
+                          "Physics material payload contains reserved or noncanonical field bytes."));
+        return material;
     }
 }  // namespace Horo::Physics

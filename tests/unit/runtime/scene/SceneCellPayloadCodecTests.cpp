@@ -1,5 +1,6 @@
 #include "../world_streaming/StreamingCellCandidateTestSupport.h"
 #include "Horo/Runtime/Scene/SceneCellPayloadCodec.h"
+#include "TriggerVolumeCellTestValues.h"
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
@@ -67,7 +68,7 @@ namespace Horo::Runtime {
         REQUIRE(bytes.size() > 16);
         CHECK(bytes[0] == std::byte{'H'});
         CHECK(bytes[7] == std::byte{'S'});
-        CHECK(bytes[8] == std::byte{1});
+        CHECK(bytes[8] == std::byte{2});
         auto decoded = DecodeSceneCellPayload(fixture.manifest.Descriptor(), bytes, Identity(), fixture.schemas, {}, Limits());
         if (decoded.HasError())
             INFO(decoded.ErrorValue().message);
@@ -118,7 +119,7 @@ namespace Horo::Runtime {
         }
         CHECK(DecodeSceneCellPayload(fixture.manifest.Descriptor(), bytes, Identity(), fixture.schemas, {}, Limits()).HasError());
         bytes = fixture.Bytes();
-        bytes[8] = std::byte{2};
+        bytes[8] = std::byte{1};
         RequireError(DecodeSceneCellPayload(fixture.manifest.Descriptor(), bytes, Identity(), fixture.schemas, {}, Limits()),
                      SceneCellPayloadErrors::Unsupported);
     }
@@ -156,5 +157,22 @@ namespace Horo::Runtime {
                      SceneCellPayloadErrors::Cancelled);
         CHECK(fixture.entities[1].parent == SceneObjectId{1});
         CHECK(fixture.manifest.Cells().size() == 3);
+    }
+
+    TEST_CASE("CoreEcs version two preserves portable trigger proof and rejects old providers", "[scene][trigger][cell_codec]") {
+        const auto manifest = W::CandidateTestSupport::Manifest();
+        const Test::TriggerCellValues values;
+        const SceneCellPayloadSource source{.identity = Identity(), .entities = values.entities, .triggerVolumeEvidence = values.proof};
+        const auto payload = CookRuntimeSceneCellPayload(manifest.Descriptor(), source, Identity(), Limits().semantic);
+        REQUIRE(payload.HasValue());
+        const auto bytes = EncodeSceneCellPayload(payload.Value(), Limits());
+        REQUIRE(bytes.HasValue());
+        const auto decoded = DecodeSceneCellPayload(manifest.Descriptor(), bytes.Value(), Identity(), {}, {}, Limits());
+        REQUIRE(decoded.HasValue());
+        REQUIRE(decoded.Value().Definition().TriggerVolumeEvidence().front() == values.proof.front());
+        REQUIRE(EncodeSceneCellPayload(decoded.Value(), Limits()).Value() == bytes.Value());
+        auto stale = bytes.Value();
+        stale[8] = std::byte{1};
+        REQUIRE(DecodeSceneCellPayload(manifest.Descriptor(), stale, Identity(), {}, {}, Limits()).HasError());
     }
 }  // namespace Horo::Runtime

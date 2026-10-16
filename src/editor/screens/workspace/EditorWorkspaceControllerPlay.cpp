@@ -174,7 +174,7 @@ namespace Horo::Editor {
         if (auto cloned = m_runtimeScene.CloneActive(Runtime::SceneRuntimeId{0x8000000000000001ULL}); cloned.HasValue())
             preparedScene = std::move(cloned).Value();
         const Result<void> started = m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(),
-                                                         m_gameplayRegistry->Components(), std::move(preparedScene));
+                                                         m_gameplayRegistry->Components(), std::move(preparedScene), m_triggerBinding);
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())

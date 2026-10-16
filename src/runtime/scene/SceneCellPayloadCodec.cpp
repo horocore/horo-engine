@@ -8,11 +8,14 @@
 
 namespace Horo::Runtime {
     namespace {
-        // Version one fixes the shared canonical field order, eight-byte little-endian
+        // Version two retains the shared canonical field order, eight-byte little-endian
         // scalar/count representation and explicit variant/optional tags. No native ABI bytes.
-        constexpr std::array Header{std::byte{'H'}, std::byte{'O'}, std::byte{'C'}, std::byte{'O'}, std::byte{'R'}, std::byte{'E'},
-                                    std::byte{'C'}, std::byte{'S'}, std::byte{1},   std::byte{0},   std::byte{0},   std::byte{0},
-                                    std::byte{0},   std::byte{0},   std::byte{0},   std::byte{0}};
+        constexpr std::array Header{std::byte{'H'}, std::byte{'O'}, std::byte{'C'},
+                                    std::byte{'O'}, std::byte{'R'}, std::byte{'E'},
+                                    std::byte{'C'}, std::byte{'S'}, std::byte{SceneCellPayloadCodecVersion},
+                                    std::byte{0},   std::byte{0},   std::byte{0},
+                                    std::byte{0},   std::byte{0},   std::byte{0},
+                                    std::byte{0}};
 
         /** @brief Requires explicit positive independent budgets before any wire ownership is allocated. */
         bool ValidLimits(const SceneCellPayloadCodecLimits &limits) noexcept {
@@ -23,7 +26,8 @@ namespace Horo::Runtime {
         /** @brief Emits the same immutable fields in both measurement and output passes. */
         void WritePayload(CellCookDetail::PayloadWriter &writer, const RuntimeSceneCellPayload &payload) {
             writer.Bytes(Header);
-            writer.Fields(payload.Identity(), payload.Definition().Entities(), payload.Definition().AssetDependencies());
+            writer.Fields(payload.Identity(), payload.Definition().Entities(), payload.Definition().AssetDependencies(),
+                          payload.Definition().TriggerVolumeEvidence());
         }
 
         /** @brief Validates the exact supported header before constructing typed component storage. */
@@ -31,7 +35,8 @@ namespace Horo::Runtime {
             if (bytes.size() < Header.size() || !std::ranges::equal(bytes.first(8), std::span{Header}.first(8)))
                 return Result<void>::Failure(
                     MakeError(SceneCellPayloadErrors::Invalid, "CoreEcs provider header is truncated or invalid."));
-            if (bytes[8] != std::byte{1} || bytes[9] != std::byte{0} || bytes[10] != std::byte{0} || bytes[11] != std::byte{0})
+            if (bytes[8] != std::byte{SceneCellPayloadCodecVersion} || bytes[9] != std::byte{0} || bytes[10] != std::byte{0} ||
+                bytes[11] != std::byte{0})
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::Unsupported, "CoreEcs provider version is unsupported."));
             if (!std::ranges::all_of(bytes.subspan(12, 4), [](const auto byte) {
                 return byte == std::byte{0};
@@ -85,12 +90,14 @@ namespace Horo::Runtime {
         SceneCellPayloadIdentity identity;
         std::vector<RuntimeEntityDefinition> entities;
         std::vector<SceneAssetDependency> dependencies;
+        std::vector<TriggerVolumeMigrationEvidence> migration;
         reader.Fields(identity);
         reader.Sequence(entities, limits.semantic.maximumEntities);
         reader.Sequence(dependencies, limits.semantic.maximumDependencies);
+        reader.Sequence(migration, entities.size());
         if (const auto read = reader.Finish(); read.HasError())
             return Result<RuntimeSceneCellPayload>::Failure(read.ErrorValue());
-        return CookRuntimeSceneCellPayload(partition, {identity, entities, dependencies, componentSchemas, behaviorSchemas}, expected,
-                                           limits.semantic, cancellation);
+        return CookRuntimeSceneCellPayload(partition, {identity, entities, dependencies, componentSchemas, behaviorSchemas, migration},
+                                           expected, limits.semantic, cancellation);
     }
 }  // namespace Horo::Runtime

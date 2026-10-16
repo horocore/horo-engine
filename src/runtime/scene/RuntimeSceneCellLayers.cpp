@@ -126,6 +126,13 @@ namespace Horo::Runtime {
                 if (const auto required = builder.RequireAsset(dependency); required.HasError())
                     return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
             }
+            for (const auto &evidence : baseline.TriggerVolumeEvidence()) {
+                if (cancellation.IsCancellationRequested())
+                    return Failure<RuntimeSceneDefinition>(SceneCellPayloadErrors::Cancelled);
+                if (Included(evidence.object, payload, decisions, states))
+                    if (const auto required = builder.RequireTriggerVolume(evidence); required.HasError())
+                        return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
+            }
             return std::move(builder).Build();
         }
 
