@@ -545,4 +545,5 @@ def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> Non
         assert source in tests_cmake
     for consumer in ("HoroPhysicsTriggerVolumeHostContractConsumer", "HoroTriggerVolumeConversionPublicHeaderConsumer"):
         registration = re.search(rf'set_tests_properties\({consumer} PROPERTIES LABELS "([^"]+)"\)', tests_cmake)
-        assert registration and "ci-windows" in registration.group(1).split(";")
+        assert registration is not None
+        assert "ci-windows" in registration.group(1).split(";")

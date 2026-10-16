@@ -224,8 +224,7 @@ namespace Horo::Physics::Detail {
             return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale,
                                                    "Trigger migration requires the exact captured project collision "
                                                    "schema; recook or recapture the scene."));
-        const auto profile = simulation.schema->ResolveStaticSensorProfile(binding.profile);
-        if (profile.HasError())
+        if (const auto profile = simulation.schema->ResolveStaticSensorProfile(binding.profile); profile.HasError())
             return Result<void>::Failure(profile.ErrorValue());
         if (material.empty() || ComputeSha256(std::as_bytes(material)) != binding.materialPayloadDigest)
             return Result<void>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid,

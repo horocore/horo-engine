@@ -183,8 +183,8 @@ namespace Horo::Physics {
         auto material = PhysicsMaterialAsset::Create(descriptor);
         if (material.HasError())
             return material;
-        const auto canonical = EncodePhysicsMaterialAsset(material.Value());
-        if (canonical.HasError() || !std::ranges::equal(canonical.Value(), payload))
+        if (const auto canonical = EncodePhysicsMaterialAsset(material.Value());
+            canonical.HasError() || !std::ranges::equal(canonical.Value(), payload))
             return Result<PhysicsMaterialAsset>::Failure(
                 MakeError(PhysicsErrors::MaterialDescriptorInvalid,
                           "Physics material payload contains reserved or noncanonical field bytes."));

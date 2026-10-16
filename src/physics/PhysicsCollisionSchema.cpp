@@ -292,8 +292,8 @@ namespace Horo::Physics {
         const auto profile = ResolveProfile(id);
         if (profile.HasError())
             return profile;
-        const auto layer = std::ranges::find(layers_, profile.Value()->layer, &CollisionLayerDefinition::id);
-        if (!profile.Value()->simulationEnabled || !profile.Value()->lifecycleEventsEnabled || layer == layers_.end() || !layer->enabled ||
+        if (const auto layer = std::ranges::find(layers_, profile.Value()->layer, &CollisionLayerDefinition::id);
+            !profile.Value()->simulationEnabled || !profile.Value()->lifecycleEventsEnabled || layer == layers_.end() || !layer->enabled ||
             !layer->admitsStatic || !layer->admitsOverlap)
             return Result<const CollisionProfileDefinition *>::Failure(
                 MakeError(PhysicsErrors::DescriptorInvalid,
