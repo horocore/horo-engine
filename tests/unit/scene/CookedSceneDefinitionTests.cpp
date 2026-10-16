@@ -1,4 +1,5 @@
 #include "Horo/Scene/CookedSceneDefinition.h"
+#include "Horo/Scene/SceneSource.h"
 #include "TriggerVolumeConversionTestValues.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -132,4 +133,31 @@ TEST_CASE("Trigger binding union rejects conflicting semantic authorities and du
         other.binding.materialPayloadDigest.bytes.front() ^= 1;
         REQUIRE(builder.RequireTriggerVolume(other).HasError());
     }
+}
+
+TEST_CASE("Cooked scene decoding rejects unhandled components without dropping recognized portable values", "[native][prefab-cook]") {
+    const auto encoded = EncodeCookedSceneDefinition(Scene());
+    REQUIRE(encoded.HasValue());
+    auto document = nlohmann::json::parse(encoded.Value());
+    SECTION("an opaque future component cannot be erased from runtime input") {
+        document["entities"][0]["components"]["futureCollisionOwner"] = {{"enabled", false}};
+    }
+    SECTION("a null unknown key is still unhandled schema evidence") {
+        document["entities"][0]["components"]["futureCollisionOwner"] = nullptr;
+    }
+    SECTION("recognized authoring-only trigger values remain unsupported in cooked input") {
+        const SceneSource::SceneObjectSnapshot source{.id = {1}, .components = {.triggerVolume = Runtime::TriggerVolumeComponent{}}};
+        const std::array objects{source};
+        const auto authored = nlohmann::json::parse(SceneSource::EncodeSceneSource({objects, {}}));
+        document["entities"][0]["components"]["triggerVolume"] = authored["objects"][0]["components"]["triggerVolume"];
+    }
+    const auto text = document.dump() + '\n';
+    const auto decoded = DecodeCookedSceneDefinition(std::span{reinterpret_cast<const std::uint8_t *>(text.data()), text.size()}, {1}, {2});
+    REQUIRE(decoded.HasError());
+    REQUIRE(decoded.ErrorValue().domain.Value() == SceneCookErrors::Unsupported.domain.Value());
+    REQUIRE(decoded.ErrorValue().code.Value() == SceneCookErrors::Unsupported.code.Value());
+    const auto valid = DecodeCookedSceneDefinition(encoded.Value(), {1}, {2});
+    REQUIRE(valid.HasValue());
+    REQUIRE(valid.Value().Entities().front().components.camera.has_value());
+    REQUIRE_FALSE(valid.Value().Entities().front().components.camera->enabled);
 }

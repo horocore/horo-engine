@@ -105,7 +105,10 @@ modal draft/presentation headers remain owned by `HoroGui`.
 and deduplicated by the existing owning decoder after object admission. Callers
 which perform destructive reference work must inspect this evidence. The writer
 and all valid schema-1 canonical bytes are unchanged; opaque evidence is not
-serialized. The same canonical decoder now rejects duplicate object keys and
+serialized. Scene Cook consumes the same decoder recognition result and rejects every unhandled
+component key, including null or disabled future payloads, rather than dropping it
+from source-free runtime data. Its existing authoring-only trigger rejection remains.
+The same canonical decoder now rejects duplicate object keys and
 nesting at the existing Foundation guard's 64-level boundary, including ignored
 fields. Ambiguous last-wins input must be repaired before use; no second permissive
 decoder exists. Completed-DOM child cleanup avoids flattening scratch growth in
