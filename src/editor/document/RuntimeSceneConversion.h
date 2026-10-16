@@ -40,10 +40,10 @@ namespace Horo::Editor {
      * @param limits Captured bounded prefab policy.
      * @return Complete projection; failed placements remain authored and carry their typed error.
      */
-    [[nodiscard]] Result<ScenePrefabProjection> BuildScenePrefabProjection(
-        const SceneDocumentSnapshot &document, const Prefab::PrefabSourceResolverSnapshot &resolver,
-        const Prefab::PrefabLimitProfile &limits, const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr,
-        const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
+    [[nodiscard]] Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneDocumentSnapshot &document,
+                                                                           const Prefab::PrefabSourceResolverSnapshot &resolver,
+                                                                           const Prefab::PrefabLimitProfile &limits,
+                                                                           const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr);
 
     /**
      * @brief Marks only affected retained editor previews stale at the publication boundary.
@@ -64,6 +64,7 @@ namespace Horo::Editor {
      * @param resolver Current immutable source publication.
      * @param schemas Current immutable property schema identity used to fence retained results.
      * @param limits Bounded conversion and publication policy.
+     * @param triggerBinding Explicit project sensor/material capture for runtime conversion.
      * @return Complete detached runtime definition or typed failure, preserving the previous active scene.
      * @note InvalidateScenePrefabProjection must consume intervening resource publications before this call.
      */
@@ -80,6 +81,7 @@ namespace Horo::Editor {
      * @param resolver Immutable source/resolver snapshot used for every placement.
      * @param schemas Explicit immutable property schema snapshot; null preserves unavailable property intent.
      * @param limits Captured bounded prefab policy.
+     * @param triggerBinding Explicit project sensor/material capture for runtime conversion.
      * @return Complete runtime definition, or the typed failure for the first required placement.
      */
     [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertSceneDocumentToRuntime(

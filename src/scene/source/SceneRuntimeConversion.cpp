@@ -96,6 +96,28 @@ namespace Horo::SceneSource {
             return bytes;
         }
 
+        /** @brief Validates legacy geometry before disabled/conflict/binding precedence is evaluated. */
+        Result<Runtime::PhysicsColliderSource> TriggerGeometry(const SceneObjectSnapshot &object) {
+            using enum Runtime::ColliderShapeType;
+            switch (object.components.triggerVolume->shape) {
+                case Box:
+                    return Result<Runtime::PhysicsColliderSource>::Success(Runtime::PhysicsAnalyticCollider{Runtime::PhysicsBoxCollider{}});
+                case Sphere:
+                    return Result<Runtime::PhysicsColliderSource>::Success(
+                        Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{}});
+                case Capsule:
+                    return Result<Runtime::PhysicsColliderSource>::Success(
+                        Runtime::PhysicsAnalyticCollider{Runtime::PhysicsCapsuleCollider{}});
+                case StaticPlane:
+                    return Result<Runtime::PhysicsColliderSource>::Success(
+                        Runtime::PhysicsAnalyticCollider{Runtime::PhysicsStaticPlaneCollider{}});
+                default:
+                    return Result<Runtime::PhysicsColliderSource>::Failure(
+                        MakeError(TriggerVolumeSchemaUnsupported,
+                                  std::format("Scene object {} contains an unsupported legacy trigger shape value.", object.id.value)));
+            }
+        }
+
         /**
          * @brief Converts one enabled legacy trigger into canonical inert Physics producers.
          * @param object Immutable authored object whose component set is being projected.
@@ -109,26 +131,9 @@ namespace Horo::SceneSource {
             if (!object.components.triggerVolume)
                 return Result<void>::Success();
 
-            Runtime::PhysicsColliderSource source;
-            using enum Runtime::ColliderShapeType;
-            switch (object.components.triggerVolume->shape) {
-                case Box:
-                    source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsBoxCollider{}};
-                    break;
-                case Sphere:
-                    source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{}};
-                    break;
-                case Capsule:
-                    source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsCapsuleCollider{}};
-                    break;
-                case StaticPlane:
-                    source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsStaticPlaneCollider{}};
-                    break;
-                default:
-                    return Result<void>::Failure(
-                        MakeError(TriggerVolumeSchemaUnsupported,
-                                  std::format("Scene object {} contains an unsupported legacy trigger shape value.", object.id.value)));
-            }
+            auto source = TriggerGeometry(object);
+            if (source.HasError())
+                return Result<void>::Failure(source.ErrorValue());
             if (!object.components.triggerVolume->enabled)
                 return Result<void>::Success();
 
@@ -156,7 +161,7 @@ namespace Horo::SceneSource {
                 .id = LegacyTriggerVolumeColliderComponent,
                 .collider = LegacyTriggerVolumeColliderSlot,
                 .body = {.object = Runtime::SceneObjectId{object.id.value}, .body = LegacyTriggerVolumeBodySlot},
-                .source = std::move(source),
+                .source = std::move(source).Value(),
                 .localPose = {.translation = Math::Vec3{}, .rotation = Math::Quaternion::Identity()},
                 .scale = {1.0F, 1.0F, 1.0F},
                 .collisionProfile = binding.profile,

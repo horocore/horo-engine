@@ -11,6 +11,14 @@ namespace {
     using namespace Horo::Application::PrefabCookTestSupport;
     using namespace Horo::Assets::ServiceTestSupport;
 
+    /** @brief Creates exact fixture registry records without exposing another fixture's private helpers. */
+    Assets::AssetRecord TriggerAssetRecord(Assets::AssetId id, std::string_view type, std::string_view path) {
+        return {.id = id,
+                .type = Type(type),
+                .sourcePath = ProjectPath::Parse(path).Value(),
+                .metadataPath = ProjectPath::Parse(std::string(path) + ".horo").Value()};
+    }
+
     /** @brief Actual project collision authority selected explicitly by the headless host. */
     Physics::PhysicsWorldSimulationBinding ProjectSimulation() {
         const auto layer = Physics::CollisionLayerId::FromBytes(Id("00000000-0000-0000-0000-000000000001").Bytes());
@@ -28,54 +36,77 @@ namespace {
     }
 }  // namespace
 
-TEST_CASE("Public project Physics capture supplies real material closure to transactional scene cook", "[host][trigger][cook]") {
-    HostFixture fixture;
-    const auto simulation = ProjectSimulation();
-    const auto profile = simulation.schema->Profiles().front().id;
-    const auto materialId = Id("00000000-0000-0000-0000-000000000091");
-    const auto materialType = Type("core.physics_material");
-    const auto material =
-        Physics::PhysicsMaterialAsset::Create({.id = Physics::PhysicsMaterialAssetId::FromAssetId(materialId), .sourceRevision = 7})
-            .Value();
-    const auto encodedMaterial = Physics::EncodePhysicsMaterialAsset(material).Value();
-    const std::span bytes{reinterpret_cast<const std::uint8_t *>(encodedMaterial.data()), encodedMaterial.size()};
-    WriteFile(fixture.project.dir.path / "assets/trigger.material", bytes);
-    fixture.WriteText("assets/trigger.material.horo", SidecarJson(materialId.ToString(), "core.physics_material"));
-    const std::array objects{
-        SceneSource::SceneObjectSnapshot{.id = {874}, .components = {.triggerVolume = Runtime::TriggerVolumeComponent{}}}};
-    fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({objects, {}}));
-    REQUIRE(fixture.registry
-                .Publish({TestMeshRecord(), Record(fixture.prefabId, "core.prefab", "assets/hierarchy.prefab"),
-                          Record(fixture.sceneId, "core.scene", "assets/level.scene"),
-                          Record(materialId, "core.physics_material", "assets/trigger.material")})
-                .status == Assets::AssetRegistryBuildStatus::Complete);
-    Assets::CookerCatalog catalog;
-    REQUIRE(catalog
-                .Register({.contributionId = "test.mesh",
-                           .assetType = Type("core.mesh"),
-                           .targets = {fixture.request.assets.target},
-                           .strategy = std::make_shared<const SettingsCooker>(1)})
-                .HasValue());
-    REQUIRE(catalog
-                .Register({.contributionId = "test.material",
-                           .assetType = materialType,
-                           .targets = {fixture.request.assets.target},
-                           .strategy = MakePhysicsMaterialCooker()})
-                .HasValue());
-    auto sealed = catalog.Publish();
-    REQUIRE(sealed.HasValue());
-    PrefabSceneCookHost host{fixture.jobs, sealed.Value(), fixture.registry, fixture.inspector, fixture.mutations, fixture.migrations};
-    Assets::AssetCookArtifact artifact{.id = materialId,
-                                       .type = materialType,
-                                       .target = fixture.request.assets.target,
-                                       .sourceDigest = ComputeSha256(std::as_bytes(std::span{bytes})),
-                                       .payloadDigest = ComputeSha256(std::as_bytes(std::span{bytes})),
-                                       .payload = {bytes.begin(), bytes.end()}};
+namespace {
+    /** @brief Owns real project files, jobs and cook host together; no returned artifact borrows constructor locals. */
+    struct TriggerCookFixture {
+        HostFixture fixture;
+        Physics::PhysicsWorldSimulationBinding simulation{ProjectSimulation()};
+        Physics::CollisionProfileId profile{simulation.schema->Profiles().front().id};
+        Assets::AssetId materialId{Id("00000000-0000-0000-0000-000000000091")};
+        Assets::AssetTypeId materialType{Type("core.physics_material")};
+        Physics::PhysicsMaterialAsset material{
+            Physics::PhysicsMaterialAsset::Create({.id = Physics::PhysicsMaterialAssetId::FromAssetId(materialId), .sourceRevision = 7})
+                .Value()};
+        Assets::AssetCookArtifact artifact;
+        std::unique_ptr<PrefabSceneCookHost> host;
+
+        TriggerCookFixture() {
+            const auto encoded = Physics::EncodePhysicsMaterialAsset(material).Value();
+            const std::span bytes{reinterpret_cast<const std::uint8_t *>(encoded.data()), encoded.size()};
+            WriteFile(fixture.project.dir.path / "assets/trigger.material", bytes);
+            fixture.WriteText("assets/trigger.material.horo", SidecarJson(materialId.ToString(), "core.physics_material"));
+            const std::array objects{
+                SceneSource::SceneObjectSnapshot{.id = {874}, .components = {.triggerVolume = Runtime::TriggerVolumeComponent{}}}};
+            fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({objects, {}}));
+            REQUIRE(fixture.registry
+                        .Publish({TestMeshRecord(), TriggerAssetRecord(fixture.prefabId, "core.prefab", "assets/hierarchy.prefab"),
+                                  TriggerAssetRecord(fixture.sceneId, "core.scene", "assets/level.scene"),
+                                  TriggerAssetRecord(materialId, "core.physics_material", "assets/trigger.material")})
+                        .status == Assets::AssetRegistryBuildStatus::Complete);
+            artifact = {.id = materialId,
+                        .type = materialType,
+                        .target = fixture.request.assets.target,
+                        .sourceDigest = ComputeSha256(std::as_bytes(bytes)),
+                        .payloadDigest = ComputeSha256(std::as_bytes(bytes)),
+                        .payload = {bytes.begin(), bytes.end()}};
+            ComposeCookHost();
+        }
+
+        void ComposeCookHost() {
+            Assets::CookerCatalog catalog;
+            REQUIRE(catalog
+                        .Register({.contributionId = "test.mesh",
+                                   .assetType = Type("core.mesh"),
+                                   .targets = {fixture.request.assets.target},
+                                   .strategy = std::make_shared<const SettingsCooker>(1)})
+                        .HasValue());
+            REQUIRE(catalog
+                        .Register({.contributionId = "test.material",
+                                   .assetType = materialType,
+                                   .targets = {fixture.request.assets.target},
+                                   .strategy = MakePhysicsMaterialCooker()})
+                        .HasValue());
+            auto sealed = catalog.Publish();
+            REQUIRE(sealed.HasValue());
+            host = std::make_unique<PrefabSceneCookHost>(fixture.jobs, sealed.Value(), fixture.registry, fixture.inspector,
+                                                         fixture.mutations, fixture.migrations);
+        }
+
+        Assets::AssetCookReport CookValid() {
+            auto result = CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, artifact);
+            REQUIRE(result.HasValue());
+            return std::move(result).Value();
+        }
+    };
+}  // namespace
+
+TEST_CASE_METHOD(TriggerCookFixture, "Public project Physics capture supplies real material closure to transactional scene cook",
+                 "[host][trigger][cook]") {
     const auto capture = CaptureProjectTriggerVolumeBinding(simulation, profile, material, artifact);
     REQUIRE(capture.HasValue());
     REQUIRE(capture.Value().binding.materialSourceRevision == 7);
     REQUIRE(capture.Value().materialSourceDigest == artifact.sourceDigest);
-    const auto cooked = CookScenesWithProjectTriggerVolumes(host, fixture.request, simulation, profile, material, artifact);
+    const auto cooked = CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, artifact);
     REQUIRE(cooked.HasValue());
     const auto inventory = Assets::ReadCookGenerationContents(cooked.Value().generation, 1024U * 1024U);
     REQUIRE(inventory.HasValue());
@@ -100,12 +131,16 @@ TEST_CASE("Public project Physics capture supplies real material closure to tran
     }
     REQUIRE(foundScene);
     REQUIRE(foundMaterial);
+}
+
+TEST_CASE_METHOD(TriggerCookFixture, "Material capture rejects malformed or semantically different snapshots", "[host][trigger][cook]") {
+    const auto cooked = CookValid();
     SECTION("wrong actual resource bytes cannot publish another generation") {
         auto changed = artifact;
         changed.payload.push_back(4);
         changed.payloadDigest = ComputeSha256(std::as_bytes(std::span{changed.payload}));
-        REQUIRE(CookScenesWithProjectTriggerVolumes(host, fixture.request, simulation, profile, material, changed).HasError());
-        fixture.AssertRetained(cooked.Value().generation);
+        REQUIRE(CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, changed).HasError());
+        fixture.AssertRetained(cooked.generation);
     }
     SECTION("same identity and revision cannot hide different material coefficients") {
         auto descriptor = material.Descriptor();
@@ -117,9 +152,18 @@ TEST_CASE("Public project Physics capture supplies real material closure to tran
         selfConsistent.payload.assign(otherBytes.begin(), otherBytes.end());
         selfConsistent.payloadDigest = ComputeSha256(std::as_bytes(otherBytes));
         REQUIRE(CaptureProjectTriggerVolumeBinding(simulation, profile, material, selfConsistent).HasError());
-        REQUIRE(CookScenesWithProjectTriggerVolumes(host, fixture.request, simulation, profile, material, selfConsistent).HasError());
-        fixture.AssertRetained(cooked.Value().generation);
+        REQUIRE(CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, selfConsistent).HasError());
+        fixture.AssertRetained(cooked.generation);
     }
+    SECTION("corrupt artifact payload is rejected at public capture") {
+        artifact.payload.front() ^= 1;
+        REQUIRE(CaptureProjectTriggerVolumeBinding(simulation, profile, material, artifact).HasError());
+    }
+}
+
+TEST_CASE_METHOD(TriggerCookFixture, "Actual material source and cooker output preserve the published generation",
+                 "[host][trigger][cook]") {
+    const auto cooked = CookValid();
     SECTION("actual cooker bytes must agree with a valid captured different material snapshot") {
         auto descriptor = material.Descriptor();
         descriptor.friction = 0.75F;
@@ -131,19 +175,15 @@ TEST_CASE("Public project Physics capture supplies real material closure to tran
         selfConsistent.payloadDigest = ComputeSha256(std::as_bytes(otherBytes));
         REQUIRE(CaptureProjectTriggerVolumeBinding(simulation, profile, other, selfConsistent).HasValue());
         // The source file remains the original material. Its actual cooker output cannot be published under the other proof.
-        REQUIRE(CookScenesWithProjectTriggerVolumes(host, fixture.request, simulation, profile, other, selfConsistent).HasError());
-        fixture.AssertRetained(cooked.Value().generation);
+        REQUIRE(CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, other, selfConsistent).HasError());
+        fixture.AssertRetained(cooked.generation);
     }
     SECTION("foreign schema profile cannot use the project default") {
         REQUIRE(CaptureProjectTriggerVolumeBinding(simulation, {}, material, artifact).HasError());
     }
-    SECTION("corrupt artifact payload is rejected at public capture") {
-        artifact.payload.front() ^= 1;
-        REQUIRE(CaptureProjectTriggerVolumeBinding(simulation, profile, material, artifact).HasError());
-    }
     SECTION("source capture must match actual project file") {
         artifact.sourceDigest.bytes.front() ^= 1;
-        REQUIRE(CookScenesWithProjectTriggerVolumes(host, fixture.request, simulation, profile, material, artifact).HasError());
-        fixture.AssertRetained(cooked.Value().generation);
+        REQUIRE(CookScenesWithProjectTriggerVolumes(*host, fixture.request, simulation, profile, material, artifact).HasError());
+        fixture.AssertRetained(cooked.generation);
     }
 }

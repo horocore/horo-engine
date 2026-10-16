@@ -62,6 +62,60 @@ namespace Horo::Physics {
         }
 
 #if HORO_TEST_PHYSICS_NATIVE
+        /** @brief Executes the same fixed90-tick native oracle while all world/capability leases remain caller-owned. */
+        void RequireTriggerPassThrough(PhysicsWorld &world, PhysicsQueryEventCapability &capability, std::uint64_t sceneGeneration,
+                                       BodyHandle moving) {
+            std::size_t enters{}, exits{};
+            for (std::uint64_t tick = 1; tick <= 90; ++tick) {
+                REQUIRE(world
+                            .AdvanceFixedTick({.simulationTick = tick,
+                                               .sceneGeneration = sceneGeneration,
+                                               .fixedDelta = Duration::FromNanoseconds(16'666'667)})
+                            .HasValue());
+                const auto publication = world.PublishedTick();
+                std::array<PhysicsEventRecord, 8> events{};
+                const auto read = capability.ReadEvents({.identity = capability.Identity(),
+                                                         .completedTick = publication.eventTick,
+                                                         .publicationRevision = publication.publicationRevision,
+                                                         .maximumRecords = events.size()},
+                                                        events);
+                REQUIRE(read.HasValue());
+                for (std::size_t index = 0; index < read.Value().recordCount; ++index) {
+                    enters += events[index].kind == PhysicsEventKind::TriggerEnter;
+                    exits += events[index].kind == PhysicsEventKind::TriggerExit;
+                    REQUIRE((events[index].kind == PhysicsEventKind::TriggerEnter || events[index].kind == PhysicsEventKind::TriggerExit));
+                }
+            }
+            REQUIRE(enters == 1);
+            REQUIRE(exits == 1);
+            const auto state = world.ReadSceneBodyReconciliation(moving);
+            REQUIRE(state.HasValue());
+            REQUIRE(state.Value().state.pose.translation.x > 4.0F);
+        }
+
+        /** @brief Keeps the alternative asset provider alive through real preparation and checks old-world retention. */
+        void RequireDifferentMaterialRejected(PhysicsPlayWorldSession &play, const SceneSource::SceneSourceDocument &source,
+                                              const SceneSource::TriggerVolumeConversionContext &binding) {
+            const auto oldWorld = play.WorldIdentity();
+            const auto oldBody = play.ResolveBody({1}, {1}).Value();
+            // Same material identity/revision, different valid coefficients and self-consistent bytes.
+            AssetSceneFixture differentAssets;
+            auto descriptor =
+                PhysicsMaterialAsset::Create({.id = PhysicsMaterialAssetId::FromAssetId(differentAssets.material), .sourceRevision = 1})
+                    .Value()
+                    .Descriptor();
+            descriptor.friction = 0.75F;
+            const auto changedMaterial = PhysicsMaterialAsset::Create(descriptor).Value();
+            const auto changedBytes = EncodePhysicsMaterialAsset(changedMaterial).Value();
+            const auto payload = std::span{reinterpret_cast<const std::uint8_t *>(changedBytes.data()), changedBytes.size()};
+            differentAssets.provider.Insert(differentAssets.material, {payload.begin(), payload.end()});
+            const auto expected = TriggerDefinition(source, binding, 3);
+            const auto differentView = differentAssets.Prepare(expected);
+            Test::RequireError(play.Prepare(expected, differentView), PhysicsErrors::MaterialDescriptorInvalid);
+            REQUIRE(play.WorldIdentity() == oldWorld);
+            REQUIRE(play.ValidateBody(oldBody).HasValue());
+        }
+
         TEST_CASE("Authored trigger cooked scene activates native enter and exit without physical response",
                   "[physics][trigger][native][cook][events]") {
             auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical).Value();
@@ -90,32 +144,7 @@ namespace Horo::Physics {
             const auto moving = candidate.FindBody({2}, {100});
             REQUIRE(moving.has_value());
             auto capability = world.IssueQueryEventCapability().Value();
-            std::size_t enters{}, exits{};
-            for (std::uint64_t tick = 1; tick <= 90; ++tick) {
-                REQUIRE(world
-                            .AdvanceFixedTick({.simulationTick = tick,
-                                               .sceneGeneration = view.RuntimeId().value,
-                                               .fixedDelta = Duration::FromNanoseconds(16'666'667)})
-                            .HasValue());
-                const auto publication = world.PublishedTick();
-                std::array<PhysicsEventRecord, 8> events{};
-                const auto read = capability.ReadEvents({.identity = capability.Identity(),
-                                                         .completedTick = publication.eventTick,
-                                                         .publicationRevision = publication.publicationRevision,
-                                                         .maximumRecords = events.size()},
-                                                        events);
-                REQUIRE(read.HasValue());
-                for (std::size_t index = 0; index < read.Value().recordCount; ++index) {
-                    enters += events[index].kind == PhysicsEventKind::TriggerEnter;
-                    exits += events[index].kind == PhysicsEventKind::TriggerExit;
-                    REQUIRE((events[index].kind == PhysicsEventKind::TriggerEnter || events[index].kind == PhysicsEventKind::TriggerExit));
-                }
-            }
-            REQUIRE(enters == 1);
-            REQUIRE(exits == 1);
-            const auto state = world.ReadSceneBodyReconciliation(*moving);
-            REQUIRE(state.HasValue());
-            REQUIRE(state.Value().state.pose.translation.x > 4.0F);
+            RequireTriggerPassThrough(world, capability, view.RuntimeId().value, *moving);
             candidate.Shutdown();
             REQUIRE(candidate.BodyBindings().empty());
             REQUIRE(world.ReadSceneBodyReconciliation(*moving).HasError());
@@ -142,24 +171,7 @@ namespace Horo::Physics {
             Test::RequireError(play.Prepare(rejected, rejectedView), PhysicsErrors::MaterialDescriptorInvalid);
             REQUIRE(play.WorldIdentity() == oldWorld);
             REQUIRE(play.ValidateBody(oldBody).HasValue());
-            {
-                // Same material identity/revision, different valid coefficients and self-consistent bytes.
-                AssetSceneFixture differentAssets;
-                auto descriptor =
-                    PhysicsMaterialAsset::Create({.id = PhysicsMaterialAssetId::FromAssetId(differentAssets.material), .sourceRevision = 1})
-                        .Value()
-                        .Descriptor();
-                descriptor.friction = 0.75F;
-                const auto changedMaterial = PhysicsMaterialAsset::Create(descriptor).Value();
-                const auto changedBytes = EncodePhysicsMaterialAsset(changedMaterial).Value();
-                const auto payload = std::span{reinterpret_cast<const std::uint8_t *>(changedBytes.data()), changedBytes.size()};
-                differentAssets.provider.Insert(differentAssets.material, {payload.begin(), payload.end()});
-                const auto expected = TriggerDefinition(source, binding, 3);
-                const auto differentView = differentAssets.Prepare(expected);
-                Test::RequireError(play.Prepare(expected, differentView), PhysicsErrors::MaterialDescriptorInvalid);
-                REQUIRE(play.WorldIdentity() == oldWorld);
-                REQUIRE(play.ValidateBody(oldBody).HasValue());
-            }
+            RequireDifferentMaterialRejected(play, source, binding);
             for (const auto shape : {Runtime::ColliderShapeType::Sphere, Runtime::ColliderShapeType::Capsule}) {
                 source = TriggerSource(shape, true, 3.0F);
                 const auto replacement = TriggerDefinition(source, binding, 3 + static_cast<std::uint64_t>(shape));
