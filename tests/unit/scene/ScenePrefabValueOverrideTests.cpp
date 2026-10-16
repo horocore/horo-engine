@@ -11,10 +11,10 @@ namespace Horo::SceneSource {
                                    const Prefab::EffectivePrefabCandidate &source) {
             auto wrong = fresh;
             wrong.instances[0].expanded = source;
-            CHECK(ConvertScenePrefabProjectionToRuntime({document.objects, document.prefabInstances}, {19}, {1}, wrong, sources, Limits(),
-                                                        &schemas)
+            CHECK(ConvertScenePrefabProjectionToRuntime({document.objects, document.prefabInstances}, {19}, {1}, wrong,
+                                                        {sources, Limits(), &schemas})
                       .HasError());
-            CHECK(ConvertScenePrefabProjectionToRuntime({document.objects, document.prefabInstances}, {19}, {1}, fresh, sources, Limits())
+            CHECK(ConvertScenePrefabProjectionToRuntime({document.objects, document.prefabInstances}, {19}, {1}, fresh, {sources, Limits()})
                       .HasError());
             auto unavailable = BuildScenePrefabProjection({document.objects, document.prefabInstances}, sources, Limits());
             REQUIRE(unavailable.HasValue());

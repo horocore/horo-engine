@@ -192,15 +192,29 @@ namespace Horo::Runtime {
                 hash.Add(*value);
         }
 
-        /** @brief Computes the complete separate Scene-baseline key version 1 over
+        /** @brief Computes the complete separate Scene-baseline key version 2 over
          * actual typed source fields. */
         Result<Sha256Digest> Key(const SceneCellPayloadSource &source, const DependencyGraph &graph, const Sha256Digest &settings,
                                  std::size_t maximumBytes, const CancellationToken &cancellation) {
             CellCookDetail::ContentHasher hash{cancellation, maximumBytes};
-            hash.Fields(std::string_view{"Horo.SceneCellCook.Key.v1"}, settings, source.identity, source.entities);
+            hash.Fields(std::string_view{"Horo.SceneCellCook.Key.v2"}, settings, source.identity, source.entities);
             HashSorted(hash, source.dependencies, [](const auto &d) {
                 return std::pair{d.id, d.expectedType};
             });
+            std::vector<const TriggerVolumeMigrationEvidence *> migration;
+            migration.reserve(source.triggerVolumeEvidence.size());
+            for (const auto &evidence : source.triggerVolumeEvidence)
+                migration.push_back(&evidence);
+            std::ranges::sort(migration, {}, [](const auto *evidence) {
+                return evidence->object.value;
+            });
+            hash.Add(migration.size());
+            for (const auto *evidence : migration) {
+                const auto &binding = evidence->binding;
+                hash.Fields(evidence->object, evidence->body, evidence->collider, binding.collisionSchemaFingerprint, binding.profile,
+                            binding.material.id, binding.material.expectedType, binding.materialSourceRevision,
+                            binding.materialPayloadDigest.bytes);
+            }
             HashSorted(hash, source.componentSchemas, [](const auto &s) {
                 return std::pair{s.type, s.version};
             });
@@ -227,7 +241,7 @@ namespace Horo::Runtime {
             }))
                 return Failure<void>(SceneCellPayloadErrors::Invalid);
             if (source.entities.size() > limits.maximumEntities || source.dependencies.size() > limits.maximumDependencies ||
-                source.componentSchemas.size() > maximumSchemas ||
+                source.triggerVolumeEvidence.size() > source.entities.size() || source.componentSchemas.size() > maximumSchemas ||
                 source.behaviorSchemas.size() > maximumSchemas - source.componentSchemas.size())
                 return Failure<void>(SceneCellPayloadErrors::CapacityExceeded);
             return Result<void>::Success();

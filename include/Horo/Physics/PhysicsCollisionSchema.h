@@ -111,6 +111,11 @@ namespace Horo::Physics {
         [[nodiscard]] Result<SimulationPairResponse> ResolvePair(CollisionLayerId first, CollisionLayerId second) const;
         /** @brief Resolves an exact profile without substituting the default. */
         [[nodiscard]] Result<const CollisionProfileDefinition *> ResolveProfile(CollisionProfileId id) const;
+        /** @brief Resolves an explicit profile eligible for static sensor simulation and lifecycle events.
+         * @param id Exact project profile; no default substitution.
+         * @return Borrowed profile or a typed invalid/unknown profile or layer diagnostic; no allocation or native work.
+         */
+        [[nodiscard]] Result<const CollisionProfileDefinition *> ResolveStaticSensorProfile(CollisionProfileId id) const;
         /** @brief Resolves one profile/channel response without fallback. */
         [[nodiscard]] Result<CollisionQueryResponse> ResolveQuery(CollisionProfileId profile, PhysicsQueryChannelId channel) const;
 

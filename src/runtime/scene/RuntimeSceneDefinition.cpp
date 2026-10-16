@@ -208,8 +208,10 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeSceneDefinition::RuntimeSceneDefinition */
     RuntimeSceneDefinition::RuntimeSceneDefinition(SceneDefinitionId id, SceneDefinitionRevision revision,
                                                    std::vector<RuntimeEntityDefinition> entities,
-                                                   std::vector<SceneAssetDependency> assetDependencies) noexcept
-        : id_(id), revision_(revision), entities_(std::move(entities)), assetDependencies_(std::move(assetDependencies)) {}
+                                                   std::vector<SceneAssetDependency> assetDependencies,
+                                                   std::vector<TriggerVolumeMigrationEvidence> triggerVolumeEvidence) noexcept
+        : id_(id), revision_(revision), entities_(std::move(entities)), assetDependencies_(std::move(assetDependencies)),
+          triggerVolumeEvidence_(std::move(triggerVolumeEvidence)) {}
 
     /** @copydoc RuntimeSceneDefinition::Id */
     SceneDefinitionId RuntimeSceneDefinition::Id() const noexcept {
@@ -229,6 +231,11 @@ namespace Horo::Runtime {
     /** @copydoc RuntimeSceneDefinition::AssetDependencies */
     std::span<const SceneAssetDependency> RuntimeSceneDefinition::AssetDependencies() const noexcept {
         return assetDependencies_;
+    }
+
+    /** @copydoc RuntimeSceneDefinition::TriggerVolumeEvidence */
+    std::span<const TriggerVolumeMigrationEvidence> RuntimeSceneDefinition::TriggerVolumeEvidence() const noexcept {
+        return triggerVolumeEvidence_;
     }
 
     /** @copydoc SceneDefinitionBuilder::SceneDefinitionBuilder */
@@ -254,6 +261,30 @@ namespace Horo::Runtime {
         }
         if (found->expectedType != dependency.expectedType)
             return Failure(SceneErrors::ConflictingAssetDependency, "Runtime scene requires one asset identity with conflicting types.");
+        return Result<void>::Success();
+    }
+
+    /** @copydoc SceneDefinitionBuilder::RequireTriggerVolume */
+    Result<void> SceneDefinitionBuilder::RequireTriggerVolume(TriggerVolumeMigrationEvidence evidence) {
+        const auto &binding = evidence.binding;
+        if (!evidence.object.IsValid() || evidence.body.value == 0 || evidence.collider.value == 0 ||
+            binding.collisionSchemaFingerprint == 0 || !binding.profile.IsValid() || binding.materialSourceRevision == 0 ||
+            binding.materialPayloadDigest == Sha256Digest{} || !binding.material.id.IsValid() ||
+            binding.material.expectedType.Value() != "core.physics_material")
+            return Failure(SceneErrors::InvalidDefinition, "Trigger migration requires exact project schema and material evidence.");
+        for (const auto &existing : triggerVolumeEvidence_) {
+            if (existing.object == evidence.object)
+                return Failure(SceneErrors::InvalidDefinition, "Duplicate trigger migration evidence names the same object.");
+            if (existing.binding.collisionSchemaFingerprint != binding.collisionSchemaFingerprint ||
+                (existing.binding.material.id == binding.material.id &&
+                 (existing.binding.material != binding.material ||
+                  existing.binding.materialSourceRevision != binding.materialSourceRevision ||
+                  existing.binding.materialPayloadDigest != binding.materialPayloadDigest)))
+                return Failure(SceneErrors::InvalidDefinition, "Trigger migration evidence contains conflicting project authorities.");
+        }
+        if (auto required = RequireAsset(binding.material); required.HasError())
+            return required;
+        triggerVolumeEvidence_.push_back(std::move(evidence));
         return Result<void>::Success();
     }
 
@@ -289,6 +320,22 @@ namespace Horo::Runtime {
                 return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
         }
 
+        for (const auto &evidence : triggerVolumeEvidence_) {
+            const auto entity = std::ranges::find(entities_, evidence.object, &RuntimeEntityDefinition::object);
+            if (entity == entities_.end() || !entity->components.rigidBody || entity->components.rigidBody->body != evidence.body ||
+                !entity->components.rigidBody->enabled || entity->components.rigidBody->motion != AuthoredPhysicsMotionType::Static)
+                return Result<RuntimeSceneDefinition>::Failure(
+                    MakeError(SceneErrors::InvalidDefinition, "Trigger migration evidence has no corresponding enabled static body."));
+            const auto collider = std::ranges::find(entity->components.colliders, evidence.collider, &ColliderComponent::collider);
+            if (collider == entity->components.colliders.end() || !collider->enabled || !collider->sensor ||
+                collider->body.object != evidence.object || collider->body.body != evidence.body ||
+                collider->collisionProfile != evidence.binding.profile || collider->materials.size() != 1 ||
+                collider->materials.front().material != evidence.binding.material.id)
+                return Result<RuntimeSceneDefinition>::Failure(
+                    MakeError(SceneErrors::InvalidDefinition, "Trigger migration evidence conflicts with its canonical sensor collider."));
+        }
+        std::ranges::sort(triggerVolumeEvidence_, {}, &TriggerVolumeMigrationEvidence::object);
+
         std::ranges::sort(assetDependencies_, {}, [](const SceneAssetDependency &dependency) {
             return dependency.id;
         });
@@ -296,6 +343,6 @@ namespace Horo::Runtime {
             return Result<RuntimeSceneDefinition>::Failure(components.ErrorValue());
 
         return Result<RuntimeSceneDefinition>::Success(
-            RuntimeSceneDefinition{id_, revision_, std::move(entities_), std::move(assetDependencies_)});
+            RuntimeSceneDefinition{id_, revision_, std::move(entities_), std::move(assetDependencies_), std::move(triggerVolumeEvidence_)});
     }
 }  // namespace Horo::Runtime

@@ -3294,4 +3294,11 @@ target_link_libraries(HoroPrefabCookHost
                HoroPackageSecurity HoroEngine::PrefabAuthoring HoroEngine::SceneCook
         PRIVATE HoroEngine::SceneRuntimeConversion nlohmann_json::nlohmann_json)
 
+# Explicit application composition; portable Scene/Assets never depend back on the solver.
+add_library(HoroPhysicsTriggerVolumeHost STATIC application/assets/PhysicsTriggerVolumeHost.cpp)
+add_library(HoroEngine::PhysicsTriggerVolumeHost ALIAS HoroPhysicsTriggerVolumeHost)
+target_compile_features(HoroPhysicsTriggerVolumeHost PUBLIC cxx_std_20)
+target_link_libraries(HoroPhysicsTriggerVolumeHost PUBLIC HoroEngine::PrefabCookHost
+        HoroEngine::PhysicsSceneIntegration HoroEngine::SceneRuntimeConversion)
+
 include(HoroPublicHeaderOwnership)

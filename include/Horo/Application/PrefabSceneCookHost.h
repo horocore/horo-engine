@@ -75,6 +75,7 @@ namespace Horo::Application {
                                                                              Trust/activation remains the package host's authority. */
         std::vector<Assets::AssetId> runtimePrefabRoots; /**< Explicit unique runtime-spawnable roots; empty preserves static-only
                                                         cooking. Source-only nested/variant prefabs are never published as templates. */
+        std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding; /**< Explicit project sensor/material capture. */
     };
 
     /**

@@ -18,6 +18,13 @@ set(HORO_CI_AUDIO_TARGETS
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
     HoroPhysicsTests
+    HoroPrefabSceneCookHostTests
+    HoroPhysicsTriggerVolumeHostContractConsumer
+    HoroPhysicsTriggerVolumeHostPublicHeaderConsumer
+    HoroTriggerVolumeConversionPublicHeaderConsumer
+    HoroSceneCookPublicHeaderConsumer
+    HoroPhysicsSceneIntegrationPublicHeaderConsumer
+    HoroPrefabCookHostPublicHeaderConsumer
     HoroPhysicsPublicHeaderConsumer
     HoroGameplayPhysicsTests
     HoroGameplayRuntimeTests
