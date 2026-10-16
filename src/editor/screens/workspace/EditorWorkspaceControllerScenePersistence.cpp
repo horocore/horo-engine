@@ -100,8 +100,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::SaveScene */
     void EditorWorkspaceController::SaveScene(const bool overwriteConflict) {
         if (m_navigationSettings) {
-            const auto saved = SaveNavigationDocuments();
-            if (saved.HasError())
+            if (const auto saved = SaveNavigationDocuments(); saved.HasError())
                 LOG_ERROR("editor.navigation_document", "Coordinated save failed: %s", saved.ErrorValue().message.c_str());
             return;  // The canonical active Scene participated in the same source-save session.
         }

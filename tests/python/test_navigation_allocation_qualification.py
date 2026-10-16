@@ -55,21 +55,24 @@ def test_all_three_cases_and_every_measured_position_qualify(tmp_path):
 
 @pytest.mark.parametrize("marker", ["partial", "zero", "absent"])
 def test_sampled_or_unexercised_fault_sweeps_fail_closed(tmp_path, marker):
+    receipt = report(tmp_path, marker)
     with pytest.raises(ValueError, match="positions incomplete"):
-        ROUTE.verify_junit(report(tmp_path, marker), ROUTE.NAVIGATION_CASES)
+        ROUTE.verify_junit(receipt, ROUTE.NAVIGATION_CASES)
 
 
 @pytest.mark.parametrize("status", ["notrun", "disabled"])
 def test_unexecuted_cases_cannot_qualify(tmp_path, status):
+    receipt = report(tmp_path, status=status)
     with pytest.raises(ValueError, match="did not pass"):
-        ROUTE.verify_junit(report(tmp_path, status=status), ROUTE.NAVIGATION_CASES)
+        ROUTE.verify_junit(receipt, ROUTE.NAVIGATION_CASES)
 
 
 def test_missing_discovery_or_execution_cannot_replace_a_fault_case(tmp_path):
     with pytest.raises(ValueError, match="discovery differs"):
         ROUTE.verify_discovery({"tests": []}, ROUTE.NAVIGATION_CASES)
+    receipt = report(tmp_path, dropped=next(iter(ROUTE.NAVIGATION_CASES)))
     with pytest.raises(ValueError, match="execution differs"):
-        ROUTE.verify_junit(report(tmp_path, dropped=next(iter(ROUTE.NAVIGATION_CASES))), ROUTE.NAVIGATION_CASES)
+        ROUTE.verify_junit(receipt, ROUTE.NAVIGATION_CASES)
 
 
 def test_route_builds_same_release_target_and_verifies_actual_discovery_and_junit():

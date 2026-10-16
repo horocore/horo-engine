@@ -25,24 +25,32 @@ namespace Horo::Editor {
                 *found = value;
         }
 
+        /** @brief Stack-only report sink; the caller retains every owner and preparation buffer. */
+        struct ReferenceReview final {
+            Assets::AssetId asset;
+            std::uint64_t object{};
+            std::vector<NavigationReferenceImpact> &impacts;
+            bool &repairable;
+        };
+
         /** @brief Reviews an occurrence before changing the detached value. */
         template <class T>
-        void Repair(T &value, const T removed, const std::optional<T> replacement, const Assets::AssetId asset, const std::uint64_t object,
-                    const NavigationReferenceField field, std::vector<NavigationReferenceImpact> &impacts, bool &repairable) {
+        void Repair(T &value, const T removed, const std::optional<T> replacement, const NavigationReferenceField field,
+                    const ReferenceReview &review) {
             if (value != removed)
                 return;
-            impacts.push_back({asset, object, field, removed.Value(), replacement ? std::optional{replacement->Value()} : std::nullopt});
+            review.impacts.emplace_back(review.asset, review.object, field, removed.Value(),
+                                        replacement ? std::optional{replacement->Value()} : std::nullopt);
             if (replacement)
                 value = *replacement;
             else
-                repairable = false;
+                review.repairable = false;
         }
 
         /** @brief Applies puts first so explicit replacement identities are validated against the final catalog. */
         void ApplyPuts(NavigationDefinitionInput &input, const std::span<const NavigationDefinitionEdit> edits) {
             for (const auto &edit : edits)
-                std::visit([&](const auto &operation) {
-                    using T = std::decay_t<decltype(operation)>;
+                std::visit([&input]<typename T>(const T &operation) {
                     if constexpr (std::is_same_v<T, PutNavigationProfile>)
                         Put(input.profiles, operation.value);
                     else if constexpr (std::is_same_v<T, PutNavigationArea>)
@@ -57,10 +65,24 @@ namespace Horo::Editor {
             if (!id.IsValid() || std::ranges::find(values, id, &T::id) == values.end() ||
                 (replacement && (*replacement == id || std::ranges::find(values, *replacement, &T::id) == values.end())))
                 return false;
-            std::erase_if(values, [&](const auto &value) {
+            std::erase_if(values, [id](const auto &value) {
                 return value.id == id;
             });
             return true;
+        }
+
+        /** @brief Repairs one filter's local cost references while preserving package-contributed authority. */
+        void RepairFilterCosts(NavigationQueryFilterDescriptor &filter, const RemoveNavigationArea &operation, const Assets::AssetId asset,
+                               std::vector<NavigationReferenceImpact> &impacts, bool &repairable) {
+            const ReferenceReview review{asset, filter.id.Value(), impacts, repairable};
+            for (auto &cost : filter.costOverrides) {
+                if (cost.area == operation.id && filter.source.kind == NavigationDescriptorSourceKind::Package) {
+                    impacts.emplace_back(asset, filter.id.Value(), NavigationReferenceField::FilterAreaCost, operation.id.Value(),
+                                         std::nullopt);
+                    repairable = false;
+                } else
+                    Repair(cost.area, operation.id, operation.replacement, NavigationReferenceField::FilterAreaCost, review);
+            }
         }
 
         /** @brief Projects definition-local references and removes descriptors only in detached storage. */
@@ -69,8 +91,7 @@ namespace Horo::Editor {
                                    bool &repairable) {
             for (const auto &edit : edits) {
                 bool valid = true;
-                std::visit([&](const auto &operation) {
-                    using T = std::decay_t<decltype(operation)>;
+                std::visit([&input, asset, &impacts, &repairable, &valid]<typename T>(const T &operation) {
                     if constexpr (std::is_same_v<T, RemoveNavigationProfile>)
                         valid = Remove(input.profiles, operation.id, operation.replacement);
                     else if constexpr (std::is_same_v<T, RemoveNavigationFilter>)
@@ -78,15 +99,7 @@ namespace Horo::Editor {
                     else if constexpr (std::is_same_v<T, RemoveNavigationArea>) {
                         valid = Remove(input.areas, operation.id, operation.replacement);
                         for (auto &filter : input.filters)
-                            for (auto &cost : filter.costOverrides) {
-                                if (cost.area == operation.id && filter.source.kind == NavigationDescriptorSourceKind::Package) {
-                                    impacts.push_back({asset, filter.id.Value(), NavigationReferenceField::FilterAreaCost,
-                                                       operation.id.Value(), std::nullopt});
-                                    repairable = false;  // Project gestures cannot rewrite contributed package authority.
-                                } else
-                                    Repair(cost.area, operation.id, operation.replacement, asset, filter.id.Value(),
-                                           NavigationReferenceField::FilterAreaCost, impacts, repairable);
-                            }
+                            RepairFilterCosts(filter, operation, asset, impacts, repairable);
                     }
                 }, edit);
                 if (!valid)
@@ -97,25 +110,25 @@ namespace Horo::Editor {
 
         /** @brief Preserves package provenance and rejects unreviewed project identity replacement. */
         Result<void> ValidateEditable(const NavigationDefinitionInput &input, const std::span<const NavigationDefinitionEdit> edits) {
+            using enum NavigationDescriptorSourceKind;
             // Package-contributed descriptors are not project-editable and retain their exact provenance.
             for (const auto &edit : edits) {
                 bool permitted = true;
-                std::visit([&](const auto &operation) {
-                    using T = std::decay_t<decltype(operation)>;
+                std::visit([&input, &permitted]<typename T>(const T &operation) {
                     if constexpr (std::is_same_v<T, PutNavigationArea>) {
                         const auto prior = std::ranges::find(input.areas, operation.value.id, &NavigationAreaDescriptor::id);
-                        permitted = operation.value.source.kind == NavigationDescriptorSourceKind::Project &&
+                        permitted = operation.value.source.kind == Project &&
                                     (prior == input.areas.end() || prior->source == operation.value.source);
                     } else if constexpr (std::is_same_v<T, PutNavigationFilter>) {
                         const auto prior = std::ranges::find(input.filters, operation.value.id, &NavigationQueryFilterDescriptor::id);
-                        permitted = operation.value.source.kind == NavigationDescriptorSourceKind::Project &&
+                        permitted = operation.value.source.kind == Project &&
                                     (prior == input.filters.end() || prior->source == operation.value.source);
                     } else if constexpr (std::is_same_v<T, RemoveNavigationArea>) {
                         const auto prior = std::ranges::find(input.areas, operation.id, &NavigationAreaDescriptor::id);
-                        permitted = prior != input.areas.end() && prior->source.kind == NavigationDescriptorSourceKind::Project;
+                        permitted = prior != input.areas.end() && prior->source.kind == Project;
                     } else if constexpr (std::is_same_v<T, RemoveNavigationFilter>) {
                         const auto prior = std::ranges::find(input.filters, operation.id, &NavigationQueryFilterDescriptor::id);
-                        permitted = prior != input.filters.end() && prior->source.kind == NavigationDescriptorSourceKind::Project;
+                        permitted = prior != input.filters.end() && prior->source.kind == Project;
                     }
                 }, edit);
                 if (!permitted)
@@ -126,7 +139,7 @@ namespace Horo::Editor {
 
         /** @brief Resolves a surface through the exact captured Scene, not ordering or the current UI selection. */
         bool SelectedSurface(const SceneTransactionSnapshot &scene, const Navigation::SurfaceId id, const Assets::AssetId definition) {
-            return std::ranges::any_of(scene.objects, [&](const auto &object) {
+            return std::ranges::any_of(scene.objects, [id, definition](const auto &object) {
                 const auto &surface = object.components.navigationSurface;
                 return surface && surface->id == id && surface->definition == definition;
             });
@@ -137,8 +150,8 @@ namespace Horo::Editor {
                                    const std::span<const NavigationDefinitionSnapshot> definitions) {
             std::optional<Assets::AssetId> owner;
             for (const auto &definition : definitions) {
-                const auto &source = *definition.definition;
-                if (std::ranges::find(source.Profiles(), agent.profile, &NavigationAgentProfileDescriptor::id) == source.Profiles().end() ||
+                if (const auto &source = *definition.definition;
+                    std::ranges::find(source.Profiles(), agent.profile, &NavigationAgentProfileDescriptor::id) == source.Profiles().end() ||
                     source.Registry().ResolveFilter(agent.filter).HasError())
                     continue;
                 if (owner)
@@ -150,48 +163,65 @@ namespace Horo::Editor {
             return Result<bool>::Success(*owner == selected);
         }
 
+        /** @brief Repairs surface and link profiles in the same original order, retaining cross-definition ambiguity checks. */
+        Result<void> RepairProfiles(SceneSource::SceneObjectComponentSet &components, const SceneTransactionSnapshot &scene,
+                                    const Assets::AssetId definition, const RemoveNavigationProfile &remove,
+                                    const ReferenceReview &review) {
+            if (components.navigationSurface && components.navigationSurface->definition == definition)
+                for (auto &id : components.navigationSurface->profiles)
+                    Repair(id, remove.id, remove.replacement, NavigationReferenceField::SurfaceProfile, review);
+            if (!components.navigationLink)
+                return Result<void>::Success();
+            const auto &link = *components.navigationLink;
+            const bool start = SelectedSurface(scene, link.start.surface, definition);
+            const bool end = SelectedSurface(scene, link.end.surface, definition);
+            if (start != end)
+                return Result<void>::Failure(Reject(NavigationSettingsFailure::IncompleteInventory));
+            if (start)
+                for (auto &id : components.navigationLink->profiles)
+                    Repair(id, remove.id, remove.replacement, NavigationReferenceField::LinkProfile, review);
+            return Result<void>::Success();
+        }
+
+        /** @brief Repairs an agent only after resolving its exact unambiguous captured definition owner. */
+        Result<void> RepairAgent(Runtime::NavigationAgentComponent &agent, const NavigationDefinitionEdit &edit,
+                                 const Assets::AssetId definition, const std::span<const NavigationDefinitionSnapshot> definitions,
+                                 const ReferenceReview &review) {
+            const auto *profile = std::get_if<RemoveNavigationProfile>(&edit);
+            const auto *filter = std::get_if<RemoveNavigationFilter>(&edit);
+            if ((!profile || agent.profile != profile->id) && (!filter || agent.filter != filter->id))
+                return Result<void>::Success();
+            const auto selected = SelectedAgent(agent, definition, definitions);
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            if (!selected.Value())
+                return Result<void>::Success();
+            if (profile)
+                Repair(agent.profile, profile->id, profile->replacement, NavigationReferenceField::AgentProfile, review);
+            if (filter)
+                Repair(agent.filter, filter->id, filter->replacement, NavigationReferenceField::AgentFilter, review);
+            return Result<void>::Success();
+        }
+
         /** @brief Repairs one detached object's exact navigation fields while retaining all unrelated authored content. */
         Result<void> RepairObject(SceneSource::SceneObjectSnapshot &object, const SceneTransactionSnapshot &scene,
                                   const Assets::AssetId definition, const std::span<const NavigationDefinitionSnapshot> definitions,
                                   const std::span<const NavigationDefinitionEdit> edits, std::vector<NavigationReferenceImpact> &impacts,
                                   bool &repairable) {
-            auto &c = object.components;
+            auto &components = object.components;
+            const ReferenceReview review{scene.session.owner, object.id.value, impacts, repairable};
             for (const auto &edit : edits) {
-                if (const auto *remove = std::get_if<RemoveNavigationProfile>(&edit)) {
-                    if (c.navigationSurface && c.navigationSurface->definition == definition)
-                        for (auto &id : c.navigationSurface->profiles)
-                            Repair(id, remove->id, remove->replacement, scene.session.owner, object.id.value,
-                                   NavigationReferenceField::SurfaceProfile, impacts, repairable);
-                    if (c.navigationLink && SelectedSurface(scene, c.navigationLink->start.surface, definition) !=
-                                                SelectedSurface(scene, c.navigationLink->end.surface, definition))
-                        return Result<void>::Failure(Reject(NavigationSettingsFailure::IncompleteInventory));
-                    if (c.navigationLink && SelectedSurface(scene, c.navigationLink->start.surface, definition))
-                        for (auto &id : c.navigationLink->profiles)
-                            Repair(id, remove->id, remove->replacement, scene.session.owner, object.id.value,
-                                   NavigationReferenceField::LinkProfile, impacts, repairable);
-                }
+                if (const auto *remove = std::get_if<RemoveNavigationProfile>(&edit))
+                    if (auto valid = RepairProfiles(components, scene, definition, *remove, review); valid.HasError())
+                        return valid;
                 if (const auto *remove = std::get_if<RemoveNavigationArea>(&edit);
-                    remove && c.navigationModifier && c.navigationModifier->area &&
-                    SelectedSurface(scene, c.navigationModifier->surface, definition))
-                    Repair(*c.navigationModifier->area, remove->id, remove->replacement, scene.session.owner, object.id.value,
-                           NavigationReferenceField::ModifierArea, impacts, repairable);
-                if (!c.navigationAgent)
-                    continue;
-                const auto *profile = std::get_if<RemoveNavigationProfile>(&edit);
-                const auto *filter = std::get_if<RemoveNavigationFilter>(&edit);
-                if ((!profile || c.navigationAgent->profile != profile->id) && (!filter || c.navigationAgent->filter != filter->id))
-                    continue;
-                auto selected = SelectedAgent(*c.navigationAgent, definition, definitions);
-                if (selected.HasError())
-                    return Result<void>::Failure(selected.ErrorValue());
-                if (!selected.Value())
-                    continue;
-                if (profile)
-                    Repair(c.navigationAgent->profile, profile->id, profile->replacement, scene.session.owner, object.id.value,
-                           NavigationReferenceField::AgentProfile, impacts, repairable);
-                if (filter)
-                    Repair(c.navigationAgent->filter, filter->id, filter->replacement, scene.session.owner, object.id.value,
-                           NavigationReferenceField::AgentFilter, impacts, repairable);
+                    remove && components.navigationModifier && components.navigationModifier->area &&
+                    SelectedSurface(scene, components.navigationModifier->surface, definition))
+                    Repair(*components.navigationModifier->area, remove->id, remove->replacement, NavigationReferenceField::ModifierArea,
+                           review);
+                if (components.navigationAgent)
+                    if (auto valid = RepairAgent(*components.navigationAgent, edit, definition, definitions, review); valid.HasError())
+                        return valid;
             }
             return Result<void>::Success();
         }
@@ -202,33 +232,33 @@ namespace Horo::Editor {
                                                            const std::span<NavigationDefinitionDocument *const> definitions,
                                                            const std::span<SceneDocumentTransactions *const> scenes)
         : registry_(registry) {
-        for (auto *owner : definitions)
+        for (const auto *owner : definitions)
             definitions_.push_back(owner ? owner->lifetime_ : std::weak_ptr<NavigationDefinitionDocument::Lifetime>{});
-        for (auto *owner : scenes)
+        for (const auto *owner : scenes)
             scenes_.push_back(owner ? owner->lifetime_ : std::weak_ptr<SceneDocumentTransactions::Lifetime>{});
     }
 
     /** @copydoc NavigationSettingsWorkflow::CaptureInventory */
     Result<void> NavigationSettingsWorkflow::CaptureInventory(NavigationSettingsReview &review, const Assets::AssetId definition,
                                                               const bool destructive) const {
+        using enum NavigationSettingsFailure;
         const auto registry = registry_.Snapshot();
         review.registryRevision_ = registry.Revision();
         if (!registry.Revision().value)
-            return Result<void>::Failure(Reject(NavigationSettingsFailure::IncompleteInventory));
+            return Result<void>::Failure(Reject(IncompleteInventory));
         std::set<Assets::AssetId> assets;
         for (const auto &handle : definitions_) {
             const auto lifetime = handle.lock();
             const auto *owner = lifetime ? lifetime->owner : nullptr;
             if (!owner)
-                return Result<void>::Failure(Reject(NavigationSettingsFailure::IncompleteInventory));
+                return Result<void>::Failure(Reject(IncompleteInventory));
             auto captured = owner->Snapshot();
             if (captured.HasError())
                 return Result<void>::Failure(captured.ErrorValue());
             if (!assets.insert(captured.Value().asset).second)
-                return Result<void>::Failure(Reject(NavigationSettingsFailure::IncompleteInventory));
-            const auto *record = registry.Find(captured.Value().asset);
-            if (!record || record->type.Value() != Assets::NavMeshAssetTypeName)
-                return Result<void>::Failure(Reject(NavigationSettingsFailure::IncompleteInventory));
+                return Result<void>::Failure(Reject(IncompleteInventory));
+            if (const auto *record = registry.Find(captured.Value().asset); !record || record->type.Value() != Assets::NavMeshAssetTypeName)
+                return Result<void>::Failure(Reject(IncompleteInventory));
             if (captured.Value().asset == definition)
                 review.definition_ = captured.Value();
             review.definitions_.push_back(std::move(captured).Value());
@@ -245,7 +275,7 @@ namespace Horo::Editor {
             assets.insert(definition.asset);
         for (const auto &handle : scenes_) {
             const auto lifetime = handle.lock();
-            auto *owner = lifetime ? lifetime->owner : nullptr;
+            const auto *owner = lifetime ? lifetime->owner : nullptr;
             if (!owner)
                 return Result<void>::Failure(Reject(NavigationSettingsFailure::IncompleteInventory));
             auto captured = owner->Snapshot();

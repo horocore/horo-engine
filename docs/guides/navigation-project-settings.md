@@ -176,3 +176,26 @@ compositions; it does not promise allocation-free checked-iterator proxy machine
 or persistent-OOM-safe cleanup of an upstream partially constructed parser tree.
 The earlier Windows timeout has no captured stack; this compatibility mechanism is
 source evidence, not a claim that its precise timeout position was observed.
+
+## Const review query and admitted session ownership
+
+`NavigationProjectSettingsSession::Preview` is now a const query: it captures a
+fresh immutable review and performs no document or history publication. Existing
+mutable callers remain source-compatible. Consumers linking this host-side C++
+symbol must rebuild with the matching EditorServices library. `Commit`, `Replay`,
+`SavePolicy` and `SaveDocuments` still require a mutable session. The public consumer
+contract checks both the const query and the absence of const command authority.
+
+`SettingsModal` accepts a pointer to a const navigation session only to capture its
+revocable `Borrow()` handle. It does not retain that pointer or extend the session
+lifetime. Modal callers and the matching GUI library must rebuild together; no
+serialized project format changes. These Editor host symbols are outside the
+GameRuntimeContext, module descriptor and capability-vtable ABI; this change does
+not alter those layouts or assign a new extension SDK epoch.
+
+Session construction remains private to the validating `Open` factory. Its single
+S5950 exception documents immediate `unique_ptr` ownership of that private
+constructor; exposing a public constructor merely to use `make_unique` would
+remove the admission boundary. Definition/Scene source loaders are static helpers
+because they inspect only their explicit arguments, while completed Scene JSON
+cleanup owners cannot be copied or moved into a second cleanup authority.

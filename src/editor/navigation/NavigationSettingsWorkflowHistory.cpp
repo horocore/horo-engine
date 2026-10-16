@@ -68,7 +68,7 @@ namespace Horo::Editor {
             auto prepared = owner->Prepare(context, scene.changes, {}, coordinated);
             if (prepared.HasError())
                 return Return::Failure(prepared.ErrorValue());
-            stage->nextScenes.push_back({scene.owner, owner->PreparedContext(*prepared.Value())});
+            stage->nextScenes.emplace_back(scene.owner, owner->PreparedContext(*prepared.Value()));
             stage->owners.push_back(owner);
             stage->scenes.push_back(std::move(prepared).Value());
             if (!scene.changes.empty())
@@ -117,8 +117,8 @@ namespace Horo::Editor {
             for (std::size_t index = 0; index < stage->scenes.size(); ++index)
                 if (auto valid = stage->owners[index]->ValidatePrepared(*stage->scenes[index]); valid.HasError())
                     return valid;
-            if (auto final = FindDefinition(review); final.HasError())
-                return Result<void>::Failure(final.ErrorValue());
+            if (auto admitted = FindDefinition(review); admitted.HasError())
+                return Result<void>::Failure(admitted.ErrorValue());
             PublishCommit(*definition, preparedDefinition, *stage, nextDefinitions, history, review.registryRevision_);
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
@@ -158,7 +158,7 @@ namespace Horo::Editor {
             auto prepared = changed ? owner->PrepareReplay(context, redo) : owner->Prepare(context, {});
             if (prepared.HasError())
                 return Return::Failure(prepared.ErrorValue());
-            stage->nextScenes.push_back({fence.owner, owner->PreparedContext(*prepared.Value())});
+            stage->nextScenes.emplace_back(fence.owner, owner->PreparedContext(*prepared.Value()));
             stage->owners.push_back(owner);
             stage->scenes.push_back(std::move(prepared).Value());
         }
@@ -169,7 +169,7 @@ namespace Horo::Editor {
     Result<void> NavigationSettingsWorkflow::ValidateReplayDefinitions() const {
         for (const auto &handle : definitions_) {
             const auto lease = handle.lock();
-            auto *owner = lease ? lease->owner : nullptr;
+            const auto *owner = lease ? lease->owner : nullptr;
             if (!owner)
                 return Result<void>::Failure(Reject(NavigationSettingsFailure::Closed));
             const auto expected = std::ranges::find(expectedDefinitions_, owner->asset_, &NavigationDefinitionSnapshot::asset);

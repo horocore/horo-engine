@@ -19,6 +19,11 @@ namespace Horo::SceneSource::Detail {
         /** @brief Owns only the completed, at-most-64-level parse tree; partial parser state remains upstream-owned. */
         struct BoundedSceneJson final {
             Json value;
+            BoundedSceneJson() = default;
+            BoundedSceneJson(const BoundedSceneJson &) = delete;
+            BoundedSceneJson &operator=(const BoundedSceneJson &) = delete;
+            BoundedSceneJson(BoundedSceneJson &&) = delete;
+            BoundedSceneJson &operator=(BoundedSceneJson &&) = delete;
 
             ~BoundedSceneJson() {
                 ClearSceneJson(value);
@@ -194,7 +199,7 @@ namespace Horo::SceneSource::Detail {
         try {
             Foundation::JsonParseGuard guard{64};
             BoundedSceneJson parsed;
-            parsed.value = Json::parse(contents, [&guard](const int depth, const Json::parse_event_t event, Json &value) {
+            parsed.value = Json::parse(contents, [&guard](const int depth, const Json::parse_event_t event, const Json &value) {
                 return guard(depth, event, value);
             });
             if (guard.IsTooDeep() || guard.HasDuplicate())

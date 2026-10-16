@@ -16,7 +16,7 @@ namespace Horo::Application {
 
         /** @brief Requires the entire closed object shape before field access. */
         bool Fields(const Json &value, std::initializer_list<std::string_view> fields) {
-            return value.is_object() && value.size() == fields.size() && std::ranges::all_of(fields, [&](auto key) {
+            return value.is_object() && value.size() == fields.size() && std::ranges::all_of(fields, [&value](const auto key) {
                 return value.contains(key);
             });
         }
@@ -99,7 +99,7 @@ namespace Horo::Application {
             return failure(NavigationSettingsFailure::Capacity);
         try {
             std::vector<std::set<std::string>> keys;
-            const auto callback = [&](int depth, Json::parse_event_t event, Json &value) {
+            const auto callback = [&keys](const int depth, const Json::parse_event_t event, const Json &value) {
                 if (depth > 12)
                     throw std::invalid_argument("depth exceeded");
                 if (event == Json::parse_event_t::object_start)
@@ -126,7 +126,9 @@ namespace Horo::Application {
                                                       ReadProfile(root["runtimeProfile"])});
         } catch (const std::bad_alloc &) {
             return failure(NavigationSettingsFailure::Capacity);
-        } catch (const std::exception &) {
+        } catch (const Json::exception &) {
+            return failure(NavigationSettingsFailure::Invalid);
+        } catch (const std::invalid_argument &) {
             return failure(NavigationSettingsFailure::Invalid);
         }
     }

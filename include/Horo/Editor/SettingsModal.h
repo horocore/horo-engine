@@ -32,7 +32,7 @@ namespace Horo::Editor {
         SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, std::uintptr_t logo,
                       Extensions::ExtensionInventory *extensionInventory = nullptr,
                       Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
-                      NavigationProjectSettingsSession *navigationSettings = nullptr) noexcept;
+                      const NavigationProjectSettingsSession *navigationSettings = nullptr) noexcept;
 
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;

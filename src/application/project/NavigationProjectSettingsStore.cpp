@@ -1,5 +1,6 @@
 #include "Horo/Application/NavigationProjectSettingsStore.h"
 
+#include <bit>
 #include <limits>
 #include <new>
 
@@ -27,7 +28,7 @@ namespace Horo::Application {
             if (!source.Value().identity.exists)
                 return Result<NavigationSettingsFileSnapshot>::Failure(Reject(Navigation::NavigationSettingsFailure::Invalid));
             const auto &bytes = source.Value().bytes;
-            auto policy = Application::DecodeNavigationProjectSettings({reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+            auto policy = Application::DecodeNavigationProjectSettings({std::bit_cast<const char *>(bytes.data()), bytes.size()});
             if (policy.HasError())
                 return Result<NavigationSettingsFileSnapshot>::Failure(policy.ErrorValue());
             return Result<NavigationSettingsFileSnapshot>::Success(

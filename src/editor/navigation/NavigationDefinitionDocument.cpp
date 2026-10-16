@@ -74,8 +74,7 @@ namespace Horo::Editor {
 
     /** @copydoc NavigationDefinitionDocument::Admit */
     Result<void> NavigationDefinitionDocument::Admit(const NavigationDefinitionSnapshot &expected) const {
-        auto current = Snapshot();
-        if (current.HasError())
+        if (auto current = Snapshot(); current.HasError())
             return Result<void>::Failure(current.ErrorValue());
         if (expected.asset != asset_ || expected.session != session_ || expected.revision != revision_ || expected.state != state_ ||
             expected.definition != source_)
@@ -111,7 +110,7 @@ namespace Horo::Editor {
         Prepared result{{std::make_shared<const Navigation::NavigationDefinition>(std::move(validated).Value()), nextState_,
                          nextBytes.Value()},
                         undo_};
-        result.undo.push_back({source_, state_, priorBytes.Value(), coordinated});
+        result.undo.emplace_back(source_, state_, priorBytes.Value(), coordinated);
         return Result<Prepared>::Success(std::move(result));
     }
 
@@ -165,8 +164,7 @@ namespace Horo::Editor {
                                                                                                const bool redo) const {
         if (auto admitted = Admit(expected); admitted.HasError())
             return Result<Prepared>::Failure(admitted.ErrorValue());
-        const auto &from = redo ? redo_ : undo_;
-        if (from.empty() || revision_ == UINT64_MAX)
+        if (const auto &from = redo ? redo_ : undo_; from.empty() || revision_ == UINT64_MAX)
             return Result<Prepared>::Failure(Reject(Navigation::NavigationSettingsFailure::Invalid));
         auto bytes = Bytes(*source_);
         if (bytes.HasError())
@@ -175,7 +173,7 @@ namespace Horo::Editor {
         auto &source = redo ? result.redo : result.undo;
         auto &target = redo ? result.undo : result.redo;
         result.next = source.back();
-        target.push_back({source_, state_, bytes.Value(), result.next.coordinated});
+        target.emplace_back(source_, state_, bytes.Value(), result.next.coordinated);
         source.pop_back();
         return Result<Prepared>::Success(std::move(result));
     }
@@ -185,8 +183,7 @@ namespace Horo::Editor {
                                                                               const bool redo) {
         if (auto admitted = Admit(expected); admitted.HasError())
             return Result<NavigationDefinitionSnapshot>::Failure(admitted.ErrorValue());
-        const auto &from = redo ? redo_ : undo_;
-        if (!from.empty() && from.back().coordinated)
+        if (const auto &from = redo ? redo_ : undo_; !from.empty() && from.back().coordinated)
             return Result<NavigationDefinitionSnapshot>::Failure(Reject(Navigation::NavigationSettingsFailure::Referenced));
         auto result = PrepareReplay(expected, redo);
         if (result.HasError())

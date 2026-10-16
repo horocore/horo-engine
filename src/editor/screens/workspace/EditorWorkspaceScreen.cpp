@@ -419,50 +419,59 @@ namespace Horo::Editor {
                 return LeaveDecision{.disposition = Allow, .requirement = std::nullopt};
             }
 
+            /** @brief Saves canonical owners in the existing order and retires them only after every required save succeeds. */
+            Result<LeaveDecision> SaveForLeave() {
+                using enum LeaveDisposition;
+                if (!controller_)
+                    return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+                if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
+                    return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                EditorWorkspaceViewCommandData command;
+                command.command = EditorWorkspaceViewCommand::SaveScene;
+                controller_->ProcessCommand(command);
+                if (controller_->ViewModel().isDirty || controller_->SavePCGDocuments().HasError() || controller_->HasDirtyPCGDocuments())
+                    return Result<LeaveDecision>::Success({.disposition = Deny, .requirement = std::nullopt});
+                if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
+                    return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
+                    return Result<LeaveDecision>::Failure(graphs.ErrorValue());
+                return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+            }
+
+            /** @brief Applies the explicit discard decision without bypassing either document group's shutdown admission. */
+            Result<LeaveDecision> DiscardForLeave() {
+                using enum LeaveDisposition;
+                if (!controller_)
+                    return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+                EditorWorkspaceViewCommandData command;
+                command.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
+                controller_->ProcessCommand(command);
+                if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
+                    return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
+                    return Result<LeaveDecision>::Failure(graphs.ErrorValue());
+                return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+            }
+
             Result<LeaveDecision> ResolveLeave(const LeaveTarget &, const LeaveResolution &resolution) override {
                 using enum LeaveAction;
                 using enum LeaveDisposition;
-                if (resolution.subject != 1 || resolution.revision != 1) {
+                if (resolution.subject != 1 || resolution.revision != 1)
                     return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
-                }
                 if (controller_ && resolution.action != Stay) {
                     if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
                         return Result<LeaveDecision>::Failure(current.ErrorValue());
                 }
-                if (resolution.action == Save) {
-                    if (controller_) {
-                        if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
-                            return Result<LeaveDecision>::Failure(navigation.ErrorValue());
-                        EditorWorkspaceViewCommandData command;
-                        command.command = EditorWorkspaceViewCommand::SaveScene;
-                        controller_->ProcessCommand(command);
-                        if (controller_->ViewModel().isDirty || controller_->SavePCGDocuments().HasError() ||
-                            controller_->HasDirtyPCGDocuments()) {
-                            return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Deny, .requirement = std::nullopt});
-                        }
-                        if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
-                            return Result<LeaveDecision>::Failure(navigation.ErrorValue());
-                        if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
-                            return Result<LeaveDecision>::Failure(graphs.ErrorValue());
-                    }
-                    return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Allow, .requirement = std::nullopt});
+                switch (resolution.action) {
+                    case Save:
+                        return SaveForLeave();
+                    case Discard:
+                        return DiscardForLeave();
+                    case Stay:
+                        return Result<LeaveDecision>::Success({.disposition = Deny, .requirement = std::nullopt});
+                    default:
+                        return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceLeaveActionNotAllowed));
                 }
-                if (resolution.action == Discard) {
-                    if (controller_) {
-                        EditorWorkspaceViewCommandData command;
-                        command.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
-                        controller_->ProcessCommand(command);
-                        if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
-                            return Result<LeaveDecision>::Failure(navigation.ErrorValue());
-                        if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
-                            return Result<LeaveDecision>::Failure(graphs.ErrorValue());
-                    }
-                    return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Allow, .requirement = std::nullopt});
-                }
-                if (resolution.action == Stay) {
-                    return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Deny, .requirement = std::nullopt});
-                }
-                return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceLeaveActionNotAllowed));
             }
 
             void OnLeave() override {

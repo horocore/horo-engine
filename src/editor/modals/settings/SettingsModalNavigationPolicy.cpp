@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <format>
 #include <imgui.h>
 
 namespace Horo::Editor::SettingsModalInternal {
@@ -16,7 +17,7 @@ namespace Horo::Editor::SettingsModalInternal {
         /** @brief Shared boolean control edits only the user preference draft. */
         void Overlay(std::string_view key, bool &value, const EditorGuiContext &ctx) {
             const auto label = Text(ctx, key);
-            Ui::SettingRow(label.c_str(), "", ctx.theme.fonts, [&] {
+            Ui::SettingRow(label.c_str(), "", ctx.theme.fonts, [&label, &value, &ctx] {
                 static_cast<void>(Ui::ToggleControl(label.c_str(), &value, ctx.theme.fonts));
             });
         }
@@ -32,7 +33,7 @@ namespace Horo::Editor::SettingsModalInternal {
                                                 limits.maximumResidentMemoryBytes,
                                                 limits.maximumWorkUnitsPerTick};
             for (std::size_t index = 0; index < values.size(); ++index)
-                changed |= NavigationUnsignedField("settings.navigation.capacity." + std::to_string(index), values[index], ctx,
+                changed |= NavigationUnsignedField(std::format("settings.navigation.capacity.{}", index), values[index], ctx,
                                                    index < 4 ? UINT32_MAX : UINT64_MAX);
             if (values[0] <= UINT32_MAX && values[1] <= UINT32_MAX && values[2] <= UINT32_MAX && values[3] <= UINT32_MAX)
                 limits = {static_cast<std::uint32_t>(values[0]),
@@ -50,14 +51,14 @@ namespace Horo::Editor::SettingsModalInternal {
             std::array<std::string, Count> labels;
             std::array<const char *, Count> names;
             for (std::size_t index = 0; index < Count; ++index) {
-                labels[index] = Text(ctx, std::string(key) + "." + std::to_string(index));
+                labels[index] = Text(ctx, std::format("{}.{}", key, index));
                 names[index] = labels[index].c_str();
             }
             auto selected = static_cast<int>(value);
             bool changed{};
             const auto title = Text(ctx, key);
-            Ui::SettingRow(title.c_str(), "", ctx.theme.fonts, [&] {
-                changed = Ui::ComboControl(title.c_str(), &selected, names.data(), names.size(), ctx.theme.fonts);
+            Ui::SettingRow(title.c_str(), "", ctx.theme.fonts, [&changed, &title, &selected, &names, &ctx] {
+                changed = Ui::ComboControl(title.c_str(), &selected, names.data(), static_cast<int>(names.size()), ctx.theme.fonts);
             });
             if (changed && selected >= 0 && static_cast<std::size_t>(selected) < Count)
                 value = static_cast<Enum>(selected);
@@ -79,14 +80,14 @@ namespace Horo::Editor::SettingsModalInternal {
             profile.maximumQuery.limits.maximumResultPoints = static_cast<std::uint32_t>(points);
             const auto before = profile.maximumQuery.limits.maximumSearchDistanceMeters;
             const auto distance = Text(ctx, "settings.navigation.query_distance");
-            Ui::SettingRow(distance.c_str(), "", ctx.theme.fonts, [&] {
+            Ui::SettingRow(distance.c_str(), "", ctx.theme.fonts, [&profile, &ctx] {
                 Ui::InputFloatControl("##navigation-distance", &profile.maximumQuery.limits.maximumSearchDistanceMeters, ctx.theme.fonts);
             });
             changed |= before != profile.maximumQuery.limits.maximumSearchDistanceMeters;
             for (std::size_t index = 0; index < profile.capabilities.size(); ++index) {
                 bool required = profile.capabilities[index] == Nav::NavigationCapabilityRequirement::Required;
                 const auto prior = required;
-                Overlay("settings.navigation.capability." + std::to_string(index), required, ctx);
+                Overlay(std::format("settings.navigation.capability.{}", index), required, ctx);
                 if (prior != required) {
                     changed = true;
                     profile.capabilities[index] =
@@ -97,7 +98,7 @@ namespace Horo::Editor::SettingsModalInternal {
         }
 
         /** @brief Reports exact host metadata without constructing, discovering or selecting a concrete provider. */
-        void Compatibility(SettingsState &state, const EditorGuiContext &ctx) {
+        void Compatibility(const SettingsState &state, const EditorGuiContext &ctx) {
             const auto title = Text(ctx, "settings.navigation.compatibility");
             Ui::SectionTitle(title.c_str(), ctx.theme.fonts);
             const auto evidence = state.navigationSettings.Resolve()->TargetEvidence();
@@ -171,8 +172,8 @@ namespace Horo::Editor::SettingsModalInternal {
                 draft.definitionOpening = definitions.front().session;
             }
             draft.selectedDefinition = std::clamp(draft.selectedDefinition, 0, static_cast<int>(draft.definitionNames.size()) - 1);
-            Ui::ComboControl("##navigation-definition-binding", &draft.selectedDefinition, draft.definitionNames.data(),
-                             draft.definitionNames.size(), ctx.theme.fonts);
+            static_cast<void>(Ui::ComboControl("##navigation-definition-binding", &draft.selectedDefinition, draft.definitionNames.data(),
+                                               static_cast<int>(draft.definitionNames.size()), ctx.theme.fonts));
         }
     }  // namespace
 
@@ -182,14 +183,14 @@ namespace Horo::Editor::SettingsModalInternal {
         auto text = std::to_string(value);
         const auto label = Text(ctx, key);
         bool changed{};
-        Ui::SettingRow(label.c_str(), "", ctx.theme.fonts, [&] {
+        Ui::SettingRow(label.c_str(), "", ctx.theme.fonts, [&changed, &label, &text, &ctx] {
             changed = Ui::InputTextControl(label.c_str(), text, 20, ctx.theme.fonts);
         });
         if (!changed)
             return false;
         std::uint64_t candidate{};
-        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), candidate);
-        if (text.empty() || parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || candidate > maximum) {
+        if (const auto parsed = std::from_chars(text.data(), text.data() + text.size(), candidate);
+            text.empty() || parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || candidate > maximum) {
             ImGui::TextWrapped("%s", Text(ctx, "settings.navigation.invalid_number").c_str());
             return false;
         }
@@ -206,7 +207,7 @@ namespace Horo::Editor::SettingsModalInternal {
         if (draft.policy) {
             auto &policy = *draft.policy;
             const auto provider = Text(ctx, "settings.navigation.default_provider");
-            Ui::SettingRow(provider.c_str(), "", ctx.theme.fonts, [&] {
+            Ui::SettingRow(provider.c_str(), "", ctx.theme.fonts, [&state, &policy, &ctx] {
                 state.navigationProjectDraftDirty |=
                     Ui::InputTextControl("##navigation-provider", policy.defaultProvider, 128, ctx.theme.fonts);
             });

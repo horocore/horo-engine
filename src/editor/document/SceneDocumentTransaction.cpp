@@ -326,15 +326,15 @@ namespace Horo::Editor {
         std::optional<DocumentStateId> replayState;
 
         /** @brief Builds the detached root and complete semantic history before any owner publication. */
-        Result<void> StageRoot(SceneDocumentTransactions &port, SceneObjectsReplacedDelta delta, const SceneTransactionLimits limits,
+        Result<void> StageRoot(const SceneDocumentTransactions &port, SceneObjectsReplacedDelta delta, const SceneTransactionLimits limits,
                                const std::size_t budget, const bool coordinated) {
             auto candidate = owner->document->m_objects;
             ReplaceObjects(candidate, delta, false);
             if (candidate.size() > limits.maximumSnapshotObjects ||
                 owner->document->m_prefabInstances.size() > limits.maximumSnapshotObjects - candidate.size())
                 return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
-            SceneDocument validated;
-            if (auto valid = validated.LoadSaved(candidate, owner->document->m_prefabInstances); valid.HasError())
+            SceneDocument validatedRoot;
+            if (auto valid = validatedRoot.LoadSaved(candidate, owner->document->m_prefabInstances); valid.HasError())
                 return Result<void>::Failure(valid.ErrorValue());
             const auto &document = *owner->document;
             if (document.m_revision.value == std::numeric_limits<std::uint64_t>::max() ||
@@ -348,15 +348,15 @@ namespace Horo::Editor {
             const auto bytes = EstimateMemoryBytes(semantic, affected.size());
             if (bytes > kMaximumHistoryBytes || bytes > budget)
                 return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
-            EditorHistory::Impl history = *owner->history->m_impl;
-            PushHistory(history, HistoryRecord{document.m_state, DocumentStateId{document.m_nextStateId}, std::move(semantic),
-                                               std::move(affected), bytes});
+            EditorHistory::Impl preparedHistory = *owner->history->m_impl;
+            PushHistory(preparedHistory, HistoryRecord{document.m_state, DocumentStateId{document.m_nextStateId}, std::move(semantic),
+                                                       std::move(affected), bytes});
             if (auto admitted = port.Admit(context); admitted.HasError())
                 return Result<void>::Failure(admitted.ErrorValue());
-            history.undo.back().coordinated = coordinated;
+            preparedHistory.undo.back().coordinated = coordinated;
             objects = std::move(candidate);
-            this->validated = std::make_unique<SceneDocument>(std::move(validated));
-            this->history = std::make_unique<EditorHistory::Impl>(std::move(history));
+            this->validated = std::make_unique<SceneDocument>(std::move(validatedRoot));
+            this->history = std::make_unique<EditorHistory::Impl>(std::move(preparedHistory));
             return Result<void>::Success();
         }
     };

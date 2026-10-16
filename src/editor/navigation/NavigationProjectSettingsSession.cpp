@@ -44,7 +44,8 @@ namespace Horo::Editor {
             using Return = Result<std::unique_ptr<NavigationProjectSettingsSession>>;
             if (!generation || !root.is_absolute() || root != root.lexically_normal())
                 return Return::Failure(Reject(Navigation::NavigationSettingsFailure::Invalid));
-            auto session = std::unique_ptr<NavigationProjectSettingsSession>(new NavigationProjectSettingsSession);
+            // The private constructor admits only this validated factory; the pointer is immediately owned.
+            auto session = std::unique_ptr<NavigationProjectSettingsSession>(new NavigationProjectSettingsSession);  // NOSONAR(cpp:S5950)
             session->state_ = std::make_unique<State>();
             auto &s = *session->state_;
             s.root = std::move(root);
@@ -107,9 +108,9 @@ namespace Horo::Editor {
         }
         std::vector<NavigationDefinitionDocument *> definitions;
         std::vector<SceneDocumentTransactions *> scenes;
-        for (auto &entry : s.definitions)
+        for (const auto &entry : s.definitions)
             definitions.push_back(entry.document.get());
-        for (auto &entry : s.scenes)
+        for (const auto &entry : s.scenes)
             scenes.push_back(entry.port.lock()->owner);
         s.workflow = std::make_unique<NavigationSettingsWorkflow>(registry, definitions, scenes);
         s.definitionProjection.resize(s.definitions.size());
@@ -208,18 +209,19 @@ namespace Horo::Editor {
         auto candidate = Application::NavigationProjectSettings::Create(std::move(input));
         if (candidate.HasError())
             return Result<Application::NavigationSettingsPublication>::Failure(candidate.ErrorValue());
-        auto lease = s.mutations->TryAcquire({s.root, ProjectMutationOwner::Save, "navigation-project-policy"});
-        if (lease.HasError())
+        if (auto lease = s.mutations->TryAcquire({s.root, ProjectMutationOwner::Save, "navigation-project-policy"}); lease.HasError())
             return Result<Application::NavigationSettingsPublication>::Failure(lease.ErrorValue());
-        auto saved = s.store->Save(s.policy, candidate.Value());
-        if (saved.HasValue())
-            s.policy = saved.Value().snapshot;
-        return saved;
+        else {
+            auto saved = s.store->Save(s.policy, candidate.Value());
+            if (saved.HasValue())
+                s.policy = saved.Value().snapshot;
+            return saved;
+        }
     }
 
     /** @copydoc NavigationProjectSettingsSession::Preview */
-    Result<NavigationSettingsReview> NavigationProjectSettingsSession::Preview(const Assets::AssetId definition,
-                                                                               const std::span<const NavigationDefinitionEdit> edits) {
+    Result<NavigationSettingsReview> NavigationProjectSettingsSession::Preview(
+        const Assets::AssetId definition, const std::span<const NavigationDefinitionEdit> edits) const {
         if (auto fresh = Fresh(); fresh.HasError())
             return Result<NavigationSettingsReview>::Failure(fresh.ErrorValue());
         return state_->workflow->Preview(definition, edits);
@@ -251,34 +253,35 @@ namespace Horo::Editor {
         if (auto fresh = Fresh(); fresh.HasError())
             return Return::Failure(fresh.ErrorValue());
         auto &s = *state_;
-        auto lease = s.mutations->TryAcquire({s.root, ProjectMutationOwner::Save, "navigation-authoring-documents"});
-        if (lease.HasError())
+        if (auto lease = s.mutations->TryAcquire({s.root, ProjectMutationOwner::Save, "navigation-authoring-documents"}); lease.HasError())
             return Return::Failure(lease.ErrorValue());
-        std::vector<NavigationDocumentSaveOutcome> outcomes;
-        outcomes.reserve(s.definitions.size() + s.scenes.size());
-        for (auto &entry : s.definitions) {
-            if (!entry.document->IsDirty())
-                continue;
-            const auto snapshot = entry.document->Snapshot();
-            if (snapshot.HasError())
-                return Return::Failure(snapshot.ErrorValue());
-            NavigationDocumentSaveOutcome outcome{snapshot.Value().asset, {}, false};
-            outcomes.push_back(s.SaveDefinition(entry, std::move(outcome)));
+        else {
+            std::vector<NavigationDocumentSaveOutcome> outcomes;
+            outcomes.reserve(s.definitions.size() + s.scenes.size());
+            for (auto &entry : s.definitions) {
+                if (!entry.document->IsDirty())
+                    continue;
+                const auto snapshot = entry.document->Snapshot();
+                if (snapshot.HasError())
+                    return Return::Failure(snapshot.ErrorValue());
+                NavigationDocumentSaveOutcome outcome{snapshot.Value().asset, {}, false};
+                outcomes.push_back(s.SaveDefinition(entry, std::move(outcome)));
+            }
+            for (auto &entry : s.scenes) {
+                const auto owner = entry.port.lock();
+                if (!owner || !owner->owner)
+                    return Return::Failure(Reject(Navigation::NavigationSettingsFailure::Closed));
+                auto snapshot = owner->owner->Snapshot();
+                if (snapshot.HasError())
+                    return Return::Failure(snapshot.ErrorValue());
+                if (!snapshot.Value().dirty)
+                    continue;
+                const auto &v = snapshot.Value();
+                NavigationDocumentSaveOutcome outcome{v.session.owner, {}, false};
+                outcomes.push_back(s.SaveScene(entry, *owner->owner, v, std::move(outcome)));
+            }
+            return Return::Success(std::move(outcomes));
         }
-        for (auto &entry : s.scenes) {
-            const auto owner = entry.port.lock();
-            if (!owner || !owner->owner)
-                return Return::Failure(Reject(Navigation::NavigationSettingsFailure::Closed));
-            auto snapshot = owner->owner->Snapshot();
-            if (snapshot.HasError())
-                return Return::Failure(snapshot.ErrorValue());
-            if (!snapshot.Value().dirty)
-                continue;
-            const auto &v = snapshot.Value();
-            NavigationDocumentSaveOutcome outcome{v.session.owner, {}, false};
-            outcomes.push_back(s.SaveScene(entry, *owner->owner, v, std::move(outcome)));
-        }
-        return Return::Success(std::move(outcomes));
     }
 
     /** @copydoc NavigationProjectSettingsSession::IsDirty */
@@ -287,9 +290,10 @@ namespace Horo::Editor {
             return false;
         if (state_->owner != std::this_thread::get_id())
             return true;
-        for (const auto &entry : state_->definitions)
-            if (entry.document->IsDirty())
-                return true;
+        if (std::ranges::any_of(state_->definitions, [](const auto &entry) {
+            return entry.document->IsDirty();
+        }))
+            return true;
         for (const auto &entry : state_->scenes) {
             const auto lease = entry.port.lock();
             if (!lease || !lease->owner)

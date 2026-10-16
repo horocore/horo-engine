@@ -5,10 +5,11 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <utility>
 
 namespace Horo::Editor {
-    namespace {
+    namespace NavigationSessionDetail {
         /** @brief State-local typed source/session rejection. */
         Error RejectNavigationSessionState(const Navigation::NavigationSettingsFailure reason) {
             return MakeError(Navigation::NavigationSettingsError(reason));
@@ -18,7 +19,10 @@ namespace Horo::Editor {
         auto NavigationSessionSupport() {
             return std::array{Navigation::NavigationDefinitionRecordSupport()};
         }
-    }  // namespace
+    }  // namespace NavigationSessionDetail
+
+    using NavigationSessionDetail::NavigationSessionSupport;
+    using NavigationSessionDetail::RejectNavigationSessionState;
 
     struct NavigationProjectSettingsSession::State final {
         struct Definition final {
@@ -36,8 +40,8 @@ namespace Horo::Editor {
         };
 
         /** @brief Loads the sole accepted authored definition record without dropping unknown/generated data. */
-        Result<Definition> LoadDefinition(const Assets::AssetRecord &record, const Assets::AssetSourceCapture &source,
-                                          const std::uint64_t generation, const std::filesystem::path &path) {
+        static Result<Definition> LoadDefinition(const Assets::AssetRecord &record, const Assets::AssetSourceCapture &source,
+                                                 const std::uint64_t generation, const std::filesystem::path &path) {
             using Return = Result<Definition>;
             const auto support = NavigationSessionSupport();
             const Navigation::NavigationSourceLoadContext context{.supportedRecords = support};
@@ -54,14 +58,16 @@ namespace Horo::Editor {
             auto document = NavigationDefinitionDocument::Open(record.id, generation, 1, std::move(definition).Value());
             if (document.HasError())
                 return Return::Failure(document.ErrorValue());
-            return Return::Success(
-                {path, source.identity, authored.id, std::make_unique<NavigationDefinitionDocument>(std::move(document).Value())});
+            Definition result{path, source.identity, authored.id,
+                              std::make_unique<NavigationDefinitionDocument>(std::move(document).Value())};
+            return Return::Success(std::move(result));
         }
 
         /** @brief Reuses the active canonical owner or loads an inactive Scene through its real source codec. */
-        Result<Scene> LoadScene(const Assets::AssetRecord &record, const Assets::AssetSourceCapture &source, const std::uint64_t generation,
-                                const std::filesystem::path &path, SceneDocumentTransactions *activeScene,
-                                const std::optional<SceneTransactionSnapshot> &active) {
+        static Result<Scene> LoadScene(const Assets::AssetRecord &record, const Assets::AssetSourceCapture &source,
+                                       const std::uint64_t generation, const std::filesystem::path &path,
+                                       const SceneDocumentTransactions *activeScene,
+                                       const std::optional<SceneTransactionSnapshot> &active) {
             using Return = Result<Scene>;
             Scene scene;
             scene.path = path;
@@ -70,7 +76,7 @@ namespace Horo::Editor {
                 scene.port = activeScene->lifetime_;
             else {
                 const auto &bytes = source.bytes;
-                auto decoded = SceneSource::DecodeSceneSource({reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+                auto decoded = SceneSource::DecodeSceneSource({std::bit_cast<const char *>(bytes.data()), bytes.size()});
                 if (decoded.HasError())
                     return Return::Failure(decoded.ErrorValue());
                 auto sceneSource = std::move(decoded).Value();
@@ -153,12 +159,12 @@ namespace Horo::Editor {
         }
 
         /** @brief Saves the captured canonical Scene without replacing its history or clearing later edits. */
-        NavigationDocumentSaveOutcome SaveScene(Scene &entry, SceneDocumentTransactions &owner, const SceneTransactionSnapshot &v,
+        NavigationDocumentSaveOutcome SaveScene(Scene &entry, SceneDocumentTransactions &sceneOwner, const SceneTransactionSnapshot &v,
                                                 NavigationDocumentSaveOutcome outcome) {
             const auto text = SceneSource::EncodeSceneSource({v.objects, v.prefabInstances});
             return PublishDocument(entry.path, entry.source, std::as_bytes(std::span{text.data(), text.size()}), std::move(outcome),
-                                   [&owner, &v] {
-                return owner.MarkSaved({v.session, v.revision, v.state, true, {}});
+                                   [&sceneOwner, &v] {
+                return sceneOwner.MarkSaved({v.session, v.revision, v.state, true, {}});
             });
         }
 

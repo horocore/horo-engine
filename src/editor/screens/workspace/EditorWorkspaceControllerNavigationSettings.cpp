@@ -124,7 +124,7 @@ namespace Horo::Editor {
                 })) {
                     auto editor = std::make_shared<NavigationDefinitionEditorState>();
                     editor->session = m_navigationSettings->Borrow();
-                    m_viewModel.navigationDocuments.push_back({opened.Value().identity, asset, std::move(editor)});
+                    m_viewModel.navigationDocuments.emplace_back(opened.Value().identity, asset, std::move(editor));
                 }
             }
         }
@@ -133,7 +133,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::UpdateNavigationDocumentTabs */
     void EditorWorkspaceController::UpdateNavigationDocumentTabs() {
         for (auto it = m_viewModel.navigationDocuments.begin(); it != m_viewModel.navigationDocuments.end();) {
-            auto &tab = *it;
+            const auto &tab = *it;
             if (std::exchange(tab.editor->requestFocus, false))
                 static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(tab.identity.instance));
             const bool dirty = m_navigationSettings->IsDirty();

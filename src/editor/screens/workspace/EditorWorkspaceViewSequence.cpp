@@ -88,18 +88,16 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceView::DrawNavigationDocumentTabs */
     void EditorWorkspaceView::DrawNavigationDocumentTabs(const EditorWorkspaceViewModel &viewModel) const {
+        using enum Ui::ButtonVariant;
         for (const auto &tab : viewModel.navigationDocuments) {
             ImGui::SameLine();
             ImGui::PushID(tab.asset.ToString().c_str());
-            const auto title = tab.identity.key.source.Value();
-            if (Ui::Button({.label = title.c_str(),
-                            .variant = viewModel.workspacePanelHost.ActiveDocument() == tab.identity.instance
-                                           ? Ui::ButtonVariant::Primary
-                                           : Ui::ButtonVariant::Secondary}))
+            if (const auto title = tab.identity.key.source.Value();
+                Ui::Button({.label = title.c_str(),
+                            .variant = viewModel.workspacePanelHost.ActiveDocument() == tab.identity.instance ? Primary : Secondary}))
                 tab.editor->requestFocus = true;
             ImGui::SameLine();
-            if (Ui::Button({.label = m_context.localization.Get("editor", "workspace.sequence.close").c_str(),
-                            .variant = Ui::ButtonVariant::Secondary}))
+            if (Ui::Button({.label = m_context.localization.Get("editor", "workspace.sequence.close").c_str(), .variant = Secondary}))
                 tab.editor->requestClose = true;
             ImGui::PopID();
         }

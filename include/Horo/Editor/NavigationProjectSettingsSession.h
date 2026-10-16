@@ -78,7 +78,8 @@ namespace Horo::Editor {
         /** @brief Checks actual file freshness and captures exhaustive reference review.
          * @param definition Asset identity. @param edits Typed gesture. @return Immutable review or typed diagnostic.
          */
-        [[nodiscard]] Result<NavigationSettingsReview> Preview(Assets::AssetId definition, std::span<const NavigationDefinitionEdit> edits);
+        [[nodiscard]] Result<NavigationSettingsReview> Preview(Assets::AssetId definition,
+                                                               std::span<const NavigationDefinitionEdit> edits) const;
         /** @brief Rechecks source freshness and commits the exact confirmed review through all canonical owners.
          * @param review Previously displayed full impact report. @return Success or zero-mutation failure.
          */

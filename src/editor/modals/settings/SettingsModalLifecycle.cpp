@@ -9,7 +9,7 @@ namespace Horo::Editor {
     SettingsModal::SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, const std::uintptr_t logo,
                                  Extensions::ExtensionInventory *extensionInventory,
                                  Extensions::ExtensionMarketplaceService *extensionMarketplace,
-                                 NavigationProjectSettingsSession *navigationSettings) noexcept
+                                 const NavigationProjectSettingsSession *navigationSettings) noexcept
         : m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
           m_extensionMarketplace(extensionMarketplace),
           m_navigationSettings(navigationSettings ? navigationSettings->Borrow() : NavigationProjectSettingsSessionBorrow{}) {}
