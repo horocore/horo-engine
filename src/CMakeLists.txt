@@ -2255,6 +2255,7 @@ target_link_libraries(HoroAndroidInputIntegration PUBLIC HoroEngine::Input)
 add_library(HoroRuntimeUiInput STATIC
         runtime/ui/input/UiTextInputAdapter.cpp
         runtime/ui/input/UiNavigationInput.cpp
+        runtime/ui/input/UiInputDebugger.cpp
         runtime/ui/input/UiPointerInput.cpp
 )
 add_library(HoroEngine::RuntimeUiInput ALIAS HoroRuntimeUiInput)

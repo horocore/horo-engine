@@ -211,49 +211,27 @@ namespace Horo::Runtime::Ui {
             return Failure<UiFocusChange>(UiErrors::FocusLifecycleUnavailable);
         if (!FocusGraphDetail::DirectionIndex(direction).has_value())
             return Failure<UiFocusChange>(UiErrors::FocusInvalid);
-        if (!storage_->focusedIndex.has_value())
-            return FocusDefault();
-
-        const std::size_t currentIndex = *storage_->focusedIndex;
-        if (currentIndex >= storage_->nodes.size() || !storage_->IsAllowed(currentIndex)) {
-            Storage::RestorationEntry recovery;
-            storage_->CollectPath(storage_->focusedIndex, recovery);
-            recovery.focused = {};
-            const auto previous = storage_->CurrentTarget();
-            storage_->focusedIndex = storage_->ResolveRestoration(recovery);
-            return Result<UiFocusChange>::Success(storage_->BuildChange(previous, UiFocusChangeReason::InvalidTarget));
-        }
-
-        const UiElementId targetId = storage_->nodes[currentIndex].descriptor.links.Target(direction);
-        if (!targetId.IsValid()) {
-            const auto spatial = storage_->SpatialTarget(currentIndex, direction);
-            if (!spatial.has_value())
-                return Result<UiFocusChange>::Success(storage_->NoTarget(UiFocusChangeReason::InvalidTarget));
-            const auto previous = storage_->CurrentTarget();
-            storage_->focusedIndex = spatial;
-            return Result<UiFocusChange>::Success(storage_->BuildChange(previous, UiFocusChangeReason::Spatial));
-        }
-
-        const auto target = storage_->ResolveAllowed(targetId);
-        if (target.has_value()) {
-            const auto previous = storage_->CurrentTarget();
-            storage_->focusedIndex = target;
-            return Result<UiFocusChange>::Success(storage_->BuildChange(previous, UiFocusChangeReason::Link));
-        }
-
-        const std::size_t targetIndex = storage_->FindNode(targetId);
-        if (targetIndex != Storage::InvalidIndex && !storage_->IsWithinModal(targetIndex))
-            return Result<UiFocusChange>::Success(storage_->NoTarget(UiFocusChangeReason::InvalidTarget));
-
-        Storage::RestorationEntry recovery;
-        storage_->CollectPath(storage_->focusedIndex, recovery);
-        recovery.focused = {};
+        const auto decision = storage_->ResolveNavigation(direction);
+        if (!decision.admitted)
+            return Result<UiFocusChange>::Success(storage_->NoTarget(decision.reason));
         const auto previous = storage_->CurrentTarget();
-        const auto recovered = storage_->ResolveRestoration(recovery);
-        if (!recovered.has_value())
-            return Result<UiFocusChange>::Success(storage_->NoTarget(UiFocusChangeReason::InvalidTarget));
-        storage_->focusedIndex = recovered;
-        return Result<UiFocusChange>::Success(storage_->BuildChange(previous, UiFocusChangeReason::InvalidTarget));
+        storage_->focusedIndex = decision.target;
+        return Result<UiFocusChange>::Success(storage_->BuildChange(previous, decision.reason));
+    }
+
+    /** @copydoc UiFocusGraph::PreviewMove */
+    Result<UiFocusNavigationPreview> UiFocusGraph::PreviewMove(const UiNavigationDirection direction) const {
+        if (!storage_ || storage_->lifecycle != UiFocusGraphState::Active)
+            return Failure<UiFocusNavigationPreview>(UiErrors::FocusLifecycleUnavailable);
+        if (!FocusGraphDetail::DirectionIndex(direction).has_value())
+            return Failure<UiFocusNavigationPreview>(UiErrors::FocusInvalid);
+        const auto decision = storage_->ResolveNavigation(direction);
+        std::optional<UiFocusTarget> target;
+        if (decision.admitted && decision.target.has_value()) {
+            const auto &node = storage_->nodes[*decision.target].descriptor;
+            target = UiFocusTarget{node.id, node.element};
+        }
+        return Result<UiFocusNavigationPreview>::Success({direction, target, decision.reason, decision.admitted});
     }
 
     /** @copydoc UiFocusGraph::PushModal */

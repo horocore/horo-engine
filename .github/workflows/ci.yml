@@ -101,7 +101,7 @@ jobs:
     name: Test · ${{ matrix.name }}
     needs: tooling
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
