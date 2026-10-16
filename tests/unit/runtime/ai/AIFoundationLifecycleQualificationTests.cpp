@@ -60,10 +60,11 @@ namespace Horo::AI {
 
         /** @brief Publishes a typed flag through the scene-owned blackboard sync boundary. */
         void CommitFlag(const AiRuntimeCapability &capability, const AgentHandle agent, const BlackboardKeyId key, const bool value) {
-            auto writes = capability.BeginBlackboardWrite(agent);
-            REQUIRE(writes.HasValue());
-            REQUIRE(writes.Value().Stage({key, BlackboardValue{BlackboardScalarValue{value}}}).HasValue());
-            REQUIRE(capability.CommitBlackboardWrite(agent, std::move(writes).Value()).HasValue());
+            auto preparedWrites = capability.BeginBlackboardWrite(agent);
+            REQUIRE(preparedWrites.HasValue());
+            auto writes = std::move(preparedWrites).Value();
+            REQUIRE(writes.Stage({key, BlackboardValue{BlackboardScalarValue{value}}}).HasValue());
+            REQUIRE(capability.CommitBlackboardWrite(agent, std::move(writes)).HasValue());
         }
 
         /** @brief Verifies late completion cannot affect the replacement task, then releases that replacement. */
@@ -86,9 +87,10 @@ namespace Horo::AI {
             const auto original = scene.Capture();
             const auto task = capability.StartTask(scene.handle, {.task = MakeIdentity<TaskId>(41)});
             REQUIRE(task.HasValue());
-            auto oldBatch = capability.BeginBlackboardWrite(scene.handle);
-            REQUIRE(oldBatch.HasValue());
-            REQUIRE(oldBatch.Value().Stage({key, BlackboardValue{BlackboardScalarValue{false}}}).HasValue());
+            auto preparedOldBatch = capability.BeginBlackboardWrite(scene.handle);
+            REQUIRE(preparedOldBatch.HasValue());
+            auto oldBatch = std::move(preparedOldBatch).Value();
+            REQUIRE(oldBatch.Stage({key, BlackboardValue{BlackboardScalarValue{false}}}).HasValue());
             CancellationSource cancellation;
             auto cancelled = scene.Stage(original, {}, cancellation.Token());
             cancellation.RequestCancellation();
@@ -102,7 +104,7 @@ namespace Horo::AI {
             CHECK(scene.Capture() == original);
             CHECK(capability.ReadBlackboard(scene.handle, key).Value() == std::optional{BlackboardValue{BlackboardScalarValue{true}}});
             ExpectError(capability.InspectTask(scene.handle, task.Value()), AIErrors::HandleInvalid);
-            ExpectError(capability.CommitBlackboardWrite(scene.handle, std::move(oldBatch).Value()), AIErrors::BlackboardInstanceStale);
+            ExpectError(capability.CommitBlackboardWrite(scene.handle, std::move(oldBatch)), AIErrors::BlackboardInstanceStale);
             CheckRestoredTaskFence(capability, scene.handle, task.Value());
             CHECK_FALSE(scene.runtime.Find(scene.handle).Value().hasRunningTask);
         }

@@ -71,10 +71,11 @@ namespace Horo::AI {
         }
 
         void CommitTrue(BlackboardInstance &board, const BlackboardKeyId key) {
-            auto writes = board.BeginWriteBatch();
-            REQUIRE(writes.HasValue());
-            REQUIRE(writes.Value().Stage({key, BlackboardValue{BlackboardScalarValue{true}}}).HasValue());
-            REQUIRE(board.CommitAtBlackboardSync(std::move(writes).Value()).HasValue());
+            auto preparedWrites = board.BeginWriteBatch();
+            REQUIRE(preparedWrites.HasValue());
+            auto writes = std::move(preparedWrites).Value();
+            REQUIRE(writes.Stage({key, BlackboardValue{BlackboardScalarValue{true}}}).HasValue());
+            REQUIRE(board.CommitAtBlackboardSync(std::move(writes)).HasValue());
         }
 
         TEST_CASE("AI foundation production publication shutdown releases observers tasks and blackboard storage",
@@ -136,14 +137,15 @@ namespace Horo::AI {
 
         /** @brief Prepares maximum writes and repeated updates before the allocation measurement begins. */
         BlackboardWriteBatch PrepareMaximumBatch(BlackboardInstance &board, const std::vector<BlackboardKeyDescriptor> &keys) {
-            auto batch = board.BeginWriteBatch();
-            REQUIRE(batch.HasValue());
+            auto preparedBatch = board.BeginWriteBatch();
+            REQUIRE(preparedBatch.HasValue());
+            auto batch = std::move(preparedBatch).Value();
             for (const auto &key : keys)
-                REQUIRE(batch.Value().Stage({key.key, BlackboardValue{BlackboardScalarValue{true}}}).HasValue());
+                REQUIRE(batch.Stage({key.key, BlackboardValue{BlackboardScalarValue{true}}}).HasValue());
             for (std::size_t index = 0; index < 4096; ++index)
-                REQUIRE(batch.Value().Stage({keys.front().key, BlackboardValue{BlackboardScalarValue{index % 2 != 0}}}).HasValue());
-            CHECK(batch.Value().Writes().size() == MaximumBlackboardWritesPerBatch);
-            return std::move(batch).Value();
+                REQUIRE(batch.Stage({keys.front().key, BlackboardValue{BlackboardScalarValue{index % 2 != 0}}}).HasValue());
+            CHECK(batch.Writes().size() == MaximumBlackboardWritesPerBatch);
+            return batch;
         }
 
         TEST_CASE("AI foundation declared maximum storage remains bounded through notification and commit",
