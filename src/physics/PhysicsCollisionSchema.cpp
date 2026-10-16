@@ -286,4 +286,18 @@ namespace Horo::Physics {
                                                          std::vector<CollisionProfileDefinition> profiles, const std::uint64_t fingerprint)
         : defaultProfile_(defaultProfile), layers_(std::move(layers)), pairs_(std::move(pairs)), channels_(std::move(channels)),
           profiles_(std::move(profiles)), fingerprint_(fingerprint) {}
+
+    /** @copydoc NormalizedCollisionSchema::ResolveStaticSensorProfile */
+    Result<const CollisionProfileDefinition *> NormalizedCollisionSchema::ResolveStaticSensorProfile(const CollisionProfileId id) const {
+        const auto profile = ResolveProfile(id);
+        if (profile.HasError())
+            return profile;
+        const auto layer = std::ranges::find(layers_, profile.Value()->layer, &CollisionLayerDefinition::id);
+        if (!profile.Value()->simulationEnabled || !profile.Value()->lifecycleEventsEnabled || layer == layers_.end() || !layer->enabled ||
+            !layer->admitsStatic || !layer->admitsOverlap)
+            return Result<const CollisionProfileDefinition *>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid,
+                          "The selected project profile/layer must admit static sensors and lifecycle events."));
+        return profile;
+    }
 }  // namespace Horo::Physics

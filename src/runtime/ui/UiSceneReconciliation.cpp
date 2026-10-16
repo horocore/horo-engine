@@ -94,6 +94,15 @@ namespace Horo::Runtime::Ui {
         return slot == storage_.Get()->active.size() ? nullptr : &storage_.Get()->active[slot]->publisher;
     }
 
+    /** @copydoc UiSceneReconciliation::Describe */
+    Result<UiSceneInstanceDescriptor> UiSceneReconciliation::Describe(const RuntimeUiInstanceId instance) const {
+        if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)
+            return Failure<UiSceneInstanceDescriptor>(UiErrors::InstanceStateInvalid);
+        const auto slot = storage_.Get()->Find(instance);
+        return slot == storage_.Get()->active.size() ? Failure<UiSceneInstanceDescriptor>(UiErrors::HandleStale)
+                                                     : Result<UiSceneInstanceDescriptor>::Success(storage_.Get()->active[slot]->descriptor);
+    }
+
     /** @copydoc UiSceneReconciliation::Acquire */
     Result<UiReloadLease> UiSceneReconciliation::Acquire(const RuntimeUiInstanceId instance) const {
         if (!storage_ || storage_.Get()->stopped || storage_.Get()->collecting)

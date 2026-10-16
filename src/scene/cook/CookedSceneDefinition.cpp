@@ -94,16 +94,44 @@ namespace Horo::SceneCook {
                  .components = CopyComponents<Runtime::RuntimeComponentSet>(components.Value())});
         }
 
+        /** @brief Decodes one exact portable proof value; the Scene builder owns canonical correspondence checks. */
+        Result<Runtime::TriggerVolumeMigrationEvidence> DecodeMigration(const Json &value) {
+            const bool identityFields = value.is_object() && value.contains("object") && value.contains("body") &&
+                                        value.contains("collider") && value["object"].is_number_unsigned() &&
+                                        value["body"].is_number_unsigned() && value["collider"].is_number_unsigned();
+            if (!identityFields || !Foundation::HasAllowedFields(value, {"object", "body", "collider", "schema", "profile", "material",
+                                                                         "type", "revision", "payload"}))
+                return Result<Runtime::TriggerVolumeMigrationEvidence>::Failure(MakeError(SceneCookErrors::Invalid));
+            if (!value["schema"].is_number_unsigned() || !value["revision"].is_number_unsigned() || !value["profile"].is_string() ||
+                !value["material"].is_string() || !value["type"].is_string() || !value["payload"].is_string())
+                return Result<Runtime::TriggerVolumeMigrationEvidence>::Failure(MakeError(SceneCookErrors::Invalid));
+            const auto profile = Physics::CollisionProfileId::Parse(value["profile"].get<std::string>());
+            const auto material = Assets::AssetId::Parse(value["material"].get<std::string>());
+            const auto type = Assets::AssetTypeId::Parse(value["type"].get<std::string>());
+            const auto digest = ParseSha256(value["payload"].get<std::string>());
+            if (profile.HasError() || material.HasError() || type.HasError() || digest.HasError())
+                return Result<Runtime::TriggerVolumeMigrationEvidence>::Failure(MakeError(SceneCookErrors::Invalid));
+            return Result<Runtime::TriggerVolumeMigrationEvidence>::Success({{value["object"].get<std::uint64_t>()},
+                                                                             {value["body"].get<std::uint64_t>()},
+                                                                             {value["collider"].get<std::uint64_t>()},
+                                                                             {value["schema"].get<std::uint64_t>(),
+                                                                              profile.Value(),
+                                                                              {material.Value(), type.Value()},
+                                                                              value["revision"].get<std::uint64_t>(),
+                                                                              digest.Value()}});
+        }
+
         /** @brief Validates and commits all entity and dependency values through the containing-scene owner. */
         Result<Runtime::RuntimeSceneDefinition> DecodeDocument(const Json &root, const Runtime::SceneDefinitionId scene,
                                                                const Runtime::SceneDefinitionRevision revision,
                                                                const CookedSceneLimits &limits) {
-            if (!Foundation::HasAllowedFields(root, {"format", "scene", "revision", "entities", "dependencies"}) ||
-                root["format"] != "horo.scene.runtime.v1" || !root["scene"].is_number_unsigned() || root["scene"] != scene.value ||
+            if (!Foundation::HasAllowedFields(root, {"format", "scene", "revision", "entities", "dependencies", "triggerMigration"}) ||
+                root["format"] != CookedSceneFormat || !root["scene"].is_number_unsigned() || root["scene"] != scene.value ||
                 !root["revision"].is_number_unsigned() || root["revision"] != revision.value || !root["entities"].is_array() ||
-                !root["dependencies"].is_array())
+                !root["dependencies"].is_array() || !root["triggerMigration"].is_array())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
-            if (!WithinLimits(root["entities"].size(), root["dependencies"].size(), limits))
+            if (!WithinLimits(root["entities"].size(), root["dependencies"].size(), limits) ||
+                root["triggerMigration"].size() > root["entities"].size())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::TooLarge));
             Runtime::SceneDefinitionBuilder builder{scene, revision};
             for (const auto &value : root["entities"]) {
@@ -121,6 +149,13 @@ namespace Horo::SceneCook {
                     return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
                 if (auto required = builder.RequireAsset({id.Value(), type.Value()}); required.HasError())
                     return Result<Runtime::RuntimeSceneDefinition>::Failure(required.ErrorValue());
+            }
+            for (const auto &value : root["triggerMigration"]) {
+                auto evidence = DecodeMigration(value);
+                if (evidence.HasError())
+                    return Result<Runtime::RuntimeSceneDefinition>::Failure(evidence.ErrorValue());
+                if (auto admitted = builder.RequireTriggerVolume(std::move(evidence).Value()); admitted.HasError())
+                    return Result<Runtime::RuntimeSceneDefinition>::Failure(admitted.ErrorValue());
             }
             return std::move(builder).Build();
         }
@@ -144,13 +179,24 @@ namespace Horo::SceneCook {
                 return Result<std::vector<std::uint8_t>>::Failure(MakeError(SceneCookErrors::Invalid));
             dependencies.push_back({{"id", dependency.id.ToString()}, {"type", dependency.expectedType.Value()}});
         }
-        const std::string encoded = Json{{"format", "horo.scene.runtime.v1"},
-                                         {"scene", definition.Id().value},
-                                         {"revision", definition.Revision().value},
-                                         {"entities", std::move(entities)},
-                                         {"dependencies", std::move(dependencies)}}
-                                        .dump() +
-                                    '\n';
+        Json migration = Json::array();
+        for (const auto &evidence : definition.TriggerVolumeEvidence()) {
+            const auto &binding = evidence.binding;
+            migration.push_back({{"object", evidence.object.value},
+                                 {"body", evidence.body.value},
+                                 {"collider", evidence.collider.value},
+                                 {"schema", binding.collisionSchemaFingerprint},
+                                 {"profile", binding.profile.ToString()},
+                                 {"material", binding.material.id.ToString()},
+                                 {"type", binding.material.expectedType.Value()},
+                                 {"revision", binding.materialSourceRevision},
+                                 {"payload", FormatSha256(binding.materialPayloadDigest)}});
+        }
+        const std::string encoded =
+            Json{{"format", CookedSceneFormat},     {"scene", definition.Id().value},          {"revision", definition.Revision().value},
+                 {"entities", std::move(entities)}, {"dependencies", std::move(dependencies)}, {"triggerMigration", std::move(migration)}}
+                .dump() +
+            '\n';
         if (encoded.size() > limits.maximumBytes)
             return Result<std::vector<std::uint8_t>>::Failure(MakeError(SceneCookErrors::TooLarge));
         return Result<std::vector<std::uint8_t>>::Success({encoded.begin(), encoded.end()});

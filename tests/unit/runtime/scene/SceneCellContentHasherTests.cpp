@@ -1,4 +1,6 @@
 #include "SceneCellContentHasher.h"
+#include "SceneCellPayloadReader.h"
+#include "SceneCellPayloadWriter.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -14,9 +16,26 @@ namespace Horo::Runtime {
         }
 
         // The expected member sequence is independent of the production projection
-        // dispatch. It protects the version-1 encoding when components evolve.
+        // dispatch. It protects the version-2 encoding when components evolve.
         template <class T, class... Fields> void CheckFields(const T &value, const Fields &...fields) {
             CHECK(Encoded(value) == Encoded(fields...));
+            const CancellationToken cancellation;
+            CellCookDetail::PayloadWriter measure{cancellation, 1024 * 1024};
+            measure.Fields(value);
+            const auto measured = measure.Finish();
+            REQUIRE(measured.HasValue());
+            std::vector<std::byte> bytes(measured.Value());
+            CellCookDetail::PayloadWriter writer{cancellation, bytes.size(), &bytes};
+            writer.Fields(value);
+            REQUIRE(writer.Finish().HasValue());
+            T decoded{};
+            CellCookDetail::PayloadReader reader{bytes, 1024 * 1024, cancellation};
+            reader.Fields(decoded);
+            const auto read = reader.Finish();
+            if (read.HasError())
+                INFO(read.ErrorValue().message);
+            REQUIRE(read.HasValue());
+            CHECK(Encoded(decoded) == Encoded(fields...));
         }
     }  // namespace
 

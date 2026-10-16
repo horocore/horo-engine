@@ -22,7 +22,7 @@ archive/provenance; do not assign it the current snapshot's contracts.
 | External native host ABI | `horo-extension` @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_MIN_HOST_MINOR@ inclusive to @HORO_EXTENSION_ABI_MAX_HOST_MAJOR_EXCLUSIVE@.0 exclusive; declarations through @HORO_EXTENSION_ABI_MAJOR_VERSION@.@HORO_EXTENSION_ABI_PUBLISHED_MINOR@ |
 | Extension descriptor | `extension.json`, schema 1 |
 | Package manifest | `horo-package.toml`, schema 1; owns package identity/dependencies |
-| Gameplay C++ boundary in this engine snapshot | Native boundary 20 / `gameplay-sdk20`; separate exact-fingerprint build-tree SDK |
+| Gameplay C++ boundary in this engine snapshot | Native boundary 21 / `gameplay-sdk21`; separate exact-fingerprint build-tree SDK |
 | Author CI platform profiles | Linux x64, macOS arm64, macOS x64, Windows x64 |
 
 The external extension range does not imply that every table/capability works on
@@ -214,6 +214,77 @@ and complete consumer/lifecycle revalidation, not the maximum prior number.
 Rollback: restore a coherent previous engine, SDK and rebuilt module set, then
 restart play. Never edit fingerprints or force-load a mismatched binary.
 
+## Gameplay SDK19/20 → SDK21 (Navigation, Character, AI and Runtime UI union)
+
+Rebuild the engine hosts, every native module, generated descriptor bundle and
+all optional SDK consumers with boundary21 / `gameplay-sdk21`. This layout
+preserves main SDK20's Physics, Navigation, AI and Character runtime context
+fields, then appends Runtime UI. `GameRegistrationContext` retains main's inert
+AI descriptor registry; the behavior backend retains its UI capability slot.
+Host services preserve Physics, Character, Navigation and AI, then append UI.
+Use designated fields rather than positional aggregates. SDK15/18/19/20 and all
+earlier incompatible layouts are rejected before native factory activation.
+
+AI diagnostics remain immutable host-owned snapshots. Authoritative AI task
+retirement and UI scope revocation both precede native callbacks and image unload;
+neither capability may replace the other's authority. Behavior factories retain
+`BehaviorRuntimeServiceBindings` for Physics, Navigation, Character and UI, with
+SceneService-only prefab admission separate. AI script composition retains its
+existing explicit bridge; no service discovery or fallback is introduced.
+
+SDK19 and SDK20 identify different published layouts; SDK21 is a fresh combined
+reservation, never their numeric maximum. Rollback requires restoring a coherent
+previous engine, SDK, rebuilt modules and manifests together. Never edit a
+fingerprint to force-load an old binary. Historical migration sections below
+describe their original layouts rather than the current combined boundary.
+
+## Gameplay SDK15/17 → SDK19 (Character, Navigation and Runtime UI union)
+
+Rebuild every native module, generated descriptor bundle, host and optional Physics
+and RuntimeUi SDK consumer with boundary 19 and the exact `gameplay-sdk19`
+fingerprint. SDK19 combines main Character SDK15 (including Navigation SDK10)
+with Runtime UI SDK17. `GameRuntimeContext` preserves main Physics, Navigation,
+Character order and appends `runtimeUi`; the behavior backend preserves Character
+and appends UI before the existing Prefab capability. Runtime host services preserve
+Physics, Character, Navigation and append UI. The runtime constructors accept
+Character followed by UI, so UI callers must supply an empty Character argument
+when no Character grant is admitted. Use designated host service fields.
+
+Both capabilities retain separate host-derived scopes and revoke before teardown.
+Minimal/headless consumers retain forward declarations; Physics and RuntimeUi
+remain independent optional SDK components over one common exported support closure.
+SDK10/15/17/18 binaries are rejected before factories. SDK18/20 AI layouts are
+independent reservations and are not part of SDK19; a future UI+AI union needs
+another fresh identity and complete consumer/lifecycle validation, never `max`.
+
+Rollback: restore one coherent previous engine, SDK, descriptor/artifact manifests
+and rebuilt module set, then restart play. Never edit fingerprints to load an old
+binary into this combined layout.
+
+## Gameplay SDK10 → SDK17 (Navigation and Runtime UI layout)
+
+This combined layout preserves merged Navigation and appends `GameRuntimeContext::runtimeUi` and the matching
+`BehaviorContext` backend virtual capability. It preserves existing field and
+constructor ordering. Rebuild all native module descriptors, bundles and SDK
+consumers with boundary 17 and the exact `gameplay-sdk17` fingerprint. The optional
+`find_package(HoroEngineGameplay REQUIRED COMPONENTS RuntimeUi)` exposes canonical
+Horo UI values/client calls; the default Gameplay API retains forward declarations
+and does not import UI, renderer, input or platform implementations. Physics and
+RuntimeUi share one exported common support closure and remain independent options.
+
+Hosts compose `GameModuleHostOptions{capabilities, GameModuleRuntimeServices{physics,
+runtimeUi, navigation}}`; legacy Physics constructors forward to this sole authority. A grant
+is issued by the application-owned `RuntimeUiService`, then independently derived
+for native module, behavior runner and each Lua VM. Revoke before callback admission
+closes; module-facing context assignment cannot replace the authoritative holder.
+
+SDK17 combines merged NAV SDK10 with Runtime UI. Parallel Character SDK15 and
+AI SDK16 identify different layouts; a future union requires a fresh boundary18
+or later, a new fingerprint and complete SDK revalidation. Taking a numeric
+maximum is unsafe. Revalidate after main changes. Rollback requires rebuilding
+the previous exact SDK and restoring its module/artifact manifest together;
+never change a fingerprint to admit an old native binary.
+
 ## Gameplay SDK15 / AI18 → SDK20
 
 This snapshot combines current-main Character15 and Navigation with the AI18
@@ -229,3 +300,7 @@ fields. Legacy empty, Physics and Navigation host constructors retain their mean
 Each module receives independently revocable AI and Character children; AI tasks
 retire before module callbacks/image unload, while Navigation retains its exact
 code-image pin and Physics/Character allocation authority remains host-owned.
+
+Rollback: restore a coherent previous engine, SDK, rebuilt native modules and
+matching descriptor/artifact manifests, then restart play. Never edit fingerprints
+to admit a binary from another layout.

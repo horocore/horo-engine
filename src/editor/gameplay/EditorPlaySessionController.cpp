@@ -76,19 +76,21 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPlaySessionController::Start */
     Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
-                                                    std::unique_ptr<Runtime::RuntimeScene> preparedScene) {
+                                                    std::unique_ptr<Runtime::RuntimeScene> preparedScene,
+                                                    const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding) {
         static const Gameplay::ComponentRegistry missingComponents = [] {
             Gameplay::ComponentRegistry registry;
             static_cast<void>(registry.Freeze());
             return registry;
         }();
-        return Start(authoring, registry, missingComponents, std::move(preparedScene));
+        return Start(authoring, registry, missingComponents, std::move(preparedScene), triggerBinding);
     }
 
     /** @copydoc EditorPlaySessionController::Start */
     Result<void> EditorPlaySessionController::Start(const SceneDocumentSnapshot &authoring, const Gameplay::BehaviorRegistry &registry,
                                                     const Gameplay::ComponentRegistry &components,
-                                                    std::unique_ptr<Runtime::RuntimeScene> preparedScene) {
+                                                    std::unique_ptr<Runtime::RuntimeScene> preparedScene,
+                                                    const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding) {
         if (state_ != EditorPlaySessionState::Idle && state_ != EditorPlaySessionState::Failed)
             return Result<void>::Failure(InvalidTransition("A play session is already active."));
         Stop();
@@ -110,7 +112,8 @@ namespace Horo::Editor {
             }
             scene_ = std::move(preparedScene);
         } else {
-            Result<Runtime::RuntimeSceneDefinition> converted = ConvertSceneDocumentToRuntime(authoring, Runtime::SceneDefinitionId{2});
+            Result<Runtime::RuntimeSceneDefinition> converted =
+                ConvertSceneDocumentToRuntime(authoring, Runtime::SceneDefinitionId{2}, triggerBinding);
             if (converted.HasError()) {
                 Error error = converted.ErrorValue();
                 Fail(error);

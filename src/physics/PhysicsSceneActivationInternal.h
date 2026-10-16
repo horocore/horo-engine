@@ -36,6 +36,7 @@ namespace Horo::Physics::Detail {
     /** @brief Retained publication fence; closed before the borrowed world can be destroyed. */
     struct PhysicsStructuralState final {
         PhysicsWorld *world{};
+        PhysicsWorldSimulationBinding simulation; /**< Immutable project authority retained for structural proof checks. */
         Runtime::SceneRuntimeId scene;
         const PhysicsSceneActivationAuthority *authority{};
         PhysicsSceneActivationEvidence evidence;
@@ -53,6 +54,11 @@ namespace Horo::Physics::Detail {
     struct PhysicsStructuralRegistration final {
         std::shared_ptr<PhysicsStructuralState> active;
     };
+
+    /** @brief Validates one portable migration binding against actual project semantics and canonical immutable material bytes. */
+    [[nodiscard]] Result<void> ValidateTriggerVolumeProjectMaterial(const Runtime::TriggerVolumeProjectBinding &binding,
+                                                                    const PhysicsWorldSimulationBinding &simulation,
+                                                                    std::span<const std::uint8_t> material);
 
     /** @brief Creates the concrete Physics structural adapter without selecting a backend or discovering services. */
     [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakePhysicsStructuralParticipant(

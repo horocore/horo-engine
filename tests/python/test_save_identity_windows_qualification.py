@@ -20,8 +20,16 @@ def test_windows_save_identity_allocation_has_build_and_discovery_closure() -> N
 
 def test_release_save_qualification_is_mandatory_and_debug_skips_are_explicit() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    build = workflow.split("      - name: Build Windows Release MCP restore and Character allocation qualification", 1)[1].split("      - name:", 1)[0]
-    assert "--target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroRuntimeSaveSlotLifecycleTests" in build
+    build = workflow.split("        id: mcp_release_build", 1)[1].split("      - name:", 1)[0]
+    build_targets = re.search(r"--target ([^\n]+)", build)
+    assert build_targets
+    assert {
+        "HoroMcpSessionTests",
+        "HoroRuntimeSaveRestoreTransactionTests",
+        "HoroRuntimeSaveSlotLifecycleTests",
+        "HoroSceneRuntimeConversionTests",
+        "HoroPhysicsTests",
+    } <= set(build_targets.group(1).split())
     step = workflow.split("      - name: Test Windows Release Save lifecycle allocation qualification", 1)[1].split("      - name:", 1)[0]
     assert "runner.os == 'Windows'" in step
     assert "steps.mcp_release_build.outcome == 'success'" in step

@@ -94,6 +94,14 @@ namespace Horo::Editor::SceneDocumentDetail {
                                       "Loaded prefab instances require unique identities, valid asset references, finite root "
                                       "transforms, and containing-scene object parents."));
             }
+            if (instance.valueOverrides) {
+                if (instance.valueOverrides->sourcePrefab != instance.sourcePrefab.Asset())
+                    return Result<std::uint64_t>::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
+                auto valid =
+                    Prefab::ValidatePrefabValueOverrideSet(*instance.valueOverrides, Prefab::PrefabLimitProfile::Create({}).Value());
+                if (valid.HasError())
+                    return Result<std::uint64_t>::Failure(valid.ErrorValue());
+            }
             maximumInstanceId = std::max(maximumInstanceId, instance.instanceId.Value());
         }
         if (maximumInstanceId == std::numeric_limits<std::uint64_t>::max()) {

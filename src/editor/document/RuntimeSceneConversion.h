@@ -18,11 +18,13 @@ namespace Horo::Editor {
      * @brief Converts one committed authoring snapshot to a validated backend-neutral runtime definition.
      * @param document Immutable committed document snapshot.
      * @param sceneId Stable logical identity of this editor preview scene.
+     * @param triggerBinding Explicit project sensor/material capture; omission rejects enabled legacy triggers.
      * @return Immutable definition or the first typed validation diagnostic. Unresolved prefab references reject the
      * conversion rather than producing a partial runtime candidate.
      */
-    [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertSceneDocumentToRuntime(const SceneDocumentSnapshot &document,
-                                                                                        Runtime::SceneDefinitionId sceneId);
+    [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertSceneDocumentToRuntime(
+        const SceneDocumentSnapshot &document, Runtime::SceneDefinitionId sceneId,
+        const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
 
     /** @brief One immutable editor projection of an authored prefab placement. */
     using ScenePrefabInstanceProjection = SceneSource::ScenePrefabInstanceProjection;
@@ -34,12 +36,14 @@ namespace Horo::Editor {
      * @brief Resolves every authored placement into a repairable immutable editor projection.
      * @param document Immutable committed scene snapshot.
      * @param resolver Immutable source/resolver snapshot.
+     * @param schemas Explicit immutable property schema snapshot; null preserves unavailable property intent.
      * @param limits Captured bounded prefab policy.
      * @return Complete projection; failed placements remain authored and carry their typed error.
      */
-    [[nodiscard]] Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneDocumentSnapshot &document,
-                                                                           const Prefab::PrefabSourceResolverSnapshot &resolver,
-                                                                           const Prefab::PrefabLimitProfile &limits);
+    [[nodiscard]] Result<ScenePrefabProjection> BuildScenePrefabProjection(
+        const SceneDocumentSnapshot &document, const Prefab::PrefabSourceResolverSnapshot &resolver,
+        const Prefab::PrefabLimitProfile &limits, const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr,
+        const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
 
     /**
      * @brief Marks only affected retained editor previews stale at the publication boundary.
@@ -58,23 +62,28 @@ namespace Horo::Editor {
      * @param sceneId Runtime scene identity.
      * @param projection Retained preview; stale/broken/incomplete entries reject the entire conversion.
      * @param resolver Current immutable source publication.
+     * @param schemas Current immutable property schema identity used to fence retained results.
      * @param limits Bounded conversion and publication policy.
      * @return Complete detached runtime definition or typed failure, preserving the previous active scene.
      * @note InvalidateScenePrefabProjection must consume intervening resource publications before this call.
      */
     [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(
         const SceneDocumentSnapshot &document, Runtime::SceneDefinitionId sceneId, const ScenePrefabProjection &projection,
-        const Prefab::PrefabSourceResolverSnapshot &resolver, const Prefab::PrefabLimitProfile &limits);
+        const Prefab::PrefabSourceResolverSnapshot &resolver, const Prefab::PrefabLimitProfile &limits,
+        const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr,
+        const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
 
     /**
      * @brief Converts authored scene content and all required prefab candidates transactionally.
      * @param document Immutable committed scene snapshot.
      * @param sceneId Stable logical identity of the runtime scene.
      * @param resolver Immutable source/resolver snapshot used for every placement.
+     * @param schemas Explicit immutable property schema snapshot; null preserves unavailable property intent.
      * @param limits Captured bounded prefab policy.
      * @return Complete runtime definition, or the typed failure for the first required placement.
      */
     [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertSceneDocumentToRuntime(
         const SceneDocumentSnapshot &document, Runtime::SceneDefinitionId sceneId, const Prefab::PrefabSourceResolverSnapshot &resolver,
-        const Prefab::PrefabLimitProfile &limits);
+        const Prefab::PrefabLimitProfile &limits, const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr,
+        const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {});
 }  // namespace Horo::Editor

@@ -130,6 +130,7 @@ namespace Horo::Editor {
                         Command("web_workspace.menu.save_as", EditorMenuAction::SaveSceneAs, true, "Ctrl+Shift+S", "S"),
                         Command("web_workspace.menu.save_copy_as", EditorMenuAction::SaveSceneCopyAs, true),
                         Separator(),
+                        Command("workspace.packages.button", EditorMenuAction::ManagePackages, true),
                         Command("web_workspace.menu.editor_settings", EditorMenuAction::OpenEditorSettings, true, "Ctrl+,", ","),
                         Command("web_workspace.menu.exit", EditorMenuAction::ExitApplication, true, "Alt+F4", "q"),
                     }),

@@ -57,6 +57,8 @@ namespace Horo::Editor {
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        std::optional<SceneSource::TriggerVolumeConversionContext>
+            triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -212,6 +214,7 @@ namespace Horo::Editor {
 
     private:
         Runtime::RuntimeSceneService &m_runtimeScene;
+        std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
         Assets::AssetRegistrySnapshot m_assetRegistry;
         DocumentIdentityRegistry m_documentRegistry;
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;

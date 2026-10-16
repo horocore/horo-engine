@@ -73,7 +73,7 @@ namespace Horo::Application::PrefabCookDetail {
                 : scenes_(std::move(scenes)), settings_(settings), limits_(limits) {}
 
             Assets::CookerCacheIdentity CacheIdentity() const noexcept override {
-                return {.version = "horo.scene.prefab-inline.v1", .settingsDigest = settings_, .settingsSchemaVersion = 1};
+                return {.version = "horo.scene.prefab-inline.v2", .settingsDigest = settings_, .settingsSchemaVersion = 1};
             }
 
             Result<Assets::CookOutputSink> Cook(const Assets::CookSourceView &source,
@@ -115,8 +115,9 @@ namespace Horo::Application::PrefabCookDetail {
         /** @brief Preserves registered resource strategies while adding actual host semantics to every derived cache key. */
         class HostKeyStrategy final : public Assets::ICookerStrategy {
         public:
-            HostKeyStrategy(std::shared_ptr<const Assets::ICookerStrategy> strategy, const Sha256Digest &host)
-                : strategy_(std::move(strategy)), identity_(strategy_->CacheIdentity()) {
+            HostKeyStrategy(std::shared_ptr<const Assets::ICookerStrategy> strategy, const Sha256Digest &host,
+                            std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding)
+                : strategy_(std::move(strategy)), identity_(strategy_->CacheIdentity()), triggerBinding_(std::move(triggerBinding)) {
                 std::string preimage{"horo.host.cooker-input.v1"};
                 Append(preimage, FormatSha256(host));
                 Append(preimage, FormatSha256(identity_.settingsDigest));
@@ -131,17 +132,37 @@ namespace Horo::Application::PrefabCookDetail {
 
             Result<Assets::CookOutputSink> Cook(const Assets::CookSourceView &source,
                                                 const CancellationToken &cancellation) const override {
-                return strategy_->Cook(source, cancellation);
+                auto output = strategy_->Cook(source, cancellation);
+                if (output.HasError())
+                    return output;
+                if (const auto valid = ValidateBinding(source, output.Value().payload); valid.HasError())
+                    return Result<Assets::CookOutputSink>::Failure(valid.ErrorValue());
+                return output;
             }
 
             Result<void> ValidateCookedPayload(const Assets::CookSourceView &source,
                                                const std::span<const std::uint8_t> payload) const override {
+                if (const auto valid = ValidateBinding(source, payload); valid.HasError())
+                    return valid;
                 return strategy_->ValidateCookedPayload(source, payload);
             }
 
         private:
+            /** @brief Validates the actual selected material source and cooked/cache bytes before generation publication. */
+            Result<void> ValidateBinding(const Assets::CookSourceView &source, const std::span<const std::uint8_t> payload) const {
+                if (triggerBinding_ && source.id == triggerBinding_->binding.material.id &&
+                    (source.type != triggerBinding_->binding.material.expectedType ||
+                     source.sourceDigest != triggerBinding_->materialSourceDigest ||
+                     ComputeSha256(std::as_bytes(payload)) != triggerBinding_->binding.materialPayloadDigest))
+                    return Result<void>::Failure(
+                        MakeError(PrefabSceneCookErrors::Stale,
+                                  "The real project material source or cooked payload differs from the trigger binding capture."));
+                return Result<void>::Success();
+            }
+
             const std::shared_ptr<const Assets::ICookerStrategy> strategy_;
             Assets::CookerCacheIdentity identity_;
+            const std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding_;
         };
 
         /** @brief Admits retained project schemas and rejects unsupported required mesh projections before conversion. */
@@ -186,7 +207,8 @@ namespace Horo::Application::PrefabCookDetail {
                                                                  .revision = revision,
                                                                  .document = source,
                                                                  .resolver = resolver,
-                                                                 .limits = limits};
+                                                                 .limits = limits,
+                                                                 .triggerBinding = context.request.triggerBinding};
                 if (const auto admitted = context.expansion.Submit(request, context.cancellation); admitted.HasError())
                     return Result<Runtime::RuntimeSceneDefinition>::Failure(admitted.ErrorValue());
                 const JoinOptions options{WaitPolicy::MainThreadPumpAllowed, Duration::FromMilliseconds(30'000)};
@@ -227,6 +249,9 @@ namespace Horo::Application::PrefabCookDetail {
                     return Result<PreparedScene>::Failure(admitted.ErrorValue());
                 prepared.dependencies.push_back(dependency.id);
             }
+            for (const auto &evidence : definition.TriggerVolumeEvidence())
+                if (auto required = builder.RequireTriggerVolume(evidence); required.HasError())
+                    return Result<PreparedScene>::Failure(required.ErrorValue());
             auto complete = std::move(builder).Build();
             if (complete.HasError())
                 return Result<PreparedScene>::Failure(complete.ErrorValue());
@@ -295,7 +320,7 @@ namespace Horo::Application::PrefabCookDetail {
             }
             const auto settings = ComputeSha256(std::as_bytes(std::span{identity}));
             for (auto &contribution : contributions)
-                contribution.strategy = std::make_shared<HostKeyStrategy>(contribution.strategy, settings);
+                contribution.strategy = std::make_shared<HostKeyStrategy>(contribution.strategy, settings, request.triggerBinding);
             return Result<ResourceCatalogInputs>::Success({std::move(contributions), settings});
         }
 

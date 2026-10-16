@@ -10,7 +10,8 @@ namespace Horo::SceneSource {
     Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneSourceView &document,
                                                              const Prefab::PrefabSourceResolverSnapshot &resolver,
                                                              const Prefab::PrefabLimitProfile &limits, Prefab::PrefabExpansionCache &cache,
-                                                             const CancellationToken &cancellation) {
+                                                             const CancellationToken &cancellation,
+                                                             const Prefab::PrefabValueSchemaSnapshot *schemas) {
         try {
             if (document.prefabInstances.size() > limits.Policy().maximumObjectCount)
                 return Result<ScenePrefabProjection>::Failure(MakeError(Prefab::PrefabErrors::ObjectCountExceeded));
@@ -26,6 +27,7 @@ namespace Horo::SceneSource {
                     AddInstanceContext(*entry.failure, entry);
                 } else
                     entry.expanded = *candidate.Value();
+                Detail::ApplyInstanceValues(entry, schemas, limits, cancellation);
                 projection.instances.push_back(std::move(entry));
             }
             if (cancellation.IsCancellationRequested())
@@ -40,13 +42,14 @@ namespace Horo::SceneSource {
     Result<Runtime::RuntimeSceneDefinition> ConvertSceneSourceToRuntime(
         const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId, const Runtime::SceneDefinitionRevision revision,
         const Prefab::PrefabSourceResolverSnapshot &resolver, const Prefab::PrefabLimitProfile &limits, Prefab::PrefabExpansionCache &cache,
-        const CancellationToken &cancellation) {
+        const ScenePrefabCachedConversionOptions &options) {
         try {
-            auto projection = BuildScenePrefabProjection(document, resolver, limits, cache, cancellation);
+            auto projection = BuildScenePrefabProjection(document, resolver, limits, cache, options.cancellation, options.schemas);
             if (projection.HasError())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(projection.ErrorValue());
-            auto definition = ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits);
-            if (cancellation.IsCancellationRequested())
+            auto definition = ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits,
+                                                                    options.schemas, options.triggerBinding);
+            if (options.cancellation.IsCancellationRequested())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(Prefab::PrefabErrors::Cancelled));
             return definition;
         } catch (const std::bad_alloc &) {

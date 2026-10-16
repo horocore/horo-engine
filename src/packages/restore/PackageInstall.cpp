@@ -81,6 +81,10 @@ namespace Horo::Packages {
             return Result<void>::Failure(MakeError(PackageInstallErrors::LockUnavailable));
         }
 
+        const std::filesystem::path &ProjectRoot() const noexcept {
+            return root_;
+        }
+
         /** @brief Reads the graph under the same mutex that protects publication. */
         std::shared_ptr<const PackageRestoreGraph> ActiveGraph() const {
             std::lock_guard guard(mutex_);
@@ -166,6 +170,11 @@ namespace Horo::Packages {
         // make_shared cannot invoke the private constructor that seals verified install evidence.
         return std::shared_ptr<const VerifiedPackageInstallRecord>{// NOSONAR(cpp:S5950) Sealed private constructor.
                                                                    new VerifiedPackageInstallRecord{std::move(snapshot), revision}};
+    }
+
+    /** @copydoc PackageInstallService::ProjectRoot */
+    const std::filesystem::path &PackageInstallService::ProjectRoot() const noexcept {
+        return state_->ProjectRoot();
     }
 
     /** @copydoc PackageInstallService::InstalledRecord */

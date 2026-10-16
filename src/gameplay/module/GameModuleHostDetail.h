@@ -92,6 +92,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<GameplayAiContext> ai;
         std::shared_ptr<GameplayCharacterContext> character;
         std::shared_ptr<GameplayNavigationContext> navigation;
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi;
         IGameModule *gameplayModule{};
         DestroyGameModuleFunction destroy{};
         std::string moduleId;

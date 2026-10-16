@@ -9,12 +9,18 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Physics/PhysicsErrors.h"
 
+#include <array>
 #include <compare>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <string_view>
 
 namespace Horo::Physics {
+    /** @brief Registered asset type for the canonical Physics material source/cooked payload. */
+    inline constexpr std::string_view PhysicsMaterialAssetTypeName = "core.physics_material";
+
     /** @brief Version of the persisted physical-material asset descriptor contract. */
     inline constexpr std::uint32_t PhysicsMaterialAssetSchemaVersion = 1;
 
@@ -197,6 +203,23 @@ namespace Horo::Physics {
 
         PhysicsMaterialAssetDescriptor descriptor_{};
     };
+
+    /** @brief Exact canonical material source/cooked wire size; fixed fields never contain native ABI bytes. */
+    inline constexpr std::size_t PhysicsMaterialPayloadSize = 56;
+    using PhysicsMaterialPayload = std::array<std::byte, PhysicsMaterialPayloadSize>;
+
+    /** @brief Encodes one validated immutable material using the sole fixed-field portable schema-1 format.
+     * @param material Validated owning material snapshot.
+     * @return Canonical little-endian bytes or MaterialDescriptorInvalid for an empty value.
+     * @details Source and cooked material payload share this one representation. No allocation or native activation occurs.
+     */
+    [[nodiscard]] Result<PhysicsMaterialPayload> EncodePhysicsMaterialAsset(const PhysicsMaterialAsset &material);
+    /** @brief Decodes exact canonical bytes and validates every descriptor field before constructing the immutable value.
+     * @param payload Exactly PhysicsMaterialPayloadSize bytes with supported header/schema and no trailing fields.
+     * @return Validated material or a typed material descriptor/combine error.
+     * @details Rejects malformed, non-finite, reserved, noncanonical and version-skewed representations.
+     */
+    [[nodiscard]] Result<PhysicsMaterialAsset> DecodePhysicsMaterialAsset(std::span<const std::byte> payload);
 
     /**
      * @brief Combines contact coefficients using the deterministic Horo policy vocabulary.

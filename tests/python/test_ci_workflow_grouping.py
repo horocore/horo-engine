@@ -42,10 +42,23 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    "HoroPrefabSceneCookHostTests",
+    "HoroPhysicsTriggerVolumeHostContractConsumer",
+    "HoroPhysicsTriggerVolumeHostPublicHeaderConsumer",
+    "HoroTriggerVolumeConversionPublicHeaderConsumer",
+    "HoroSceneCookPublicHeaderConsumer",
+    "HoroPhysicsSceneIntegrationPublicHeaderConsumer",
+    "HoroPrefabCookHostPublicHeaderConsumer",
+
     "HoroWorldStreamingTests", "HoroWorldStreamingPublicHeaderConsumer", "HoroStreamingSourcePlannerBenchmark",
     "HoroDestructionSaveTests", "HoroDestructionSavePublicConsumer",
     "HoroDestructionSaveIntegrationPublicHeaderConsumer", "HoroDestructionApiPublicHeaderConsumer",
     "HoroDestructionReplicationTests", "HoroDestructionReplicationPublicHeaderConsumer",
+    "HoroRuntimeSceneCellPayloadTests", "HoroSceneCellPayloadPublicHeaderConsumer",
+    "HoroWorldCookIntegrationTests",
+    "HoroWorldCookIntegrationConsumer",
+    "HoroWorldCookIntegrationPublicHeaderConsumer", "HoroWorldStreamingPublicHeaderConsumer",
+    "HoroWorldArtifactCodecTests", "HoroWorldArtifactCodecConsumer",
     "HoroLightCullingTests", "HoroLightFramePoolTests",
     "HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer",
     "HoroGameplayAiTests", "HoroGameplayAiContractConsumer",
@@ -79,6 +92,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroEditorSurfaceIdentityTests", "HoroSourceFileOpenServiceTests",
     "HoroCameraCutRuntimeTests", "HoroCameraCutPublicHeaderConsumer",
     "HoroPrefabTests", "HoroPrefabSceneExpansionTests", "HoroPrefabSceneExpansionContractConsumer",
+    "HoroPrefabOverrideModelPublicHeaderConsumer", "HoroPrefabAuthoringPublicHeaderConsumer",
+    "HoroSceneSourceModelPublicHeaderConsumer", "HoroSceneSourcePublicHeaderConsumer",
+    "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests", "HoroSceneDocumentTests",
     "HoroAssetRegistryTests", "HoroInputTests", "HoroAndroidInputTests", "HoroAndroidInputIntegrationPublicHeaderConsumer",
     "HoroInputSdlTests", "HoroRuntimeUiInputTests",
     "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
@@ -92,6 +108,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroProjectCodeQueryPublicHeaderConsumer", "HoroMcpProjectCodeQueryPublicHeaderConsumer",
     "HoroSourceDocumentCodeQueryPublicHeaderConsumer",
     "HoroPackageLifecycleTests", "HoroPackageLifecyclePublicHeaderConsumer",
+    "HoroPackageApplicationTests", "HoroPackageApplicationPublicHeaderConsumer",
+    "HoroCliPackageAdaptersPublicHeaderConsumer", "HoroMcpPackageAdaptersPublicHeaderConsumer",
+    "HoroEditorPackageAdaptersPublicHeaderConsumer",
     "HoroMcpSessionPublicHeaderConsumer", "HoroRuntimeSaveIdentityTests", "HoroRuntimeSaveRootResolverTests",
     "HoroRuntimeSaveStorageQualificationTests", "HoroSaveStorageUserStateQualificationTests",
     "HoroRuntimeSaveFilesystemLockTests", "HoroRuntimeSaveSlotCommitTransactionTests",
@@ -102,7 +121,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroRuntimeUiOverlayLifecycleTests",
     "HoroRuntimeUiHudAssociationTests", "HoroRuntimeUiHudPublicHeaderConsumer",
     "HoroRuntimeUiSceneReconciliationTests", "HoroRuntimeUiSceneReconciliationPublicHeaderConsumer",
-    "HoroRuntimeUiHotReloadTests", "HoroRuntimeUiHotReloadPublicHeaderConsumer",
+    "HoroGameplayRuntimeUiSdkHostConsumer", "HoroRuntimeUiCapabilityTests", "HoroRuntimeUiHotReloadTests", "HoroRuntimeUiHotReloadPublicHeaderConsumer",
     "HoroSceneIdentityPublicHeaderConsumer", "HoroSceneIdentityContractConsumer",
     "HoroRuntimeUiScreenTransitionTests", "HoroRuntimeUiScreenTransitionPublicHeaderConsumer",
     "HoroTerrainSourceArtifactTests", "HoroTerrainSourceArtifactPublicHeaderConsumer",
@@ -412,7 +431,7 @@ def test_instrumented_render_graph_pane_keeps_sonar_coverage() -> None:
 
 
 def test_windows_restore_allocation_sweep_has_mandatory_release_coverage() -> None:
-    build = re.search(r"      - name: Build Windows Release MCP restore and Character allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
+    build = re.search(r"        id: mcp_release_build\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
     assert build
     assert "--target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests" in build.group(1)
     test = re.search(r"      - name: Test Windows Release restore allocation qualification\n(.*?)(?=\n      - name:|\Z)", WORKFLOW, re.S)
@@ -512,3 +531,18 @@ def test_vfx_extraction_has_execution_and_owned_compile_consumer_closure() -> No
     assert 'add_library("${consumer_target}" OBJECT ${generated_sources})' in boundaries
     assert "support/VfxWorldPublicHeaderConsumer.cpp" in tests_cmake
     assert "support/RenderGraphWorkloadPublicHeaderConsumer.cpp" in tests_cmake
+
+
+def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> None:
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    closure = targets("HORO_CI_WINDOWS_TARGETS")
+    assert {"HoroPhysicsTests", "HoroPrefabSceneCookHostTests", "HoroRuntimeSceneCellPayloadTests",
+            "HoroWorldCookIntegrationTests", "HoroSceneRuntimeConversionTests",
+            "HoroPhysicsTriggerVolumeHostContractConsumer", "HoroTriggerVolumeConversionPublicHeaderConsumer"} <= closure
+    for source in ("unit/runtime/physics/PhysicsTriggerVolumeRuntimeTests.cpp",
+                   "unit/runtime/physics/RuntimeSceneBaselinePhysicsTests.cpp",
+                   "unit/application/PhysicsTriggerVolumeHostTests.cpp"):
+        assert source in tests_cmake
+    for consumer in ("HoroPhysicsTriggerVolumeHostContractConsumer", "HoroTriggerVolumeConversionPublicHeaderConsumer"):
+        registration = re.search(rf'set_tests_properties\({consumer} PROPERTIES LABELS "([^"]+)"\)', tests_cmake)
+        assert registration and "ci-windows" in registration.group(1).split(";")

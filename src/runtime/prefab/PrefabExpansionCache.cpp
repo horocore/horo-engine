@@ -198,8 +198,8 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabExpansionCache::Matches */
     bool PrefabExpansionCache::Matches(const PrefabExpansionCacheKey &key, const EffectivePrefabCandidate &candidate) const {
-        return key.root_ == candidate.RootAsset() && key.revision_ == candidate.Revision() &&
-               std::ranges::all_of(candidate.Objects(), [&key](const auto &object) {
+        return candidate.ValueOverridesDigest() == Sha256Digest{} && key.root_ == candidate.RootAsset() &&
+               key.revision_ == candidate.Revision() && std::ranges::all_of(candidate.Objects(), [&key](const auto &object) {
             return object.key.instance == key.instance_;
         });
     }

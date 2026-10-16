@@ -65,7 +65,7 @@ TEST_CASE("Lua Physics preserves copied hits and terminal batches across world r
     REQUIRE(registry.Freeze().HasValue());
     auto definition = Tests::SingleBehaviorSceneDefinition({1}, {1}, {1}, {1}, type);
     auto scene = Runtime::RuntimeScene::Create(definition, {7}).Value();
-    auto behavior = BehaviorRuntime::Create(*scene, registry, {}, context);
+    auto behavior = BehaviorRuntime::Create(*scene, registry, {}, {.physics = context});
     REQUIRE(behavior.HasValue());
     REQUIRE(world->ProcessQueryBatch().HasValue());
     REQUIRE(behavior.Value()->FixedUpdate({}, {1.0 / 60.0}).HasValue());

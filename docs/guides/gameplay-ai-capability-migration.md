@@ -122,14 +122,14 @@ dispatch rather than merely copying `shared_ptr` values.
 
 ## SDK boundary and integration
 
-The current combined Navigation, Character and AI layout uses reserved gameplay boundary
-**20** and `gameplay-sdk20`. Rebuild native modules, generated descriptor bundles,
+The current combined Navigation, Character, AI and Runtime UI layout uses reserved gameplay boundary
+**21** and `gameplay-sdk21`. Rebuild native modules, generated descriptor bundles,
 runtime hosts and public consumers together. Earlier independent AI11, NAV10,
-combined NAV+AI16, Character15, host-owned-diagnostics AI18 and Runtime UI19 are
-distinct incompatible layouts. Boundary20 includes current-main Physics and
-Character allocation authority and Navigation image pinning, and excludes Runtime UI19.
-A future union requires a newly allocated epoch; taking the maximum existing
-number does not establish identity. The C ABI extension version remains separate.
+combined NAV+AI16, Character15, host-owned-diagnostics AI18, Runtime UI19 and AI20 are
+distinct incompatible layouts. Historical boundary20 included Physics and
+Character allocation authority and Navigation image pinning but excluded Runtime UI.
+The present union uses newly reserved SDK21; taking the maximum existing number
+does not establish identity. The C ABI extension version remains separate.
 
 ## Additional native module fixture metadata
 
@@ -169,7 +169,7 @@ only verify metadata registration; they no longer launch external commands.
 
 The merged navigation runtime layout used boundary10. The previous combined Navigation
 and AI layout used boundary16; the diagnostics representation below requires
-boundary18. The current-main Character union now requires fresh boundary20.
+boundary18. The historical Character union required boundary20; adding Runtime UI now requires fresh boundary21.
 Rebuild the host, all modules and generated bundles together. Existing
 navigation-aware three-argument constructors forward into the canonical typed
 options and retain their explicit navigation service; Physics and AI grants remain
@@ -204,3 +204,16 @@ The snapshot's control block and deleter remain host-owned. Module retirement
 revokes its scope and releases tasks before image unload; returned task facts are
 owned values. Internal/default task contexts do not allocate a diagnostic owner,
 and no mutable provider, runtime pointer or callback setter is added.
+
+## SDK21 Runtime UI union
+
+Main SDK20's runtime context order (Physics, Navigation, AI, Character) and AI
+registration registry are preserved, then UI is appended. Host runtime services
+retain Physics/Character/Navigation/AI and append UI; use designated `.ai` and
+`.runtimeUi` fields. AI task retirement remains before callbacks/image unload,
+alongside independently authoritative UI revocation. Immutable diagnostic snapshots
+and their host-owned post-unload storage are unchanged. Rebuild every native module,
+bundle and consumer; SDK19 and SDK20 are distinct rejected prior layouts. The
+host-only `BehaviorRuntimeServiceBindings` factory migration does not inject AI into
+behavior services or replace the explicit script bridge. SDK20 evidence is historical
+until SDK21's actual native AI/UI lifecycle and public consumers are qualified.

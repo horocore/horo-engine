@@ -2238,6 +2238,66 @@
     },
     "welcome.whats_new": {
       "text": "YENİLİKLER"
+    },
+    "workspace.packages.button": {
+      "text": "Paketler"
+    },
+    "workspace.packages.title": {
+      "text": "Proje paketleri"
+    },
+    "workspace.packages.policy_hint": {
+      "text": "Geri yükleme ve kurulum kullanılabilirliği doğrular. Etkinleştirme, ana uygulamanın yürütme ve güven politikasını kullanır; kurulum izin vermez."
+    },
+    "workspace.packages.plan_unavailable": {
+      "text": "Doğrulanmış paket planı yok. Arşiv kanıtı almak için geri yükleyin."
+    },
+    "workspace.packages.verified": {
+      "text": "Arşiv doğrulandı"
+    },
+    "workspace.packages.locked": {
+      "text": "Yalnızca kilitli meta veriler"
+    },
+    "workspace.packages.semantic_unavailable": {
+      "text": "Geçerli bildirim sözleşmesinde paket türü, lisans ve içe aktarma/kopyalama bilgileri bulunmuyor. Eksik kanıttan izin çıkarılmaz."
+    },
+    "workspace.packages.restore": {
+      "text": "Kilitli paketleri geri yükle"
+    },
+    "workspace.packages.install": {
+      "text": "Doğrulanmış paketleri kur"
+    },
+    "workspace.packages.package": {
+      "text": "Paket kimliği"
+    },
+    "workspace.packages.descriptor": {
+      "text": "Bildirilen uzantı tanımlayıcısının yolu"
+    },
+    "workspace.packages.activate": {
+      "text": "Açık seçimi etkinleştir"
+    },
+    "workspace.packages.disable": {
+      "text": "Paket uzantılarını devre dışı bırak"
+    },
+    "workspace.packages.cancel": {
+      "text": "İptal iste"
+    },
+    "workspace.packages.running": {
+      "text": "İşlem sürüyor; iptal iş birliğine dayalıdır."
+    },
+    "workspace.packages.terminal": {
+      "text": "İşlem tamamlandı. Kurulu ve etkin durumlar ayrıdır."
+    },
+    "workspace.packages.operation_failed": {
+      "text": "İşlem reddedildi veya başarısız oldu. Türlü tanı bilgisi uygulama hizmetinde saklanır."
+    },
+    "workspace.packages.close": {
+      "text": "Kapat"
+    },
+    "workspace.packages.retry": {
+      "text": "Proje paket oturumunu yenile"
+    },
+    "workspace.packages.recovery_hint": {
+      "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
     }
   }
 }

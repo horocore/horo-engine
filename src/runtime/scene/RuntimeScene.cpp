@@ -315,6 +315,18 @@ namespace Horo::Runtime {
                storage.slots[entity.entity.index].active && storage.slots[entity.entity.index].generation == entity.entity.generation;
     }
 
+    /** @copydoc SceneStructuralParticipant::ValidateBaselines */
+    Result<void> SceneStructuralParticipant::ValidateBaselines(RuntimeSceneView,
+                                                               const std::span<const SceneBaselinePreparationView> baselines) const {
+        if (Owner() == SceneStructuralOwner::Physics && std::ranges::any_of(baselines, [](const auto &baseline) {
+            return !baseline.definition.TriggerVolumeEvidence().empty();
+        }))
+            return Result<void>::Failure(
+                MakeError(SceneErrors::BaselineUnsupported,
+                          "The composed Physics structural owner does not validate required trigger migration proof."));
+        return Result<void>::Success();
+    }
+
     /** @copydoc RuntimeScene::Commit */
     Result<StructuralCommitResult> RuntimeScene::Commit(const SceneCommandBuffer &commands) {
         return CommitWithRegistry(commands, nullptr);
@@ -331,6 +343,15 @@ namespace Horo::Runtime {
             return Result<StructuralCommitResult>::Failure(admission.ErrorValue());
         if (const auto valid = commands.ValidateBaselineResources(registry); valid.HasError())
             return Result<StructuralCommitResult>::Failure(valid.ErrorValue());
+        std::vector<SceneBaselinePreparationView> baselines;
+        for (const auto &command : commands.commands_)
+            if (const auto *baseline = std::get_if<SceneCommandBuffer::AttachBaselineCommand>(&command))
+                baselines.push_back({baseline->definition, baseline->resources});
+        // Every owner sees the entire exact batch before ANY owner can allocate native additions or retirement state.
+        if (!baselines.empty())
+            for (const auto &participant : participants)
+                if (const auto valid = participant->ValidateBaselines(View(), baselines); valid.HasError())
+                    return Result<StructuralCommitResult>::Failure(valid.ErrorValue());
         RuntimeSceneStorage candidate = storage_;
         StructuralCommitResult result;
         result.created.reserve(commands.commands_.size());

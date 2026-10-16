@@ -1,7 +1,9 @@
 #include "Horo/Physics/PhysicsSceneActivation.h"
 
 #include "Horo/Physics/CharacterWorld.h"
+#include "Horo/Physics/PhysicsCollisionSchema.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "PhysicsSceneActivationInternal.h"
 
 #include <algorithm>
@@ -174,9 +176,11 @@ namespace Horo::Physics::Detail {
         Result<std::shared_ptr<PhysicsStructuralState>> PrepareStructuralState(StagedPhysicsScene &resources,
                                                                                const Runtime::RuntimeSceneView scene,
                                                                                const PhysicsSceneActivationAuthority &authority,
-                                                                               const PhysicsSceneActivationEvidence evidence) {
+                                                                               const PhysicsSceneActivationEvidence evidence,
+                                                                               const PhysicsWorldSimulationBinding &simulation) {
             auto structural = std::make_shared<PhysicsStructuralState>();
             structural->world = resources.physics.get();
+            structural->simulation = simulation;
             structural->scene = scene.RuntimeId();
             structural->authority = &authority;
             structural->evidence = evidence;
@@ -210,6 +214,33 @@ namespace Horo::Physics::Detail {
 
 }  // namespace Horo::Physics::Detail
 
+namespace Horo::Physics::Detail {
+    /** @copydoc ValidateTriggerVolumeProjectMaterial */
+    Result<void> ValidateTriggerVolumeProjectMaterial(const Runtime::TriggerVolumeProjectBinding &binding,
+                                                      const PhysicsWorldSimulationBinding &simulation,
+                                                      const std::span<const std::uint8_t> material) {
+        if (!simulation.schema || simulation.generation == 0 ||
+            simulation.schema->SemanticFingerprint() != binding.collisionSchemaFingerprint)
+            return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale,
+                                                   "Trigger migration requires the exact captured project collision "
+                                                   "schema; recook or recapture the scene."));
+        const auto profile = simulation.schema->ResolveStaticSensorProfile(binding.profile);
+        if (profile.HasError())
+            return Result<void>::Failure(profile.ErrorValue());
+        if (material.empty() || ComputeSha256(std::as_bytes(material)) != binding.materialPayloadDigest)
+            return Result<void>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid,
+                                                   "Trigger material payload differs from its captured project snapshot."));
+        const auto decoded = DecodePhysicsMaterialAsset(std::as_bytes(material));
+        if (decoded.HasError())
+            return Result<void>::Failure(decoded.ErrorValue());
+        if (decoded.Value().Id().Asset() != binding.material.id || decoded.Value().SourceRevision() != binding.materialSourceRevision)
+            return Result<void>::Failure(
+                MakeError(PhysicsErrors::MaterialDescriptorInvalid,
+                          "Trigger material snapshot identity or authored revision differs from its captured proof."));
+        return Result<void>::Success();
+    }
+}  // namespace Horo::Physics::Detail
+
 namespace Horo::Physics {
     /** @copydoc PhysicsSceneActivationParticipant::PhysicsSceneActivationParticipant */
     PhysicsSceneActivationParticipant::PhysicsSceneActivationParticipant(PhysicsRuntime &runtime,
@@ -223,6 +254,24 @@ namespace Horo::Physics {
             structuralRegistration_ = std::make_shared<Detail::PhysicsStructuralRegistration>();
         return Detail::MakePhysicsStructuralParticipant(structuralRegistration_);
     }
+
+    namespace {
+        /** @brief Checks portable migration constraints against installed project semantics and real pinned asset bytes. */
+        Result<void> ValidateTriggerVolumeEvidence(const Runtime::RuntimeSceneDefinition &definition, const Runtime::RuntimeSceneView scene,
+                                                   const PhysicsSceneActivationSettings &settings) {
+            for (const auto &evidence : definition.TriggerVolumeEvidence()) {
+                const auto &binding = evidence.binding;
+                const auto material = scene.FindAsset(binding.material.id);
+                if (!material || material->type == nullptr || *material->type != binding.material.expectedType)
+                    return Result<void>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid,
+                                                           "Trigger migration requires its declared real project material payload."));
+                if (const auto valid = Detail::ValidateTriggerVolumeProjectMaterial(binding, settings.simulation, material->bytes);
+                    valid.HasError())
+                    return valid;
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
 
     /** @copydoc PhysicsSceneActivationParticipant::Prepare */
     Result<std::unique_ptr<Runtime::SceneActivationCandidate>> PhysicsSceneActivationParticipant::Prepare(
@@ -238,6 +287,8 @@ namespace Horo::Physics {
         try {
             if (const Result<void> capabilities = Detail::RequirePhysicsSceneCapabilities(*runtime_, definition); capabilities.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(capabilities.ErrorValue());
+            if (const auto evidence = ValidateTriggerVolumeEvidence(definition, scene, settings_); evidence.HasError())
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(evidence.ErrorValue());
             Result<Detail::PhysicsScenePlan> builtPlan = Detail::BuildPhysicsScenePlan(definition, scene);
             if (builtPlan.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(builtPlan.ErrorValue());
@@ -257,7 +308,7 @@ namespace Horo::Physics {
             Detail::StagedPhysicsScene resources = std::move(staged).Value();
             std::shared_ptr<Detail::PhysicsStructuralState> structural;
             if (structuralRegistration_) {
-                auto preparedState = Detail::PrepareStructuralState(resources, scene, *authority_, evidence);
+                auto preparedState = Detail::PrepareStructuralState(resources, scene, *authority_, evidence, settings_.simulation);
                 if (preparedState.HasError())
                     return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(preparedState.ErrorValue());
                 structural = std::move(preparedState).Value();

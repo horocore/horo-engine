@@ -211,6 +211,11 @@ namespace Horo::Editor {
         return m_state != m_savedState;
     }
 
+    /** @copydoc SceneDocument::ReplacementEpoch */
+    std::uint64_t SceneDocument::ReplacementEpoch() const noexcept {
+        return m_replacementEpoch;
+    }
+
     /** @copydoc SceneDocument::Snapshot */
     SceneDocumentSnapshot SceneDocument::Snapshot() const {
         return SceneDocumentSnapshot{m_revision, m_state, m_objects, m_prefabInstances};

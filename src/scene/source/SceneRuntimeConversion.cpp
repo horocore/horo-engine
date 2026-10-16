@@ -58,18 +58,19 @@ namespace Horo::SceneSource {
             .retryable = false,
             .userActionable = true,
         };
+        const ErrorCodeDescriptor
+            TriggerVolumeProjectBindingMissing{.domain = ErrorDomainId{"horo.scene.conversion"},
+                                               .code = ErrorCode{"scene_conversion.trigger_volume_project_binding_missing"},
+                                               .defaultSeverity = ErrorSeverity::Error,
+                                               .summary =
+                                                   "An enabled legacy trigger requires captured project collision and material bindings.",
+                                               .remediationHint = "Select a project sensor profile and cooked Physics material, then "
+                                                                  "recapture the scene conversion."};
         constexpr std::string_view NavigationAgentPrefabComponentType = "game.horo.navigation_agent";
         constexpr std::string_view AiAgentPrefabComponentType = "game.horo.ai_agent";
         constexpr std::string_view AiControllerPrefabComponentType = "game.horo.ai_controller";
         using Json = nlohmann::json;
 
-        // These identities are derived-only compatibility values for the shape-only
-        // authoring component. They are never persisted and are not project defaults.
-        // The project collision/material schema owns the eventual replacement IDs.
-        constexpr Physics::CollisionProfileId LegacyTriggerVolumeCollisionProfile = Physics::CollisionProfileId::FromBytes(
-            {0x48, 0x6f, 0x72, 0x6f, 0x50, 0x68, 0x79, 0x73, 0x00, 0x04, 0x00, 0x08, 0x00, 0x00, 0x00, 0x02});
-        constexpr Assets::AssetId LegacyTriggerVolumeMaterial =
-            Assets::AssetId::FromBytes({0x48, 0x6f, 0x72, 0x6f, 0x50, 0x68, 0x79, 0x73, 0x00, 0x04, 0x00, 0x08, 0x00, 0x00, 0x00, 0x04});
         constexpr Physics::PhysicsMaterialSlotId LegacyTriggerVolumeMaterialSlot = Physics::PhysicsMaterialSlotId::FromValue(1);
         constexpr Runtime::PhysicsComponentId LegacyTriggerVolumeBodyComponent = {1};
         constexpr Runtime::PhysicsBodySlotId LegacyTriggerVolumeBodySlot = {1};
@@ -102,7 +103,9 @@ namespace Horo::SceneSource {
          *                    producers.
          * @return Success or a stable migration diagnostic; no authored state is mutated.
          */
-        [[nodiscard]] Result<void> MigrateTriggerVolume(const SceneObjectSnapshot &object, Runtime::RuntimeComponentSet &components) {
+        [[nodiscard]] Result<void> MigrateTriggerVolume(const SceneObjectSnapshot &object, Runtime::RuntimeComponentSet &components,
+                                                        Runtime::SceneDefinitionBuilder &builder,
+                                                        const std::optional<TriggerVolumeConversionContext> &triggerBinding) {
             if (!object.components.triggerVolume)
                 return Result<void>::Success();
 
@@ -135,6 +138,16 @@ namespace Horo::SceneSource {
                               std::format("Scene object {} contains both a legacy trigger volume and canonical Physics producers.",
                                           object.id.value)));
 
+            if (!triggerBinding || triggerBinding->collisionFilterGeneration == 0)
+                return Result<void>::Failure(
+                    MakeError(TriggerVolumeProjectBindingMissing,
+                              std::format("Scene object {} requires an explicit project trigger binding.", object.id.value)));
+            const auto &binding = triggerBinding->binding;
+            if (auto admitted = builder.RequireTriggerVolume(
+                    {Runtime::SceneObjectId{object.id.value}, LegacyTriggerVolumeBodySlot, LegacyTriggerVolumeColliderSlot, binding});
+                admitted.HasError())
+                return admitted;
+
             components.rigidBody = Runtime::RigidBodyComponent{.id = LegacyTriggerVolumeBodyComponent,
                                                                .body = LegacyTriggerVolumeBodySlot,
                                                                .motion = Runtime::AuthoredPhysicsMotionType::Static,
@@ -146,8 +159,8 @@ namespace Horo::SceneSource {
                 .source = std::move(source),
                 .localPose = {.translation = Math::Vec3{}, .rotation = Math::Quaternion::Identity()},
                 .scale = {1.0F, 1.0F, 1.0F},
-                .collisionProfile = LegacyTriggerVolumeCollisionProfile,
-                .materials = {{.slot = LegacyTriggerVolumeMaterialSlot, .material = LegacyTriggerVolumeMaterial}},
+                .collisionProfile = binding.profile,
+                .materials = {{.slot = LegacyTriggerVolumeMaterialSlot, .material = binding.material.id}},
                 .sensor = true,
             }};
             return Result<void>::Success();
@@ -335,7 +348,8 @@ namespace Horo::SceneSource {
         }
 
         [[nodiscard]] Result<void> AddAuthoredObjects(const SceneSourceView &document, Runtime::SceneDefinitionBuilder &builder,
-                                                      std::vector<Prefab::PrefabSceneObjectId> &occupied) {
+                                                      std::vector<Prefab::PrefabSceneObjectId> &occupied,
+                                                      const std::optional<TriggerVolumeConversionContext> &triggerBinding) {
             occupied.reserve(document.objects.size());
             for (const SceneObjectSnapshot &object : document.objects) {
                 occupied.emplace_back(object.id.value);
@@ -356,7 +370,7 @@ namespace Horo::SceneSource {
                     .behaviors = object.components.behaviors,
                     .gameplayComponents = object.components.gameplayComponents,
                 };
-                if (const Result<void> migrated = MigrateTriggerVolume(object, components); migrated.HasError())
+                if (const Result<void> migrated = MigrateTriggerVolume(object, components, builder, triggerBinding); migrated.HasError())
                     return migrated;
                 builder.Add(Runtime::RuntimeEntityDefinition{
                     .object = Runtime::SceneObjectId{object.id.value},
@@ -377,9 +391,10 @@ namespace Horo::SceneSource {
 
         /** @brief Admits authored objects once for both public conversion paths, keeping collision state beside its builder. */
         Result<SceneAssembly> BeginSceneAssembly(const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId,
-                                                 const Runtime::SceneDefinitionRevision revision) {
+                                                 const Runtime::SceneDefinitionRevision revision,
+                                                 const std::optional<TriggerVolumeConversionContext> &triggerBinding) {
             SceneAssembly assembly{Runtime::SceneDefinitionBuilder{sceneId, revision}, {}};
-            if (auto authored = AddAuthoredObjects(document, assembly.builder, assembly.occupied); authored.HasError())
+            if (auto authored = AddAuthoredObjects(document, assembly.builder, assembly.occupied, triggerBinding); authored.HasError())
                 return Result<SceneAssembly>::Failure(authored.ErrorValue());
             return Result<SceneAssembly>::Success(std::move(assembly));
         }
@@ -423,7 +438,8 @@ namespace Horo::SceneSource {
     /** @copydoc BuildScenePrefabProjection */
     Result<ScenePrefabProjection> BuildScenePrefabProjection(const SceneSourceView &document,
                                                              const Prefab::PrefabSourceResolverSnapshot &resolver,
-                                                             const Prefab::PrefabLimitProfile &limits) {
+                                                             const Prefab::PrefabLimitProfile &limits,
+                                                             const Prefab::PrefabValueSchemaSnapshot *schemas) {
         ScenePrefabProjection projection;
         projection.instances.reserve(document.prefabInstances.size());
         for (const ScenePrefabInstance &instance : document.prefabInstances) {
@@ -434,6 +450,7 @@ namespace Horo::SceneSource {
                 entry.failure = std::move(error);
             } else
                 entry.expanded = std::move(candidate).Value();
+            Detail::ApplyInstanceValues(entry, schemas, limits);
             projection.instances.push_back(std::move(entry));
         }
         return Result<ScenePrefabProjection>::Success(std::move(projection));
@@ -456,15 +473,14 @@ namespace Horo::SceneSource {
     }
 
     /** @copydoc ConvertScenePrefabProjectionToRuntime */
-    Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(const SceneSourceView &document,
-                                                                                  const Runtime::SceneDefinitionId sceneId,
-                                                                                  const Runtime::SceneDefinitionRevision revision,
-                                                                                  const ScenePrefabProjection &projection,
-                                                                                  const Prefab::PrefabSourceResolverSnapshot &resolver,
-                                                                                  const Prefab::PrefabLimitProfile &limits) {
+    Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(
+        const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId, const Runtime::SceneDefinitionRevision revision,
+        const ScenePrefabProjection &projection, const Prefab::PrefabSourceResolverSnapshot &resolver,
+        const Prefab::PrefabLimitProfile &limits, const Prefab::PrefabValueSchemaSnapshot *schemas,
+        const std::optional<TriggerVolumeConversionContext> &triggerBinding) {
         if (projection.instances.size() != document.prefabInstances.size())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
-        auto prepared = BeginSceneAssembly(document, sceneId, revision);
+        auto prepared = BeginSceneAssembly(document, sceneId, revision, triggerBinding);
         if (prepared.HasError())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(prepared.ErrorValue());
         auto assembly = std::move(prepared).Value();
@@ -475,6 +491,8 @@ namespace Horo::SceneSource {
             if (entry.authored != document.prefabInstances[index] || !entry.IsSynchronized())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(
                     entry.failure.value_or(MakeError(Prefab::PrefabErrors::ResolutionStale)));
+            if (auto values = Detail::ValidateInstanceValues(entry, schemas, limits); values.HasError())
+                return InstanceFailure(values.ErrorValue(), entry);
             const auto &candidate = *entry.expanded;
             if (auto valid = resolver.ValidateRevisionPublication(candidate.RootAsset(), candidate.Revision(), {}, limits);
                 valid.HasError())
@@ -492,12 +510,12 @@ namespace Horo::SceneSource {
     }
 
     /** @copydoc ConvertSceneSourceToRuntime */
-    Result<Runtime::RuntimeSceneDefinition> ConvertSceneSourceToRuntime(const SceneSourceView &document,
-                                                                        const Runtime::SceneDefinitionId sceneId,
-                                                                        const Runtime::SceneDefinitionRevision revision) {
+    Result<Runtime::RuntimeSceneDefinition> ConvertSceneSourceToRuntime(
+        const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId, const Runtime::SceneDefinitionRevision revision,
+        const std::optional<TriggerVolumeConversionContext> &triggerBinding) {
         if (!document.prefabInstances.empty())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(PrefabResolutionRequired));
-        auto assembly = BeginSceneAssembly(document, sceneId, revision);
+        auto assembly = BeginSceneAssembly(document, sceneId, revision, triggerBinding);
         if (assembly.HasError())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(assembly.ErrorValue());
         auto owned = std::move(assembly).Value();
@@ -505,15 +523,15 @@ namespace Horo::SceneSource {
     }
 
     /** @copydoc ConvertSceneSourceToRuntime */
-    Result<Runtime::RuntimeSceneDefinition> ConvertSceneSourceToRuntime(const SceneSourceView &document,
-                                                                        const Runtime::SceneDefinitionId sceneId,
-                                                                        const Runtime::SceneDefinitionRevision revision,
-                                                                        const Prefab::PrefabSourceResolverSnapshot &resolver,
-                                                                        const Prefab::PrefabLimitProfile &limits) {
-        auto projection = BuildScenePrefabProjection(document, resolver, limits);
+    Result<Runtime::RuntimeSceneDefinition> ConvertSceneSourceToRuntime(
+        const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId, const Runtime::SceneDefinitionRevision revision,
+        const Prefab::PrefabSourceResolverSnapshot &resolver, const Prefab::PrefabLimitProfile &limits,
+        const Prefab::PrefabValueSchemaSnapshot *schemas, const std::optional<TriggerVolumeConversionContext> &triggerBinding) {
+        auto projection = BuildScenePrefabProjection(document, resolver, limits, schemas);
         if (projection.HasError())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(projection.ErrorValue());
-        return ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits);
+        return ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits, schemas,
+                                                     triggerBinding);
     }
 
 }  // namespace Horo::SceneSource

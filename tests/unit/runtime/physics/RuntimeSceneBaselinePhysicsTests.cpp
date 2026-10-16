@@ -1,3 +1,4 @@
+#include "Horo/Application/PhysicsTriggerVolumeHost.h"
 #include "Horo/Assets/AssetCook.h"
 #include "PhysicsSceneActivationTestSupport.h"
 
@@ -61,6 +62,66 @@ namespace Horo::Physics {
             return RequireDefinition(std::move(builder));
         }
 
+        class PreparationProbeCandidate final : public Runtime::SceneStructuralCandidate {
+        public:
+            Result<void> ValidatePublication() const override {
+                return Result<void>::Success();
+            }
+
+            void Publish() noexcept override {}
+
+            Result<void> AfterPublication() override {
+                return Result<void>::Success();
+            }
+        };
+
+        /** @brief A second owner registered before Physics proves validation is a batch-wide barrier, not an owner-local check. */
+        class PreparationProbeOwner final : public Runtime::SceneStructuralParticipant {
+        public:
+            explicit PreparationProbeOwner(std::size_t &prepares) : prepares_(prepares) {}
+
+            Runtime::SceneStructuralOwner Owner() const noexcept override {
+                return Runtime::SceneStructuralOwner::Gameplay;
+            }
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView,
+                                                                               std::span<const Runtime::RuntimeEntityView>,
+                                                                               std::span<const Runtime::EntityRef>) override {
+                ++prepares_;
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::make_unique<PreparationProbeCandidate>());
+            }
+
+        private:
+            std::size_t &prepares_;
+        };
+
+        /** @brief Counts real owner preparation only; proof validation delegates to the production Physics owner. */
+        class CountedPhysicsOwner final : public Runtime::SceneStructuralParticipant {
+        public:
+            CountedPhysicsOwner(std::unique_ptr<Runtime::SceneStructuralParticipant> owner, std::size_t &prepares)
+                : owner_(std::move(owner)), prepares_(prepares) {}
+
+            Runtime::SceneStructuralOwner Owner() const noexcept override {
+                return owner_->Owner();
+            }
+
+            Result<void> ValidateBaselines(Runtime::RuntimeSceneView active,
+                                           std::span<const Runtime::SceneBaselinePreparationView> baselines) const override {
+                return owner_->ValidateBaselines(active, baselines);
+            }
+
+            Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView active,
+                                                                               std::span<const Runtime::RuntimeEntityView> created,
+                                                                               std::span<const Runtime::EntityRef> destroyed) override {
+                ++prepares_;
+                return owner_->Prepare(active, created, destroyed);
+            }
+
+        private:
+            std::unique_ptr<Runtime::SceneStructuralParticipant> owner_;
+            std::size_t &prepares_;
+        };
+
         struct CanonicalBaselineFixture final {
             std::unique_ptr<PhysicsRuntime> runtime;
             PhysicsSceneActivationAuthority authority;
@@ -78,14 +139,21 @@ namespace Horo::Physics {
             Assets::AssetPayloadLease pin;
             std::shared_ptr<BaselineAdmission> check{std::make_shared<BaselineAdmission>()};
             Runtime::SceneStructuralAdmission admission;
+            std::size_t ownerPrepares{};
+            std::size_t otherOwnerPrepares{};
 
-            CanonicalBaselineFixture() {
+            explicit CanonicalBaselineFixture(const bool probeOtherOwner = false) {
                 auto created = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
                 REQUIRE(created.HasValue());
                 runtime = std::move(created).Value();
                 observer = std::make_unique<BaselinePhysicsObserver>(*runtime, authority);
                 observed = observer.get();
-                REQUIRE(scenes.AddStructuralParticipant(observer->participant.MakeStructuralParticipant()).HasValue());
+                if (probeOtherOwner)
+                    REQUIRE(scenes.AddStructuralParticipant(std::make_unique<PreparationProbeOwner>(otherOwnerPrepares)).HasValue());
+                REQUIRE(scenes
+                            .AddStructuralParticipant(
+                                std::make_unique<CountedPhysicsOwner>(observer->participant.MakeStructuralParticipant(), ownerPrepares))
+                            .HasValue());
                 REQUIRE(scenes.AddActivationParticipant(std::move(observer)).HasValue());
                 REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
                 REQUIRE(registry.Publish({Record(material, type)}).status == Assets::AssetRegistryBuildStatus::Complete);
@@ -170,6 +238,92 @@ namespace Horo::Physics {
         REQUIRE(fixture.observed->candidate->FindRuntimeBody(second, {100}).has_value());
         REQUIRE(fixture.observed->candidate->WorldIdentity() == world);
         fixture.scenes.Shutdown();
+    }
+
+    TEST_CASE("Every baseline proof is checked before any native preparation in mixed atomic batches",
+              "[physics][trigger][cell_attachment][native][atomic]") {
+        CanonicalBaselineFixture fixture{true};
+        const auto settings = Settings();
+        const auto material =
+            PhysicsMaterialAsset::Create({.id = PhysicsMaterialAssetId::FromAssetId(fixture.material), .sourceRevision = 1}).Value();
+        const auto materialBytes = EncodePhysicsMaterialAsset(material).Value();
+        const auto bytes = std::span{reinterpret_cast<const std::uint8_t *>(materialBytes.data()), materialBytes.size()};
+        Assets::AssetCookArtifact artifact{.id = fixture.material,
+                                           .type = fixture.type,
+                                           .target = Assets::AssetCookTargetId::Parse("test-host").Value(),
+                                           .sourceDigest = ComputeSha256(std::as_bytes(bytes)),
+                                           .payloadDigest = ComputeSha256(std::as_bytes(bytes)),
+                                           .payload = {bytes.begin(), bytes.end()}};
+        const auto encoded = Assets::EncodeCookedArtifact(artifact).Value();
+        fixture.pin = fixture.cache->Admit(std::as_bytes(std::span{encoded})).Value();
+        const auto binding = Application::CaptureProjectTriggerVolumeBinding(settings.simulation, Profile(), material, artifact).Value();
+        const auto definition = [&](const std::uint64_t cell, const std::uint64_t revision, const bool valid) {
+            const std::array source{
+                SceneSource::SceneObjectSnapshot{.id = {874 + cell}, .components = {.triggerVolume = Runtime::TriggerVolumeComponent{}}}};
+            auto capture = binding;
+            if (!valid)
+                capture.binding.materialPayloadDigest.bytes.front() ^= 1;
+            auto converted = SceneSource::ConvertSceneSourceToRuntime({source, {}}, {19 + cell}, {revision}, capture);
+            REQUIRE(converted.HasValue());
+            return std::move(converted).Value();
+        };
+        const auto attach = [&](Runtime::SceneCommandBuffer &commands, const std::uint64_t cell, const std::uint64_t revision,
+                                const bool valid, const std::uint64_t expected) {
+            REQUIRE(commands
+                        .AttachBaseline(definition(cell, revision, valid), {{{fixture.material, fixture.type}, fixture.pin}},
+                                        fixture.admission, {4, 32, 32}, {expected}, fixture.check,
+                                        std::make_shared<BaselineSourceOwnership>(Runtime::SceneDefinitionId{19 + cell}))
+                        .HasValue());
+        };
+        Runtime::SceneCommandBuffer mixed;
+        REQUIRE(mixed.CreateGroup({Runtime::RuntimeEntityGroupEntry{}}, {}, fixture.admission).HasValue());
+        SECTION("bad last baseline") {
+            attach(mixed, 0, 1, true, 0);
+            attach(mixed, 1, 1, false, 0);
+        }
+        SECTION("bad first baseline") {
+            attach(mixed, 0, 1, false, 0);
+            attach(mixed, 1, 1, true, 0);
+        }
+        REQUIRE(fixture.scenes.QueueStructuralCommands(std::move(mixed)).HasValue());
+        REQUIRE(fixture.scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Context(fixture.cancellation.Token()))
+                    .HasValue());
+        const auto failure = fixture.scenes.TakeOperationError();
+        REQUIRE(failure.has_value());
+        REQUIRE(failure->code.Value() == PhysicsErrors::MaterialDescriptorInvalid.code.Value());
+        REQUIRE(fixture.ownerPrepares == 0);
+        REQUIRE(fixture.otherOwnerPrepares == 0);
+        REQUIRE_FALSE(fixture.scenes.ActiveScene()->FindBaseline({19}));
+        REQUIRE_FALSE(fixture.scenes.ActiveScene()->FindBaseline({20}));
+        REQUIRE(fixture.observed->candidate->BodyBindings().empty());
+
+        Runtime::SceneCommandBuffer good;
+        attach(good, 0, 1, true, 0);
+        attach(good, 1, 1, true, 0);
+        REQUIRE(good.CreateGroup({Runtime::RuntimeEntityGroupEntry{}}, {}, fixture.admission).HasValue());
+        REQUIRE(fixture.scenes.QueueStructuralCommands(std::move(good)).HasValue());
+        fixture.Commit();
+        REQUIRE(fixture.ownerPrepares == 1);
+        REQUIRE(fixture.otherOwnerPrepares == 1);
+        const auto oldView = *fixture.scenes.ActiveScene();
+        const auto oldEntity = oldView.Find({874});
+        REQUIRE(oldEntity.has_value());
+        const auto oldBody = fixture.observed->candidate->FindRuntimeBody(*oldEntity, {1});
+        REQUIRE(oldBody.has_value());
+        const auto oldWorld = fixture.observed->candidate->WorldIdentity();
+        Runtime::SceneCommandBuffer replacement;
+        attach(replacement, 0, 2, true, 1);
+        attach(replacement, 1, 2, false, 1);
+        REQUIRE(fixture.scenes.QueueStructuralCommands(std::move(replacement)).HasValue());
+        REQUIRE(fixture.scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Context(fixture.cancellation.Token()))
+                    .HasValue());
+        REQUIRE(fixture.scenes.TakeOperationError().has_value());
+        REQUIRE(fixture.ownerPrepares == 1);
+        REQUIRE(fixture.otherOwnerPrepares == 1);
+        REQUIRE(fixture.observed->candidate->WorldIdentity() == oldWorld);
+        REQUIRE(fixture.observed->candidate->FindRuntimeBody(*oldEntity, {1}) == oldBody);
+        REQUIRE(fixture.scenes.ActiveScene()->FindBaseline({19})->revision.value == 1);
+        REQUIRE(fixture.scenes.ActiveScene()->FindBaseline({20})->revision.value == 1);
     }
 #endif
 }  // namespace Horo::Physics

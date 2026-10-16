@@ -64,6 +64,10 @@ namespace Horo::Packages {
          */
         [[nodiscard]] Result<void> Install(std::shared_ptr<const PackageRestoreGraph> graph, const CancellationToken &cancellation);
 
+        /** @brief Returns the immutable canonical project root bound at construction.
+         * @return Borrowed root, valid while this unmoved service remains alive. */
+        [[nodiscard]] const std::filesystem::path &ProjectRoot() const noexcept;
+
         /** @brief Returns an owned frozen copy of the last committed graph. @return Immutable graph or empty before an install. */
         [[nodiscard]] std::shared_ptr<const PackageRestoreGraph> ActiveGraph() const;
 
