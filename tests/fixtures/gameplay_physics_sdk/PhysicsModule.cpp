@@ -4,6 +4,7 @@
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Physics/PhysicsContinuousCollision.h"
 #include "Horo/Physics/PhysicsWorld.h"
+#include "Horo/Runtime/Scene/CharacterSceneComponents.h"
 
 #include <array>
 #include <optional>
@@ -20,12 +21,30 @@ static_assert(std::is_same_v<decltype(Horo::Physics::PhysicsSceneBodyDescriptor{
 #if defined(JPH_OBJECT_LAYER_BITS) || defined(JPH_DOUBLE_PRECISION)
 #error "The gameplay Physics SDK leaked native solver configuration"
 #endif
+#if __has_include("CharacterScenePlacement.h") ||                                                                                          \
+                  __has_include("PhysicsSceneHostAccess.h") ||                                                                             \
+                                __has_include("ScenePhysicsHost.h") || __has_include("HeadlessSceneLoadBoundary.h") ||                     \
+                                                                                     __has_include("Horo/Runtime/Scene/RuntimeScene.h")
+#error "The gameplay Physics SDK leaked host-only Scene activation authority"
+#endif
 
 using namespace Horo;
 using namespace Horo::Gameplay;
 
 namespace {
     std::optional<Physics::PhysicsQueryBatchHandle> retainedBatch;
+
+    /** @brief Verifies additive exported authoring values without acquiring a world or inventing required bindings. */
+    Result<void> VerifyCharacterAuthoringModel() {
+        Runtime::CharacterControllerComponent component{.id = {1}};
+        if (auto valid = Runtime::ValidateCharacterControllerComponent(component); valid.HasError())
+            return valid;
+        component.enabled = true;
+        auto incomplete = Runtime::ValidateCharacterControllerComponent(component);
+        if (!incomplete.HasError() || incomplete.ErrorValue().code.Value() != Physics::PhysicsErrors::DescriptorInvalid.code.Value())
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
+        return Result<void>::Success();
+    }
 
     /** @brief Exercise the exported Physics operations and pending-batch cancellation from a real external module. */
     Result<void> VerifyPhysicsOperations(const Physics::PhysicsQueryEventCapability &client, const GameplayPhysicsBinding &binding) {
@@ -58,7 +77,7 @@ namespace {
     class Module final : public IGameModule {
     public:
         Result<void> Register(GameRegistrationContext &) override {
-            return Result<void>::Success();
+            return VerifyCharacterAuthoringModel();
         }
 
         Result<void> Start(GameRuntimeContext &context) override {

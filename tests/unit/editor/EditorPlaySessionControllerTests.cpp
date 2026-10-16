@@ -2,6 +2,9 @@
 #include "editor/gameplay/EditorPlaySessionController.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <memory>
+#include <utility>
+#include <vector>
 
 namespace {
     using namespace Horo;
@@ -102,6 +105,53 @@ namespace {
                 {{Editor::SceneObjectId{1}, std::nullopt, "Camera", {}, std::nullopt, std::move(camera)},
                  {Editor::SceneObjectId{2}, std::nullopt, "Actor", {}, std::nullopt, std::move(actor)}}};
     }
+
+    struct PlayOwnerObservations final {
+        std::vector<Runtime::SceneRuntimeId> admitted;
+        std::size_t ticks{};
+        std::size_t closed{};
+        bool failTick{};
+    };
+
+    /** @brief Exercises the injected owner protocol using an actual assetless Scene service; no native backend claim. */
+    class ObservedPlaySceneHost final : public Editor::EditorPlaySceneHost {
+    public:
+        ObservedPlaySceneHost(Runtime::SceneRuntimeId identity, std::shared_ptr<PlayOwnerObservations> observations)
+            : observations_(std::move(observations)), scenes_(identity) {}
+
+        Runtime::RuntimeSceneService &Scenes() noexcept override {
+            return scenes_;
+        }
+
+        Result<void> FixedUpdate(Gameplay::FixedDeltaTime) override {
+            ++observations_->ticks;
+            return observations_->failTick ? Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable))
+                                           : Result<void>::Success();
+        }
+
+        void Shutdown() noexcept override {
+            if (closed_)
+                return;
+            closed_ = true;
+            ++observations_->closed;
+            scenes_.Shutdown();
+        }
+
+    private:
+        std::shared_ptr<PlayOwnerObservations> observations_;
+        Runtime::RuntimeSceneService scenes_;
+        bool closed_{};
+    };
+
+    Editor::EditorPlaySceneFactory ObservePlayOwner(const std::shared_ptr<PlayOwnerObservations> &observations) {
+        return [observations](Runtime::SceneRuntimeId identity,
+                              const Runtime::RuntimeSceneDefinition &definition) -> Result<std::unique_ptr<Editor::EditorPlaySceneHost>> {
+            REQUIRE(definition.Entities().size() == 2);
+            observations->admitted.push_back(identity);
+            return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Success(
+                std::make_unique<ObservedPlaySceneHost>(identity, observations));
+        };
+    }
 }  // namespace
 
 TEST_CASE("play session pause step stop keeps authoring snapshot isolated") {
@@ -116,18 +166,18 @@ TEST_CASE("play session pause step stop keeps authoring snapshot isolated") {
 
     REQUIRE(play.Pause().HasValue());
     REQUIRE(play.FixedUpdate({}, Gameplay::FixedDeltaTime{1.0 / 60.0}).HasValue());
-    auto actor = play.Scene()->View().Find(Runtime::SceneObjectId{2});
+    auto actor = play.SceneView().value().Find(Runtime::SceneObjectId{2});
     REQUIRE(actor.has_value());
-    REQUIRE(play.Scene()->View().Get(*actor).Value().localTransform->translation.x == 1.0F);
+    REQUIRE(play.SceneView().value().Get(*actor).Value().localTransform->translation.x == 1.0F);
 
     REQUIRE(play.Step().HasValue());
     REQUIRE(play.FixedUpdate({}, Gameplay::FixedDeltaTime{1.0 / 60.0}).HasValue());
-    REQUIRE(play.Scene()->View().Get(*actor).Value().localTransform->translation.x == 2.0F);
+    REQUIRE(play.SceneView().value().Get(*actor).Value().localTransform->translation.x == 2.0F);
     REQUIRE(authoring.objects[1].localTransform.translation.x == 0.0F);
 
     play.Stop();
     REQUIRE(play.State() == Editor::EditorPlaySessionState::Idle);
-    REQUIRE(play.Scene() == nullptr);
+    REQUIRE(!play.SceneView().has_value());
     REQUIRE(authoring.revision == Editor::DocumentRevision{7});
 }
 
@@ -155,15 +205,15 @@ TEST_CASE("play session reloads behavior factories without replacing current run
     Gameplay::BehaviorRegistry candidate = FastRegistry();
     Editor::EditorPlaySessionController play;
     REQUIRE(play.Start(AuthoringScene(), original).HasValue());
-    const Runtime::SceneRuntimeId runtimeId = play.Scene()->View().RuntimeId();
+    const Runtime::SceneRuntimeId runtimeId = play.SceneView().value().RuntimeId();
     REQUIRE(play.FixedUpdate({}, Gameplay::FixedDeltaTime{1.0 / 60.0}).HasValue());
 
     REQUIRE(play.ReloadBehaviors(candidate, original).HasValue());
-    REQUIRE(play.Scene()->View().RuntimeId() == runtimeId);
+    REQUIRE(play.SceneView().value().RuntimeId() == runtimeId);
     REQUIRE(play.FixedUpdate({}, Gameplay::FixedDeltaTime{1.0 / 60.0}).HasValue());
-    const auto actor = play.Scene()->View().Find(Runtime::SceneObjectId{2});
+    const auto actor = play.SceneView().value().Find(Runtime::SceneObjectId{2});
     REQUIRE(actor.has_value());
-    REQUIRE(play.Scene()->View().Get(*actor).Value().localTransform->translation.x == 3.0F);
+    REQUIRE(play.SceneView().value().Get(*actor).Value().localTransform->translation.x == 3.0F);
 }
 
 TEST_CASE("play session gates missing gameplay components with affected object diagnostics") {
@@ -183,7 +233,7 @@ TEST_CASE("play session gates missing gameplay components with affected object d
 
     Gameplay::ComponentRegistry restored = ComponentRegistry();
     REQUIRE(play.Start(authoring, behaviors, restored).HasValue());
-    REQUIRE(play.Scene()->View().Find(Runtime::SceneObjectId{2}).has_value());
+    REQUIRE(play.SceneView().value().Find(Runtime::SceneObjectId{2}).has_value());
 }
 
 TEST_CASE("Standalone Play diagnostics bind the real clone and detach across reload stop and failure", "[unit][editor][play][network]") {
@@ -193,7 +243,7 @@ TEST_CASE("Standalone Play diagnostics bind the real clone and detach across rel
     REQUIRE(play.Start(AuthoringScene(), registry).HasValue());
     auto first = debugger.Query();
     REQUIRE(first.state == Application::NetworkDebuggerState::Disabled);
-    REQUIRE(first.snapshot.source.scene == play.Scene()->View().RuntimeId().value);
+    REQUIRE(first.snapshot.source.scene == play.SceneView().value().RuntimeId().value);
     REQUIRE(first.snapshot.source.sceneGeneration != 0);
     REQUIRE_FALSE(debugger.Request(first.snapshot.source, first.snapshot.revision, Network::NetworkCaptureAction::Pause));
     const auto reload = play.QuiesceForReload();
@@ -208,4 +258,46 @@ TEST_CASE("Standalone Play diagnostics bind the real clone and detach across rel
     REQUIRE(debugger.Query().snapshot.source.session > first.snapshot.source.session);
     play.DegradeAfterReload(MakeError(Gameplay::GameplayErrors::GameplayReloadRestoreFailed));
     REQUIRE(debugger.Query().state == Application::NetworkDebuggerState::Detached);
+}
+
+TEST_CASE("Play injects one Scene owner and steps it only at admitted fixed quanta", "[editor][play][ownership]") {
+    auto observations = std::make_shared<PlayOwnerObservations>();
+    const auto factory = ObservePlayOwner(observations);
+    const auto authoring = AuthoringScene();
+    auto registry = Registry();
+    Editor::EditorPlaySessionController play;
+    REQUIRE(play.Start(authoring, registry, factory).HasValue());
+    REQUIRE(play.SceneView().has_value());
+    CHECK(play.SceneView()->RuntimeId() == Editor::EditorFirstPlayScene);
+    REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
+    REQUIRE(play.Pause().HasValue());
+    REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
+    CHECK(observations->ticks == 1);
+    REQUIRE(play.Step().HasValue());
+    REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
+    CHECK(observations->ticks == 2);
+    play.Stop();
+    play.Stop();
+    CHECK(observations->closed == 1);
+    CHECK_FALSE(play.SceneView());
+    CHECK(authoring.objects[1].localTransform.translation.x == 0);
+    REQUIRE(play.Start(authoring, registry, factory).HasValue());
+    CHECK(play.SceneView()->RuntimeId().value > observations->admitted.front().value);
+    CHECK(observations->admitted.size() == 2);
+    play.Stop();
+    CHECK(observations->closed == 2);
+}
+
+TEST_CASE("Play injected-owner failure preserves cause and closes the single Scene service", "[editor][play][ownership]") {
+    auto observations = std::make_shared<PlayOwnerObservations>();
+    observations->failTick = true;
+    auto registry = Registry();
+    Editor::EditorPlaySessionController play;
+    REQUIRE(play.Start(AuthoringScene(), registry, ObservePlayOwner(observations)).HasValue());
+    const auto advanced = play.FixedUpdate({}, {1.0 / 60.0});
+    REQUIRE(advanced.HasError());
+    CHECK(advanced.ErrorValue().code.Value() == Gameplay::GameplayErrors::PhysicsUnavailable.code.Value());
+    CHECK(play.State() == Editor::EditorPlaySessionState::Failed);
+    CHECK_FALSE(play.SceneView());
+    CHECK(observations->closed == 1);
 }

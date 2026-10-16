@@ -621,6 +621,8 @@ horo_configure_target_header_boundary(HoroInput PUBLIC_HEADERS
     Horo/Runtime/Input.h
 )
 horo_configure_target_header_boundary(HoroPhysicsModel PUBLIC_HEADERS
+    Horo/Physics/CharacterPolicies.h
+    Horo/Runtime/Scene/CharacterSceneComponents.h
     Horo/Physics/PhysicsErrors.h
     Horo/Physics/PhysicsFilterIdentity.h
     Horo/Runtime/Scene/PhysicsSceneComponents.h
@@ -1327,6 +1329,10 @@ horo_configure_target_header_boundary(HoroPackageApplication PUBLIC_HEADERS Horo
 horo_configure_target_header_boundary(HoroCliPackageAdapters PUBLIC_HEADERS Horo/Cli/PackageCommands.h)
 horo_configure_target_header_boundary(HoroMcpPackageAdapters PUBLIC_HEADERS Horo/Mcp/PackageTools.h)
 horo_configure_target_header_boundary(HoroEditorPackageAdapters PUBLIC_HEADERS Horo/Editor/PackageModalSession.h)
+
+horo_configure_target_header_boundary(HoroProjectPhysicsCapture PUBLIC_HEADERS
+    Horo/Application/ProjectPhysicsCapture.h
+)
 
 horo_configure_target_header_boundary(HoroPhysicsTriggerVolumeHost PUBLIC_HEADERS
     Horo/Application/PhysicsTriggerVolumeHost.h

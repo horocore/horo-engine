@@ -128,7 +128,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ApplyPendingGameplayRegistry() {
-        if (!m_pendingGameplayRegistry)
+        if (!m_pendingGameplayRegistry || m_playSession.State() == EditorPlaySessionState::Starting)
             return;
         if (m_pendingGameplayRegistry->HasBlockingDiagnostics()) {
             for (const ProjectGameplayDiagnostic &diagnostic : m_pendingGameplayRegistry->Diagnostics())
@@ -151,7 +151,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ApplyNativeGameplayReload() {
-        if (m_nativeGameplayReloadQuarantined || !m_nativeGameplayReloadPending)
+        if (m_nativeGameplayReloadQuarantined || !m_nativeGameplayReloadPending ||
+            m_playSession.State() == EditorPlaySessionState::Starting)
             return;
         m_nativeGameplayReloadPending = false;
         m_pendingGameplayRegistry.reset();

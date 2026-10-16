@@ -36,6 +36,12 @@ namespace Horo::Physics::Detail {
             if (const Result<void> bodies = RequireSceneCapability(runtime, RigidBodies); bodies.HasError())
                 return bodies;
         }
+        if (std::ranges::any_of(definition.Entities(), [](const auto &entity) {
+            return entity.components.characterController && entity.components.characterController->enabled;
+        })) {
+            if (auto queries = RequireSceneCapability(runtime, ImmediateQueries); queries.HasError())
+                return queries;
+        }
         if (DefinitionHasActiveConstraints(definition))
             return RequireSceneCapability(runtime, Constraints);
         return Result<void>::Success();

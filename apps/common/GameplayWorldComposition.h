@@ -78,6 +78,20 @@ namespace Horo::Application::Internal {
             Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider &templates, Physics::PhysicsWorld *world,
             std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components = nullptr,
             Character::CharacterWorld *character = nullptr);
+        /** @brief Activates gameplay against the real Scene service when this host selects no runtime prefab provider.
+         * @param scenes Active single Scene authority outliving the composition.
+         * @param world Explicit paired Physics owner or null for unavailable access.
+         * @param sceneGeneration Exact nonzero activation epoch shared with this Physics owner.
+         * @param selection Trusted module/script and capability selection; a prefab grant is rejected before callbacks.
+         * @param character Explicit paired Character owner or null; borrowed through admission only.
+         * @return Active gameplay owner or typed admission failure without discovering a provider or cloning the Scene.
+         * @pre The host registers MakeGameplayStructuralParticipant before Scene startup and retires gameplay before Scene.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> Create(Runtime::RuntimeSceneService &scenes,
+                                                                                      Physics::PhysicsWorld *world,
+                                                                                      std::uint64_t sceneGeneration,
+                                                                                      const GameplayWorldSelection &selection,
+                                                                                      Character::CharacterWorld *character = nullptr);
         ~GameplayWorldComposition();
         GameplayWorldComposition() = default;
         GameplayWorldComposition(const GameplayWorldComposition &) = delete;
@@ -108,6 +122,11 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant();
 
     private:
+        /** @brief Shares exact Scene-service construction; nullable templates express the host's explicit provider selection. */
+        [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> CreateServiceBacked(
+            Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
+            std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
+            Character::CharacterWorld *character);
         /** @brief Validates artifacts and activates callbacks only after Physics admission is resolved. */
         [[nodiscard]] Result<void> Activate(Runtime::RuntimeScene &scene, const GameplayWorldSelection &selection);
         /** @brief Loads the explicitly selected module/script and freezes its registry before any callback. */

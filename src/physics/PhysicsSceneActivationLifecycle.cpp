@@ -2,6 +2,7 @@
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 #include "PhysicsSceneActivationInternal.h"
+#include "internal/PhysicsSceneHostAccess.h"
 
 #include <algorithm>
 #include <cassert>
@@ -10,12 +11,27 @@
 #include <thread>
 #include <utility>
 
+namespace Horo::Physics::Detail {
+    /** @copydoc PhysicsSceneHostAccess::Borrow */
+    Result<PhysicsSceneHostScope> PhysicsSceneHostAccess::Borrow(PhysicsSceneActivationCandidate &candidate) {
+        // The authority check rejects foreign threads before inspecting mutable publication state.
+        if (auto valid = candidate.ValidatePublication(); valid.HasError())
+            return Result<PhysicsSceneHostScope>::Failure(valid.ErrorValue());
+        if (!candidate.published_)
+            return Result<PhysicsSceneHostScope>::Failure(
+                MakeError(PhysicsErrors::InvalidState, "Host world access requires the aggregate publication barrier."));
+        return Result<PhysicsSceneHostScope>::Success(
+            {*candidate.physics_, *candidate.character_, Runtime::SceneRuntimeId{candidate.character_->Descriptor().sceneGeneration}});
+    }
+}  // namespace Horo::Physics::Detail
+
 namespace Horo::Physics {
     /** @copydoc PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate */
     PhysicsSceneActivationCandidate::PhysicsSceneActivationCandidate(ConstructionData data) noexcept
         : physics_(std::move(data.physics)), character_(std::move(data.character)), runtime_(data.runtime), authority_(data.authority),
           evidence_(data.evidence), bodyBindings_(std::move(data.bodyBindings)), shapeBindings_(std::move(data.shapeBindings)),
-          constraintBindings_(std::move(data.constraintBindings)), structuralRegistration_(std::move(data.structuralRegistration)),
+          constraintBindings_(std::move(data.constraintBindings)), characterBindings_(std::move(data.characterBindings)),
+          placements_(std::move(data.placements)), structuralRegistration_(std::move(data.structuralRegistration)),
           structuralState_(std::move(data.structuralState)) {
         physics_->SetQuarantineSink(*this);
     }
@@ -81,6 +97,7 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsSceneActivationCandidate::Publish */
     void PhysicsSceneActivationCandidate::Publish() noexcept {
+        published_ = true;
         if (structuralRegistration_ && structuralState_ && !structuralState_->closed)
             structuralRegistration_->active = structuralState_;
     }
@@ -100,6 +117,7 @@ namespace Horo::Physics {
 
     /** @copydoc PhysicsSceneActivationCandidate::Shutdown */
     void PhysicsSceneActivationCandidate::Shutdown() noexcept {
+        published_ = false;
         if (structuralState_)
             structuralState_->closed = true;
         if (structuralRegistration_ && structuralRegistration_->active == structuralState_)
@@ -111,6 +129,8 @@ namespace Horo::Physics {
         bodyBindings_.clear();
         shapeBindings_.clear();
         constraintBindings_.clear();
+        characterBindings_.clear();
+        placements_.clear();
         if (structuralState_) {
             structuralState_->bodies.clear();
             structuralState_->shapes.clear();

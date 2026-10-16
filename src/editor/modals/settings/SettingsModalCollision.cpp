@@ -19,6 +19,10 @@ namespace Horo::Editor::SettingsModalInternal {
             switch (reason) {
                 case CollisionImpactReason::ProfileReference:
                     return "settings.collision.impact.profile";
+                case CollisionImpactReason::LayerReference:
+                    return "settings.collision.impact.layer";
+                case CollisionImpactReason::QueryChannelReference:
+                    return "settings.collision.impact.channel";
                 case CollisionImpactReason::OpaqueOwner:
                     return "settings.collision.impact.opaque";
                 case CollisionImpactReason::InventoryIncomplete:

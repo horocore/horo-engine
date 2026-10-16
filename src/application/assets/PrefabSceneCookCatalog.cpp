@@ -74,7 +74,7 @@ namespace Horo::Application::PrefabCookDetail {
                 : scenes_(std::move(scenes)), settings_(settings), limits_(limits) {}
 
             Assets::CookerCacheIdentity CacheIdentity() const noexcept override {
-                return {.version = "horo.scene.prefab-inline.v2", .settingsDigest = settings_, .settingsSchemaVersion = 1};
+                return {.version = "horo.scene.prefab-inline.v3", .settingsDigest = settings_, .settingsSchemaVersion = 1};
             }
 
             Result<Assets::CookOutputSink> Cook(const Assets::CookSourceView &source,
@@ -308,7 +308,7 @@ namespace Horo::Application::PrefabCookDetail {
                 return Result<PreparedScene>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
             if (auto admitted = AdmitSceneObjects(source.objects, context.request.schemas); admitted.HasError())
                 return Result<PreparedScene>::Failure(admitted.ErrorValue());
-            const Runtime::SceneDefinitionId id{Compact(ComputeSha256(std::as_bytes(std::span{input.record.id.Bytes()})))};
+            const Runtime::SceneDefinitionId id = SceneCook::SceneDefinitionIdForAsset(input.record.id);
             const std::string revisionInput = FormatSha256(input.sourceDigest) + FormatSha256(context.settings);
             const Runtime::SceneDefinitionRevision revision{Compact(ComputeSha256(std::as_bytes(std::span{revisionInput})))};
             const auto definition = ExpandScene(source, resolver, limits, context, id, revision);

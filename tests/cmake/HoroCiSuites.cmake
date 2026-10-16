@@ -21,6 +21,9 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPublicationLockFoundationConsumer
     HoroProjectCollisionSettingsPublicHeaderConsumer
     HoroPhysicsTests
+    HoroCharacterSceneProductTests
+    HoroEditorPlaySessionControllerTests
+    HoroProjectPhysicsCaptureBoundaryConsumer
     HoroPrefabSceneCookHostTests
     HoroPhysicsTriggerVolumeHostContractConsumer
     HoroPhysicsTriggerVolumeHostPublicHeaderConsumer

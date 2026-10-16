@@ -4,8 +4,8 @@
  * @file SceneSourceModel.h
  * @brief Backend-neutral authored Scene values shared by bounded source decoding and editor documents.
  *
- * These are the existing Scene schema-1 values, not a new persisted format. Editor visibility
- * and lock fields are retained as inert authoring data and never grant runtime capabilities.
+ * Legacy-only documents retain Scene schema1; typed Character documents require schema2 so older readers reject rather than drop them.
+ * Editor visibility and lock fields are retained as inert authoring data and never grant runtime capabilities.
  */
 
 #include "Horo/AI/AISceneComponents.h"
@@ -16,6 +16,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Prefab/PrefabValueOverrideTypes.h"
+#include "Horo/Runtime/Scene/CharacterSceneComponents.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/PrimitiveMeshDescriptor.h"
@@ -58,6 +59,7 @@ namespace Horo::SceneSource {
         std::optional<Runtime::NavigationAgentComponent> navigationAgent;
         std::optional<AI::AiAgentComponent> aiAgent;
         std::optional<AI::AiControllerComponent> aiController;
+        std::optional<Runtime::CharacterControllerComponent> characterController;
         std::optional<Runtime::RigidBodyComponent> rigidBody;
         std::vector<Runtime::ColliderComponent> colliders;
         std::vector<Runtime::PhysicsConstraintComponent> physicsConstraints;

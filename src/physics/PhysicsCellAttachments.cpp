@@ -50,6 +50,13 @@ namespace Horo::Physics {
             const std::span<const PhysicsCellAttachment> attachments, const W::CellAttachmentReference &reference,
             const Assets::AssetPayloadLease &bytes, const Runtime::RuntimeSceneDefinition &definition,
             const Runtime::RuntimeSceneView scene) {
+            if (std::ranges::any_of(definition.Entities(), [](const auto &entity) {
+                return entity.components.characterController && entity.components.characterController->enabled;
+            }))
+                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
+                    MakeError(PhysicsErrors::OperationUnsupported,
+                              "Optional Physics attachment factories cannot produce initial Character placements. Register the whole-Scene "
+                              "Physics activation owner instead."));
             const auto found = std::ranges::find(attachments, reference, &PhysicsCellAttachment::reference);
             if (found == attachments.end())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(MakeError(W::CellAttachmentErrors::Stale));

@@ -46,6 +46,7 @@ namespace Horo::Editor {
         Assets::AssetRegistry *mutableAssetRegistry{};
         CollisionInventoryEvidence *collisionInventory{};
         CollisionActivationEvidence *collisionActivation{};
+        const EditorPreviewCollisionReceiptSource *previewCollisionReceipt{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
@@ -60,6 +61,7 @@ namespace Horo::Editor {
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        EditorPlaySceneFactory playSceneFactory{}; /**< Explicit host composition; captures/pins selected native and asset authorities. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -229,6 +231,7 @@ namespace Horo::Editor {
     private:
         Runtime::RuntimeSceneService &m_runtimeScene;
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
+        EditorPlaySceneFactory m_playSceneFactory;
         Assets::AssetRegistrySnapshot m_assetRegistry;
         DocumentIdentityRegistry m_documentRegistry;
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
@@ -239,6 +242,7 @@ namespace Horo::Editor {
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
+        const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
         Assets::AssetId m_collisionSceneOwner;
         std::uint64_t m_collisionSceneGeneration{};
         ProjectMutationCoordinator *m_mutations{};

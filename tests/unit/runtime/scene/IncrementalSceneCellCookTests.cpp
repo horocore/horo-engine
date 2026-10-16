@@ -382,8 +382,8 @@ namespace Horo::Runtime {
         const std::array inputs{Input({})};
         const auto result = cache.Cook(manifest.Descriptor(), inputs, {}, Hash(), 0, PayloadLimits());
         REQUIRE(result.HasValue());
-        // Independent LE-u64 packing: v2 domain, settings, identity, six empty collection counts (201 bytes).
-        CHECK(FormatSha256(result.Value().cells[0].key) == "sha256:271b95005758272cdc15d0632ef6d0676edc2adbedf0a69aefa90f9230ff6c0a");
+        // Independent LE-u64 packing: v3 domain, settings, identity, six empty collection counts (201 bytes).
+        CHECK(FormatSha256(result.Value().cells[0].key) == "sha256:87262550d81e5b2b417056daccc6248a0614aa5b30f17bbb6711f005a8c5fcf0");
         REQUIRE(result.Value().cells[0].payload->Definition().Entities().empty());
     }
 

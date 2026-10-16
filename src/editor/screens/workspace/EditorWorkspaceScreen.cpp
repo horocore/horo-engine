@@ -66,6 +66,7 @@ namespace Horo::Editor {
             Assets::AssetRegistry *assetRegistry{nullptr};
             CollisionInventoryEvidence *collisionInventory{};
             CollisionActivationEvidence *collisionActivation{};
+            const EditorPreviewCollisionReceiptSource *previewCollisionReceipt{};
             const Assets::AssetImporterCatalogSnapshot *importerCatalog{nullptr};
             ProjectMutationCoordinator *mutations{nullptr};
             DurableFileSystem *durableFiles{nullptr};
@@ -177,6 +178,7 @@ namespace Horo::Editor {
                       .assetRegistry = services.TryGet<Assets::AssetRegistry>(),
                       .collisionInventory = services.TryGet<CollisionInventoryEvidence>(),
                       .collisionActivation = services.TryGet<CollisionActivationEvidence>(),
+                      .previewCollisionReceipt = services.TryGetConst<EditorPreviewCollisionReceiptSource>(),
                       .importerCatalog = services.TryGetConst<Assets::AssetImporterCatalogSnapshot>(),
                       .mutations = services.TryGet<ProjectMutationCoordinator>(),
                       .durableFiles = services.TryGet<DurableFileSystem>(),
@@ -545,6 +547,24 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             }
 
+            /** @brief Owns the exact project path and app closure across asynchronous Play preparation. */
+            EditorPlaySceneFactory BindPlayFactory(const std::string &projectRoot) const {
+                EditorPlaySceneFactory playSceneFactory;
+                if (const auto *projectFactory = services_.TryGet<EditorProjectPlaySceneFactory>()) {
+                    // Copy the application closure and exact project path into the workspace. No
+                    // reference to this screen or its activation stack survives asynchronous Start.
+                    playSceneFactory =
+                        [factory = *projectFactory,
+                         root =
+                             std::filesystem::path{std::u8string{projectRoot.begin(),
+                                                                 projectRoot.end()}}](const Runtime::SceneRuntimeId identity,
+                                                                                      const Runtime::RuntimeSceneDefinition &definition) {
+                        return factory(root, identity, definition);
+                    };
+                }
+                return playSceneFactory;
+            }
+
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::string &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
@@ -564,6 +584,7 @@ namespace Horo::Editor {
                                                                     .mutableAssetRegistry = projectServices_.assetRegistry,
                                                                     .collisionInventory = projectServices_.collisionInventory,
                                                                     .collisionActivation = projectServices_.collisionActivation,
+                                                                    .previewCollisionReceipt = projectServices_.previewCollisionReceipt,
                                                                     .mutations = projectServices_.mutations,
                                                                     .durableFiles = projectServices_.durableFiles,
                                                                     .importerCatalog = projectServices_.importerCatalog,
@@ -578,6 +599,7 @@ namespace Horo::Editor {
                                                                     .networkDebugger =
                                                                         services_.TryGet<Application::NetworkDebuggerService>(),
                                                                     .documentSessionOwner = sessionOwner,
+                                                                    .playSceneFactory = BindPlayFactory(projectRoot),
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();

@@ -58,6 +58,12 @@ namespace Horo::Editor {
                                                 "Update trigger volume");
                 }
                 break;
+            case EditorWorkspaceViewCommand::UpdateCharacterComponent:
+                if (cmd.objectPayload && cmd.characterPayload)
+                    HandleDocumentCommandResult(m_documentCommands.Execute(
+                                                    SetSceneObjectCharacterCommand{*cmd.objectPayload, *cmd.characterPayload}),
+                                                "Update Character");
+                break;
             case EditorWorkspaceViewCommand::UpdateAudioSourceComponent:
                 if (cmd.objectPayload.has_value() && cmd.audioSourcePayload.has_value()) {
                     HandleDocumentCommandResult(m_documentCommands.Execute(

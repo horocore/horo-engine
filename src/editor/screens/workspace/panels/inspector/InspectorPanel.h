@@ -50,6 +50,7 @@ namespace Horo::Editor {
         [[nodiscard]] InspectorLightEdit DrawLightWidgets(const EditorGuiContext &context);
         [[nodiscard]] InspectorTriggerVolumeEdit DrawTriggerVolumeWidgets(const EditorGuiContext &context);
         [[nodiscard]] InspectorAudioSourceEdit DrawAudioSourceWidgets(const EditorGuiContext &context);
+        [[nodiscard]] InspectorCharacterEdit DrawCharacterWidgets(const EditorGuiContext &context);
         void DrawBehaviors(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                            const EditorGuiContext &context) const;
 

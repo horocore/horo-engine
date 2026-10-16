@@ -1,7 +1,7 @@
 #pragma once
 /**
  * @file SceneSource.h
- * @brief Read-only canonical Scene schema-1 decoding shared by host applications and Editor.
+ * @brief Read-only canonical Scene source decoding shared by host applications and Editor.
  */
 #include "Horo/Foundation/Result.h"
 #include "Horo/Scene/SceneSourceModel.h"
@@ -29,7 +29,7 @@ namespace Horo::SceneSource {
     };
 
     /**
-     * @brief Decodes the existing Scene schema-1 representation without migration or activation.
+     * @brief Decodes Scene schema 1 and Character-capable schema 2 without runtime activation.
      * @param contents Canonical Scene JSON, at most 16 MiB and nesting depth below 64.
      * Duplicate object keys and deeper inputs reject even in unknown fields. Completed DOM cleanup avoids child-flattening scratch
      * growth in supported production-STL compositions; checked-iterator MSVC Debug may allocate container proxies inside
@@ -37,13 +37,14 @@ namespace Horo::SceneSource {
      * allocation failure during upstream partial JSON parser cleanup remains outside this guarantee.
      * @return Detached values or the existing typed scene-persistence error.
      * @throws std::bad_alloc When allocation capacity is unavailable; the caller owns its allocation-failure boundary.
+     * Schema 1 cannot contain Character; absent legacy data stays absent in either schema.
      * Decoding preserves existing component validation and diagnostic semantics. The project host must
      * inspect project compatibility and authorize file access first; decoding grants no trust or write authority.
      * Scene graph/document admission remains a separate operation.
      */
     [[nodiscard]] Result<SceneSourceDocument> DecodeSceneSource(std::string_view contents);
     /**
-     * @brief Encodes existing authored values using the unchanged Scene schema-1 codec.
+     * @brief Encodes Character-bearing values as schema 2 and legacy-only values with unchanged schema-1 bytes.
      * @param source Coherent values admitted by their owning document.
      * @return The existing two-space-indented JSON representation, with a trailing newline.
      * @throws std::invalid_argument If an instance contains an invalid value-override envelope.

@@ -369,6 +369,7 @@ namespace Horo::SceneSource {
                     .navigationAgent = ActiveComponent(object.components.navigationAgent),
                     .aiAgent = ActiveComponent(object.components.aiAgent),
                     .aiController = ActiveComponent(object.components.aiController),
+                    .characterController = object.components.characterController,
                     .rigidBody = ActiveComponent(object.components.rigidBody),
                     .colliders = ActiveComponents(object.components.colliders),
                     .physicsConstraints = ActiveComponents(object.components.physicsConstraints),

@@ -4,6 +4,7 @@
  * @brief Physics-owned aggregate scene activation participant and Character-world lifetime.
  */
 
+#include "Horo/Physics/CharacterControllerContracts.h"
 #include "Horo/Physics/CharacterWorldSettings.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -24,6 +25,7 @@ namespace Horo::Physics {
     namespace Detail {
         struct PhysicsStructuralRegistration;
         struct PhysicsStructuralState;
+        class PhysicsSceneHostAccess;
     }  // namespace Detail
 
     /** @brief Exact collision-filter and local-origin evidence captured for one scene candidate. */
@@ -88,6 +90,13 @@ namespace Horo::Physics {
         ConstraintHandle handle;
     };
 
+    /** @brief Stable authored Character component and its exact resident controller. */
+    struct PhysicsSceneCharacterBinding final {
+        Runtime::SceneObjectId object;
+        Runtime::PhysicsComponentId component;
+        Character::CharacterControllerHandle handle;
+    };
+
     /**
      * @brief Owns the fully staged Physics and Character state for one unpublished or active scene generation.
      *
@@ -105,6 +114,8 @@ namespace Horo::Physics {
             std::vector<PhysicsSceneBodyBinding> bodyBindings;
             std::vector<PhysicsSceneShapeBinding> shapeBindings;
             std::vector<PhysicsSceneConstraintBinding> constraintBindings;
+            std::vector<PhysicsSceneCharacterBinding> characterBindings;
+            std::vector<Runtime::SceneInitialPlacement> placements;
             std::shared_ptr<Detail::PhysicsStructuralRegistration> structuralRegistration;
             std::shared_ptr<Detail::PhysicsStructuralState> structuralState;
         };
@@ -121,6 +132,16 @@ namespace Horo::Physics {
         /** @copydoc Runtime::SceneActivationCandidate::CanonicalDatasetProjection */
         [[nodiscard]] Runtime::SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept override {
             return Runtime::SceneCanonicalDatasetProjection::Absent;
+        }
+
+        /** @copydoc Runtime::SceneActivationCandidate::InitialPlacements */
+        [[nodiscard]] std::span<const Runtime::SceneInitialPlacement> InitialPlacements() const noexcept override {
+            return placements_;
+        }
+
+        /** @brief Borrows the exact authored controller bindings until candidate retirement. */
+        [[nodiscard]] std::span<const PhysicsSceneCharacterBinding> CharacterBindings() const noexcept {
+            return characterBindings_;
         }
 
         /** @copydoc Runtime::SceneActivationCandidate::Publish */
@@ -169,6 +190,7 @@ namespace Horo::Physics {
         void Retire(ConstraintHandle constraint) noexcept override;
         friend class PhysicsSceneActivationParticipant;
         friend class PhysicsPlayWorldSession;
+        friend class Detail::PhysicsSceneHostAccess;
 
         [[nodiscard]] static std::unique_ptr<PhysicsSceneActivationCandidate> Create(ConstructionData data);
 
@@ -180,13 +202,21 @@ namespace Horo::Physics {
         std::vector<PhysicsSceneBodyBinding> bodyBindings_;
         std::vector<PhysicsSceneShapeBinding> shapeBindings_;
         std::vector<PhysicsSceneConstraintBinding> constraintBindings_;
+        std::vector<PhysicsSceneCharacterBinding> characterBindings_;
+        std::vector<Runtime::SceneInitialPlacement> placements_;
         std::shared_ptr<Detail::PhysicsStructuralRegistration> structuralRegistration_;
         std::shared_ptr<Detail::PhysicsStructuralState> structuralState_;
+        bool published_{}; /**< Host-only borrow admission; revoked before any owned world retires. */
     };
 
     /** @brief Prepares and retires paired Physics and Character worlds through RuntimeScene's aggregate boundary. */
     class PhysicsSceneActivationParticipant final : public Runtime::SceneActivationParticipant {
     public:
+        /** @copydoc Runtime::SceneActivationParticipant::PreparationPhase */
+        [[nodiscard]] Runtime::SceneActivationPhase PreparationPhase() const noexcept override {
+            return Runtime::SceneActivationPhase::InitialPlacement;
+        }
+
         /** @brief Binds one process Physics owner, shared generation authority, and immutable activation policy.
          * @param runtime Physics runtime that outlives this participant and its candidates.
          * @param authority Generation authority that outlives this participant and its candidates.

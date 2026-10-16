@@ -1,6 +1,7 @@
 #include "NetworkProductLaunch.h"
 
 #include "HeadlessNetworkServices.h"
+#include "HeadlessProjectScene.h"
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/MessageCodecRegistry.h"
 #include "Horo/Network/NetworkAddress.h"
@@ -9,13 +10,16 @@
 #include "Horo/Network/NetworkTransport.h"
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 #include "NetworkProductHost.h"
+#include "NetworkProductLaunchOptions.h"
 #if HORO_PRODUCT_HAS_GNS
 #include "GnsTransportFactory.h"
 #endif
 
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -179,24 +183,6 @@ namespace Horo::Application::Internal {
                 std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(created).Value()));
         }
 
-        [[nodiscard]] bool ParseFrameCount(const std::string_view text, std::uint32_t &frames) noexcept {
-            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), frames);
-            return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && frames > 0 && frames <= 10'000;
-        }
-
-        [[nodiscard]] std::optional<Net::NetworkProjectRole> ParseRole(const std::string_view text) noexcept {
-            using enum Net::NetworkProjectRole;
-            if (text == "standalone")
-                return Standalone;
-            if (text == "client")
-                return Client;
-            if (text == "listen")
-                return ListenServer;
-            if (text == "dedicated")
-                return DedicatedServer;
-            return std::nullopt;
-        }
-
         class SessionOrLocalPlayerService final : public Net::INetworkModeService {
         public:
             explicit SessionOrLocalPlayerService(const Net::NetworkModeServiceRequest &request) : request_(request) {}
@@ -343,99 +329,16 @@ namespace Horo::Application::Internal {
             return factories;
         }
 
-        struct ProductLaunch final {
-            Net::NetworkProjectRole role{Net::NetworkProjectRole::Count};
-            std::uint32_t frames{};
-            Net::NetworkAddress bind;
-            Net::NetworkAddress connect;
-            std::optional<GameplayWorldSelection> gameplay;
-        };
-
-        /** @brief Validate one native artifact's absolute identity and non-zero descriptor revision. */
-        Result<void> ParseNativeGameplay(const std::span<char *> arguments, GameplayWorldSelection &selection) {
-            selection.nativeArtifact = arguments[1];
-            selection.moduleId = arguments[2];
-            const std::string_view revision = arguments[3];
-            if (const auto parsed = std::from_chars(revision.data(), revision.data() + revision.size(), selection.descriptorRevision);
-                !selection.nativeArtifact.is_absolute() || parsed.ec != std::errc{} || parsed.ptr != revision.data() + revision.size() ||
-                selection.descriptorRevision == 0)
-                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
-            return Result<void>::Success();
-        }
-
-        /** @brief Decode a host-local explicit artifact request; permissions default to denied and are never module claims. */
-        [[nodiscard]] Result<GameplayWorldSelection> ParseGameplaySelection(const std::span<char *> arguments) {
-            if (arguments.size() != 5)
-                return Result<GameplayWorldSelection>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                              "Gameplay suffix: --game-module <absolute artifact> <module id> <revision> <grant|deny>, or "
-                              "--game-script <absolute source> <absolute sidecar> <module id> <grant|deny>."));
-            GameplayWorldSelection selection;
-            if (const std::string_view kind = arguments[0]; kind == "--game-module") {
-                if (const auto valid = ParseNativeGameplay(arguments, selection); valid.HasError())
-                    return Result<GameplayWorldSelection>::Failure(valid.ErrorValue());
-            } else if (kind == "--game-script") {
-                selection.scriptSource = arguments[1];
-                selection.scriptSidecar = arguments[2];
-                selection.moduleId = arguments[3];
-                if (!selection.scriptSource.is_absolute() || !selection.scriptSidecar.is_absolute())
-                    return Result<GameplayWorldSelection>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
-            } else
-                return Result<GameplayWorldSelection>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
-            const std::string_view permission = arguments[4];
-            if (permission != "grant" && permission != "deny")
-                return Result<GameplayWorldSelection>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
-            selection.physicsPermission = permission == "grant" ? GameplayPhysicsPermission::Granted : GameplayPhysicsPermission::Denied;
-            return Result<GameplayWorldSelection>::Success(std::move(selection));
-        }
-
-        /** @brief Validate the selected mode's explicit endpoints before extending its gameplay selection. */
-        Result<void> ParseProductEndpoints(const std::span<char *> arguments, ProductLaunch &launch, const bool listener,
-                                           const bool outbound) {
-            std::size_t endpointIndex = 2;
-            if (listener) {
-                auto parsed = Net::NetworkAddress::Parse(arguments[endpointIndex++]);
-                if (parsed.HasError() || parsed.Value().RequiresResolution())
-                    return Result<void>::Failure(
-                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "Listener needs a numeric bind endpoint."));
-                launch.bind = parsed.Value();
-            }
-            if (outbound) {
-                auto parsed = Net::NetworkAddress::Parse(arguments[endpointIndex]);
-                if (parsed.HasError())
-                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid outbound endpoint."));
-                launch.connect = parsed.Value();
-            }
-            return Result<void>::Success();
-        }
-
-        [[nodiscard]] Result<ProductLaunch> ParseProductLaunch(const std::span<char *> arguments) {
-            if (arguments.size() < 2) {
-                return Result<ProductLaunch>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                              "Use <standalone|client|listen|dedicated> <frames 1..10000> [bind] [connect]."));
-            }
-            const auto role = ParseRole(arguments[0]);
-            ProductLaunch launch;
-            if (!role.has_value() || !ParseFrameCount(arguments[1], launch.frames))
-                return Result<ProductLaunch>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid mode or bounded frame count."));
-            launch.role = *role;
-            const bool listener = *role == Net::NetworkProjectRole::DedicatedServer || *role == Net::NetworkProjectRole::ListenServer;
-            const bool outbound = *role == Net::NetworkProjectRole::Client || *role == Net::NetworkProjectRole::ListenServer;
-            const std::size_t modeArgumentCount = 2 + static_cast<std::size_t>(listener) + static_cast<std::size_t>(outbound);
-            if (arguments.size() != modeArgumentCount && arguments.size() != modeArgumentCount + 5)
-                return Result<ProductLaunch>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Selected mode requires exact explicit bind/connect endpoints."));
-            if (const auto valid = ParseProductEndpoints(arguments, launch, listener, outbound); valid.HasError())
-                return Result<ProductLaunch>::Failure(valid.ErrorValue());
-            if (arguments.size() > modeArgumentCount) {
-                auto selection = ParseGameplaySelection(arguments.subspan(modeArgumentCount));
-                if (selection.HasError())
-                    return Result<ProductLaunch>::Failure(selection.ErrorValue());
-                launch.gameplay = std::move(selection).Value();
-            }
-            return Result<ProductLaunch>::Success(std::move(launch));
+        /** @brief Chooses one explicit product input; synthetic mode remains unchanged when no Scene option is supplied. */
+        Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>> ResolveProductScene(
+            const ProductLaunch &launch, std::unique_ptr<HeadlessProjectSceneResources> &resources) {
+            if (launch.sceneInput.scene.empty())
+                return ProductScene(launch.gameplay);
+            auto prepared = PrepareHeadlessProjectSceneResources(launch.sceneInput);
+            if (prepared.HasError())
+                return Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>>::Failure(prepared.ErrorValue());
+            resources = std::move(prepared).Value();
+            return Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>>::Success(resources->definition);
         }
 
         struct ProductWorlds final {
@@ -471,7 +374,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
             Clock &clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
-            Net::NetworkTargetDiagnostic &diagnostic) {
+            Net::NetworkTargetDiagnostic &diagnostic, HeadlessProjectSceneResources *resources = nullptr) {
             const auto product = BuiltProduct(project);
             const auto inventory = LinkedPackageInventory(project);
             const auto hostFacts = HeadlessHostFacts(project);
@@ -493,6 +396,18 @@ namespace Horo::Application::Internal {
             auto debugger = std::make_shared<NetworkDebuggerService>();
             (void)debugger->Begin(worlds.values[0].scene.value, 1, launch.role != Net::NetworkProjectRole::Standalone,
                                   Net::NetworkDiagnosticProvider::Native);
+            auto factories = ProductFactories(launch.role, launch.bind, launch.connect, debugger);
+            if (resources) {
+                auto configured = ComposeHeadlessSceneNetworkServices(std::move(scene),
+                                                                      {launch.sceneInput.physicsMode, *resources->settings,
+                                                                       resources->registry, *resources->loads, resources->load},
+                                                                      std::move(factories), launch.gameplay);
+                if (configured.HasError())
+                    return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
+                factories = std::move(configured).Value();
+            } else {
+                factories = ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay);
+            }
             return NetworkProductHost::Create(clock,
                                               {project,
                                                product,
@@ -503,11 +418,7 @@ namespace Horo::Application::Internal {
                                                1,
                                                {worlds.values.data(), worlds.count},
                                                presentation},
-                                              ComposeHeadlessNetworkServices(std::move(scene),
-                                                                             ProductFactories(launch.role, launch.bind, launch.connect,
-                                                                                              debugger),
-                                                                             launch.gameplay),
-                                              &diagnostic, debugger);
+                                              std::move(factories), &diagnostic, debugger);
         }
 
         [[nodiscard]] int RunProductFrames(NetworkProductHost &runtime, const ProductLaunch &launch, const ProductWorlds &worlds) {
@@ -534,21 +445,24 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     int RunNetworkProduct(const std::span<char *> arguments) {
-        auto launch = ParseProductLaunch(arguments);
+        auto launch = ParseNetworkProductLaunch(arguments);
         if (launch.HasError()) {
             std::cerr << "horo-engine: " << launch.ErrorValue().message << '\n';
             return 2;
         }
         auto project = ProjectSettings();
-        auto scene = ProductScene(launch.Value().gameplay);
+        std::unique_ptr<HeadlessProjectSceneResources> resources;
+        auto scene = ResolveProductScene(launch.Value(), resources);
         if (project.HasError() || scene.HasError()) {
-            std::cerr << "horo-engine: built product metadata or Scene is invalid\n";
+            const auto &failure = project.HasError() ? project.ErrorValue() : scene.ErrorValue();
+            std::cerr << "horo-engine: product metadata/Scene failed (" << failure.code.Value() << "): " << failure.message << '\n';
             return 3;
         }
         const auto worlds = WorldsFor(launch.Value().role);
         SteadyClock clock;
         Net::NetworkTargetDiagnostic diagnostic;
-        auto runtime = ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic);
+        auto runtime =
+            ComposeProduct(clock, launch.Value(), project.Value(), std::move(scene).Value(), worlds, diagnostic, resources.get());
         if (runtime.HasError()) {
             std::cerr << "horo-engine: network product admission failed (capability " << static_cast<int>(diagnostic.capability)
                       << ", reason " << static_cast<int>(diagnostic.reason) << ")\n";

@@ -454,6 +454,8 @@ namespace Horo::SceneSource::Detail {
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("aiController", components.aiController, ParseAiController); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
+        if (auto parsed = parse("characterController", components.characterController, ParseCharacterController); parsed.HasError())
+            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("rigidBody", components.rigidBody, ParseRigidBody); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (const Result<void> collections = ParseCollectionComponents(value, components, recognized); collections.HasError())

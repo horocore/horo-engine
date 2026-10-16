@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Handles.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Physics/CharacterErrors.h"
+#include "Horo/Physics/CharacterPolicies.h"
 #include "Horo/Physics/PhysicsBodyDescriptor.h"
 #include "Horo/Physics/PhysicsQuery.h"
 #include "Horo/Physics/PhysicsShapeDescriptor.h"
@@ -20,12 +21,8 @@ namespace Horo::Physics {
 }
 
 namespace Horo::Character {
-    /** @brief Absolute fixed capacity of one owned movement result. */
-    inline constexpr std::uint32_t MaximumCharacterContacts = 32;
     /** @brief Absolute fixed capacity of one retained capsule-sweep response. */
     inline constexpr std::uint32_t MaximumCharacterSweepHits = MaximumCharacterContacts;
-    /** @brief Maximum squared-norm error admitted for controller unit vectors and headings. */
-    inline constexpr double CharacterUnitSquaredNormTolerance = 1.0e-6;
 
     /** @brief Process-local identity of one Character-world generation; never serialize it. */
     class CharacterWorldId final {
@@ -138,19 +135,6 @@ namespace Horo::Character {
      */
     [[nodiscard]] Result<void> ValidateCharacterCollisionSelectors(const CharacterCollisionSelectors &selectors,
                                                                    Physics::PhysicsWorldId world);
-
-    /** @brief Deliberate response to a non-walkable upward-facing surface. */
-    enum class CharacterSteepSlopePolicy : std::uint8_t {
-        Stop,  /**< Blocks uphill intent and applies no automatic surface drift. */
-        Slide, /**< Integrates committed Character gravity velocity along the steep surface. */
-    };
-
-    /** @brief Velocity transferred once when a valid moving support is left. */
-    enum class CharacterPlatformLeaveVelocityPolicy : std::uint8_t {
-        None,   /**< No support velocity enters free-flight continuation. */
-        Linear, /**< Transfer only the supporting body's center-of-mass linear velocity. */
-        Point,  /**< Transfer linear velocity plus angular velocity at the attachment point. */
-    };
 
     /**
      * @brief Owned inert controller creation policy for one exact scene/Character/Physics generation.

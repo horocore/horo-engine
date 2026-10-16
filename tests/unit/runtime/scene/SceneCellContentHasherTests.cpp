@@ -16,7 +16,7 @@ namespace Horo::Runtime {
         }
 
         // The expected member sequence is independent of the production projection
-        // dispatch. It protects the version-2 encoding when components evolve.
+        // dispatch. It protects the version-3 encoding when components evolve.
         template <class T, class... Fields> void CheckFields(const T &value, const Fields &...fields) {
             CHECK(Encoded(value) == Encoded(fields...));
             const CancellationToken cancellation;
@@ -304,8 +304,8 @@ namespace Horo::Runtime {
         {
             const RuntimeComponentSet v{};
             CheckFields(v, v.camera, v.light, v.audioSource, v.audioListener, v.uiCanvas, v.navigationSurface, v.navigationRegion,
-                        v.navigationModifier, v.navigationLink, v.navigationAgent, v.aiAgent, v.aiController, v.rigidBody, v.colliders,
-                        v.physicsConstraints, v.behaviors, v.gameplayComponents);
+                        v.navigationModifier, v.navigationLink, v.navigationAgent, v.aiAgent, v.aiController, v.characterController,
+                        v.rigidBody, v.colliders, v.physicsConstraints, v.behaviors, v.gameplayComponents);
         }
         {
             const RuntimeEntityDefinition v{};
@@ -323,6 +323,33 @@ namespace Horo::Runtime {
             const SceneCellBehaviorSchema v{};
             CheckFields(v, v.type, v.version);
         }
+    }
+
+    TEST_CASE("Cell Character encoding preserves durable geometry movement and collision field order", "[scene][character][encoding]") {
+        const CharacterSceneGeometry geometry{.capsule = {0.3F, 0.7F},
+                                              .crouchedCapsule = PhysicsCapsuleCollider{0.3F, 0.2F},
+                                              .up = {0, 0, 1},
+                                              .gravity = {0, 0, -3}};
+        CheckFields(geometry, geometry.capsule, geometry.crouchedCapsule, geometry.up, geometry.gravity);
+        CharacterSceneMovement movement;
+        movement.skinWidthMeters = 0.03F;
+        movement.maximumContacts = 7;
+        movement.steepSlopePolicy = Character::CharacterSteepSlopePolicy::Slide;
+        movement.platformLeaveVelocity = Character::CharacterPlatformLeaveVelocityPolicy::Point;
+        CheckFields(movement, movement.skinWidthMeters, movement.minimumMoveDistanceMeters, movement.maximumStepHeightMeters,
+                    movement.maximumSlopeDegrees, movement.preserveHorizontalSpeed, movement.steepSlopePolicy, movement.maximumContacts,
+                    movement.jumpSpeedMetersPerSecond, movement.dynamicPlatformSupport, movement.inheritPlatformHeading,
+                    movement.platformLeaveVelocity);
+        const CharacterSceneCollision collision{.excludedBody = PhysicsBodyReference{{11}, {12}}};
+        CheckFields(collision, collision.profile, collision.queryChannel, collision.defaultMaterial, collision.requiredLayer,
+                    collision.requiredProfile, collision.excludedBody);
+        const CharacterControllerComponent component{.id = {7},
+                                                     .enabled = true,
+                                                     .geometry = geometry,
+                                                     .movement = movement,
+                                                     .collision = collision};
+        CheckFields(component, component.id, component.schemaVersion, component.enabled, component.geometry, component.movement,
+                    component.collision);
     }
 
     TEST_CASE("Cell scalar encoding matches an independently packed little endian SHA256 fixture",

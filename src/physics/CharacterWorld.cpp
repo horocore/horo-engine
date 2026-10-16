@@ -1,5 +1,7 @@
 #include "CharacterWorldPlacementInternal.h"
 
+#include <cmath>
+
 namespace Horo::Character {
     Result<std::unique_ptr<CharacterWorld>> CharacterWorld::Prepare(const CharacterWorldPreparationDescriptor &descriptor,
                                                                     const CharacterWorldSettings &settings) {
@@ -90,6 +92,18 @@ namespace Horo::Character {
     /** @copydoc CharacterWorld::SpawnController */
     Result<CharacterPlacementResult> CharacterWorld::SpawnController(const CharacterControllerHandle &handle,
                                                                      const CharacterPhysicsQueryContext &query) {
+        return SpawnControllerWithHeading(handle, query, Math::Quaternion::Identity());
+    }
+
+    /** @copydoc CharacterWorld::SpawnControllerWithHeading */
+    Result<CharacterPlacementResult> CharacterWorld::SpawnControllerWithHeading(const CharacterControllerHandle &handle,
+                                                                                const CharacterPhysicsQueryContext &query,
+                                                                                const Math::Quaternion heading) {
+        const double norm = static_cast<double>(heading.x) * heading.x + static_cast<double>(heading.y) * heading.y +
+                            static_cast<double>(heading.z) * heading.z + static_cast<double>(heading.w) * heading.w;
+        if (!Math::IsFinite(heading) || std::abs(norm - 1.0) > CharacterUnitSquaredNormTolerance)
+            return Result<CharacterPlacementResult>::Failure(
+                MakeError(CharacterErrors::DescriptorInvalid, "Initial heading must be unit length."));
         if (const auto ready = Detail::RequirePlacementMutation(*impl_); ready.HasError())
             return Result<CharacterPlacementResult>::Failure(ready.ErrorValue());
 
@@ -107,11 +121,12 @@ namespace Horo::Character {
         }
         const auto sourceTick = impl_->closedTick.load();
         impl_->debug.Begin(handle, true);
-        const auto recovery = Detail::RecoverSpawnPosition(*impl_, handle, descriptor, query, sourceTick, descriptor.collisionRootPosition);
+        const auto recovery =
+            Detail::RecoverSpawnPosition(*impl_, handle, descriptor, query, sourceTick, descriptor.collisionRootPosition, guard.entryState);
         if (recovery.HasError())
             return Result<CharacterPlacementResult>::Failure(recovery.ErrorValue());
-        return Detail::PublishPlacement(*impl_, handle, CharacterPlacementOperation::Spawn, sourceTick, recovery.Value().position,
-                                        Math::Quaternion::Identity(), recovery.Value().iterations);
+        return Detail::PublishPlacement(guard, handle, CharacterPlacementOperation::Spawn, sourceTick, recovery.Value().position, heading,
+                                        recovery.Value().iterations);
     }
 
     /** @copydoc CharacterWorld::DestroyController */
@@ -139,7 +154,7 @@ namespace Horo::Character {
             return Result<CharacterPlacementResult>::Failure(descriptor.ErrorValue());
         impl_->debug.Begin(request.controller, true);
         if (const auto valid = Detail::ValidateTeleportClearance(*impl_, request.controller, descriptor.Value(), query, request.tick,
-                                                                 request.targetPosition);
+                                                                 request.targetPosition, guard.entryState);
             valid.HasError()) {
             Detail::ReleaseTeleportReservation(*impl_, request.controller, request.tick);
             return Result<CharacterPlacementResult>::Failure(valid.ErrorValue());
@@ -155,7 +170,7 @@ namespace Horo::Character {
             Detail::ReleaseTeleportReservation(*impl_, request.controller, request.tick);
             return Result<CharacterPlacementResult>::Failure(valid.ErrorValue());
         }
-        const auto published = Detail::PublishPlacement(*impl_, request.controller, CharacterPlacementOperation::Teleport, request.tick,
+        const auto published = Detail::PublishPlacement(guard, request.controller, CharacterPlacementOperation::Teleport, request.tick,
                                                         request.targetPosition, request.targetHeading, 0);
         if (published.HasError())
             Detail::ReleaseTeleportReservation(*impl_, request.controller, request.tick);

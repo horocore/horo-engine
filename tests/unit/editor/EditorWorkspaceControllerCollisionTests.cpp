@@ -101,4 +101,43 @@ namespace Horo::Editor {
         CHECK(escaped->Snapshot().HasError());
         CHECK(escaped->Preview(Input()).HasError());
     }
+
+    TEST_CASE("Workspace receipt projection changes only at actual injected evidence transitions", "[gui][collision][workspace][receipt]") {
+        Project project;
+        PrepareWorkspace(project);
+        auto document = Application::ProjectCollisionSettings::Create(Input());
+        REQUIRE(document.HasValue());
+        // This is the internal evidence projection contract; real native receipts are
+        // independently exercised by the configured Editor/Character product tests.
+        std::optional<EditorSceneCollisionReceipt> receipt{EditorSceneCollisionReceipt{EditorScenePhysicsState::Inactive,
+                                                                                       "collision-project", 1, 31,
+                                                                                       document.Value().Schema()->SemanticFingerprint()}};
+        const EditorPreviewCollisionReceiptSource source{[&receipt] {
+            return receipt;
+        }};
+        auto services = Services(project);
+        services.previewCollisionReceipt = &source;
+        Runtime::RuntimeSceneService runtime;
+        EditorWorkspaceController controller{project.root, runtime, project.registry.Snapshot(), services};
+        const auto opened = controller.CollisionSettings();
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value()->Activation().Value()->state == CollisionActivationState::Inactive);
+        receipt->state = EditorScenePhysicsState::Active;
+        controller.UpdatePlayPresentation(0.0F);
+        const auto active = *opened.Value()->Activation().Value();
+        CHECK(active.state == CollisionActivationState::Active);
+        CHECK(active.generation == 31);
+        CHECK(active.fingerprint == receipt->fingerprint);
+        controller.UpdatePlayPresentation(0.0F);
+        CHECK(opened.Value()->Activation().Value()->revision == active.revision);
+        receipt.reset();
+        controller.UpdatePlayPresentation(0.0F);
+        const auto unavailable = *opened.Value()->Activation().Value();
+        CHECK(unavailable.state == CollisionActivationState::Unknown);
+        CHECK(unavailable.generation == 0);
+        CHECK(unavailable.documentRevision == 0);
+        CHECK(unavailable.fingerprint == 0);
+        REQUIRE(opened.Value()->Preview(RemoveSpare(Input())).HasValue());
+        CHECK_FALSE(opened.Value()->Preview(RemoveSpare(Input())).Value().CanCommit());
+    }
 }  // namespace Horo::Editor

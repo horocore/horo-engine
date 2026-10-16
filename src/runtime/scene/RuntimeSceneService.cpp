@@ -40,10 +40,16 @@ namespace Horo::Runtime {
             return error;
         }
 
-        [[nodiscard]] Result<void> ValidatePreparation(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config,
-                                                       const RuntimeSceneAssetLimits &limits, const std::uint64_t nextRuntimeId) {
+        [[nodiscard]] Result<void> ValidateRuntimeIdentity(const std::uint64_t nextRuntimeId) {
             if (nextRuntimeId == 0)
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Runtime scene identity space is exhausted."));
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> ValidatePreparation(const RuntimeSceneDefinition &definition, const RuntimeSceneConfig config,
+                                                       const RuntimeSceneAssetLimits &limits, const std::uint64_t nextRuntimeId) {
+            if (const auto identity = ValidateRuntimeIdentity(nextRuntimeId); identity.HasError())
+                return identity;
             if (config.maximumGeneration == 0 || limits.maximumDependencies == 0 || limits.maximumConcurrentLoads == 0 ||
                 limits.maximumResidentBytes == 0)
                 return Result<void>::Failure(MakeError(SceneErrors::AssetLimitsInvalid));
@@ -108,9 +114,17 @@ namespace Horo::Runtime {
 
     RuntimeSceneService::RuntimeSceneService() = default;
 
+    /** @copydoc RuntimeSceneService::RuntimeSceneService */
+    RuntimeSceneService::RuntimeSceneService(const SceneRuntimeId initialRuntimeId) : nextRuntimeId_(initialRuntimeId.value) {}
+
     RuntimeSceneService::RuntimeSceneService(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads,
                                              const RuntimeSceneAssetLimits limits)
         : assetPreparationServices_{&registry, &loads, limits} {}
+
+    /** @copydoc RuntimeSceneService::RuntimeSceneService */
+    RuntimeSceneService::RuntimeSceneService(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads,
+                                             const RuntimeSceneAssetLimits limits, const SceneRuntimeId initialRuntimeId)
+        : nextRuntimeId_(initialRuntimeId.value), assetPreparationServices_{&registry, &loads, limits} {}
 
     RuntimeSceneService::~RuntimeSceneService() {
         Shutdown();
@@ -141,6 +155,8 @@ namespace Horo::Runtime {
             return Result<ScenePublicationReceipt>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<ScenePublicationReceipt>::Failure(MakeError(SceneErrors::OperationInProgress));
+        if (const auto valid = ValidateRuntimeIdentity(nextRuntimeId_); valid.HasError())
+            return Result<ScenePublicationReceipt>::Failure(valid.ErrorValue());
         const LifecycleMutation mutation{*this};
         if (publicationCheck) {
             if (const auto valid = publicationCheck->ValidatePublication(); valid.HasError())
@@ -178,6 +194,8 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(SceneErrors::ServiceShutdown));
         if (mutatingLifecycle_ || transition_ != TransitionKind::None || structuralCommands_ || preparation_)
             return Result<void>::Failure(MakeError(SceneErrors::OperationInProgress));
+        if (const auto valid = ValidateRuntimeIdentity(nextRuntimeId_); valid.HasError())
+            return valid;
         const LifecycleMutation mutation{*this};
         operationError_.reset();
         aggregateRestore_ = std::move(restore);
@@ -495,7 +513,6 @@ namespace Horo::Runtime {
         auto candidate = RuntimeScene::CreateResolved(definition, SceneRuntimeId{nextRuntimeId_}, config, revision, std::move(assets));
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
-        ++nextRuntimeId_;
         pending_.scene = std::move(candidate).Value();
         if (aggregateRestore_) {
             if (const auto prepared = aggregateRestore_->PrepareScene(*pending_.scene); prepared.HasError()) {
@@ -510,6 +527,9 @@ namespace Horo::Runtime {
             pending_.scene.reset();
             return Result<void>::Failure(prepared.ErrorValue());
         }
+        // Only a complete private aggregate consumes its identity. Failed preparation may retry
+        // the same unpublished ID; unsigned wrap after a successful maximum ID closes admission.
+        ++nextRuntimeId_;
         return Result<void>::Success();
     }
 
@@ -546,35 +566,62 @@ namespace Horo::Runtime {
         preparation_.reset();
     }
 
-    Result<void> RuntimeSceneService::PrepareParticipants(const RuntimeSceneDefinition &definition) {
+    Result<void> RuntimeSceneService::PrepareParticipantPhase(const RuntimeSceneDefinition &definition, const SceneActivationPhase phase) {
         using enum SceneCanonicalDatasetProjection;
+        for (const auto &participant : participants_)
+            if (participant->PreparationPhase() == phase)
+                if (auto owned = participant->PrepareOwnedScene(*pending_.scene); owned.HasError())
+                    return owned;
+        for (const auto &participant : participants_) {
+            if (participant->PreparationPhase() != phase)
+                continue;
+            auto prepared = participant->Prepare(definition, pending_.scene->View());
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            if (!prepared.Value())
+                return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Participant returned a null candidate."));
+            if (phase != SceneActivationPhase::InitialPlacement && !prepared.Value()->InitialPlacements().empty()) {
+                prepared.Value()->Shutdown();
+                return Result<void>::Failure(
+                    MakeError(SceneErrors::InvalidCandidate, "Derived owner cannot introduce late initial placement."));
+            }
+            if (const auto datasets = prepared.Value()->CanonicalDatasetProjection(); datasets == PersistentWorld)
+                pending_.datasets = PersistentWorld;
+            else if (datasets != Absent && pending_.datasets != PersistentWorld)
+                pending_.datasets = Unqualified;
+            pending_.candidates.push_back(std::move(prepared).Value());
+        }
+        return Result<void>::Success();
+    }
+
+    Result<void> RuntimeSceneService::PrepareParticipants(const RuntimeSceneDefinition &definition) {
         ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
-        pending_.datasets = Absent;
+        pending_.datasets = SceneCanonicalDatasetProjection::Absent;
+        const auto reject = [&](Error error) {
+            ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
+            return Result<void>::Failure(std::move(error));
+        };
         try {
             pending_.candidates.reserve(participants_.size());
             for (const auto &participant : participants_)
-                if (auto owned = participant->PrepareOwnedScene(*pending_.scene); owned.HasError())
-                    return owned;
-            for (const auto &participant : participants_) {
-                auto prepared = participant->Prepare(definition, pending_.scene->View());
-                if (prepared.HasError()) {
-                    ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
-                    return Result<void>::Failure(prepared.ErrorValue());
-                }
-                if (!prepared.Value()) {
-                    ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
-                    return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Participant returned a null candidate."));
-                }
-                if (const auto datasets = prepared.Value()->CanonicalDatasetProjection(); datasets == PersistentWorld)
-                    pending_.datasets = PersistentWorld;
-                else if (datasets != Absent && pending_.datasets != PersistentWorld)
-                    pending_.datasets = Unqualified;
-                pending_.candidates.push_back(std::move(prepared).Value());
+                if (participant->PreparationPhase() != SceneActivationPhase::InitialPlacement &&
+                    participant->PreparationPhase() != SceneActivationPhase::DerivedResources)
+                    return reject(MakeError(SceneErrors::InvalidCandidate, "Unknown Scene activation preparation phase."));
+            if (auto prepared = PrepareParticipantPhase(definition, SceneActivationPhase::InitialPlacement); prepared.HasError())
+                return reject(prepared.ErrorValue());
+            std::vector<SceneInitialPlacement> placements;
+            for (const auto &candidate : pending_.candidates) {
+                const auto projected = candidate->InitialPlacements();
+                if (projected.size() > pending_.scene->View().SlotCount() - placements.size())
+                    return reject(MakeError(SceneErrors::InvalidCandidate, "Initial placement exceeds candidate entity count."));
+                placements.insert(placements.end(), projected.begin(), projected.end());
             }
+            if (auto placed = pending_.scene->ApplyInitialPlacements(placements); placed.HasError())
+                return reject(placed.ErrorValue());
+            if (auto prepared = PrepareParticipantPhase(definition, SceneActivationPhase::DerivedResources); prepared.HasError())
+                return reject(prepared.ErrorValue());
         } catch (const std::bad_alloc &) {
-            ScenePublicationDetail::ShutdownCandidates(pending_.candidates);
-            return Result<void>::Failure(
-                MakeError(SceneErrors::InvalidCandidate, "Unable to retain the complete scene activation candidate set."));
+            return reject(MakeError(SceneErrors::InvalidCandidate, "Unable to retain the complete scene activation candidate set."));
         }
         return Result<void>::Success();
     }

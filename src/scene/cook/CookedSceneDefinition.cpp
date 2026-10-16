@@ -1,12 +1,23 @@
 #include "Horo/Scene/CookedSceneDefinition.h"
 
+#include "Horo/Foundation/Sha256.h"
 #include "JsonUtils.h"
 #include "SceneSourceInternal.h"
 
 #include <algorithm>
 #include <functional>
+#include <optional>
 
 namespace Horo::SceneCook {
+    /** @copydoc SceneDefinitionIdForAsset */
+    Runtime::SceneDefinitionId SceneDefinitionIdForAsset(const Assets::AssetId asset) {
+        const auto digest = ComputeSha256(std::as_bytes(std::span{asset.Bytes()}));
+        std::uint64_t value{};
+        for (std::size_t index = 0; index < 8; ++index)
+            value |= static_cast<std::uint64_t>(digest.bytes[index]) << (8U * index);
+        return Runtime::SceneDefinitionId{value == 0 ? 1 : value};
+    }
+
     namespace SceneCookErrors {
         const ErrorCodeDescriptor Invalid{.domain = ErrorDomainId{"horo.scene.cook"},
                                           .code = ErrorCode{"scene.cook.invalid"},
@@ -42,6 +53,7 @@ namespace Horo::SceneCook {
                     .navigationAgent = source.navigationAgent,
                     .aiAgent = source.aiAgent,
                     .aiController = source.aiController,
+                    .characterController = source.characterController,
                     .rigidBody = source.rigidBody,
                     .colliders = source.colliders,
                     .physicsConstraints = source.physicsConstraints,
@@ -204,29 +216,48 @@ namespace Horo::SceneCook {
         return Result<std::vector<std::uint8_t>>::Success({encoded.begin(), encoded.end()});
     }
 
+    namespace {
+        /** @brief Shares canonical parsing and complete typed admission for exact-revision and verified-asset hosts. */
+        Result<Runtime::RuntimeSceneDefinition> DecodePayload(const std::span<const std::uint8_t> bytes,
+                                                              const Runtime::SceneDefinitionId expectedScene,
+                                                              const std::optional<Runtime::SceneDefinitionRevision> expectedRevision,
+                                                              const CookedSceneLimits &limits) {
+            if (bytes.empty() || bytes.size() > limits.maximumBytes)
+                return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::TooLarge));
+            try {
+                Foundation::JsonParseGuard guard{32};
+                const auto root = Json::parse(bytes.begin(), bytes.end(), std::ref(guard));
+                if (guard.HasDuplicate() || guard.IsTooDeep() || !root.is_object() || !root.contains("revision") ||
+                    !root["revision"].is_number_unsigned() || root["revision"].get<std::uint64_t>() == 0)
+                    return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
+                const auto revision = expectedRevision.value_or(Runtime::SceneDefinitionRevision{root["revision"].get<std::uint64_t>()});
+                auto definition = DecodeDocument(root, expectedScene, revision, limits);
+                if (definition.HasError())
+                    return definition;
+                const auto canonical = EncodeCookedSceneDefinition(definition.Value(), limits);
+                if (canonical.HasError())
+                    return Result<Runtime::RuntimeSceneDefinition>::Failure(canonical.ErrorValue());
+                if (!std::ranges::equal(canonical.Value(), bytes))
+                    return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
+                return definition;
+            } catch (const Json::exception &) {
+                return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
+            }
+        }
+    }  // namespace
+
     /** @copydoc DecodeCookedSceneDefinition */
     Result<Runtime::RuntimeSceneDefinition> DecodeCookedSceneDefinition(const std::span<const std::uint8_t> bytes,
                                                                         const Runtime::SceneDefinitionId expectedScene,
                                                                         const Runtime::SceneDefinitionRevision expectedRevision,
                                                                         const CookedSceneLimits &limits) {
-        if (bytes.empty() || bytes.size() > limits.maximumBytes)
-            return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::TooLarge));
-        try {
-            Foundation::JsonParseGuard guard{32};
-            const auto root = Json::parse(bytes.begin(), bytes.end(), std::ref(guard));
-            if (guard.HasDuplicate() || guard.IsTooDeep())
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
-            auto definition = DecodeDocument(root, expectedScene, expectedRevision, limits);
-            if (definition.HasError())
-                return definition;
-            const auto canonical = EncodeCookedSceneDefinition(definition.Value(), limits);
-            if (canonical.HasError())
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(canonical.ErrorValue());
-            if (!std::ranges::equal(canonical.Value(), bytes))
-                return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
-            return definition;
-        } catch (const Json::exception &) {
-            return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
-        }
+        return DecodePayload(bytes, expectedScene, expectedRevision, limits);
+    }
+
+    /** @copydoc DecodeCookedSceneWithEmbeddedRevision */
+    Result<Runtime::RuntimeSceneDefinition> DecodeCookedSceneWithEmbeddedRevision(const std::span<const std::uint8_t> bytes,
+                                                                                  const Runtime::SceneDefinitionId expectedScene,
+                                                                                  const CookedSceneLimits &limits) {
+        return DecodePayload(bytes, expectedScene, std::nullopt, limits);
     }
 }  // namespace Horo::SceneCook

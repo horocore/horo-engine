@@ -62,7 +62,10 @@ namespace Horo::SceneSource::Detail {
             }
             prefabInstances.push_back(std::move(value));
         }
-        return WireJson{{"schemaVersion", kSceneSchemaVersion},
+        const bool character = std::ranges::any_of(snapshot.objects, [](const auto &object) {
+            return object.components.characterController.has_value();
+        });
+        return WireJson{{"schemaVersion", character ? kCharacterSceneSchemaVersion : kSceneSchemaVersion},
                         {"objects", std::move(objects)},
                         {"prefabInstances", std::move(prefabInstances)}};
     }
@@ -195,6 +198,17 @@ namespace Horo::SceneSource::Detail {
             ScenePrefabInstance{instanceId.Value(), sourcePrefab.Value(), parent, rootTransform.Value(), std::move(overrides)});
     }
 
+    namespace {
+        /** @brief Admits only complete bounded legacy or Character-capable document roots. */
+        bool InvalidSceneRoot(const Json &document) {
+            return !document.is_object() || !document.contains("schemaVersion") ||
+                   (document["schemaVersion"] != kSceneSchemaVersion && document["schemaVersion"] != kCharacterSceneSchemaVersion) ||
+                   !document.contains("objects") || !document["objects"].is_array() || document["objects"].size() > kMaximumSceneObjects ||
+                   (document.contains("prefabInstances") &&
+                    (!document["prefabInstances"].is_array() || document["prefabInstances"].size() > kMaximumSceneObjects));
+        }
+    }  // namespace
+
     [[nodiscard]] Result<ParsedScene> ParseScene(const std::string_view contents) {
         try {
             Foundation::JsonParseGuard guard{64};
@@ -205,12 +219,8 @@ namespace Horo::SceneSource::Detail {
             if (guard.IsTooDeep() || guard.HasDuplicate())
                 return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Scene JSON nesting or duplicate keys are invalid."));
             const Json &document = parsed.value;
-            if (!document.is_object() || !document.contains("schemaVersion") || document["schemaVersion"] != kSceneSchemaVersion ||
-                !document.contains("objects") || !document["objects"].is_array() || document["objects"].size() > kMaximumSceneObjects ||
-                (document.contains("prefabInstances") &&
-                 (!document["prefabInstances"].is_array() || document["prefabInstances"].size() > kMaximumSceneObjects))) {
+            if (InvalidSceneRoot(document))
                 return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Scene schema is unsupported or incomplete."));
-            }
 
             ParsedScene scene;
             scene.objects.reserve(document["objects"].size());
@@ -224,6 +234,11 @@ namespace Horo::SceneSource::Detail {
                     scene.unsupportedComponentOwners.push_back(object.Value().id);
                 scene.objects.push_back(std::move(object).Value());
             }
+            const bool character = std::ranges::any_of(scene.objects, [](const auto &object) {
+                return object.components.characterController.has_value();
+            });
+            if (character && document["schemaVersion"] != kCharacterSceneSchemaVersion)
+                return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Character components require Scene source schema2."));
             if (document.contains("prefabInstances")) {
                 scene.prefabInstances.reserve(document["prefabInstances"].size());
                 for (const Json &value : document["prefabInstances"]) {

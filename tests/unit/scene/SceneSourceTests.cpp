@@ -52,7 +52,7 @@ namespace Horo::SceneSource {
 
     TEST_CASE("Scene source rejects malformed future and structurally incomplete input", "[unit][scene][serialization]") {
         CHECK(DecodeSceneSource("{").HasError());
-        CHECK(DecodeSceneSource(R"({"schemaVersion":2,"objects":[]})").HasError());
+        CHECK(DecodeSceneSource(R"({"schemaVersion":3,"objects":[]})").HasError());
         CHECK(DecodeSceneSource(R"({"schemaVersion":1,"objects":[{"id":1}]})").HasError());
         CHECK(DecodeSceneSource(R"({"schemaVersion":1,"objects":[],"prefabInstances":{}})").HasError());
     }

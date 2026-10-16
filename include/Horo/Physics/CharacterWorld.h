@@ -17,6 +17,10 @@
 #include <memory>
 
 namespace Horo::Character {
+    namespace Detail {
+        class CharacterScenePlacement;
+    }
+
     /** @brief Immutable external generations required to prepare one detached Character-world candidate. */
     struct CharacterWorldPreparationDescriptor final {
         std::uint64_t sceneGeneration{};           /**< Exact scene generation that owns the world. */
@@ -208,6 +212,11 @@ namespace Horo::Character {
 
     private:
         friend class CharacterCapability;
+        friend class Detail::CharacterScenePlacement;
+        /** @brief Shares the ordinary guarded spawn implementation with the non-installed Scene composition boundary. */
+        [[nodiscard]] Result<CharacterPlacementResult> SpawnControllerWithHeading(const CharacterControllerHandle &handle,
+                                                                                  const CharacterPhysicsQueryContext &query,
+                                                                                  Math::Quaternion heading);
         struct Impl;
         /** @brief Admits a copied intent with its grant fence, using the ordinary command ordering and capacity rules. */
         [[nodiscard]] Result<CharacterCommandAdmission> QueueScopedMovementCommand(const CharacterMovementRequest &request,

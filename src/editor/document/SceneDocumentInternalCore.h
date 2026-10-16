@@ -74,6 +74,12 @@ namespace Horo::Editor::SceneDocumentDetail {
         Runtime::AudioSourceComponent after;
     };
 
+    struct CharacterChangedDelta {
+        SceneObjectId object;
+        Runtime::CharacterControllerComponent before;
+        Runtime::CharacterControllerComponent after;
+    };
+
     struct NavigationComponentsChangedDelta {
         SceneObjectId object;
         std::optional<Runtime::NavigationSurfaceComponent> surfaceBefore;
@@ -106,6 +112,7 @@ namespace Horo::Editor::SceneDocumentDetail {
         std::optional<Runtime::LightComponent> light;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolume;
         std::optional<Runtime::AudioSourceComponent> audioSource;
+        std::optional<Runtime::CharacterControllerComponent> characterController;
     };
 
     struct BehaviorsChangedDelta {
@@ -179,10 +186,11 @@ namespace Horo::Editor::SceneDocumentDetail {
 
     using SceneCommandDelta =
         std::variant<CreatedObjectDelta, RenamedObjectDelta, TransformedObjectDelta, TransformedObjectsDelta, CameraChangedDelta,
-                     LightChangedDelta, TriggerVolumeChangedDelta, AudioSourceChangedDelta, NavigationComponentsChangedDelta,
-                     EditorStateChangedDelta, ComponentAddedDelta, ComponentRemovedDelta, BehaviorsChangedDelta,
-                     GameplayComponentsChangedDelta, DeletedObjectsDelta, CreatedPrefabInstanceDelta, PrefabInstanceTransformDelta,
-                     PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta, SceneObjectsReplacedDelta, PrefabInstanceValuesDelta>;
+                     LightChangedDelta, TriggerVolumeChangedDelta, AudioSourceChangedDelta, CharacterChangedDelta,
+                     NavigationComponentsChangedDelta, EditorStateChangedDelta, ComponentAddedDelta, ComponentRemovedDelta,
+                     BehaviorsChangedDelta, GameplayComponentsChangedDelta, DeletedObjectsDelta, CreatedPrefabInstanceDelta,
+                     PrefabInstanceTransformDelta, PrefabInstanceReparentDelta, DeletedPrefabInstancesDelta, SceneObjectsReplacedDelta,
+                     PrefabInstanceValuesDelta>;
 
     struct HistoryRecord {
         DocumentStateId beforeState;
@@ -249,6 +257,22 @@ namespace Horo::Editor::SceneDocumentDetail {
     }
 
     [[nodiscard]] inline Result<void> ValidatePhysicsAuthoringComponents(const SceneObjectComponentSet &components) {
+        if (components.characterController && Runtime::ValidateCharacterControllerComponent(*components.characterController).HasError())
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
+        if (components.characterController) {
+            const auto id = components.characterController->id;
+            if ((components.rigidBody && components.rigidBody->id == id) ||
+                std::ranges::any_of(components.colliders,
+                                    [id](const auto &collider) {
+                return collider.id == id;
+            }) ||
+                std::ranges::any_of(components.physicsConstraints, [id](const auto &constraint) {
+                return constraint.id == id;
+            }))
+                return Result<void>::Failure(
+                    MakeError(Physics::PhysicsErrors::DescriptorInvalid,
+                              "Character component identity collides with another Physics contributor on the same object."));
+        }
         if (components.rigidBody && Runtime::ValidateRigidBodyComponent(*components.rigidBody).HasError())
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid));
         if (std::ranges::any_of(components.colliders, [](const Runtime::ColliderComponent &component) {

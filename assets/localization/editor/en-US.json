@@ -1487,6 +1487,105 @@
     "workspace.inspector.audio_source_kind": {"text": "Source type"},
     "workspace.inspector.audio_source_kind_native_clip": {"text": "Native Clip"},
     "workspace.inspector.audio_source_kind_middleware_event": {"text": "Middleware Event"},
+    "workspace.inspector.character.title": {
+      "text": "Character controller"
+    },
+    "workspace.inspector.character.invalid": {
+      "text": "Character settings are invalid. Enabled controllers require a real collision profile, query channel and material asset/slot."
+    },
+    "workspace.inspector.character.radius": {
+      "text": "Standing radius (m)"
+    },
+    "workspace.inspector.character.half_height": {
+      "text": "Standing cylindrical half-height (m)"
+    },
+    "workspace.inspector.character.crouched_radius": {
+      "text": "Crouched radius (m)"
+    },
+    "workspace.inspector.character.crouched_half_height": {
+      "text": "Crouched cylindrical half-height (m)"
+    },
+    "workspace.inspector.character.up": {
+      "text": "World up"
+    },
+    "workspace.inspector.character.gravity": {
+      "text": "World gravity (m/s²)"
+    },
+    "workspace.inspector.character.crouch": {
+      "text": "Crouched capsule"
+    },
+    "workspace.inspector.character.skin": {
+      "text": "Skin width (m)"
+    },
+    "workspace.inspector.character.minimum_move": {
+      "text": "Minimum movement (m)"
+    },
+    "workspace.inspector.character.step": {
+      "text": "Maximum step (m)"
+    },
+    "workspace.inspector.character.slope": {
+      "text": "Maximum slope (degrees)"
+    },
+    "workspace.inspector.character.jump": {
+      "text": "Jump speed (m/s)"
+    },
+    "workspace.inspector.character.preserve_speed": {
+      "text": "Preserve horizontal speed"
+    },
+    "workspace.inspector.character.dynamic_platform": {
+      "text": "Allow dynamic platform support"
+    },
+    "workspace.inspector.character.platform_heading": {
+      "text": "Inherit platform heading"
+    },
+    "workspace.inspector.character.stop": {
+      "text": "Stop"
+    },
+    "workspace.inspector.character.slide": {
+      "text": "Slide"
+    },
+    "workspace.inspector.character.steep_policy": {
+      "text": "Steep slope policy"
+    },
+    "workspace.inspector.character.none": {
+      "text": "None"
+    },
+    "workspace.inspector.character.linear": {
+      "text": "Linear velocity"
+    },
+    "workspace.inspector.character.point": {
+      "text": "Point velocity"
+    },
+    "workspace.inspector.character.leave_velocity": {
+      "text": "Platform leave velocity"
+    },
+    "workspace.inspector.character.profile": {
+      "text": "Collision profile UUID"
+    },
+    "workspace.inspector.character.query": {
+      "text": "Query channel UUID"
+    },
+    "workspace.inspector.character.material": {
+      "text": "Physical material asset UUID"
+    },
+    "workspace.inspector.character.slot": {
+      "text": "Material slot ID"
+    },
+    "workspace.inspector.character.required_layer": {
+      "text": "Required layer UUID (optional)"
+    },
+    "workspace.inspector.character.required_profile": {
+      "text": "Required profile UUID (optional)"
+    },
+    "workspace.inspector.character.excluded_object": {
+      "text": "Excluded body object ID (optional)"
+    },
+    "workspace.inspector.character.excluded_body": {
+      "text": "Excluded body slot ID (optional)"
+    },
+    "workspace.inspector.character.contacts": {
+      "text": "Maximum contacts (1–32)"
+    },
     "workspace.inspector.audio_source_gain": {"text": "Gain"},
     "workspace.inspector.audio_source_pitch": {"text": "Pitch"},
     "workspace.inspector.audio_source_spatial": {"text": "Spatial"},
@@ -2334,6 +2433,8 @@
     "settings.collision.activation.no_physics": {"text": "Host explicitly selected No Physics. This document is not active in a native world."},
     "settings.collision.activation.inactive": {"text": "Physics owner is explicitly inactive. A future activation must capture this exact saved document."},
     "settings.collision.activation.active": {"text": "Active capture: document revision / generation / semantic fingerprint. Changes require Stop and restart."},
+    "settings.collision.impact.layer": {"text": "Layer owner: migrate its typed reference before retirement"},
+    "settings.collision.impact.channel": {"text": "Query channel owner: migrate its typed reference before retirement"},
     "settings.collision.impact.profile": {"text": "Profile owner: migrate its typed reference before deletion"},
     "settings.collision.impact.opaque": {"text": "Unsupported prefab/custom owner: deletion is blocked until a typed provider can resolve it"},
     "settings.collision.impact.inventory": {"text": "Incomplete or changed project inventory: refresh sources before deletion"},
