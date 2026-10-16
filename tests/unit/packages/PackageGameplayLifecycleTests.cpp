@@ -10,9 +10,9 @@
 using namespace Horo::Packages::Tests::Support;
 
 namespace {
-    /** @brief The measured GCC Debug SDK fixture is 121269368 bytes; authorize at most 128MiB only for this local test image. */
+    /** @brief SDK debug information varies by compiler and grows with the exported API; bound this test image to 256MiB. */
     PackageValidationLimits GameplayFixtureArchiveLimits() {
-        return {.fileBytes = 128ULL * 1024 * 1024};
+        return {.fileBytes = 256ULL * 1024 * 1024};
     }
 
     std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false) {
@@ -211,13 +211,13 @@ TEST_CASE("Gameplay fixture file policy remains bounded without changing product
     const PackageValidationLimits production;
     const auto fixture = GameplayFixtureArchiveLimits();
     REQUIRE(production.fileBytes == 64ULL * 1024 * 1024);
-    REQUIRE(fixture.fileBytes == 128ULL * 1024 * 1024);
+    REQUIRE(fixture.fileBytes == 256ULL * 1024 * 1024);
     REQUIRE(fixture.archiveBytes == production.archiveBytes);
     REQUIRE(fixture.expandedBytes == production.expandedBytes);
     REQUIRE(fixture.manifestBytes == production.manifestBytes);
     REQUIRE(fixture.entries == production.entries);
 
-    // Scale the same file-ceiling boundary down to an actual tiny archive, avoiding another 120MiB test allocation.
+    // Scale the same file-ceiling boundary down to an actual tiny archive, avoiding another full SDK fixture allocation.
     const auto bytes = ::Horo::Tests::Packages::ValidPackageArchiveBytes();
     mz_zip_archive zip{};
     REQUIRE(mz_zip_reader_init_mem(&zip, bytes.data(), bytes.size(), 0));
