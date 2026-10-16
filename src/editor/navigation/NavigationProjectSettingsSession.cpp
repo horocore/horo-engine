@@ -39,30 +39,34 @@ namespace Horo::Editor {
     Result<std::unique_ptr<NavigationProjectSettingsSession>> NavigationProjectSettingsSession::Open(
         std::filesystem::path root, const Assets::AssetRegistry &registry, DurableFileSystem &files, ProjectMutationCoordinator &mutations,
         const std::uint64_t generation, SceneDocumentTransactions *activeScene,
-        const std::span<const Application::NavigationTargetProviderEvidence> targets) try {
-        using Return = Result<std::unique_ptr<NavigationProjectSettingsSession>>;
-        if (!generation || !root.is_absolute() || root != root.lexically_normal())
-            return Return::Failure(Reject(Navigation::NavigationSettingsFailure::Invalid));
-        auto session = std::unique_ptr<NavigationProjectSettingsSession>(new NavigationProjectSettingsSession);
-        session->state_ = std::make_unique<State>();
-        auto &s = *session->state_;
-        s.root = std::move(root);
-        s.registry = &registry;
-        s.revision = registry.Snapshot().Revision();
-        s.files = &files;
-        s.mutations = &mutations;
-        s.targets.assign(targets.begin(), targets.end());
-        if (!s.revision.value)
-            return Return::Failure(Reject(Navigation::NavigationSettingsFailure::IncompleteInventory));
-        if (auto loaded = session->LoadRegisteredSources(generation, activeScene); loaded.HasError())
-            return Return::Failure(loaded.ErrorValue());
-        if (auto policy = session->LoadPolicy(); policy.HasError())
-            return Return::Failure(policy.ErrorValue());
-        return Return::Success(std::move(session));
-    } catch (const std::bad_alloc &) {
-        return Result<std::unique_ptr<NavigationProjectSettingsSession>>::Failure(Reject(Navigation::NavigationSettingsFailure::Capacity));
-    } catch (const std::filesystem::filesystem_error &) {
-        return Result<std::unique_ptr<NavigationProjectSettingsSession>>::Failure(Reject(Navigation::NavigationSettingsFailure::Invalid));
+        const std::span<const Application::NavigationTargetProviderEvidence> targets) {
+        try {
+            using Return = Result<std::unique_ptr<NavigationProjectSettingsSession>>;
+            if (!generation || !root.is_absolute() || root != root.lexically_normal())
+                return Return::Failure(Reject(Navigation::NavigationSettingsFailure::Invalid));
+            auto session = std::unique_ptr<NavigationProjectSettingsSession>(new NavigationProjectSettingsSession);
+            session->state_ = std::make_unique<State>();
+            auto &s = *session->state_;
+            s.root = std::move(root);
+            s.registry = &registry;
+            s.revision = registry.Snapshot().Revision();
+            s.files = &files;
+            s.mutations = &mutations;
+            s.targets.assign(targets.begin(), targets.end());
+            if (!s.revision.value)
+                return Return::Failure(Reject(Navigation::NavigationSettingsFailure::IncompleteInventory));
+            if (auto loaded = session->LoadRegisteredSources(generation, activeScene); loaded.HasError())
+                return Return::Failure(loaded.ErrorValue());
+            if (auto policy = session->LoadPolicy(); policy.HasError())
+                return Return::Failure(policy.ErrorValue());
+            return Return::Success(std::move(session));
+        } catch (const std::bad_alloc &) {
+            return Result<std::unique_ptr<NavigationProjectSettingsSession>>::Failure(
+                Reject(Navigation::NavigationSettingsFailure::Capacity));
+        } catch (const std::filesystem::filesystem_error &) {
+            return Result<std::unique_ptr<NavigationProjectSettingsSession>>::Failure(
+                Reject(Navigation::NavigationSettingsFailure::Invalid));
+        }
     }
 
     /** @copydoc NavigationProjectSettingsSession::LoadRegisteredSources */

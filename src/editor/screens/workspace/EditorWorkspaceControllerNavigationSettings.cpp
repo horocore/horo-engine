@@ -20,37 +20,39 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::NavigationSettings */
-    Result<NavigationProjectSettingsSession *> EditorWorkspaceController::NavigationSettings() try {
-        using Return = Result<NavigationProjectSettingsSession *>;
-        if (m_navigationSettings)
-            return Return::Success(m_navigationSettings.get());
-        if (!m_mutableAssetRegistry || !m_durableFiles || !m_mutations || m_navigationOpening == UINT64_MAX)
-            return Return::Failure(
-                MakeError(Navigation::NavigationSettingsError(Navigation::NavigationSettingsFailure::IncompleteInventory)));
-        const auto &root = m_sourceOpenService.ProjectRoot();
-        if (m_defaultScenePath) {
-            const auto portable = m_defaultScenePath->lexically_relative(root).generic_u8string();
-            const std::string path{portable.begin(), portable.end()};
-            const auto registry = m_mutableAssetRegistry->Snapshot();
-            const auto *record = registry.FindByPath(path);
-            if (record) {
-                auto scene = SceneDocumentTransactions::Bind(m_document, m_history, {record->id, m_navigationOpening});
-                if (scene.HasError())
-                    return Return::Failure(scene.ErrorValue());
-                m_navigationScene = std::make_unique<SceneDocumentTransactions>(std::move(scene).Value());
+    Result<NavigationProjectSettingsSession *> EditorWorkspaceController::NavigationSettings() {
+        try {
+            using Return = Result<NavigationProjectSettingsSession *>;
+            if (m_navigationSettings)
+                return Return::Success(m_navigationSettings.get());
+            if (!m_mutableAssetRegistry || !m_durableFiles || !m_mutations || m_navigationOpening == UINT64_MAX)
+                return Return::Failure(
+                    MakeError(Navigation::NavigationSettingsError(Navigation::NavigationSettingsFailure::IncompleteInventory)));
+            const auto &root = m_sourceOpenService.ProjectRoot();
+            if (m_defaultScenePath) {
+                const auto portable = m_defaultScenePath->lexically_relative(root).generic_u8string();
+                const std::string path{portable.begin(), portable.end()};
+                const auto registry = m_mutableAssetRegistry->Snapshot();
+                const auto *record = registry.FindByPath(path);
+                if (record) {
+                    auto scene = SceneDocumentTransactions::Bind(m_document, m_history, {record->id, m_navigationOpening});
+                    if (scene.HasError())
+                        return Return::Failure(scene.ErrorValue());
+                    m_navigationScene = std::make_unique<SceneDocumentTransactions>(std::move(scene).Value());
+                }
             }
+            auto session = NavigationProjectSettingsSession::Open(root, *m_mutableAssetRegistry, *m_durableFiles, *m_mutations,
+                                                                  m_navigationOpening++, m_navigationScene.get());
+            if (session.HasError()) {
+                m_navigationScene.reset();
+                return Return::Failure(session.ErrorValue());
+            }
+            m_navigationSettings = std::move(session).Value();
+            return Return::Success(m_navigationSettings.get());
+        } catch (const std::filesystem::filesystem_error &) {
+            return Result<NavigationProjectSettingsSession *>::Failure(
+                MakeError(Navigation::NavigationSettingsError(Navigation::NavigationSettingsFailure::Invalid)));
         }
-        auto session = NavigationProjectSettingsSession::Open(root, *m_mutableAssetRegistry, *m_durableFiles, *m_mutations,
-                                                              m_navigationOpening++, m_navigationScene.get());
-        if (session.HasError()) {
-            m_navigationScene.reset();
-            return Return::Failure(session.ErrorValue());
-        }
-        m_navigationSettings = std::move(session).Value();
-        return Return::Success(m_navigationSettings.get());
-    } catch (const std::filesystem::filesystem_error &) {
-        return Result<NavigationProjectSettingsSession *>::Failure(
-            MakeError(Navigation::NavigationSettingsError(Navigation::NavigationSettingsFailure::Invalid)));
     }
 
     /** @copydoc EditorWorkspaceController::HasDirtyNavigationDocuments */

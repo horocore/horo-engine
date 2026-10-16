@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "Horo/Editor/NavigationProjectSettingsSession.h"
+#include "NativePublicationFiles.h"
 #include "NavigationProjectPolicyTestSupport.h"
 #include "OwnedTestDirectory.h"
 
@@ -10,11 +11,30 @@ using namespace Horo;
 using namespace Horo::Tests::NavigationSettingsSupport;
 
 namespace {
+    /** @brief Injects uncertainty only after a genuine native replacement; source identities still advance. */
+    class SessionFiles final : public TestSupport::NativePublicationFiles {
+    public:
+        bool uncertain{};
+
+        Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
+                                         const std::filesystem::perms mode) override {
+            return native.WritePrivateDurable(path, bytes, created, mode);
+        }
+
+        Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                          AtomicFileReplacementReceipt &receipt) override {
+            auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
+            if (replaced.HasValue() && uncertain)
+                return Result<void>::Failure(MakeError(N::NavigationSettingsError(N::NavigationSettingsFailure::Invalid)));
+            return replaced;
+        }
+    };
+
     /** @brief Real project sources, registered identities and canonical active Scene owner. */
     struct Project final {
         Tests::OwnedTestDirectory directory{"navigation-project"};
         std::filesystem::path root{directory.Path() / std::filesystem::path{u8"çalışma alanı"}};
-        NativeDurableFileSystem files;
+        SessionFiles files;
         E::ProjectMutationCoordinator mutations{files};
         Assets::AssetRegistry registry;
         E::SceneDocumentTransactions scene = E::SceneDocumentTransactions::Create({Asset(2), 7}, Objects()).Value();
@@ -232,4 +252,36 @@ TEST_CASE("Navigation presentation borrows revoke before close and never resolve
     REQUIRE(next.Resolve() == nextOwner.get());
     nextOwner.reset();
     REQUIRE(next.Resolve() == nullptr);
+}
+
+TEST_CASE("Navigation independent document saves retain dirty tickets after replacement uncertainty and can retry exact sources",
+          "[navigation][settings][save][durability]") {
+    Project project;
+    auto opened = project.Open();
+    REQUIRE(opened.HasValue());
+    auto session = std::move(opened).Value();
+    const std::array<E::NavigationDefinitionEdit, 1> edits{
+        E::RemoveNavigationProfile{Id<N::NavigationAgentProfileId>(1), Id<N::NavigationAgentProfileId>(2)}};
+    auto review = session->Preview(Asset(1), edits);
+    REQUIRE(review.HasValue());
+    REQUIRE(session->Commit(review.Value()).HasValue());
+    project.files.uncertain = true;
+    const auto uncertain = session->SaveDocuments();
+    REQUIRE(uncertain.HasValue());
+    REQUIRE(uncertain.Value().size() == 2);
+    for (const auto &outcome : uncertain.Value()) {
+        REQUIRE_FALSE(outcome.durable);
+        REQUIRE(outcome.error);
+    }
+    REQUIRE(session->IsDirty());
+    project.files.uncertain = false;
+    // A retry must compare against the replaced bytes, not the pre-publication source identity.
+    const auto retry = session->SaveDocuments();
+    REQUIRE(retry.HasValue());
+    REQUIRE(retry.Value().size() == 2);
+    for (const auto &outcome : retry.Value()) {
+        REQUIRE(outcome.durable);
+        REQUIRE_FALSE(outcome.error);
+    }
+    REQUIRE_FALSE(session->IsDirty());
 }

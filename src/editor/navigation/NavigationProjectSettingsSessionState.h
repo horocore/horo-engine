@@ -107,6 +107,34 @@ namespace Horo::Editor {
             return Navigation::SerializeNavigationSourceRecords(envelope.Value());
         }
 
+        /** @brief Publishes exact source and acknowledges only confirmed durability; invokes the borrowed callback synchronously.
+         * @details Source identity advances after replacement even when directory durability is uncertain. The stack-only
+         * callback retains no owner and runs only after a durable receipt, preserving each document's exact save fence.
+         */
+        template <typename Acknowledge>
+        NavigationDocumentSaveOutcome PublishDocument(const std::filesystem::path &path, Assets::AssetSourceIdentity &source,
+                                                      const std::span<const std::byte> bytes, NavigationDocumentSaveOutcome outcome,
+                                                      Acknowledge &&acknowledge) {
+            auto published = Publish(path, source, bytes);
+            if (published.HasError()) {
+                outcome.error = published.ErrorValue();
+                return outcome;
+            }
+            auto receipt = std::move(published).Value();
+            source = receipt.identity;
+            if (receipt.status == Assets::AssetSourcePublicationStatus::Durable) {
+                const auto accepted = acknowledge();
+                if (accepted.HasError())
+                    outcome.error = accepted.ErrorValue();
+                else
+                    outcome.durable = true;
+            } else if (receipt.durabilityError)
+                outcome.error = std::move(receipt.durabilityError);
+            else
+                outcome.error = RejectNavigationSessionState(Navigation::NavigationSettingsFailure::Stale);
+            return outcome;
+        }
+
         /** @brief Publishes one definition and acknowledges only its durable exact source ticket. */
         NavigationDocumentSaveOutcome SaveDefinition(Definition &entry, NavigationDocumentSaveOutcome outcome) {
             auto save = entry.document->CaptureSave(entry.record);
@@ -119,48 +147,19 @@ namespace Horo::Editor {
                 outcome.error = bytes.ErrorValue();
                 return outcome;
             }
-            auto published = Publish(entry.path, entry.source, bytes.Value());
-            if (published.HasError())
-                outcome.error = published.ErrorValue();
-            else {
-                auto receipt = std::move(published).Value();
-                entry.source = receipt.identity;
-                if (receipt.status == Assets::AssetSourcePublicationStatus::Durable) {
-                    const auto accepted = entry.document->AcknowledgeSave(save.Value(), save.Value().ExpectedSourceRevision() + 1);
-                    if (accepted.HasError())
-                        outcome.error = accepted.ErrorValue();
-                    else
-                        outcome.durable = true;
-                } else if (receipt.durabilityError)
-                    outcome.error = std::move(receipt.durabilityError);
-                else
-                    outcome.error = RejectNavigationSessionState(Navigation::NavigationSettingsFailure::Stale);
-            }
-            return outcome;
+            return PublishDocument(entry.path, entry.source, bytes.Value(), std::move(outcome), [&entry, &save] {
+                return entry.document->AcknowledgeSave(save.Value(), save.Value().ExpectedSourceRevision() + 1);
+            });
         }
 
         /** @brief Saves the captured canonical Scene without replacing its history or clearing later edits. */
         NavigationDocumentSaveOutcome SaveScene(Scene &entry, SceneDocumentTransactions &owner, const SceneTransactionSnapshot &v,
                                                 NavigationDocumentSaveOutcome outcome) {
             const auto text = SceneSource::EncodeSceneSource({v.objects, v.prefabInstances});
-            auto published = Publish(entry.path, entry.source, std::as_bytes(std::span{text.data(), text.size()}));
-            if (published.HasError())
-                outcome.error = published.ErrorValue();
-            else {
-                auto receipt = std::move(published).Value();
-                entry.source = receipt.identity;
-                if (receipt.status == Assets::AssetSourcePublicationStatus::Durable) {
-                    const auto accepted = owner.MarkSaved({v.session, v.revision, v.state, true, {}});
-                    if (accepted.HasError())
-                        outcome.error = accepted.ErrorValue();
-                    else
-                        outcome.durable = true;
-                } else if (receipt.durabilityError)
-                    outcome.error = std::move(receipt.durabilityError);
-                else
-                    outcome.error = RejectNavigationSessionState(Navigation::NavigationSettingsFailure::Stale);
-            }
-            return outcome;
+            return PublishDocument(entry.path, entry.source, std::as_bytes(std::span{text.data(), text.size()}), std::move(outcome),
+                                   [&owner, &v] {
+                return owner.MarkSaved({v.session, v.revision, v.state, true, {}});
+            });
         }
 
         std::filesystem::path root;

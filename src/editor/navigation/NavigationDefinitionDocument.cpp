@@ -49,18 +49,20 @@ namespace Horo::Editor {
     /** @copydoc NavigationDefinitionDocument::Open */
     Result<NavigationDefinitionDocument> NavigationDefinitionDocument::Open(const Assets::AssetId asset, const std::uint64_t session,
                                                                             const std::uint64_t sourceRevision,
-                                                                            Navigation::NavigationDefinition definition) try {
-        if (!asset.IsValid() || !session || !sourceRevision)
-            return Result<NavigationDefinitionDocument>::Failure(Reject(Navigation::NavigationSettingsFailure::Invalid));
-        NavigationDefinitionDocument result;
-        result.lifetime_ = std::make_shared<Lifetime>(Lifetime{&result});
-        result.asset_ = asset;
-        result.session_ = session;
-        result.sourceRevision_ = sourceRevision;
-        result.source_ = std::make_shared<const Navigation::NavigationDefinition>(std::move(definition));
-        return Result<NavigationDefinitionDocument>::Success(std::move(result));
-    } catch (const std::bad_alloc &) {
-        return Result<NavigationDefinitionDocument>::Failure(Reject(Navigation::NavigationSettingsFailure::Capacity));
+                                                                            Navigation::NavigationDefinition definition) {
+        try {
+            if (!asset.IsValid() || !session || !sourceRevision)
+                return Result<NavigationDefinitionDocument>::Failure(Reject(Navigation::NavigationSettingsFailure::Invalid));
+            NavigationDefinitionDocument result;
+            result.lifetime_ = std::make_shared<Lifetime>(Lifetime{&result});
+            result.asset_ = asset;
+            result.session_ = session;
+            result.sourceRevision_ = sourceRevision;
+            result.source_ = std::make_shared<const Navigation::NavigationDefinition>(std::move(definition));
+            return Result<NavigationDefinitionDocument>::Success(std::move(result));
+        } catch (const std::bad_alloc &) {
+            return Result<NavigationDefinitionDocument>::Failure(Reject(Navigation::NavigationSettingsFailure::Capacity));
+        }
     }
 
     /** @copydoc NavigationDefinitionDocument::Snapshot */

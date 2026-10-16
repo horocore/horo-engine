@@ -277,48 +277,50 @@ namespace Horo::Editor {
 
     /** @copydoc NavigationSettingsWorkflow::Preview */
     Result<NavigationSettingsReview> NavigationSettingsWorkflow::Preview(const Assets::AssetId definition,
-                                                                         const std::span<const NavigationDefinitionEdit> edits) const try {
-        using Return = Result<NavigationSettingsReview>;
-        if (edits.empty() || edits.size() > 64 || definitions_.size() > 256 || scenes_.size() > 256)
-            return Return::Failure(Reject(NavigationSettingsFailure::Capacity));
-        const bool destructive = std::ranges::any_of(edits, [](const auto &edit) {
-            return std::holds_alternative<RemoveNavigationProfile>(edit) || std::holds_alternative<RemoveNavigationArea>(edit) ||
-                   std::holds_alternative<RemoveNavigationFilter>(edit);
-        });
-        NavigationSettingsReview review;
-        review.workflow_ = this;
-        if (auto inventory = CaptureInventory(review, definition, destructive); inventory.HasError())
-            return Return::Failure(inventory.ErrorValue());
-        review.candidate_ = CopyNavigationDefinition(*review.definition_.definition);
-        if (auto permitted = ValidateEditable(review.candidate_, edits); permitted.HasError())
-            return Return::Failure(permitted.ErrorValue());
-        ApplyPuts(review.candidate_, edits);
-        if (auto removed = ApplyRemovals(review.candidate_, definition, edits, review.impacts_, review.repairable_); removed.HasError())
-            return Return::Failure(removed.ErrorValue());
-        for (auto &scene : review.scenes_)
-            for (const auto &before : scene.snapshot.objects) {
-                auto after = before;
-                if (auto repaired =
-                        RepairObject(after, scene.snapshot, definition, review.definitions_, edits, review.impacts_, review.repairable_);
-                    repaired.HasError())
-                    return Return::Failure(repaired.ErrorValue());
-                if (review.impacts_.size() > 16'384)
-                    return Return::Failure(Reject(NavigationSettingsFailure::Capacity));
-                if (after.components == before.components)
-                    continue;
-                auto fingerprint = FingerprintSceneObjectContent(before, 16 * 1024 * 1024);
-                if (fingerprint.HasError())
-                    return Return::Failure(fingerprint.ErrorValue());
-                scene.changes.push_back({before.id, fingerprint.Value(), before.generated, std::move(after), {}});
+                                                                         const std::span<const NavigationDefinitionEdit> edits) const {
+        try {
+            using Return = Result<NavigationSettingsReview>;
+            if (edits.empty() || edits.size() > 64 || definitions_.size() > 256 || scenes_.size() > 256)
+                return Return::Failure(Reject(NavigationSettingsFailure::Capacity));
+            const bool destructive = std::ranges::any_of(edits, [](const auto &edit) {
+                return std::holds_alternative<RemoveNavigationProfile>(edit) || std::holds_alternative<RemoveNavigationArea>(edit) ||
+                       std::holds_alternative<RemoveNavigationFilter>(edit);
+            });
+            NavigationSettingsReview review;
+            review.workflow_ = this;
+            if (auto inventory = CaptureInventory(review, definition, destructive); inventory.HasError())
+                return Return::Failure(inventory.ErrorValue());
+            review.candidate_ = CopyNavigationDefinition(*review.definition_.definition);
+            if (auto permitted = ValidateEditable(review.candidate_, edits); permitted.HasError())
+                return Return::Failure(permitted.ErrorValue());
+            ApplyPuts(review.candidate_, edits);
+            if (auto removed = ApplyRemovals(review.candidate_, definition, edits, review.impacts_, review.repairable_); removed.HasError())
+                return Return::Failure(removed.ErrorValue());
+            for (auto &scene : review.scenes_)
+                for (const auto &before : scene.snapshot.objects) {
+                    auto after = before;
+                    if (auto repaired = RepairObject(after, scene.snapshot, definition, review.definitions_, edits, review.impacts_,
+                                                     review.repairable_);
+                        repaired.HasError())
+                        return Return::Failure(repaired.ErrorValue());
+                    if (review.impacts_.size() > 16'384)
+                        return Return::Failure(Reject(NavigationSettingsFailure::Capacity));
+                    if (after.components == before.components)
+                        continue;
+                    auto fingerprint = FingerprintSceneObjectContent(before, 16 * 1024 * 1024);
+                    if (fingerprint.HasError())
+                        return Return::Failure(fingerprint.ErrorValue());
+                    scene.changes.push_back({before.id, fingerprint.Value(), before.generated, std::move(after), {}});
+                }
+            if (review.repairable_) {
+                auto valid = NavigationDefinition::Create(review.candidate_);
+                if (valid.HasError())
+                    return Return::Failure(valid.ErrorValue());
             }
-        if (review.repairable_) {
-            auto valid = NavigationDefinition::Create(review.candidate_);
-            if (valid.HasError())
-                return Return::Failure(valid.ErrorValue());
+            return Return::Success(std::move(review));
+        } catch (const std::bad_alloc &) {
+            return Result<NavigationSettingsReview>::Failure(Reject(NavigationSettingsFailure::Capacity));
         }
-        return Return::Success(std::move(review));
-    } catch (const std::bad_alloc &) {
-        return Result<NavigationSettingsReview>::Failure(Reject(NavigationSettingsFailure::Capacity));
     }
 
 }  // namespace Horo::Editor

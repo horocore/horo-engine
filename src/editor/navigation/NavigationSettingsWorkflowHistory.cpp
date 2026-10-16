@@ -79,49 +79,51 @@ namespace Horo::Editor {
 
     /** @copydoc NavigationSettingsWorkflow::Commit */
     Result<void> NavigationSettingsWorkflow::Commit(const NavigationSettingsReview &review, const bool canEdit,
-                                                    const CancellationToken &cancellation) try {
-        if (review.workflow_ != this || !review.repairable_ || !canEdit || cancellation.IsCancellationRequested())
-            return Result<void>::Failure(Reject(NavigationSettingsFailure::Referenced));
-        if (groups_.size() >= 64)
+                                                    const CancellationToken &cancellation) {
+        try {
+            if (review.workflow_ != this || !review.repairable_ || !canEdit || cancellation.IsCancellationRequested())
+                return Result<void>::Failure(Reject(NavigationSettingsFailure::Referenced));
+            if (groups_.size() >= 64)
+                return Result<void>::Failure(Reject(NavigationSettingsFailure::Capacity));
+            if (registry_.Snapshot().Revision() != review.registryRevision_)
+                return Result<void>::Failure(Reject(NavigationSettingsFailure::Stale));
+            auto selected = FindDefinition(review);
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            auto *definition = selected.Value();
+            const bool coordinated = std::ranges::any_of(review.scenes_, [](const auto &scene) {
+                return !scene.changes.empty();
+            });
+            auto preparedDefinitionResult = definition->Prepare(review.definition_, review.candidate_, coordinated);
+            if (preparedDefinitionResult.HasError())
+                return Result<void>::Failure(preparedDefinitionResult.ErrorValue());
+            auto preparedDefinition = std::move(preparedDefinitionResult).Value();
+            auto reservedScenes = PrepareSceneCommit(review, canEdit, cancellation, coordinated);
+            if (reservedScenes.HasError())
+                return Result<void>::Failure(reservedScenes.ErrorValue());
+            auto stage = std::move(reservedScenes).Value();
+            stage->group.definition = definition->lifetime_;
+            auto nextDefinitions = review.definitions_;
+            auto target = std::ranges::find(nextDefinitions, definition->asset_, &NavigationDefinitionSnapshot::asset);
+            target->definition = preparedDefinition.next.source;
+            target->state = preparedDefinition.next.state;
+            ++target->revision;
+            auto history = groups_;
+            history.resize(cursor_);
+            history.push_back(std::move(stage->group));
+            // All histories, immutable roots and result buffers now exist. No callbacks/notifications occur during final swaps.
+            if (registry_.Snapshot().Revision() != review.registryRevision_ || cancellation.IsCancellationRequested())
+                return Result<void>::Failure(Reject(NavigationSettingsFailure::Stale));
+            for (std::size_t index = 0; index < stage->scenes.size(); ++index)
+                if (auto valid = stage->owners[index]->ValidatePrepared(*stage->scenes[index]); valid.HasError())
+                    return valid;
+            if (auto final = FindDefinition(review); final.HasError())
+                return Result<void>::Failure(final.ErrorValue());
+            PublishCommit(*definition, preparedDefinition, *stage, nextDefinitions, history, review.registryRevision_);
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
             return Result<void>::Failure(Reject(NavigationSettingsFailure::Capacity));
-        if (registry_.Snapshot().Revision() != review.registryRevision_)
-            return Result<void>::Failure(Reject(NavigationSettingsFailure::Stale));
-        auto selected = FindDefinition(review);
-        if (selected.HasError())
-            return Result<void>::Failure(selected.ErrorValue());
-        auto *definition = selected.Value();
-        const bool coordinated = std::ranges::any_of(review.scenes_, [](const auto &scene) {
-            return !scene.changes.empty();
-        });
-        auto preparedDefinitionResult = definition->Prepare(review.definition_, review.candidate_, coordinated);
-        if (preparedDefinitionResult.HasError())
-            return Result<void>::Failure(preparedDefinitionResult.ErrorValue());
-        auto preparedDefinition = std::move(preparedDefinitionResult).Value();
-        auto reservedScenes = PrepareSceneCommit(review, canEdit, cancellation, coordinated);
-        if (reservedScenes.HasError())
-            return Result<void>::Failure(reservedScenes.ErrorValue());
-        auto stage = std::move(reservedScenes).Value();
-        stage->group.definition = definition->lifetime_;
-        auto nextDefinitions = review.definitions_;
-        auto target = std::ranges::find(nextDefinitions, definition->asset_, &NavigationDefinitionSnapshot::asset);
-        target->definition = preparedDefinition.next.source;
-        target->state = preparedDefinition.next.state;
-        ++target->revision;
-        auto history = groups_;
-        history.resize(cursor_);
-        history.push_back(std::move(stage->group));
-        // All histories, immutable roots and result buffers now exist. No callbacks/notifications occur during final swaps.
-        if (registry_.Snapshot().Revision() != review.registryRevision_ || cancellation.IsCancellationRequested())
-            return Result<void>::Failure(Reject(NavigationSettingsFailure::Stale));
-        for (std::size_t index = 0; index < stage->scenes.size(); ++index)
-            if (auto valid = stage->owners[index]->ValidatePrepared(*stage->scenes[index]); valid.HasError())
-                return valid;
-        if (auto final = FindDefinition(review); final.HasError())
-            return Result<void>::Failure(final.ErrorValue());
-        PublishCommit(*definition, preparedDefinition, *stage, nextDefinitions, history, review.registryRevision_);
-        return Result<void>::Success();
-    } catch (const std::bad_alloc &) {
-        return Result<void>::Failure(Reject(NavigationSettingsFailure::Capacity));
+        }
     }
 
     /** @copydoc NavigationSettingsWorkflow::PublishCommit */
@@ -180,50 +182,52 @@ namespace Horo::Editor {
     }
 
     /** @copydoc NavigationSettingsWorkflow::Replay */
-    Result<void> NavigationSettingsWorkflow::Replay(const bool redo, const CancellationToken &cancellation) try {
-        if ((redo ? cursor_ == groups_.size() : cursor_ == 0) || cancellation.IsCancellationRequested() ||
-            registry_.Snapshot().Revision() != expectedRegistry_)
-            return Result<void>::Failure(Reject(NavigationSettingsFailure::Stale));
-        const auto &group = groups_[redo ? cursor_ : cursor_ - 1];
-        const auto lifetime = group.definition.lock();
-        auto *definition = lifetime ? lifetime->owner : nullptr;
-        if (!definition)
-            return Result<void>::Failure(Reject(NavigationSettingsFailure::Closed));
-        if (auto valid = ValidateReplayDefinitions(); valid.HasError())
-            return valid;
-        const auto expected = std::ranges::find(expectedDefinitions_, definition->asset_, &NavigationDefinitionSnapshot::asset);
-        auto preparedDefinitionResult = definition->PrepareReplay(*expected, redo);
-        if (preparedDefinitionResult.HasError())
-            return Result<void>::Failure(preparedDefinitionResult.ErrorValue());
-        auto preparedDefinition = std::move(preparedDefinitionResult).Value();
-        auto reservedScenes = PrepareSceneReplay(group, cancellation, redo);
-        if (reservedScenes.HasError())
-            return Result<void>::Failure(reservedScenes.ErrorValue());
-        auto stage = std::move(reservedScenes).Value();
-        auto nextDefinitions = expectedDefinitions_;
-        auto target = std::ranges::find(nextDefinitions, definition->asset_, &NavigationDefinitionSnapshot::asset);
-        target->definition = preparedDefinition.next.source;
-        target->state = preparedDefinition.next.state;
-        ++target->revision;
-        if (registry_.Snapshot().Revision() != expectedRegistry_ || cancellation.IsCancellationRequested())
-            return Result<void>::Failure(Reject(NavigationSettingsFailure::Stale));
-        for (std::size_t index = 0; index < stage->scenes.size(); ++index)
-            if (auto valid = stage->owners[index]->ValidatePrepared(*stage->scenes[index]); valid.HasError())
+    Result<void> NavigationSettingsWorkflow::Replay(const bool redo, const CancellationToken &cancellation) {
+        try {
+            if ((redo ? cursor_ == groups_.size() : cursor_ == 0) || cancellation.IsCancellationRequested() ||
+                registry_.Snapshot().Revision() != expectedRegistry_)
+                return Result<void>::Failure(Reject(NavigationSettingsFailure::Stale));
+            const auto &group = groups_[redo ? cursor_ : cursor_ - 1];
+            const auto lifetime = group.definition.lock();
+            auto *definition = lifetime ? lifetime->owner : nullptr;
+            if (!definition)
+                return Result<void>::Failure(Reject(NavigationSettingsFailure::Closed));
+            if (auto valid = ValidateReplayDefinitions(); valid.HasError())
                 return valid;
-        if (auto valid = ValidateReplayDefinitions(); valid.HasError())
-            return valid;
-        for (std::size_t index = 0; index < stage->scenes.size(); ++index)
-            static_cast<void>(stage->owners[index]->PublishPrepared(*stage->scenes[index]));
-        definition->Publish(preparedDefinition);
-        expectedDefinitions_.swap(nextDefinitions);
-        expectedScenes_.swap(stage->nextScenes);
-        if (redo)
-            ++cursor_;
-        else
-            --cursor_;
-        return Result<void>::Success();
-    } catch (const std::bad_alloc &) {
-        return Result<void>::Failure(Reject(NavigationSettingsFailure::Capacity));
+            const auto expected = std::ranges::find(expectedDefinitions_, definition->asset_, &NavigationDefinitionSnapshot::asset);
+            auto preparedDefinitionResult = definition->PrepareReplay(*expected, redo);
+            if (preparedDefinitionResult.HasError())
+                return Result<void>::Failure(preparedDefinitionResult.ErrorValue());
+            auto preparedDefinition = std::move(preparedDefinitionResult).Value();
+            auto reservedScenes = PrepareSceneReplay(group, cancellation, redo);
+            if (reservedScenes.HasError())
+                return Result<void>::Failure(reservedScenes.ErrorValue());
+            auto stage = std::move(reservedScenes).Value();
+            auto nextDefinitions = expectedDefinitions_;
+            auto target = std::ranges::find(nextDefinitions, definition->asset_, &NavigationDefinitionSnapshot::asset);
+            target->definition = preparedDefinition.next.source;
+            target->state = preparedDefinition.next.state;
+            ++target->revision;
+            if (registry_.Snapshot().Revision() != expectedRegistry_ || cancellation.IsCancellationRequested())
+                return Result<void>::Failure(Reject(NavigationSettingsFailure::Stale));
+            for (std::size_t index = 0; index < stage->scenes.size(); ++index)
+                if (auto valid = stage->owners[index]->ValidatePrepared(*stage->scenes[index]); valid.HasError())
+                    return valid;
+            if (auto valid = ValidateReplayDefinitions(); valid.HasError())
+                return valid;
+            for (std::size_t index = 0; index < stage->scenes.size(); ++index)
+                static_cast<void>(stage->owners[index]->PublishPrepared(*stage->scenes[index]));
+            definition->Publish(preparedDefinition);
+            expectedDefinitions_.swap(nextDefinitions);
+            expectedScenes_.swap(stage->nextScenes);
+            if (redo)
+                ++cursor_;
+            else
+                --cursor_;
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(Reject(NavigationSettingsFailure::Capacity));
+        }
     }
 
 }  // namespace Horo::Editor
