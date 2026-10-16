@@ -23,6 +23,7 @@ namespace Horo::Editor {
 
     void InspectorPanel::OnDetach() {
         m_nameInputContext.Reset();
+        m_physicsSession.Clear();
         m_inputRouter = nullptr;
     }
 
@@ -69,6 +70,7 @@ namespace Horo::Editor {
                     DrawAddComponent(*selected, vm, cmd, ctx);
             }
         } else {
+            m_physicsSession.Clear();
             DrawEmptyState(cmd, ctx);
         }
 
@@ -91,6 +93,7 @@ namespace Horo::Editor {
                                            context.localization.Get("editor", "workspace.inspector.name_invalid"), context.theme.fonts,
                                            6.0F, 4.0F);
         } else {
+            m_physicsSession.Clear();
             m_nameInputContext.Reset();
             DrawMultiSelectionTitle(m_editSession.Draft().selectedObjectCount, context);
         }

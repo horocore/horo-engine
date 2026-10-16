@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
 #include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
+#include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
 
 #include <imgui.h>
 
@@ -41,6 +42,9 @@ namespace Horo::Editor {
         void DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                               const EditorGuiContext &context) const;
 
+        /** @brief Draw cached portable Physics drafts and submit only explicit complete gestures to the host. */
+        void DrawPhysicsInspector(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
+                                  EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawMultiSelectionTitle(std::size_t selectedObjectCount, const EditorGuiContext &context) const;
 
         [[nodiscard]] InspectorNameEdit DrawObjectTitleWidgets(const SceneObject &object, EditorWorkspaceViewCommandData &command,
@@ -70,6 +74,8 @@ namespace Horo::Editor {
         Input::InputRouter *m_inputRouter{nullptr};
         Input::InputContextToken m_nameInputContext;
         InspectorEditSession m_editSession;
+        PhysicsInspectorSession m_physicsSession;
+        bool m_physicsInputError{};
         int m_activeTab{0};
     };
 }  // namespace Horo::Editor
