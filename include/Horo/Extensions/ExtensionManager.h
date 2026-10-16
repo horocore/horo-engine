@@ -22,6 +22,7 @@ namespace Horo::Assets {
 namespace Horo::Extensions {
     struct ExtensionModuleLifetime;
     class EditorActivityHost;
+    class EditorPageHost;
 
     /** @brief Represents a loaded extension instance. */
     struct LoadedExtension {
@@ -59,7 +60,8 @@ namespace Horo::Extensions {
                                   std::vector<std::string> hostCapabilities = {},
                                   std::shared_ptr<const Security::NativeArtifactGate> artifactGate = {},
                                   NativeLibraryLoader libraryLoader = {}, ExtensionPlatformProviderCommit platformProviderCommit = {},
-                                  std::shared_ptr<EditorActivityHost> editorActivityHost = {});
+                                  std::shared_ptr<EditorActivityHost> editorActivityHost = {},
+                                  std::shared_ptr<EditorPageHost> editorPageHost = {});
         /** @brief Withdraws publications on the owner lane; busy native closures require process restart. */
         ~ExtensionManager();
         ExtensionManager(const ExtensionManager &) = delete;
@@ -133,6 +135,7 @@ namespace Horo::Extensions {
         NativeLibraryLoader m_libraryLoader;
         ExtensionPlatformProviderCommit m_platformProviderCommit;
         std::shared_ptr<EditorActivityHost> m_editorActivityHost;
+        std::shared_ptr<EditorPageHost> m_editorPageHost;
         TransparentStringMap<std::unique_ptr<LoadedExtension>> m_loadedExtensions;
         std::vector<std::string> m_activationOrder;
         std::vector<std::shared_ptr<ExtensionRetirement>> m_failedActivations;

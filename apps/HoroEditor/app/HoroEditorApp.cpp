@@ -1621,7 +1621,23 @@ namespace Horo::Editor {
                                                                   extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
                                                               .extensionMarketplace =
                                                                   extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
-                                                              .nativeDialogs = &nativeDialogs}};
+                                                              .nativeDialogs = &nativeDialogs,
+                                                              .extensionSettingsFiles = &durableFiles,
+                                                              .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
+                                                              .extensionPagePolicy =
+                                                                  {.revision = 1,
+                                                                   .knownPermissions = {{"editor.settings"},
+                                                                                        {"editor.modal"},
+                                                                                        {"configuration.user.write"},
+                                                                                        {"configuration.project.write"},
+                                                                                        {"configuration.workspace.write"}},
+                                                                   .approvedPermissions = {{"editor.settings"},
+                                                                                           {"editor.modal"},
+                                                                                           {"configuration.user.write"},
+                                                                                           {"configuration.project.write"},
+                                                                                           {"configuration.workspace.write"}},
+                                                                   .availableCapabilities = {{"horo.editor.settings"},
+                                                                                             {"horo.editor.modal"}}}}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);

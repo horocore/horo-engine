@@ -1267,6 +1267,9 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionAbi.h
     Horo/Extensions/EditorActivityAbi.h
     Horo/Extensions/EditorActivityHost.h
+    Horo/Extensions/EditorPageDefinition.h
+    Horo/Extensions/EditorPageHost.h
+    Horo/Extensions/EditorPageAbi.h
     Horo/Extensions/ExtensionAbiConformance.h
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h

@@ -171,7 +171,7 @@ namespace Horo::Extensions {
         const EditorSurfaceDescriptor &descriptor = context.Context().Surface();
         if (const Result<void> valid = ValidateEditorSurfaceDescriptor(descriptor); valid.HasError())
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryInvalid);
-        if (!IsSupportedPersistentSurface(descriptor))
+        if (!IsSupportedSurface(descriptor))
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryInvalid);
 
         const std::string surfaceId = descriptor.id;
@@ -185,6 +185,8 @@ namespace Horo::Extensions {
             return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
 
         const PendingSurfaceState *pending = FindPending(*state_, surfaceId);
+        if (pending && descriptor.persistence == EditorSurfacePersistence::None)
+            return FailureValue<EditorSurfaceRegistration>(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
         if (const auto *error = ActivityRegistrationError(*state_, descriptor, provider, pending))
             return FailureValue<EditorSurfaceRegistration>(*error);
         if (!HasPreservationCapacity(*state_) ||
@@ -224,7 +226,9 @@ namespace Horo::Extensions {
         if (state_->shutdown)
             return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
         const auto surface = FindSurface(*state_, surfaceId);
-        if (surface == nullptr || surface->descriptor.provider != provider || surface->descriptor.kind != EditorSurfaceKind::Panel)
+        if (surface == nullptr || surface->descriptor.provider != provider ||
+            (surface->descriptor.kind != EditorSurfaceKind::Panel && surface->descriptor.kind != EditorSurfaceKind::SettingsPage &&
+             surface->descriptor.kind != EditorSurfaceKind::Modal && surface->descriptor.kind != EditorSurfaceKind::ModalPage))
             return Failure(ExtensionErrors::EditorSurfaceRegistryInvalid);
         if (EffectiveStatus(*state_, *surface) != EditorSurfaceProviderStatus::Active)
             return Failure(ExtensionErrors::EditorSurfaceContextRevoked);
@@ -367,7 +371,8 @@ namespace Horo::Extensions {
         }
         if (const EditorSurfaceProviderStatus status = EffectiveStatus(*state_, *surface); status != EditorSurfaceProviderStatus::Active)
             return ProviderFailure(status);
-        if (surface->descriptor.activity.has_value() || std::ranges::any_of(state_->surfaces, [&surfaceId](const auto &candidate) {
+        if (surface->descriptor.persistence == EditorSurfacePersistence::None || surface->descriptor.activity.has_value() ||
+            std::ranges::any_of(state_->surfaces, [&surfaceId](const auto &candidate) {
             return candidate->descriptor.activity.has_value() && candidate->descriptor.activity->drawerId == surfaceId;
         }))
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryInvalid);
@@ -399,7 +404,8 @@ namespace Horo::Extensions {
         }
         if (const EditorSurfaceProviderStatus status = EffectiveStatus(*state_, *surface); status != EditorSurfaceProviderStatus::Active)
             return ProviderFailure(status);
-        if (surface->descriptor.activity.has_value() || std::ranges::any_of(state_->surfaces, [&surfaceId](const auto &candidate) {
+        if (surface->descriptor.persistence == EditorSurfacePersistence::None || surface->descriptor.activity.has_value() ||
+            std::ranges::any_of(state_->surfaces, [&surfaceId](const auto &candidate) {
             return candidate->descriptor.activity.has_value() && candidate->descriptor.activity->drawerId == surfaceId;
         }))
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryInvalid);
@@ -421,6 +427,8 @@ namespace Horo::Extensions {
         if (state_->shutdown)
             return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryShutdown);
         if (const auto surface = FindSurface(*state_, surfaceId); surface != nullptr) {
+            if (surface->descriptor.persistence == EditorSurfacePersistence::None)
+                return FailureValue<EditorSurfaceOperation>(ExtensionErrors::EditorSurfaceRegistryInvalid);
             ++state_->revision;
             const bool wasOpen = surface->desiredOpen;
             for (const auto &candidate : state_->surfaces) {
@@ -475,6 +483,8 @@ namespace Horo::Extensions {
         const std::shared_ptr<EditorSurfaceState> surface = FindSurface(*state_, surfaceId);
         if (surface == nullptr)
             return Failure(ExtensionErrors::EditorSurfaceRegistryUnknown);
+        if (surface->descriptor.persistence == EditorSurfacePersistence::None)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryStateInvalid);
         ++state_->revision;
         surface->opaqueState.assign(state.begin(), state.end());
         return Result<void>::Success();

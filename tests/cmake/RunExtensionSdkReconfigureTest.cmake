@@ -22,6 +22,7 @@ foreach(source_file IN ITEMS
         LICENSE
         include/Horo/Extensions/ExtensionAbi.h
         include/Horo/Extensions/EditorActivityAbi.h
+        include/Horo/Extensions/EditorPageAbi.h
         scripts/scaffold_extension.py
         scripts/bootstrap_extension_ci.py
         scripts/run_extension_author_ci.py
@@ -81,6 +82,7 @@ set(expected_files
     bin/horo-scaffold-extension.py
     include/Horo/Extensions/ExtensionAbi.h
     include/Horo/Extensions/EditorActivityAbi.h
+        include/Horo/Extensions/EditorPageAbi.h
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfig.cmake
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfigVersion.cmake
     share/horo/extension-sdk/ci/bootstrap.py

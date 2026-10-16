@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace Horo::Extensions {
@@ -13,6 +14,7 @@ namespace Horo::Extensions {
 
 namespace Horo::Editor {
     class EditorSettingsService;
+    class EditorPageView;
 
     struct SettingsGeneralTab {
         int startupAction = 0;
@@ -150,6 +152,8 @@ namespace Horo::Editor {
         PackagesTab packages{};
         DiagnosticsTab diagnostics{};
 
+        std::shared_ptr<EditorPageView>
+            extensionPages; /**< Transient host-rendered extension workflow; never part of EditorSettings persistence. */
         int pluginSectionTab = 0;
         Extensions::ExtensionInventory *extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr;

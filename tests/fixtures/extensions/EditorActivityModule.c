@@ -45,7 +45,7 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequ
     *requirements = (HoroExtensionRequirements){.structSize = sizeof(HoroExtensionRequirements),
                                                 .abiMajorVersion = 1,
                                                 .minimumHostMinor = 4,
-                                                .requiredHostApiSize = sizeof(HoroExtensionHostApi),
+                                                .requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorPage),
                                                 .requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY};
     return HORO_EXTENSION_SUCCESS;
 }

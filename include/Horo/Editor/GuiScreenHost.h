@@ -8,6 +8,7 @@
 #include "Horo/Editor/GuiScreen.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Extensions/ExtensionCapabilityAdmission.h"
 #include "Horo/Foundation/Diagnostics.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Result.h"
@@ -26,6 +27,7 @@ namespace Horo::Security {
 
 namespace Horo {
     class EngineDataBus;
+    class DurableFileSystem;
     class NativeDialogs;
 }  // namespace Horo
 
@@ -38,6 +40,7 @@ namespace Horo::Extensions {
     class ExtensionMarketplaceService;
     class ExtensionManager;
     class EditorActivityHost;
+    class EditorPageHost;
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
@@ -49,6 +52,8 @@ namespace Horo::Editor {
     class ProjectCreationService;
     class RendererAvailabilitySnapshot;
     class EditorStatusBar;
+    class EditorPageFileStore;
+    class EditorPageThemeCapture;
 
     /**
      * @file GuiScreenHost.h
@@ -84,6 +89,9 @@ namespace Horo::Editor {
         Extensions::ExtensionMarketplaceService *extensionMarketplace{};
         NativeDialogs *nativeDialogs{};
         std::shared_ptr<const Security::NativeArtifactGate> extensionArtifactGate;
+        DurableFileSystem *extensionSettingsFiles{};     /**< Explicit application-owned durable storage; absence disables native pages. */
+        std::filesystem::path extensionUserSettingsRoot; /**< Resolved user settings root, never inferred from a provider. */
+        Extensions::ExtensionAdmissionPolicy extensionPagePolicy; /**< Application-sealed permission evidence. */
     };
 
     /**
@@ -153,9 +161,7 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<ProjectCreationOperationId> GetActiveCreationId() const noexcept;
 
         /** @brief Sets the current project root for import/file operations. */
-        void SetCurrentProjectRoot(const std::filesystem::path &root) noexcept {
-            currentProjectRoot_ = root;
-        }
+        void SetCurrentProjectRoot(const std::filesystem::path &root);
 
         /** @brief Returns the current project root, or current_path() as fallback. */
         [[nodiscard]] std::filesystem::path CurrentProjectRoot() const noexcept;
@@ -204,10 +210,14 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorStatusItemRegistry &StatusItems() const noexcept;
 
     private:
+        /** @brief Opens the built-in settings workflow with the actual composed page authority and captured shared theme. */
+        void OpenSettingsModal();
         /** @brief Registers the already-initialized host and borrowed application services without activating native packages. */
         void RegisterApplicationServices(const GuiScreenHostComposition &composition);
         /** @brief Creates and activates extension/importer owners in their existing rollback and destruction order. */
-        void InitializeExtensions(JobSystem &jobs, std::shared_ptr<const Security::NativeArtifactGate> artifactGate);
+        void InitializeExtensions(const GuiScreenHostComposition &composition);
+        /** @brief Composes the explicit scoped page store and actual current-theme projection before advertising native page capability. */
+        void InitializeExtensionPages(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities);
         /** @brief Publishes initial status items after extension composition and status-bar ownership are established. */
         void InitializeStatusItems(const RendererAvailabilitySnapshot &rendererAvailability);
         Result<void> ExecuteLeaveCheckAndCommit(const LeaveTarget &target);
@@ -239,6 +249,9 @@ namespace Horo::Editor {
         JobSystem m_importJobs{JobSystemConfig{.workerCount = 1}};
         std::unique_ptr<Assets::AssetImporterCatalog> importerCatalogCandidate_;
         std::shared_ptr<Extensions::EditorActivityHost> editorActivityHost_;
+        std::unique_ptr<EditorPageFileStore> extensionPageStore_;
+        std::unique_ptr<EditorPageThemeCapture> extensionPageTheme_;
+        std::shared_ptr<Extensions::EditorPageHost> editorPageHost_;
         std::unique_ptr<Extensions::ExtensionManager> extensionManager_;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 

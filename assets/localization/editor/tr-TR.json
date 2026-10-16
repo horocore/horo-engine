@@ -2298,6 +2298,18 @@
     },
     "workspace.packages.recovery_hint": {
       "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
+    },
+    "settings.extension_pages.title": {
+      "text": "Uzantı sayfaları"
+    },
+    "settings.extension_pages.apply": {
+      "text": "Uygula"
+    },
+    "settings.extension_pages.reset": {
+      "text": "Taslağı sıfırla"
+    },
+    "settings.extension_pages.cancel": {
+      "text": "Taslağı iptal et"
     }
   }
 }

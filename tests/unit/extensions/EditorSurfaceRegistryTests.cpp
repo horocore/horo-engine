@@ -415,8 +415,8 @@ namespace Horo::Extensions::Tests {
         EditorSurfaceContextProvider provider;
         EditorSurfaceRegistry registry;
         auto descriptor = ContextDescriptor("com.example.tools.modal");
-        descriptor.surface.kind = EditorSurfaceKind::Modal;
-        descriptor.surface.placement.kind = EditorSurfacePlacementKind::Modal;
+        descriptor.surface.kind = EditorSurfaceKind::ViewportOverlay;
+        descriptor.surface.placement.kind = EditorSurfacePlacementKind::Viewport;
         descriptor.surface.persistence = EditorSurfacePersistence::None;
         auto attached = provider.Attach(std::move(descriptor), admission.ActivationLease());
         REQUIRE(attached.HasValue());

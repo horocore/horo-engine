@@ -283,9 +283,12 @@ namespace Horo::Extensions {
                     return Result<void>::Failure(MakeError(ExtensionErrors::ModuleResolutionFailed,
                                                            "An asset importer requires backend-capability authority. Involved modules: " +
                                                                contribution.owningModule + '.'));
-                if (contribution.type == "editor.panel" && !HasRole(*owner->second, ExtensionModuleRole::EditorPresentation))
+                const bool editorSurface = contribution.type == "editor.panel" || contribution.type == "editor.activity_item" ||
+                                           contribution.type == "editor.settings_page" || contribution.type == "editor.modal" ||
+                                           contribution.type == "editor.modal_page";
+                if (editorSurface && !HasRole(*owner->second, ExtensionModuleRole::EditorPresentation))
                     return Result<void>::Failure(MakeError(ExtensionErrors::ModuleResolutionFailed,
-                                                           "An editor panel requires editor-presentation authority. Involved modules: " +
+                                                           "An editor surface requires editor-presentation authority. Involved modules: " +
                                                                contribution.owningModule + '.'));
             }
             return Result<void>::Success();

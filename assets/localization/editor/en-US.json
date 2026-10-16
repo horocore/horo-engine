@@ -2298,6 +2298,18 @@
     },
     "workspace.packages.recovery_hint": {
       "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
+    },
+    "settings.extension_pages.title": {
+      "text": "Extension pages"
+    },
+    "settings.extension_pages.apply": {
+      "text": "Apply"
+    },
+    "settings.extension_pages.reset": {
+      "text": "Reset draft"
+    },
+    "settings.extension_pages.cancel": {
+      "text": "Cancel draft"
     }
   }
 }

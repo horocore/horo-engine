@@ -11,10 +11,15 @@
 
 namespace Horo::Extensions {
     class ExtensionInventory;
+    class EditorPageHost;
+    struct EditorThemeFrame;
+    struct EditorSurfaceProviderIdentity;
     class ExtensionMarketplaceService;
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
+    class EditorPageView;
+
     /** @brief Host-owned editor settings workflow and its transient settings draft. */
     class SettingsModal final : public EditorModal {
     public:
@@ -27,11 +32,17 @@ namespace Horo::Editor {
          * @param logo Presentation logo texture.
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional registry-backed extension marketplace.
+         * @param pageHost Optional explicitly composed restricted settings/modal controller.
+         * @param themeFrame Actual GUI owner theme capture, required whenever pageHost is supplied.
          */
         SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, std::uintptr_t logo,
                       Extensions::ExtensionInventory *extensionInventory = nullptr,
-                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr) noexcept;
+                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
+                      std::shared_ptr<Extensions::EditorPageHost> pageHost = {},
+                      std::shared_ptr<const Extensions::EditorThemeFrame> themeFrame = {});
 
+        /** @brief Selects an already-open exact extension settings page for actual modal realization. */
+        void SelectExtensionPage(const Extensions::EditorSurfaceProviderIdentity &provider, std::string id);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -51,6 +62,9 @@ namespace Horo::Editor {
         std::uintptr_t m_logo = 0;
         Extensions::ExtensionInventory *m_extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *m_extensionMarketplace = nullptr;
+        std::shared_ptr<EditorPageView> m_extensionPages;
+        bool m_openExtensionPage{};
+        bool m_pagesUnsupported{};
         EditorDataBus *m_events = nullptr;
         SettingsState m_draft;
         bool m_revertedPublished = false;
