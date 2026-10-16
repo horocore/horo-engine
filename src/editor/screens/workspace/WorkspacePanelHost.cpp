@@ -328,8 +328,9 @@ namespace Horo::Editor {
         return Result<std::vector<WorkspaceDocumentTab>>::Success(std::move(restoredTabs));
     }
 
-    bool WorkspacePanelHost::SaveLayout(const std::filesystem::path &path, std::string *error) const {
-        return WorkspaceLayoutPersistence::Save(path, m_layout, error);
+    bool WorkspacePanelHost::SaveLayout(DurableFileSystem &files, AtomicFileReplacementReceipt &receipt, const std::filesystem::path &path,
+                                        std::string *error) const {
+        return WorkspaceLayoutPersistence::Save(files, receipt, path, m_layout, error);
     }
 
     bool WorkspacePanelHost::RestoreLayout(const std::filesystem::path &path, std::string *error) {

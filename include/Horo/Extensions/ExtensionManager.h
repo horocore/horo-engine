@@ -9,6 +9,7 @@
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Security/ArtifactSignature.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
@@ -20,6 +21,7 @@ namespace Horo::Assets {
 }
 
 namespace Horo::Extensions {
+    enum class EditorSurfaceProviderStatus : std::uint8_t;
     struct ExtensionModuleLifetime;
     class EditorActivityHost;
 
@@ -141,6 +143,12 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<void> AcquireProviderDependencies(std::span<const std::string> providers, std::string_view extensionId,
                                                                std::vector<std::shared_ptr<ExtensionModuleLifetime>> &dependencies,
                                                                std::vector<std::shared_ptr<ExtensionExecutableLease>> &leases) const;
+        /** @brief Reads the actual bounded manifest and reserves failure presentation before dependency/native admission. */
+        [[nodiscard]] Result<ExtensionManifest> ReadRecoveryManifest(const std::string &extensionDir) const;
+        /** @brief Preserves host-plan failure information while publishing its precise incompatibility reason. */
+        [[nodiscard]] Result<ExtensionModulePlan> ResolveRecoveryPlan(const ExtensionManifest &manifest) const;
+        /** @brief Reserves or updates bounded host recovery reasons without invoking a provider or granting activation. */
+        [[nodiscard]] Result<void> ReportEditorProviderStatus(const ExtensionManifest &manifest, EditorSurfaceProviderStatus status) const;
         void RetireRecord(const std::string &extensionId);
         void CloseForDestruction() noexcept;
     };

@@ -1,5 +1,6 @@
 #include "../capabilities/asset_pipeline_points/ExternalAssetImporter.h"
 #include "Horo/Assets/AssetImporter.h"
+#include "Horo/Extensions/EditorSurfaceRegistry.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Extensions/ExtensionManager.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -79,6 +80,7 @@ namespace Horo::Extensions {
                     std::ranges::find(record->second->providerExtensions, extensionId) != record->second->providerExtensions.end())
                     RetireRecord(*dependent);
             }
+            static_cast<void>(ReportEditorProviderStatus(extension.manifest, EditorSurfaceProviderStatus::Missing));
             extension.retirement->CloseAdmission();
             extension.platformProvider.reset();
             if (m_importerCatalog && !m_importerCatalog->WithdrawPackage(extensionId))

@@ -2,6 +2,7 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
+#include "Horo/Foundation/Platform.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
@@ -108,7 +109,9 @@ TEST_CASE("Workspace Layout Persistence Tests", "[unit][editor]") {
 
     const Horo::Tests::OwnedTestDirectory directory{"workspace persistence"};
     const auto path = directory.Path() / "horo_workspace_layout_test.json";
-    REQUIRE((WorkspaceLayoutPersistence::Save(path, host.Layout(), &error)));
+    Horo::NativeDurableFileSystem files;
+    Horo::AtomicFileReplacementReceipt receipt;
+    REQUIRE((WorkspaceLayoutPersistence::Save(files, receipt, path, host.Layout(), &error)));
     REQUIRE((WorkspaceLayoutPersistence::Load(path, &error).has_value()));
     REQUIRE((host.RestoreLayout(path, &error)));
     std::filesystem::remove(path);
@@ -163,10 +166,13 @@ TEST_CASE("Workspace serialization accepts registry state bounds without unbound
     CHECK(restored->surfaces == host.Layout().surfaces);
     const Horo::Tests::OwnedTestDirectory directory{"bounded workspace persistence"};
     const auto path = directory.Path() / "horo107 bounded workspace.json";
-    REQUIRE(WorkspaceLayoutPersistence::Save(path, host.Layout()));
+    Horo::NativeDurableFileSystem files;
+    Horo::AtomicFileReplacementReceipt receipt;
+    REQUIRE(WorkspaceLayoutPersistence::Save(files, receipt, path, host.Layout()));
     host.Layout().surfaces[128].state.push_back(1);
     CHECK(WorkspaceLayoutPersistence::Serialize(host.Layout()).empty());
-    CHECK_FALSE(WorkspaceLayoutPersistence::Save(path, host.Layout()));
+    Horo::AtomicFileReplacementReceipt rejected;
+    CHECK_FALSE(WorkspaceLayoutPersistence::Save(files, rejected, path, host.Layout()));
     REQUIRE(WorkspaceLayoutPersistence::Load(path));
     CHECK(WorkspaceLayoutPersistence::Load(path)->surfaces == restored->surfaces);
     std::filesystem::remove(path);

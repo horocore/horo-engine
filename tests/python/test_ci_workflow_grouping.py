@@ -42,6 +42,7 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    "HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer",
     "HoroWorldStreamingTests", "HoroWorldStreamingPublicHeaderConsumer", "HoroStreamingSourcePlannerBenchmark",
     "HoroDestructionSaveTests", "HoroDestructionSavePublicConsumer",
     "HoroDestructionSaveIntegrationPublicHeaderConsumer", "HoroDestructionApiPublicHeaderConsumer",
@@ -523,3 +524,9 @@ def test_vfx_extraction_has_execution_and_owned_compile_consumer_closure() -> No
     assert 'add_library("${consumer_target}" OBJECT ${generated_sources})' in boundaries
     assert "support/VfxWorldPublicHeaderConsumer.cpp" in tests_cmake
     assert "support/RenderGraphWorkloadPublicHeaderConsumer.cpp" in tests_cmake
+
+
+def test_workspace_provider_recovery_is_in_actual_windows_build_and_test_routes() -> None:
+    assert {"HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer"} <= targets("HORO_CI_WINDOWS_TARGETS")
+    assert "if(target IN_LIST HORO_CI_WINDOWS_TARGETS)" in SUITES
+    assert "list(APPEND ARG_LABELS ci-windows)" in SUITES

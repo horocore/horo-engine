@@ -2325,10 +2325,16 @@ add_executable(HoroUiCanvasDocumentTests
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices nlohmann_json::nlohmann_json)
 add_executable(HoroWorkspaceLayoutPersistenceTests
+        unit/editor/WorkspaceSurfacePublicationTests.cpp
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
         support/AllocationProbe.cpp
 )
 target_link_libraries(HoroWorkspaceLayoutPersistenceTests PRIVATE HoroEngine::EditorServices)
+add_library(HoroWorkspaceRecoveryPublicHeaderConsumer OBJECT support/WorkspaceRecoveryPublicContract.cpp)
+target_compile_features(HoroWorkspaceRecoveryPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroWorkspaceRecoveryPublicHeaderConsumer PRIVATE HoroEngine::EditorServices HoroEngine::Extensions)
+target_sources(HoroWorkspaceLayoutPersistenceTests PRIVATE $<TARGET_OBJECTS:HoroWorkspaceRecoveryPublicHeaderConsumer>)
+
 add_executable(HoroActivityBarLayoutTests
         unit/editor/ActivityBarLayoutTests.cpp
 )
@@ -2510,7 +2516,7 @@ if (HORO_BUILD_EDITOR_GUI)
             PRIVATE
             HoroEngine::Gui
     )
-    add_executable(HoroExtensionActivityViewTests unit/editor/ExtensionActivityViewTests.cpp support/AllocationProbe.cpp)
+    add_executable(HoroExtensionActivityViewTests unit/editor/ExtensionActivityViewTests.cpp unit/editor/ExtensionRecoveryViewTests.cpp support/AllocationProbe.cpp)
     target_sources(HoroGuiPublicHeaderConsumer PRIVATE support/GuiScreenHostPublicContract.cpp)
     target_compile_features(HoroExtensionActivityViewTests PRIVATE cxx_std_20)
     target_include_directories(HoroExtensionActivityViewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
@@ -4057,8 +4063,10 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/EditorSvgIconTests.cpp
+        unit/extensions/EditorActivityRecoveryTests.cpp
         unit/extensions/EditorActivityHostTests.cpp
         unit/extensions/EditorSurfaceContextTests.cpp
+        unit/extensions/EditorSurfaceRecoveryTests.cpp
         unit/extensions/EditorSurfaceRegistryTests.cpp
         unit/extensions/EditorActivityRegistryTests.cpp
         unit/extensions/EditorCommandRegistryTests.cpp

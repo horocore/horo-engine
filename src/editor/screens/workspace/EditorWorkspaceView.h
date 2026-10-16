@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ExtensionActivityView.h"
+#include "ExtensionRecoveryView.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "WorkspaceSplitterInteraction.h"
@@ -66,6 +67,7 @@ namespace Horo::Editor {
 
         [[nodiscard]] std::optional<Extensions::EditorActivitySide> UpdateExtensionActivities() {
             m_extensions.Update();
+            m_extensionRecovery.Update();
             return m_extensions.TakeNativePanelClear();
         }
 
@@ -73,6 +75,7 @@ namespace Horo::Editor {
 
     private:
         ExtensionActivityView m_extensions;
+        ExtensionRecoveryView m_extensionRecovery;
         const EditorGuiContext &m_context;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;
