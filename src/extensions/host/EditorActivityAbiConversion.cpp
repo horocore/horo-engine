@@ -33,7 +33,8 @@ namespace Horo::Extensions::Detail {
             EditorUiText content{(input.flags & HORO_EDITOR_ACTIVITY_TEXT_TECHNICAL) != 0 ? EditorUiTextKind::TechnicalText
                                                                                           : EditorUiTextKind::LocalizationKey,
                                  std::move(text)};
-            if (input.kind == HORO_EDITOR_ACTIVITY_TEXT || input.kind == HORO_EDITOR_ACTIVITY_LABEL)
+            if (input.kind == HORO_EDITOR_ACTIVITY_TEXT || input.kind == HORO_EDITOR_ACTIVITY_LABEL ||
+                input.kind == HORO_EDITOR_ACTIVITY_STACK || input.kind == HORO_EDITOR_ACTIVITY_GROUP)
                 base.focusPolicy = EditorUiFocusPolicy::Never;
             switch (input.kind) {
                 case HORO_EDITOR_ACTIVITY_TEXT:

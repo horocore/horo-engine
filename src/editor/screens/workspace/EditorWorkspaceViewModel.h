@@ -14,6 +14,7 @@
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
+#include "editor/screens/workspace/InspectorExtensionEdit.h"
 
 #include <memory>
 #include <optional>
@@ -118,6 +119,8 @@ namespace Horo::Editor {
         RemoveComponentFromObject,
         AttachBehaviorToObject,
         UpdateBehaviorOnObject,
+        UpdateInspectorBehaviorField,
+        ApproveInspectorContribution,
         RemoveBehaviorFromObject,
         NavigateContentBrowser,
         NavigateContentBrowserBack,
@@ -246,6 +249,7 @@ namespace Horo::Editor {
         std::optional<ComponentType> componentTypePayload = std::nullopt;
         std::optional<Gameplay::BehaviorTypeId> behaviorTypePayload = std::nullopt;
         std::optional<Gameplay::BehaviorComponent> behaviorPayload = std::nullopt;
+        std::optional<InspectorExtensionEdit> inspectorEdit;
         std::optional<Gameplay::BehaviorInstanceId> behaviorInstancePayload = std::nullopt;
         std::optional<EditorTransformTool> transformToolPayload = std::nullopt;
         std::optional<EditorTransformSpace> transformSpacePayload = std::nullopt;
@@ -286,6 +290,11 @@ namespace Horo::Editor {
         bool contentBrowserCanNavigateBack{false};
         bool contentBrowserCanNavigateForward{false};
         DocumentRevision documentRevision;
+        std::uint64_t inspectorDocumentGeneration{};
+        std::uint64_t inspectorBehaviorRegistryRevision{};
+        std::uint64_t inspectorApprovalRevision{};
+        std::uint64_t selectionRevision{};
+        std::vector<InspectorProviderApproval> inspectorApprovals;
         std::vector<SceneObject> objects;
         std::vector<Gameplay::BehaviorDescriptor> availableBehaviors;
         std::optional<SceneObjectId> hierarchyRevealObject;

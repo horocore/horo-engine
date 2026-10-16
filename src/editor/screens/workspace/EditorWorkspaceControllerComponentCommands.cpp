@@ -79,6 +79,8 @@ namespace Horo::Editor {
     }
 
     bool EditorWorkspaceController::ProcessBehaviorCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (ProcessInspectorContributionCommand(cmd))
+            return true;
         switch (cmd.command) {
             case EditorWorkspaceViewCommand::AttachBehaviorToObject:
                 if (cmd.objectPayload.has_value() && cmd.behaviorTypePayload.has_value()) {

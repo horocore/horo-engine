@@ -240,6 +240,11 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc SceneDocumentTransactions::CheckCurrent */
+    Result<void> SceneDocumentTransactions::CheckCurrent() const {
+        return CheckAccess();
+    }
+
     /** @copydoc SceneDocumentTransactions::Admit */
     Result<void> SceneDocumentTransactions::Admit(const SceneTransactionContext &context) const {
         using enum SceneTransactionFailure;

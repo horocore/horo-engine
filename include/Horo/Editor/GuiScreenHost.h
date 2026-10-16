@@ -41,6 +41,7 @@ namespace Horo::Extensions {
     class ExtensionManager;
     class EditorActivityHost;
     class EditorPageHost;
+    class EditorInspectorHost;
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
@@ -92,6 +93,8 @@ namespace Horo::Editor {
         DurableFileSystem *extensionSettingsFiles{};     /**< Explicit application-owned durable storage; absence disables native pages. */
         std::filesystem::path extensionUserSettingsRoot; /**< Resolved user settings root, never inferred from a provider. */
         Extensions::ExtensionAdmissionPolicy extensionPagePolicy; /**< Application-sealed permission evidence. */
+        Extensions::ExtensionAdmissionPolicy
+            extensionInspectorPolicy; /**< Explicit inspector/drawer grants; no configuration write grant. */
     };
 
     /**
@@ -218,6 +221,8 @@ namespace Horo::Editor {
         void InitializeExtensions(const GuiScreenHostComposition &composition);
         /** @brief Composes the explicit scoped page store and actual current-theme projection before advertising native page capability. */
         void InitializeExtensionPages(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities);
+        /** @brief Composes copied declarative inspector authority and actual owner theme before extension activation. */
+        void InitializeExtensionInspectors(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities);
         /** @brief Publishes initial status items after extension composition and status-bar ownership are established. */
         void InitializeStatusItems(const RendererAvailabilitySnapshot &rendererAvailability);
         Result<void> ExecuteLeaveCheckAndCommit(const LeaveTarget &target);
@@ -252,6 +257,7 @@ namespace Horo::Editor {
         std::unique_ptr<EditorPageFileStore> extensionPageStore_;
         std::unique_ptr<EditorPageThemeCapture> extensionPageTheme_;
         std::shared_ptr<Extensions::EditorPageHost> editorPageHost_;
+        std::shared_ptr<Extensions::EditorInspectorHost> editorInspectorHost_;
         std::unique_ptr<Extensions::ExtensionManager> extensionManager_;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 

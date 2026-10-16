@@ -73,12 +73,13 @@ static HoroExtensionStatus Register(const HoroExtensionHostApi *host, uint32_t i
 }
 
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequirements *requirements) {
-    *requirements = (HoroExtensionRequirements){.structSize = sizeof(*requirements),
-                                                .abiMajorVersion = 1,
-                                                .minimumHostMinor = legacyQuery ? 4 : 5,
-                                                .requiredHostApiSize = legacyQuery ? offsetof(HoroExtensionHostApi, registerEditorPage)
-                                                                                   : sizeof(HoroExtensionHostApi),
-                                                .requiredFunctions = legacyQuery ? 0 : HORO_EXTENSION_REQUIRES_EDITOR_PAGE};
+    *requirements =
+        (HoroExtensionRequirements){.structSize = sizeof(*requirements),
+                                    .abiMajorVersion = 1,
+                                    .minimumHostMinor = legacyQuery ? 4 : 5,
+                                    .requiredHostApiSize = legacyQuery ? offsetof(HoroExtensionHostApi, registerEditorPage)
+                                                                       : offsetof(HoroExtensionHostApi, registerEditorInspector),
+                                    .requiredFunctions = legacyQuery ? 0 : HORO_EXTENSION_REQUIRES_EDITOR_PAGE};
     return HORO_EXTENSION_SUCCESS;
 }
 

@@ -292,6 +292,7 @@ namespace Horo::Editor {
         const SelectionSnapshot &selection = m_selection.Current();
         m_viewModel.primarySelection = selection.primary;
         m_viewModel.selectedObjects = selection.objects;
+        m_viewModel.selectionRevision = selection.revision.value;
         m_viewModel.viewportCamera = m_viewportScene.camera;
         m_viewModel.primarySelectionWorldTransform.reset();
         m_viewModel.primarySelectionPreviewWorldTransform.reset();

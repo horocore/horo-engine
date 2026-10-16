@@ -1156,6 +1156,34 @@ Modal drafts and open/focus state are transient and never document/workspace dat
 The versioned profile and rebuild/rollback rules are specified in
 [the ABI migration guide](../../guides/extension-abi-migration.md#external-c-abi-14--15-settings-and-modal-pages).
 
+### Inspector And Property Drawer Contributions
+
+The implemented ABI1.6 profile accepts inert declarations for exact project-owned
+behavior schemas and bool/int64/double/string fields. Other component, asset,
+project, vector and opaque payloads retain generic owner presentation until their
+own typed codec is explicitly composed. Unsupported layouts and controls fail
+registration rather than becoming inert admitted widgets.
+
+Provider declaration and broad capability permission do not establish ownership
+of a GameModule/Lua type. The actual document owner must approve the exact
+provider activation, immutable declaration, type/schema and field set. The normal
+Inspector offers that explicit session action; generic controls remain the default.
+Overlapping explicit approval replaces prior presentation authority. Provider
+revocation, document replacement or actual behavior catalog publication invalidates
+stale evidence. Approval is never module-issued or persisted in document bytes.
+
+The host obtains current values from the real selection/document and uses shared
+FormKit render snapshots and controls. A gesture prepares complete owner-preserving
+replacements and invokes the existing Scene transaction/history once. Validation,
+selection/content fences, rollback, undo/redo, serialization and runtime/editor
+notifications remain with the existing owners. No provider callback receives an
+authoring document or arbitrary render authority. Normal draw caches use actual
+owner/selection/approval and inspector publication epochs; unrelated activity-form
+updates cannot trigger per-frame inspector snapshot copying.
+
+The explicit ABI/source migration and affected consumers are specified in
+[the inspector migration guide](../../guides/extension-inspector-migration.md).
+
 ### Activity Bar Contributions
 
 The activity bar is the vertical icon strip on the left and right edges of the

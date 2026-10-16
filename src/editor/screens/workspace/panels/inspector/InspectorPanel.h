@@ -5,10 +5,18 @@
 #include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
 
 #include <imgui.h>
+#include <memory>
 
 namespace Horo::Editor {
+    class InspectorContributionView;
+
     class InspectorPanel final : public IWorkspacePanel {
     public:
+        /** @brief Creates an unattached panel; contribution authority is borrowed only on attachment. */
+        InspectorPanel();
+        /** @brief Releases all cached restricted projections before attached host teardown. */
+        ~InspectorPanel() override;
+
         [[nodiscard]] std::string GetId() const override {
             return "horo.inspector";
         }
@@ -67,6 +75,7 @@ namespace Horo::Editor {
         void DrawEmptyState(EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         static void AdoptCommand(EditorWorkspaceViewCommandData &destination, EditorWorkspaceViewCommandData source);
 
+        std::unique_ptr<InspectorContributionView> m_contributions;
         Input::InputRouter *m_inputRouter{nullptr};
         Input::InputContextToken m_nameInputContext;
         InspectorEditSession m_editSession;
