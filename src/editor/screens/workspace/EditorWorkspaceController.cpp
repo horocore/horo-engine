@@ -80,6 +80,9 @@ namespace Horo::Editor {
           m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
           m_playSession(dependencies.networkDebugger) {
+        m_audioPreview = dependencies.audioPreview;
+        m_audioPreviewWorkspace = dependencies.documentSessionOwner;
+        m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         if (dependencies.engineEvents != nullptr) {
             m_engineEventBridge = std::make_unique<EditorEngineEventBridge>(*dependencies.engineEvents, m_dataBus);
             m_engineEventBridge->Attach();

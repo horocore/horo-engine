@@ -349,6 +349,21 @@ namespace Horo::Editor {
         });
     }
 
+    /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioListenerCommand&) */
+    Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioListenerCommand &command) {
+        if (!IsValidAudioListenerComponent(command.audioListener))
+            return Result<SceneCommandResult>::Failure(
+                MakeDocumentError(SceneDocumentErrors::InvalidAudioListener, "Audio listener values are invalid."));
+        return CommitExistingComponent<Runtime::AudioListenerComponent,
+                                       AudioListenerChangedDelta>(m_document, m_document.m_objects, command.object, command.audioListener,
+                                                                  &SceneObjectComponentSet::audioListener,
+                                                                  ExistingComponentError{SceneDocumentErrors::InvalidAudioListener,
+                                                                                         "Scene object has no audio listener component."},
+                                                                  [this, objectId = command.object](SceneCommandDelta delta) {
+            return CommitObject({std::move(delta), objectId, DocumentChangeKind::ComponentChanged});
+        });
+    }
+
     /** @copydoc SceneDocumentCommandExecutor::CommitNavigationComponents */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::CommitNavigationComponents(
         const SceneObjectId objectId, const std::optional<Runtime::NavigationSurfaceComponent> *surface,

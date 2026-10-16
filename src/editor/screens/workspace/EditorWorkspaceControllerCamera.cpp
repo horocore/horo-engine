@@ -42,7 +42,9 @@ namespace Horo::Editor {
         : runtime(std::move(runtimeValue)), camera(std::move(cameraValue)),
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
-    EditorWorkspaceController::~EditorWorkspaceController() = default;
+    EditorWorkspaceController::~EditorWorkspaceController() {
+        StopAudioPreview();
+    }
 
     /** @copydoc EditorWorkspaceController::StartCameraCutPreview */
     Result<void> EditorWorkspaceController::StartCameraCutPreview(Cinematic::SequencePlaybackActivation activation,

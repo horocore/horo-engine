@@ -289,6 +289,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshSelectionProjection() {
+        ReconcileAudioPreview();
         const SelectionSnapshot &selection = m_selection.Current();
         m_viewModel.primarySelection = selection.primary;
         m_viewModel.selectedObjects = selection.objects;

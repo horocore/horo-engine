@@ -55,6 +55,8 @@ namespace Horo::Editor {
      * @return True when gain is finite and non-negative.
      */
     [[nodiscard]] bool IsValidAudioSourceComponent(const Runtime::AudioSourceComponent &audioSource) noexcept;
+    /** @brief Validates authored listener selection/weight. @param listener Candidate. @return Whether runtime bounds hold. */
+    [[nodiscard]] bool IsValidAudioListenerComponent(const Runtime::AudioListenerComponent &listener) noexcept;
 
     using SceneObjectId = SceneSource::SceneObjectId;
 
@@ -253,6 +255,12 @@ namespace Horo::Editor {
         Runtime::AudioSourceComponent audioSource;
     };
 
+    /** @brief Typed undoable replacement of an existing authored listener. */
+    struct SetSceneObjectAudioListenerCommand {
+        SceneObjectId object;
+        Runtime::AudioListenerComponent audioListener;
+    };
+
     /** @brief Undoable replacement, attachment, or removal of one authored navigation surface. */
     struct SetSceneNavigationSurfaceCommand {
         SceneObjectId object;
@@ -294,7 +302,8 @@ namespace Horo::Editor {
         Camera,
         Light,
         TriggerVolume,
-        AudioSource
+        AudioSource,
+        AudioListener
     };
 
     /** @brief Typed request to add a default-initialized component to an object. */
@@ -600,6 +609,8 @@ namespace Horo::Editor {
 
         /** @brief Validates and atomically commits an existing audio source component. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectAudioSourceCommand &command);
+        /** @brief Commits validated listener values through document history. @param command Typed replacement. @return Commit or error. */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectAudioListenerCommand &command);
 
         /** @brief Validates Scene-wide identities/references and atomically commits a navigation surface value. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneNavigationSurfaceCommand &command);

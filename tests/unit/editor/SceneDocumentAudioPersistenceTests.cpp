@@ -133,3 +133,23 @@ TEST_CASE("Audio source persistence rejects malformed admission policies", "[uni
         CHECK(loaded.HasError());
     }
 }
+
+TEST_CASE("Explicit audio listeners persist all fields while legacy scenes remain listener-free", "[editor][audio][persistence]") {
+    TemporaryProject project;
+    project.PrepareEmptyScene();
+    const Runtime::AudioListenerComponent listener{16, -123, 0.25F, false};
+    SceneDocumentSnapshot snapshot{.revision = {1},
+                                   .state = {1},
+                                   .objects = {{.id = {1}, .name = "Listener", .components = {.audioListener = listener}},
+                                               {.id = {2}, .name = "Legacy object"}}};
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations{files};
+    auto fingerprint = InspectProjectSceneFingerprint(project.Root(), project.ScenePath());
+    REQUIRE(fingerprint.HasValue());
+    REQUIRE(SaveProjectScene(project.Root(), project.ScenePath(), snapshot, fingerprint.Value(), false, mutations, files).HasValue());
+    auto loaded = LoadProjectDefaultScene(project.Root());
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.Value());
+    CHECK(loaded.Value()->objects[0].components.audioListener == listener);
+    CHECK_FALSE(loaded.Value()->objects[1].components.audioListener);
+}

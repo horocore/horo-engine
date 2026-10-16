@@ -967,6 +967,16 @@ namespace Horo::Editor::Ui {
     [[nodiscard]] bool DrawComboPropRow(const char *label, const char *id, int &value, std::span<const char *const> entries,
                                         const Theme::Fonts &fonts);
 
+    /** @brief Draws a full-width stable unsigned identity/property without float conversion.
+     * @param label Localized label. @param id Stable widget key. @param value Mutable integer draft.
+     * @param fonts Typography. @param error Invalid-value presentation. @return Change and commit state. */
+    [[nodiscard]] PropertyEditResult DrawUnsignedPropRow(const char *label, const char *id, std::uint64_t &value, const Theme::Fonts &fonts,
+                                                         bool error = false);
+    /** @brief Draws a signed integer property using shared inspector geometry and typography.
+     * @param label Localized label. @param id Stable widget key. @param value Mutable integer draft.
+     * @param fonts Typography. @return Change and commit state. */
+    [[nodiscard]] PropertyEditResult DrawIntegerPropRow(const char *label, const char *id, std::int32_t &value, const Theme::Fonts &fonts);
+
     /**
      * @brief Draws a shared Inspector row for editing one floating-point value.
      * @param label Localized property label.

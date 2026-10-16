@@ -35,6 +35,7 @@ namespace Horo::SceneCook {
             return {.camera = source.camera,
                     .light = source.light,
                     .audioSource = source.audioSource,
+                    .audioListener = source.audioListener,
                     .navigationSurface = source.navigationSurface,
                     .navigationRegion = source.navigationRegion,
                     .navigationModifier = source.navigationModifier,
@@ -57,7 +58,7 @@ namespace Horo::SceneCook {
 
         /** @brief Encodes one supported source-free runtime entity using existing typed scalar/component codecs. */
         Result<Json> EncodeEntity(const Runtime::RuntimeEntityDefinition &entity) {
-            if (entity.components.audioListener || entity.components.uiCanvas)
+            if (entity.components.uiCanvas)
                 return Result<Json>::Failure(MakeError(SceneCookErrors::Unsupported));
             return Result<Json>::Success(
                 {{"id", entity.object.value},

@@ -242,6 +242,7 @@ namespace Horo::Editor {
                         controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
                                                      .targetIndex = static_cast<int>(*destination),
                                                      .stringPayload = std::string{}});
+                    controller_->ReconcileAudioPreview();
                     controller_->UpdatePlayPresentation(dt);
                     if (packages_.pump) {
                         const auto &model = controller_->ViewModel();
@@ -527,6 +528,7 @@ namespace Horo::Editor {
                                                                     .networkDebugger =
                                                                         services_.TryGet<Application::NetworkDebuggerService>(),
                                                                     .documentSessionOwner = sessionOwner,
+                                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
