@@ -231,20 +231,20 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Single geometry decision used by both normal queries and optional overlays. */
         template <typename Record> UiHitTestDecision CandidateDecision(const Record &record, double canvasX, double canvasY) noexcept {
+            using enum UiHitTestDecision;
             if (!record.visible)
-                return UiHitTestDecision::Hidden;
+                return Hidden;
             if (!record.enabled)
-                return UiHitTestDecision::Disabled;
+                return Disabled;
             if (record.hasClip && !Contains(record.clip, canvasX, canvasY))
-                return UiHitTestDecision::OutsideClip;
+                return OutsideClip;
             const double localX = record.canvasToLocal[0] * canvasX + record.canvasToLocal[1] * canvasY + record.canvasToLocal[4];
             const double localY = record.canvasToLocal[2] * canvasX + record.canvasToLocal[3] * canvasY + record.canvasToLocal[5];
             const double left = static_cast<double>(record.hitTest.origin.x) - record.hitSlop.left;
             const double top = static_cast<double>(record.hitTest.origin.y) - record.hitSlop.top;
             const double right = static_cast<double>(record.hitTest.origin.x) + record.hitTest.extent.width + record.hitSlop.right;
             const double bottom = static_cast<double>(record.hitTest.origin.y) + record.hitTest.extent.height + record.hitSlop.bottom;
-            return localX >= left && localX < right && localY >= top && localY < bottom ? UiHitTestDecision::Selected
-                                                                                        : UiHitTestDecision::OutsideGeometry;
+            return localX >= left && localX < right && localY >= top && localY < bottom ? Selected : OutsideGeometry;
         }
 
         template <typename Storage>
@@ -288,7 +288,8 @@ namespace Horo::Runtime::Ui {
     Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestScreen(const UiScreenPointerQuery &query,
                                                                             const UiPresentedInteractionState &presented,
                                                                             UiHitTestObservation &observation) const {
-        observation.written = observation.omitted = 0;
+        observation.written = 0;
+        observation.omitted = 0;
         return HitTestScreenObserved(query, presented, &observation);
     }
 
@@ -334,7 +335,8 @@ namespace Horo::Runtime::Ui {
     Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestWorld(const UiWorldRayQuery &query,
                                                                            const UiPresentedInteractionState &presented,
                                                                            UiHitTestObservation &observation) const {
-        observation.written = observation.omitted = 0;
+        observation.written = 0;
+        observation.omitted = 0;
         return HitTestWorldObserved(query, presented, &observation);
     }
 

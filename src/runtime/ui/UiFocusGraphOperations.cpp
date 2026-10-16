@@ -223,11 +223,11 @@ namespace Horo::Runtime::Ui {
     Result<UiFocusNavigationPreview> UiFocusGraph::PreviewMove(const UiNavigationDirection direction) const {
         if (!storage_ || storage_->lifecycle != UiFocusGraphState::Active)
             return Failure<UiFocusNavigationPreview>(UiErrors::FocusLifecycleUnavailable);
-        if (!FocusGraphDetail::DirectionIndex(direction))
+        if (!FocusGraphDetail::DirectionIndex(direction).has_value())
             return Failure<UiFocusNavigationPreview>(UiErrors::FocusInvalid);
         const auto decision = storage_->ResolveNavigation(direction);
         std::optional<UiFocusTarget> target;
-        if (decision.admitted && decision.target) {
+        if (decision.admitted && decision.target.has_value()) {
             const auto &node = storage_->nodes[*decision.target].descriptor;
             target = UiFocusTarget{node.id, node.element};
         }

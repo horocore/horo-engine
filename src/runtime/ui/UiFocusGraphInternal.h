@@ -159,7 +159,7 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Sole next-focus resolver, shared with read-only debugger edges. */
         [[nodiscard]] NavigationDecision ResolveNavigation(UiNavigationDirection direction) const {
-            if (!focusedIndex)
+            if (!focusedIndex.has_value())
                 return {ResolveInitial(), UiFocusChangeReason::Default, true};
             const auto current = *focusedIndex;
             if (current >= nodes.size() || !IsAllowed(current)) {
@@ -171,12 +171,12 @@ namespace Horo::Runtime::Ui {
             const auto id = nodes[current].descriptor.links.Target(direction);
             if (!id.IsValid()) {
                 const auto spatial = SpatialTarget(current, direction);
-                return {spatial, spatial ? UiFocusChangeReason::Spatial : UiFocusChangeReason::InvalidTarget, spatial.has_value()};
+                return {spatial, spatial.has_value() ? UiFocusChangeReason::Spatial : UiFocusChangeReason::InvalidTarget,
+                        spatial.has_value()};
             }
-            if (const auto next = ResolveAllowed(id))
+            if (const auto next = ResolveAllowed(id); next.has_value())
                 return {next, UiFocusChangeReason::Link, true};
-            const auto target = FindNode(id);
-            if (target != InvalidIndex && !IsWithinModal(target))
+            if (const auto target = FindNode(id); target != InvalidIndex && !IsWithinModal(target))
                 return {{}, UiFocusChangeReason::InvalidTarget, false};
             RestorationEntry recovery;
             CollectPath(focusedIndex, recovery);

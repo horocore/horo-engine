@@ -31,7 +31,7 @@ namespace Horo::Runtime::Ui {
             bool &busy;
 
             explicit RecordingGuard(bool &value) noexcept : busy(value) {
-                busy = true;
+                value = true;
             }
 
             ~RecordingGuard() {
@@ -48,7 +48,9 @@ namespace Horo::Runtime::Ui {
         std::vector<UiHitTestCandidate> candidates;
         std::vector<UiEventPhaseObservation> phases;
         std::vector<UiPointerCaptureInspection> captures;
-        std::size_t candidateCount{}, phaseCount{}, captureCount{};
+        std::size_t candidateCount{};
+        std::size_t phaseCount{};
+        std::size_t captureCount{};
 
         explicit Storage(const UiInputDebuggerDescriptor &d)
             : candidates(d.candidateCapacity), phases(d.phaseCapacity), captures(d.captureCapacity) {}
@@ -59,8 +61,11 @@ namespace Horo::Runtime::Ui {
         const std::thread::id thread{std::this_thread::get_id()};
         std::vector<std::shared_ptr<UiInputDebugSnapshot::Storage>> slots;
         std::vector<UiPointerCaptureInspection> captureScratch;
-        std::uint64_t nextSerial{1}, dropped{};
-        bool enabled{}, stopped{}, busy{};
+        std::uint64_t nextSerial{1};
+        std::uint64_t dropped{};
+        bool enabled{};
+        bool stopped{};
+        bool busy{};
 
         explicit Storage(const UiInputDebuggerDescriptor &d) : descriptor(d), captureScratch(d.captureCapacity) {
             slots.reserve(d.historyCapacity);
@@ -76,7 +81,7 @@ namespace Horo::Runtime::Ui {
         std::shared_ptr<UiInputDebugSnapshot::Storage> Acquire(UiInputDebugRecordKind kind) {
             if (!OnThread() || !enabled || stopped)
                 return {};
-            std::shared_ptr<UiInputDebugSnapshot::Storage> *oldest{};
+            const std::shared_ptr<UiInputDebugSnapshot::Storage> *oldest{};
             if (!busy)
                 for (auto &slot : slots)
                     if (slot.use_count() == 1 && (!oldest || slot->record.serial < (*oldest)->record.serial))
@@ -90,7 +95,9 @@ namespace Horo::Runtime::Ui {
             entry->record = {};
             entry->record.kind = kind;
             entry->record.owner = descriptor.owner;
-            entry->candidateCount = entry->phaseCount = entry->captureCount = 0;
+            entry->candidateCount = 0;
+            entry->phaseCount = 0;
+            entry->captureCount = 0;
             return entry;
         }
 
@@ -144,8 +151,7 @@ namespace Horo::Runtime::Ui {
             return Failure<UiInputDebugger>(UiErrors::DiagnosticInvalid);
         if (focus.Owner() != descriptor.owner)
             return Failure<UiInputDebugger>(UiErrors::HandleOwnerMismatch);
-        const auto state = focus.Snapshot();
-        if (state.HasError())
+        if (const auto state = focus.Snapshot(); state.HasError())
             return Result<UiInputDebugger>::Failure(state.ErrorValue());
         try {
             return Result<UiInputDebugger>::Success(UiInputDebugger{std::make_unique<Storage>(descriptor)});
@@ -173,8 +179,7 @@ namespace Horo::Runtime::Ui {
     Result<void> UiInputDebugger::Rebind(const UiFocusGraph &focus) {
         if (!storage_ || !storage_->OnThread() || storage_->stopped || storage_->busy)
             return Failure(UiErrors::InstanceStateInvalid);
-        const auto state = focus.Snapshot();
-        if (state.HasError())
+        if (const auto state = focus.Snapshot(); state.HasError())
             return Result<void>::Failure(state.ErrorValue());
         const auto &owner = focus.Owner();
         const auto &before = storage_->descriptor.owner;
@@ -267,8 +272,8 @@ namespace Horo::Runtime::Ui {
                                                                const UiNavigationInput &navigation) {
         if (!storage_ || !storage_->OnThread() || !storage_->enabled || storage_->stopped || storage_->busy || navigation.IsStopped())
             return Failure<UiInputDebugSnapshot>(UiErrors::InstanceStateInvalid);
-        const auto &owner = storage_->descriptor.owner;
-        if (focus.Owner() != owner || navigation.Owner() != owner || context.instance != owner.instance || context.canvas != owner.canvas ||
+        if (const auto &owner = storage_->descriptor.owner;
+            focus.Owner() != owner || navigation.Owner() != owner || context.instance != owner.instance || context.canvas != owner.canvas ||
             context.document != owner.document || context.tree != owner.treeRevision || context.interaction != owner.interaction)
             return Failure<UiInputDebugSnapshot>(UiErrors::RevisionStale);
         auto state = focus.Snapshot();
