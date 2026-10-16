@@ -146,6 +146,10 @@ namespace Horo::Runtime::Ui {
          * @details Never retain this pointer across registry commands; Acquire pins immutable generations instead.
          */
         [[nodiscard]] UiHotReload *Publisher(RuntimeUiInstanceId instance) noexcept;
+        /** @brief Copies immutable semantic ownership without exposing a publisher or mutable registry.
+         * @param instance Exact active incarnation. @return Host-admitted descriptor or typed stale/lifecycle failure.
+         */
+        [[nodiscard]] Result<UiSceneInstanceDescriptor> Describe(RuntimeUiInstanceId instance) const;
         /** @brief Pins an exact active generation. @param instance Exact instance. @return Lease or typed stale/lifecycle failure. */
         [[nodiscard]] Result<UiReloadLease> Acquire(RuntimeUiInstanceId instance) const;
         /** @brief Drains retirement without blocking or freeing leased generations.

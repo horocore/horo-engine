@@ -3,6 +3,7 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
 #include <algorithm>
 #include <system_error>
@@ -144,6 +145,7 @@ namespace Horo::Gameplay {
         runtimeContext.physics = physics;
         runtimeContext.character = character;
         runtimeContext.ai = ai;
+        runtimeContext.runtimeUi = runtimeUi;
         runtimeContext.navigation = navigation;
     }
 
@@ -159,6 +161,8 @@ namespace Horo::Gameplay {
             character->Revoke();
         if (navigation)
             navigation->Revoke();
+        if (runtimeUi)
+            runtimeUi->Revoke();
         if (physics)
             physics->Revoke();
         auto snapshot = InvokePrepareReload(*gameplayModule, runtimeContext);
@@ -196,6 +200,8 @@ namespace Horo::Gameplay {
             character->Revoke();
         if (navigation)
             navigation->Revoke();
+        if (runtimeUi)
+            runtimeUi->Revoke();
         if (physics)
             physics->Revoke();
         if (projectServices)
@@ -203,6 +209,10 @@ namespace Horo::Gameplay {
         if (gameplayModule != nullptr && startAttempted)
             gameplayModule->Stop(runtimeContext);  // NOSONAR: exact-generation module boundary; path analysis is unrelated.
         projectServices.reset();
+        runtimeContext.navigation.reset();
+        navigation.reset();
+        runtimeContext.runtimeUi.reset();
+        runtimeUi.reset();
         registries.assetTypes.reset();
         registries.replication.reset();
         registries.events.reset();

@@ -8,6 +8,18 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::Runtime::Ui::UiErrors {
+    /** @brief No explicit Runtime UI owner or requested optional responsibility is composed. */
+    extern const ErrorCodeDescriptor CapabilityUnavailable;
+    /** @brief Explicit module policy withholds the requested Runtime UI operation. */
+    extern const ErrorCodeDescriptor CapabilityDenied;
+    /** @brief Scope cancellation, replacement or shutdown permanently closed capability admission. */
+    extern const ErrorCodeDescriptor CapabilityRevoked;
+    /** @brief A Runtime UI operation ran outside its immutable owner thread. */
+    extern const ErrorCodeDescriptor CapabilityWrongThread;
+    /** @brief A callback attempted reentry into an active owner dispatch. */
+    extern const ErrorCodeDescriptor CapabilityBusy;
+    /** @brief A copied command exceeds the finite bridge representation or uses unsupported semantics. */
+    extern const ErrorCodeDescriptor CapabilityUnsupported;
     /** @brief A stable authored identity is the reserved all-zero value. */
     extern const ErrorCodeDescriptor IdentityInvalid;
     /** @brief A runtime ownership generation is the reserved zero value. */

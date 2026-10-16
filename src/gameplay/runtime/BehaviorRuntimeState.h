@@ -10,6 +10,7 @@
 #include "Horo/Physics/CharacterErrors.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
+#include "Horo/Runtime/Ui/RuntimeUiClient.h"
 
 #include <algorithm>
 #include <unordered_map>
@@ -136,6 +137,15 @@ namespace Horo::Gameplay {
                     !instance.component.typeId.Value().starts_with(runtime.physics->Binding().moduleId + "."))
                     return {};
                 return runtime.physics;
+            }
+
+            [[nodiscard]] std::shared_ptr<const Runtime::Ui::RuntimeUiClient> RuntimeUiContext() const noexcept override {
+                if (!runtime.runtimeUi)
+                    return {};
+                const auto &moduleId = runtime.runtimeUi->Grant().moduleId;
+                const auto &type = instance.component.typeId.Value();
+                return type.size() > moduleId.size() && type.starts_with(moduleId) && type[moduleId.size()] == '.' ? runtime.runtimeUi
+                                                                                                                   : nullptr;
             }
 
             [[nodiscard]] std::shared_ptr<const GameplayCharacterContext> CharacterContext() const noexcept override {
@@ -477,6 +487,8 @@ namespace Horo::Gameplay {
                 character->Revoke();
             if (navigation)
                 navigation->Revoke();
+            if (runtimeUi)
+                runtimeUi->Revoke();
             if (physics)
                 physics->Revoke();
             if (prefabs)
@@ -496,6 +508,7 @@ namespace Horo::Gameplay {
         EventQueue events;
         std::shared_ptr<void> generationLease;
         Runtime::SceneRuntimeId sceneIdentity;
+        std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi;
         std::shared_ptr<const GameplayPhysicsContext> physics;
         std::shared_ptr<const GameplayCharacterContext> character;
         std::shared_ptr<const GameplayNavigationContext> navigation;
