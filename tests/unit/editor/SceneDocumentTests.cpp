@@ -1,6 +1,7 @@
 #include "Horo/Editor/SceneDocumentTransaction.h"
 #include "Horo/Runtime/Scene/PrimitiveCatalog.h"
 #include "SceneDocumentTestSupport.h"
+#include "TriggerVolumeConversionTestValues.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/document/SceneDocument.h"
@@ -116,7 +117,7 @@ namespace {
                                                 .components = {.triggerVolume = Runtime::TriggerVolumeComponent{shape}}}},
             };
 
-            const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{1});
+            const auto converted = ConvertSceneDocumentToRuntime(document, Runtime::SceneDefinitionId{1}, Test::TriggerBinding());
             REQUIRE(converted.HasValue());
             REQUIRE(document.objects.front().components.triggerVolume.has_value());
             const auto &components = converted.Value().Entities().front().components;
@@ -168,6 +169,12 @@ namespace {
         REQUIRE(disabledRuntime.HasValue());
         REQUIRE_FALSE(disabledRuntime.Value().Entities().front().components.rigidBody.has_value());
         REQUIRE(disabledRuntime.Value().Entities().front().components.colliders.empty());
+
+        SceneDocumentSnapshot enabled = disabled;
+        enabled.objects.front().components.triggerVolume->enabled = true;
+        const auto missing = ConvertSceneDocumentToRuntime(enabled, Runtime::SceneDefinitionId{1});
+        REQUIRE(missing.HasError());
+        REQUIRE(missing.ErrorValue().code.Value() == "scene_conversion.trigger_volume_project_binding_missing");
 
         SceneDocumentSnapshot conflict = disabled;
         conflict.objects.front().components.triggerVolume->enabled = true;

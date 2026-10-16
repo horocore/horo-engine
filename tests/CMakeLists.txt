@@ -784,6 +784,7 @@ add_executable(HoroPhysicsTests
         unit/runtime/physics/PhysicsQueryEventCapabilityTests.cpp
         unit/runtime/physics/PhysicsReferenceSceneCorpusTests.cpp
         unit/runtime/physics/PhysicsSceneActivationTests.cpp
+        unit/runtime/physics/PhysicsTriggerVolumeRuntimeTests.cpp
         unit/runtime/physics/RuntimeSceneBaselinePhysicsTests.cpp
         unit/runtime/physics/PrefabPhysicsStructuralTests.cpp
         unit/runtime/physics/PhysicsSceneContainmentTests.cpp
@@ -802,7 +803,7 @@ add_executable(HoroPhysicsTests
 target_compile_features(HoroPhysicsTests PRIVATE cxx_std_20)
 target_include_directories(HoroPhysicsTests PRIVATE ${PROJECT_SOURCE_DIR}/src/physics ${PROJECT_SOURCE_DIR}/tests/support)
 target_compile_definitions(HoroPhysicsTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
-target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
+target_link_libraries(HoroPhysicsTests PRIVATE HoroEngine::PhysicsTriggerVolumeHost HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Physics HoroEngine::PhysicsSceneIntegration HoroEngine::Runtime HoroEngine::Platform)
 horo_register_catch_test(HoroPhysicsTests LABELS "unit;physics;headless")
 
 add_executable(HoroPrefabPhysicsGroupTests unit/runtime/physics/PrefabPhysicsGroupTests.cpp)
@@ -1618,6 +1619,18 @@ target_link_libraries(HoroPrefabTemplateCookPublicHeaderConsumer PRIVATE HoroEng
 add_test(NAME HoroPrefabTemplateCookPublicHeaderConsumer COMMAND HoroPrefabTemplateCookPublicHeaderConsumer)
 set_tests_properties(HoroPrefabTemplateCookPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless")
 
+add_executable(HoroPhysicsTriggerVolumeHostContractConsumer support/PhysicsTriggerVolumeHostPublicHeaderConsumer.cpp)
+target_compile_features(HoroPhysicsTriggerVolumeHostContractConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPhysicsTriggerVolumeHostContractConsumer PRIVATE HoroEngine::PhysicsTriggerVolumeHost)
+add_test(NAME HoroPhysicsTriggerVolumeHostContractConsumer COMMAND HoroPhysicsTriggerVolumeHostContractConsumer)
+set_tests_properties(HoroPhysicsTriggerVolumeHostContractConsumer PROPERTIES LABELS "unit;physics;host;headless;ci-windows")
+
+add_executable(HoroTriggerVolumeConversionPublicHeaderConsumer support/TriggerVolumeConversionPublicHeaderConsumer.cpp)
+target_compile_features(HoroTriggerVolumeConversionPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroTriggerVolumeConversionPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook)
+add_test(NAME HoroTriggerVolumeConversionPublicHeaderConsumer COMMAND HoroTriggerVolumeConversionPublicHeaderConsumer)
+set_tests_properties(HoroTriggerVolumeConversionPublicHeaderConsumer PROPERTIES LABELS "unit;physics;scene;headless;ci-windows")
+
 add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp
         unit/scene/ScenePrefabExpansionTests.cpp unit/scene/ScenePrefabExpansionOwnerTests.cpp
         unit/scene/ScenePrefabCanonicalWireTests.cpp unit/scene/ScenePrefabValueOverrideTests.cpp support/AllocationProbe.cpp)
@@ -1630,6 +1643,7 @@ horo_register_catch_test(HoroSceneRuntimeConversionTests LABELS "unit;scene;pref
 add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
 add_executable(HoroPrefabSceneCookHostTests
         unit/application/PrefabSceneCookHostTests.cpp
+        unit/application/PhysicsTriggerVolumeHostTests.cpp
         unit/application/PrefabTemplateCookHostTests.cpp
         unit/application/PrefabCookSchemaContextTests.cpp
         unit/application/PrefabSceneCookQualificationTests.cpp
@@ -1640,7 +1654,7 @@ target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroPrefabSceneCookHostTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
-target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PhysicsTriggerVolumeHost HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPrefabSceneCookHostTests LABELS "unit;prefab;headless;host")
 target_compile_features(HoroPrefabCookPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabCookPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Assets HoroEngine::PrefabCookHost)
@@ -2882,8 +2896,10 @@ add_executable(HoroSceneDocumentTests
         unit/editor/PrefabHierarchyProjectionTests.cpp
         unit/editor/PrefabHierarchySourcesTests.cpp
 )
+
 target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction HoroEngine::EditorServices HoroPrefabHierarchyInternal)
+target_include_directories(HoroSceneDocumentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
         unit/editor/SceneDocumentRecoveryPathTests.cpp
@@ -2894,6 +2910,7 @@ add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentFileWatchPersistenceTests.cpp
         unit/editor/SceneDocumentPersistenceTestSupport.cpp
 )
+
 target_compile_features(HoroSceneDocumentPersistenceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentPersistenceTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroSceneSourceTests unit/scene/SceneSourceTests.cpp)

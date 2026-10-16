@@ -60,6 +60,8 @@ namespace Horo::Editor {
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
         PrefabHierarchySourceCapture prefabSources;   /**< Explicit host loader; never discovered by panels. */
         PCGDocumentCatalog pcgCatalog{.revision = 1}; /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        std::optional<SceneSource::TriggerVolumeConversionContext>
+            triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -217,6 +219,7 @@ namespace Horo::Editor {
 
     private:
         Runtime::RuntimeSceneService &m_runtimeScene;
+        std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
         Assets::AssetRegistrySnapshot m_assetRegistry;
         DocumentIdentityRegistry m_documentRegistry;
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;

@@ -69,7 +69,8 @@ namespace Horo::Editor {
                                                          Runtime::RuntimeSceneService &runtimeScene,
                                                          const Assets::AssetRegistrySnapshot &assetRegistry,
                                                          const EditorWorkspaceDependencies &dependencies)
-        : m_runtimeScene(runtimeScene), m_assetRegistry(assetRegistry), m_sourceOpenService(projectRoot, m_documentRegistry),
+        : m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding), m_assetRegistry(assetRegistry),
+          m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
           m_prefabSourceCapture(dependencies.prefabSources), m_workspaceSession(dependencies.documentSessionOwner),

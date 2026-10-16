@@ -251,14 +251,14 @@ TEST_CASE("Reference scene source moves preserve output and stale nested revisio
     RequireEquivalent(moved.Value(), baseline.Value());
     const auto stillCurrent =
         ConvertScenePrefabProjectionToRuntime({request.document.objects, request.document.prefabInstances}, request.scene, request.revision,
-                                              retained, request.resolver, request.limits);
+                                              retained, {request.resolver, request.limits});
     REQUIRE(stillCurrent.HasValue());
     RequireEquivalent(stillCurrent.Value(), baseline.Value());
     request.resolver = fixture.Resolver(9);
     const std::array changed{fixture.child};
     InvalidateScenePrefabProjection(retained, request.resolver, changed, request.limits);
     const auto stale = ConvertScenePrefabProjectionToRuntime({request.document.objects, request.document.prefabInstances}, request.scene,
-                                                             request.revision, retained, request.resolver, request.limits);
+                                                             request.revision, retained, {request.resolver, request.limits});
     REQUIRE(stale.HasError());
     CHECK(stale.ErrorValue().code.Value() == PrefabErrors::ResolutionStale.code.Value());
     const auto replacement = Convert(request);

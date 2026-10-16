@@ -574,12 +574,28 @@ namespace Horo::Runtime {
         [[nodiscard]] virtual Result<void> AfterPublication() = 0;
     };
 
+    /** @brief Borrowed exact baseline inputs retained by one structural command batch; never stored by a participant. */
+    struct SceneBaselinePreparationView final {
+        const RuntimeSceneDefinition &definition;
+        std::span<const RuntimeGroupAssetLease> resources;
+    };
+
+    /** @brief Host structural-participant virtual contract revision; external host implementations must rebuild. */
+    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 2;
+
     /** @brief Application-composed subsystem participant for bounded Scene group transactions. */
     class SceneStructuralParticipant {
     public:
         virtual ~SceneStructuralParticipant() = default;
         /** @brief Names the one subsystem this participant owns. @return Stable owner category. */
         [[nodiscard]] virtual SceneStructuralOwner Owner() const noexcept = 0;
+        /** @brief Prevalidates every attached/replacement baseline before any owner prepares a native candidate.
+         * @param active Existing coherent scene. @param baselines Complete borrowed batch, including mixed baseline/group transactions.
+         * @return Success or a typed failure preserving all owners. Default Physics ownership rejects unhandled trigger proof;
+         * other owners may delegate to this no-op. No view or lease may be retained beyond this call.
+         */
+        [[nodiscard]] virtual Result<void> ValidateBaselines(RuntimeSceneView active,
+                                                             std::span<const SceneBaselinePreparationView> baselines) const;
         /** @brief Prepares detached additions/removals without exposing native state or running gameplay hooks.
          * @param active Existing Scene, borrowed only for this call.
          * @param created Complete candidate entities, with generation-qualified parent references.

@@ -1,6 +1,7 @@
 #include "../runtime/prefab/PrefabValueOverrideTestSupport.h"
 #include "Horo/Scene/SceneSource.h"
 #include "SceneDocumentTestSupport.h"
+#include "TriggerVolumeConversionTestValues.h"
 
 namespace Horo::Editor {
     namespace {
@@ -121,3 +122,34 @@ namespace Horo::Editor {
         }
     }  // namespace
 }  // namespace Horo::Editor
+
+TEST_CASE("Editor prefab projection keeps its schema signature and runtime trigger binding", "[unit][editor][prefab][physics]") {
+    using namespace Horo;
+    using ProjectionFunction =
+        Result<Editor::ScenePrefabProjection> (*)(const Editor::SceneDocumentSnapshot &, const Prefab::PrefabSourceResolverSnapshot &,
+                                                  const Prefab::PrefabLimitProfile &, const Prefab::PrefabValueSchemaSnapshot *);
+    const ProjectionFunction build = &Editor::BuildScenePrefabProjection;
+    Assets::AssetRegistry registry;
+    const auto limits = Editor::SceneDocumentTestSupport::ScenePrefabLimits();
+    const auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry.Snapshot(), {}, limits).Value();
+    const Editor::SceneDocumentSnapshot document{.revision = Editor::DocumentRevision{1},
+                                                 .state = Editor::DocumentStateId{1},
+                                                 .objects = {
+                                                     Editor::SceneObjectSnapshot{.id = Editor::SceneObjectId{1},
+                                                                                 .name = "Bound trigger",
+                                                                                 .components = {.triggerVolume =
+                                                                                                    Runtime::TriggerVolumeComponent{}}}}};
+    const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr;
+    const auto projection = build(document, resolver, limits, schemas);
+    REQUIRE(projection.HasValue());
+    const auto binding = Test::TriggerBinding();
+    const auto retained =
+        Editor::ConvertScenePrefabProjectionToRuntime(document, {1}, projection.Value(), resolver, limits, schemas, binding);
+    const auto direct = Editor::ConvertSceneDocumentToRuntime(document, {1}, resolver, limits, schemas, binding);
+    REQUIRE(retained.HasValue());
+    REQUIRE(direct.HasValue());
+    REQUIRE(retained.Value().TriggerVolumeEvidence().size() == 1);
+    REQUIRE(direct.Value().TriggerVolumeEvidence().front().binding == binding.binding);
+    REQUIRE(retained.Value().TriggerVolumeEvidence().front().binding == binding.binding);
+    REQUIRE(Editor::ConvertSceneDocumentToRuntime(document, {1}, resolver, limits, schemas).HasError());
+}
