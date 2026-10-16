@@ -126,7 +126,8 @@ TEST_CASE("Native module unload revokes clients before a still-live Physics worl
     auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", CurrentGameplayBuildFingerprint(),
                                                          Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)});
     REQUIRE(loaded.HasValue());
-    auto module = std::move(loaded).Value();
+    REQUIRE_FALSE(loaded.Value().diagnostic);
+    auto module = std::move(loaded).Value().owner;
     REQUIRE(module->PhysicsContext() == context);
     auto client = module->PhysicsContext()->Acquire("game.tests", 7, 7).Value();
     const auto command = Ray(client, *world);

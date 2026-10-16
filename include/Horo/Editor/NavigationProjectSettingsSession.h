@@ -108,7 +108,7 @@ namespace Horo::Editor {
         std::unique_ptr<State> state_;
         std::shared_ptr<NavigationProjectSettingsSessionBorrow::Anchor> borrow_;
         /** @brief Loads the host-enumerated canonical authoring sources with bounded total owner count. */
-        [[nodiscard]] Result<void> LoadRegisteredSources(std::uint64_t generation, SceneDocumentTransactions *activeScene);
+        [[nodiscard]] Result<void> LoadRegisteredSources(std::uint64_t generation, const SceneDocumentTransactions *activeScene);
         /** @brief Refreshes preallocated slots only after owner admission/successful mutation, without allocation or callbacks. */
         void RefreshDefinitionProjection() noexcept;
         /** @brief Loads optional policy and checks its exact registered definition binding. */

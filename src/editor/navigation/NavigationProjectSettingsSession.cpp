@@ -72,7 +72,7 @@ namespace Horo::Editor {
 
     /** @copydoc NavigationProjectSettingsSession::LoadRegisteredSources */
     Result<void> NavigationProjectSettingsSession::LoadRegisteredSources(const std::uint64_t generation,
-                                                                         SceneDocumentTransactions *activeScene) {
+                                                                         const SceneDocumentTransactions *activeScene) {
         auto &s = *state_;
         const auto &registry = *s.registry;
         std::optional<SceneTransactionSnapshot> active;
@@ -95,12 +95,12 @@ namespace Horo::Editor {
             if (!source.Value().identity.exists)
                 return Result<void>::Failure(Reject(Navigation::NavigationSettingsFailure::IncompleteInventory));
             if (record.type.Value() == Assets::NavMeshAssetTypeName) {
-                auto definition = s.LoadDefinition(record, source.Value(), generation, path);
+                auto definition = State::LoadDefinition(record, source.Value(), generation, path);
                 if (definition.HasError())
                     return Result<void>::Failure(definition.ErrorValue());
                 s.definitions.push_back(std::move(definition).Value());
             } else {
-                auto scene = s.LoadScene(record, source.Value(), generation, path, activeScene, active);
+                auto scene = State::LoadScene(record, source.Value(), generation, path, activeScene, active);
                 if (scene.HasError())
                     return Result<void>::Failure(scene.ErrorValue());
                 s.scenes.push_back(std::move(scene).Value());
@@ -294,15 +294,13 @@ namespace Horo::Editor {
             return entry.document->IsDirty();
         }))
             return true;
-        for (const auto &entry : state_->scenes) {
+        return std::ranges::any_of(state_->scenes, [](const auto &entry) {
             const auto lease = entry.port.lock();
             if (!lease || !lease->owner)
                 return true;
             const auto dirty = lease->owner->IsDirty();
-            if (dirty.HasError() || dirty.Value())
-                return true;
-        }
-        return false;
+            return dirty.HasError() || dirty.Value();
+        });
     }
 
     /** @copydoc NavigationProjectSettingsSession::Close */

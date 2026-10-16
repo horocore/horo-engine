@@ -364,7 +364,7 @@ namespace Horo::Editor {
     /** @copydoc SceneDocumentTransactions::Prepare */
     Result<std::shared_ptr<SceneDocumentTransactions::Prepared>> SceneDocumentTransactions::Prepare(
         const SceneTransactionContext &context, const std::span<const SceneObjectReplacement> changes, const SceneTransactionLimits limits,
-        const bool coordinated) {
+        const bool coordinated) const {
         using Return = Result<std::shared_ptr<Prepared>>;
         if (auto admitted = Admit(context); admitted.HasError())
             return Return::Failure(admitted.ErrorValue());

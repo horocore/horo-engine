@@ -199,3 +199,20 @@ constructor; exposing a public constructor merely to use `make_unique` would
 remove the admission boundary. Definition/Scene source loaders are static helpers
 because they inspect only their explicit arguments, while completed Scene JSON
 cleanup owners cannot be copied or moved into a second cleanup authority.
+
+## Navigation presentation regression coverage
+
+`HoroEditorPresentationTests` exercises the actual definition and policy views
+against registered, persisted Navigation/Scene sources and a real admitted session.
+Queued ImGui keyboard activations reach the existing shared buttons; the tests do
+not call private presentation actions or substitute document command handlers.
+The cases check detached invalid drafts, reviewed reference repair, canonical
+publication, grouped undo/redo, durable save/reopen, uncertain save retry, explicit
+policy creation/binding, supplied compatibility evidence, local-overlay separation
+and revoked-session feedback. Narrow Turkish rendering uses the same controls.
+
+Private `SceneDocumentTransactions::Prepare` is a const staging query: it reads
+the admitted owner, allocates detached candidate/history roots and returns them
+without swapping canonical state. Only the mutable publication path can install
+those roots. This does not add const command authority or change a public method
+signature, wire schema, module descriptor or extension capability layout.

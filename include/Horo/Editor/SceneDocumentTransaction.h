@@ -172,7 +172,7 @@ namespace Horo::Editor {
         /** @brief Stages canonical root/history without publication for an owner-thread multi-document transaction. */
         [[nodiscard]] Result<std::shared_ptr<Prepared>> Prepare(const SceneTransactionContext &context,
                                                                 std::span<const SceneObjectReplacement> changes,
-                                                                SceneTransactionLimits limits = {}, bool coordinated = false);
+                                                                SceneTransactionLimits limits = {}, bool coordinated = false) const;
         /** @brief Stages canonical replay for an exclusively admitted multi-document coordinator. */
         [[nodiscard]] Result<std::shared_ptr<Prepared>> PrepareReplay(const SceneTransactionContext &context, bool redo);
         /** @brief Computes the post-publication fence from prepared owner state without copying a root. */

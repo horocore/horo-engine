@@ -481,6 +481,9 @@ namespace Horo::Editor {
                         static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
                     SaveExtensionWorkspace();
                     controller_->FlushAutosave();
+                    if (const auto gameplay = controller_->ShutdownGameplayModules(); gameplay.HasError())
+                        LOG_WARN("editor.gameplay", "Gameplay retirement remains owned by the application: %s",
+                                 gameplay.ErrorValue().message.c_str());
                     if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
                         LOG_ERROR("editor.navigation_document", "Navigation document shutdown is incomplete: %s",
                                   navigation.ErrorValue().message.c_str());
@@ -551,6 +554,7 @@ namespace Horo::Editor {
                                                                     .networkDebugger =
                                                                         services_.TryGet<Application::NetworkDebuggerService>(),
                                                                     .documentSessionOwner = sessionOwner,
+                                                                    .gameplayRetirements = host_.GameplayRetirements(),
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();

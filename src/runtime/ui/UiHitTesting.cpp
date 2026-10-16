@@ -211,6 +211,11 @@ namespace Horo::Runtime::Ui {
         return storage_->descriptor;
     }
 
+    /** @copydoc UiHitTestSnapshot::TryDescriptor */
+    const UiHitTestSnapshotDescriptor *UiHitTestSnapshot::TryDescriptor() const noexcept {
+        return storage_ ? &storage_->descriptor : nullptr;
+    }
+
     namespace {
         template <typename Storage>
         [[nodiscard]] Result<void> ValidatePresentation(const Storage &storage, const UiRenderViewId requestedView,
@@ -224,32 +229,74 @@ namespace Horo::Runtime::Ui {
             return Result<void>::Success();
         }
 
+        /** @brief Single geometry decision used by both normal queries and optional overlays. */
+        template <typename Record> UiHitTestDecision CandidateDecision(const Record &record, double canvasX, double canvasY) noexcept {
+            using enum UiHitTestDecision;
+            if (!record.visible)
+                return Hidden;
+            if (!record.enabled)
+                return Disabled;
+            if (record.hasClip && !Contains(record.clip, canvasX, canvasY))
+                return OutsideClip;
+            const double localX = record.canvasToLocal[0] * canvasX + record.canvasToLocal[1] * canvasY + record.canvasToLocal[4];
+            const double localY = record.canvasToLocal[2] * canvasX + record.canvasToLocal[3] * canvasY + record.canvasToLocal[5];
+            const double left = static_cast<double>(record.hitTest.origin.x) - record.hitSlop.left;
+            const double top = static_cast<double>(record.hitTest.origin.y) - record.hitSlop.top;
+            const double right = static_cast<double>(record.hitTest.origin.x) + record.hitTest.extent.width + record.hitSlop.right;
+            const double bottom = static_cast<double>(record.hitTest.origin.y) + record.hitTest.extent.height + record.hitSlop.bottom;
+            return localX >= left && localX < right && localY >= top && localY < bottom ? Selected : OutsideGeometry;
+        }
+
         template <typename Storage>
-        [[nodiscard]] std::optional<UiHitTestResult> HitLogical(const Storage &storage, const double canvasX, const double canvasY,
-                                                                const float rayDistance) noexcept {
+        [[nodiscard]] std::optional<UiHitTestResult> HitLogical(const Storage &storage, double canvasX, double canvasY, float rayDistance,
+                                                                UiHitTestObservation *observation) noexcept {
             if (canvasX < 0.0 || canvasY < 0.0 || canvasX >= storage.descriptor.logicalExtent.width ||
                 canvasY >= storage.descriptor.logicalExtent.height)
                 return std::nullopt;
+            std::optional<UiHitTestResult> selected;
             for (auto iterator = storage.records.rbegin(); iterator != storage.records.rend(); ++iterator) {
                 const auto &record = *iterator;
-                if (!record.visible || !record.enabled || (record.hasClip && !Contains(record.clip, canvasX, canvasY)))
+                auto decision = CandidateDecision(record, canvasX, canvasY);
+                if (decision == UiHitTestDecision::Selected) {
+                    if (selected)
+                        decision = UiHitTestDecision::Occluded;
+                    else
+                        selected = UiHitTestResult{record.element, ToLogicalPoint(canvasX, canvasY), rayDistance};
+                }
+                if (!observation) {
+                    if (selected)
+                        return selected;
                     continue;
-                const double localX = record.canvasToLocal[0] * canvasX + record.canvasToLocal[1] * canvasY + record.canvasToLocal[4];
-                const double localY = record.canvasToLocal[2] * canvasX + record.canvasToLocal[3] * canvasY + record.canvasToLocal[5];
-                const double left = static_cast<double>(record.hitTest.origin.x) - record.hitSlop.left;
-                const double top = static_cast<double>(record.hitTest.origin.y) - record.hitSlop.top;
-                const double right = static_cast<double>(record.hitTest.origin.x) + record.hitTest.extent.width + record.hitSlop.right;
-                const double bottom = static_cast<double>(record.hitTest.origin.y) + record.hitTest.extent.height + record.hitSlop.bottom;
-                if (localX >= left && localX < right && localY >= top && localY < bottom)
-                    return UiHitTestResult{record.element, ToLogicalPoint(canvasX, canvasY), rayDistance};
+                }
+                if (observation->written < observation->candidates.size())
+                    observation->candidates[observation->written++] = {record.element, record.hitTest, record.clip,   record.canvasToLocal,
+                                                                       decision,       record.hasClip, record.hitSlop};
+                else
+                    ++observation->omitted;
             }
-            return std::nullopt;
+            return selected;
         }
     }  // namespace
 
     /** @copydoc UiHitTestSnapshot::HitTestScreen */
     Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestScreen(const UiScreenPointerQuery &query,
                                                                             const UiPresentedInteractionState &presented) const {
+        return HitTestScreenObserved(query, presented, nullptr);
+    }
+
+    /** @copydoc UiHitTestSnapshot::HitTestScreen */
+    Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestScreen(const UiScreenPointerQuery &query,
+                                                                            const UiPresentedInteractionState &presented,
+                                                                            UiHitTestObservation &observation) const {
+        observation.written = 0;
+        observation.omitted = 0;
+        return HitTestScreenObserved(query, presented, &observation);
+    }
+
+    /** @copydoc UiHitTestSnapshot::HitTestScreenObserved */
+    Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestScreenObserved(const UiScreenPointerQuery &query,
+                                                                                    const UiPresentedInteractionState &presented,
+                                                                                    UiHitTestObservation *observation) const {
         if (!storage_)
             return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestLifecycleUnavailable);
         if (storage_->descriptor.renderMode == UiRenderMode::WorldSpace)
@@ -275,12 +322,28 @@ namespace Horo::Runtime::Ui {
             return Result<std::optional<UiHitTestResult>>::Success(std::nullopt);
         const double logicalX = (static_cast<double>(query.pixelX) - content.x) * unitsPerPixel;
         const double logicalY = (static_cast<double>(query.pixelY) - content.y) * unitsPerPixel;
-        return Result<std::optional<UiHitTestResult>>::Success(HitLogical(*storage_, logicalX, logicalY, 0.0F));
+        return Result<std::optional<UiHitTestResult>>::Success(HitLogical(*storage_, logicalX, logicalY, 0.0F, observation));
     }
 
     /** @copydoc UiHitTestSnapshot::HitTestWorld */
     Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestWorld(const UiWorldRayQuery &query,
                                                                            const UiPresentedInteractionState &presented) const {
+        return HitTestWorldObserved(query, presented, nullptr);
+    }
+
+    /** @copydoc UiHitTestSnapshot::HitTestWorld */
+    Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestWorld(const UiWorldRayQuery &query,
+                                                                           const UiPresentedInteractionState &presented,
+                                                                           UiHitTestObservation &observation) const {
+        observation.written = 0;
+        observation.omitted = 0;
+        return HitTestWorldObserved(query, presented, &observation);
+    }
+
+    /** @copydoc UiHitTestSnapshot::HitTestWorldObserved */
+    Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestWorldObserved(const UiWorldRayQuery &query,
+                                                                                   const UiPresentedInteractionState &presented,
+                                                                                   UiHitTestObservation *observation) const {
         if (!storage_)
             return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestLifecycleUnavailable);
         if (storage_->descriptor.renderMode != UiRenderMode::WorldSpace)
@@ -320,7 +383,7 @@ namespace Horo::Runtime::Ui {
         const double vertical = (py * xx - px * xy) / determinant;
         const double logicalX = horizontal * storage_->descriptor.logicalExtent.width;
         const double logicalY = vertical * storage_->descriptor.logicalExtent.height;
-        return Result<std::optional<UiHitTestResult>>::Success(HitLogical(*storage_, logicalX, logicalY, distance));
+        return Result<std::optional<UiHitTestResult>>::Success(HitLogical(*storage_, logicalX, logicalY, distance, observation));
     }
 
     /** @copydoc UiHitTestStore::Create */

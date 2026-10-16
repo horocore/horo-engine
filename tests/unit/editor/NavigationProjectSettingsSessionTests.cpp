@@ -1,8 +1,6 @@
 #include "AllocationProbe.h"
 #include "Horo/Editor/NavigationProjectSettingsSession.h"
-#include "NativePublicationFiles.h"
-#include "NavigationProjectPolicyTestSupport.h"
-#include "OwnedTestDirectory.h"
+#include "NavigationSettingsProjectTestSupport.h"
 
 #include <fstream>
 #include <thread>
@@ -10,88 +8,9 @@
 using namespace Horo;
 using namespace Horo::Tests::NavigationSettingsSupport;
 
-namespace {
-    /** @brief Injects uncertainty only after a genuine native replacement; source identities still advance. */
-    class SessionFiles final : public TestSupport::NativePublicationFiles {
-    public:
-        enum class ReplacementMode {
-            Durable,
-            Uncertain
-        };
-
-        void SetReplacementMode(const ReplacementMode mode) noexcept {
-            mode_ = mode;
-        }
-
-        [[nodiscard]] std::size_t UncertainReplacements() const noexcept {
-            return uncertainReplacements_;
-        }
-
-        [[nodiscard]] std::size_t DurableReplacements() const noexcept {
-            return durableReplacements_;
-        }
-
-        Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
-                                         const std::filesystem::perms mode) override {
-            return native.WritePrivateDurable(path, bytes, created, mode);
-        }
-
-        Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
-                                          AtomicFileReplacementReceipt &receipt) override {
-            auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
-            if (replaced.HasError())
-                return replaced;
-            if (mode_ == ReplacementMode::Uncertain) {
-                ++uncertainReplacements_;
-                return Result<void>::Failure(MakeError(N::NavigationSettingsError(N::NavigationSettingsFailure::Invalid)));
-            }
-            ++durableReplacements_;
-            return replaced;
-        }
-
-    private:
-        ReplacementMode mode_{ReplacementMode::Durable};
-        std::size_t uncertainReplacements_{};
-        std::size_t durableReplacements_{};
-    };
-
-    /** @brief Real project sources, registered identities and canonical active Scene owner. */
-    struct Project final {
-        Tests::OwnedTestDirectory directory{"navigation-project"};
-        std::filesystem::path root{directory.Path() / std::filesystem::path{u8"çalışma alanı"}};
-        SessionFiles files;
-        E::ProjectMutationCoordinator mutations{files};
-        Assets::AssetRegistry registry;
-        E::SceneDocumentTransactions scene = E::SceneDocumentTransactions::Create({Asset(2), 7}, Objects()).Value();
-
-        Project() {
-            REQUIRE(std::filesystem::create_directory(root));
-            REQUIRE(
-                registry.Publish({Record(1, "core.navmesh", "assets/nav.horoasset"), Record(2, "core.scene", "assets/a.horo")}).status ==
-                Assets::AssetRegistryBuildStatus::Complete);
-            const auto record = N::EncodeNavigationDefinitionRecord(N::NavigationDefinition::Create(Definition()).Value(),
-                                                                    Id<N::NavigationAuthoredRecordId>(1));
-            REQUIRE(record.HasValue());
-            const std::array support{N::NavigationDefinitionRecordSupport()};
-            const N::NavigationSourceLoadContext context{.supportedRecords = support};
-            const auto envelope = N::NavigationSourceRecords::Create(N::CurrentNavigationSourceSchemaVersion, {record.Value()}, context);
-            REQUIRE(envelope.HasValue());
-            const auto bytes = N::SerializeNavigationSourceRecords(envelope.Value());
-            REQUIRE(bytes.HasValue());
-            REQUIRE(files.WriteDurable(root / "assets/nav.horoasset", bytes.Value()).HasValue());
-            const auto text = SceneSource::EncodeSceneSource({Objects(), {}});
-            REQUIRE(files.WriteDurable(root / "assets/a.horo", std::as_bytes(std::span{text.data(), text.size()})).HasValue());
-        }
-
-        auto Open(const std::uint64_t generation = 7) {
-            return E::NavigationProjectSettingsSession::Open(root, registry, files, mutations, generation, &scene);
-        }
-    };
-}  // namespace
-
 TEST_CASE("Navigation project session repairs canonical active Scene and saves actual independent source files",
           "[navigation][settings][session]") {
-    Project project;
+    SessionProjectFixture project;
     auto opened = project.Open();
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();
@@ -130,7 +49,7 @@ TEST_CASE("Navigation project session repairs canonical active Scene and saves a
 }
 
 TEST_CASE("Navigation project session refuses externally changed bytes and missing inventory", "[navigation][settings][freshness]") {
-    Project project;
+    SessionProjectFixture project;
     auto opened = project.Open();
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();
@@ -176,7 +95,7 @@ TEST_CASE("Navigation source revision exhaustion rejects before a save ticket ex
 
 TEST_CASE("Navigation definition rendering projection reuses storage and never reads changed files",
           "[navigation][settings][projection][allocation]") {
-    Project project;
+    SessionProjectFixture project;
     auto opened = project.Open();
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();
@@ -207,7 +126,7 @@ TEST_CASE("Navigation definition rendering projection reuses storage and never r
 
 TEST_CASE("Navigation definition cached projection refreshes on commit replay and new opening",
           "[navigation][settings][projection][lifetime]") {
-    Project project;
+    SessionProjectFixture project;
     auto opened = project.Open();
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();
@@ -243,7 +162,7 @@ TEST_CASE("Navigation definition cached projection refreshes on commit replay an
 }
 
 TEST_CASE("Navigation presentation borrows revoke before close and never resolve another opening", "[navigation][settings][lifetime]") {
-    Project project;
+    SessionProjectFixture project;
     auto opened = project.Open();
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();
@@ -281,7 +200,7 @@ TEST_CASE("Navigation presentation borrows revoke before close and never resolve
 
 TEST_CASE("Navigation independent document saves retain dirty tickets after replacement uncertainty and can retry exact sources",
           "[navigation][settings][save][durability]") {
-    Project project;
+    SessionProjectFixture project;
     auto opened = project.Open();
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();

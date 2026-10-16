@@ -174,8 +174,7 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             const auto &link = *components.navigationLink;
             const bool start = SelectedSurface(scene, link.start.surface, definition);
-            const bool end = SelectedSurface(scene, link.end.surface, definition);
-            if (start != end)
+            if (const bool end = SelectedSurface(scene, link.end.surface, definition); start != end)
                 return Result<void>::Failure(Reject(NavigationSettingsFailure::IncompleteInventory));
             if (start)
                 for (auto &id : components.navigationLink->profiles)

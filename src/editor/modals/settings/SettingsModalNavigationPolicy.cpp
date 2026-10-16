@@ -184,7 +184,7 @@ namespace Horo::Editor::SettingsModalInternal {
         const auto label = Text(ctx, key);
         bool changed{};
         Ui::SettingRow(label.c_str(), "", ctx.theme.fonts, [&changed, &label, &text, &ctx] {
-            changed = Ui::InputTextControl(label.c_str(), text, 20, ctx.theme.fonts);
+            changed = Ui::InputTextControl(label.c_str(), text, 21, ctx.theme.fonts);
         });
         if (!changed)
             return false;

@@ -150,7 +150,7 @@ namespace Horo::AI {
         /**
          * @brief Adds one owned write without touching live storage.
          * @param write Typed key/value candidate.
-         * @return Success or a stable duplicate, invalid-key, or capacity failure.
+         * @return Success or a stable consumed-batch, invalid-key, or capacity failure.
          */
         [[nodiscard]] Result<void> Stage(BlackboardWrite write);
 
@@ -171,6 +171,15 @@ namespace Horo::AI {
 
     private:
         friend class BlackboardInstance;
+
+        class CommitConsumption;
+        /** @brief Transfers the one call-scoped reset obligation without moving vector storage.
+         * @return Noncopyable/nonmovable stack guard borrowing this batch until commit returns.
+         * @pre Only the owning BlackboardInstance calls this on its owner lane. The caller's batch
+         * outlives the guard; staged values remain intact through validation and observer publication.
+         * @post Guard destruction invalidates the binding/revision and clears writes on every exit.
+         */
+        [[nodiscard]] CommitConsumption ConsumeForCommit() && noexcept;
 
         BlackboardWriteBatch(BlackboardInstanceBinding binding, std::uint64_t revision) : binding_(binding), baseRevision_(revision) {}
 
@@ -273,10 +282,14 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::size_t> CancelTaskObserversAtBlackboardSync(TaskHandle task);
         /**
          * @brief Validates and atomically applies a complete batch at the owner BlackboardSync safe point.
-         * @param batch Detached candidate batch.
-         * @return New revision and deterministic changes, or a stable failure with no mutation.
+         * @param batch Detached candidate consumed on every return, including rejected commits.
+         * @return New revision and deterministic changes, or a stable failure with no live-state mutation.
+         * @post The batch has an invalid binding, zero base revision and no staged writes or authorizations.
+         * @details Borrows the supplied rvalue during the call to avoid allocating a container move proxy.
+         * Prepared successful commits allocate no storage; the caller retains only the emptied vector capacity.
+         * Callers must not reuse a consumed batch; acquire a new batch for another attempt.
          */
-        [[nodiscard]] Result<BlackboardCommitResult> CommitAtBlackboardSync(BlackboardWriteBatch batch);
+        [[nodiscard]] Result<BlackboardCommitResult> CommitAtBlackboardSync(BlackboardWriteBatch &&batch);
         /**
          * @brief Transactionally migrates compatible values to a replacement schema/default layout.
          * @param replacementBinding Strictly newer schema and instance generation fence for the same agent.
