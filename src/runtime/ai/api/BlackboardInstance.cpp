@@ -105,7 +105,7 @@ namespace Horo::AI {
 
     /** @copydoc BlackboardWriteBatch::Stage */
     Result<void> BlackboardWriteBatch::Stage(BlackboardWrite write) {
-        if (!write.key.IsValid())
+        if (!binding_.IsValid() || !write.key.IsValid())
             return Result<void>::Failure(Failure(AIErrors::BlackboardBatchInvalid));
         if (const auto duplicate = std::ranges::find(writes_, write.key, &BlackboardWrite::key); duplicate != writes_.end()) {
             duplicate->value = std::move(write.value);
@@ -260,7 +260,20 @@ namespace Horo::AI {
     }
 
     /** @copydoc BlackboardInstance::CommitAtBlackboardSync */
-    Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch batch) {
+    Result<BlackboardCommitResult> BlackboardInstance::CommitAtBlackboardSync(BlackboardWriteBatch &&batch) {
+        // Consume on every exit without move-constructing a vector (MSVC Debug allocates its iterator proxy).
+        struct ConsumeBatch final {
+            BlackboardInstanceBinding &binding;
+            std::uint64_t &revision;
+            std::vector<BlackboardWrite> &writes;
+
+            ~ConsumeBatch() {
+                binding = {};
+                revision = 0;
+                writes.clear();
+            }
+        } consumed{batch.binding_, batch.baseRevision_, batch.writes_};
+
         if (publishing_)
             return Result<BlackboardCommitResult>::Failure(Failure(AIErrors::BlackboardReentrantMutation));
         if (!active_ || batch.Binding() != binding_ || batch.BaseRevision() != revision_)

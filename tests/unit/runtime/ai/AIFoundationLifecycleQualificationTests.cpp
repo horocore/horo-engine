@@ -54,7 +54,7 @@ namespace Horo::AI {
             }
             CHECK(capability.ReadBlackboard(scene.handle, key).Value() == std::optional{BlackboardValue{BlackboardScalarValue{false}}});
             REQUIRE(capability.CommitBlackboardWrite(scene.handle, std::move(writers[0]->batch)).HasValue());
-            ExpectError(capability.CommitBlackboardWrite(scene.handle, std::move(writers[1]->batch)), AIErrors::BlackboardBatchInvalid);
+            ExpectError(capability.CommitBlackboardWrite(scene.handle, std::move(writers[1]->batch)), AIErrors::BlackboardInstanceStale);
             CHECK(capability.ReadBlackboard(scene.handle, key).Value() == std::optional{BlackboardValue{BlackboardScalarValue{true}}});
         }
 

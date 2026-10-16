@@ -170,6 +170,9 @@ namespace Horo::AI {
             }();
             REQUIRE(committed.HasValue());
             CHECK(allocations == 0);
+            CHECK_FALSE(batch.Binding().IsValid());
+            CHECK(batch.BaseRevision() == 0);
+            CHECK(batch.Writes().empty());
             CHECK(committed.Value().changedKeyCount == MaximumBlackboardKeys);
             CHECK(owner.Board().CaptureCanonical().Value().entries.size() == MaximumBlackboardKeys);
             for (std::size_t index = 0; index < MaximumBlackboardObservers; ++index) {

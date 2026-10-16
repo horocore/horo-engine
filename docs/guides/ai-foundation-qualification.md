@@ -3,7 +3,8 @@
 This qualification joins the delivered GAI-001 identity, blackboard, task,
 scheduler, scene and canonical-state contracts. It uses the real scene runtime,
 Foundation JobSystem and owning AI implementation. It does not introduce a
-backend, runtime API, SDK generation or alternate state authority.
+backend, SDK generation or alternate state authority. The commit-call migration below
+removes a platform-specific allocation without changing runtime component layouts.
 
 ## Acceptance and proof boundaries
 
@@ -60,6 +61,33 @@ invokes AI retirement. Public scene destruction/capability tests and private
 production-owner teardown tests provide complementary evidence. The latter does not manufacture a public
 observer API, and independent BlackboardInstance tests are not substituted for
 scene-owner cleanup evidence.
+
+## Prepared commit ownership migration
+
+`BlackboardInstance::CommitAtBlackboardSync` now accepts `BlackboardWriteBatch&&`
+instead of constructing a by-value batch. The original defaulted vector move
+allocates a container iterator proxy on MSVC Debug before entering the commit
+body, violating the prepared-commit zero-allocation qualification despite the
+pre-sized value and authorization scratch stores. The measured Windows failure
+was one allocation; the zero-allocation assertion remains unchanged.
+
+A stack-only exit guard invalidates the binding and base revision and clears all
+writes on every exit, including stale, invalid and reentrant rejection. Staged
+authorizations are released at that boundary. The caller retains an empty
+vector's capacity until its normal destruction; no new vector or proxy is
+constructed during commit. Consumed batches reject further staging. Successful
+publication still owns any authorizations copied into active values.
+
+All existing direct callers already pass rvalues and need no source rewrite:
+`AiRuntimeCapability::CommitBlackboardWrite`, scene perception publication, and
+AI blackboard, decision-wake, perception, behavior-tree, state-machine and
+foundation qualification tests/support. Rebuild the owning AI library and its
+consumers because the C++ member signature changes; there is no SDK component
+layout change. The outer public capability still accepts a batch by value, so
+this qualification does **not** claim that capability transport or detached
+batch preparation is allocation-free. Regression coverage checks consumption
+on successful, invalid, stale and reentrant exits, authorization release on
+rejection, and unchanged values, revisions and observer notifications.
 
 ## Validation
 
