@@ -285,7 +285,7 @@ TEST_CASE("Project Scene Resolver Accepts An Empty Default Scene", "[unit][edito
 
 TEST_CASE("Project Scene Loader Rejects Unknown Schema Versions", "[unit][editor][persistence]") {
     TemporaryProject project;
-    project.PrepareEmptyScene("{\"schemaVersion\":2,\"objects\":[]}\n");
+    project.PrepareEmptyScene("{\"schemaVersion\":999,\"objects\":[]}\n");
     REQUIRE((LoadProjectDefaultScene(project.Root()).HasError()));
 }
 

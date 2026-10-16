@@ -4,6 +4,7 @@ include_guard(GLOBAL)
 # update the architecture policy in the same review.
 horo_allow_target_dependencies(TARGET HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroFoundationJsonInternal)
+horo_allow_target_dependencies(TARGET HoroPublicationLockInternal)
 horo_allow_target_dependencies(TARGET HoroHostErrors DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroSecurity DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroCliHost DEPENDENCIES HoroFoundation HoroHostErrors)

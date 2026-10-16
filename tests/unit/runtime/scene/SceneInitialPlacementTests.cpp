@@ -160,9 +160,10 @@ namespace Horo::Runtime {
             std::size_t &calls_;
         };
 
-        RuntimeSceneDefinition PlacementDefinition(std::uint64_t revision, Math::Vec3 parentScale = {2, 2, 2}) {
+        RuntimeSceneDefinition PlacementDefinition(std::uint64_t revision, Math::Vec3 parentScale = {2, 2, 2},
+                                                   Math::Quaternion parentHeading = Math::Quaternion::Identity()) {
             SceneDefinitionBuilder builder{{1}, {revision}};
-            builder.Add({.object = {1}, .localTransform = {.translation = {2, 0, 0}, .scale = parentScale}});
+            builder.Add({.object = {1}, .localTransform = {.translation = {2, 0, 0}, .rotation = parentHeading, .scale = parentScale}});
             builder.Add(
                 {.object = {2}, .parent = SceneObjectId{1}, .localTransform = {.translation = {0, 1, 0}, .scale = {0.5F, 0.5F, 0.5F}}});
             builder.Add({.object = {3}, .parent = SceneObjectId{2}, .localTransform = {.translation = {0, 1, 0}}});
@@ -231,6 +232,41 @@ namespace Horo::Runtime {
             service.Shutdown();
             CHECK(probe.retired == 2);
         }
+    }
+
+    TEST_CASE("Initial placement preserves representable mirrored and nonuniform rotated parent transforms", "[scene][placement]") {
+        PlacementProbe probe;
+        Math::Vec3 scale{-2, 2, 2};
+        Math::Quaternion heading = Math::Quaternion::Identity();
+        SECTION("mirrored parent") {}
+        SECTION("nonuniform parent with aligned nonidentity heading") {
+            scale = {2, 1, 1};
+            heading = {0, 0, 0.70710677F, 0.70710677F};
+            probe.heading = heading;
+        }
+        RuntimeSceneService service;
+        RegisterPlacement(service, probe);
+        const auto authored = PlacementDefinition(1, scale, heading);
+        REQUIRE(service.QueuePreparation(authored).HasValue());
+        Commit(service);
+        REQUIRE(service.ActiveScene().has_value());
+        const auto view = service.ActiveScene()->Get(*service.ActiveScene()->Find({2}));
+        REQUIRE(view.HasValue());
+        CHECK(Math::NearlyEqual(view.Value().localTransform->scale, Math::Vec3{0.5F, 0.5F, 0.5F}));
+        CHECK(authored.Entities()[0].localTransform.scale == scale);
+        CHECK(authored.Entities()[1].localTransform.translation == Math::Vec3{0, 1, 0});
+        CHECK(probe.published == 1);
+    }
+
+    TEST_CASE("Initial placement rejects a near-singular parent before publishing any owner", "[scene][placement]") {
+        PlacementProbe probe;
+        RuntimeSceneService service;
+        RegisterPlacement(service, probe);
+        const auto authored = PlacementDefinition(1, {Math::DefaultEpsilon * 0.25F, 1, 1});
+        REQUIRE(service.QueuePreparation(authored).HasError());
+        CHECK_FALSE(service.ActiveScene());
+        CHECK(probe.published == 0);
+        CHECK(probe.retired == 1);
     }
 
     TEST_CASE("Initial placement rejects nonrepresentable local shear instead of rewriting authored scale", "[scene][placement]") {

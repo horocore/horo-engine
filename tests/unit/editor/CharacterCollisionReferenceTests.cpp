@@ -65,7 +65,7 @@ namespace Horo::Tests::CollisionSettings {
               "[character][collision][scene][references]") {
         auto input = Input();
         const auto channel = IdOf<Physics::PhysicsQueryChannelId>(11);
-        input.schema.queryChannels.push_back({.id = channel, .enabled = false});
+        input.schema.queryChannels.push_back({.id = channel});
         input.channels.push_back({channel, "Optional authored query", {}});
         for (auto &profile : input.schema.profiles)
             profile.queryResponses.push_back({channel, Physics::CollisionQueryResponse::Ignore});

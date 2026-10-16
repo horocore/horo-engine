@@ -53,14 +53,14 @@ namespace Horo::Application::CharacterSceneProductTest {
     TEST_CASE("Actual terminal CLI activates authored and committed cooked Character Scenes",
               "[character][scene][cli][product][canonical]") {
         Fixture fixture;
-        CHECK(RunCli(SceneArguments(fixture, "source:assets/level.scene", "canonical")).exitCode == 0);
+        CHECK(RunCli(SceneArguments(fixture, "source:assets/level.horo", "canonical")).exitCode == 0);
         CHECK(RunCli(SceneArguments(fixture, "cooked:" + fixture.project.sceneId.ToString(), "canonical")).exitCode == 0);
     }
 #endif
 
     TEST_CASE("Explicit Null terminal Scene host refuses enabled Character without fallback", "[character][scene][cli][product][null]") {
         Fixture fixture;
-        CHECK(RunCli(SceneArguments(fixture, "source:assets/level.scene", "null")).exitCode == 3);
+        CHECK(RunCli(SceneArguments(fixture, "source:assets/level.horo", "null")).exitCode == 3);
     }
 
     TEST_CASE("Terminal Scene options reject malformed incomplete and escaping input", "[character][scene][cli][product]") {

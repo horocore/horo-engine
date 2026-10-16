@@ -346,7 +346,7 @@ namespace Horo::Runtime {
         std::vector<SceneBaselinePreparationView> baselines;
         for (const auto &command : commands.commands_)
             if (const auto *baseline = std::get_if<SceneCommandBuffer::AttachBaselineCommand>(&command))
-                baselines.push_back({baseline->definition, baseline->resources});
+                baselines.emplace_back(baseline->definition, baseline->resources);
         // Every owner sees the entire exact batch before ANY owner can allocate native additions or retirement state.
         if (!baselines.empty())
             for (const auto &participant : participants)

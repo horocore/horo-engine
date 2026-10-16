@@ -26,12 +26,16 @@ namespace Horo::Application::CharacterSceneProductTest {
 
         Fixture() {
             project.request.assets.target = Target("headless-canonical");
+            // The generic cook fixture uses synthetic extensions; product discovery needs canonical source/sidecar pairs.
+            std::filesystem::rename(project.project.dir.path / "assets/level.scene", project.project.dir.path / "assets/level.horo");
+            std::filesystem::rename(project.project.dir.path / "assets/level.scene.horo",
+                                    project.project.dir.path / "assets/level.horo.horo");
             WriteCollision();
             WriteMaterial();
             WriteScene();
             REQUIRE(project.registry
-                        .Publish({Record(project.sceneId, "core.scene", "assets/level.scene"),
-                                  Record(materialId, "core.physics_material", "assets/controller.material")})
+                        .Publish({Record(project.sceneId, "core.scene", "assets/level.horo"),
+                                  Record(materialId, "core.physics_material", "assets/controller.horoasset")})
                         .status == Assets::AssetRegistryBuildStatus::Complete);
             Cook();
         }
@@ -68,9 +72,9 @@ namespace Horo::Application::CharacterSceneProductTest {
             const auto encoded = Physics::EncodePhysicsMaterialAsset(material.Value());
             REQUIRE(encoded.HasValue());
             const auto &bytes = encoded.Value();
-            WriteFile(project.project.dir.path / "assets/controller.material",
+            WriteFile(project.project.dir.path / "assets/controller.horoasset",
                       {reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()});
-            project.WriteText("assets/controller.material.horo", SidecarJson(materialId.ToString(), "core.physics_material"));
+            project.WriteText("assets/controller.horoasset.horo", SidecarJson(materialId.ToString(), "core.physics_material"));
         }
 
         void WriteScene() {
@@ -94,7 +98,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                        Runtime::PhysicsAnalyticCollider{Runtime::PhysicsStaticPlaneCollider{{0, 1, 0}, 0}},
                                                    .collisionProfile = profile,
                                                    .materials = {{Physics::PhysicsMaterialSlotId::FromValue(1), materialId}}}}}}};
-            project.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({source.objects, source.prefabInstances}));
+            project.WriteText("assets/level.horo", SceneSource::EncodeSceneSource({source.objects, source.prefabInstances}));
         }
 
         void Cook() {

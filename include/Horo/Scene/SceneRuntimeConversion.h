@@ -50,6 +50,16 @@ namespace Horo::SceneSource {
         [[nodiscard]] bool HasBrokenInstances() const noexcept;
     };
 
+    /** @brief Coherent borrowed source publication and policy for one synchronous retained conversion.
+     * @details The caller keeps every referenced value alive and immutable until conversion returns.
+     * Conversion does not retain the context, copy snapshots or discover project services.
+     */
+    struct ScenePrefabResolutionContext final {
+        const Prefab::PrefabSourceResolverSnapshot &resolver; /**< Exact current immutable source publication. */
+        const Prefab::PrefabLimitProfile &limits;             /**< Captured bounded expansion and publication policy. */
+        const Prefab::PrefabValueSchemaSnapshot *schemas{};   /**< Optional current immutable property schema. */
+    };
+
     /**
      * @brief Resolves every placement using the single Prefab-domain resolver without source I/O or activation.
      * @param document Borrowed coherent authored values; retained only for this call.
@@ -96,17 +106,14 @@ namespace Horo::SceneSource {
      * @param sceneId Stable containing scene identity.
      * @param revision Captured authored revision.
      * @param projection Retained candidates; stale, broken or mismatched placements reject the complete conversion.
-     * @param resolver Current immutable source publication.
-     * @param schemas Current schema context; mismatched retained schema identity rejects publication.
-     * @param limits Bounded conversion and publication policy.
+     * @param context Current immutable resolver, bounded policy and schema; mismatched retained evidence rejects publication.
      * @param triggerBinding Explicit project authority required by enabled legacy triggers.
      * @return Complete immutable runtime definition or typed failure, without partial publication.
      * @details The owner must invalidate retained projections for intervening resource publications before conversion.
      */
     [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(
         const SceneSourceView &document, Runtime::SceneDefinitionId sceneId, Runtime::SceneDefinitionRevision revision,
-        const ScenePrefabProjection &projection, const Prefab::PrefabSourceResolverSnapshot &resolver,
-        const Prefab::PrefabLimitProfile &limits, const Prefab::PrefabValueSchemaSnapshot *schemas = nullptr,
+        const ScenePrefabProjection &projection, const ScenePrefabResolutionContext &context,
         const std::optional<TriggerVolumeConversionContext> &triggerBinding = {});
 
     /**

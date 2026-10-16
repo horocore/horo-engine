@@ -481,9 +481,9 @@ namespace Horo::SceneSource {
     /** @copydoc ConvertScenePrefabProjectionToRuntime */
     Result<Runtime::RuntimeSceneDefinition> ConvertScenePrefabProjectionToRuntime(
         const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId, const Runtime::SceneDefinitionRevision revision,
-        const ScenePrefabProjection &projection, const Prefab::PrefabSourceResolverSnapshot &resolver,
-        const Prefab::PrefabLimitProfile &limits, const Prefab::PrefabValueSchemaSnapshot *schemas,
+        const ScenePrefabProjection &projection, const ScenePrefabResolutionContext &context,
         const std::optional<TriggerVolumeConversionContext> &triggerBinding) {
+        const auto &[resolver, limits, schemas] = context;
         if (projection.instances.size() != document.prefabInstances.size())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
         auto prepared = BeginSceneAssembly(document, sceneId, revision, triggerBinding);
@@ -536,7 +536,7 @@ namespace Horo::SceneSource {
         auto projection = BuildScenePrefabProjection(document, resolver, limits, schemas);
         if (projection.HasError())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(projection.ErrorValue());
-        return ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), resolver, limits, schemas,
+        return ConvertScenePrefabProjectionToRuntime(document, sceneId, revision, projection.Value(), {resolver, limits, schemas},
                                                      triggerBinding);
     }
 

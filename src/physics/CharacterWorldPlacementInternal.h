@@ -12,7 +12,8 @@ namespace Horo::Character::Detail {
 
     /** @brief Keeps controller records resident while an owner-thread adapter callback is in flight. */
     template <typename Impl> struct PlacementOperationGuard final {
-        explicit PlacementOperationGuard(Impl &world) noexcept : impl(world), previous(std::exchange(impl.placementActive, true)) {}
+        explicit PlacementOperationGuard(Impl &world) noexcept
+            : impl(world), entryState(world.state.load()), previous(std::exchange(impl.placementActive, true)) {}
 
         ~PlacementOperationGuard() noexcept {
             impl.debug.End();
@@ -24,6 +25,7 @@ namespace Horo::Character::Detail {
         PlacementOperationGuard &operator=(const PlacementOperationGuard &) = delete;
 
         Impl &impl;
+        const CharacterWorldState entryState;
         bool previous{};
     };
 
@@ -64,8 +66,9 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Revalidates owner state and exact controller liveness after an adapter callback. */
-    [[nodiscard]] Result<void> ValidatePlacementContinuation(auto &impl, const CharacterControllerHandle &handle) {
-        if (impl.state.load() != CharacterWorldState::Active || !impl.placementActive || impl.shutdownRequested)
+    [[nodiscard]] Result<void> ValidatePlacementContinuation(auto &impl, const CharacterControllerHandle &handle,
+                                                             const CharacterWorldState entryState) {
+        if (impl.state.load() != entryState || !impl.placementActive || impl.shutdownRequested)
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         const auto registryLock = impl.synchronization.LockRegistry();
         if (const auto record = impl.controllers.Resolve(handle); record.HasError())
@@ -77,7 +80,7 @@ namespace Horo::Character::Detail {
     [[nodiscard]] Result<SpawnRecovery> RecoverSpawnPosition(auto &impl, const CharacterControllerHandle &handle,
                                                              const CharacterControllerDescriptor &descriptor,
                                                              const CharacterPhysicsQueryContext &query, const std::uint64_t expectedTick,
-                                                             const Math::Vec3 initialPosition) {
+                                                             const Math::Vec3 initialPosition, const CharacterWorldState entryState) {
         if (const auto valid = ValidateQueryContext(impl, query, expectedTick); valid.HasError())
             return Result<SpawnRecovery>::Failure(valid.ErrorValue());
 
@@ -100,7 +103,7 @@ namespace Horo::Character::Detail {
                 descriptor.selectors,
             };
             const auto probe = query.overlap(query.context, request);
-            if (const auto continuation = ValidatePlacementContinuation(impl, handle); continuation.HasError())
+            if (const auto continuation = ValidatePlacementContinuation(impl, handle, entryState); continuation.HasError())
                 return Result<SpawnRecovery>::Failure(continuation.ErrorValue());
             if (probe.HasError())
                 return Result<SpawnRecovery>::Failure(probe.ErrorValue());
@@ -123,7 +126,7 @@ namespace Horo::Character::Detail {
     [[nodiscard]] Result<void> ValidateTeleportClearance(auto &impl, const CharacterControllerHandle &handle,
                                                          const CharacterControllerDescriptor &descriptor,
                                                          const CharacterPhysicsQueryContext &query, const std::uint64_t expectedTick,
-                                                         const Math::Vec3 position) {
+                                                         const Math::Vec3 position, const CharacterWorldState entryState) {
         if (const auto valid = ValidateQueryContext(impl, query, expectedTick); valid.HasError())
             return valid;
         if (const auto valid = ValidatePlacementPosition(position); valid.HasError())
@@ -142,7 +145,7 @@ namespace Horo::Character::Detail {
             descriptor.selectors,
         };
         const auto probe = query.overlap(query.context, request);
-        if (const auto continuation = ValidatePlacementContinuation(impl, handle); continuation.HasError())
+        if (const auto continuation = ValidatePlacementContinuation(impl, handle, entryState); continuation.HasError())
             return continuation;
         if (probe.HasError())
             return Result<void>::Failure(probe.ErrorValue());
@@ -197,12 +200,14 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Commits one validated placement after re-resolving the exact live controller record. */
-    [[nodiscard]] Result<CharacterPlacementResult> PublishPlacement(auto &impl, const CharacterControllerHandle &handle,
+    [[nodiscard]] Result<CharacterPlacementResult> PublishPlacement(const auto &guard, const CharacterControllerHandle &handle,
                                                                     const CharacterPlacementOperation operation, const std::uint64_t tick,
                                                                     const Math::Vec3 position, const Math::Quaternion heading,
                                                                     const std::uint32_t recoveryIterations) {
+        auto &impl = guard.impl;
+        const auto entryState = guard.entryState;
         const auto registryLock = impl.synchronization.LockRegistry();
-        if (impl.state.load() != CharacterWorldState::Active || !impl.placementActive)
+        if (impl.state.load() != entryState || !impl.placementActive || impl.shutdownRequested)
             return Result<CharacterPlacementResult>::Failure(MakeError(CharacterErrors::InvalidState));
         const auto resolved = impl.controllers.ResolveMutable(handle);
         if (resolved.HasError())

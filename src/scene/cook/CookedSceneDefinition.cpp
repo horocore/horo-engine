@@ -109,10 +109,10 @@ namespace Horo::SceneCook {
 
         /** @brief Decodes one exact portable proof value; the Scene builder owns canonical correspondence checks. */
         Result<Runtime::TriggerVolumeMigrationEvidence> DecodeMigration(const Json &value) {
-            const bool identityFields = value.is_object() && value.contains("object") && value.contains("body") &&
-                                        value.contains("collider") && value["object"].is_number_unsigned() &&
-                                        value["body"].is_number_unsigned() && value["collider"].is_number_unsigned();
-            if (!identityFields || !Foundation::HasAllowedFields(value, {"object", "body", "collider", "schema", "profile", "material",
+            if (const bool identityFields = value.is_object() && value.contains("object") && value.contains("body") &&
+                                            value.contains("collider") && value["object"].is_number_unsigned() &&
+                                            value["body"].is_number_unsigned() && value["collider"].is_number_unsigned();
+                !identityFields || !Foundation::HasAllowedFields(value, {"object", "body", "collider", "schema", "profile", "material",
                                                                          "type", "revision", "payload"}))
                 return Result<Runtime::TriggerVolumeMigrationEvidence>::Failure(MakeError(SceneCookErrors::Invalid));
             if (!value["schema"].is_number_unsigned() || !value["revision"].is_number_unsigned() || !value["profile"].is_string() ||

@@ -71,11 +71,13 @@ namespace Horo::Physics {
         TEST_CASE("Null Physics explicitly refuses enabled Character while disabled data survives cook", "[physics][scene][character]") {
             auto runtime = RequireRuntime();
             PhysicsSceneActivationAuthority authority;
-            auto source = CharacterSource(Asset(91), false);
+            AssetSceneFixture assets;
+            InstallCharacterMaterial(assets);
+            auto source = CharacterSource(assets.material, false);
             const auto enabled = CookCharacter(source);
-            auto scene = RequireScene(enabled);
+            const auto scene = assets.Prepare(enabled);
             PhysicsSceneActivationParticipant participant{*runtime, authority, Settings()};
-            Test::RequireError(participant.Prepare(enabled, scene->View()), PhysicsErrors::CapabilityUnavailable);
+            Test::RequireError(participant.Prepare(enabled, scene), PhysicsErrors::CapabilityUnavailable);
             source.objects[1].components.characterController->enabled = false;
             source.objects[1].components.characterController->collision = {};
             const auto disabled = CookCharacter(source, 2);

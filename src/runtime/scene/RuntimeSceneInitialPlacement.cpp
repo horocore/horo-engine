@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "RuntimeSceneErrors.h"
 
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <vector>
@@ -55,6 +56,22 @@ namespace Horo::Runtime {
             return Result<Matrices>::Success(std::move(matrices));
         }
 
+        /** @brief Rejects shear locally: the general math decomposer intentionally projects onto the closest TRS basis. */
+        [[nodiscard]] Result<Math::Transform> ExactPlacementTransform(const Math::Mat4 &matrix) {
+            auto transform = Math::TryDecomposeAffineTRS(matrix);
+            if (transform.HasError())
+                return Result<Math::Transform>::Failure(transform.ErrorValue());
+            auto rebuilt = transform.Value().TryToMatrix();
+            if (rebuilt.HasError())
+                return Result<Math::Transform>::Failure(rebuilt.ErrorValue());
+            for (std::size_t index = 0; index < matrix.values.size(); ++index) {
+                const float scale = std::max({1.0F, std::abs(matrix.values[index]), std::abs(rebuilt.Value().values[index])});
+                if (!Math::NearlyEqual(matrix.values[index], rebuilt.Value().values[index], Math::DefaultEpsilon * scale))
+                    return InvalidPlacement<Math::Transform>("Initial placement cannot represent the candidate pose without shear.");
+            }
+            return transform;
+        }
+
         /** @brief Replaces the world pose while preserving the original representable visual scale. */
         [[nodiscard]] Result<Math::Mat4> PlacedWorld(const SceneInitialPlacement &placement, const Math::Mat4 &original) {
             const auto &q = placement.heading;
@@ -62,7 +79,7 @@ namespace Horo::Runtime {
                                 static_cast<double>(q.w) * q.w;
             if (!Math::IsFinite(placement.position) || !Math::IsFinite(q) || std::abs(norm - 1.0) > 1.0e-6)
                 return InvalidPlacement<Math::Mat4>("Initial placement pose must be finite with a unit heading.");
-            auto visual = Math::TryDecomposeAffineTRS(original);
+            auto visual = ExactPlacementTransform(original);
             if (visual.HasError())
                 return Result<Math::Mat4>::Failure(visual.ErrorValue());
             Math::Transform result = visual.Value();
@@ -103,7 +120,7 @@ namespace Horo::Runtime {
                     return Result<void>::Failure(inverse.ErrorValue());
                 local = Math::Multiply(inverse.Value(), local);
             }
-            auto transform = Math::TryDecomposeAffineTRS(local);
+            auto transform = ExactPlacementTransform(local);
             if (transform.HasError())
                 return Result<void>::Failure(transform.ErrorValue());
             updates.emplace_back(index, transform.Value());

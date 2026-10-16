@@ -295,3 +295,20 @@ requires an explicit editor restart with that project's `--project` selection;
 it never reuses the previous project's schema/provider. Null authoring keeps its
 existing project-switch behavior. New committed generations/schema changes are
 adopted through explicit restart/capture, not silent mutation of a live world.
+
+## Prepared placement and exact transform preservation
+
+Initial Character recovery runs while its private world is Prepared. Placement
+retains the exact entry lifecycle state across every real overlap callback and
+through final controller publication; activation, shutdown, stale generation or
+reentrant mutation invalidates the operation. This preserves ordinary Active
+spawn/teleport behavior without activating the initial candidate early. Successful
+prepared spawn publishes its one initial transform at tick zero; aggregate Publish
+activates the world once after every owner is ready.
+
+The general math TRS decomposer may approximate a sheared basis. Scene initial
+placement therefore recomposes each decomposed world/local transform and checks
+equivalence with the established finite Math tolerance. Nonrepresentable shear
+is rejected before any private local transform is assigned or owner publishes.
+Mirrored and representable nonuniform rotated parents remain supported; singular
+parents fail rather than replacing authored visual scale.

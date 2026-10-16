@@ -6,6 +6,7 @@ add_library(HoroFoundation STATIC
         foundation/assertions/Assertions.cpp
         foundation/AssetCookTargetId.cpp
         foundation/FoundationErrors.cpp
+        foundation/PublicationLock.cpp
         foundation/modules/ModuleActivationContext.cpp
         foundation/modules/ModuleDescriptor.cpp
         foundation/modules/ModuleHost.cpp
@@ -47,6 +48,16 @@ target_include_directories(HoroFoundation
         PRIVATE
         $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
 )
+
+# The native owner implements only this staged, non-installed lease-state contract.
+add_library(HoroPublicationLockInternal INTERFACE)
+set(_horo_publication_lock_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/publication-lock")
+file(MAKE_DIRECTORY "${_horo_publication_lock_headers}")
+configure_file(foundation/PublicationLockState.h
+        "${_horo_publication_lock_headers}/PublicationLockState.h" COPYONLY)
+target_include_directories(HoroPublicationLockInternal INTERFACE "${_horo_publication_lock_headers}")
+target_include_directories(HoroFoundation PRIVATE
+        "$<TARGET_PROPERTY:HoroPublicationLockInternal,INTERFACE_INCLUDE_DIRECTORIES>")
 add_library(HoroHostErrors STATIC hosts/ErrorTranslation.cpp)
 add_library(HoroEngine::HostErrors ALIAS HoroHostErrors)
 target_compile_features(HoroHostErrors PUBLIC cxx_std_20)
@@ -221,6 +232,8 @@ target_include_directories(HoroPlatform
         ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Security)
+target_include_directories(HoroPlatform PRIVATE
+        "$<TARGET_PROPERTY:HoroPublicationLockInternal,INTERFACE_INCLUDE_DIRECTORIES>")
 
 add_library(HoroPlatformServices STATIC
         platform_services/AchievementDefinitionRegistry.cpp

@@ -121,10 +121,11 @@ namespace Horo::Character {
         }
         const auto sourceTick = impl_->closedTick.load();
         impl_->debug.Begin(handle, true);
-        const auto recovery = Detail::RecoverSpawnPosition(*impl_, handle, descriptor, query, sourceTick, descriptor.collisionRootPosition);
+        const auto recovery =
+            Detail::RecoverSpawnPosition(*impl_, handle, descriptor, query, sourceTick, descriptor.collisionRootPosition, guard.entryState);
         if (recovery.HasError())
             return Result<CharacterPlacementResult>::Failure(recovery.ErrorValue());
-        return Detail::PublishPlacement(*impl_, handle, CharacterPlacementOperation::Spawn, sourceTick, recovery.Value().position, heading,
+        return Detail::PublishPlacement(guard, handle, CharacterPlacementOperation::Spawn, sourceTick, recovery.Value().position, heading,
                                         recovery.Value().iterations);
     }
 
@@ -153,7 +154,7 @@ namespace Horo::Character {
             return Result<CharacterPlacementResult>::Failure(descriptor.ErrorValue());
         impl_->debug.Begin(request.controller, true);
         if (const auto valid = Detail::ValidateTeleportClearance(*impl_, request.controller, descriptor.Value(), query, request.tick,
-                                                                 request.targetPosition);
+                                                                 request.targetPosition, guard.entryState);
             valid.HasError()) {
             Detail::ReleaseTeleportReservation(*impl_, request.controller, request.tick);
             return Result<CharacterPlacementResult>::Failure(valid.ErrorValue());
@@ -169,7 +170,7 @@ namespace Horo::Character {
             Detail::ReleaseTeleportReservation(*impl_, request.controller, request.tick);
             return Result<CharacterPlacementResult>::Failure(valid.ErrorValue());
         }
-        const auto published = Detail::PublishPlacement(*impl_, request.controller, CharacterPlacementOperation::Teleport, request.tick,
+        const auto published = Detail::PublishPlacement(guard, request.controller, CharacterPlacementOperation::Teleport, request.tick,
                                                         request.targetPosition, request.targetHeading, 0);
         if (published.HasError())
             Detail::ReleaseTeleportReservation(*impl_, request.controller, request.tick);
