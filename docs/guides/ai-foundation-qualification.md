@@ -71,8 +71,13 @@ body, violating the prepared-commit zero-allocation qualification despite the
 pre-sized value and authorization scratch stores. The measured Windows failure
 was one allocation; the zero-allocation assertion remains unchanged.
 
-A stack-only exit guard invalidates the binding and base revision and clears all
-writes on every exit, including stale, invalid and reentrant rejection. Staged
+A private rvalue-qualified `ConsumeForCommit() &&` transfers the reset obligation
+to a noncopyable/nonmovable stack-only guard through guaranteed prvalue
+construction. The guard borrows the caller's batch on the owner lane; neither
+it nor the vector is move-constructed. Its lifetime remains wholly inside
+`CommitAtBlackboardSync`, and staged values stay alive through validation and
+observer publication. At call exit the guard invalidates the binding and base
+revision and clears all writes on every exit, including stale, invalid and reentrant rejection. Staged
 authorizations are released at that boundary. The caller retains an empty
 vector's capacity until its normal destruction; no new vector or proxy is
 constructed during commit. Consumed batches reject further staging. Successful

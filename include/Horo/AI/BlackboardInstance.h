@@ -172,6 +172,15 @@ namespace Horo::AI {
     private:
         friend class BlackboardInstance;
 
+        class CommitConsumption;
+        /** @brief Transfers the one call-scoped reset obligation without moving vector storage.
+         * @return Noncopyable/nonmovable stack guard borrowing this batch until commit returns.
+         * @pre Only the owning BlackboardInstance calls this on its owner lane. The caller's batch
+         * outlives the guard; staged values remain intact through validation and observer publication.
+         * @post Guard destruction invalidates the binding/revision and clears writes on every exit.
+         */
+        [[nodiscard]] CommitConsumption ConsumeForCommit() && noexcept;
+
         BlackboardWriteBatch(BlackboardInstanceBinding binding, std::uint64_t revision) : binding_(binding), baseRevision_(revision) {}
 
         BlackboardInstanceBinding binding_;

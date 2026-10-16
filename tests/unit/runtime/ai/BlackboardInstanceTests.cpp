@@ -72,6 +72,8 @@ namespace Horo::AI {
             std::size_t changedCount{};
             std::uint64_t revision{};
             std::size_t calls{};
+            const BlackboardWriteBatch *observedCommitBatch{};
+            bool writesAliveDuringPublication{};
             bool beginRejected{};
             bool commitRejected{};
             bool resetRejected{};
@@ -85,6 +87,10 @@ namespace Horo::AI {
         void Observe(void *context, const BlackboardNotificationBatch &notification) noexcept {
             auto &probe = *static_cast<ObserverProbe *>(context);
             ++probe.calls;
+            if (probe.observedCommitBatch)
+                probe.writesAliveDuringPublication = probe.observedCommitBatch->Binding().IsValid() &&
+                                                     probe.observedCommitBatch->BaseRevision() != 0 &&
+                                                     !probe.observedCommitBatch->Writes().empty();
             probe.revision = notification.Revision();
             probe.changedCount = notification.Changes().size();
             std::ranges::copy(notification.Changes(), probe.changes.begin());
@@ -120,6 +126,24 @@ namespace Horo::AI {
             REQUIRE(instance.CommitAtBlackboardSync(std::move(batch)).HasValue());
         }
     }  // namespace
+
+    TEST_CASE("Blackboard consumption keeps staged writes alive through observer publication then invalidates the batch",
+              "[unit][ai][blackboard-instance][blackboard-observer]") {
+        auto instance = Instance(Schema({Key(1, BlackboardValueKind::Boolean)}));
+        auto batch = instance->BeginWriteBatch().Value();
+        REQUIRE(batch.Stage({MakeIdentity<BlackboardKeyId>(1), Bool(true)}).HasValue());
+        ObserverProbe probe{.observedCommitBatch = &batch};
+        const BlackboardObserverRegistration observer{instance->Snapshot().Value().Binding().agent, Task(),
+                                                      MakeIdentity<BlackboardKeyId>(1), Observe, &probe};
+        REQUIRE(instance->RegisterObserverAtBlackboardSync(observer).HasValue());
+        const auto committed = instance->CommitAtBlackboardSync(std::move(batch));
+        REQUIRE(committed.HasValue());
+        CHECK(probe.calls == 1);
+        CHECK(probe.writesAliveDuringPublication);
+        CHECK(committed.Value().revision == 2);
+        CHECK(instance->Snapshot().Value().Read(MakeIdentity<BlackboardKeyId>(1)).Value() == std::optional{Bool(true)});
+        CheckConsumed(batch);
+    }
 
     TEST_CASE("Blackboard instance materializes typed schema defaults", "[unit][ai][blackboard-instance]") {
         auto schema = Schema({Key(2, BlackboardValueKind::Boolean, Bool(true)), Key(1, BlackboardValueKind::SignedInteger, Integer(9))});
