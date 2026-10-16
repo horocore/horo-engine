@@ -172,3 +172,21 @@ registry paths are portable UTF-8 and are converted explicitly to native paths,
 including on Windows; symlink resolution and project-root containment still apply.
 The Unicode WAV fixture constructs its native filename from a UTF-8 literal,
 independently of the decoder's conversion, so mojibake cannot satisfy both sides.
+
+## Audio command family migration
+
+Source and listener replacements enter the same `SceneDocumentCommandExecutor`
+through `SetSceneObjectAudioComponentCommand`, a fixed-storage variant of the
+existing two typed commands. Their payloads contain only Audio IDs, fixed sound
+reference alternatives, scalars and optional fixed IDs. The sum introduces no
+heap storage or second document/history authority. Each alternative retains its
+existing typed validation, missing-component diagnostic and atomic
+`CommitExistingComponent`/`CommitObject` transition.
+
+Existing typed `Execute(SetSceneObjectAudioSourceCommand{...})` and listener
+calls convert implicitly; internal document/editor consumers must rebuild for
+the unified member signature. Undo/redo, invalid-command redo preservation and
+both missing-component cases cover the migration. No gameplay SDK or installed
+public contract changes. The preview cleanup destructors terminate before
+unwinding retained native ownership if any cleanup call throws; an exception
+never proves callback detachment.

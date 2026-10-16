@@ -23,6 +23,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <variant>
 #include <vector>
 
 namespace Horo::Editor {
@@ -260,6 +261,9 @@ namespace Horo::Editor {
         SceneObjectId object;
         Runtime::AudioListenerComponent audioListener;
     };
+
+    /** @brief One fixed-storage audio-component edit family; both alternatives retain the same document/history authority. */
+    using SetSceneObjectAudioComponentCommand = std::variant<SetSceneObjectAudioSourceCommand, SetSceneObjectAudioListenerCommand>;
 
     /** @brief Undoable replacement, attachment, or removal of one authored navigation surface. */
     struct SetSceneNavigationSurfaceCommand {
@@ -607,10 +611,13 @@ namespace Horo::Editor {
         /** @brief Validates and atomically commits an existing trigger volume component. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectTriggerVolumeCommand &command);
 
-        /** @brief Validates and atomically commits an existing audio source component. */
-        [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectAudioSourceCommand &command);
-        /** @brief Commits validated listener values through document history. @param command Typed replacement. @return Commit or error. */
-        [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectAudioListenerCommand &command);
+        /**
+         * @brief Validates and atomically commits one existing audio source or listener through the shared history authority.
+         * @param command Owned fixed-storage typed source/listener replacement; typed alternatives convert implicitly.
+         * @return Component-change result or the original typed validation/missing-component error without live mutation.
+         * @details Source and listener edits share one related command family; callers rebuild against this internal signature.
+         */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneObjectAudioComponentCommand &command);
 
         /** @brief Validates Scene-wide identities/references and atomically commits a navigation surface value. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const SetSceneNavigationSurfaceCommand &command);

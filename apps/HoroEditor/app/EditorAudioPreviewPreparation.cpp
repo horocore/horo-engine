@@ -56,6 +56,7 @@ namespace Horo::Editor::AudioPreviewHostDetail {
         for (std::size_t pass = 0; pass < 4; ++pass) {
             (void)resources.staging.Pump(64);
             while (resources.staging.TryConsume(record)) {
+                // Detached preparation never publishes these retired staging records.
             }
         }
     }
@@ -73,7 +74,7 @@ namespace Horo::Editor::AudioPreviewHostDetail {
         if (plan.HasError())
             return Result<Internal::AudioFrontendResources>::Failure(plan.ErrorValue());
         const auto bus = request.source.playback.bus.value_or(Identity<AudioBusId>(3));
-        if (!plan.Value()->ResolveBus(bus))
+        if (!plan.Value()->ResolveBus(bus).has_value())
             return Result<Internal::AudioFrontendResources>::Failure(MakeError(AudioComponentPreviewErrors::MissingBus));
         auto stagingResult = AudioCommandStaging::Create(
             {{owner, Identity<AudioMemoryPoolId>(31), 1, 128, 8, 256U << 10U}, Identity<AudioMemoryPoolId>(32), 128, 8, 1, 256U << 10U});

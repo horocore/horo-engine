@@ -68,8 +68,7 @@ namespace Horo::Editor {
                                              m_assetRegistry,
                                              *source,
                                              listeners.empty() ? std::nullopt : std::optional{listeners.front()}};
-        auto started = m_audioPreview->Start(request);
-        if (started.HasError())
+        if (auto started = m_audioPreview->Start(request); started.HasError())
             return fail(started.ErrorValue());
         m_viewModel.audioPreviewFailure.reset();
         ReconcileAudioPreview();

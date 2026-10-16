@@ -26,7 +26,7 @@ namespace Horo::Editor {
             *m_draft.audioSource == *object.components.audioSource)
             return {};
 
-        EditorWorkspaceViewCommandData command =
+        auto command =
             EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::UpdateAudioSourceComponent, .objectPayload = object.id};
         command.audioSourcePayload = *m_draft.audioSource;
         return command;
@@ -47,7 +47,7 @@ namespace Horo::Editor {
             *m_draft.audioListener == *object.components.audioListener)
             return {};
 
-        EditorWorkspaceViewCommandData command =
+        auto command =
             EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::UpdateAudioListenerComponent, .objectPayload = object.id};
         command.audioListenerPayload = *m_draft.audioListener;
         return command;

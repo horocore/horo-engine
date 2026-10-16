@@ -7,6 +7,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -276,4 +277,32 @@ TEST_CASE("Audio inspector draws narrow localized enabled disabled and error sta
             CHECK(command.ClipRect.x >= 0.0F);
             CHECK(command.ClipRect.z <= 240.0F);
         }
+}
+
+TEST_CASE("Audio listener inspector reset preserves disabled authoring while restoring defaults", "[unit][editor][audio]") {
+    AudioInspectorFrame frame;
+    auto &components = frame.model.objects.front().components;
+    components.audioSource.reset();
+    components.audioListener = Horo::Runtime::AudioListenerComponent{12, -27, 0.25F, false};
+    const auto original = components.audioListener;
+    REQUIRE(frame.Draw().command == Horo::Editor::EditorWorkspaceViewCommand::None);
+    REQUIRE(frame.Draw().command == Horo::Editor::EditorWorkspaceViewCommand::None);
+    ImGuiWindow *listenerWindow{};
+    for (auto *window : GImGui->Windows)
+        if (std::string_view{window->Name}.find("##AudioListenerCard") != std::string_view::npos)
+            listenerWindow = window;
+    REQUIRE(listenerWindow);
+    REQUIRE(listenerWindow->WasActive);
+    // Activate the real shared card reset action by its scoped widget identity, without depending on pixel offsets.
+    const auto titleScope = ImHashStr("title_bar", 0, listenerWindow->ID);
+    const auto resetScope = ImHashStr("reset", 0, titleScope);
+    ImGui::ActivateItemByID(ImHashStr("##card_action", 0, resetScope));
+    const auto command = frame.Draw();
+    REQUIRE(command.command == Horo::Editor::EditorWorkspaceViewCommand::UpdateAudioListenerComponent);
+    REQUIRE(command.audioListenerPayload.has_value());
+    CHECK_FALSE(command.audioListenerPayload->enabled);
+    CHECK(command.audioListenerPayload->view == 0);
+    CHECK(command.audioListenerPayload->priority == 0);
+    CHECK(command.audioListenerPayload->weight == 1.0F);
+    CHECK(components.audioListener == original);
 }

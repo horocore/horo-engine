@@ -2419,7 +2419,8 @@ namespace Horo::Editor::Ui {
     }
 
     /** @brief Draws one exact integer representation in the existing property-row surface. */
-    static PropertyEditResult DrawIntegerProperty(const char *label, const char *id, void *value, const ImGuiDataType type,
+    template <typename Integer>
+    static PropertyEditResult DrawIntegerProperty(const char *label, const char *id, Integer &value, const ImGuiDataType type,
                                                   const Theme::Fonts &fonts, const bool error) {
         const PropertyRowLayout layout = BeginPropertyRow(label, fonts);
         ImGui::SetCursorScreenPos({layout.controlX, layout.controlY});
@@ -2431,7 +2432,7 @@ namespace Horo::Editor::Ui {
         PropertyEditResult result;
         {
             Theme::ScopedTextStyle text(fonts.sans, InspectorTypography::Field(), Theme::FontPx::Sans);
-            result.changed = ImGui::InputScalar("##value", type, value);
+            result.changed = ImGui::InputScalar("##value", type, &value);
             result.committed = ImGui::IsItemDeactivatedAfterEdit();
         }
         if (error)
@@ -2446,12 +2447,12 @@ namespace Horo::Editor::Ui {
     /** @copydoc DrawUnsignedPropRow */
     PropertyEditResult DrawUnsignedPropRow(const char *label, const char *id, std::uint64_t &value, const Theme::Fonts &fonts,
                                            const bool error) {
-        return DrawIntegerProperty(label, id, &value, ImGuiDataType_U64, fonts, error);
+        return DrawIntegerProperty(label, id, value, ImGuiDataType_U64, fonts, error);
     }
 
     /** @copydoc DrawIntegerPropRow */
     PropertyEditResult DrawIntegerPropRow(const char *label, const char *id, std::int32_t &value, const Theme::Fonts &fonts) {
-        return DrawIntegerProperty(label, id, &value, ImGuiDataType_S32, fonts, false);
+        return DrawIntegerProperty(label, id, value, ImGuiDataType_S32, fonts, false);
     }
 
     /** @copydoc DrawFloatPropRow */

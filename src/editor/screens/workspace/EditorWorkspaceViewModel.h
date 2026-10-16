@@ -283,11 +283,10 @@ namespace Horo::Editor {
         std::string absoluteSourcePath;
     };
 
-    struct EditorWorkspaceViewModel {
+    struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
         bool audioPreviewAvailable{};
         std::optional<AudioComponentPreviewSnapshot> audioPreview;
         std::optional<Error> audioPreviewFailure;
-        // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
         std::string projectRoot;
         Assets::AssetRegistryRevision assetRegistryRevision{};
         ContentBrowserDirectory contentBrowser;

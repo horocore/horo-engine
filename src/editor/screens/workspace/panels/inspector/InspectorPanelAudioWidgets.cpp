@@ -66,20 +66,21 @@ namespace Horo::Editor {
                                      Label(context, "workspace.inspector.audio.stream"),
                                      Label(context, "workspace.inspector.audio.music"),
                                      Label(context, "workspace.inspector.audio.extension")};
-            int kind = static_cast<int>(sound.kind);
+            auto kind = static_cast<int>(sound.kind);
             bool committed = Ui::DrawComboPropRow(Label(context, "workspace.inspector.audio.sound_kind"), "audio_kind", kind, entries,
                                                   context.theme.fonts);
             if (committed) {
                 draft.audioSoundIdentity.clear();
                 sound.kind = static_cast<Audio::AudioSoundReferenceKind>(kind);
+                using enum Audio::AudioSoundReferenceKind;
                 switch (sound.kind) {
-                    case Audio::AudioSoundReferenceKind::Unassigned:
+                    case Unassigned:
                         sound.target = std::monostate{};
                         break;
-                    case Audio::AudioSoundReferenceKind::Clip:
+                    case Clip:
                         sound.target = Audio::AudioClipId{};
                         break;
-                    case Audio::AudioSoundReferenceKind::Extension:
+                    case Extension:
                         sound.target = Audio::AudioSoundExtensionReference{};
                         break;
                     default:
@@ -124,8 +125,8 @@ namespace Horo::Editor {
                                      Label(context, "workspace.inspector.audio.steal_priority"),
                                      Label(context, "workspace.inspector.audio.steal_furthest"),
                                      Label(context, "workspace.inspector.audio.replace")};
-            int mode = static_cast<int>(playback.concurrency.mode);
-            if (Ui::DrawComboPropRow(Label(context, "workspace.inspector.audio.concurrency"), "audio_concurrency", mode, entries,
+            if (auto mode = static_cast<int>(playback.concurrency.mode);
+                Ui::DrawComboPropRow(Label(context, "workspace.inspector.audio.concurrency"), "audio_concurrency", mode, entries,
                                      context.theme.fonts)) {
                 playback.concurrency.mode = static_cast<Audio::AudioConcurrencyMode>(mode);
                 committed = true;
@@ -144,8 +145,8 @@ namespace Horo::Editor {
             committed = DrawAdmission(context, source.playback) || committed;
             const std::array entries{Label(context, "workspace.inspector.audio.stop_unload"),
                                      Label(context, "workspace.inspector.audio.keep_alive")};
-            int lifecycle = static_cast<int>(source.sceneLifecycle);
-            if (Ui::DrawComboPropRow(Label(context, "workspace.inspector.audio.lifecycle"), "audio_lifecycle", lifecycle, entries,
+            if (auto lifecycle = static_cast<int>(source.sceneLifecycle);
+                Ui::DrawComboPropRow(Label(context, "workspace.inspector.audio.lifecycle"), "audio_lifecycle", lifecycle, entries,
                                      context.theme.fonts)) {
                 source.sceneLifecycle = static_cast<Audio::AudioSceneLifecyclePolicy>(lifecycle);
                 committed = true;
@@ -179,6 +180,40 @@ namespace Horo::Editor {
                 source.playback.spatialMode = spatialInt != 0 ? Audio::AudioSpatialMode::ThreeD : Audio::AudioSpatialMode::TwoD;
 
             return gainEdit.committed || pitchEdit.committed || spatialChanged;
+        }
+
+        /** @brief Maps a typed preview failure to localized copy without changing its retained diagnostic. */
+        const char *PreviewFailureMessage(const Error &error) {
+            const auto &code = error.code.Value();
+            if (code == AudioComponentPreviewErrors::MissingAsset.code.Value())
+                return "workspace.inspector.audio.asset_missing";
+            if (code == AudioComponentPreviewErrors::MissingListener.code.Value())
+                return "workspace.inspector.audio.listener_missing";
+            if (code == AudioComponentPreviewErrors::MissingBus.code.Value())
+                return "workspace.inspector.audio.bus_missing";
+            if (code == AudioComponentPreviewErrors::ProviderUnavailable.code.Value())
+                return "workspace.inspector.audio.provider_missing";
+            if (code == AudioComponentPreviewErrors::Busy.code.Value())
+                return "workspace.inspector.audio.busy";
+            if (code == AudioComponentPreviewErrors::Stale.code.Value())
+                return "workspace.inspector.audio.stale";
+            return "workspace.inspector.audio.preview_failed";
+        }
+
+        /** @brief Projects native-independent frontend progress into the existing localized status surface. */
+        const char *PreviewPhaseMessage(const Audio::AudioFrontendPhase phase) {
+            using enum Audio::AudioFrontendPhase;
+            switch (phase) {
+                case Active:
+                    return "workspace.inspector.audio.preview_active";
+                case Closed:
+                    return "workspace.inspector.audio.preview_closed";
+                case Closing:
+                case Retained:
+                    return "workspace.inspector.audio.preview_closing";
+                default:
+                    return "workspace.inspector.audio.preview_opening";
+            }
         }
     }  // namespace
 
@@ -220,11 +255,8 @@ namespace Horo::Editor {
         Ui::Card card(Ui::CardProps{.id = "##AudioListenerCard"});
         const auto header =
             DrawComponentTitleBar(card, Label(context, "workspace.inspector.audio_listener"), {.enabled = listener->enabled}, context);
-        if (header.resetRequested) {
-            const bool enabled = listener->enabled;
-            *listener = Runtime::AudioListenerComponent{};
-            listener->enabled = enabled;
-        }
+        if (header.resetRequested)
+            listener = Runtime::AudioListenerComponent{.enabled = listener->enabled};
         if (header.toggleEnabledRequested)
             listener->enabled = !listener->enabled;
         const bool cancelled = IsInspectorCardEscapeRequested();
@@ -269,32 +301,10 @@ namespace Horo::Editor {
         const char *message = nullptr;
         if (!model.audioPreviewAvailable)
             message = "workspace.inspector.audio.provider_missing";
-        else if (model.audioPreviewFailure) {
-            const auto &code = model.audioPreviewFailure->code.Value();
-            if (code == AudioComponentPreviewErrors::MissingAsset.code.Value())
-                message = "workspace.inspector.audio.asset_missing";
-            else if (code == AudioComponentPreviewErrors::MissingListener.code.Value())
-                message = "workspace.inspector.audio.listener_missing";
-            else if (code == AudioComponentPreviewErrors::MissingBus.code.Value())
-                message = "workspace.inspector.audio.bus_missing";
-            else if (code == AudioComponentPreviewErrors::ProviderUnavailable.code.Value())
-                message = "workspace.inspector.audio.provider_missing";
-            else if (code == AudioComponentPreviewErrors::Busy.code.Value())
-                message = "workspace.inspector.audio.busy";
-            else if (code == AudioComponentPreviewErrors::Stale.code.Value())
-                message = "workspace.inspector.audio.stale";
-            else
-                message = "workspace.inspector.audio.preview_failed";
-        }
-        if (!message && model.audioPreview && model.audioPreview->output) {
-            using enum Audio::AudioFrontendPhase;
-            const auto phase = model.audioPreview->output->phase;
-            const auto key = phase == Active                         ? "workspace.inspector.audio.preview_active"
-                             : phase == Closed                       ? "workspace.inspector.audio.preview_closed"
-                             : phase == Closing || phase == Retained ? "workspace.inspector.audio.preview_closing"
-                                                                     : "workspace.inspector.audio.preview_opening";
-            ImGui::TextWrapped("%s", Label(context, key));
-        }
+        else if (model.audioPreviewFailure)
+            message = PreviewFailureMessage(*model.audioPreviewFailure);
+        if (!message && model.audioPreview && model.audioPreview->output)
+            ImGui::TextWrapped("%s", Label(context, PreviewPhaseMessage(model.audioPreview->output->phase)));
         if (message)
             DrawValidationMessageIfInvalid(false, context.localization.Get("editor", message), context.theme.fonts, 8.0F);
     }

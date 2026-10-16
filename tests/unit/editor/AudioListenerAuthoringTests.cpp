@@ -2,6 +2,8 @@
 #include "SceneDocumentTestSupport.h"
 #include "editor/project_model/EditorModelErrors.h"
 
+#include <type_traits>
+
 namespace {
     using namespace Horo;
     using namespace Horo::Editor;
@@ -21,6 +23,65 @@ namespace {
             REQUIRE(commands.Execute(AddSceneObjectComponentCommand{object, ComponentType::AudioListener}).HasValue());
         }
     };
+
+    static_assert(std::is_nothrow_copy_constructible_v<SetSceneObjectAudioComponentCommand>);
+    static_assert(std::is_nothrow_copy_assignable_v<SetSceneObjectAudioComponentCommand>);
+
+    TEST_CASE("Audio component command family preserves source edits and redo after invalid input", "[editor][audio][source]") {
+        ListenerDocument fixture;
+        REQUIRE(fixture.commands.Execute(AddSceneObjectComponentCommand{fixture.object, ComponentType::AudioSource}).HasValue());
+        const auto original = *fixture.document.Objects().front().components.audioSource;
+        const auto listener = fixture.document.Objects().front().components.audioListener;
+        auto edited = original;
+        edited.playback.gain = 0.25F;
+        edited.playback.loop = true;
+        REQUIRE(fixture.commands.Execute(SetSceneObjectAudioSourceCommand{fixture.object, edited}).HasValue());
+        CHECK(fixture.document.Objects().front().components.audioSource == edited);
+        CHECK(fixture.document.Objects().front().components.audioListener == listener);
+        REQUIRE(fixture.commands.Undo().HasValue());
+        CHECK(fixture.document.Objects().front().components.audioSource == original);
+        REQUIRE(fixture.history.CanRedo());
+        const auto before = fixture.document.Snapshot();
+        auto invalid = edited;
+        invalid.playback.gain = std::numeric_limits<float>::quiet_NaN();
+        const auto rejected = fixture.commands.Execute(SetSceneObjectAudioSourceCommand{fixture.object, invalid});
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == SceneDocumentErrors::InvalidAudioSource.code.Value());
+        CHECK(fixture.document.Revision() == before.revision);
+        CHECK(fixture.document.Snapshot().state == before.state);
+        CHECK(fixture.document.Objects().front().components == before.objects.front().components);
+        REQUIRE(fixture.history.CanRedo());
+        REQUIRE(fixture.commands.Redo().HasValue());
+        CHECK(fixture.document.Objects().front().components.audioSource == edited);
+        CHECK(fixture.document.Objects().front().components.audioListener == listener);
+    }
+
+    TEST_CASE("Audio component command family rejects missing components without replacing history", "[editor][audio][component]") {
+        ListenerDocument fixture;
+        SetSceneObjectAudioComponentCommand command{SetSceneObjectAudioSourceCommand{fixture.object, {}}};
+        const ErrorCodeDescriptor *expected = &SceneDocumentErrors::InvalidAudioSource;
+        bool missingListener{};
+        SECTION("missing source") {}
+        SECTION("missing listener") {
+            REQUIRE(fixture.commands.Execute(RemoveSceneObjectComponentCommand{fixture.object, ComponentType::AudioListener}).HasValue());
+            command = SetSceneObjectAudioListenerCommand{fixture.object, {}};
+            expected = &SceneDocumentErrors::InvalidAudioListener;
+            missingListener = true;
+        }
+        const auto before = fixture.document.Snapshot();
+        const auto canUndo = fixture.history.CanUndo();
+        const auto canRedo = fixture.history.CanRedo();
+        const auto rejected = fixture.commands.Execute(command);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == expected->code.Value());
+        CHECK(fixture.document.Revision() == before.revision);
+        CHECK(fixture.document.Snapshot().state == before.state);
+        CHECK(fixture.document.Objects().front().components == before.objects.front().components);
+        CHECK(fixture.history.CanUndo() == canUndo);
+        CHECK(fixture.history.CanRedo() == canRedo);
+        REQUIRE(fixture.commands.Undo().HasValue());
+        CHECK(fixture.document.Objects().front().components.audioListener.has_value() == missingListener);
+    }
 
     TEST_CASE("Authored listener edits removal and restore use typed atomic history", "[editor][audio][listener]") {
         ListenerDocument fixture;

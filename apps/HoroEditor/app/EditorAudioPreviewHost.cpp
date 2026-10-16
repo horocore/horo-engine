@@ -106,15 +106,20 @@ namespace Horo::Editor {
             DiscoveryOperation &operator=(const DiscoveryOperation &) = delete;
 
             ~DiscoveryOperation() {
-                if (acknowledged_)
-                    return;
-                if (backend_.Cancel(operation_).HasError())
+                try {
+                    if (acknowledged_)
+                        return;
+                    if (backend_.Cancel(operation_).HasError())
+                        std::terminate();
+                    auto terminal = backend_.Poll(operation_);
+                    if (terminal.HasError() || !terminal.Value())
+                        std::terminate();
+                    if (Acknowledge(*terminal.Value()).HasError())
+                        std::terminate();
+                } catch (...) {
+                    // The accepted native operation must not escape cleanup by unwinding its backend owner.
                     std::terminate();
-                auto terminal = backend_.Poll(operation_);
-                if (terminal.HasError() || !terminal.Value())
-                    std::terminate();
-                if (Acknowledge(*terminal.Value()).HasError())
-                    std::terminate();
+                }
             }
 
             Result<void> Acknowledge(const Audio::Backend::Completion &completion) {
@@ -142,16 +147,14 @@ namespace Horo::Editor {
             if (operation.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(operation.ErrorValue());
             DiscoveryOperation pending{backend, operation.Value()};
-            auto advanced = backend.Advance();
-            if (advanced.HasError())
+            if (auto advanced = backend.Advance(); advanced.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(advanced.ErrorValue());
             auto completion = backend.Poll(operation.Value());
             if (completion.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(completion.ErrorValue());
             if (!completion.Value())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(MakeError(AudioComponentPreviewErrors::ProviderUnavailable));
-            auto acknowledged = pending.Acknowledge(*completion.Value());
-            if (acknowledged.HasError())
+            if (auto acknowledged = pending.Acknowledge(*completion.Value()); acknowledged.HasError())
                 return Result<Audio::AudioDeviceSnapshot>::Failure(acknowledged.ErrorValue());
             const auto &outcome = completion.Value()->outcome;
             if (const auto *catalog = std::get_if<Audio::AudioDeviceSnapshot>(&outcome))
@@ -168,8 +171,8 @@ namespace Horo::Editor {
         };
 
         /** @brief Performs bounded file/device preparation on control, before any native output opens. */
-        Result<PreparedLane> PrepareLane(const AudioComponentPreviewRequest &request, Audio::AudioRuntimeId owner,
-                                         const EditorAudioPreviewOutputFactory &factory) {
+        template <typename Factory>
+        Result<PreparedLane> PrepareLane(const AudioComponentPreviewRequest &request, Audio::AudioRuntimeId owner, const Factory &factory) {
             auto decoded = AudioPreviewHostDetail::Decode(request);
             if (decoded.HasError())
                 return Result<PreparedLane>::Failure(decoded.ErrorValue());
@@ -206,7 +209,7 @@ namespace Horo::Editor {
                 AudioPreviewHostDetail::RetireDetached(prepared);
                 return Result<PreparedLane>::Failure(frontend.ErrorValue());
             }
-            return Result<PreparedLane>::Success({std::move(frontend).Value(), std::move(advance)});
+            return Result<PreparedLane>::Success({std::move(frontend).Value(), advance});
         }
     }  // namespace
 
@@ -259,16 +262,21 @@ namespace Horo::Editor {
     }
 
     EditorAudioPreviewHost::~EditorAudioPreviewHost() {
-        if (!state_->frontend)
-            return;
-        state_->frontend->Close();
-        const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-        while (state_->frontend && std::chrono::steady_clock::now() < end) {
-            static_cast<void>(Pump());
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        try {
+            if (!state_->frontend)
+                return;
+            state_->frontend->Close();
+            const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (state_->frontend && std::chrono::steady_clock::now() < end) {
+                static_cast<void>(Pump());
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            if (state_->frontend)
+                std::terminate();  // A timeout never proves native callback detachment; retain/fatal Audio ownership contract.
+        } catch (...) {
+            // Any cleanup exception leaves native detachment unproven; do not unwind and free the retained output.
+            std::terminate();
         }
-        if (state_->frontend)
-            std::terminate();  // A timeout never proves native callback detachment; retain/fatal Audio ownership contract.
     }
 
     /** @copydoc IAudioComponentPreview::Start */
@@ -300,8 +308,7 @@ namespace Horo::Editor {
         state_->frontend = std::move(lane.frontend);
         state_->advance = std::move(lane.advance);
         state_->startVoice = true;
-        auto started = state_->frontend->Start(Deadline());
-        if (started.HasError()) {
+        if (auto started = state_->frontend->Start(Deadline()); started.HasError()) {
             state_->frontend->Close();
             return fail(started.ErrorValue());
         }

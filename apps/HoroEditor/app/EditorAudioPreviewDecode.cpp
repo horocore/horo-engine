@@ -2,6 +2,7 @@
 #include "Horo/Audio/AudioSourceImporter.h"
 
 #include <algorithm>
+#include <array>
 #include <fstream>
 
 namespace Horo::Editor::AudioPreviewHostDetail {
@@ -15,25 +16,52 @@ namespace Horo::Editor::AudioPreviewHostDetail {
         };
 
         /** @brief Performs bounded random-access reads on the host/control invocation, never on Audio callbacks. */
-        Result<std::size_t> Read(void *context, const std::uint64_t offset, const std::span<std::byte> bytes) {
-            auto &input = static_cast<DecodeState *>(context)->input;
+        Result<std::size_t> Read(DecodeState &state, const std::uint64_t offset, const std::span<std::byte> bytes) {
+            auto &input = state.input;
             input.clear();
             input.seekg(static_cast<std::streamoff>(offset));
-            input.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-            if (input.bad())
-                return Result<std::size_t>::Failure(MakeError(AudioComponentPreviewErrors::MissingAsset));
-            return Result<std::size_t>::Success(static_cast<std::size_t>(input.gcount()));
+            std::array<char, 4096> streamCharacters;
+            std::size_t copied{};
+            while (copied < bytes.size()) {
+                const auto count = std::min(bytes.size() - copied, streamCharacters.size());
+                input.read(streamCharacters.data(), static_cast<std::streamsize>(count));
+                if (input.bad())
+                    return Result<std::size_t>::Failure(MakeError(AudioComponentPreviewErrors::MissingAsset));
+                const auto received = static_cast<std::size_t>(input.gcount());
+                for (std::size_t index = 0; index < received; ++index)
+                    bytes[copied + index] = static_cast<std::byte>(static_cast<unsigned char>(streamCharacters[index]));
+                copied += received;
+                if (received != count)
+                    break;
+            }
+            return Result<std::size_t>::Success(copied);
         }
 
         /** @brief Copies bounded importer blocks; partially decoded samples never become an active voice. */
-        Result<void> Write(void *context, const std::uint64_t firstFrame, const Audio::AudioProcessingFormat &format,
+        Result<void> Write(DecodeState &state, const std::uint64_t firstFrame, const Audio::AudioProcessingFormat &format,
                            const std::span<const Audio::AudioSample> samples) {
-            auto &state = *static_cast<DecodeState *>(context);
             if (firstFrame * format.layout.orderedChannels.size() != state.samples.size() ||
                 samples.size() > PcmLimit / sizeof(float) - state.samples.size())
                 return Result<void>::Failure(MakeError(Audio::AudioErrors::MemoryBudgetExceeded));
             state.samples.insert(state.samples.end(), samples.begin(), samples.end());
             return Result<void>::Success();
+        }
+
+        /** @brief Adapts the importer's invocation-only erased callbacks to the concrete owned decode state. */
+        Result<Audio::AudioSourceImportCandidate> Import(DecodeState &state, const std::uint64_t bytes) {
+            const Audio::AudioSourceReader reader{&state, bytes,
+                                                  [](auto *context, const std::uint64_t offset, const std::span<std::byte> destination) {
+                return Read(*static_cast<DecodeState *>(context), offset, destination);
+            }};
+            const Audio::AudioDecodedFrameSink sink{&state, [](auto *context, const std::uint64_t firstFrame,
+                                                               const Audio::AudioProcessingFormat &format,
+                                                               const std::span<const Audio::AudioSample> samples) {
+                return Write(*static_cast<DecodeState *>(context), firstFrame, format, samples);
+            }};
+            return Audio::ImportCoreAudioSource(reader, sink,
+                                                {.maximumSourceBytes = SourceLimit,
+                                                 .maximumDecodedFrames = 4U << 20U,
+                                                 .maximumDecodedBytes = PcmLimit});
         }
 
         /** @brief Converts the portable UTF-8 asset path without using the Windows narrow code page. */
@@ -59,8 +87,8 @@ namespace Horo::Editor::AudioPreviewHostDetail {
             if (nativeSource.HasError())
                 return Result<std::filesystem::path>::Failure(nativeSource.ErrorValue());
             const auto source = std::filesystem::canonical(root / nativeSource.Value(), error);
-            const auto relative = source.lexically_relative(root);
-            if (error || relative.empty() || relative.is_absolute() || *relative.begin() == "..")
+            if (const auto relative = source.lexically_relative(root);
+                error || relative.empty() || relative.is_absolute() || *relative.begin() == "..")
                 return Result<std::filesystem::path>::Failure(MakeError(AudioComponentPreviewErrors::MissingAsset));
             return Result<std::filesystem::path>::Success(source);
         }
@@ -86,10 +114,7 @@ namespace Horo::Editor::AudioPreviewHostDetail {
         DecodeState state{std::ifstream{source.Value(), std::ios::binary}, {}};
         if (!state.input)
             return Result<DecodedSource>::Failure(MakeError(AudioComponentPreviewErrors::MissingAsset));
-        auto imported = Audio::ImportCoreAudioSource({&state, bytes, Read}, {&state, Write},
-                                                     {.maximumSourceBytes = SourceLimit,
-                                                      .maximumDecodedFrames = 4U << 20U,
-                                                      .maximumDecodedBytes = PcmLimit});
+        auto imported = Import(state, bytes);
         if (imported.HasError())
             return Result<DecodedSource>::Failure(imported.ErrorValue());
         DecodedSource decoded{imported.Value().decodedFormat, {}, static_cast<std::uint32_t>(imported.Value().frameCount)};
