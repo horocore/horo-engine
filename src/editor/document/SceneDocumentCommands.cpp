@@ -83,6 +83,34 @@ namespace Horo::Editor {
             });
         }
 
+        /** @brief Validates one typed audio replacement before the existing component/history commit. */
+        template <typename AudioCommand, typename Commit>
+        [[nodiscard]] Result<SceneCommandResult> CommitAudioComponent(SceneDocument &document, std::vector<SceneObjectSnapshot> &objects,
+                                                                      const AudioCommand &command, Commit &&commit) {
+            if constexpr (std::is_same_v<AudioCommand, SetSceneObjectAudioSourceCommand>) {
+                if (!IsValidAudioSourceComponent(command.audioSource))
+                    return Result<SceneCommandResult>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidAudioSource,
+                                                                                 "Audio source reference or playback values are invalid."));
+                return CommitExistingComponent<
+                    Runtime::AudioSourceComponent,
+                    AudioSourceChangedDelta>(document, objects, command.object, command.audioSource, &SceneObjectComponentSet::audioSource,
+                                             ExistingComponentError{SceneDocumentErrors::InvalidAudioSource,
+                                                                    "Scene object has no audio source component."},
+                                             std::forward<Commit>(commit));
+            } else {
+                if (!IsValidAudioListenerComponent(command.audioListener))
+                    return Result<SceneCommandResult>::Failure(
+                        MakeDocumentError(SceneDocumentErrors::InvalidAudioListener, "Audio listener values are invalid."));
+                return CommitExistingComponent<
+                    Runtime::AudioListenerComponent,
+                    AudioListenerChangedDelta>(document, objects, command.object, command.audioListener,
+                                               &SceneObjectComponentSet::audioListener,
+                                               ExistingComponentError{SceneDocumentErrors::InvalidAudioListener,
+                                                                      "Scene object has no audio listener component."},
+                                               std::forward<Commit>(commit));
+            }
+        }
+
         /** @brief Carries a validated navigation candidate and its semantic history delta. */
         struct PreparedNavigationComponents final {
             SceneObjectComponentSet candidate;
@@ -337,35 +365,10 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioComponentCommand&) */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SetSceneObjectAudioComponentCommand &command) {
-        return std::visit([this](const auto &value) -> Result<SceneCommandResult> {
-            if constexpr (std::is_same_v<std::decay_t<decltype(value)>, SetSceneObjectAudioSourceCommand>) {
-                if (!IsValidAudioSourceComponent(value.audioSource)) {
-                    return Result<SceneCommandResult>::Failure(MakeDocumentError(SceneDocumentErrors::InvalidAudioSource,
-                                                                                 "Audio source reference or playback values are invalid."));
-                }
-                return CommitExistingComponent<
-                    Runtime::AudioSourceComponent,
-                    AudioSourceChangedDelta>(m_document, m_document.m_objects, value.object, value.audioSource,
-                                             &SceneObjectComponentSet::audioSource,
-                                             ExistingComponentError{SceneDocumentErrors::InvalidAudioSource,
-                                                                    "Scene object has no audio source component."},
-                                             [this, objectId = value.object](SceneCommandDelta delta) {
-                    return CommitObject({std::move(delta), objectId, DocumentChangeKind::ComponentChanged});
-                });
-            } else {
-                if (!IsValidAudioListenerComponent(value.audioListener))
-                    return Result<SceneCommandResult>::Failure(
-                        MakeDocumentError(SceneDocumentErrors::InvalidAudioListener, "Audio listener values are invalid."));
-                return CommitExistingComponent<
-                    Runtime::AudioListenerComponent,
-                    AudioListenerChangedDelta>(m_document, m_document.m_objects, value.object, value.audioListener,
-                                               &SceneObjectComponentSet::audioListener,
-                                               ExistingComponentError{SceneDocumentErrors::InvalidAudioListener,
-                                                                      "Scene object has no audio listener component."},
-                                               [this, objectId = value.object](SceneCommandDelta delta) {
-                    return CommitObject({std::move(delta), objectId, DocumentChangeKind::ComponentChanged});
-                });
-            }
+        return std::visit([this]<typename AudioCommand>(const AudioCommand &value) -> Result<SceneCommandResult> {
+            return CommitAudioComponent(m_document, m_document.m_objects, value, [this, objectId = value.object](SceneCommandDelta delta) {
+                return CommitObject({std::move(delta), objectId, DocumentChangeKind::ComponentChanged});
+            });
         }, command);
     }
 
