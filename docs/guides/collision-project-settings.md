@@ -139,13 +139,13 @@ manual narrow/localized visual interaction checks or native Physics activation.
 
 ## Allocation qualification
 
-The three global single-fault sweeps run every measured allocation position in
+The four global single-fault sweeps run every measured allocation position in
 supported production STL compositions. Windows checked Debug iterator proxies
 allocate in noexcept container operations, so these exact probes use the existing
 Scene allocation admission guard and run mandatorily in a consistently configured
 Windows Release engine/test composition. Ordinary Debug functional, lifecycle and
 cached-projection zero-allocation cases remain enabled. Release discovery and
-JUnit validation require all three exact cases, zero skips, and nonzero equal
+JUnit validation require all four exact cases, zero skips, and nonzero equal
 `measured`/`completed` counters. No positions are sampled and case timeouts remain
 90 seconds. This does not promise persistent-OOM safety for an upstream partially
 constructed JSON parser DOM.
@@ -156,3 +156,90 @@ Ordinary filesystem equivalence lookup failures retain the existing canonical
 and lexical containment fallback. The direct containment and complete commit
 sweeps qualify every measured allocation position; neither exception swallowing
 nor a reduced sweep substitutes for rollback evidence.
+
+## Root-bound inventory migration
+
+Collision freshness no longer enumerates `std::filesystem::directory_iterator` or
+`recursive_directory_iterator`. GCC 13's internal directory advance allocates path
+storage inside a `noexcept` function, including when reached through its throwing
+public overload. A surrounding `bad_alloc` catch therefore cannot protect the
+history rollback contract. The legacy default Assets filesystem scanner remains
+available for ordinary registry loading; it is not claimed allocation-fault safe.
+
+`Assets::IAssetRegistrySource` is the explicit synchronous source contract owned by
+`HoroAssets`. Its manifest retains the actual `Assets` or legacy `assets` spelling,
+empty directories, regular entries, links and special entries. The existing Assets
+classifier, pairing rules, identity-sidecar decoder and publisher are shared by both
+sources. Symbolic links/reparse points are reported as ambiguous and never traversed;
+special/unsupported files retain their existing ignored classification. Hardlinked
+regular sidecars remain readable through the dedicated inventory byte operation.
+No second JSON decoder, extension table or registry authority is introduced.
+
+`CreateNativeAssetRegistrySource` is upper Editor composition, implemented through
+the existing Platform handle-relative POSIX/Windows read owner. The real workspace
+creates it for its host-issued opening identity and supplies it to the controller.
+`CollisionProjectSettingsOwners` now requires the borrowed source; sessions and
+`ProjectCollisionSettingsStore` retain it through their final freshness/save fences.
+Standalone hosts must construct and retain a source, pass it to both owners/store,
+and close sessions before releasing it. The collision test fixture follows this
+same native production route, including every position in the existing complete
+Commit allocation sweep. Rebuild all host implementations/consumers of the extended
+`IProjectReadFiles` virtual interface; restricted implementations inherit explicit
+Unavailable inventory defaults. This C++ host migration changes no GameModule SDK21
+or extension C ABI layout.
+
+Inventory admission has an independent reducible policy: at most 1,048,576 entries,
+64 MiB of relative-name bytes including delimiters, and 30 seconds per complete candidate
+operation. Immediate project-root discovery and recursive asset enumeration share
+the same entry/name budget and monotonic deadline. These are newly explicit finite
+tooling limits, not a claim that the former unbounded scanner admitted all projects
+within a known maximum. Oversized projects receive typed capacity/deadline failures;
+no truncated manifest is published. Only observed entries are allocated. The explicit monotonic deadline travels in the captured manifest through classification
+and every sidecar read; no mutable last-capture deadline or per-file renewal exists. Each
+sidecar retains its existing 1 MiB byte ceiling and exact native mutation/identity
+fences. Existing code-query `Files`/`Text`
+limits (4096 entries, 1 MiB, one second, portable paths and single hardlinks) are
+unchanged. Source read failures retain their typed native/capacity diagnostic in
+the candidate instead of being relabelled as malformed JSON. No partial candidate
+can satisfy collision freshness.
+
+The new native inventory sweep is also an exact mandatory member of the existing
+Windows Release collision qualification runner. Its nonzero measured/completed
+counter is checked like the existing paths/Commit/Scene decoder counters. Ordinary
+Debug tests retain their current supported-allocation admission; no old probe or
+failure position is removed.
+
+A root `Assets`/`assets` symlink is deliberately refused by the explicit native
+source: legacy `AssetRoot` followed root links when checking `is_directory`, whereas
+the new retained-authority path never follows any link. Replace such a root with a
+real contained directory before using collision authoring. Default/native parity
+claims cover real root directories, descendant link diagnostics and hardlinks;
+they do not claim identical acceptance of symbolic root aliases.
+
+The canonical Assets sidecar/index decoder owns completed JSON trees together
+with iterative cleanup scratch admitted before parsing. Scratch depth follows
+the actual quote-aware raw nesting envelope within the existing sidecar/index
+byte limits; no new authored nesting limit or alternate decoder is introduced.
+Completed-tree cleanup empties children before the upstream JSON destructor,
+which otherwise allocates its flattening stack inside a nonthrowing destructor.
+The direct valid, duplicate, malformed and deep compound sidecar fault sweeps
+supplement the four complete inventory, Commit, paths and Scene sweeps. MSVC
+checked-iterator allocation behavior still requires the existing consistently
+configured Release qualification profile.
+
+Windows Release qualification explicitly discovers five exact Collision cases:
+the original inventory, Commit, paths and Scene cases plus the direct canonical
+sidecar case. Its completion verifier requires all eight unique positive
+measured/completed markers, including valid, duplicate, malformed and deep
+sidecar groups; missing, duplicate, zero, partial or skipped groups cannot
+qualify. The existing Release target and CTest route execute the added case
+without CMake target or option changes.
+
+Strict registry JSON admission now uses nlohmann's canonical SAX parser first
+for syntax and duplicate-key validation without constructing a DOM. A duplicate
+flag does not terminate syntax parsing: malformed bytes after a repeated key
+retain the canonical syntax diagnostic and its precedence. Valid unique input
+then passes unchanged to the same canonical DOM parser without its discard
+callback. This avoids callback-parser destruction of discarded structured values
+while preserving the completed-DOM owner and all existing typed schema checks.
+No persistent-allocation-failure or checked-MSVC-Debug guarantee is implied.

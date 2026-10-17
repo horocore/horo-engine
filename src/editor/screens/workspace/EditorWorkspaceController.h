@@ -48,6 +48,7 @@ namespace Horo::Editor {
         CollisionActivationEvidence *collisionActivation{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
+        std::shared_ptr<const Assets::IAssetRegistrySource> assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
         JobSystem *jobs{};
         SourceOpenNavigator sourceOpenNavigator{};
@@ -246,6 +247,7 @@ namespace Horo::Editor {
         std::uint64_t m_collisionSceneGeneration{};
         ProjectMutationCoordinator *m_mutations{};
         DurableFileSystem *m_durableFiles{};
+        std::shared_ptr<const Assets::IAssetRegistrySource> m_assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *m_importerCatalog{};
         std::unique_ptr<Assets::AssetPreviewService> m_assetPreviews;
         SourceOpenNavigator m_sourceOpenNavigator;

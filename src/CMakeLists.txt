@@ -2807,6 +2807,7 @@ add_library(HoroEditorServices STATIC
         editor/physics/CollisionReferenceReview.cpp
         editor/physics/CollisionReviewFreshness.cpp
         editor/physics/CollisionSourceInventory.cpp
+        editor/physics/NativeAssetRegistrySource.cpp
         editor/pcg/PCGDocumentErrors.cpp
         editor/pcg/PCGGraphDocument.cpp
         editor/pcg/PCGGraphDocumentService.cpp
@@ -2907,6 +2908,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::Input
         HoroEngine::ProjectMigrations
         PRIVATE
+        HoroEngine::PlatformProjectReadFiles
         HoroSceneSourceCodecInternal
         nlohmann_json::nlohmann_json
 )

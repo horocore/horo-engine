@@ -91,7 +91,7 @@ namespace Horo::Platform::ProjectReadNative {
     }
 
     /** @copydoc OpenChild */
-    Result<Handle> OpenChild(const Handle &parent, const std::string_view name, const bool directory) {
+    Result<Handle> OpenChild(const Handle &parent, const std::string_view name, const bool directory, const bool allowRegularHardlinks) {
         if (name.empty() || name.find_first_of("/\\\0", 0, 3) != std::string_view::npos || name == "." || name == "..")
             return Result<Handle>::Failure(MakeError(ProjectReadErrors::UnsafePath));
         const auto module = GetModuleHandleW(L"ntdll.dll");
@@ -117,7 +117,7 @@ namespace Horo::Platform::ProjectReadNative {
         if (result < 0)
             return Result<Handle>::Failure(MakeError(ProjectReadErrors::ReadFailed));
         Handle child{opened};
-        return AdmitChild(std::move(child), directory);
+        return AdmitChild(std::move(child), directory, allowRegularHardlinks);
     }
 
     /** @copydoc OpenAnchor */
@@ -198,7 +198,11 @@ namespace Horo::Platform::ProjectReadNative {
                     auto portable = Utf8(name);
                     if (portable.HasError())
                         return Result<void>::Failure(portable.ErrorValue());
-                    if (auto visited = visitor(portable.Value()); visited.HasError())
+                    const auto kind = (entry->FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 ? ProjectInventoryKind::Link
+                                      : (entry->FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0   ? ProjectInventoryKind::Directory
+                                      : (entry->FileAttributes & FILE_ATTRIBUTE_DEVICE) != 0      ? ProjectInventoryKind::Special
+                                                                                                  : ProjectInventoryKind::Regular;
+                    if (auto visited = visitor.Classified(portable.Value(), kind); visited.HasError())
                         return visited;
                 }
                 if (entry->NextEntryOffset == 0)

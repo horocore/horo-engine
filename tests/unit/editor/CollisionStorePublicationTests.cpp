@@ -76,7 +76,7 @@ namespace Horo::Tests::CollisionSettings {
               "[collision][publication]") {
         Project project;
         PublicationFiles files;
-        const Editor::CollisionProjectSettingsOwners owners{project.registry, files, project.mutations, project.inventory};
+        const Editor::CollisionProjectSettingsOwners owners{project.registry, files, project.mutations, project.inventory, *project.source};
         auto opening = Editor::CollisionProjectSettingsSession::Open(project.root, "collision-project", owners, project.activation);
         REQUIRE(opening.HasValue());
         auto session = opening.Value();
@@ -106,7 +106,7 @@ namespace Horo::Tests::CollisionSettings {
     TEST_CASE("Collision failed preparation preserves canonical file dirty draft and replay", "[collision][publication]") {
         Project project;
         PublicationFiles files;
-        const Editor::CollisionProjectSettingsOwners owners{project.registry, files, project.mutations, project.inventory};
+        const Editor::CollisionProjectSettingsOwners owners{project.registry, files, project.mutations, project.inventory, *project.source};
         auto opening = Editor::CollisionProjectSettingsSession::Open(project.root, "collision-project", owners, project.activation);
         REQUIRE(opening.HasValue());
         auto session = opening.Value();

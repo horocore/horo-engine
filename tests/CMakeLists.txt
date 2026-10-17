@@ -2380,13 +2380,15 @@ add_executable(HoroProjectCollisionSettingsTests
         unit/editor/CollisionProjectSettingsSessionTests.cpp
         unit/editor/CollisionReferenceReviewTests.cpp
         unit/editor/CollisionInventoryFreshnessTests.cpp
+        unit/editor/NativeAssetRegistrySourceTests.cpp
         unit/editor/CollisionSceneParserFailureTests.cpp
         unit/editor/CollisionStorePublicationTests.cpp
         support/AllocationProbe.cpp)
 target_compile_features(HoroProjectCollisionSettingsTests PRIVATE cxx_std_20)
 target_include_directories(HoroProjectCollisionSettingsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroProjectCollisionSettingsTests PRIVATE Catch2::Catch2WithMain
-        HoroEngine::ProjectCollisionSettings HoroEngine::EditorServices HoroEngine::SceneSource nlohmann_json::nlohmann_json)
+        HoroEngine::ProjectCollisionSettings HoroEngine::EditorServices HoroEngine::SceneSource
+        HoroEngine::PlatformProjectReadFiles nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroProjectCollisionSettingsTests LABELS "unit;project;physics;headless;ci-windows;sonar-coverage")
 add_executable(HoroCollisionSettingsPublicConsumer support/CollisionSettingsPublicConsumer.cpp)
 target_compile_features(HoroCollisionSettingsPublicConsumer PRIVATE cxx_std_20)

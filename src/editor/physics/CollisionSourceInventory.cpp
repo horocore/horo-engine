@@ -6,8 +6,9 @@
 
 namespace Horo::Editor {
     /** @copydoc ValidateCollisionSourceInventory */
-    Result<void> ValidateCollisionSourceInventory(const std::filesystem::path &root, const Assets::AssetRegistrySnapshot &expected) {
-        auto physical = Assets::PrepareAssetRegistryCandidate(root);
+    Result<void> ValidateCollisionSourceInventory(const Assets::IAssetRegistrySource &source,
+                                                  const Assets::AssetRegistrySnapshot &expected) {
+        auto physical = Assets::PrepareAssetRegistryCandidate(source);
         if (physical.HasError())
             return Result<void>::Failure(physical.ErrorValue());
         if (physical.Value().status != Assets::AssetRegistryBuildStatus::Complete) {

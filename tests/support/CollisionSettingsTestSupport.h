@@ -1,5 +1,6 @@
 #pragma once
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
+#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Scene/SceneSource.h"
 #include "OwnedTestDirectory.h"
 
@@ -59,7 +60,15 @@ namespace Horo::Tests::CollisionSettings {
         Assets::AssetRegistry registry;
         Editor::CollisionInventoryEvidence inventory;
         Editor::CollisionActivationEvidence activation{.revision = 1, .state = Editor::CollisionActivationState::NoPhysics};
-        Editor::ProjectCollisionSettingsStore store{files, mutations, root, "collision-project"};
+        std::shared_ptr<const Assets::IAssetRegistrySource> source{CreateSource()};
+        Editor::ProjectCollisionSettingsStore store{files, mutations, root, "collision-project", *source};
+
+        /** @brief Retains the real native inventory owner before entering any allocation-fault scope. */
+        std::shared_ptr<const Assets::IAssetRegistrySource> CreateSource() {
+            auto created = Editor::CreateNativeAssetRegistrySource(root, "collision-project", 1);
+            REQUIRE(created.HasValue());
+            return std::move(created).Value();
+        }
 
         explicit Project(Application::ProjectCollisionSettingsInput input = Input()) {
             std::filesystem::create_directories(root / ".horo");
@@ -78,8 +87,14 @@ namespace Horo::Tests::CollisionSettings {
         }
 
         std::shared_ptr<Editor::CollisionProjectSettingsSession> Open(Editor::SceneDocumentTransactions *scene = nullptr) {
-            const Editor::CollisionProjectSettingsOwners
-                owners{registry, files, mutations, inventory, scene, scene ? root / "Assets/Scene.horoasset" : std::filesystem::path{}, {}};
+            const Editor::CollisionProjectSettingsOwners owners{registry,
+                                                                files,
+                                                                mutations,
+                                                                inventory,
+                                                                *source,
+                                                                scene,
+                                                                scene ? root / "Assets/Scene.horoasset" : std::filesystem::path{},
+                                                                {}};
             auto result = Editor::CollisionProjectSettingsSession::Open(root, "collision-project", owners, activation);
             REQUIRE(result.HasValue());
             return result.Value();

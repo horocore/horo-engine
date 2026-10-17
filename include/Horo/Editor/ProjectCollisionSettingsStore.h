@@ -35,9 +35,10 @@ namespace Horo::Editor {
         /** @brief Borrows durable operations and shared project mutation admission for one authorized project.
          * @param files Host-owned durable filesystem. @param mutations Shared host project mutation coordinator.
          * @param projectRoot Canonical absolute authorized root. @param projectId Exact loaded Project metadata identity.
+         * @param source Root-bound physical inventory owner, alive until this store is destroyed.
          */
         ProjectCollisionSettingsStore(DurableFileSystem &files, ProjectMutationCoordinator &mutations, std::filesystem::path projectRoot,
-                                      std::string projectId);
+                                      std::string projectId, const Assets::IAssetRegistrySource &source);
         /** @brief Reads the exact single authority without migration or runtime defaults.
          * @return Complete immutable file snapshot or an actionable typed read/validation failure.
          */
@@ -60,5 +61,6 @@ namespace Horo::Editor {
         ProjectMutationCoordinator &mutations_;
         std::filesystem::path root_;
         std::string projectId_;
+        const Assets::IAssetRegistrySource &source_;
     };
 }  // namespace Horo::Editor

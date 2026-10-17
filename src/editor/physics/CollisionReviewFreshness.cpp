@@ -9,7 +9,7 @@ namespace Horo::Editor {
         if (review.opening.lock() != opening || review.revision != revision || review.inventory != inventory ||
             review.activation != activation || review.registryRevision != registry->Snapshot().Revision())
             return Result<void>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Stale)));
-        if (auto physical = ValidateCollisionSourceInventory(root, review.registrySnapshot); physical.HasError())
+        if (auto physical = ValidateCollisionSourceInventory(*source, review.registrySnapshot); physical.HasError())
             return physical;
         const auto collision = Assets::CaptureAssetSource(root, root / ".horo/collision.json", 4 * 1024 * 1024);
         if (collision.HasError())

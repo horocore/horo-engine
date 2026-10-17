@@ -58,14 +58,14 @@ namespace Horo::Platform::ProjectReadNative {
     }
 
     /** @copydoc OpenChild */
-    Result<Handle> OpenChild(const Handle &parent, const std::string_view name, const bool directory) {
+    Result<Handle> OpenChild(const Handle &parent, const std::string_view name, const bool directory, const bool allowRegularHardlinks) {
         if (name.empty() || name.find_first_of("/\0", 0, 2) != std::string_view::npos || name == "..")
             return Result<Handle>::Failure(MakeError(ProjectReadErrors::UnsafePath));
         const std::string segment{name};
         Handle child{openat(parent.Get(), segment.c_str(), O_RDONLY | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK | (directory ? O_DIRECTORY : 0))};
         if (!child.IsValid())
             return Result<Handle>::Failure(OpenError());
-        return AdmitChild(std::move(child), directory);
+        return AdmitChild(std::move(child), directory, allowRegularHardlinks);
     }
 
     /** @copydoc OpenAnchor */
@@ -118,7 +118,14 @@ namespace Horo::Platform::ProjectReadNative {
             const std::string_view name{entry->d_name};
             if (name == "." || name == "..")
                 continue;
-            if (auto visited = visitor(name); visited.HasError())
+            struct stat info{};
+            if (fstatat(dirfd(directory.get()), entry->d_name, &info, AT_SYMLINK_NOFOLLOW) != 0)
+                return Result<void>::Failure(MakeError(ProjectReadErrors::ReadFailed));
+            const auto kind = S_ISLNK(info.st_mode)   ? ProjectInventoryKind::Link
+                              : S_ISDIR(info.st_mode) ? ProjectInventoryKind::Directory
+                              : S_ISREG(info.st_mode) ? ProjectInventoryKind::Regular
+                                                      : ProjectInventoryKind::Special;
+            if (auto visited = visitor.Classified(name, kind); visited.HasError())
                 return visited;
         }
     }

@@ -16,9 +16,12 @@ SPEC.loader.exec_module(QUALIFICATION)
 
 def report(tmp_path, completed=8946, status="run", omitted=False):
     cases = []
-    for name, phase in QUALIFICATION.COLLISION_PHASES.items():
-        proof = "" if omitted else (
-            f"[collision-allocation] {phase} measured=8946 completed={completed}"
+    for name in sorted(QUALIFICATION.COLLISION_CASES):
+        sidecar = name == QUALIFICATION.SIDECAR_CASE
+        phases = QUALIFICATION.SIDECAR_PHASES if sidecar else (QUALIFICATION.COLLISION_PHASES[name],)
+        prefix = "collision-sidecar-allocation" if sidecar else "collision-allocation"
+        proof = "" if omitted else "\n".join(
+            f"[{prefix}] {phase} measured=8946 completed={completed}" for phase in phases
         )
         cases.append(
             f'<testcase name="{escape(name, quote=True)}" status="{status}">'
@@ -33,7 +36,10 @@ def report(tmp_path, completed=8946, status="run", omitted=False):
 def test_exact_release_cases_and_every_measured_position(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cases = QUALIFICATION.COLLISION_CASES
-    assert len(cases) == 3
+    assert len(cases) == 5
+    assert QUALIFICATION.SIDECAR_CASE in cases
+    assert len(QUALIFICATION.SIDECAR_PHASES) == 4
+    assert "HoroProjectCollisionSettingsTests::Native registry inventory recovers after every one-shot allocation failure" in cases
     QUALIFICATION.verify_discovery({"tests": [
         {"name": name, "properties": []} for name in cases
     ]}, cases)
@@ -49,6 +55,23 @@ def test_partial_absent_or_unexecuted_sweep_never_qualifies(
     monkeypatch.chdir(tmp_path)
     with pytest.raises(ValueError):
         QUALIFICATION.verify_collision_positions(report(tmp_path, completed, status, omitted))
+
+
+@pytest.mark.parametrize("phase", QUALIFICATION.SIDECAR_PHASES)
+@pytest.mark.parametrize("fault", ("missing", "zero", "partial", "duplicate"))
+def test_every_direct_decoder_sweep_requires_one_positive_complete_marker(tmp_path, monkeypatch, phase, fault):
+    monkeypatch.chdir(tmp_path)
+    path = report(tmp_path)
+    marker = f"[collision-sidecar-allocation] {phase} measured=8946 completed=8946"
+    replacements = {
+        "missing": "",
+        "zero": f"[collision-sidecar-allocation] {phase} measured=0 completed=0",
+        "partial": f"[collision-sidecar-allocation] {phase} measured=8946 completed=8945",
+        "duplicate": marker + "\n" + marker,
+    }
+    path.write_text(path.read_text().replace(marker, replacements[fault]), encoding="utf-8")
+    with pytest.raises(ValueError):
+        QUALIFICATION.verify_collision_positions(path)
 
 
 def test_release_route_builds_real_target_and_retains_exact_results():

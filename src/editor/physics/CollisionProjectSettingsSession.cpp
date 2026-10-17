@@ -41,6 +41,7 @@ namespace Horo::Editor {
             state->root = root;
             state->projectId = std::move(projectId);
             state->registry = &owners.registry;
+            state->source = &owners.source;
             state->files = &owners.files;
             state->mutations = &owners.mutations;
             state->activeScene = owners.activeScene;
@@ -51,7 +52,8 @@ namespace Horo::Editor {
             state->saved = std::move(loaded).Value();
             state->draft = state->saved.settings;
             state->history.push_back(state->draft);
-            state->store = std::make_unique<ProjectCollisionSettingsStore>(owners.files, owners.mutations, root, state->projectId);
+            state->store =
+                std::make_unique<ProjectCollisionSettingsStore>(owners.files, owners.mutations, root, state->projectId, owners.source);
             if (owners.activeScene) {
                 auto scene = owners.activeScene->Snapshot();
                 if (scene.HasError())

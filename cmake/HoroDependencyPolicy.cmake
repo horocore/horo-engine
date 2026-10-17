@@ -229,6 +229,7 @@ horo_allow_target_dependencies(TARGET HoroEditorServices
         HoroNetworkDebuggerApplication
         HoroApplication
         HoroPlatform
+        HoroPlatformProjectReadFiles
         HoroRuntimeUi
         HoroEditorModel
         HoroGameplayModuleHost

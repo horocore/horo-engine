@@ -11,6 +11,7 @@
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
@@ -561,6 +562,9 @@ namespace Horo::Editor {
                 const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
                 if (!sessionOwner.IsValid())
                     return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
+                auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
+                if (registrySource.HasError())
+                    return Result<void>::Failure(registrySource.ErrorValue());
                 controller_ =
                     std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                                 EditorWorkspaceDependencies{
@@ -569,6 +573,7 @@ namespace Horo::Editor {
                                                                     .collisionActivation = projectServices_.collisionActivation,
                                                                     .mutations = projectServices_.mutations,
                                                                     .durableFiles = projectServices_.durableFiles,
+                                                                    .assetRegistrySource = std::move(registrySource).Value(),
                                                                     .importerCatalog = projectServices_.importerCatalog,
                                                                     .jobs = &services_.Get<JobSystem>(),
                                                                     .gameplayBuilds = services_.TryGet<Application::GameplayBuildService>(),

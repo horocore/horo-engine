@@ -38,6 +38,7 @@ namespace Horo::Editor {
                     .collisionActivation = &project.activation,
                     .mutations = &project.mutations,
                     .durableFiles = &project.files,
+                    .assetRegistrySource = project.source,
                     .documentSessionOwner = IdOf<Assets::AssetId>(40)};
         }
     }  // namespace

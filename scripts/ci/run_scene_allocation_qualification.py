@@ -27,11 +27,15 @@ CASES = frozenset(PREFIX + name for name in (
 
 
 COLLISION_PHASES = {
+    "HoroProjectCollisionSettingsTests::Native registry inventory recovers after every one-shot allocation failure": "inventory",
     "HoroProjectCollisionSettingsTests::Collision path admission propagates every allocation failure before owner publication": "paths",
     "HoroProjectCollisionSettingsTests::Collision history publication exhaustively rolls back every one-shot allocation failure": "commit",
     "HoroProjectCollisionSettingsTests::Canonical Scene decoder unwinds every single allocation failure without terminating completed DOM cleanup": "scene",
 }
-COLLISION_CASES = frozenset(COLLISION_PHASES)
+SIDECAR_CASE = ("HoroProjectCollisionSettingsTests::Canonical sidecar decoding unwinds every allocation "
+                "across valid invalid and deep compound DOMs")
+SIDECAR_PHASES = ("valid", "duplicate", "malformed", "deep")
+COLLISION_CASES = frozenset((*COLLISION_PHASES, SIDECAR_CASE))
 
 
 def verify_discovery(document, cases=CASES):
@@ -84,14 +88,17 @@ def verify_collision_positions(path):
     """Require proof of every measured failure position, including probes above Debug-sized budgets."""
     verify_junit(path, COLLISION_CASES)
     for case in ET.parse(path).getroot().iter("testcase"):
-        phase = COLLISION_PHASES[case.get("name")]
+        sidecar = case.get("name") == SIDECAR_CASE
+        phases = SIDECAR_PHASES if sidecar else (COLLISION_PHASES[case.get("name")],)
+        prefix = "collision-sidecar-allocation" if sidecar else "collision-allocation"
         output = "".join(case.itertext())
-        positions = re.findall(r"\[collision-allocation\] " + phase + r" measured=(\d+) completed=(\d+)", output)
-        if case.get("status") != "run" or len(positions) != 1:
-            raise ValueError("Collision allocation execution has no unique complete position proof")
-        measured, completed = map(int, positions[0])
-        if measured == 0 or completed != measured:
-            raise ValueError("Collision allocation sweep did not execute every measured position")
+        for phase in phases:
+            positions = re.findall(r"\[" + prefix + r"\] " + phase + r" measured=(\d+) completed=(\d+)", output)
+            if case.get("status") != "run" or len(positions) != 1:
+                raise ValueError("Collision allocation execution has no unique complete position proof")
+            measured, completed = map(int, positions[0])
+            if measured == 0 or completed != measured:
+                raise ValueError("Collision allocation sweep did not execute every measured position")
 
 
 def workspace_path(value):

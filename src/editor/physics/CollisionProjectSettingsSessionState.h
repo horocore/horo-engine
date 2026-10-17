@@ -24,6 +24,7 @@ namespace Horo::Editor {
         std::filesystem::path root;
         std::string projectId;
         const Assets::AssetRegistry *registry{};
+        const Assets::IAssetRegistrySource *source{};
         DurableFileSystem *files{};
         ProjectMutationCoordinator *mutations{};
         SceneDocumentTransactions *activeScene{};
