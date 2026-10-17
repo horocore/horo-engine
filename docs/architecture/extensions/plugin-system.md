@@ -1145,6 +1145,17 @@ the external controller receives only allowlisted invalidation hints through its
 versioned session/capability contract. Extension pages follow the same interaction
 and focus rules as built-in modal content and cannot bypass the active modal scope.
 
+The native page profile is ABI1.5 (`EditorPageAbi.h`) and requires explicit
+`editor.page` host composition plus approved `editor.settings`/`editor.modal`
+permissions. Definitions remain inert; registration stages copied transport,
+transactional activation publishes the real page controller, and provider
+retirement fences admission before releasing code leases. Settings use canonical
+configuration schema/resolution and the existing durable store; uncertain writes
+retain dirty recovery state rather than publishing an unproven clean snapshot.
+Modal drafts and open/focus state are transient and never document/workspace data.
+The versioned profile and rebuild/rollback rules are specified in
+[the ABI migration guide](../../guides/extension-abi-migration.md#external-c-abi-14--15-settings-and-modal-pages).
+
 ### Activity Bar Contributions
 
 The activity bar is the vertical icon strip on the left and right edges of the

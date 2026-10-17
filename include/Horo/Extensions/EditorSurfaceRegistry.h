@@ -2,7 +2,7 @@
 
 /**
  * @file EditorSurfaceRegistry.h
- * @brief Host-owned registration and lifecycle state for external editor panels and tabs.
+ * @brief Host-owned registration and lifecycle state for external persistent and transient editor surfaces.
  */
 
 #include "Horo/Extensions/EditorSurfaceContext.h"
@@ -161,7 +161,7 @@ namespace Horo::Extensions {
     };
 
     /**
-     * @brief Transactional host registry for persistent external panels and document tabs.
+     * @brief Transactional host registry for external surfaces; transient pages never enter workspace persistence.
      *
      * The registry owns copied metadata and lifecycle state only. It never invokes module
      * code, exposes layout internals, or treats persisted state as activation evidence.
@@ -178,7 +178,7 @@ namespace Horo::Extensions {
         EditorSurfaceRegistry &operator=(EditorSurfaceRegistry &&) noexcept = delete;
 
         /**
-         * @brief Publishes one restricted editor context as a persistent panel or tab.
+         * @brief Publishes one restricted persistent panel/tab/activity or transient settings/modal context.
          * @param context Live activation-scoped context returned by EditorSurfaceContextProvider.
          * @return Move-only registration, or a typed validation, duplicate, capacity, or shutdown failure.
          * @note Registration copies no executable callback and never invokes provider code.
@@ -271,6 +271,10 @@ namespace Horo::Extensions {
         /** @brief Returns deterministic copied snapshots in contribution-ID order. */
         [[nodiscard]] std::vector<EditorSurfaceSnapshot> Snapshot() const;
 
+        /** @brief Checks exact active publication without copying a form or granting new authority.
+         * @param provider Exact activation. @param surfaceId Contribution identity. @return Whether registered, enabled and context-live.
+         */
+        [[nodiscard]] bool IsAvailable(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId) const;
         /** @brief Returns the publication revision for owner-lane projection caches; no forms or strings are copied. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
 

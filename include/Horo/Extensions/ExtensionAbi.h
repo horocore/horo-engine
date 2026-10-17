@@ -27,7 +27,7 @@
 
 enum {  // NOSONAR(cpp:S3642) C ABI constant group
     HORO_EXTENSION_ABI_VERSION = 1,
-    HORO_EXTENSION_ABI_MINOR_VERSION = 4,
+    HORO_EXTENSION_ABI_MINOR_VERSION = 5,
     HORO_ASSET_IMPORTER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION_2 = 2,
@@ -398,6 +398,17 @@ typedef HoroExtensionStatus (*HoroRegisterEditorActivityFunc)(void *hostContext,
                                                               struct HoroEditorActivitySessionApi *session);
 #endif
 
+/** @brief ABI 1.5 manifest-owned restricted page contribution and staged session. */
+struct HoroEditorPageDescriptor;
+struct HoroEditorPageSessionApi;
+#ifdef __cplusplus
+using HoroRegisterEditorPageFunc = HoroExtensionStatus (*)(void *hostContext, const struct HoroEditorPageDescriptor *descriptor,
+                                                           struct HoroEditorPageSessionApi *session);
+#else
+typedef HoroExtensionStatus (*HoroRegisterEditorPageFunc)(void *hostContext, const struct HoroEditorPageDescriptor *descriptor,
+                                                          struct HoroEditorPageSessionApi *session);
+#endif
+
 struct HoroExtensionHostApi {
     /** @brief Size of this struct for append-only ABI negotiation. */
     uint32_t structSize;
@@ -413,6 +424,8 @@ struct HoroExtensionHostApi {
     HoroRegisterPlatformServicesProviderFunc registerPlatformServicesProvider;
     /** @brief Appended in 1.4; unavailable in headless compositions. Check structSize before reading. */
     HoroRegisterEditorActivityFunc registerEditorActivity;
+    /** @brief Appended in 1.5; check structSize and editor.page host capability before reading. */
+    HoroRegisterEditorPageFunc registerEditorPage;
 };
 typedef struct HoroExtensionHostApi HoroExtensionHostApi;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
@@ -429,6 +442,7 @@ enum {  // NOSONAR(cpp:S3642) C ABI function requirement bits.
     HORO_EXTENSION_REQUIRES_ASSET_IMPORTER = 1,
     HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER = 2,
     HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY = 4,
+    HORO_EXTENSION_REQUIRES_EDITOR_PAGE = 8,
 };
 
 /**

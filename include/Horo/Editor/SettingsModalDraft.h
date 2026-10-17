@@ -15,6 +15,7 @@ namespace Horo::Extensions {
 
 namespace Horo::Editor {
     class EditorSettingsService;
+    class EditorPageView;
     struct NavigationSettingsDraft;
 
     struct SettingsGeneralTab {
@@ -158,6 +159,8 @@ namespace Horo::Editor {
         PackagesTab packages{};
         DiagnosticsTab diagnostics{};
 
+        std::shared_ptr<EditorPageView>
+            extensionPages; /**< Transient host-rendered extension workflow; never part of EditorSettings persistence. */
         int pluginSectionTab = 0;
         Extensions::ExtensionInventory *extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr;

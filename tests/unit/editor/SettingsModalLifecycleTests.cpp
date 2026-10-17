@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Foundation/DataBus.h"
@@ -15,10 +16,6 @@
 #include <filesystem>
 #include <memory>
 #include <string>
-
-namespace Horo::Editor::Theme {
-    struct Fonts;
-}
 
 Horo::Editor::ModalFrameResult Horo::Editor::SettingsModal::Draw() {
     return ModalFrameResult::None();
@@ -35,7 +32,7 @@ namespace {
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
         LocalizationService localization{LocaleTag{"en-US"}};
         EditorSettingsService settings{DefaultEditorSettings(), configuration, events, localization};
-        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        Theme::Fonts fonts{};
         ThemeContext theme{fonts};
         EditorSettingsSnapshot snapshot = settings.Snapshot();
         EditorGuiContext ctx{engineEvents, events, localization, theme, snapshot};

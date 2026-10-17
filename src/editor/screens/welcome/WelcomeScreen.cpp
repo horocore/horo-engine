@@ -1,17 +1,14 @@
 #include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/EditorGuiContext.h"
+#include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorServiceRegistry.h"
-#include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/RecentProject.h"
 #include "Horo/Editor/RecentProjectInspectionService.h"
 #include "Horo/Editor/ScreenRegistry.h"
-#include "Horo/Editor/SettingsModal.h"
 #include "Horo/Editor/WelcomeController.h"
-#include "Horo/Extensions/ExtensionInventory.h"
-#include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Runtime/Input.h"
 #include "WelcomeView.h"
@@ -30,8 +27,8 @@ namespace Horo::Editor {
         public:
             explicit WelcomeScreen(const EditorServiceRegistry &services)
                 : host_(services.Get<GuiScreenHost>()), context_(services.GetConst<EditorGuiContext>()),
-                  modalHost_(services.Get<EditorModalHost>()), settings_(services.Get<EditorSettingsService>()),
-                  inputRouter_(services.Get<Input::InputRouter>()), recentInspection_(services.Get<RecentProjectInspectionService>()),
+                  modalHost_(services.Get<EditorModalHost>()), inputRouter_(services.Get<Input::InputRouter>()),
+                  recentInspection_(services.Get<RecentProjectInspectionService>()),
                   logoTexture_(services.TryGet<std::uintptr_t>() ? *services.TryGet<std::uintptr_t>() : 0) {}
 
             ScreenId Id() const override {
@@ -85,10 +82,7 @@ namespace Horo::Editor {
                         break;
                     }
                     case WelcomeViewCommand::OpenSettings: {
-                        static_cast<void>(modalHost_.OpenRoot(
-                            std::make_unique<SettingsModal>(context_, settings_, logoTexture_,
-                                                            host_.Services().TryGet<Extensions::ExtensionInventory>(),
-                                                            host_.Services().TryGet<Extensions::ExtensionMarketplaceService>())));
+                        host_.DispatchMenuInvocation({.action = EditorMenuAction::OpenEditorSettings});
                         break;
                     }
                     case WelcomeViewCommand::OpenRecentProject: {
@@ -228,7 +222,6 @@ namespace Horo::Editor {
             GuiScreenHost &host_;
             const EditorGuiContext &context_;
             EditorModalHost &modalHost_;
-            EditorSettingsService &settings_;
             Input::InputRouter &inputRouter_;
             RecentProjectInspectionService &recentInspection_;
             std::uintptr_t logoTexture_;

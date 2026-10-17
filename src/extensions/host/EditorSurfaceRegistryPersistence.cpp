@@ -291,6 +291,16 @@ namespace Horo::Extensions {
         return state_->shutdown;
     }
 
+    /** @copydoc EditorSurfaceRegistry::IsAvailable */
+    bool EditorSurfaceRegistry::IsAvailable(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId) const {
+        if (!state_)
+            return false;
+        auto lock = state_->Lock();
+        const auto surface = FindSurface(*state_, surfaceId);
+        return !state_->shutdown && surface && surface->descriptor.provider == provider &&
+               EffectiveStatus(*state_, *surface) == EditorSurfaceProviderStatus::Active;
+    }
+
     /** @copydoc EditorSurfaceRegistry::Remove */
     void EditorSurfaceRegistry::Remove(const std::shared_ptr<EditorSurfaceRegistryState> &registry,
                                        const std::shared_ptr<EditorSurfaceState> &surface) noexcept {
@@ -303,7 +313,7 @@ namespace Horo::Extensions {
         if (found == registry->surfaces.end())
             return;
         ++registry->revision;
-        if (!registry->shutdown) {
+        if (!registry->shutdown && surface->descriptor.persistence != EditorSurfacePersistence::None) {
             assert(HasPreservationCapacity(*registry));
             assert(registry->pending.size() < registry->limits.maximumWorkspaceEntries);
             assert(registry->pending.capacity() >= registry->limits.maximumWorkspaceEntries);
