@@ -224,7 +224,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroExtensionManagerTests
+        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -452,7 +452,7 @@ jobs:
           if (Test-Path -LiteralPath "$root/extension-allocation-ctest.xml") {
             Remove-Item -LiteralPath "$root/extension-allocation-ctest.xml" -ErrorAction Stop
           }
-          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "extension-allocation-ctest.xml"
+          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 --test-output-size-passed 65536 -R $pattern --output-junit "extension-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/ci/run_extension_allocation_qualification.py --output-junit "$root/extension-allocation-ctest.xml"
 
@@ -567,6 +567,8 @@ jobs:
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
             build/ci-audio-release/extension-allocation-ctest.xml
+            build/ci-audio-release/tests/HoroWorkspaceLayoutPersistenceTests.exe
+            build/ci-audio-release/tests/HoroWorkspaceLayoutPersistenceTests.pdb
             build/ci-audio-release/save-allocation-ctest.xml
           if-no-files-found: warn
           retention-days: 14

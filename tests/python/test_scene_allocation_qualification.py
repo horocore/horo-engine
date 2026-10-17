@@ -1,10 +1,14 @@
 """The Windows Release Scene route requires actual exact, non-skipped CTest cases."""
 
 import importlib.util
+import re
 from pathlib import Path, PurePosixPath
+from argparse import ArgumentTypeError
 from html import escape
 
 import pytest
+
+from scripts.ci import allocation_qualification_cli as EVIDENCE
 
 ROOT = Path(__file__).resolve().parents[2]
 PARSER_STEP_ID = "id: qualification_python"
@@ -126,9 +130,9 @@ def test_actual_ctest_path_contract_is_registered_and_matches_workflow():
 def test_cli_paths_cannot_escape_workspace(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     outside = tmp_path.parent / "outside.xml"
-    with pytest.raises(QUALIFICATION.argparse.ArgumentTypeError):
-        QUALIFICATION.workspace_path(outside)
-    assert QUALIFICATION.workspace_path("inside.xml") == tmp_path / "inside.xml"
+    with pytest.raises(ArgumentTypeError):
+        EVIDENCE.workspace_path(outside)
+    assert EVIDENCE.workspace_path("inside.xml") == tmp_path / "inside.xml"
 
 
 def test_cli_paths_reject_symlink_escape(tmp_path, monkeypatch):
@@ -139,8 +143,8 @@ def test_cli_paths_reject_symlink_escape(tmp_path, monkeypatch):
     except OSError:
         pytest.skip("Host does not permit test symlink creation")
     escaped = link / "evidence.xml"
-    with pytest.raises(QUALIFICATION.argparse.ArgumentTypeError):
-        QUALIFICATION.workspace_path(escaped)
+    with pytest.raises(ArgumentTypeError):
+        EVIDENCE.workspace_path(escaped)
 
 
 @pytest.mark.parametrize("absolute", [False, True])
@@ -230,8 +234,8 @@ def test_direct_regex_writer_accepts_workspace_paths_with_spaces(tmp_path, absol
     QUALIFICATION.write_regex(destination if absolute else destination.relative_to(tmp_path))
     pattern = destination.read_text(encoding="utf-8")
     for name in QUALIFICATION.CASES:
-        assert QUALIFICATION.re.fullmatch(pattern, name)
-    assert not QUALIFICATION.re.fullmatch(pattern, "unexpected allocation test")
+        assert re.fullmatch(pattern, name)
+    assert not re.fullmatch(pattern, "unexpected allocation test")
 
 
 @pytest.mark.parametrize("absolute", [False, True])
@@ -268,4 +272,4 @@ def test_actual_discovery_cli_writes_exact_workspace_regex(tmp_path, monkeypatch
     monkeypatch.setattr("sys.argv", ["qualification", "--discovery", str(arguments[0]), "--regex-output", str(arguments[1])])
     QUALIFICATION.main()
     pattern = destination.read_text(encoding="utf-8")
-    assert all(QUALIFICATION.re.fullmatch(pattern, name) for name in QUALIFICATION.CASES)
+    assert all(re.fullmatch(pattern, name) for name in QUALIFICATION.CASES)

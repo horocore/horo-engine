@@ -2,6 +2,7 @@
 #include "EditorActivityPackageSupport.h"
 #include "Horo/Extensions/EditorActivityAbi.h"
 #include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Extensions/ExtensionManager.h"
 #include "Horo/Extensions/ExtensionRetirement.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -225,6 +226,27 @@ namespace Horo::Extensions::Tests {
             CHECK(entry.intent.activityVisible == saved->activityVisible);
             CHECK(entry.intent.opaqueState == saved->opaqueState);
             CHECK(entry.intent.activityPlacement == saved->activityPlacement);
+        }
+    }
+
+    TEST_CASE("Invalid manifest file bytes reject recovery before native loading and preserve independent ownership",
+              "[Extensions][EditorSurface][Recovery][Manifest]") {
+        for (const std::string_view content : {"", "{\"id\":\"fixture.package\"", "{} trailing bytes"}) {
+            NativeRecoveryFixture fixture;
+            fixture.RetainIndependentOwner();
+            fixture.RejectNativeLoad();
+            {
+                std::ofstream output{fixture.package.root / "extension.json", std::ios::binary | std::ios::trunc};
+                output.write(content.data(), static_cast<std::streamsize>(content.size()));
+                output.close();
+                REQUIRE(output.good());
+            }
+            const auto loaded = fixture.manager.LoadExtension(fixture.package.root.string());
+            REQUIRE(loaded.HasError());
+            CHECK(loaded.ErrorValue().code.Value() == ExtensionErrors::InvalidManifest.code.Value());
+            CHECK(fixture.LoadAttempts() == 0);
+            CHECK(fixture.manager.GetLoadedExtensionIds().empty());
+            fixture.RequireIndependentOwner();
         }
     }
 

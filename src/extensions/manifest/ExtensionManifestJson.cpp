@@ -1,5 +1,6 @@
 #include "ExtensionManifestParsing.h"
 #include "Horo/Extensions/ExtensionErrors.h"
+#include "Horo/Foundation/Assertions.h"
 
 #include <algorithm>
 #include <array>
@@ -242,44 +243,56 @@ namespace Horo::Extensions::ManifestParsing {
     }  // namespace
 
     static_assert(std::is_nothrow_move_constructible_v<Json>);
-    static_assert(std::is_nothrow_move_constructible_v<std::vector<Json *>>);
-    static_assert(!std::is_copy_constructible_v<ManifestDocument> && std::is_nothrow_move_constructible_v<ManifestDocument>);
+    static_assert(std::is_nothrow_move_constructible_v<std::unique_ptr<Json *[]>>);
+    static_assert(!std::is_copy_constructible_v<ManifestDocument> && !std::is_copy_assignable_v<ManifestDocument>);
+    static_assert(std::is_nothrow_move_constructible_v<ManifestDocument> && !std::is_move_assignable_v<ManifestDocument>);
 
     /** @copydoc ManifestDocument::ManifestDocument */
-    ManifestDocument::ManifestDocument(const std::size_t observedDepth) {
-        retirement_.reserve(observedDepth);
-    }
+    ManifestDocument::ManifestDocument(const std::size_t observedDepth)
+        : retirement_(observedDepth == 0 ? nullptr : std::make_unique_for_overwrite<Json *[]>(observedDepth)),
+          retirementCapacity_(observedDepth) {}
+
+    /** @copydoc ManifestDocument::ManifestDocument */
+    ManifestDocument::ManifestDocument(ManifestDocument &&other) noexcept
+        : document_(std::move(other.document_)), retirement_(std::move(other.retirement_)),
+          retirementCapacity_(std::exchange(other.retirementCapacity_, 0)) {}
 
     /** @copydoc ManifestDocument::~ManifestDocument */
     ManifestDocument::~ManifestDocument() noexcept {
         if (!document_.is_structured())
             return;
-        retirement_.push_back(&document_);
-        while (!retirement_.empty()) {
-            Json *const current = retirement_.back();
-            if (current->is_object() && !current->empty()) {
-                auto &object = current->get_ref<Json::object_t &>();
-                const auto child = object.begin();
-                if (child->second.is_structured())
-                    retirement_.push_back(&child->second);
+        HORO_INVARIANT(retirementCapacity_ > 0);
+        std::size_t depth = 1;
+        retirement_[0] = &document_;
+        while (depth != 0) {
+            Json *const current = retirement_[depth - 1];
+            Json *child = nullptr;
+            if (auto *const object = current->get_ptr<Json::object_t *>(); object != nullptr && !object->empty()) {
+                const auto first = object->begin();
+                if (first->second.is_structured())
+                    child = &first->second;
                 else
-                    object.erase(child);
-            } else if (current->is_array() && !current->empty()) {
-                auto &array = current->get_ref<Json::array_t &>();
-                if (array.back().is_structured())
-                    retirement_.push_back(&array.back());
+                    object->erase(first);
+            } else if (auto *const array = current->get_ptr<Json::array_t *>(); array != nullptr && !array->empty()) {
+                if (array->back().is_structured())
+                    child = &array->back();
                 else
-                    array.pop_back();
+                    array->pop_back();
             } else {
-                // Empty containers can be destroyed without nlohmann's allocating descendant stack.
+                // Children retire before their parent. The upstream empty-container destructor remains authoritative.
                 *current = nullptr;
-                retirement_.pop_back();
+                --depth;
+            }
+            if (child != nullptr) {
+                HORO_INVARIANT(depth < retirementCapacity_);
+                retirement_[depth++] = child;
             }
         }
     }
 
     /** @copydoc ManifestDocument::Adopt */
     void ManifestDocument::Adopt(Json &&document) noexcept {
+        HORO_INVARIANT(document_.is_null());
         document_ = std::move(document);
     }
 

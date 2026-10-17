@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
-"""Verify the two complete Extension allocation sweeps in the supported Release ABI."""
+"""Verify the complete Extension and Workspace allocation sweeps in the supported Release ABI."""
 
-import argparse
 import json
-from pathlib import Path
 import re
 import sys
 from defusedxml import ElementTree as element_tree
 from defusedxml.common import DefusedXmlException
 
+if __name__ == "__main__":
+    from allocation_qualification_cli import parse_evidence_arguments, write_case_regex
+else:
+    from scripts.ci.allocation_qualification_cli import parse_evidence_arguments, write_case_regex
+
 PREFIX = "HoroExtensionManagerAllocationTests::"
+WORKSPACE_CASE = "HoroWorkspaceLayoutPersistenceTests::Split parsing releases every owned allocation when any allocation fails"
 CASES = {
+    WORKSPACE_CASE:
+        ("workspace-allocation", 1),
     PREFIX + "Every recovery admission allocation failure precedes native callbacks and preserves independent status":
         ("recovery-admission-allocation", 1),
     PREFIX + "Completed manifest DOM retirement preserves every allocation failure on valid and rejected schemas":
@@ -19,10 +25,11 @@ CASES = {
 
 
 def verify_discovery(document):
-    """Require both exact enabled executable cases before CTest filtering."""
-    selected = [test for test in document.get("tests", []) if test.get("name", "").startswith(PREFIX)]
+    """Require all exact enabled executable cases before CTest filtering."""
+    selected = [test for test in document.get("tests", [])
+                if test.get("name", "").startswith(PREFIX) or test.get("name") == WORKSPACE_CASE]
     if len(selected) != len(CASES) or {test["name"] for test in selected} != set(CASES):
-        raise ValueError("Extension allocation discovery must contain both exact cases")
+        raise ValueError("Extension allocation discovery must contain all exact cases")
     for test in selected:
         if any(prop.get("name") == "DISABLED" and prop.get("value") for prop in test.get("properties", [])):
             raise ValueError(f"Extension allocation case is disabled: {test['name']}")
@@ -34,7 +41,14 @@ def verify_case(case):
         raise ValueError(f"Extension allocation case did not pass: {case.get('name')}")
     marker, expected = CASES[case.get("name")]
     output = "".join(case.itertext())
-    counts = re.findall(r"\[" + re.escape(marker) + r"\] measured=(\d+) completed=(\d+)", output)
+    if marker == "workspace-allocation":
+        measured = re.findall(r"\[workspace-allocation\] measured=(\d+)", output)
+        completed = re.findall(r"\[workspace-allocation\] completed=(\d+)", output)
+        if len(measured) != expected or len(completed) != expected:
+            raise ValueError("Workspace allocation full-sweep evidence is missing or duplicated")
+        counts = list(zip(measured, completed))
+    else:
+        counts = re.findall(r"\[" + re.escape(marker) + r"\] measured=(\d+) completed=(\d+)", output)
     if len(counts) != expected or any(int(measured) == 0 or measured != completed for measured, completed in counts):
         raise ValueError(f"Extension allocation full-sweep evidence differs: {case.get('name')}")
 
@@ -44,7 +58,7 @@ def verify_junit(path):
     root = element_tree.parse(path).getroot()
     cases = list(root.iter("testcase"))
     if len(cases) != len(CASES) or {case.get("name") for case in cases} != set(CASES):
-        raise ValueError("Extension allocation execution must contain both exact cases")
+        raise ValueError("Extension allocation execution must contain all exact cases")
     for case in cases:
         verify_case(case)
     for suite in root.iter("testsuite"):
@@ -52,31 +66,15 @@ def verify_junit(path):
             raise ValueError("Extension allocation suite contains failures, errors or skips")
 
 
-def workspace_path(value):
-    """Keep all qualification evidence within the invoking workspace."""
-    candidate = Path(value).resolve()
-    if not candidate.is_relative_to(Path.cwd().resolve()):
-        raise argparse.ArgumentTypeError("Qualification evidence must remain inside the current workspace")
-    return candidate
-
-
 def main():
     """Verify discovery before execution, or validate the exact Release JUnit afterward."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--discovery", type=workspace_path)
-    mode.add_argument("--output-junit", type=workspace_path)
-    parser.add_argument("--regex-output", type=workspace_path)
-    args = parser.parse_args()
+    args = parse_evidence_arguments(__doc__)
     if args.discovery:
-        if args.regex_output is None:
-            parser.error("--discovery requires --regex-output")
         verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")))
-        pattern = "^(" + "|".join(re.escape(name) for name in sorted(CASES)) + ")$"
-        args.regex_output.write_text(pattern, encoding="utf-8")
+        write_case_regex(args.regex_output, CASES)
     else:
         verify_junit(args.output_junit)
-        print("Extension allocation qualification: two cases and all four nonzero measured sweeps completed; zero failures, errors or skips.")
+        print("Extension allocation qualification: three cases and all five nonzero measured sweeps completed; zero failures, errors or skips.")
 
 
 if __name__ == "__main__":

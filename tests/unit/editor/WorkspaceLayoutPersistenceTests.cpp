@@ -8,12 +8,14 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <charconv>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
 #include <new>
 #include <type_traits>
 #ifdef _WIN32
+#include <Windows.h>
 #include <io.h>
 #else
 #include <unistd.h>
@@ -22,16 +24,20 @@
 using namespace Horo::Editor;
 
 namespace {
+#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0
     enum class SweepTrace {
         Measured,
         Index,
         InjectedBytes,
-        Completed
+        Completed,
+        ImageBase,
+        Frame
     };
 
     /** @brief Emits bounded fault diagnostics through a stack buffer and raw stderr, outside the C++ allocator. */
     void TraceWorkspaceAllocation(const SweepTrace event, const std::size_t value) noexcept {
-        constexpr std::array<std::string_view, 4> labels{"measured", "index", "injected-bytes", "completed"};
+        constexpr std::array<std::string_view, 6> labels{"measured",           "index",        "injected-bytes", "completed",
+                                                         "release-image-base", "release-frame"};
         constexpr std::string_view prefix{"[workspace-allocation] "};
         std::array<char, 96> text{};
         auto *cursor = std::copy(prefix.begin(), prefix.end(), text.data());
@@ -50,9 +56,24 @@ namespace {
 #endif
     }
 
+#ifdef _WIN32
+    thread_local bool captureFirstFailure{};
+#endif
+
     void ObserveWorkspaceAllocationFailure(const std::size_t bytes) noexcept {
         TraceWorkspaceAllocation(SweepTrace::InjectedBytes, bytes);
+#ifdef _WIN32
+        if (captureFirstFailure) {
+            // These are the current Release binary's injected-callsite addresses, not a past Debug stack.
+            std::array<void *, 16> frames{};
+            const auto count = ::CaptureStackBackTrace(0, static_cast<DWORD>(frames.size()), frames.data(), nullptr);
+            TraceWorkspaceAllocation(SweepTrace::ImageBase, reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr)));
+            for (USHORT index = 0; index < count; ++index)
+                TraceWorkspaceAllocation(SweepTrace::Frame, reinterpret_cast<std::uintptr_t>(frames[index]));
+        }
+#endif
     }
+#endif
 }  // namespace
 
 static_assert(!std::is_copy_constructible_v<Horo::Tests::OwnedTestDirectory> &&
@@ -60,6 +81,7 @@ static_assert(!std::is_copy_constructible_v<Horo::Tests::OwnedTestDirectory> &&
 static_assert(!std::is_copy_constructible_v<SplitNode> && std::is_nothrow_move_constructible_v<SplitNode>);
 static_assert(std::is_nothrow_move_constructible_v<LayoutNode> && std::is_nothrow_move_assignable_v<LayoutNode>);
 
+#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0
 TEST_CASE("Split parsing releases every owned allocation when any allocation fails", "[unit][editor][persistence][ownership]") {
     namespace Probe = Horo::Tests::AllocationProbe;
     constexpr std::string_view json =
@@ -75,6 +97,9 @@ TEST_CASE("Split parsing releases every owned allocation when any allocation fai
     std::size_t completed{};
     for (std::size_t index = 0; index < successfulAllocations; ++index) {
         TraceWorkspaceAllocation(SweepTrace::Index, index);
+#ifdef _WIN32
+        captureFirstFailure = index == 0;
+#endif
         const auto allocationsBefore = Probe::Count();
         const auto freesBefore = Probe::FreeCount();
         bool failed{};
@@ -96,6 +121,8 @@ TEST_CASE("Split parsing releases every owned allocation when any allocation fai
     TraceWorkspaceAllocation(SweepTrace::Completed, completed);
     REQUIRE(completed == successfulAllocations);
 }
+
+#endif
 
 TEST_CASE("Split children transfer exclusive ownership into the layout variant", "[unit][editor][persistence][ownership]") {
     SplitNode split;

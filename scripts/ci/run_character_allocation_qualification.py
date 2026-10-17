@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Run the exact Character allocation probes unsupported by MSVC Debug iterator proxies."""
 
-import argparse
 import json
 from pathlib import Path
-import re
 import sys
 from defusedxml import ElementTree as element_tree
 from defusedxml.common import DefusedXmlException
+
+if __name__ == "__main__":
+    from allocation_qualification_cli import parse_evidence_arguments, write_case_regex
+else:
+    from scripts.ci.allocation_qualification_cli import parse_evidence_arguments, write_case_regex
 
 WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
 PREFIX = "HoroPhysicsTests::"
@@ -52,36 +55,13 @@ def verify_junit(path):
 
 def write_regex(path):
     """Write only resolved workspace evidence, including for direct non-CLI callers."""
-    path = Path(path).resolve()
-    if not path.is_relative_to(Path.cwd().resolve()):
-        raise ValueError(WORKSPACE_EVIDENCE_ERROR)
-    # CTest uses POSIX extended syntax: noncapturing Python groups are not supported.
-    pattern = "^(" + "|".join(re.escape(name) for name in sorted(CASES)) + ")$"
-    path.write_text(pattern, encoding="utf-8")
-
-
-def workspace_path(value):
-    """Reject CLI traversal and symlink escapes before reading or writing workspace evidence."""
-    root = Path.cwd().resolve()
-    candidate = Path(value).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(WORKSPACE_EVIDENCE_ERROR) from error
-    return candidate
+    write_case_regex(path, CASES)
 
 
 def main():
     """Validate discovery before execution, or validate the resulting exact Release JUnit."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--discovery", type=workspace_path)
-    mode.add_argument("--output-junit", type=workspace_path)
-    parser.add_argument("--regex-output", type=workspace_path)
-    args = parser.parse_args()
+    args = parse_evidence_arguments(__doc__)
     if args.discovery:
-        if args.regex_output is None:
-            parser.error("--discovery requires --regex-output")
         verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")))
         write_regex(args.regex_output)
     else:

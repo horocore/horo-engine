@@ -2,10 +2,10 @@
 
 #include "Horo/Extensions/ExtensionManifest.h"
 
+#include <memory>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace Horo::Extensions::ManifestParsing {
     using Json = nlohmann::json;
@@ -17,9 +17,13 @@ namespace Horo::Extensions::ManifestParsing {
         explicit ManifestDocument(std::size_t observedDepth);
         ManifestDocument(const ManifestDocument &) = delete;
         ManifestDocument &operator=(const ManifestDocument &) = delete;
-        ManifestDocument(ManifestDocument &&) noexcept = default;
+        /** @brief Transfers the DOM and its preadmitted scratch together; the source retains neither. */
+        ManifestDocument(ManifestDocument &&other) noexcept;
         ManifestDocument &operator=(ManifestDocument &&) = delete;
-        /** @brief Iteratively empties admitted completed containers without allocating or recursive C++ cleanup. */
+        /** @brief Iteratively empties admitted completed containers using preallocated scratch.
+         * @note The upstream JSON container destructor still uses its own temporary vector; checked-STL
+         * allocation-failure qualification is not supported by that dependency.
+         */
         ~ManifestDocument() noexcept;
         /** @brief Transfers the completed parser result into its preallocated owner; the moved-from argument becomes null.
          * @pre This owner has not previously adopted a DOM, and observed raw depth bounds every completed container.
@@ -30,7 +34,8 @@ namespace Horo::Extensions::ManifestParsing {
 
     private:
         Json document_;
-        std::vector<Json *> retirement_;
+        std::unique_ptr<Json *[]> retirement_;
+        std::size_t retirementCapacity_ = 0;
     };
 
     [[nodiscard]] std::string ChildPath(std::string_view parent, std::string_view key);

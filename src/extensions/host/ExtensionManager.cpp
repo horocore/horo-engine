@@ -20,7 +20,6 @@
 #include <fstream>
 #include <iterator>
 #include <ranges>
-#include <sstream>
 #include <stdexcept>
 #include <string_view>
 
@@ -204,18 +203,31 @@ namespace Horo::Extensions {
 
             const fs::path manifestPath = requestedRoot / "extension.json";
             std::error_code fileError;
-            if (const std::uintmax_t manifestBytes = fs::file_size(manifestPath, fileError);
-                fileError || manifestBytes > kManifestLimits.maximumDocumentBytes) {
+            const std::uintmax_t manifestBytes = fs::file_size(manifestPath, fileError);
+            if (fileError || manifestBytes > kManifestLimits.maximumDocumentBytes) {
                 return Result<std::string>::Failure(
                     MakeError(ExtensionErrors::InvalidManifest, "Extension manifest is unavailable or exceeds the bounded size."));
             }
-            std::ifstream fileStream(manifestPath, std::ios::binary);
-            if (!fileStream.is_open())
-                return Result<std::string>::Failure(MakeError(ExtensionErrors::InvalidManifest, "Could not open extension.json"));
+            try {
+                std::ifstream fileStream;
+                // Preserve allocation failures raised by the file buffer instead of admitting a failed transfer.
+                fileStream.exceptions(std::ios::badbit);
+                fileStream.open(manifestPath, std::ios::binary);
+                if (!fileStream.is_open())
+                    return Result<std::string>::Failure(MakeError(ExtensionErrors::InvalidManifest, "Could not open extension.json"));
 
-            std::stringstream buffer;
-            buffer << fileStream.rdbuf();
-            return Result<std::string>::Success(std::move(buffer).str());
+                std::string content(static_cast<std::size_t>(manifestBytes), '\0');
+                const auto expectedBytes = static_cast<std::streamsize>(manifestBytes);
+                fileStream.read(content.data(), expectedBytes);
+                if (fileStream.gcount() != expectedBytes || !fileStream || fileStream.peek() != std::char_traits<char>::eof() ||
+                    !fileStream.eof()) {
+                    return Result<std::string>::Failure(
+                        MakeError(ExtensionErrors::InvalidManifest, "Extension manifest changed size or could not be read completely."));
+                }
+                return Result<std::string>::Success(std::move(content));
+            } catch (const std::ios_base::failure &failure) {
+                return Result<std::string>::Failure(MakeError(ExtensionErrors::InvalidManifest, failure.what()));
+            }
         }
 
         /** @brief Parses a manifest and checks constraints imposed by the native loader. */

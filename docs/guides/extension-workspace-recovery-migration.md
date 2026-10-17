@@ -110,11 +110,14 @@ The full admission allocation sweep exposed a completed nlohmann JSON destructor
 allocating its descendant work list while retiring `ParseExtensionManifest`'s
 private `Result<Json>`. LLDB observed `json::data::~data` crossing its noexcept
 boundary into terminate. The private parser now returns a move-only manifest DOM
-owner. Its cleanup scratch is reserved from the existing raw scan's observed
-container depth **before** any DOM exists, then transferred with the completed
-DOM through synchronous schema validation. Retirement iteratively removes scalar
-children and empties containers in postorder using only the preallocated scratch;
-no C++ recursion or new heap requests are needed at that boundary.
+owner. Its cleanup scratch is a uniquely owned fixed pointer array allocated from
+the existing raw scan's observed container depth **before** any DOM exists. An
+explicit move transfers the DOM and scratch together and empties the source's
+ownership. Retirement uses nonthrowing typed container pointers and postorder
+removal, without recursive Horo cleanup or scratch growth. The upstream JSON
+empty-container destructor still constructs its own temporary vector; MSVC checked
+STL may allocate an iterator proxy there even for an empty container. This change
+does not promise checked-Debug global allocation-failure tolerance.
 
 Default depth16 and all nonzero caller budgets remain unchanged, including custom
 admission above depth64. Document bytes, duplicate fields, version, malformed JSON
@@ -127,18 +130,42 @@ and the original full admission sweep must execute after the change.
 
 ## Windows allocation qualification composition
 
-Only the two new global allocation-failure sweeps are omitted from MSVC checked
-Debug compilation, following the existing Scene allocation qualification policy.
+The two Extension global allocation-failure cases and the complete Split parser
+allocation-failure case are compiled in Windows Release rather than MSVC checked
+Debug, following the existing Scene allocation qualification policy.
 Checked STL container constructors and moves can allocate iterator proxies inside
 `noexcept` boundaries, making global one-shot failure injection unsupported for
 that composition. Debug retains the functional admission, recovery, rollback and
-manifest validation cases. This is a supported-composition decision from the
-existing contract, not an observed Windows stack for these two new cases.
+manifest validation cases. This is a supported-composition qualification decision, not an observed Windows
+stack identifying the failed Debug Split request. The completed Debug run reported
+index0 and16bytes before its unchanged90second timeout; that telemetry and the
+inspected checked-STL noexcept boundary do not localize an exact frame.
 
 Windows `ci-audio-release` builds the entire engine and Manager with the same
-Release STL ABI. Two exact registered CTests must be discovered and executed with
-zero failures, errors or skips. Their output must prove a nonzero measured count
-and equal completed count for the admission sweep and all three manifest sweeps.
-No position is sampled or disabled in Release. Other supported compositions run
-the same full sweeps. The separate legacy Split-parser timeout remains unproven;
-its full Debug test and bounded diagnostic markers remain unchanged.
+Release STL ABI. Three exact registered CTests must be discovered and executed
+with zero failures, errors or skips. Their output must prove a nonzero measured
+count and equal completed count for the admission sweep, all three manifest
+sweeps, and every Split parser allocation position. No position is sampled or
+disabled in Release. Linux and macOS retain the same complete sweeps. All functional
+Debug Split, recovery, admission and manifest tests remain enabled. The first
+injected Windows Split request emits at most16native frames and the image base;
+these belong only to that actual Release binary, which is retained with the test
+artifact, and never prove the earlier Debug failure's stack.
+
+## Manifest file admission
+
+The package reader allocates one bounded string from the observed file size and
+requires an exact read plus EOF before parsing or calling any native loader.
+Shrink/growth and failed transfer reject admission. The file stream propagates
+`badbit` failures so an allocation exception cannot be consumed as a successful
+transfer. This removes an unchecked stringstream transfer; the prior Release
+recovery index8 fault reached the loader, but no captured stack identifies that
+request as the transfer's allocation. The unchanged full admission sweep remains
+the authoritative regression, not that working hypothesis.
+
+The three allocation verifier CLIs retain their existing arguments and exact case
+sets (the Extension route additionally includes Split). Their common evidence
+argument policy and regex writer now have one implementation, with resolved
+workspace containment rechecked at the actual write sink for direct callers and
+post-argument symlink changes. Case selection and JUnit completion requirements
+remain owned by each qualifier.
