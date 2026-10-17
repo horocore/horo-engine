@@ -305,6 +305,13 @@ the GUI session and requests shutdown rather than continuing with ambiguous
 shared ownership.
 
 `OnLeave()` executes once after leave permission and before destruction.
+The application injects a gameplay retirement queue that outlives route screens.
+Workspace departure withdraws module admission and transfers native owners to
+that queue; it does not discard a busy failed initializer. The host pumps retirement
+on its owner lane. Application close leaves the screen once, then remains pending
+until typed queue Close succeeds; callback completion never triggers worker-thread
+native teardown. CanLeave remains a non-mutating query.
+
 Navigation requested from `Draw()` is queued and committed only after that
 screen callback returns; an active screen is never destroyed on its own stack.
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <type_traits>
 
 namespace Horo::Extensions::Detail {
@@ -20,7 +21,9 @@ namespace Horo::Extensions::Detail {
         };
 
         /** @brief Contains malformed provider output and allocation failures at the sink boundary. */
-        HoroExtensionStatus Append(void *context, const HoroEditorPageFinding *input) noexcept {
+        // The finding sink is a literal C11 callback; no C++ type may replace its opaque ABI context.
+        HoroExtensionStatus Append(void *context,  // NOSONAR(cpp:S5008): C ABI context.
+                                   const HoroEditorPageFinding *input) noexcept {
             if (!context)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             auto &result = *static_cast<Findings *>(context);
@@ -44,7 +47,8 @@ namespace Horo::Extensions::Detail {
         }
 
         /** @brief Reads only the callback-lifetime cancellation token; never retains a host context. */
-        uint8_t Cancelled(const void *context) noexcept {
+        // The cancellation callback borrows the non-null request token for this synchronous C11 invocation.
+        uint8_t Cancelled(const void *context) noexcept {  // NOSONAR(cpp:S5008): C ABI context.
             return static_cast<uint8_t>(static_cast<const CancellationToken *>(context)->IsCancellationRequested());
         }
 
@@ -54,8 +58,7 @@ namespace Horo::Extensions::Detail {
             values.reserve(draft.values.size());
             for (const auto &field : draft.values) {
                 HoroEditorPageValue wire{.structSize = sizeof(wire), .binding = Text(field.binding.value)};
-                std::visit([&](const auto &value) {
-                    using T = std::decay_t<decltype(value)>;
+                std::visit([&]<typename T>(const T &value) {
                     if constexpr (std::is_same_v<T, bool>) {
                         wire.kind = HORO_EDITOR_PAGE_BOOLEAN;
                         wire.booleanValue = value;
@@ -101,13 +104,14 @@ namespace Horo::Extensions::Detail {
                 HoroExtensionStatus status = HORO_EXTENSION_ERROR_INIT_FAILED;
                 try {
                     status = HoroEditorPageInvoke(&endpoint_, &request, &sink);
-                } catch (...) {
+                    // Arbitrary plugin exceptions must not escape native invocation or bypass typed rejection.
+                } catch (...) {  // NOSONAR(cpp:S2738): Foreign ABI boundary.
                     status = HORO_EXTENSION_ERROR_INIT_FAILED;
                 }
                 if (status != HORO_EXTENSION_SUCCESS || findings.rejected)
                     return Result<std::vector<EditorPageFinding>>::Failure(
                         MakeError(ExtensionErrors::ContributionRejected,
-                                  "Native page operation rejected (status=" + std::to_string(status) + ")."));
+                                  std::format("Native page operation rejected (status={}).", status)));
                 return Result<std::vector<EditorPageFinding>>::Success(std::move(findings.values));
             }
 

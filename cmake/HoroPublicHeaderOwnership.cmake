@@ -254,9 +254,16 @@ horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
     Horo/Packages/PackagePublisherVerification.h
     Horo/Packages/PackagePublisherVerificationErrors.h
 )
+horo_configure_target_header_boundary(HoroPackageContentStagingInternal)
+horo_configure_target_header_boundary(HoroPackageGameplayHost PUBLIC_HEADERS
+    Horo/Packages/GameplayPackageModuleHost.h
+)
 horo_configure_target_header_boundary(HoroPackageLifecycle PUBLIC_HEADERS
     Horo/Packages/PackageLifecycle.h
     Horo/Packages/PackageLifecycleErrors.h
+    Horo/Packages/PackageModuleHost.h
+    Horo/Packages/NativePackageModuleHost.h
+    Horo/Packages/ScriptPackageModuleHost.h
 )
 horo_configure_target_header_boundary(HoroProjectMigrations)
 horo_configure_target_header_boundary(HoroSaveApi PUBLIC_HEADERS
@@ -500,6 +507,7 @@ horo_configure_target_header_boundary(HoroGameplayCharacterIntegration PUBLIC_HE
     Horo/Gameplay/GameplayCharacterContext.h
 )
 horo_configure_target_header_boundary(HoroGameplayModuleHost PUBLIC_HEADERS
+    Horo/Gameplay/GameModuleRetirement.h
     Horo/Gameplay/GameModuleHost.h
 )
 horo_configure_target_header_boundary(HoroGameplayBuild PUBLIC_HEADERS
@@ -1237,6 +1245,7 @@ horo_configure_target_header_boundary(HoroEditorViewportMetal)
 horo_configure_target_header_boundary(HoroInputSdl)
 horo_configure_target_header_boundary(HoroRuntimeUiInput PUBLIC_HEADERS
     Horo/Runtime/Ui/UiNavigationInput.h
+    Horo/Runtime/Ui/UiInputDebugger.h
     Horo/Runtime/Ui/UiPointerInput.h
 )
 horo_configure_target_header_boundary(HoroGui PUBLIC_HEADERS
@@ -1328,6 +1337,10 @@ horo_configure_target_header_boundary(HoroPackageApplication PUBLIC_HEADERS Horo
 horo_configure_target_header_boundary(HoroCliPackageAdapters PUBLIC_HEADERS Horo/Cli/PackageCommands.h)
 horo_configure_target_header_boundary(HoroMcpPackageAdapters PUBLIC_HEADERS Horo/Mcp/PackageTools.h)
 horo_configure_target_header_boundary(HoroEditorPackageAdapters PUBLIC_HEADERS Horo/Editor/PackageModalSession.h)
+
+horo_configure_target_header_boundary(HoroPhysicsTriggerVolumeHost PUBLIC_HEADERS
+    Horo/Application/PhysicsTriggerVolumeHost.h
+)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

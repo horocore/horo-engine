@@ -147,7 +147,7 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc EditorPageThemeCapture::EditorPageThemeCapture */
-    EditorPageThemeCapture::EditorPageThemeCapture() : frame_(std::make_shared<Extensions::EditorThemeFrame>()) {
+    EditorPageThemeCapture::EditorPageThemeCapture() {
         frame_->revision = 0;
     }
 

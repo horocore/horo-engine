@@ -1,6 +1,7 @@
 #include "PackageActivationComposition.h"
 
 #include "Horo/Packages/PackageLifecycleErrors.h"
+#include "PackageContentStaging.h"
 
 #include <algorithm>
 #include <atomic>
@@ -34,27 +35,6 @@ namespace Horo::Packages::Detail {
             std::map<std::filesystem::path, Sha256Digest> artifacts_;
         };
 
-        /** @brief Exclusively creates one bounded private directory; existing names and symlinks are never adopted. */
-        Result<std::filesystem::path> CreatePrivateRoot(const std::filesystem::path &parent) {
-            static std::atomic<std::uint64_t> sequence{};  // Only unique temporary names are shared across service owners.
-            for (unsigned attempt = 0; attempt < 16U; ++attempt) {
-                auto path =
-                    parent / std::format("horo-activation-{}-{}", std::chrono::steady_clock::now().time_since_epoch().count(), ++sequence);
-                std::error_code error;
-                if (!std::filesystem::create_directory(path, error)) {
-                    if (error)
-                        return Result<std::filesystem::path>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
-                    continue;
-                }
-                std::filesystem::permissions(path, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, error);
-                if (error) {
-                    std::filesystem::remove(path, error);
-                    return Result<std::filesystem::path>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
-                }
-                return Result<std::filesystem::path>::Success(std::move(path));
-            }
-            return Result<std::filesystem::path>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
-        }
     }  // namespace
 
     /** @copydoc PackageActivationComposition::PackageActivationComposition */
@@ -88,47 +68,15 @@ namespace Horo::Packages::Detail {
     /** @copydoc PackageActivationComposition::Materialize */
     Result<void> PackageActivationComposition::Materialize(const PackageActivationCandidate &candidate, const std::filesystem::path &root,
                                                            const CancellationToken &cancellation) const {
-        const auto &package = candidate.install->Graph()->packages[candidate.packageIndex];
-        const auto descriptorRoot = candidate.descriptor.Value().substr(0, candidate.descriptor.Value().rfind('/'));
-        for (const auto &entry : package.archive->Manifest().Entries()) {
-            if (!entry.id.path.Value().starts_with(descriptorRoot + '/'))
-                continue;
-            if (cancellation.IsCancellationRequested())
-                return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
-            auto bytes = package.archive->ReadDeclaredFile(entry.id.path, entry.size);
-            if (bytes.HasError())
-                return Result<void>::Failure(bytes.ErrorValue());
-            const auto path = root / std::filesystem::path{entry.id.path.Value()};
-            std::error_code error;
-            std::filesystem::create_directories(path.parent_path(), error);
-            if (error)
-                return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
-            std::ofstream output{path, std::ios::binary | std::ios::trunc};
-            const auto &content = bytes.Value();
-            // The archive exposes verified uint8_t bytes; ostream's bulk-write ABI requires char code units.
-            const auto *characters = reinterpret_cast<const char *>(content.data());  // NOSONAR(cpp:S6022)
-            output.write(characters, static_cast<std::streamsize>(content.size()));
-            output.close();
-            if (!output)
-                return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
-            const auto permissions = std::filesystem::perms::owner_read | std::filesystem::perms::owner_write |
-                                     (entry.executable ? std::filesystem::perms::owner_exec : std::filesystem::perms::none);
-            std::filesystem::permissions(path, permissions, std::filesystem::perm_options::replace, error);
-            if (error)
-                return Result<void>::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
-        }
-        return Result<void>::Success();
+        return MaterializeVerifiedPackageRoot(*candidate.install, candidate.packageIndex, candidate.descriptor, root, cancellation,
+                                              {PackageLifecycleErrors::InvalidCandidate, PackageLifecycleErrors::StorageFailed,
+                                               PackageLifecycleErrors::Cancelled});
     }
 
-    /** @copydoc PackageActivationComposition::Prepare */
-    Result<void> PackageActivationComposition::Prepare(const std::span<const PackageActivationCandidate> candidates,
-                                                       const PackageLifecycleConfiguration &configuration,
-                                                       const CancellationToken &cancellation) {
-        auto root = CreatePrivateRoot(configuration.temporaryRoot);
-        if (root.HasError())
-            return Result<void>::Failure(root.ErrorValue());
-        root_ = std::move(root).Value();
-        std::map<std::filesystem::path, Sha256Digest> artifacts;
+    /** @copydoc PackageActivationComposition::PrepareContent */
+    Result<void> PackageActivationComposition::PrepareContent(const std::span<const PackageActivationCandidate> candidates,
+                                                              const CancellationToken &cancellation,
+                                                              std::map<std::filesystem::path, Sha256Digest> &artifacts) {
         // Evaluate every grant before any package code runs. Leases stay detached until complete registration succeeds.
         for (const auto &candidate : candidates) {
             for (const auto &id : candidate.plan.moduleIds) {
@@ -149,16 +97,31 @@ namespace Horo::Packages::Detail {
             for (const auto &file : archive->Manifest().Entries())
                 artifacts.try_emplace(packageRoot / file.id.path.Value(), file.digest);
         }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc PackageActivationComposition::Prepare */
+    Result<void> PackageActivationComposition::Prepare(const std::span<const PackageActivationCandidate> candidates,
+                                                       const PackageLifecycleConfiguration &configuration,
+                                                       const CancellationToken &cancellation) {
+        auto root = CreatePrivatePackageRoot(configuration.temporaryRoot, PackageLifecycleErrors::StorageFailed);
+        if (root.HasError())
+            return Result<void>::Failure(root.ErrorValue());
+        root_ = std::move(root).Value();
+        std::map<std::filesystem::path, Sha256Digest> artifacts;
+        if (auto prepared = PrepareContent(candidates, cancellation, artifacts); prepared.HasError())
+            return prepared;
         auto gate = std::make_shared<BoundArtifactGate>(configuration.artifactGate, std::move(artifacts));
         manager_ = std::make_unique<Extensions::ExtensionManager>(catalog_.get(), configuration.profile, configuration.capabilities,
-                                                                  std::move(gate), configuration.libraryLoader);
+                                                                  std::move(gate), configuration.libraryLoader,
+                                                                  Extensions::ExtensionPlatformProviderCommit{}, configuration.editorHosts);
         retirements_.reserve(candidates.size());
         for (const auto &candidate : candidates) {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(PackageLifecycleErrors::Cancelled));
             const auto packageRoot = root_ / std::to_string(candidate.packageIndex);
             const auto descriptor = packageRoot / candidate.descriptor.Value();
-            auto loaded = manager_->LoadExtension(descriptor.parent_path().string(), candidate.providers);
+            auto loaded = manager_->LoadExtension(descriptor.parent_path().string(), candidate.providers, candidate.selectedModules);
             if (loaded.HasError())
                 return Result<void>::Failure(loaded.ErrorValue());
             retirements_.push_back(manager_->Retirement(loaded.Value()));

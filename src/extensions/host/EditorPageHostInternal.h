@@ -6,6 +6,7 @@
 #include <atomic>
 #include <limits>
 #include <thread>
+#include <type_traits>
 
 namespace Horo::Extensions {
     /** @brief Immutable worker result after ready/release; owner reads only after ready/acquire, without provider-held locks. */
@@ -82,13 +83,17 @@ namespace Horo::Extensions {
 
     /** @brief Sole private load-time bridge to the explicit page host's activation identity sequence. */
     struct EditorPageHostAccess final {
-        static std::uint64_t Generation(EditorPageHost &host) noexcept {
+        // Identity issuance increments the owner-only high-water mark; a const host is not an issuing capability.
+        static std::uint64_t Generation(EditorPageHost &host) noexcept {  // NOSONAR(cpp:S995): Issues activation identity.
             auto &state = *host.state_;
             if (!state.OnThread() || state.shutdown || state.nextGeneration == std::numeric_limits<std::uint64_t>::max())
                 return 0;
             return state.nextGeneration++;
         }
     };
+
+    static_assert(std::is_invocable_v<decltype(&EditorPageHostAccess::Generation), EditorPageHost &>);
+    static_assert(!std::is_invocable_v<decltype(&EditorPageHostAccess::Generation), const EditorPageHost &>);
 
     namespace EditorPageDetail {
         /** @brief Builds canonical control failures without discarding downstream platform/provider errors. */

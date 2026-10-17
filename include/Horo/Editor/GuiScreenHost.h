@@ -21,6 +21,10 @@
 #include <variant>
 #include <vector>
 
+namespace Horo::Gameplay {
+    class GameModuleRetirementQueue;
+}
+
 namespace Horo::Security {
     class NativeArtifactGate;
 }
@@ -92,6 +96,7 @@ namespace Horo::Editor {
         DurableFileSystem *extensionSettingsFiles{};     /**< Explicit application-owned durable storage; absence disables native pages. */
         std::filesystem::path extensionUserSettingsRoot; /**< Resolved user settings root, never inferred from a provider. */
         Extensions::ExtensionAdmissionPolicy extensionPagePolicy; /**< Application-sealed permission evidence. */
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
     };
 
     /**
@@ -138,6 +143,9 @@ namespace Horo::Editor {
          * @return Success if allowed, or error if blocked/denied.
          */
         Result<void> RequestCloseApplication();
+
+        /** @brief Returns the explicit application retirement owner injected into workspace module composition. */
+        [[nodiscard]] std::shared_ptr<Gameplay::GameModuleRetirementQueue> GameplayRetirements() const noexcept;
 
         /** @brief Returns the currently active route. */
         [[nodiscard]] const GuiRoute &ActiveRoute() const noexcept;
@@ -228,7 +236,10 @@ namespace Horo::Editor {
         void ExecuteLeaveResolution(LeaveAction action, const LeaveRequirement &requirement, const LeaveTarget &target);
         std::unique_ptr<GuiScreen> CreateScreen(const GuiRoute &route);
 
-        const EditorGuiContext *context_;
+        /** @brief Pumps owner-lane page results and opens prepared settings only when the modal host is available. */
+        void UpdateExtensionPages();
+
+        const EditorGuiContext &context_;
         EditorModalHost *modalHost_;
         Input::InputRouter *inputRouter_;
         EditorSettingsService *settingsService_;
@@ -258,12 +269,14 @@ namespace Horo::Editor {
         GuiRoute activeRoute_{GuiRouteKind::Welcome, WelcomeRouteParameters{}};
         GuiRouteRevision activeRevision_{0};
 
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements_;
         std::unique_ptr<GuiScreen> activeScreen_;
         std::optional<GuiRoute> pendingNavigation_;
         std::optional<ProjectCreationOperationId> activeCreationId_;
         std::optional<EditorRendererRestartRequest> rendererRestartRequest_;
         std::filesystem::path currentProjectRoot_;
         bool closeRequested_{false};
+        bool gameplayClosePending_{};
         bool navigationBusy_{false};
         bool isScreenCallbackActive_{false};
         bool started_{false};

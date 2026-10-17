@@ -55,3 +55,9 @@ static_assert(std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCook
 static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCook::Reserve), const Horo::Runtime::PreparedSceneCellCook &,
                                    const Horo::CancellationToken &>);
 static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCook::Adopt), const Horo::Runtime::PreparedSceneCellCook &>);
+
+static_assert(Horo::Runtime::SceneCellPayloadCodecVersion == 2);
+static_assert(Horo::Runtime::SceneStructuralParticipantContractVersion == 2);
+static_assert(std::is_same_v<decltype(&Horo::Runtime::SceneStructuralParticipant::ValidateBaselines),
+                             Horo::Result<void> (Horo::Runtime::SceneStructuralParticipant::*)(
+                                 Horo::Runtime::RuntimeSceneView, std::span<const Horo::Runtime::SceneBaselinePreparationView>) const>);

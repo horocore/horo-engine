@@ -111,6 +111,133 @@ registries, reject/drain callbacks and jobs, and release module leases. Verified
 cache content is not removed while an activation or content lease can still call
 or read it.
 
+### Independently Owned Hybrid Roles
+
+`ActivateModules` is the role-aware path through the same `PackageLifecycleService`,
+install authority, generation journal and atomic publication point. Applications
+explicitly select package, declared descriptor, module, declared role and required
+or optional policy. Installed library/assets remain availability records until
+selected; package presence never implies executable participation. Backend/library,
+headless tooling, script-provider, editor-presentation and runtime/gameplay roles
+use the existing closed `ExtensionModuleRole` contract. Hybrid packages use the
+union of their actual declared module roles.
+
+All exact inventory/descriptor identities, compatibility and digest-bound trust
+are checked before an owning host receives a sealed `VerifiedPackageModule`.
+The handoff retains its verified install graph, selected artifact, complete inert
+descriptor, dependency identities and revocable capability handles. It grants no
+raw filesystem directory, native handle, backend discovery or implicit trust.
+Unknown package/module/role selections fail closed, including optional selections.
+
+Applications inject one unambiguous owner for each admitted role.
+`NativePackageModuleHost` uses the existing native extension manager and actual
+importer registrations; presentation additionally requires an explicit activity or settings/modal page
+owner supplied through `PackageLifecycleConfiguration::editorHosts`. The same
+`ExtensionEditorHosts` carrier reaches `ExtensionManager`; omitted publication
+owners remain unavailable and headless profiles never admit editor presentation. `ScriptPackageModuleHost` uses a native resource receipt
+and the existing `ScriptInvocationRegistry`/`ScriptCapabilityContext` invocation
+boundary. It does not create a VM, infer script trust, or replace the language
+runtime adapters. Each script package/module has an exact application-injected
+registry realm: registry generations are module-local, and the provider generation
+must equal its capability activation generation. Duplicate realm identities,
+shared registry aliases and absent/wrong module realms fail closed. Hosts retain
+the realm through retirement; the application retains its normal owner-lane
+context and completion responsibilities.
+
+`GameplayPackageModuleHost` is a dedicated application adapter target linking the
+PackageLifecycle and GameplayModuleHost contracts. PackageLifecycle does not depend
+on Gameplay. Runtime participants use the actual generated gameplay SDK exports,
+exact build fingerprint and descriptor revision, and the separately approved
+`runtime.participate` permission/capability before factories. They never masquerade
+as native extension ABI contributions. Same-module replacement fails before
+mutation while the old generation remains active or retiring; the application explicitly
+disables and drains it before loading another gameplay generation, following the
+SDK safe-reload rule. Other required-role failures preserve the previous graph.
+The host's borrowed SDK view pins the complete verified install and native owner.
+Failed Register/Start attempts retain the actual native owner through rollback.
+
+The narrow non-installed `HoroPackageContentStagingInternal` target owns verified
+private-root materialization shared by the native-extension and gameplay adapters.
+It publishes only its dedicated internal header directory and never a repository
+source root; it has no dependency on either concrete host.
+
+Required role failure rolls back the unpublished candidate and preserves the
+previous active graph. Optional failure records its original error with package,
+module, role, generation and owning-host attribution while admitted siblings may
+publish. Headless compositions omit presentation ownership explicitly; an optional
+GUI role reports unavailable without withdrawing healthy backend/script roles.
+The journal retains unpublished failure reports. Completed phases distinguish
+installed, enabled, trusted, compatible, loaded and active evidence.
+
+The resolver's optional selected-root argument checks compatibility for the exact
+role dependency closure instead of unrelated optional siblings. The native
+manager's optional selected-module argument loads only those explicit native
+owners and their contributions. Its caller must retain all required dependency
+receipts; the package coordinator provides that closure. Full-package callers
+retain the original empty-selection behavior. Descriptor parsing remains inert,
+and neither selection path rewrites archive descriptors or invents contribution
+ownership.
+
+### Native Callback Exception Containment
+
+Host activation and lifecycle callbacks are an executable-module boundary. Foreign
+code may throw arbitrary C++ objects, including values outside `std::exception`.
+Each boundary converts that failure to a typed diagnostic while returning or
+retaining the already allocated rollback owner. Narrowing those handlers to
+standard exception types would allow a rejected partial registration to escape
+without its explicit retirement handoff. The `std::exception` handlers preserve
+available diagnostic text before the final non-standard exception fallback.
+Line-local Sonar exceptions on those handlers document this required containment;
+they do not weaken validation, capability admission or retirement prerequisites.
+A throwing finalizer is treated as incomplete and its complete resource closure
+stays queued for a later owner-lane drain. A failed final queue destruction cannot
+release that closure safely and terminates, enforcing the existing explicit-close
+precondition.
+
+The retirement queue's mutating operations retain non-const signatures: reserving,
+transferring, draining and releasing executable generations change the queue's
+lifecycle even though the implementation state is held through a shared pointer.
+Line-local const-suggestion exceptions preserve that public mutation contract.
+
+### Explicit Retirement Owner And Migration
+
+Existing native-only `Activate` callers retain their complete-package semantics.
+Applications adopting `ActivateModules` must compose `moduleHosts` and an explicit
+`PackageModuleRetirementQueue` in `PackageLifecycleConfiguration`. Public ownership
+remains `HoroPackageLifecycle`; consumers must link that target. New native/editor
+and script host declarations expose only Horo contracts. A selected-module native
+loader caller must migrate to explicit required-owner receipt retention; an
+isolated module selection is not permission to discard its providers.
+
+The bounded application-owned retirement queue outlives lifecycle services,
+contexts, callbacks and every retired generation. A slot is reserved before any
+host mutation. Failed activation, replacement, disable and service shutdown move
+the entire resource closure into that queue, including concrete host receipts,
+required provider receipts and verified install/module resources. Admission closes
+before withdrawal. Actual dependents finalize before providers even if the caller
+selected consumers first. A host reporting `Finalize() == false` keeps the entire
+closure pinned; framework teardown must not treat an activation error as proof of
+drain. A host with rejected but still busy work returns an inactive receipt carrying
+its original diagnostic rather than dropping that work behind an error-only return.
+
+The application pumps `Drain()` on the creating lane, including after service
+shutdown, then calls typed `Close()`. A busy result requires retaining the explicit
+drain handle and completing pending work; it is not a successful shutdown. No
+orphan registry, process-global discovery or silent resource leak is introduced.
+Destroying the final queue owner with reserved/live work violates the lifetime
+precondition and terminates instead of unloading executable work. This reuses the
+fatal final-owner safety posture of
+`src/extensions/registry/BackendServiceRegistry.cpp::QuarantineForRestart` when its
+bounded safe retention boundary cannot be maintained. Ordinary busy shutdown is
+recoverable through the retained queue and does not terminate. Hosts must not
+recreate queues to bypass capacity or discard required shutdown evidence.
+
+Updates replace the sealed install graph and activate a new role generation at a
+quiescent boundary. Disable selects an empty or reduced module set. Uninstall
+removes package availability only after the same withdrawal/drain policy and
+project-reference checks; old resource receipts remain valid until drain. These
+operations do not create a second installer or mutate project-owned assets.
+
 ## Enablement State
 
 Enablement is not the same as trust.

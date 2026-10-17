@@ -86,9 +86,6 @@ namespace Horo::Extensions::Tests {
         SECTION("competing double range") {
             std::get<EditorUiNumberNode>(definition.form.nodes.front().payload).maximum = 9007199254740992.0;
         }
-        SECTION("missing fallback") {
-            definition.messages.erase(definition.messages.begin());
-        }
         SECTION("transient state persistence") {
             surface.persistence = EditorSurfacePersistence::Workspace;
         }
@@ -110,6 +107,53 @@ namespace Horo::Extensions::Tests {
         SECTION("foreign page domain") {
             definition.fields.front().setting.scope = SettingScope::Session;
         }
+        CHECK(ValidateEditorPageDefinition(surface, definition).HasError());
+    }
+
+    TEST_CASE("Extension page message catalogs reject malformed and unresolved localized definitions",
+              "[Extensions][EditorPage][Definition]") {
+        const auto surface = SettingsSurface();
+        auto definition = Definition(surface);
+        REQUIRE(ValidateEditorPageDefinition(surface, definition).HasValue());
+        SECTION("missing fallback") {
+            definition.messages.erase(definition.messages.begin());
+        }
+        SECTION("duplicate locale and message key") {
+            definition.messages.push_back(definition.messages.front());
+        }
+        SECTION("invalid message encoding") {
+            definition.messages.front().value = std::string{"\xC0\xAF", 2};
+        }
+        SECTION("embedded message terminator") {
+            definition.messages.front().value = std::string{"a\0b", 3};
+        }
+        SECTION("oversized locale") {
+            definition.messages.front().locale.assign(33, 'x');
+        }
+        SECTION("empty message key") {
+            definition.messages.front().key.clear();
+        }
+        SECTION("message count exceeds bounded catalog") {
+            for (unsigned i = 0; i < 127; ++i)
+                definition.messages.push_back({"en-US", "extra." + std::to_string(i), "Extra"});
+        }
+        SECTION("unresolved node description") {
+            std::get<EditorUiNumberNode>(definition.form.nodes.front().payload).base.description = {EditorUiTextKind::LocalizationKey,
+                                                                                                    "fixture.unknown"};
+        }
+        CHECK(ValidateEditorPageDefinition(surface, definition).HasError());
+    }
+
+    TEST_CASE("Page message catalogs keep exact locale identity and allow self-contained technical text",
+              "[Extensions][EditorPage][Definition]") {
+        const auto surface = SettingsSurface();
+        auto definition = Definition(surface);
+        definition.messages.push_back({"tr-TR", "fixture.title", "Ayarlar"});
+        definition.form.description = {EditorUiTextKind::TechnicalText, "Self-contained diagnostic"};
+        std::get<EditorUiNumberNode>(definition.form.nodes.front().payload).base.description = {EditorUiTextKind::TechnicalText,
+                                                                                                "Signed 64-bit value"};
+        CHECK(ValidateEditorPageDefinition(surface, definition).HasValue());
+        definition.messages.back().locale = "en-US";
         CHECK(ValidateEditorPageDefinition(surface, definition).HasError());
     }
 

@@ -2,6 +2,7 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Runtime/Scene/AudioSceneExtraction.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
+#include "TriggerVolumeCellTestValues.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -433,4 +434,26 @@ namespace Horo::Runtime {
         REQUIRE(QueueRuntimeSceneCellPayload(service, Payload(2), Fence(), authority).ErrorValue().code.Value() ==
                 "scene.service.shutdown");
     }
+
+    TEST_CASE("Cell baseline retains exact trigger migration proof and charges owned evidence", "[scene][cell_payload][trigger]") {
+        const auto manifest = W::CandidateTestSupport::Manifest();
+        const Test::TriggerCellValues values;
+        const auto &entities = values.entities;
+        const auto &proof = values.proof;
+        const SceneCellPayloadSource source{.identity = Identity(), .entities = entities, .triggerVolumeEvidence = proof};
+        const auto payload = CookRuntimeSceneCellPayload(manifest.Descriptor(), source, Identity(), Limits());
+        REQUIRE(payload.HasValue());
+        REQUIRE(payload.Value().Definition().TriggerVolumeEvidence().front() == proof.front());
+        REQUIRE(payload.Value().Definition().AssetDependencies().size() == 1);
+        auto exact = Limits();
+        exact.maximumRetainedBytes = payload.Value().RetainedBytes();
+        REQUIRE(CookRuntimeSceneCellPayload(manifest.Descriptor(), source, Identity(), exact).HasValue());
+        --exact.maximumRetainedBytes;
+        REQUIRE(CookRuntimeSceneCellPayload(manifest.Descriptor(), source, Identity(), exact).HasError());
+        const std::array duplicate{proof.front(), proof.front()};
+        auto oversized = source;
+        oversized.triggerVolumeEvidence = duplicate;
+        REQUIRE(CookRuntimeSceneCellPayload(manifest.Descriptor(), oversized, Identity(), Limits()).HasError());
+    }
+
 }  // namespace Horo::Runtime

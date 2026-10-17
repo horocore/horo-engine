@@ -31,6 +31,16 @@ namespace Horo::Editor {
         /** @brief Uses the validated common projection geometry; localized labels can expand vertical slots without overlapping controls.
          */
         void DrawForm(const Extensions::EditorPageProjection &page);
+        /** @brief Draws one exact typed field and forwards admitted edits to the sole page authority. */
+        void DrawBoolean(const Extensions::EditorUiBooleanNode &node, const Extensions::EditorPageProjection &page);
+        void DrawInteger(const Extensions::EditorUiNumberNode &node, const Extensions::EditorPageProjection &page, std::size_t index);
+        void DrawText(const Extensions::EditorUiTextFieldNode &node, const Extensions::EditorPageProjection &page, std::size_t index);
+        void DrawAction(const Extensions::EditorUiActionNode &node, const Extensions::EditorUiNodeBase &base,
+                        const Extensions::EditorPageProjection &page);
+        void DrawMessage(const Extensions::EditorUiText &text) const;
+        /** @brief Draws one selectable surface. @return False only when an opened modal ends settings traversal. */
+        bool DrawSettingsChoice(const Extensions::EditorPageProjection &page, const Extensions::EditorPageProjection *current,
+                                bool maySwitch);
         /** @brief Orders the cached vertical profile by validated geometry/ancestry without allocating during normal drawing. */
         void OrderRender(const Extensions::EditorPageProjection &page);
         /** @brief Draws one admitted standard primitive with exact typed owner mutation. */

@@ -8,9 +8,11 @@
 #include "Horo/Runtime/Ui/UiElementTree.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace Horo::Runtime::Ui {
     /** @brief Closed normalized event vocabulary consumed by shared Runtime UI controls. */
@@ -102,6 +104,25 @@ namespace Horo::Runtime::Ui {
         bool defaultApplied{};         /**< Whether the target default action completed. */
     };
 
+    /** @brief One actual callback attempt in propagation order; no handler or Error/message borrow survives. */
+    struct UiEventPhaseObservation final {
+        UiElementHandle element;
+        UiEventPhase phase{};
+        UiEventResponse response;
+        bool responded{};
+        bool failed{};
+    };
+
+    /** @brief Optional fixed caller storage. Overflow omits evidence only; event routing stays authoritative. */
+    struct UiEventDispatchObservation final {
+        std::span<UiEventPhaseObservation> phases;
+        std::size_t written{};
+        std::size_t omitted{};
+        bool defaultAttempted{};
+        bool defaultFailed{};
+        UiEventDispatchResult partial; /**< Exact visited-prefix aggregate even when dispatch fails or rows truncate. */
+    };
+
     /** @brief Borrowed synchronous handler; implementations retain neither event nor element references. */
     class UiEventHandler {
     public:
@@ -169,6 +190,15 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<UiEventDispatchResult> Dispatch(const UiElementTree &tree, const UiEventRoute &route,
                                                              const UiRoutedEvent &event, UiEventHandler &handler);
 
+        /** @brief Dispatches normally with optional bounded actual phase/default evidence.
+         * @param tree Actual tree. @param route Actual route. @param event Actual event. @param handler Actual handler.
+         * @param observation Reset caller output; truncation never affects callbacks, result or failures.
+         * @return The ordinary dispatch result/error. No observation allocation or callbacks occur.
+         */
+        [[nodiscard]] Result<UiEventDispatchResult> Dispatch(const UiElementTree &tree, const UiEventRoute &route,
+                                                             const UiRoutedEvent &event, UiEventHandler &handler,
+                                                             UiEventDispatchObservation &observation);
+
         /** @brief Closes new dispatch admission. @return Success or lifecycle failure. */
         [[nodiscard]] Result<void> BeginRetirement();
         /** @brief Idempotently stops dispatch and releases route storage. */
@@ -177,6 +207,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] UiEventDispatcherState State() const noexcept;
 
     private:
+        /** @brief Shared route authority; observation is nullable and never controls dispatch. */
+        [[nodiscard]] Result<UiEventDispatchResult> DispatchObserved(const UiElementTree &tree, const UiEventRoute &route,
+                                                                     const UiRoutedEvent &event, UiEventHandler &handler,
+                                                                     UiEventDispatchObservation *observation);
         struct Storage;
         explicit UiEventDispatcher(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;

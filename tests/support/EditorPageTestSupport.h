@@ -10,6 +10,15 @@
 #include <thread>
 
 namespace Horo::Extensions::Tests::PageSupport {
+    /** @brief Non-standard foreign callback failure used to exercise containment boundaries. */
+    struct ForeignFailure final {};
+
+    enum class StoreThrowPoint {
+        None,
+        BeforeReplacement,
+        AfterReplacement
+    };
+
     /** @brief Actual canonical configuration document authority with controllable durable outcome, not a competing value registry. */
     struct Store final : IEditorPageStore {
         std::optional<std::string> document;
@@ -17,6 +26,7 @@ namespace Horo::Extensions::Tests::PageSupport {
         unsigned writes{};
         bool failWrite{};
         bool replaceThenFail{};
+        StoreThrowPoint throwPoint{StoreThrowPoint::None};
 
         std::uint64_t ContextRevision(SettingScope) const noexcept override {
             return epoch;
@@ -30,8 +40,12 @@ namespace Horo::Extensions::Tests::PageSupport {
                            const ConfigurationSnapshot &snapshot) override {
             REQUIRE(revision == epoch);
             ++writes;
+            if (throwPoint == StoreThrowPoint::BeforeReplacement)
+                throw ForeignFailure{};
             if (!failWrite || replaceThenFail)
                 document = snapshot.ToJson();
+            if (throwPoint == StoreThrowPoint::AfterReplacement)
+                throw ForeignFailure{};
             if (failWrite)
                 return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected, "Original durable-store failure"));
             return Result<void>::Success();
@@ -47,6 +61,7 @@ namespace Horo::Extensions::Tests::PageSupport {
         std::array<std::atomic_uint, 3> calls{};
         std::vector<EditorPageFinding> findings;
         bool fail{};
+        bool throwForeign{};
 
         Result<std::vector<EditorPageFinding>> Invoke(EditorPageOperation operation, const EditorPageDraft &, const EditorUiActionId &,
                                                       const CancellationToken &cancel) override {
@@ -57,6 +72,8 @@ namespace Horo::Extensions::Tests::PageSupport {
             while (hold.load() && !cancel.IsCancellationRequested())
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             --active;
+            if (throwForeign)
+                throw ForeignFailure{};
             if (fail)
                 return Result<std::vector<EditorPageFinding>>::Failure(
                     MakeError(ExtensionErrors::ContributionRejected, "Original provider failure"));

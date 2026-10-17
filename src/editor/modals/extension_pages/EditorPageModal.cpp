@@ -6,12 +6,14 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/Sha256.h"
 
+#include <format>
+
 namespace Horo::Editor {
     namespace {
         /** @brief Derives a host-local modal identity from the exact provider activation, without persisting a runtime generation. */
         ModalId Identity(const Extensions::EditorSurfaceDescriptor &surface) {
             const auto &p = surface.provider;
-            const std::string key = p.extensionId + ":" + p.moduleId + ":" + std::to_string(p.activationGeneration) + ":" + surface.id;
+            const std::string key = std::format("{}:{}:{}:{}", p.extensionId, p.moduleId, p.activationGeneration, surface.id);
             const auto digest = ComputeSha256(std::as_bytes(std::span{key}));
             std::uint64_t value{};
             for (unsigned i = 0; i < 8; ++i)
@@ -54,13 +56,11 @@ namespace Horo::Editor {
     /** @copydoc EditorPageModal::OnUpdate */
     void EditorPageModal::OnUpdate(float) {
         const auto *page = view_.Current();
-        if (!page || page->state == Extensions::EditorPageState::Cancelled || page->state == Extensions::EditorPageState::Completed ||
-            page->state == Extensions::EditorPageState::Revoked) {
-            if (modals_)
-                static_cast<void>(modals_->RequestClose(id_, page && page->state == Extensions::EditorPageState::Completed
-                                                                 ? ModalCloseReason::Completed
-                                                                 : ModalCloseReason::Cancelled));
-        }
+        if (modals_ && (!page || page->state == Extensions::EditorPageState::Cancelled ||
+                        page->state == Extensions::EditorPageState::Completed || page->state == Extensions::EditorPageState::Revoked))
+            static_cast<void>(modals_->RequestClose(id_, page && page->state == Extensions::EditorPageState::Completed
+                                                             ? ModalCloseReason::Completed
+                                                             : ModalCloseReason::Cancelled));
     }
 
     /** @copydoc EditorPageModal::Draw */
@@ -71,10 +71,10 @@ namespace Horo::Editor {
         for (const auto &child : host_->Prepared())
             if (child.surface.kind == Extensions::EditorSurfaceKind::ModalPage && child.surface.provider == surface_.provider &&
                 child.surface.placement.target == surface_.id) {
-                const auto label = host_->LocalizedText(child.surface.provider, child.surface.labelLocalizationKey,
-                                                        context_.settings.settings.languageTag);
+                const auto childLabel = host_->LocalizedText(child.surface.provider, child.surface.labelLocalizationKey,
+                                                             context_.settings.settings.languageTag);
                 ImGui::PushID(child.surface.id.c_str());
-                if (Ui::Button({.label = label.data()}))
+                if (Ui::Button({.label = childLabel.data()}))
                     static_cast<void>(host_->Begin(child.surface.provider, child.surface.id));
                 ImGui::PopID();
             }

@@ -1,5 +1,6 @@
 #include "Horo/Extensions/ExtensionModuleResolution.h"
 
+#include "ExtensionModuleSelection.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <algorithm>
@@ -379,9 +380,12 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<void> AddServiceDependencies(const ExtensionManifest &manifest, const ExportIndex &exports,
                                                           DependencyIndex &dependencies, DependencyIndex &requiredDependencies,
                                                           std::vector<ResolvedExtensionServiceImport> &bindings,
-                                                          const MakeResolvedImport &makeResolvedImport) {
+                                                          const MakeResolvedImport &makeResolvedImport,
+                                                          const std::set<std::string, std::less<>> *selected) {
             std::set<std::pair<std::string, std::string>> importIds;
             for (const ExtensionModuleManifest &moduleManifest : manifest.modules) {
+                if (selected && !selected->contains(moduleManifest.id))
+                    continue;
                 for (const ExtensionServiceImportManifest &serviceImport : moduleManifest.imports) {
                     if (!importIds.emplace(moduleManifest.id, serviceImport.id).second)
                         return Result<void>::Failure(
@@ -568,6 +572,24 @@ namespace Horo::Extensions {
             std::ranges::sort(plan.contributions, {}, &ExtensionContributionManifest::id);
             return Result<ExtensionModulePlan>::Success(std::move(plan));
         }
+
+        /** @brief Prunes only dependency edges outside the already validated explicit module closure. */
+        void RestrictDependencies(DependencyIndex &dependencies, DependencyIndex &requiredDependencies,
+                                  const std::set<std::string, std::less<>> &selected) {
+            std::erase_if(dependencies, [&selected](const auto &entry) {
+                return !selected.contains(entry.first);
+            });
+            std::erase_if(requiredDependencies, [&selected](const auto &entry) {
+                return !selected.contains(entry.first);
+            });
+            for (auto &[id, providers] : dependencies) {
+                (void)id;
+                std::erase_if(providers, [&selected](const auto &provider) {
+                    return !selected.contains(provider);
+                });
+            }
+        }
+
     }  // namespace
 
     /** @copydoc EvaluateExtensionModuleCompatibility */
@@ -584,7 +606,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc ResolveExtensionModules */
-    Result<ExtensionModulePlan> ResolveExtensionModules(const ExtensionManifest &manifest, const ExtensionHostEnvironment &host) {
+    Result<ExtensionModulePlan> ResolveExtensionModules(const ExtensionManifest &manifest, const ExtensionHostEnvironment &host,
+                                                        const std::span<const std::string> selectedModules) {
         const auto makeResolvedImport = [](ResolvedImportFields fields) {
             return ResolvedExtensionServiceImport{ResolvedExtensionServiceImport::Fields{
                 .consumerExtensionId = std::move(fields.consumerExtensionId),
@@ -614,10 +637,17 @@ namespace Horo::Extensions {
         std::vector<ResolvedExtensionServiceImport> bindings;
         if (auto result = AddDeclaredDependencies(manifest, modules, dependencies, requiredDependencies); result.HasError())
             return Result<ExtensionModulePlan>::Failure(result.ErrorValue());
-        if (auto result =
-                AddServiceDependencies(manifest, exportsResult.Value(), dependencies, requiredDependencies, bindings, makeResolvedImport);
+        auto closure = Detail::SelectModuleClosure(manifest, selectedModules);
+        if (closure.HasError())
+            return Result<ExtensionModulePlan>::Failure(closure.ErrorValue());
+        const auto &selected = closure.Value();
+        if (auto result = AddServiceDependencies(manifest, exportsResult.Value(), dependencies, requiredDependencies, bindings,
+                                                 makeResolvedImport, selectedModules.empty() ? nullptr : &selected);
             result.HasError())
             return Result<ExtensionModulePlan>::Failure(result.ErrorValue());
+
+        if (!selectedModules.empty())
+            RestrictDependencies(dependencies, requiredDependencies, selected);
 
         if (auto profileResult = ApplyHostProfile(dependencies, requiredDependencies, modules, host.profile); profileResult.HasError())
             return Result<ExtensionModulePlan>::Failure(profileResult.ErrorValue());

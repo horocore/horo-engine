@@ -113,7 +113,8 @@ namespace Horo::Gameplay::HostTest {
         GameModuleHost host;
         auto moduleResult = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
         REQUIRE(moduleResult.HasValue());
-        std::unique_ptr<LoadedGameModule> loaded = std::move(moduleResult).Value();
+        REQUIRE_FALSE(moduleResult.Value().diagnostic);
+        std::unique_ptr<LoadedGameModule> loaded = std::move(moduleResult).Value().owner;
         auto created = createRuntime(*loaded);
         REQUIRE(created.HasValue());
         auto runtime = std::move(created).Value();

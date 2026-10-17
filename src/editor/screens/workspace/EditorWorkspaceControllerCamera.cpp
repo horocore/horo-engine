@@ -42,7 +42,17 @@ namespace Horo::Editor {
         : runtime(std::move(runtimeValue)), camera(std::move(cameraValue)),
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
-    EditorWorkspaceController::~EditorWorkspaceController() = default;
+    EditorWorkspaceController::~EditorWorkspaceController() {
+        (void)ShutdownGameplayModules();
+    }
+
+    /** @copydoc EditorWorkspaceController::ShutdownGameplayModules */
+    Result<void> EditorWorkspaceController::ShutdownGameplayModules() {
+        m_playSession.Stop();
+        m_pendingGameplayRegistry.reset();
+        m_gameplayRegistry.reset();
+        return m_gameplayRetirements->Close();
+    }
 
     /** @copydoc EditorWorkspaceController::StartCameraCutPreview */
     Result<void> EditorWorkspaceController::StartCameraCutPreview(Cinematic::SequencePlaybackActivation activation,

@@ -33,7 +33,9 @@ namespace Horo::Tests::CharacterIntegration {
             auto loaded = loader.Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", CurrentGameplayBuildFingerprint(),
                                                                    Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)});
             REQUIRE(loaded.HasValue());
-            return std::move(loaded).Value();
+            auto candidate = std::move(loaded).Value();
+            REQUIRE_FALSE(candidate.diagnostic);
+            return std::move(candidate.owner);
         }
     };
 

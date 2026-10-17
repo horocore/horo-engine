@@ -96,8 +96,7 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 activities,
-                                 pages};
+                                 ExtensionEditorHosts{.activities = activities, .pages = pages}};
         auto loaded = manager.LoadExtension(package.root.string());
         if (loaded.HasError())
             UNSCOPED_INFO(loaded.ErrorValue().message);
@@ -162,8 +161,7 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 activities,
-                                 pages};
+                                 ExtensionEditorHosts{.activities = activities, .pages = pages}};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         pages->Update();
         CHECK(pages->Prepared().empty());

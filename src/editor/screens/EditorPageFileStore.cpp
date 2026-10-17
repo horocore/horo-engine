@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Platform/PlatformErrors.h"
 
+#include <format>
 #include <limits>
 
 namespace Horo::Editor {
@@ -22,7 +23,12 @@ namespace Horo::Editor {
                     return Result<bool>::Failure(MakeError(PlatformErrors::ConfigurationReadFailed,
                                                            "Extension configuration contains an unreadable or redirected path."));
             }
-            if (!std::filesystem::is_regular_file(path, error) || error || std::filesystem::hard_link_count(path, error) != 1 || error)
+            const bool regular = std::filesystem::is_regular_file(path, error);
+            if (!regular || error)
+                return Result<bool>::Failure(
+                    MakeError(PlatformErrors::ConfigurationReadFailed, "Extension configuration must be one private regular file."));
+            const auto links = std::filesystem::hard_link_count(path, error);
+            if (links != 1 || error)
                 return Result<bool>::Failure(
                     MakeError(PlatformErrors::ConfigurationReadFailed, "Extension configuration must be one private regular file."));
             return Result<bool>::Success(true);
@@ -46,9 +52,10 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPageFileStore::ContextRevision */
     std::uint64_t EditorPageFileStore::ContextRevision(SettingScope scope) const noexcept {
-        if (scope == SettingScope::User)
+        using enum SettingScope;
+        if (scope == User)
             return userRoot_.empty() ? 0 : 1;
-        if (scope == SettingScope::Project || scope == SettingScope::Workspace)
+        if (scope == Project || scope == Workspace)
             return projectRoot_.empty() ? 0 : projectRevision_;
         return 0;
     }
@@ -58,13 +65,14 @@ namespace Horo::Editor {
                                                             SettingScope scope) const {
         if (ContextRevision(scope) == 0 || provider.extensionId.empty() || provider.moduleId.empty() || id.empty())
             return Result<std::filesystem::path>::Failure(MakeError(Extensions::ExtensionErrors::CapabilityUnavailable));
-        const std::string identity = std::to_string(provider.extensionId.size()) + ":" + provider.extensionId +
-                                     std::to_string(provider.moduleId.size()) + ":" + provider.moduleId + std::to_string(id.size()) + ":" +
-                                     std::string{id};
+        const std::string identity = std::format("{}:{}{}:{}{}:{}", provider.extensionId.size(), provider.extensionId,
+                                                 provider.moduleId.size(), provider.moduleId, id.size(), id);
         const auto filename = FormatSha256(ComputeSha256(std::as_bytes(std::span{identity}))).substr(7) + ".json";
-        const auto root = scope == SettingScope::User      ? userRoot_
-                          : scope == SettingScope::Project ? projectRoot_ / ".horo/settings"
-                                                           : projectRoot_ / ".horo/local";
+        auto root = userRoot_;
+        if (scope == SettingScope::Project)
+            root = projectRoot_ / ".horo/settings";
+        else if (scope != SettingScope::User)
+            root = projectRoot_ / ".horo/local";
         if (!root.is_absolute())
             return Result<std::filesystem::path>::Failure(MakeError(Extensions::ExtensionErrors::CapabilityUnavailable));
         return Result<std::filesystem::path>::Success(root / "extensions" / filename);
@@ -95,8 +103,7 @@ namespace Horo::Editor {
         auto path = Path(provider, id, scope);
         if (path.HasError())
             return Result<void>::Failure(path.ErrorValue());
-        auto exists = ExistingFile(path.Value());
-        if (exists.HasError())
+        if (auto exists = ExistingFile(path.Value()); exists.HasError())
             return Result<void>::Failure(exists.ErrorValue());
         std::error_code error;
         std::filesystem::create_directories(path.Value().parent_path(), error);

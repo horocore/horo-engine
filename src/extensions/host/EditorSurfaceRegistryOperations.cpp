@@ -218,6 +218,7 @@ namespace Horo::Extensions {
     /** @copydoc EditorSurfaceRegistry::PublishForm */
     Result<void> EditorSurfaceRegistry::PublishForm(const EditorSurfaceProviderIdentity &provider, const std::string_view surfaceId,
                                                     EditorUiForm form) const {
+        using enum EditorSurfaceKind;
         if (const auto valid = ValidateEditorUiForm(form); valid.HasError())
             return Result<void>::Failure(valid.ErrorValue());
         if (state_ == nullptr)
@@ -227,8 +228,8 @@ namespace Horo::Extensions {
             return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
         const auto surface = FindSurface(*state_, surfaceId);
         if (surface == nullptr || surface->descriptor.provider != provider ||
-            (surface->descriptor.kind != EditorSurfaceKind::Panel && surface->descriptor.kind != EditorSurfaceKind::SettingsPage &&
-             surface->descriptor.kind != EditorSurfaceKind::Modal && surface->descriptor.kind != EditorSurfaceKind::ModalPage))
+            (surface->descriptor.kind != Panel && surface->descriptor.kind != SettingsPage && surface->descriptor.kind != Modal &&
+             surface->descriptor.kind != ModalPage))
             return Failure(ExtensionErrors::EditorSurfaceRegistryInvalid);
         if (EffectiveStatus(*state_, *surface) != EditorSurfaceProviderStatus::Active)
             return Failure(ExtensionErrors::EditorSurfaceContextRevoked);

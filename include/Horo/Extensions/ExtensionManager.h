@@ -24,6 +24,12 @@ namespace Horo::Extensions {
     class EditorActivityHost;
     class EditorPageHost;
 
+    /** @brief Explicit editor publication authorities supplied by application composition. */
+    struct ExtensionEditorHosts final {
+        std::shared_ptr<EditorActivityHost> activities; /**< Activity contribution authority; absent denies publication. */
+        std::shared_ptr<EditorPageHost> pages;          /**< Page contribution authority; absent denies publication. */
+    };
+
     /** @brief Represents a loaded extension instance. */
     struct LoadedExtension {
         ExtensionManifest manifest;
@@ -53,15 +59,14 @@ namespace Horo::Extensions {
          * load.
          * @param libraryLoader Explicit native loader boundary; empty uses the platform loader after security verification.
          * @param platformProviderCommit Optional host-owned commit for one staged provider-only extension.
-         * @param editorActivityHost Explicit editor surface authority; omitted hosts reject ABI editor publication.
+         * @param editorHosts Explicit editor authorities; absent hosts reject their corresponding ABI publication.
          */
         explicit ExtensionManager(Assets::AssetImporterCatalog *importerCatalog = nullptr,
                                   ExtensionHostProfile hostProfile = ExtensionHostProfile::Interactive,
                                   std::vector<std::string> hostCapabilities = {},
                                   std::shared_ptr<const Security::NativeArtifactGate> artifactGate = {},
                                   NativeLibraryLoader libraryLoader = {}, ExtensionPlatformProviderCommit platformProviderCommit = {},
-                                  std::shared_ptr<EditorActivityHost> editorActivityHost = {},
-                                  std::shared_ptr<EditorPageHost> editorPageHost = {});
+                                  ExtensionEditorHosts editorHosts = {});
         /** @brief Withdraws publications on the owner lane; busy native closures require process restart. */
         ~ExtensionManager();
         ExtensionManager(const ExtensionManager &) = delete;
@@ -73,9 +78,11 @@ namespace Horo::Extensions {
          * @brief Loads an extension from the given directory path.
          * @param extensionDir Path to the extension's root directory.
          * @param providerExtensions Package-authority-resolved provider extensions, already activated by this host.
+         * @param selectedModules Explicit independently owned native modules; empty preserves complete-package loading.
          * @return Result containing a reference to the loaded extension ID or an error.
          */
-        Result<std::string> LoadExtension(const std::string &extensionDir, std::span<const std::string> providerExtensions = {});
+        Result<std::string> LoadExtension(const std::string &extensionDir, std::span<const std::string> providerExtensions = {},
+                                          std::span<const std::string> selectedModules = {});
 
         /**
          * @brief Begins terminal retirement of a specific extension; never forcibly unloads held code.
@@ -134,8 +141,7 @@ namespace Horo::Extensions {
         std::shared_ptr<const Security::NativeArtifactGate> m_artifactGate;
         NativeLibraryLoader m_libraryLoader;
         ExtensionPlatformProviderCommit m_platformProviderCommit;
-        std::shared_ptr<EditorActivityHost> m_editorActivityHost;
-        std::shared_ptr<EditorPageHost> m_editorPageHost;
+        ExtensionEditorHosts m_editorHosts;
         TransparentStringMap<std::unique_ptr<LoadedExtension>> m_loadedExtensions;
         std::vector<std::string> m_activationOrder;
         std::vector<std::shared_ptr<ExtensionRetirement>> m_failedActivations;

@@ -53,7 +53,8 @@ namespace Horo::Extensions {
     }  // namespace
 
     /** @copydoc EditorPageHost::Begin */
-    Result<void> EditorPageHost::Begin(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId) {
+    Result<void> EditorPageHost::Begin(  // NOSONAR(cpp:S5817): Mutates owner-lane page state.
+        const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId) {
         const auto s = Find(*state_, provider, surfaceId);
         if (!s || s->job || s->cancelledDraft || s->revision == std::numeric_limits<std::uint64_t>::max())
             return Failure();
@@ -93,8 +94,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorPageHost::SetValue */
-    Result<void> EditorPageHost::SetValue(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, std::uint64_t revision,
-                                          EditorPageValue value) {
+    Result<void> EditorPageHost::SetValue(  // NOSONAR(cpp:S5817): Mutates owner-lane page state.
+        const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, std::uint64_t revision, EditorPageValue value) {
         const auto s = Find(*state_, provider, surfaceId);
         if (!Editable(s, revision))
             return Failure();
@@ -105,7 +106,8 @@ namespace Horo::Extensions {
             return Failure();
         if (const auto valid = ValidateEditorPageValue(*field, value.value); valid.HasError())
             return valid;
-        const auto node = std::ranges::find_if(s->definition.form.nodes, [&](const auto &n) {
+        if (const auto node = std::ranges::find_if(s->definition.form.nodes,
+                                                   [&](const auto &n) {
             return std::visit([&](const auto &typed) {
                 if constexpr (requires { typed.binding; })
                     return typed.binding == value.binding;
@@ -113,7 +115,7 @@ namespace Horo::Extensions {
                     return false;
             }, n.payload);
         });
-        if (node == s->definition.form.nodes.end() || !AdmitsInput(s->definition.form, *node))
+            node == s->definition.form.nodes.end() || !AdmitsInput(s->definition.form, *node))
             return Failure();
         const auto found = std::ranges::find(s->draft.values, value.binding, &EditorPageValue::binding);
         if (found == s->draft.values.end())
@@ -130,7 +132,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorPageHost::Reset */
-    Result<void> EditorPageHost::Reset(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, std::uint64_t revision) {
+    Result<void> EditorPageHost::Reset(  // NOSONAR(cpp:S5817): Mutates owner-lane page state.
+        const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, std::uint64_t revision) {
         const auto s = Find(*state_, provider, surfaceId);
         if (!Editable(s, revision))
             return Failure();
@@ -151,8 +154,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorPageHost::Apply */
-    Result<void> EditorPageHost::Apply(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, std::uint64_t revision,
-                                       EditorUiActionId action) {
+    Result<void> EditorPageHost::Apply(  // NOSONAR(cpp:S5817): Mutates owner-lane page state.
+        const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, std::uint64_t revision, EditorUiActionId action) {
         const auto s = Find(*state_, provider, surfaceId);
         if (!Editable(s, revision))
             return Failure();
@@ -167,21 +170,22 @@ namespace Horo::Extensions {
             return Failure();
         if (s->active->Revision() == std::numeric_limits<ConfigurationRevision>::max())
             return Failure();
-        auto candidate = Candidate(*s, s->draft, s->active->Revision() + 1);
-        if (candidate.HasError())
+        if (auto candidate = Candidate(*s, s->draft, s->active->Revision() + 1); candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
         return Schedule(*state_, *s, EditorPageOperation::Validate, std::move(action));
     }
 
     /** @copydoc EditorPageHost::Cancel */
-    Result<void> EditorPageHost::Cancel(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId) {
+    Result<void> EditorPageHost::Cancel(  // NOSONAR(cpp:S5817): Mutates owner-lane page state.
+        const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId) {
+        using enum EditorPageState;
         const auto s = Find(*state_, provider, surfaceId);
         if (!s)
             return Failure();
         state_->projectionDirty = true;
-        if (s->state == EditorPageState::Cancelled || s->state == EditorPageState::Closed)
+        if (s->state == Cancelled || s->state == Closed)
             return Result<void>::Success();
-        if (s->state == EditorPageState::RecoveryRequired) {
+        if (s->state == RecoveryRequired) {
             s->focused.reset();
             return Result<void>::Success();
         }
@@ -190,7 +194,7 @@ namespace Horo::Extensions {
             static_cast<void>(s->job->RequestCancel());
         s->cancelledDraft.emplace(std::move(cancelled));
         s->focused.reset();
-        s->state = EditorPageState::Cancelled;
+        s->state = Cancelled;
         if (s->revision != std::numeric_limits<std::uint64_t>::max())
             ++s->revision;
         RestoreDraft(*s);
@@ -198,8 +202,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorPageHost::Focus */
-    Result<void> EditorPageHost::Focus(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, std::uint64_t revision,
-                                       EditorUiId node) {
+    Result<void> EditorPageHost::Focus(  // NOSONAR(cpp:S5817): Mutates owner-lane page state.
+        const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, std::uint64_t revision, EditorUiId node) {
         const auto s = Find(*state_, provider, surfaceId);
         if (!Editable(s, revision))
             return Failure();

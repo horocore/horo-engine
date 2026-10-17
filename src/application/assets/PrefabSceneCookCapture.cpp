@@ -113,6 +113,19 @@ namespace Horo::Application {
 
             /** @brief Captures every policy ceiling as a scalar; no object layout or process-local revision enters the key. */
             std::string PolicyIdentity(const PrefabSceneCookRequest &request) {
+                // Bind source conversion and cached cooked output to actual selected project semantics.
+                std::string triggerIdentity;
+                if (request.triggerBinding) {
+                    const auto &context = *request.triggerBinding;
+                    const auto &binding = context.binding;
+                    Append(triggerIdentity, std::to_string(binding.collisionSchemaFingerprint));
+                    Append(triggerIdentity, binding.profile.ToString());
+                    Append(triggerIdentity, binding.material.id.ToString());
+                    Append(triggerIdentity, binding.material.expectedType.Value());
+                    Append(triggerIdentity, std::to_string(binding.materialSourceRevision));
+                    Append(triggerIdentity, FormatSha256(binding.materialPayloadDigest));
+                    Append(triggerIdentity, FormatSha256(context.materialSourceDigest));
+                }
                 const auto &p = request.prefabPolicy;
                 const std::array values{p.maximumHierarchyDepth,
                                         p.maximumObjectCount,
@@ -139,6 +152,7 @@ namespace Horo::Application {
                 std::string result;
                 for (const auto value : values)
                     Append(result, std::to_string(value));
+                Append(result, triggerIdentity);
                 return result;
             }
         }  // namespace

@@ -1,6 +1,8 @@
 #include "GameplayModuleTestSupport.h"
+#include "GameplayRetirementTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 
@@ -8,6 +10,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <memory>
 #include <string_view>
 
@@ -174,4 +177,37 @@ TEST_CASE("native gameplay rollback artifact cleanup ownership follows moves") {
         CHECK(std::filesystem::is_regular_file(artifactPath));
     }
     CHECK_FALSE(std::filesystem::exists(artifactPath));
+}
+
+TEST_CASE("Editor discovery reserves application rollback ownership before native factories", "[editor][gameplay][retirement]") {
+    TemporaryProject project;
+    WriteNativeManifest(project);
+    Horo::Tests::NativeGameplayFailureControl native{2};
+    auto queue = std::make_shared<Gameplay::GameModuleRetirementQueue>(1);
+    auto reserved = queue->Reserve();
+    REQUIRE(reserved.HasValue());
+    Gameplay::GameModuleHost loader;
+    auto loaded = loader.Load(HORO_TEST_GAME_MODULE_PATH, Horo::Tests::NativeRetirementExpectation());
+    REQUIRE(loaded.HasValue());
+    auto candidate = std::move(loaded).Value();
+    REQUIRE(candidate.diagnostic);
+    REQUIRE(native.callback);
+    auto admission = std::move(reserved).Value();
+    admission.Retain(std::move(candidate.owner));
+    auto blocked = Editor::ProjectGameplayRegistry::Discover(project.root, queue);
+    REQUIRE(blocked->HasBlockingDiagnostics());
+    CHECK_FALSE(blocked->HasNativeModule());
+    CHECK(native.control.created == 1);
+    blocked.reset();
+    CHECK(queue->Close().HasError());
+    std::async(std::launch::async, [callback = std::move(native.callback)]() mutable {
+        callback.reset();
+    }).get();
+    REQUIRE(queue->Close().HasValue());
+    native.configure(nullptr);
+    auto healthy = Editor::ProjectGameplayRegistry::Discover(project.root, queue);
+    REQUIRE_FALSE(healthy->HasBlockingDiagnostics());
+    REQUIRE(healthy->HasNativeModule());
+    healthy.reset();
+    REQUIRE(queue->Close().HasValue());
 }

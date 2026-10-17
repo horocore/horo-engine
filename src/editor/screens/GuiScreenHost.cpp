@@ -20,6 +20,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/OperationStore.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Runtime/Input.h"
 #include "NavigationErrors.h"
 #include "editor/project_model/RendererAvailability.h"
@@ -88,12 +89,14 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::GuiScreenHost */
     GuiScreenHost::GuiScreenHost(const EditorGuiContext &context, GuiScreenHostComposition composition)
-        : context_(&context), modalHost_(&composition.modalHost), inputRouter_(&composition.inputRouter),
+        : context_(context), modalHost_(&composition.modalHost), inputRouter_(&composition.inputRouter),
           settingsService_(&composition.settingsService), localization_(&composition.localization),
           engineEvents_(&composition.engineEvents), logoTexture_(composition.logoTexture),
           extensionInventory_(composition.extensionInventory), extensionMarketplace_(composition.extensionMarketplace),
           nativeDialogs_(composition.nativeDialogs), screenRegistry_(std::move(composition.screenRegistry)),
           workspacePanelRegistry_(std::move(composition.workspacePanelRegistry)) {
+        gameplayRetirements_ = composition.gameplayRetirements ? std::move(composition.gameplayRetirements)
+                                                               : std::make_shared<Gameplay::GameModuleRetirementQueue>();
         RegisterApplicationServices(composition);
         InitializeExtensions(composition);
         statusBar_ = std::make_unique<EditorStatusBar>(context, statusItemRegistry_);
@@ -104,7 +107,7 @@ namespace Horo::Editor {
     /** @copydoc GuiScreenHost::RegisterApplicationServices */
     void GuiScreenHost::RegisterApplicationServices(const GuiScreenHostComposition &composition) {
         services_.Register(*this);
-        services_.RegisterConst(*context_);
+        services_.RegisterConst(context_);
         services_.Register(composition.modalHost);
         services_.Register(composition.settingsService);
         services_.Register(composition.localization);
@@ -135,8 +138,9 @@ namespace Horo::Editor {
             std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get(), Extensions::ExtensionHostProfile::Interactive,
                                                            std::move(capabilities), composition.extensionArtifactGate,
                                                            Extensions::ExtensionManager::NativeLibraryLoader{},
-                                                           Extensions::ExtensionPlatformProviderCommit{}, editorActivityHost_,
-                                                           editorPageHost_);
+                                                           Extensions::ExtensionPlatformProviderCommit{},
+                                                           Extensions::ExtensionEditorHosts{.activities = editorActivityHost_,
+                                                                                            .pages = editorPageHost_});
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
         if (extensionInventory_ != nullptr)
             ActivateUserExtensions(*extensionManager_, *extensionInventory_);
@@ -154,7 +158,7 @@ namespace Horo::Editor {
         if (composition.extensionSettingsFiles && !composition.extensionUserSettingsRoot.empty() &&
             composition.extensionPagePolicy.revision != 0) {
             extensionPageTheme_ = std::make_unique<EditorPageThemeCapture>();
-            if (auto captured = extensionPageTheme_->Update(*context_); captured.HasError()) {
+            if (auto captured = extensionPageTheme_->Update(context_); captured.HasError()) {
                 LOG_ERROR("editor.extensions", "Native page theme capture unavailable: %s", captured.ErrorValue().message.c_str());
                 return;
             }
@@ -163,7 +167,7 @@ namespace Horo::Editor {
             editorPageHost_ = std::make_shared<Extensions::EditorPageHost>(composition.jobs, editorActivityHost_->Registry(),
                                                                            *extensionPageStore_, composition.extensionPagePolicy);
             services_.Register<Extensions::EditorPageHost>(*editorPageHost_);
-            capabilities.push_back(HORO_EDITOR_PAGE_HOST_CAPABILITY);
+            capabilities.emplace_back(HORO_EDITOR_PAGE_HOST_CAPABILITY);
         }
     }
 
@@ -255,7 +259,13 @@ namespace Horo::Editor {
             editorActivityHost_->BeginShutdown();
         if (extensionManager_)
             extensionManager_->UnloadAll();
+        (void)gameplayRetirements_->Close();
         services_.Clear();
+    }
+
+    /** @copydoc GuiScreenHost::GameplayRetirements */
+    std::shared_ptr<Gameplay::GameModuleRetirementQueue> GuiScreenHost::GameplayRetirements() const noexcept {
+        return gameplayRetirements_;
     }
 
     bool GuiScreenHost::IsShutdown() const noexcept {
@@ -341,6 +351,8 @@ namespace Horo::Editor {
     }
 
     Result<void> GuiScreenHost::Navigate(GuiRoute destination) {
+        if (gameplayClosePending_)
+            return Result<void>::Failure(MakeError(NavigationErrors::Busy, "Application gameplay retirement is still pending."));
         if (shutdown_)
             return Result<void>::Failure(MakeError(NavigationErrors::HostShutdown));
         if (!started_)
@@ -466,28 +478,33 @@ namespace Horo::Editor {
         return screenRegistry_.CreateScreen(route, services_);
     }
 
+    /** @copydoc GuiScreenHost::UpdateExtensionPages */
+    void GuiScreenHost::UpdateExtensionPages() {
+        if (!editorPageHost_)
+            return;
+        static_cast<void>(extensionPageTheme_->Update(context_));
+        editorPageHost_->Update();
+        PumpEditorPageModals(context_, editorPageHost_, extensionPageTheme_->Frame(), *modalHost_);
+        if (modalHost_->HasOpenModal())
+            return;
+        for (const auto &page : editorPageHost_->Prepared()) {
+            if (page.surface.kind == Extensions::EditorSurfaceKind::SettingsPage && page.state == Extensions::EditorPageState::Editing) {
+                auto modal =
+                    std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
+                                                    editorPageHost_, extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr);
+                modal->SelectExtensionPage(page.surface.provider, page.surface.id);
+                static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
+                break;
+            }
+        }
+    }
+
     void GuiScreenHost::OnUpdate(float dt) {
-        if (!shutdown_ && context_ != nullptr && context_->updates != nullptr)
-            context_->updates->Poll();
+        if (!shutdown_ && context_.updates != nullptr)
+            context_.updates->Poll();
         if (editorActivityHost_)
             editorActivityHost_->Update();
-        if (editorPageHost_) {
-            static_cast<void>(extensionPageTheme_->Update(*context_));
-            editorPageHost_->Update();
-            PumpEditorPageModals(*context_, editorPageHost_, extensionPageTheme_->Frame(), *modalHost_);
-            if (!modalHost_->HasOpenModal())
-                for (const auto &page : editorPageHost_->Prepared()) {
-                    if (page.surface.kind == Extensions::EditorSurfaceKind::SettingsPage &&
-                        page.state == Extensions::EditorPageState::Editing) {
-                        auto modal = std::make_unique<SettingsModal>(*context_, *settingsService_, logoTexture_, extensionInventory_,
-                                                                     extensionMarketplace_, editorPageHost_,
-                                                                     extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr);
-                        modal->SelectExtensionPage(page.surface.provider, page.surface.id);
-                        static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
-                        break;
-                    }
-                }
-        }
+        UpdateExtensionPages();
         if (localization_ != nullptr) {
             static_cast<void>(
                 statusItemRegistry_.Update("horo.status.navigation",
@@ -515,6 +532,7 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::OnFixedUpdate */
     void GuiScreenHost::OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) {
+        (void)gameplayRetirements_->Drain();
         if (activeScreen_) {
             isScreenCallbackActive_ = true;
             activeScreen_->OnFixedUpdate(simulationTick, fixedDeltaSeconds);
@@ -524,6 +542,10 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::FlushPendingNavigation() {
+        if (gameplayClosePending_ && !isScreenCallbackActive_) {
+            (void)CommitApplicationClose();
+            return;
+        }
         if (!pendingNavigation_.has_value()) {
             return;
         }
@@ -568,9 +590,9 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::OpenSettingsModal */
     void GuiScreenHost::OpenSettingsModal() {
-        if (context_ && settingsService_ && modalHost_) {
+        if (settingsService_ && modalHost_) {
             auto modal =
-                std::make_unique<SettingsModal>(*context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
+                std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
                                                 editorPageHost_, extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr);
             static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
         }
@@ -587,9 +609,9 @@ namespace Horo::Editor {
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
                 return;
             case ImportAssets:
-                if (context_ && modalHost_ && !modalHost_->HasOpenModal()) {
+                if (modalHost_ && !modalHost_->HasOpenModal()) {
                     auto modal =
-                        std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
+                        std::make_unique<AssetImportModal>(context_.theme.fonts, m_importJobs, importerCatalog_,
                                                            AssetImportModalServices{.assetRegistry =
                                                                                         services_.TryGet<Assets::AssetRegistry>(),
                                                                                     .operationStore = services_.TryGet<OperationStore>(),
@@ -705,6 +727,10 @@ namespace Horo::Editor {
     }
 
     Result<void> GuiScreenHost::CommitApplicationClose() {
+        if (isScreenCallbackActive_) {
+            gameplayClosePending_ = true;
+            return Result<void>::Success();
+        }
         if (modalHost_->HasOpenModal()) {
             const Result<void> modalClosed = modalHost_->RequestCloseAllForShutdown();
             if (modalClosed.HasError()) {
@@ -713,6 +739,15 @@ namespace Horo::Editor {
                 return modalClosed;
             }
         }
+        if (activeScreen_) {
+            activeScreen_->OnLeave();
+            activeScreen_.reset();
+        }
+        if (auto closed = gameplayRetirements_->Close(); closed.HasError()) {
+            gameplayClosePending_ = true;
+            return closed;
+        }
+        gameplayClosePending_ = false;
         closeRequested_ = true;
         return Result<void>::Success();
     }

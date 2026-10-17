@@ -67,6 +67,52 @@ namespace Horo::Extensions::Tests {
         CHECK_FALSE(fixture.Page().dirty);
     }
 
+    TEST_CASE("Foreign provider exceptions complete the handoff without publishing settings", "[Extensions][EditorPage][Recovery]") {
+        Fixture fixture;
+        fixture.Begin();
+        fixture.Set(99);
+        fixture.operations->throwForeign = true;
+        REQUIRE(fixture.host.Apply(fixture.provider, fixture.id, fixture.Page().revision).HasValue());
+        fixture.Wait();
+        CHECK(fixture.Page().state == EditorPageState::Failed);
+        CHECK(fixture.Page().dirty);
+        CHECK(fixture.store.writes == 0);
+        CHECK(fixture.operations->active.load() == 0);
+        REQUIRE(fixture.Page().failure);
+        CHECK(fixture.Page().failure->code.Value() == ExtensionErrors::ContributionRejected.code.Value());
+    }
+
+    TEST_CASE("Foreign store exceptions preserve uncertainty before and after replacement", "[Extensions][EditorPage][Recovery]") {
+        Fixture fixture;
+        fixture.Begin();
+        fixture.Set(99);
+        bool replaced = false;
+        SECTION("before replacement") {
+            fixture.store.throwPoint = PageSupport::StoreThrowPoint::BeforeReplacement;
+        }
+        SECTION("after replacement") {
+            fixture.store.throwPoint = PageSupport::StoreThrowPoint::AfterReplacement;
+            replaced = true;
+        }
+        REQUIRE(fixture.host.Apply(fixture.provider, fixture.id, fixture.Page().revision).HasValue());
+        fixture.Wait();
+        CHECK(fixture.Page().state == EditorPageState::RecoveryRequired);
+        CHECK(fixture.Page().dirty);
+        CHECK(fixture.Value() == 99);
+        CHECK(fixture.store.writes == 1);
+        REQUIRE(fixture.Page().failure);
+        CHECK(fixture.Page().failure->code.Value() == ExtensionErrors::ContributionRejected.code.Value());
+        REQUIRE(fixture.host.Cancel(fixture.provider, fixture.id).HasValue());
+        fixture.host.Update();
+        CHECK(fixture.Page().state == EditorPageState::RecoveryRequired);
+        CHECK(fixture.host.Apply(fixture.provider, fixture.id, fixture.Page().revision).HasError());
+        fixture.store.throwPoint = PageSupport::StoreThrowPoint::None;
+        REQUIRE(fixture.host.Begin(fixture.provider, fixture.id).HasValue());
+        fixture.host.Update();
+        CHECK(fixture.Value() == (replaced ? 99 : 20));
+        CHECK_FALSE(fixture.Page().dirty);
+    }
+
     TEST_CASE("Whole candidate validation or changed persistence context prevents settings publication",
               "[Extensions][EditorPage][Validation]") {
         Fixture fixture;

@@ -8,8 +8,13 @@
 #include "Horo/Extensions/ExtensionCapabilityAdmission.h"
 #include "Horo/Extensions/ExtensionManager.h"
 #include "Horo/Packages/PackageInstall.h"
+#include "Horo/Packages/PackageModuleHost.h"
 
 #include <optional>
+
+namespace Horo::Extensions {
+    class EditorActivityHost;
+}
 
 namespace Horo::Packages {
     /** @brief Explicit portable enablement selection; it carries no execution trust or host path. */
@@ -64,6 +69,10 @@ namespace Horo::Packages {
         Extensions::ExtensionManager::NativeLibraryLoader libraryLoader;
         std::size_t maximumExtensions{64U};
         std::size_t maximumRetiredCompositions{16U}; /**< Held callbacks/catalogs cannot cause unbounded native retention. */
+        std::vector<std::shared_ptr<IPackageModuleHost>> moduleHosts;
+        Extensions::ExtensionEditorHosts editorHosts; /**< Explicit activity/page publication owners, never discovered. */
+        std::shared_ptr<PackageModuleRetirementQueue> moduleRetirements;
+        /**< Explicit drain owner required for mixed-role hosts. */ /**< Explicit owning hosts, selected before activation. */
     };
 
     /** @brief Immutable published graph, actual registrations and real activation-generation evidence. */
@@ -72,6 +81,7 @@ namespace Horo::Packages {
         std::uint64_t generation{};
         std::vector<Extensions::ExtensionActivationLease> activations;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importers;
+        std::vector<PackageModuleReport> modules; /**< Independent role outcomes from the exact published composition. */
     };
 
     /** @brief Transient journal recorded before native mutation; failure does not rewrite the active snapshot. */
@@ -81,6 +91,7 @@ namespace Horo::Packages {
         std::uint64_t installRevision{};
         std::optional<Error> diagnostic;
         bool restartRequired{};
+        std::vector<PackageModuleReport> modules; /**< Attempted role outcomes, including rejected unpublished candidates. */
     };
 
     /**
@@ -115,6 +126,13 @@ namespace Horo::Packages {
          */
         [[nodiscard]] Result<void> Activate(std::span<const EnabledPackageExtension> enabled, PackageActivationBoundary boundary,
                                             const CancellationToken &cancellation);
+        /** @brief Routes selected verified modules to their explicit owning hosts at a quiescent boundary.
+         * @param enabled Exact package/descriptor/module/role selections and required/optional policy.
+         * @param boundary Startup or quiescent host lifecycle point; Running fails before host work.
+         * @param cancellation Cooperative cancellation before the atomic composition publication.
+         * @return Success with independent optional outcomes, or required-role failure retaining the prior composition. */
+        [[nodiscard]] Result<void> ActivateModules(std::span<const EnabledPackageModule> enabled, PackageActivationBoundary boundary,
+                                                   const CancellationToken &cancellation);
         /** @brief Checks exact injected availability authority without reading mutable package state.
          * @param install Expected stable service instance. @return Whether this lifecycle borrows that exact authority. */
         [[nodiscard]] bool UsesInstallService(const PackageInstallService &install) const noexcept;
