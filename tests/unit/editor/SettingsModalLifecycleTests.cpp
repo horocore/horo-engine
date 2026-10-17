@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Foundation/DataBus.h"
@@ -16,10 +17,6 @@
 #include <filesystem>
 #include <memory>
 #include <string>
-
-namespace Horo::Editor::Theme {
-    struct Fonts;
-}
 
 Horo::Editor::ModalFrameResult Horo::Editor::SettingsModal::Draw() {
     return ModalFrameResult::None();
@@ -36,7 +33,7 @@ namespace {
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
         LocalizationService localization{LocaleTag{"en-US"}};
         EditorSettingsService settings{DefaultEditorSettings(), configuration, events, localization};
-        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        Theme::Fonts fonts{};
         ThemeContext theme{fonts};
         EditorSettingsSnapshot snapshot = settings.Snapshot();
         EditorGuiContext ctx{engineEvents, events, localization, theme, snapshot};
@@ -155,7 +152,8 @@ namespace {
         Tests::CollisionSettings::Project project;
         auto owner = project.Open();
         SettingsFixture fixture;
-        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, nullptr, owner);
+        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr,
+                                                     SettingsModalProjectOpening{.collision = owner});
         auto *view = modal.get();
         REQUIRE(fixture.host.OpenRoot(std::move(modal)).HasValue());
         fixture.host.OnUpdate(0);
@@ -195,7 +193,8 @@ namespace {
         Tests::CollisionSettings::Project project;
         auto owner = project.Open();
         SettingsFixture fixture;
-        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, nullptr, owner);
+        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr,
+                                                     SettingsModalProjectOpening{.collision = owner});
         auto *view = modal.get();
         REQUIRE(fixture.host.OpenRoot(std::move(modal)).HasValue());
         fixture.host.OnUpdate(0);
@@ -228,7 +227,8 @@ TEST_CASE("Settings modal keeps navigation and collision borrows independent dur
     auto opened = NavigationProjectSettingsSession::Open(directory.Path(), registry, files, mutations, 1);
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();
-    auto ownedModal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, session.get(), collision);
+    auto ownedModal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr,
+                                                      SettingsModalProjectOpening{.navigation = session.get(), .collision = collision});
     auto *modal = ownedModal.get();
     REQUIRE(fixture.host.OpenRoot(std::move(ownedModal)).HasValue());
     SECTION("retired before queued opening") {

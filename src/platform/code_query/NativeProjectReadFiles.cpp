@@ -23,15 +23,16 @@ namespace Horo::Platform {
 
         /** @brief Admits exact contained inventory spellings without importing the code-query device/name profile. */
         bool SafeInventoryPath(const std::string_view path) {
-            if (path.empty() || path.size() > 4096 || path.front() == '/' || path.back() == '/' || path.find('\0') != path.npos)
+            if (path.empty() || path.size() > 4096 || path.front() == '/' || path.back() == '/' ||
+                path.find('\0') != std::string_view::npos)
                 return false;
             std::size_t start{};
             while (start < path.size()) {
                 const auto end = path.find('/', start);
-                const auto part = path.substr(start, end == path.npos ? path.size() - start : end - start);
-                if (part.empty() || part == "." || part == "..")
+                if (const auto part = path.substr(start, end == std::string_view::npos ? path.size() - start : end - start);
+                    part.empty() || part == "." || part == "..")
                     return false;
-                if (end == path.npos)
+                if (end == std::string_view::npos)
                     break;
                 start = end + 1;
             }
@@ -186,7 +187,7 @@ namespace Horo::Platform {
                         path.size() + 1 > state.limits.maximumManifestBytes - state.bytes)
                         return Result<void>::Failure(MakeError(ProjectReadErrors::Capacity));
                     state.bytes += path.size() + 1;
-                    state.entries.push_back({path, kind});
+                    state.entries.emplace_back(path, kind);
                     if (kind != ProjectInventoryKind::Directory || state.depth != ProjectInventoryDepth::Recursive)
                         return Result<void>::Success();
                     state.pendingDirectories.push_back(state.entries.size() - 1);

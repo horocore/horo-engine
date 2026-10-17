@@ -103,7 +103,7 @@ namespace Horo::Tests::CollisionSettings {
         auto session = project.Open();
         std::weak_ptr<Editor::CollisionProjectSettingsSession> old = session;
         bool foreignRejected{};
-        std::thread worker([&] {
+        std::jthread worker([session, &foreignRejected] {
             foreignRejected = session->Snapshot().HasError();
         });
         worker.join();

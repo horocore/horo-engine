@@ -21,11 +21,11 @@ namespace Horo::Editor::SettingsModalInternal {
             }};
             (void)Ui::ComboControl("##definition", &draft.selected, static_cast<int>(items.size()), source, ctx.theme.fonts);
             auto &item = items[static_cast<std::size_t>(draft.selected)];
-            Ui::SettingRow(Text(ctx, "settings.collision.name"), nullptr, ctx.theme.fonts, [&] {
+            Ui::SettingRow(Text(ctx, "settings.collision.name"), nullptr, ctx.theme.fonts, [&ctx, &draft, &item] {
                 if (Ui::InputTextControl("##name", item.name, 128, ctx.theme.fonts))
                     CollisionEdited(draft);
             });
-            Ui::SettingRow(Text(ctx, "settings.collision.description"), nullptr, ctx.theme.fonts, [&] {
+            Ui::SettingRow(Text(ctx, "settings.collision.description"), nullptr, ctx.theme.fonts, [&ctx, &draft, &item] {
                 if (Ui::InputTextControl("##description", item.description, 1024, ctx.theme.fonts))
                     CollisionEdited(draft);
             });
@@ -60,8 +60,8 @@ namespace Horo::Editor::SettingsModalInternal {
                 CollisionEdited(draft);
         }
 
-        void DrawCreation(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner, const EditorGuiContext &ctx) {
-            Ui::SettingRow(Text(ctx, "settings.collision.new_name"), nullptr, ctx.theme.fonts, [&] {
+        void DrawCreation(SettingsCollisionDraft &draft, const CollisionProjectSettingsSession &owner, const EditorGuiContext &ctx) {
+            Ui::SettingRow(Text(ctx, "settings.collision.new_name"), nullptr, ctx.theme.fonts, [&ctx, &draft] {
                 (void)Ui::InputTextControl("##new-name", draft.newName, 128, ctx.theme.fonts);
             });
             if (static_cast<CollisionItemKind>(draft.kind) == CollisionItemKind::Profile && !draft.input->layers.empty()) {
@@ -70,14 +70,14 @@ namespace Horo::Editor::SettingsModalInternal {
                 const Ui::ComboItemSource source{.label = [&layers](int index) {
                     return layers[static_cast<std::size_t>(index)].name.c_str();
                 }};
-                Ui::SettingRow(Text(ctx, "settings.collision.layer"), nullptr, ctx.theme.fonts, [&] {
+                Ui::SettingRow(Text(ctx, "settings.collision.layer"), nullptr, ctx.theme.fonts, [&ctx, &draft, &layers, &source] {
                     (void)Ui::ComboControl("##new-profile-layer", &draft.initialLayer, static_cast<int>(layers.size()), source,
                                            ctx.theme.fonts);
                 });
             }
             const std::array<const char *, 3> responses{Text(ctx, "settings.collision.ignore"), Text(ctx, "settings.collision.overlap"),
                                                         Text(ctx, "settings.collision.block")};
-            Ui::SettingRow(Text(ctx, "settings.collision.initial_response"), nullptr, ctx.theme.fonts, [&] {
+            Ui::SettingRow(Text(ctx, "settings.collision.initial_response"), nullptr, ctx.theme.fonts, [&ctx, &draft, &responses] {
                 (void)Ui::ComboControl("##initial-response", &draft.initialResponse, responses.data(), 3, ctx.theme.fonts);
             });
             if (Ui::Button({.label = Text(ctx, "settings.collision.create"), .enabled = !draft.newName.empty()})) {
@@ -86,28 +86,29 @@ namespace Horo::Editor::SettingsModalInternal {
                     draft.error = created.ErrorValue();
             }
             if (Ui::Button({.label = Text(ctx, "settings.collision.remove_candidate"), .variant = Ui::ButtonVariant::Secondary})) {
-                const auto removed = RemoveCollisionItem(draft);
-                if (removed.HasError())
+                if (const auto removed = RemoveCollisionItem(draft); removed.HasError())
                     draft.error = removed.ErrorValue();
                 draft.selected = 0;
             }
         }
     }  // namespace
 
-    void DrawCollisionDefinitions(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner, const EditorGuiContext &ctx) {
-        const std::array<const char *, 3> kinds{Text(ctx, "settings.collision.layers"), Text(ctx, "settings.collision.profiles"),
-                                                Text(ctx, "settings.collision.channels")};
-        if (Ui::ComboControl("##definition-kind", &draft.kind, kinds.data(), 3, ctx.theme.fonts))
+    void DrawCollisionDefinitions(SettingsCollisionDraft &draft, const CollisionProjectSettingsSession &owner,
+                                  const EditorGuiContext &ctx) {
+        using enum CollisionItemKind;
+        if (const std::array<const char *, 3> kinds{Text(ctx, "settings.collision.layers"), Text(ctx, "settings.collision.profiles"),
+                                                    Text(ctx, "settings.collision.channels")};
+            Ui::ComboControl("##definition-kind", &draft.kind, kinds.data(), 3, ctx.theme.fonts))
             draft.selected = 0;
         switch (static_cast<CollisionItemKind>(draft.kind)) {
-            case CollisionItemKind::Layer:
+            case Layer:
                 DrawMetadata(draft, draft.input->layers, ctx);
                 DrawLayerFlags(draft, ctx);
                 break;
-            case CollisionItemKind::Profile:
+            case Profile:
                 DrawMetadata(draft, draft.input->profiles, ctx);
                 break;
-            case CollisionItemKind::Channel:
+            case Channel:
                 DrawMetadata(draft, draft.input->channels, ctx);
                 break;
         }

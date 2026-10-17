@@ -1,4 +1,5 @@
 #pragma once
+/** @file SettingsModal.h @brief Host-owned settings workflow with explicitly composed page presentation. */
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
@@ -8,13 +9,32 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace Horo::Extensions {
     class ExtensionInventory;
+    class EditorPageHost;
+    struct EditorThemeFrame;
+    struct EditorSurfaceProviderIdentity;
     class ExtensionMarketplaceService;
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
+    class EditorPageView;
+
+    /** @brief Paired page authority and theme snapshot supplied by the GUI composition owner. */
+    struct SettingsModalPagePresentation final {
+        std::shared_ptr<Extensions::EditorPageHost> host;          /**< Shared page authority; empty disables extension pages. */
+        std::shared_ptr<const Extensions::EditorThemeFrame> theme; /**< Owner theme capture; required when host is supplied. */
+    };
+
+    /** @brief Explicit project openings captured as revocable borrows during modal construction. */
+    struct SettingsModalProjectOpening final {
+        const NavigationProjectSettingsSession *navigation{};     /**< Borrowed only until its revocable opening is captured. */
+        std::weak_ptr<CollisionProjectSettingsSession> collision; /**< Never extends the project or Scene owner lifetime. */
+        std::optional<Error> collisionError;                      /**< Preserves the original typed opening failure for presentation. */
+    };
+
     /** @brief Host-owned editor settings workflow and its transient settings draft. */
     class SettingsModal final : public EditorModal {
     public:
@@ -27,16 +47,17 @@ namespace Horo::Editor {
          * @param logo Presentation logo texture.
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional registry-backed extension marketplace.
-         * @param collision Weak exact project opening; never extends canonical Scene or project lifetime.
-         * @param collisionError Original typed opening failure for actionable project settings presentation.
-         * @param navigationSettings Optional live session borrowed only during construction to capture its revocable opening.
+         * @param projects Explicit project openings and original admission diagnostics; no owner lifetime is extended.
+         * @param pages Optional explicitly composed restricted page authority and its GUI owner theme capture.
+         * @throws std::bad_alloc When the supplied page authority cannot allocate its owned presentation.
          */
         SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, std::uintptr_t logo,
                       Extensions::ExtensionInventory *extensionInventory = nullptr,
-                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
-                      const NavigationProjectSettingsSession *navigationSettings = nullptr,
-                      std::weak_ptr<CollisionProjectSettingsSession> collision = {}, std::optional<Error> collisionError = {}) noexcept;
+                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr, SettingsModalProjectOpening projects = {},
+                      SettingsModalPagePresentation pages = {});
 
+        /** @brief Selects an already-open exact extension settings page for actual modal realization. */
+        void SelectExtensionPage(const Extensions::EditorSurfaceProviderIdentity &provider, std::string id);
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
         [[nodiscard]] ModalClosePolicy ClosePolicy() const override;
@@ -56,6 +77,9 @@ namespace Horo::Editor {
         std::uintptr_t m_logo = 0;
         Extensions::ExtensionInventory *m_extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *m_extensionMarketplace = nullptr;
+        std::shared_ptr<EditorPageView> m_extensionPages;
+        bool m_openExtensionPage{};
+        bool m_pagesUnsupported{};
         NavigationProjectSettingsSessionBorrow m_navigationSettings;
         EditorDataBus *m_events = nullptr;
         SettingsState m_draft;

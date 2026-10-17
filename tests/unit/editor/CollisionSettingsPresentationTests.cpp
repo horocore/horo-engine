@@ -57,6 +57,12 @@ namespace {
     struct RestoreCollisionTheme final {
         Theme::Preset preset{Theme::GetThemePreset()};
 
+        RestoreCollisionTheme() = default;
+        RestoreCollisionTheme(const RestoreCollisionTheme &) = delete;
+        RestoreCollisionTheme &operator=(const RestoreCollisionTheme &) = delete;
+        RestoreCollisionTheme(RestoreCollisionTheme &&) = delete;
+        RestoreCollisionTheme &operator=(RestoreCollisionTheme &&) = delete;
+
         ~RestoreCollisionTheme() {
             Theme::SetThemePreset(preset);
         }
@@ -64,9 +70,10 @@ namespace {
 }  // namespace
 
 TEST_CASE("Collision presentation and disabled actions never publish canonical project settings", "[editor][gui][collision]") {
+    using enum Kind;
     CollisionPresentationFixture fixture;
     const auto before = fixture.owner->Snapshot().Value();
-    for (const auto kind : {Kind::Layer, Kind::Profile, Kind::Channel}) {
+    for (const auto kind : {Layer, Profile, Channel}) {
         fixture.settings.collision.kind = static_cast<int>(kind);
         fixture.Page();
         CHECK(fixture.owner->Snapshot().Value() == before);
@@ -77,7 +84,7 @@ TEST_CASE("Collision presentation and disabled actions never publish canonical p
     CHECK(fixture.owner->Snapshot().Value() == before);
     CHECK_FALSE(fixture.owner->IsDirty());
     CHECK_FALSE(fixture.settings.collision.error);
-    fixture.settings.collision.kind = static_cast<int>(Kind::Layer);
+    fixture.settings.collision.kind = static_cast<int>(Layer);
     const bool dynamic = fixture.settings.collision.input->schema.layers.front().admitsDynamic;
     fixture.Page("settings.collision.dynamic");
     CHECK(fixture.settings.collision.input->schema.layers.front().admitsDynamic != dynamic);
@@ -165,45 +172,44 @@ TEST_CASE("Collision feedback renders missing projection unavailable and revoked
 
 TEST_CASE("Collision controls preserve runtime authority in narrow Turkish layouts across themes", "[editor][gui][collision]") {
     for (const auto preset : {Theme::Preset::HoroDark, Theme::Preset::Light}) {
-        DYNAMIC_SECTION("theme " << static_cast<int>(preset)) {
-            CollisionPresentationFixture fixture;
-            RestoreCollisionTheme restore;
-            Theme::SetThemePreset(preset);
-            if (preset == Theme::Preset::Light)
-                ImGui::StyleColorsLight();
-            else
-                ImGui::StyleColorsDark();
-            const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor/tr-TR.json";
-            LocalizationError error;
-            REQUIRE(fixture.gui.localization.LoadCatalogFile(catalog, &error));
-            REQUIRE(fixture.gui.localization.Prepare(LocaleTag{"tr-TR"}, &error));
-            REQUIRE(fixture.gui.localization.ActivatePrepared(&error));
-            fixture.size = {420, 3600};
-            ImGui::GetIO().FontGlobalScale = 1.25F;
-            const auto before = fixture.owner->Snapshot().Value();
-            std::uint64_t revision = 2;
-            for (const auto state : {CollisionActivationState::NoPhysics, CollisionActivationState::Inactive,
-                                     CollisionActivationState::Unknown, CollisionActivationState::Active}) {
-                CollisionActivationEvidence evidence{.revision = revision++, .state = state};
-                if (state == CollisionActivationState::Active) {
-                    evidence.projectId = "collision-project";
-                    evidence.documentRevision = before->Input().revision;
-                    evidence.generation = 8;
-                    evidence.fingerprint = before->Schema()->SemanticFingerprint();
-                    evidence.playRunning = true;
-                }
-                REQUIRE(fixture.owner->ObserveActivation(evidence).HasValue());
-                fixture.Page();
-                if (state == CollisionActivationState::Active) {
-                    fixture.Page("settings.collision.dynamic");
-                    fixture.Page("settings.collision.review");
-                    REQUIRE(fixture.settings.collision.review);
-                    CHECK_FALSE(fixture.settings.collision.review->CanCommit());
-                    fixture.Page("settings.collision.commit");
-                }
-                CHECK(fixture.owner->Snapshot().Value() == before);
-                CHECK_FALSE(fixture.owner->IsDirty());
+        INFO("theme " << static_cast<int>(preset));
+        CollisionPresentationFixture fixture;
+        RestoreCollisionTheme restore;
+        Theme::SetThemePreset(preset);
+        if (preset == Theme::Preset::Light)
+            ImGui::StyleColorsLight();
+        else
+            ImGui::StyleColorsDark();
+        const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor/tr-TR.json";
+        LocalizationError error;
+        REQUIRE(fixture.gui.localization.LoadCatalogFile(catalog, &error));
+        REQUIRE(fixture.gui.localization.Prepare(LocaleTag{"tr-TR"}, &error));
+        REQUIRE(fixture.gui.localization.ActivatePrepared(&error));
+        fixture.size = {420, 3600};
+        ImGui::GetIO().FontGlobalScale = 1.25F;
+        const auto before = fixture.owner->Snapshot().Value();
+        std::uint64_t revision = 2;
+        for (const auto state : {CollisionActivationState::NoPhysics, CollisionActivationState::Inactive, CollisionActivationState::Unknown,
+                                 CollisionActivationState::Active}) {
+            CollisionActivationEvidence evidence{.revision = revision++, .state = state};
+            if (state == CollisionActivationState::Active) {
+                evidence.projectId = "collision-project";
+                evidence.documentRevision = before->Input().revision;
+                evidence.generation = 8;
+                evidence.fingerprint = before->Schema()->SemanticFingerprint();
+                evidence.playRunning = true;
             }
+            REQUIRE(fixture.owner->ObserveActivation(evidence).HasValue());
+            fixture.Page();
+            if (state == CollisionActivationState::Active) {
+                fixture.Page("settings.collision.dynamic");
+                fixture.Page("settings.collision.review");
+                REQUIRE(fixture.settings.collision.review);
+                CHECK_FALSE(fixture.settings.collision.review->CanCommit());
+                fixture.Page("settings.collision.commit");
+            }
+            CHECK(fixture.owner->Snapshot().Value() == before);
+            CHECK_FALSE(fixture.owner->IsDirty());
         }
     }
 }

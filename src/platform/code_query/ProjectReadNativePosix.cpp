@@ -24,6 +24,18 @@ namespace Horo::Platform::ProjectReadNative {
                     closedir(value);
             }
         };
+
+        /** @brief Classifies no-follow stat evidence without selecting a backend or following a source link. */
+        ProjectInventoryKind InventoryKind(const mode_t mode) noexcept {
+            using enum ProjectInventoryKind;
+            if (S_ISLNK(mode))
+                return Link;
+            if (S_ISDIR(mode))
+                return Directory;
+            if (S_ISREG(mode))
+                return Regular;
+            return Special;
+        }
     }  // namespace
 
     /** @copydoc NormalizeHandle */
@@ -108,6 +120,9 @@ namespace Horo::Platform::ProjectReadNative {
         if (!directory)
             return Result<void>::Failure(MakeError(ProjectReadErrors::ReadFailed));
         static_cast<void>(cursor.Release());
+        const int descriptor = dirfd(directory.get());
+        if (descriptor < 0)
+            return Result<void>::Failure(MakeError(ProjectReadErrors::ReadFailed));
         for (;;) {
             if (auto stop = CheckProjectReadContext(context); stop.HasError())
                 return stop;
@@ -119,12 +134,9 @@ namespace Horo::Platform::ProjectReadNative {
             if (name == "." || name == "..")
                 continue;
             struct stat info{};
-            if (fstatat(dirfd(directory.get()), entry->d_name, &info, AT_SYMLINK_NOFOLLOW) != 0)
+            if (fstatat(descriptor, entry->d_name, &info, AT_SYMLINK_NOFOLLOW) != 0)
                 return Result<void>::Failure(MakeError(ProjectReadErrors::ReadFailed));
-            const auto kind = S_ISLNK(info.st_mode)   ? ProjectInventoryKind::Link
-                              : S_ISDIR(info.st_mode) ? ProjectInventoryKind::Directory
-                              : S_ISREG(info.st_mode) ? ProjectInventoryKind::Regular
-                                                      : ProjectInventoryKind::Special;
+            const auto kind = InventoryKind(info.st_mode);
             if (auto visited = visitor.Classified(name, kind); visited.HasError())
                 return visited;
         }

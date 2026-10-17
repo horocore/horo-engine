@@ -52,10 +52,13 @@ namespace Horo::Extensions {
             return ProviderKey(descriptor.provider);
         }
 
-        [[nodiscard]] bool IsSupportedPersistentSurface(const EditorSurfaceDescriptor &descriptor) {
+        [[nodiscard]] bool IsSupportedSurface(const EditorSurfaceDescriptor &descriptor) {
             using enum EditorSurfaceKind;
-            return (descriptor.kind == Panel || descriptor.kind == Tab || descriptor.kind == ActivityItem) &&
-                   descriptor.persistence != EditorSurfacePersistence::None;
+            const bool persistent = (descriptor.kind == Panel || descriptor.kind == Tab || descriptor.kind == ActivityItem) &&
+                                    descriptor.persistence != EditorSurfacePersistence::None;
+            const bool transient = (descriptor.kind == SettingsPage || descriptor.kind == Modal || descriptor.kind == ModalPage) &&
+                                   descriptor.persistence == EditorSurfacePersistence::None && !descriptor.openByDefault;
+            return persistent || transient;
         }
 
         [[nodiscard]] bool IsValidStatus(const EditorSurfaceProviderStatus status) noexcept {

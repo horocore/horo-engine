@@ -1075,6 +1075,7 @@ add_library(HoroAssets STATIC
         runtime/assets/package/AssetChunkPlan.cpp
         runtime/assets/registry/AssetId.cpp
         runtime/assets/registry/AssetRegistry.cpp
+        runtime/assets/registry/AssetRegistrySnapshot.cpp
         runtime/assets/runtime_provider/AssetProviderRead.h
         runtime/assets/runtime_provider/AssetProvider.cpp
         runtime/assets/preview/AssetPreviewService.cpp
@@ -3113,6 +3114,10 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
+        editor/screens/EditorPageFileStore.cpp
+        editor/modals/extension_pages/EditorPageView.cpp
+        editor/modals/extension_pages/EditorPageModal.cpp
+        editor/modals/extension_pages/EditorPageThemeCapture.cpp
     )
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
@@ -3169,6 +3174,13 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorActivityAbiConversion.cpp
         extensions/host/EditorActivitySession.cpp
         extensions/host/EditorActivityAction.cpp
+        extensions/host/EditorPageHost.cpp
+        extensions/host/EditorPageOperations.cpp
+        extensions/host/EditorPageWork.cpp
+        extensions/host/EditorPageAbiConversion.cpp
+        extensions/host/EditorPageNativeOperations.cpp
+        extensions/host/EditorPageNativeSession.cpp
+        extensions/manifest/EditorPageDefinition.cpp
         extensions/host/EditorSurfaceRegistry.cpp
         extensions/host/EditorSurfaceRegistryOperations.cpp
         extensions/host/EditorSurfaceRegistryPersistence.cpp
@@ -3332,7 +3344,7 @@ target_compile_features(HoroPlatformServicesExtension PUBLIC cxx_std_20)
 target_link_libraries(HoroPlatformServicesExtension PUBLIC HoroEngine::PlatformServices HoroEngine::Extensions)
 
 if (HORO_BUILD_EDITOR_GUI)
-    target_link_libraries(HoroGui PRIVATE HoroEngine::Extensions)
+    target_link_libraries(HoroGui PUBLIC HoroEngine::Extensions)
 endif ()
 
 # Apply the build-tree public/private include contract only after every optional

@@ -239,9 +239,8 @@ namespace Horo::SceneSource::Detail {
                 }
             }
             std::ranges::sort(scene.unsupportedComponentOwners, {}, &SceneObjectId::value);
-            scene.unsupportedComponentOwners.erase(std::unique(scene.unsupportedComponentOwners.begin(),
-                                                               scene.unsupportedComponentOwners.end()),
-                                                   scene.unsupportedComponentOwners.end());
+            const auto duplicates = std::ranges::unique(scene.unsupportedComponentOwners);
+            scene.unsupportedComponentOwners.erase(duplicates.begin(), duplicates.end());
             return Result<ParsedScene>::Success(std::move(scene));
         } catch (const Json::exception &exception) {
             return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Invalid scene JSON: " + std::string{exception.what()}));

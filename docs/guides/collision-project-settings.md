@@ -244,13 +244,16 @@ callback. This avoids callback-parser destruction of discarded structured values
 while preserving the completed-DOM owner and all existing typed schema checks.
 No persistent-allocation-failure or checked-MSVC-Debug guarantee is implied.
 
-## Main navigation settings integration
+## Main settings integration and constructor migration
 
-The Settings modal constructor keeps main's optional navigation-session pointer before
-the collision weak session and typed opening error. The host supplies both explicit
-project openings through `GuiScreenHost::OpenEditorSettingsModal`; welcome and other
-existing callers keep their defaults. Collision callers pass `nullptr` for navigation
-when no navigation owner exists. Rebuild affected GUI, Settings lifecycle and public
-consumers together. Neither settings domain owns the other domain's session, and
-retiring a navigation opening leaves a live collision opening usable. Workspace leave
-and Save As retain both document groups' dirty-state and shutdown checks.
+`SettingsModalProjectOpening` groups the navigation session borrow, weak collision
+opening, and typed collision admission error. This replaces positional project
+arguments to keep host composition explicit when extension page authority is also
+present. `GuiScreenHost::CreateSettingsModal` supplies the project opening followed
+by `SettingsModalPagePresentation`; callers without a project keep their defaults.
+
+Rebuild affected GUI, Settings lifecycle, application and public consumers together.
+Existing collision callers pass `SettingsModalProjectOpening{.collision = owner}`;
+combined callers also set `.navigation`. Neither project domain owns the other's
+session, and closing the modal retires its drafts without closing a project owner.
+Workspace leave and Save As preserve both domains' dirty-state and shutdown checks.

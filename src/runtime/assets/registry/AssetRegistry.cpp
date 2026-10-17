@@ -2,6 +2,7 @@
 
 #include "../AssetErrors.h"
 #include "AssetRegistryJson.h"
+#include "AssetRegistrySnapshotState.h"
 #include "Horo/Foundation/Paths.h"
 
 #include <algorithm>
@@ -115,7 +116,7 @@ namespace Horo::Assets {
                 return Result<Detail::RegistryJson>::Failure(Failure(descriptor, "JSON contains a duplicate key."));
             try {
                 Detail::RegistryJson parsed{contents};
-                parsed.value = Json::parse(contents);
+                parsed.Dom() = Json::parse(contents);
                 return Result<Detail::RegistryJson>::Success(std::move(parsed));
             } catch (const Json::exception &exception) {
                 return Result<Detail::RegistryJson>::Failure(Failure(descriptor, exception.what()));
@@ -256,7 +257,7 @@ namespace Horo::Assets {
                 return Result<AssetRecord>::Failure(parsed.ErrorValue());
             }
             Detail::RegistryJson owned = std::move(parsed).Value();
-            Json &sidecarJson = owned.value;
+            Json &sidecarJson = owned.Dom();
             if (!sidecarJson.is_object() || !sidecarJson.contains("schemaVersion") || !sidecarJson["schemaVersion"].is_number_unsigned()) {
                 return Result<AssetRecord>::Failure(Failure(AssetErrors::SidecarMalformed));
             }
@@ -325,39 +326,6 @@ namespace Horo::Assets {
         return DecodeSidecar(sourcePath, contents);
     }
 
-    struct AssetRegistrySnapshot::State {
-        AssetRegistryRevision revision;
-        std::vector<AssetRecord> records;
-    };
-
-    /** @copydoc AssetRegistrySnapshot::Revision */
-    AssetRegistryRevision AssetRegistrySnapshot::Revision() const noexcept {
-        return state_ ? state_->revision : AssetRegistryRevision{};
-    }
-
-    /** @copydoc AssetRegistrySnapshot::Records */
-    std::span<const AssetRecord> AssetRegistrySnapshot::Records() const noexcept {
-        return state_ ? std::span<const AssetRecord>{state_->records} : std::span<const AssetRecord>{};
-    }
-
-    /** @copydoc AssetRegistrySnapshot::Find */
-    const AssetRecord *AssetRegistrySnapshot::Find(const AssetId id) const noexcept {
-        if (!state_)
-            return nullptr;
-        const auto found = std::ranges::lower_bound(state_->records, id, {}, &AssetRecord::id);
-        return found != state_->records.end() && found->id == id ? std::to_address(found) : nullptr;
-    }
-
-    /** @copydoc AssetRegistrySnapshot::FindByPath */
-    const AssetRecord *AssetRegistrySnapshot::FindByPath(const std::string_view normalizedProjectPath) const noexcept {
-        if (!state_)
-            return nullptr;
-        const auto found = std::ranges::find(state_->records, normalizedProjectPath, [](const AssetRecord &record) -> std::string_view {
-            return record.sourcePath.String();
-        });
-        return found == state_->records.end() ? nullptr : std::to_address(found);
-    }
-
     /** @copydoc AssetRegistry::AssetRegistry */
     AssetRegistry::AssetRegistry() : state_(std::make_shared<const AssetRegistrySnapshot::State>()) {}
 
@@ -423,7 +391,7 @@ namespace Horo::Assets {
         auto parsed = ParseStrictJson(contents.Value(), AssetErrors::IndexMalformed);
         if (parsed.HasError())
             return Result<std::vector<AssetRecord>>::Failure(parsed.ErrorValue());
-        const Json &root = parsed.Value().value;
+        const Json &root = parsed.Value().Dom();
         if (!root.is_object() || !root.contains("schemaVersion") || !root["schemaVersion"].is_number_unsigned() ||
             root["schemaVersion"].get<std::uint64_t>() != 1 || !root.contains("assets") || !root["assets"].is_array()) {
             return Result<std::vector<AssetRecord>>::Failure(Failure(AssetErrors::IndexMalformed));

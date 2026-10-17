@@ -16,16 +16,17 @@ namespace Horo::Editor::SettingsModalInternal {
         }
 
         const char *ImpactKey(const CollisionImpactReason reason) {
+            using enum CollisionImpactReason;
             switch (reason) {
-                case CollisionImpactReason::ProfileReference:
+                case ProfileReference:
                     return "settings.collision.impact.profile";
-                case CollisionImpactReason::OpaqueOwner:
+                case OpaqueOwner:
                     return "settings.collision.impact.opaque";
-                case CollisionImpactReason::InventoryIncomplete:
+                case InventoryIncomplete:
                     return "settings.collision.impact.inventory";
-                case CollisionImpactReason::TriggerCaptureStale:
+                case TriggerCaptureStale:
                     return "settings.collision.impact.trigger";
-                case CollisionImpactReason::ActiveGeneration:
+                case ActiveGeneration:
                     return "settings.collision.impact.active";
             }
             return "settings.collision.unavailable";
@@ -83,25 +84,26 @@ namespace Horo::Editor::SettingsModalInternal {
         }
 
         void DrawActivation(const CollisionProjectSettingsSession &owner, const EditorGuiContext &ctx) {
+            using enum CollisionActivationState;
             const auto evidence = owner.Activation();
             if (evidence.HasError())
                 return;
             const char *key = "settings.collision.activation.unknown";
             switch (evidence.Value()->state) {
-                case CollisionActivationState::NoPhysics:
+                case NoPhysics:
                     key = "settings.collision.activation.no_physics";
                     break;
-                case CollisionActivationState::Inactive:
+                case Inactive:
                     key = "settings.collision.activation.inactive";
                     break;
-                case CollisionActivationState::Active:
+                case Active:
                     key = "settings.collision.activation.active";
                     break;
-                case CollisionActivationState::Unknown:
+                case Unknown:
                     break;
             }
             ImGui::TextWrapped("%s", Text(ctx, key));
-            if (evidence.Value()->state == CollisionActivationState::Active)
+            if (evidence.Value()->state == Active)
                 ImGui::Text("%llu / %llu / %llu", static_cast<unsigned long long>(evidence.Value()->documentRevision),
                             static_cast<unsigned long long>(evidence.Value()->generation),
                             static_cast<unsigned long long>(evidence.Value()->fingerprint));
@@ -122,8 +124,7 @@ namespace Horo::Editor::SettingsModalInternal {
             return;
         }
         // Resolves owner-thread admission each frame without I/O or a copied projection.
-        const auto current = owner->Snapshot();
-        if (current.HasError()) {
+        if (const auto current = owner->Snapshot(); current.HasError()) {
             ImGui::TextWrapped("%s", current.ErrorValue().message.c_str());
             return;
         }

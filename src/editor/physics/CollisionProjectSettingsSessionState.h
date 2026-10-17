@@ -19,14 +19,19 @@ namespace Horo::Editor {
         bool allowed{};
     };
 
-    /** @brief Owner-thread cache; Close revokes before any borrowed owner can retire. No draw path performs I/O. */
-    struct CollisionProjectSettingsSession::State final {
-        std::filesystem::path root;
-        std::string projectId;
+    /** @brief Borrowed source and publication authorities; the session revokes before their owners retire. */
+    struct CollisionSourceAuthorities final {
         const Assets::AssetRegistry *registry{};
         const Assets::IAssetRegistrySource *source{};
         DurableFileSystem *files{};
         ProjectMutationCoordinator *mutations{};
+    };
+
+    /** @brief Owner-thread cache; Close revokes before any borrowed owner can retire. No draw path performs I/O. */
+    struct CollisionProjectSettingsSession::State final {
+        std::filesystem::path root;
+        std::string projectId;
+        CollisionSourceAuthorities authorities;
         SceneDocumentTransactions *activeScene{};
         std::filesystem::path activeScenePath;
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding;

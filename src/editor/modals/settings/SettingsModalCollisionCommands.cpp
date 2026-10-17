@@ -12,7 +12,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc RefreshCollisionDraft */
-    void RefreshCollisionDraft(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner) {
+    void RefreshCollisionDraft(SettingsCollisionDraft &draft, const CollisionProjectSettingsSession &owner) {
         auto snapshot = owner.Snapshot();
         if (snapshot.HasError()) {
             draft.error = snapshot.ErrorValue();
@@ -27,7 +27,7 @@ namespace Horo::Editor {
     }
 
     namespace {
-        Result<void> AddLayer(Application::ProjectCollisionSettingsInput &input, CollisionProjectSettingsSession &owner,
+        Result<void> AddLayer(Application::ProjectCollisionSettingsInput &input, const CollisionProjectSettingsSession &owner,
                               const std::string &name, const int response) {
             if (input.schema.layers.size() >= 4096 ||
                 std::ranges::count(input.schema.layers, true, &Physics::CollisionLayerDefinition::enabled) >= 64)
@@ -37,14 +37,14 @@ namespace Horo::Editor {
                 return Result<void>::Failure(id.ErrorValue());
             for (const auto &layer : input.schema.layers)
                 if (layer.enabled)
-                    input.schema.pairs.push_back({layer.id, id.Value(), static_cast<Physics::SimulationPairResponse>(response)});
-            input.schema.pairs.push_back({id.Value(), id.Value(), static_cast<Physics::SimulationPairResponse>(response)});
+                    input.schema.pairs.emplace_back(layer.id, id.Value(), static_cast<Physics::SimulationPairResponse>(response));
+            input.schema.pairs.emplace_back(id.Value(), id.Value(), static_cast<Physics::SimulationPairResponse>(response));
             input.schema.layers.push_back({id.Value()});
             input.layers.push_back({id.Value(), name, {}});
             return Result<void>::Success();
         }
 
-        Result<void> AddChannel(Application::ProjectCollisionSettingsInput &input, CollisionProjectSettingsSession &owner,
+        Result<void> AddChannel(Application::ProjectCollisionSettingsInput &input, const CollisionProjectSettingsSession &owner,
                                 const std::string &name, const int response) {
             if (input.schema.queryChannels.size() >= 4096 ||
                 std::ranges::count(input.schema.queryChannels, true, &Physics::CollisionQueryChannelDefinition::enabled) >= 64)
@@ -59,7 +59,7 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        Result<void> AddProfile(Application::ProjectCollisionSettingsInput &input, CollisionProjectSettingsSession &owner,
+        Result<void> AddProfile(Application::ProjectCollisionSettingsInput &input, const CollisionProjectSettingsSession &owner,
                                 const std::string &name, const int response, const int selectedLayer) {
             if (selectedLayer < 0 || static_cast<std::size_t>(selectedLayer) >= input.layers.size())
                 return Result<void>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Invalid)));
@@ -80,20 +80,21 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc CreateCollisionItem */
-    Result<void> CreateCollisionItem(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner) {
+    Result<void> CreateCollisionItem(SettingsCollisionDraft &draft, const CollisionProjectSettingsSession &owner) {
+        using enum CollisionItemKind;
         try {
             if (!draft.input || draft.newName.empty() || draft.initialResponse < 0 || draft.initialResponse > 2)
                 return Result<void>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Invalid)));
             auto input = *draft.input;
             Result<void> added = Result<void>::Success();
             switch (static_cast<CollisionItemKind>(draft.kind)) {
-                case CollisionItemKind::Layer:
+                case Layer:
                     added = AddLayer(input, owner, draft.newName, draft.initialResponse);
                     break;
-                case CollisionItemKind::Profile:
+                case Profile:
                     added = AddProfile(input, owner, draft.newName, draft.initialResponse, draft.initialLayer);
                     break;
-                case CollisionItemKind::Channel:
+                case Channel:
                     added = AddChannel(input, owner, draft.newName, draft.initialResponse);
                     break;
                 default:
@@ -102,13 +103,13 @@ namespace Horo::Editor {
             if (added.HasError())
                 return added;
             switch (static_cast<CollisionItemKind>(draft.kind)) {
-                case CollisionItemKind::Layer:
+                case Layer:
                     draft.selected = static_cast<int>(input.layers.size()) - 1;
                     break;
-                case CollisionItemKind::Profile:
+                case Profile:
                     draft.selected = static_cast<int>(input.profiles.size()) - 1;
                     break;
-                case CollisionItemKind::Channel:
+                case Channel:
                     draft.selected = static_cast<int>(input.channels.size()) - 1;
                     break;
             }
@@ -139,7 +140,7 @@ namespace Horo::Editor {
             const auto id = RemoveDefinition(index, input.layers, input.schema.layers);
             if (!id)
                 return false;
-            std::erase_if(input.schema.pairs, [&](const auto &v) {
+            std::erase_if(input.schema.pairs, [id](const auto &v) {
                 return v.first == *id || v.second == *id;
             });
             // Profiles retain their actual references: the user must reassign them before canonical validation succeeds.
@@ -151,7 +152,7 @@ namespace Horo::Editor {
             if (!id)
                 return false;
             for (auto &profile : input.schema.profiles)
-                std::erase_if(profile.queryResponses, [&](const auto &v) {
+                std::erase_if(profile.queryResponses, [id](const auto &v) {
                     return v.channel == *id;
                 });
             return true;
@@ -160,19 +161,20 @@ namespace Horo::Editor {
 
     /** @copydoc RemoveCollisionItem */
     Result<void> RemoveCollisionItem(SettingsCollisionDraft &draft) {
+        using enum CollisionItemKind;
         if (!draft.input || draft.selected < 0)
             return Result<void>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Invalid)));
         const auto index = static_cast<std::size_t>(draft.selected);
         auto &input = *draft.input;
         bool removed{};
         switch (static_cast<CollisionItemKind>(draft.kind)) {
-            case CollisionItemKind::Layer:
+            case Layer:
                 removed = RemoveLayer(input, index);
                 break;
-            case CollisionItemKind::Profile:
+            case Profile:
                 removed = RemoveDefinition(index, input.profiles, input.schema.profiles).has_value();
                 break;
-            case CollisionItemKind::Channel:
+            case Channel:
                 removed = RemoveChannel(input, index);
                 break;
         }

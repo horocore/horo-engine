@@ -3,7 +3,10 @@
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <new>
 #include <random>
+#include <stdexcept>
 
 namespace Horo::Editor {
     namespace {
@@ -27,13 +30,17 @@ namespace Horo::Editor {
                 std::array<std::uint8_t, 16> bytes;
                 for (auto &byte : bytes)
                     byte = static_cast<std::uint8_t>(random());
-                bytes[6] = static_cast<std::uint8_t>((bytes[6] & 0x0fU) | 0x40U);
-                bytes[8] = static_cast<std::uint8_t>((bytes[8] & 0x3fU) | 0x80U);
+                bytes[6] = std::to_integer<std::uint8_t>((std::byte{bytes[6]} & std::byte{0x0f}) | std::byte{0x40});
+                bytes[8] = std::to_integer<std::uint8_t>((std::byte{bytes[8]} & std::byte{0x3f}) | std::byte{0x80});
                 if (!Used(existing, bytes))
                     return Result<std::array<std::uint8_t, 16>>::Success(bytes);
             }
-        } catch (const std::exception &) {
-            // Entropy failure is a rejected explicit authoring action, never a deterministic fallback identity.
+        } catch (const std::runtime_error &) {
+            return Result<std::array<std::uint8_t, 16>>::Failure(
+                MakeError(CollisionSettingsError(CollisionSettingsFailure::Capacity), "Collision identity entropy is unavailable."));
+        } catch (const std::bad_alloc &) {
+            return Result<std::array<std::uint8_t, 16>>::Failure(
+                MakeError(CollisionSettingsError(CollisionSettingsFailure::Capacity), "Collision identity capacity is unavailable."));
         }
         return Result<std::array<std::uint8_t, 16>>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Capacity)));
     }

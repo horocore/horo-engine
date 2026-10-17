@@ -151,6 +151,13 @@ namespace Horo::Editor {
             EditorStatusItemRegistry &statusItems;
         };
 
+        /** @brief Exact pending leave decision captures; borrowed collision authority never extends project lifetime. */
+        struct WorkspaceLeaveCapture final {
+            std::vector<PCGDocumentSnapshot> pcgDocuments;
+            std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
+            std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
+        };
+
         class EditorWorkspaceScreen final : public GuiScreen {
         public:
             explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
@@ -418,7 +425,7 @@ namespace Horo::Editor {
                     auto graphs = controller_->PCGDocuments().Snapshots();
                     if (graphs.HasError())
                         return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
-                    leavePCGDocuments_ = std::move(graphs).Value();
+                    leaveCapture_.pcgDocuments = std::move(graphs).Value();
                     if (const auto collision = CaptureLeaveCollision(); collision.HasError())
                         return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
                     LeaveRequirement requirement{.kind = LeaveRequirementKind::DirtyDocument,
@@ -526,8 +533,8 @@ namespace Horo::Editor {
             /** @brief Requires the exact graph sessions and revisions captured by the dirty-leave prompt. */
             /** @brief Captures the cached dirty draft at the explicit leave decision, without filesystem access. */
             Result<void> CaptureLeaveCollision() const {
-                leaveCollisionOwner_.reset();
-                leaveCollisionRoot_.reset();
+                leaveCapture_.collisionOwner.reset();
+                leaveCapture_.collisionRoot.reset();
                 if (!controller_->HasDirtyCollisionSettings())
                     return Result<void>::Success();
                 auto owner = controller_->CollisionSettings();
@@ -536,23 +543,22 @@ namespace Horo::Editor {
                 auto root = owner.Value()->Snapshot();
                 if (root.HasError())
                     return Result<void>::Failure(root.ErrorValue());
-                leaveCollisionOwner_ = owner.Value();
-                leaveCollisionRoot_ = std::move(root).Value();
+                leaveCapture_.collisionOwner = owner.Value();
+                leaveCapture_.collisionRoot = std::move(root).Value();
                 return Result<void>::Success();
             }
 
             /** @brief Refuses a delayed save/discard decision after its exact collision draft or opening changed. */
             Result<void> ValidateLeaveCollision() const {
-                if (controller_->HasDirtyCollisionSettings() != static_cast<bool>(leaveCollisionRoot_))
+                if (controller_->HasDirtyCollisionSettings() != static_cast<bool>(leaveCapture_.collisionRoot))
                     return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
-                if (!leaveCollisionRoot_)
+                if (!leaveCapture_.collisionRoot)
                     return Result<void>::Success();
-                const auto owner = leaveCollisionOwner_.lock();
-                const auto currentOwner = controller_->CollisionSettings();
-                if (!owner || currentOwner.HasError() || currentOwner.Value() != owner)
+                const auto owner = leaveCapture_.collisionOwner.lock();
+                if (const auto currentOwner = controller_->CollisionSettings();
+                    !owner || currentOwner.HasError() || currentOwner.Value() != owner)
                     return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
-                const auto snapshot = owner->Snapshot();
-                if (snapshot.HasError() || snapshot.Value() != leaveCollisionRoot_)
+                if (const auto snapshot = owner->Snapshot(); snapshot.HasError() || snapshot.Value() != leaveCapture_.collisionRoot)
                     return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 return Result<void>::Success();
             }
@@ -561,11 +567,11 @@ namespace Horo::Editor {
                 const auto graphs = controller_->PCGDocuments().Snapshots();
                 if (graphs.HasError())
                     return Result<void>::Failure(graphs.ErrorValue());
-                if (graphs.Value().size() != leavePCGDocuments_.size())
+                if (graphs.Value().size() != leaveCapture_.pcgDocuments.size())
                     return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 for (std::size_t index = 0; index < graphs.Value().size(); ++index) {
                     const auto &current = graphs.Value()[index];
-                    const auto &captured = leavePCGDocuments_[index];
+                    const auto &captured = leaveCapture_.pcgDocuments[index];
                     if (current.session != captured.session || current.revision != captured.revision ||
                         current.catalogRevision != captured.catalogRevision)
                         return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
@@ -949,9 +955,7 @@ namespace Horo::Editor {
             WorkspaceProjectServices projectServices_{};
             WorkspacePublishedRevisions publishedRevisions_{};
             std::unique_ptr<EditorWorkspaceController> controller_;
-            mutable std::vector<PCGDocumentSnapshot> leavePCGDocuments_;
-            mutable std::weak_ptr<CollisionProjectSettingsSession> leaveCollisionOwner_;
-            mutable std::shared_ptr<const Application::ProjectCollisionSettings> leaveCollisionRoot_;
+            mutable WorkspaceLeaveCapture leaveCapture_;
             std::unique_ptr<EditorSnackbarHost> snackbarHost_;
             std::optional<Input::InputBindingProfile> previousInputProfile_;
         };

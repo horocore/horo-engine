@@ -75,10 +75,11 @@ namespace Horo::Editor {
                     auto entries = files_->Inventory(root, Platform::ProjectInventoryDepth::Recursive, context, limits);
                     if (entries.HasError())
                         return Result<Assets::AssetRegistrySourceManifest>::Failure(entries.ErrorValue());
+                    auto inventory = std::move(entries).Value();
                     Assets::AssetRegistrySourceManifest result{std::move(root), {}, context.deadline};
-                    result.entries.reserve(entries.Value().entries.size());
-                    for (auto &entry : entries.Value().entries)
-                        result.entries.push_back({std::move(entry.path), AssetKind(entry.kind)});
+                    result.entries.reserve(inventory.entries.size());
+                    for (auto &entry : inventory.entries)
+                        result.entries.emplace_back(std::move(entry.path), AssetKind(entry.kind));
                     return Result<Assets::AssetRegistrySourceManifest>::Success(std::move(result));
                 } catch (const std::bad_alloc &) {
                     return Result<Assets::AssetRegistrySourceManifest>::Failure(MakeError(Platform::ProjectReadErrors::Capacity));
@@ -122,10 +123,10 @@ namespace Horo::Editor {
         const std::filesystem::path &root, std::string identity, const std::uint64_t generation,
         const AssetRegistryInventoryPolicy &policy) {
         using Return = Result<std::shared_ptr<const Assets::IAssetRegistrySource>>;
-        const AssetRegistryInventoryPolicy hard;
-        if (policy.maximumEntries == 0 || policy.maximumEntries > hard.maximumEntries || policy.maximumManifestBytes == 0 ||
-            policy.maximumManifestBytes > hard.maximumManifestBytes || policy.maximumDuration.count() <= 0 ||
-            policy.maximumDuration > hard.maximumDuration)
+        if (const AssetRegistryInventoryPolicy hard; policy.maximumEntries == 0 || policy.maximumEntries > hard.maximumEntries ||
+                                                     policy.maximumManifestBytes == 0 ||
+                                                     policy.maximumManifestBytes > hard.maximumManifestBytes ||
+                                                     policy.maximumDuration.count() <= 0 || policy.maximumDuration > hard.maximumDuration)
             return Return::Failure(MakeError(Platform::ProjectReadErrors::Invalid));
         try {
             auto files = Platform::CreateNativeProjectReadFiles(root, identity, generation);

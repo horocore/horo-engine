@@ -82,9 +82,9 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshCollisionActivation() {
         if (!m_collisionActivation)
             return;
-        const bool running =
-            m_playSession.State() != EditorPlaySessionState::Idle && m_playSession.State() != EditorPlaySessionState::Failed;
-        if (m_collisionActivation->playRunning != running) {
+        if (const bool running =
+                m_playSession.State() != EditorPlaySessionState::Idle && m_playSession.State() != EditorPlaySessionState::Failed;
+            m_collisionActivation->playRunning != running) {
             if (m_collisionActivation->revision == std::numeric_limits<std::uint64_t>::max()) {
                 m_collisionActivation->state = CollisionActivationState::Unknown;
                 m_collisionActivation->documentRevision = 0;

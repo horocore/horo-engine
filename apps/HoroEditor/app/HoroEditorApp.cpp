@@ -427,6 +427,7 @@ namespace Horo::Editor {
             }
         }
 
+#if defined(HORO_HAS_OPENTELEMETRY)
         [[nodiscard]] std::optional<std::string> ReadEnvironmentVariable(const char *name) {
 #if defined(_MSC_VER)
             char *value = nullptr;
@@ -439,6 +440,15 @@ namespace Horo::Editor {
                 return std::string{value};
             return std::nullopt;
 #endif
+        }
+#endif
+
+        /** @brief Captures explicit host Physics ownership without claiming activation of an unknown world. */
+        [[nodiscard]] CollisionActivationEvidence CaptureCollisionActivation(const Physics::PhysicsRuntimeMode mode) {
+            CollisionActivationEvidence evidence{.revision = 1};
+            if (mode == Physics::PhysicsRuntimeMode::Null)
+                evidence.state = CollisionActivationState::NoPhysics;
+            return evidence;
         }
 
         [[nodiscard]] std::string CurrentSystemErrorMessage() {
@@ -1606,10 +1616,7 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.runtime", "Scene Physics participant registration failed: %s", added.ErrorValue().message.c_str());
                 return std::nullopt;
             }
-            // Null is explicit; canonical activation needs an exact owner receipt.
-            CollisionActivationEvidence collisionActivation{.revision = 1};
-            if (physicsRuntime.Value()->Mode() == Physics::PhysicsRuntimeMode::Null)
-                collisionActivation.state = CollisionActivationState::NoPhysics;
+            auto collisionActivation = CaptureCollisionActivation(physicsRuntime.Value()->Mode());
             ScreenRegistry screenRegistry;
             RegisterWelcomeScreen(screenRegistry);
             RegisterProjectCreationScreen(screenRegistry);
@@ -1654,6 +1661,22 @@ namespace Horo::Editor {
                                                               .extensionMarketplace =
                                                                   extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
                                                               .nativeDialogs = &nativeDialogs,
+                                                              .extensionSettingsFiles = &durableFiles,
+                                                              .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
+                                                              .extensionPagePolicy =
+                                                                  {.revision = 1,
+                                                                   .knownPermissions = {{"editor.settings"},
+                                                                                        {"editor.modal"},
+                                                                                        {"configuration.user.write"},
+                                                                                        {"configuration.project.write"},
+                                                                                        {"configuration.workspace.write"}},
+                                                                   .approvedPermissions = {{"editor.settings"},
+                                                                                           {"editor.modal"},
+                                                                                           {"configuration.user.write"},
+                                                                                           {"configuration.project.write"},
+                                                                                           {"configuration.workspace.write"}},
+                                                                   .availableCapabilities = {{"horo.editor.settings"},
+                                                                                             {"horo.editor.modal"}}},
                                                               .gameplayRetirements = gameplayRetirements}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};

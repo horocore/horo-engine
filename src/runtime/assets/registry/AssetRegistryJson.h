@@ -25,8 +25,10 @@ namespace Horo::Assets::Detail {
     inline std::size_t RegistryJsonScratchDepth(const std::string_view contents) {
         if (contents.size() == std::numeric_limits<std::size_t>::max())
             throw std::length_error("Registry JSON nesting storage exceeds addressable capacity.");
-        std::size_t depth{}, maximum{};
-        bool quoted{}, escaped{};
+        std::size_t depth{};
+        std::size_t maximum{};
+        bool quoted{};
+        bool escaped{};
         for (const char character : contents) {
             if (quoted) {
                 if (escaped)
@@ -115,8 +117,7 @@ namespace Horo::Assets::Detail {
 
         /** @brief Releases the completed array frame. */
         bool end_array() override {
-            frames_.pop_back();
-            return true;
+            return end_object();
         }
 
         /** @brief Preserves the canonical parser diagnostic before reporting malformed input. */
@@ -141,6 +142,15 @@ namespace Horo::Assets::Detail {
         std::string error_;
     };
 
+    /** @brief Releases admitted pointer storage without constructing checked-STL container proxies. */
+    struct RegistryJsonScratchRelease final {
+        std::size_t capacity;
+
+        void operator()(nlohmann::json **nodes) const noexcept {
+            std::allocator<nlohmann::json *>{}.deallocate(nodes, capacity);
+        }
+    };
+
     /** @brief Owns a completed DOM and preadmitted iterative cleanup scratch through every return and unwind.
      *  Scratch is allocated before parsing; node removal sees only already emptied children. No recursion,
      *  new scratch allocation, parser substitution or authored nesting restriction is introduced by cleanup.
@@ -157,11 +167,14 @@ namespace Horo::Assets::Detail {
          *  @throws std::length_error When scratch capacity cannot be represented.
          */
         explicit RegistryJson(const std::string_view contents)
-            : capacity_(RegistryJsonScratchDepth(contents)), ancestors_(std::make_unique<Json *[]>(capacity_)) {}
+            : capacity_(RegistryJsonScratchDepth(contents)),
+              ancestors_(std::allocator<Json *>{}.allocate(capacity_), RegistryJsonScratchRelease{capacity_}) {
+            std::uninitialized_value_construct_n(ancestors_.get(), capacity_);
+        }
 
         /** @brief Transfers both the DOM and its preadmitted cleanup storage without allocating. */
         RegistryJson(RegistryJson &&other) noexcept
-            : capacity_(std::exchange(other.capacity_, 0)), ancestors_(std::move(other.ancestors_)), value(std::move(other.value)) {}
+            : capacity_(std::exchange(other.capacity_, 0)), ancestors_(std::move(other.ancestors_)), value_(std::move(other.value_)) {}
 
         RegistryJson(const RegistryJson &) = delete;
         RegistryJson &operator=(const RegistryJson &) = delete;
@@ -169,21 +182,19 @@ namespace Horo::Assets::Detail {
 
         /** @brief Empties deepest children before upstream flattening destructors can allocate. */
         ~RegistryJson() noexcept {
-            Json *current = &value;
+            Json *current = &value_;
             std::size_t depth{};
             for (;;) {
-                auto *object = current->get_ptr<Json::object_t *>();
-                auto *array = current->get_ptr<Json::array_t *>();
-                if ((object && !object->empty()) || (array && !array->empty())) {
+                if (Json *child = StructuredChild(*current)) {
                     HORO_INVARIANT_MSG(depth < capacity_, "Registry JSON exceeds its preadmitted raw nesting envelope.");
-                    ancestors_[depth++] = current;
-                    current = object ? &object->begin()->second : &array->back();
+                    ancestors_.get()[depth++] = current;
+                    current = child;
                     continue;
                 }
                 current->clear();
                 if (depth == 0)
                     return;
-                current = ancestors_[--depth];
+                current = ancestors_.get()[--depth];
                 if (auto *parent = current->get_ptr<Json::object_t *>())
                     parent->erase(parent->begin());
                 else
@@ -191,11 +202,28 @@ namespace Horo::Assets::Detail {
             }
         }
 
-    private:
-        std::size_t capacity_;                /**< Raw nesting envelope; moved-from owners have zero capacity and a null DOM. */
-        std::unique_ptr<Json *[]> ancestors_; /**< Must outlive value; transfer never constructs checked-STL container proxies. */
+        /** @brief Borrows the canonical DOM within the admitted input-depth envelope. @return Mutable owned parser output. */
+        [[nodiscard]] Json &Dom() noexcept {
+            return value_;
+        }
 
-    public:
-        Json value; /**< Canonical parser output; callers must not add deeper structured nodes than input. */
+        /** @brief Borrows the completed canonical DOM without mutation. @return Immutable owned parser output. */
+        [[nodiscard]] const Json &Dom() const noexcept {
+            return value_;
+        }
+
+    private:
+        /** @brief Selects one still-owned child without recursion, allocation or iterator ownership. */
+        [[nodiscard]] static Json *StructuredChild(Json &value) noexcept {
+            if (auto *object = value.get_ptr<Json::object_t *>(); object && !object->empty())
+                return &object->begin()->second;
+            if (auto *array = value.get_ptr<Json::array_t *>(); array && !array->empty())
+                return &array->back();
+            return nullptr;
+        }
+
+        std::size_t capacity_; /**< Raw nesting envelope; moved-from owners have zero capacity and a null DOM. */
+        std::unique_ptr<Json *, RegistryJsonScratchRelease> ancestors_; /**< Admitted storage outlives the completed DOM. */
+        Json value_; /**< Callers must not add deeper structured nodes than the admitted input. */
     };
 }  // namespace Horo::Assets::Detail

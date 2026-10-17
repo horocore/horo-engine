@@ -53,8 +53,9 @@ def test_exact_release_cases_and_every_measured_position(tmp_path, monkeypatch):
 def test_partial_absent_or_unexecuted_sweep_never_qualifies(
         tmp_path, monkeypatch, completed, status, omitted):
     monkeypatch.chdir(tmp_path)
+    path = report(tmp_path, completed, status, omitted)
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_collision_positions(report(tmp_path, completed, status, omitted))
+        QUALIFICATION.verify_collision_positions(path)
 
 
 @pytest.mark.parametrize("phase", QUALIFICATION.SIDECAR_PHASES)

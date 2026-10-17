@@ -15,5 +15,5 @@ namespace Horo::Editor::SettingsModalInternal {
     /** @brief Draws stable-ID profile and query response controls without allocating a per-frame projection. */
     void DrawCollisionProfiles(SettingsCollisionDraft &draft, const EditorGuiContext &ctx);
     /** @brief Draws typed definition selection, metadata, flags, create and reviewed deletion controls. */
-    void DrawCollisionDefinitions(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner, const EditorGuiContext &ctx);
+    void DrawCollisionDefinitions(SettingsCollisionDraft &draft, const CollisionProjectSettingsSession &owner, const EditorGuiContext &ctx);
 }  // namespace Horo::Editor::SettingsModalInternal

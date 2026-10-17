@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <new>
 #include <stdexcept>
 
@@ -51,31 +52,30 @@ namespace Horo::Editor {
         }
 
         /** @brief Lists exact authored collider references and explicitly unavailable extension/prefab owners. */
-        void SceneImpacts(const SceneSource::SceneSourceView scene, const std::string &path,
+        void SceneImpacts(const SceneSource::SceneSourceView &scene, const std::string &path,
                           const Physics::NormalizedCollisionSchema &candidate, const bool retires,
                           const std::optional<SceneSource::TriggerVolumeConversionContext> &trigger, const std::uint64_t savedFingerprint,
                           std::vector<CollisionReferenceImpact> &impacts) {
+            using enum CollisionImpactReason;
             for (const auto &object : scene.objects) {
                 for (const auto &collider : object.components.colliders) {
                     const auto profile = candidate.ResolveProfile(collider.collisionProfile);
-                    Append(impacts, {path, object.id, collider.collisionProfile, false, profile.HasError(),
-                                     CollisionImpactReason::ProfileReference});
+                    Append(impacts, {path, object.id, collider.collisionProfile, false, profile.HasError(), ProfileReference});
                 }
                 if (!object.components.behaviors.empty() || !object.components.gameplayComponents.empty())
-                    Append(impacts, {path, object.id, {}, true, retires, CollisionImpactReason::OpaqueOwner});
+                    Append(impacts, {path, object.id, {}, true, retires, OpaqueOwner});
                 if (object.components.triggerVolume) {
                     const bool exact = trigger && trigger->binding.collisionSchemaFingerprint == savedFingerprint &&
                                        trigger->collisionFilterGeneration != 0 && trigger->materialSourceDigest != Sha256Digest{};
                     if (!exact)
-                        Append(impacts, {path, object.id, {}, true, retires, CollisionImpactReason::TriggerCaptureStale});
+                        Append(impacts, {path, object.id, {}, true, retires, TriggerCaptureStale});
                     else
                         Append(impacts, {path, object.id, trigger->binding.profile, false,
-                                         candidate.ResolveStaticSensorProfile(trigger->binding.profile).HasError(),
-                                         CollisionImpactReason::ProfileReference});
+                                         candidate.ResolveStaticSensorProfile(trigger->binding.profile).HasError(), ProfileReference});
                 }
             }
             if (!scene.prefabInstances.empty())
-                Append(impacts, {path, {}, {}, true, retires, CollisionImpactReason::OpaqueOwner});
+                Append(impacts, {path, {}, {}, true, retires, OpaqueOwner});
         }
     }  // namespace
 
@@ -90,7 +90,7 @@ namespace Horo::Editor {
             review->activation = activation;
             review->inventory = inventory;
             review->candidate = std::move(candidate);
-            const auto snapshot = registry->Snapshot();
+            const auto snapshot = authorities.registry->Snapshot();
             review->registryRevision = snapshot.Revision();
             review->registrySnapshot = snapshot;
             if (snapshot.Records().size() > 4096)
@@ -99,9 +99,9 @@ namespace Horo::Editor {
             if (inventory.status != Assets::AssetRegistryBuildStatus::Complete || inventory.revision.value == 0 ||
                 inventory.revision != snapshot.Revision())
                 Append(review->impacts, {".", {}, {}, true, retires, CollisionImpactReason::InventoryIncomplete});
-            const bool semanticChange =
-                saved.settings->Schema()->SemanticFingerprint() != review->candidate->Schema()->SemanticFingerprint();
-            if ((activation.state == CollisionActivationState::Unknown && semanticChange) ||
+            if (const bool semanticChange =
+                    saved.settings->Schema()->SemanticFingerprint() != review->candidate->Schema()->SemanticFingerprint();
+                (activation.state == CollisionActivationState::Unknown && semanticChange) ||
                 (activation.state == CollisionActivationState::Active &&
                  activation.fingerprint != review->candidate->Schema()->SemanticFingerprint()) ||
                 (activation.playRunning &&
@@ -115,8 +115,7 @@ namespace Horo::Editor {
                     return Return::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Stale)));
                 review->activeScene = std::move(scene).Value();
             }
-            const auto captured = CaptureSources(snapshot, retires, *review);
-            if (captured.HasError())
+            if (const auto captured = CaptureSources(snapshot, retires, *review); captured.HasError())
                 return Return::Failure(captured.ErrorValue());
             review->allowed = std::ranges::none_of(review->impacts, &CollisionReferenceImpact::blocksPublication);
             if (const auto fresh = Fresh(*review); fresh.HasError())
@@ -136,7 +135,7 @@ namespace Horo::Editor {
         auto metadata = Assets::CaptureAssetSource(root, metadataPath, 1024 * 1024);
         if (metadata.HasError())
             return Result<void>::Failure(metadata.ErrorValue());
-        review.sources.push_back({metadataPath, metadata.Value().identity});
+        review.sources.emplace_back(metadataPath, metadata.Value().identity);
         if (!metadata.Value().identity.exists)
             Append(review.impacts, {record.metadataPath.String(), {}, {}, true, retires, CollisionImpactReason::InventoryIncomplete});
         if (NoCollisionReferences(record.type.Value()))
@@ -151,13 +150,17 @@ namespace Horo::Editor {
             return Result<void>::Failure(source.ErrorValue());
         if (!source.Value().identity.exists)
             return Result<void>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Stale)));
-        review.sources.push_back({path, source.Value().identity});
+        review.sources.emplace_back(path, source.Value().identity);
         const auto &bytes = source.Value().bytes;
-        auto decoded = SceneSource::DecodeSceneSource({reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+        std::string text(bytes.size(), '\0');
+        std::ranges::transform(bytes, text.begin(), [](const std::byte value) {
+            return std::to_integer<char>(value);
+        });
+        auto decoded = SceneSource::DecodeSceneSource(text);
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
-        for (const auto owner : decoded.Value().unsupportedComponentOwners)
-            Append(review.impacts, {record.sourcePath.String(), owner, {}, true, retires, CollisionImpactReason::OpaqueOwner});
+        for (const auto componentOwner : decoded.Value().unsupportedComponentOwners)
+            Append(review.impacts, {record.sourcePath.String(), componentOwner, {}, true, retires, CollisionImpactReason::OpaqueOwner});
         if (review.activeScene && path == activeScenePath) {
             SceneImpacts({review.activeScene->objects, review.activeScene->prefabInstances}, record.sourcePath.String(),
                          *review.candidate->Schema(), retires, triggerBinding, saved.settings->Schema()->SemanticFingerprint(),
@@ -176,7 +179,7 @@ namespace Horo::Editor {
         auto index = Assets::CaptureAssetSource(root, indexPath, 16 * 1024 * 1024);
         if (index.HasError())
             return Result<void>::Failure(index.ErrorValue());
-        review.sources.push_back({indexPath, index.Value().identity});
+        review.sources.emplace_back(indexPath, index.Value().identity);
         if (!index.Value().identity.exists)
             Append(review.impacts,
                    {std::string{ProjectLayout::AssetIndexPath}, {}, {}, true, retires, CollisionImpactReason::InventoryIncomplete});

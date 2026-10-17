@@ -54,8 +54,8 @@ namespace Horo::Editor {
                               expected->settings->Input().revision == UINT64_MAX)) ||
                 candidate.Input().revision != (expected ? expected->settings->Input().revision + 1 : 1))
                 return Return::Failure(MakeError(Invalid, "Project identity and consecutive revision must match the accepted source."));
-            auto projectLease = mutations_.TryAcquire({root_, ProjectMutationOwner::Save, "collision.settings"});
-            if (projectLease.HasError())
+            if (auto projectLease = mutations_.TryAcquire({root_, ProjectMutationOwner::Save, "collision.settings"});
+                projectLease.HasError())
                 return Return::Failure(projectLease.ErrorValue());
             if (auto validated = ValidateReviewedSources(root_, source_, reviewed); validated.HasError())
                 return Return::Failure(validated.ErrorValue());

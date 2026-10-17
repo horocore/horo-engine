@@ -19,17 +19,22 @@ namespace Horo::Tests::CollisionSettings {
 
             /** @copydoc Assets::IAssetRegistrySource::ReadSidecar */
             Result<std::string> ReadSidecar(std::string_view, std::chrono::steady_clock::time_point) const override {
-                ++reads;
+                ++reads_;
                 return Result<std::string>::Failure(MakeError(Assets::AssetRegistrySourceErrors::Deadline));
             }
 
-            mutable unsigned reads{}; /**< Tests require malformed input to be rejected before any metadata access. */
+            /** @brief Reports whether a rejected manifest reached metadata access. @return Number of sidecar reads. */
+            [[nodiscard]] unsigned ReadCount() const noexcept {
+                return reads_;
+            }
+
         private:
             Assets::AssetRegistrySourceManifest manifest_;
+            mutable unsigned reads_{};
         };
 
         /** @brief Compares canonical candidate identity, ordering, status and all typed diagnostics. */
-        void RequireParity(Project &project, const Assets::IAssetRegistrySource &source) {
+        void RequireParity(const Project &project, const Assets::IAssetRegistrySource &source) {
             auto legacy = Assets::PrepareAssetRegistryCandidate(project.root);
             auto native = Assets::PrepareAssetRegistryCandidate(source);
             REQUIRE(legacy.HasValue());
@@ -55,7 +60,8 @@ namespace Horo::Tests::CollisionSettings {
         }
 
         /** @brief Captures a small explicit inventory policy while retaining the real native root owner. */
-        std::shared_ptr<const Assets::IAssetRegistrySource> WithPolicy(Project &project, Editor::AssetRegistryInventoryPolicy policy) {
+        std::shared_ptr<const Assets::IAssetRegistrySource> WithPolicy(const Project &project,
+                                                                       Editor::AssetRegistryInventoryPolicy policy) {
             auto source = Editor::CreateNativeAssetRegistrySource(project.root, "collision-project", 1, policy);
             REQUIRE(source.HasValue());
             return std::move(source).Value();
@@ -115,30 +121,30 @@ namespace Horo::Tests::CollisionSettings {
         for (const auto path : {"/outside.png", "Assets/../outside.png", "Assets/./outside.png"}) {
             ManifestSource source{{"Assets", {{path, Assets::AssetRegistrySourceKind::Regular}}, deadline}};
             CHECK(Assets::PrepareAssetRegistryCandidate(source).HasError());
-            CHECK(source.reads == 0);
+            CHECK(source.ReadCount() == 0);
         }
         ManifestSource duplicate{
             {"Assets",
              {{"Assets/a.png", Assets::AssetRegistrySourceKind::Regular}, {"Assets/a.png", Assets::AssetRegistrySourceKind::Regular}},
              deadline}};
         CHECK(Assets::PrepareAssetRegistryCandidate(duplicate).HasError());
-        CHECK(duplicate.reads == 0);
+        CHECK(duplicate.ReadCount() == 0);
         ManifestSource invalidKind{{"Assets", {{"Assets/a.png", static_cast<Assets::AssetRegistrySourceKind>(255)}}, deadline}};
         CHECK(Assets::PrepareAssetRegistryCandidate(invalidKind).HasError());
-        CHECK(invalidKind.reads == 0);
+        CHECK(invalidKind.ReadCount() == 0);
         ManifestSource expired{{"Assets", {}, {}}};
         const auto result = Assets::PrepareAssetRegistryCandidate(expired);
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == Assets::AssetRegistrySourceErrors::Deadline.code.Value());
-        CHECK(expired.reads == 0);
+        CHECK(expired.ReadCount() == 0);
     }
 
     TEST_CASE("Native registry source rejects invalid host budgets before admitting a source", "[collision][inventory]") {
         Project project;
-        for (const auto policy : {Editor::AssetRegistryInventoryPolicy{0}, Editor::AssetRegistryInventoryPolicy{(1U << 20U) + 1},
-                                  Editor::AssetRegistryInventoryPolicy{1, 0}, Editor::AssetRegistryInventoryPolicy{1, (64U << 20U) + 1},
-                                  Editor::AssetRegistryInventoryPolicy{1, 1, std::chrono::milliseconds{0}},
-                                  Editor::AssetRegistryInventoryPolicy{1, 1, std::chrono::milliseconds{30001}}}) {
+        for (const auto &policy : {Editor::AssetRegistryInventoryPolicy{0}, Editor::AssetRegistryInventoryPolicy{(1U << 20U) + 1},
+                                   Editor::AssetRegistryInventoryPolicy{1, 0}, Editor::AssetRegistryInventoryPolicy{1, (64U << 20U) + 1},
+                                   Editor::AssetRegistryInventoryPolicy{1, 1, std::chrono::milliseconds{0}},
+                                   Editor::AssetRegistryInventoryPolicy{1, 1, std::chrono::milliseconds{30001}}}) {
             const auto source = Editor::CreateNativeAssetRegistrySource(project.root, "collision-project", 1, policy);
             REQUIRE(source.HasError());
             CHECK(source.ErrorValue().code.Value() == Platform::ProjectReadErrors::Invalid.code.Value());
@@ -155,7 +161,7 @@ namespace Horo::Tests::CollisionSettings {
         // Case-insensitive volumes expose one spelling; distinct roots can only be tested where both exist.
         if (!std::filesystem::equivalent(project.root / "Assets", project.root / "assets"))
             CHECK(project.source->Capture().Value().assetRoot == "Assets");
-        const auto root = project.source->Capture().Value().assetRoot;
+        const std::filesystem::path root{project.source->Capture().Value().assetRoot};
         Write(project.root / root / "missing.png", "source");
         Write(project.root / root / "orphan.png.horo", "{}");
         Write(project.root / root / "bad.png", "source");

@@ -320,7 +320,7 @@
       "text": "Oyun oturumu onaylandı"
     },
     "workspace.global_dock.network.replication": {
-      "text": "Çoğaltma"
+      "text": "176 nesne çoğaltılıyor · RPC kuyruğu: 0"
     },
     "workspace.global_dock.network.rpc": {
       "text": "RPC"
@@ -1840,7 +1840,6 @@
     "workspace.global_dock.network.footer.tick": {"text": "Tick 64 Hz"},
     "workspace.global_dock.network.footer.tracing": {"text": "0 kayıp · izleme kullanılabilir"},
     "workspace.global_dock.network.ping": {"text": "42 ms · Bant genişliği: 12.3 kb/s ↓ · 3.1 kb/s ↑"},
-    "workspace.global_dock.network.replication": {"text": "176 nesne çoğaltılıyor · RPC kuyruğu: 0"},
     "workspace.global_dock.network.connection": {"text": "1 eş · Sunucu yetkili · tik 64 Hz"},
     "workspace.global_dock.localization.locale": {"text": "tr-TR · Geri dönüş: en-US · 3 yüklü"},
     "workspace.global_dock.localization.strings": {"text": "1.247 çevrildi · 0 eksik · 18 belirsiz"},
@@ -2339,6 +2338,18 @@
     "settings.collision.impact.inventory": {"text": "Eksik veya değişmiş proje envanteri: silmeden önce kaynakları yenileyin"},
     "settings.collision.impact.trigger": {"text": "Tetikleyici kopyası yok veya eski: silmeden önce tam derlenmiş bağı sağlayın"},
     "settings.collision.impact.active": {"text": "Etkin nesil veya oynatma oturumu anlamsal değiştirmeyi engelliyor"},
+    "settings.extension_pages.title": {
+      "text": "Uzantı sayfaları"
+    },
+    "settings.extension_pages.apply": {
+      "text": "Uygula"
+    },
+    "settings.extension_pages.reset": {
+      "text": "Taslağı sıfırla"
+    },
+    "settings.extension_pages.cancel": {
+      "text": "Taslağı iptal et"
+    },
     "settings.navigation.open_definition": {
       "text": "Gezinme tanımını aç"
     },

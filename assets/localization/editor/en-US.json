@@ -320,7 +320,7 @@
       "text": "Gameplay session admitted"
     },
     "workspace.global_dock.network.replication": {
-      "text": "Replication"
+      "text": "176 objects replicating · RPC queue: 0"
     },
     "workspace.global_dock.network.rpc": {
       "text": "RPC"
@@ -1840,7 +1840,6 @@
     "workspace.global_dock.network.footer.tick": {"text": "Tick 64 Hz"},
     "workspace.global_dock.network.footer.tracing": {"text": "0 dropped · tracing available"},
     "workspace.global_dock.network.ping": {"text": "42 ms · Bandwidth: 12.3 kb/s ↓ · 3.1 kb/s ↑"},
-    "workspace.global_dock.network.replication": {"text": "176 objects replicating · RPC queue: 0"},
     "workspace.global_dock.network.connection": {"text": "1 peer · Server-authoritative · tick 64 Hz"},
     "workspace.global_dock.localization.locale": {"text": "tr-TR · Fallback: en-US · 3 loaded"},
     "workspace.global_dock.localization.strings": {"text": "1,247 translated · 0 missing · 18 fuzzy"},
@@ -2339,6 +2338,18 @@
     "settings.collision.impact.inventory": {"text": "Incomplete or changed project inventory: refresh sources before deletion"},
     "settings.collision.impact.trigger": {"text": "Trigger capture is unavailable or stale: provide the exact cooked binding before deletion"},
     "settings.collision.impact.active": {"text": "Active generation or Play session blocks semantic replacement"},
+    "settings.extension_pages.title": {
+      "text": "Extension pages"
+    },
+    "settings.extension_pages.apply": {
+      "text": "Apply"
+    },
+    "settings.extension_pages.reset": {
+      "text": "Reset draft"
+    },
+    "settings.extension_pages.cancel": {
+      "text": "Cancel draft"
+    },
     "settings.navigation.open_definition": {
       "text": "Open Navigation Definition"
     },

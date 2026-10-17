@@ -304,3 +304,51 @@ code-image pin and Physics/Character allocation authority remains host-owned.
 Rollback: restore a coherent previous engine, SDK, rebuilt native modules and
 matching descriptor/artifact manifests, then restart play. Never edit fingerprints
 to admit a binary from another layout.
+
+## External C ABI 1.4 → 1.5 settings and modal pages
+
+ABI 1.5 appends `registerEditorPage` to `HoroExtensionHostApi`. It does not
+change any 1.0–1.4 prefix, activity transport, or GameModule SDK21 layout.
+Existing activity modules must continue to request the 1.4 prefix ending at
+`offsetof(HoroExtensionHostApi, registerEditorPage)`, rather than recompiling an
+old initializer with the new full `sizeof`. Rebuild page modules with the
+packaged `EditorPageAbi.h`; query minor5, `HORO_EXTENSION_REQUIRES_EDITOR_PAGE`,
+full host-table size and explicit `editor.page` capability. Load must repeat
+size/version/null checks before dereferencing the new tail. Rollback removes
+page claims/callbacks and uses the unchanged activity profile on an older host;
+it never treats a settings/modal page as an activity or persistent document tab.
+
+A proper explicit1.4 query receives only its original host prefix and no page callback. Page registration additionally requires the validated minor5/page-function/complete-prefix proof at ingress; manifest claims or a composed GUI alone cannot grant transport. The actual C11 legacy-query regression verifies that neither Settings nor Modal claims publish through the old negotiation.
+
+Registration is staging only. The host copies definitions/messages and checks
+manifest ownership, requested/approved permissions and exact capability grants
+before transactional commit. Session `open`/`close` are owner-lane operations;
+opening during module load fails. The host owns draft, focus, cancellation,
+validation and active settings. Callback payloads and cancellation views are
+borrowed for that call only. Native callbacks run on attributed jobs with code
+and capability leases; revocation closes admission before draining callbacks.
+
+Page schema1 supports bool, exact int64 and bounded single-line UTF-8 strings,
+text/label/action and Stack/Group layout. Medium/Neutral styling and automatic
+focus are the supported presentation profile. Row/Grid, path/choice, decimal,
+color/vector, multiline and confirmation actions fail registration explicitly.
+Integer fields use decimal text end-to-end, including signed endpoints and
+values above2^53; converting them through double is invalid.
+
+Settings pages choose one canonical User/Project/Workspace scope. The real GUI
+composition supplies the existing durable filesystem and explicit selected
+project/configuration roots. Apply validates the whole candidate and provider
+findings, durably writes the canonical snapshot, then performs a noexcept active
+swap. Any uncertain write retains dirty `RecoveryRequired` state and original
+error until explicit reload. Modal fields are Session scoped, validate then
+submit, and never persist. Open/draft/focus/modal stack data is never workspace
+state. Reset/cancel do not write. Parent/child workflows require exact provider
+and active parent identity; the existing modal host owns focus/input exclusivity.
+
+Affected callers include `ExtensionManager`, native activation/retirement,
+`EditorSurfaceRegistry`, `GuiScreenHost`, Settings/Modal host adapters, SDK
+packaging/reconfigure/external C11 consumers and native page fixtures. All host
+C++ consumers rebuild against the new additive controller contract. The GUI
+adapter consumes validated `BuildEditorUiRenderSnapshot` from the actual shared
+design tokens/fonts. A private owner-boundary structural capture generation
+tracks real theme changes; it is neither persisted nor a second theme authority.
