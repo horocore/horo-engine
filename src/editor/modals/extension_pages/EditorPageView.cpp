@@ -12,6 +12,27 @@
 namespace Horo::Editor {
     using namespace Extensions;
 
+    namespace {
+        /** @brief Preserves the admitted node and ancestor restrictions within the validated maximum tree depth. */
+        bool AdmitsEditing(const EditorUiNodeBase &base, const EditorPageProjection &page) {
+            bool admitted = base.enabled && !base.readOnly;
+            auto parent = base.parent;
+            for (std::size_t depth = 0; depth < 16; ++depth) {
+                if (!parent.IsValid())
+                    return admitted;
+                const auto found = std::ranges::find_if(page.form.nodes, [&](const auto &candidate) {
+                    return EditorUiNodeBaseOf(candidate).id == parent;
+                });
+                if (found == page.form.nodes.end())
+                    return false;
+                const auto &ancestor = EditorUiNodeBaseOf(*found);
+                admitted = admitted && ancestor.enabled && !ancestor.readOnly;
+                parent = ancestor.parent;
+            }
+            return admitted;
+        }
+    }  // namespace
+
     /** @copydoc EditorPageView::EditorPageView */
     EditorPageView::EditorPageView(const EditorGuiContext &context, std::shared_ptr<EditorPageHost> host,
                                    std::shared_ptr<const EditorThemeFrame> theme)
@@ -133,22 +154,7 @@ namespace Horo::Editor {
         const auto &base = EditorUiNodeBaseOf(node);
         ImGui::PushID(base.id.value.c_str());
         const bool editable = page.state == EditorPageState::Editing || page.state == EditorPageState::Failed;
-        bool admitted = base.enabled && !base.readOnly;
-        auto parent = base.parent;
-        for (std::size_t depth = 0; depth < 16; ++depth) {
-            if (!parent.IsValid())
-                break;
-            const auto found = std::ranges::find_if(page.form.nodes, [&](const auto &candidate) {
-                return EditorUiNodeBaseOf(candidate).id == parent;
-            });
-            if (found == page.form.nodes.end()) {
-                admitted = false;
-                break;
-            }
-            const auto &ancestor = EditorUiNodeBaseOf(*found);
-            admitted = admitted && ancestor.enabled && !ancestor.readOnly;
-            parent = ancestor.parent;
-        }
+        const bool admitted = AdmitsEditing(base, page);
         ImGui::BeginDisabled(!admitted || !editable);
         if (page.focused == base.id && ImGui::IsWindowAppearing())
             ImGui::SetKeyboardFocusHere();

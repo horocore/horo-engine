@@ -5,6 +5,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
+#include <iterator>
 
 namespace Horo::Editor::Tests {
     namespace {
@@ -24,6 +25,23 @@ namespace Horo::Editor::Tests {
             auto resolved = ConfigurationResolver::Resolve(schema, {}, 1);
             REQUIRE(resolved.HasValue());
             return std::move(resolved).Value();
+        }
+
+        /** @brief Publishes and locates the single real user document before a filesystem rejection probe. */
+        std::filesystem::path CreateUserDocument(EditorPageFileStore &store, const Extensions::EditorSurfaceProviderIdentity &provider,
+                                                 const std::filesystem::path &root) {
+            REQUIRE(store.Write(provider, "page", SettingScope::User, 1, Snapshot()).HasValue());
+            std::filesystem::path path;
+            for (const auto &entry : std::filesystem::directory_iterator(root / "extensions")) {
+                if (entry.path().extension() == ".json") {
+                    REQUIRE(path.empty());
+                    path = entry.path();
+                }
+            }
+            REQUIRE_FALSE(path.empty());
+            REQUIRE(std::filesystem::is_regular_file(path));
+            REQUIRE(store.Read(provider, "page", SettingScope::User).HasValue());
+            return path;
         }
     }  // namespace
 
@@ -60,17 +78,7 @@ namespace Horo::Editor::Tests {
         NativeDurableFileSystem files;
         EditorPageFileStore store{files, directory.Path()};
         const Extensions::EditorSurfaceProviderIdentity provider{"fixture.package", "fixture.module", 1};
-        REQUIRE(store.Write(provider, "page", SettingScope::User, 1, Snapshot()).HasValue());
-        std::filesystem::path path;
-        for (const auto &entry : std::filesystem::directory_iterator(directory.Path() / "extensions")) {
-            if (entry.path().extension() == ".json") {
-                REQUIRE(path.empty());
-                path = entry.path();
-            }
-        }
-        REQUIRE_FALSE(path.empty());
-        REQUIRE(std::filesystem::is_regular_file(path));
-        REQUIRE(store.Read(provider, "page", SettingScope::User).HasValue());
+        const auto path = CreateUserDocument(store, provider, directory.Path());
         SECTION("oversized source remains unchanged") {
             {
                 std::ofstream stream{path, std::ios::binary | std::ios::trunc};
@@ -89,5 +97,39 @@ namespace Horo::Editor::Tests {
             CHECK(store.Write(provider, "page", SettingScope::User, 1, Snapshot()).HasError());
             CHECK(std::filesystem::hard_link_count(path) == 2);
         }
+    }
+
+    TEST_CASE("Page directory substitution preserves the original document bytes and directory contents", "[editor][EditorPage][Files]") {
+        Horo::Tests::OwnedTestDirectory directory{"page-directory-substitution"};
+        NativeDurableFileSystem files;
+        EditorPageFileStore store{files, directory.Path()};
+        const Extensions::EditorSurfaceProviderIdentity provider{"fixture.package", "fixture.module", 1};
+        const auto path = CreateUserDocument(store, provider, directory.Path());
+        std::ifstream source{path, std::ios::binary};
+        REQUIRE(source.is_open());
+        const std::string before{std::istreambuf_iterator<char>{source}, {}};
+        source.close();
+        REQUIRE_FALSE(before.empty());
+        const auto original = directory.Path() / "original.json";
+        std::filesystem::rename(path, original);
+        REQUIRE(std::filesystem::create_directory(path));
+        const auto sentinel = path / "retain.txt";
+        {
+            std::ofstream stream{sentinel};
+            stream << "retained directory";
+            stream.close();
+            REQUIRE(stream.good());
+        }
+        CHECK(store.Read(provider, "page", SettingScope::User).HasError());
+        CHECK(store.Write(provider, "page", SettingScope::User, 1, Snapshot()).HasError());
+        std::ifstream afterInput{original, std::ios::binary};
+        REQUIRE(afterInput.is_open());
+        const std::string after{std::istreambuf_iterator<char>{afterInput}, {}};
+        CHECK(after == before);
+        CHECK(std::filesystem::is_directory(path));
+        std::ifstream stream{sentinel};
+        std::string retained;
+        std::getline(stream, retained);
+        CHECK(retained == "retained directory");
     }
 }  // namespace Horo::Editor::Tests

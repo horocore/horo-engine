@@ -23,12 +23,10 @@ namespace Horo::Editor {
                     return Result<bool>::Failure(MakeError(PlatformErrors::ConfigurationReadFailed,
                                                            "Extension configuration contains an unreadable or redirected path."));
             }
-            const bool regular = std::filesystem::is_regular_file(path, error);
-            if (!regular || error)
+            if (const bool regular = std::filesystem::is_regular_file(path, error); !regular || error)
                 return Result<bool>::Failure(
                     MakeError(PlatformErrors::ConfigurationReadFailed, "Extension configuration must be one private regular file."));
-            const auto links = std::filesystem::hard_link_count(path, error);
-            if (links != 1 || error)
+            if (const auto links = std::filesystem::hard_link_count(path, error); links != 1 || error)
                 return Result<bool>::Failure(
                     MakeError(PlatformErrors::ConfigurationReadFailed, "Extension configuration must be one private regular file."));
             return Result<bool>::Success(true);

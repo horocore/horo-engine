@@ -51,13 +51,14 @@ namespace Horo::Extensions::Detail {
 
         /** @brief Maps the already validated ABI value kind to its canonical setting type. */
         SettingValueType ValueType(uint32_t kind) {
+            using enum SettingValueType;
             switch (kind) {
                 case HORO_EDITOR_PAGE_BOOLEAN:
-                    return SettingValueType::Boolean;
+                    return Boolean;
                 case HORO_EDITOR_PAGE_INTEGER:
-                    return SettingValueType::Integer;
+                    return Integer;
                 default:
-                    return SettingValueType::String;
+                    return String;
             }
         }
 

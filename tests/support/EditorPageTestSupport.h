@@ -132,7 +132,7 @@ namespace Horo::Extensions::Tests::PageSupport {
         EditorSurfaceProviderIdentity provider{"fixture.package", "fixture.module", 1};
         const std::string id = "fixture.page";
 
-        explicit Fixture(bool modal = false) {
+        explicit Fixture(bool modal = false, std::optional<EditorPageDefinition> suppliedDefinition = std::nullopt) {
             const auto capability = modal ? EditorModalPageCapability : EditorSettingsPageCapability;
             const std::vector<ExtensionPermissionId> permissions =
                 modal ? std::vector<ExtensionPermissionId>{{"editor.modal"}}
@@ -156,6 +156,7 @@ namespace Horo::Extensions::Tests::PageSupport {
                                     .requiredCapabilities = {capability},
                                     .requiredPermissions = permissions,
                                     .provider = provider},
+                        .commands = {{"fixture.action"}},
                         .state = {{"page.count"}},
                         .localization = {{"fixture.title"}, {"fixture.count"}, {"fixture.invalid"}},
                         .diagnostics = {{"fixture.validation"}}};
@@ -163,7 +164,7 @@ namespace Horo::Extensions::Tests::PageSupport {
             if (attached.HasError())
                 UNSCOPED_INFO(attached.ErrorValue().message);
             REQUIRE(attached.HasValue());
-            auto definition = Definition(modal, id);
+            auto definition = suppliedDefinition ? std::move(*suppliedDefinition) : Definition(modal, id);
             REQUIRE(retirement->BindModuleCode("fixture.module", codeOwner));
             auto registered = host.Register(std::move(attached).Value(), std::move(definition), operations, retirement);
             if (registered.HasError())

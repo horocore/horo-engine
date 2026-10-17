@@ -45,7 +45,9 @@ namespace Horo::Extensions::Tests {
         fixture.Begin();
         fixture.Set(99);
         fixture.store.failWrite = true;
-        SECTION("failure before replacement") {}
+        SECTION("failure before replacement") {
+            fixture.store.replaceThenFail = false;
+        }
         SECTION("replacement committed before durability failure") {
             fixture.store.replaceThenFail = true;
         }

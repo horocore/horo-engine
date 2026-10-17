@@ -16,6 +16,8 @@ set(HORO_CI_AUDIO_TARGETS
 # The full Windows suite remains disabled. Preserve all existing focused checks
 # in one headless Debug build, including their public-header compile consumers.
 set(HORO_CI_WINDOWS_TARGETS
+    HoroNavigationProjectSettingsTests
+    HoroNavigationProjectSettingsPublicConsumer
     HoroPhysicsTests
     HoroPrefabSceneCookHostTests
     HoroPhysicsTriggerVolumeHostContractConsumer
@@ -229,6 +231,8 @@ set(HORO_CI_WINDOWS_TARGETS
 )
 
 set(HORO_CI_NAVIGATION_TARGETS
+    HoroNavigationProjectSettingsTests
+    HoroNavigationProjectSettingsPublicConsumer
     HoroGameplayNavigationIntegrationPublicHeaderConsumer
     HoroGameplayApiPublicHeaderConsumer
     HoroGameplayRuntimePublicHeaderConsumer
@@ -259,6 +263,8 @@ set(HORO_CI_NETWORK_TARGETS
 
 # These editor-labelled suites were explicitly run by the coverage workflow.
 set(HORO_SONAR_EDITOR_TARGETS
+    HoroNavigationProjectSettingsTests
+    HoroNavigationProjectSettingsPublicConsumer
     HoroPackageApplicationTests
     HoroFractureDocumentTests
     HoroTerrainAuthoringTests

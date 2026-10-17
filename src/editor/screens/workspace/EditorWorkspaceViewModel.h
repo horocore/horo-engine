@@ -277,7 +277,16 @@ namespace Horo::Editor {
         std::string absoluteSourcePath;
     };
 
+    struct NavigationDefinitionEditorState;
+
+    struct NavigationDefinitionEditorTab final {
+        DocumentIdentity identity;
+        Assets::AssetId asset;
+        std::shared_ptr<NavigationDefinitionEditorState> editor;
+    };
+
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
+        std::vector<NavigationDefinitionEditorTab> navigationDocuments;
         std::string projectRoot;
         Assets::AssetRegistryRevision assetRegistryRevision{};
         ContentBrowserDirectory contentBrowser;

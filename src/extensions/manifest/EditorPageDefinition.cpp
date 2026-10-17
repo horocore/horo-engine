@@ -176,9 +176,9 @@ namespace Horo::Extensions {
         /** @brief Preserves signed integer constraints and the original rejection of choices on numeric values. */
         bool IntegerValueValid(const EditorPageField &field, const SettingValue &value) {
             if (const auto *number = std::get_if<std::int64_t>(&value))
-                return (!field.minimum || *number >= *field.minimum) && (!field.maximum || *number <= *field.maximum) &&
-                       field.choices.empty();
-            return !field.minimum && !field.maximum;
+                return (!field.minimum.has_value() || *number >= *field.minimum) &&
+                       (!field.maximum.has_value() || *number <= *field.maximum) && field.choices.empty();
+            return !field.minimum.has_value() && !field.maximum.has_value();
         }
 
         /** @brief Validates string bounds and choice membership with the same exact UTF-8 representation. */

@@ -1,6 +1,7 @@
 #include "Horo/Extensions/EditorPageDefinition.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <format>
 #include <limits>
 #include <type_traits>
 
@@ -37,11 +38,11 @@ namespace Horo::Extensions::Tests {
             definition.form.title = {EditorUiTextKind::LocalizationKey, "fixture.title"};
             definition.fields.push_back(IntegerField());
             definition.messages = {{"en-US", "fixture.title", "Settings"}, {"en-US", "fixture.count", "Count"}};
-            definition.form.nodes.push_back(
-                {EditorUiNumberNode{.base = {.id = {"fixture.number"}, .label = {EditorUiTextKind::LocalizationKey, "fixture.count"}},
-                                    .binding = {"page.count"},
-                                    .numberKind = EditorUiNumberKind::Integer,
-                                    .value = std::int64_t{0}}});
+            definition.form.nodes.emplace_back(
+                EditorUiNumberNode{.base = {.id = {"fixture.number"}, .label = {EditorUiTextKind::LocalizationKey, "fixture.count"}},
+                                   .binding = {"page.count"},
+                                   .numberKind = EditorUiNumberKind::Integer,
+                                   .value = std::int64_t{0}});
             return definition;
         }
     }  // namespace
@@ -72,6 +73,25 @@ namespace Horo::Extensions::Tests {
         CHECK(ValidateEditorPageValue(field, true).HasError());
     }
 
+    TEST_CASE("Zero-valued page bounds remain present and reject numeric fields on other setting types",
+              "[Extensions][EditorPage][Validation]") {
+        auto field = IntegerField();
+        field.minimum = 0;
+        CHECK(ValidateEditorPageValue(field, std::int64_t{0}).HasValue());
+        CHECK(ValidateEditorPageValue(field, std::int64_t{-1}).HasError());
+        field.minimum.reset();
+        field.maximum = 0;
+        CHECK(ValidateEditorPageValue(field, std::int64_t{0}).HasValue());
+        CHECK(ValidateEditorPageValue(field, std::int64_t{1}).HasError());
+        field.setting.type = SettingValueType::Boolean;
+        field.setting.defaultValue = false;
+        CHECK(ValidateEditorPageValue(field, false).HasError());
+        field.maximum.reset();
+        CHECK(ValidateEditorPageValue(field, false).HasValue());
+        field.minimum = 0;
+        CHECK(ValidateEditorPageValue(field, false).HasError());
+    }
+
     TEST_CASE("Extension settings definition binds exactly one canonical field to its shared form primitive",
               "[Extensions][EditorPage][Definition]") {
         auto surface = SettingsSurface();
@@ -90,16 +110,16 @@ namespace Horo::Extensions::Tests {
             surface.persistence = EditorSurfacePersistence::Workspace;
         }
         SECTION("unsupported row layout") {
-            definition.form.nodes.push_back({EditorUiContainerNode{.base = {.id = {"row"}}, .layout = EditorUiLayoutKind::Row}});
+            definition.form.nodes.emplace_back(EditorUiContainerNode{.base = {.id = {"row"}}, .layout = EditorUiLayoutKind::Row});
         }
         SECTION("unsupported grid layout") {
-            definition.form.nodes.push_back({EditorUiContainerNode{.base = {.id = {"grid"}}, .layout = EditorUiLayoutKind::Grid}});
+            definition.form.nodes.emplace_back(EditorUiContainerNode{.base = {.id = {"grid"}}, .layout = EditorUiLayoutKind::Grid});
         }
         SECTION("unsupported path") {
-            definition.form.nodes.push_back({EditorUiPathNode{.base = {.id = {"path"}}, .binding = {"page.path"}}});
+            definition.form.nodes.emplace_back(EditorUiPathNode{.base = {.id = {"path"}}, .binding = {"page.path"}});
         }
         SECTION("unsupported choice") {
-            definition.form.nodes.push_back({EditorUiChoiceNode{.base = {.id = {"choice"}}, .binding = {"page.choice"}}});
+            definition.form.nodes.emplace_back(EditorUiChoiceNode{.base = {.id = {"choice"}}, .binding = {"page.choice"}});
         }
         SECTION("unsupported interaction profile") {
             std::get<EditorUiNumberNode>(definition.form.nodes.front().payload).base.focusPolicy = EditorUiFocusPolicy::Never;
@@ -135,7 +155,7 @@ namespace Horo::Extensions::Tests {
         }
         SECTION("message count exceeds bounded catalog") {
             for (unsigned i = 0; i < 127; ++i)
-                definition.messages.push_back({"en-US", "extra." + std::to_string(i), "Extra"});
+                definition.messages.emplace_back("en-US", std::format("extra.{}", i), "Extra");
         }
         SECTION("unresolved node description") {
             std::get<EditorUiNumberNode>(definition.form.nodes.front().payload).base.description = {EditorUiTextKind::LocalizationKey,
@@ -148,7 +168,7 @@ namespace Horo::Extensions::Tests {
               "[Extensions][EditorPage][Definition]") {
         const auto surface = SettingsSurface();
         auto definition = Definition(surface);
-        definition.messages.push_back({"tr-TR", "fixture.title", "Ayarlar"});
+        definition.messages.emplace_back("tr-TR", "fixture.title", "Ayarlar");
         definition.form.description = {EditorUiTextKind::TechnicalText, "Self-contained diagnostic"};
         std::get<EditorUiNumberNode>(definition.form.nodes.front().payload).base.description = {EditorUiTextKind::TechnicalText,
                                                                                                 "Signed 64-bit value"};
@@ -177,7 +197,7 @@ namespace Horo::Extensions::Tests {
         CHECK(ValidateEditorPageValue(field, std::string{"\xC0\xAF", 2}).HasError());
         CHECK(ValidateEditorPageValue(field, std::string{"ç"}).HasValue());
         field.choices = {"one", "two"};
-        field.choices.push_back("one");
+        field.choices.emplace_back("one");
         CHECK(ValidateEditorPageValue(field, std::string{"one"}).HasError());
     }
 }  // namespace Horo::Extensions::Tests

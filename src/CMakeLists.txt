@@ -422,10 +422,14 @@ target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application
         PRIVATE HoroEngine::ProjectSettings HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
 
-add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp)
+add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp
+        application/project/NavigationProjectSettingsStore.cpp
+        application/project/NavigationProjectSettings.cpp
+        application/project/NavigationProjectSettingsCodec.cpp)
 add_library(HoroEngine::ProjectSettings ALIAS HoroProjectSettings)
 target_compile_features(HoroProjectSettings PUBLIC cxx_std_20)
-target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi)
+target_link_libraries(HoroProjectSettings PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi HoroEngine::NavigationApi HoroEngine::Assets)
 
 add_library(HoroSaveApi STATIC
         runtime/save/SaveErrors.cpp
@@ -1793,6 +1797,7 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationLinkBoundaryAnchors.cpp
         runtime/navigation/api/NavigationOutcomes.cpp
         runtime/navigation/api/NavigationProjectProfiles.cpp
+        runtime/navigation/api/NavigationSettingsErrors.cpp
         runtime/navigation/api/NavigationSourceGeometry.cpp
         runtime/navigation/api/NavigationTileDependencies.cpp
         runtime/navigation/api/NavigationTileArtifact.cpp
@@ -2656,6 +2661,10 @@ add_library(HoroEditorModel STATIC
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentTransaction.cpp
+        editor/document/SceneDocumentTransactionErrors.cpp
+        editor/navigation/NavigationDefinitionDocument.cpp
+        editor/navigation/NavigationSettingsWorkflow.cpp
+        editor/navigation/NavigationSettingsWorkflowHistory.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
         editor/document/SceneDocumentHistoryCommands.cpp
@@ -2678,6 +2687,8 @@ target_link_libraries(HoroEditorModel
         PUBLIC
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSourceModel
+        HoroEngine::NavigationApi
+        HoroEngine::Assets
         HoroEngine::Foundation
         HoroEngine::AI
         HoroEngine::Prefab
@@ -2814,6 +2825,7 @@ add_library(HoroEditorServices STATIC
         editor/project_model/RendererAvailability.cpp
         editor/settings/EditorConfiguration.cpp
         editor/settings/EditorSettingsService.cpp
+        editor/navigation/NavigationProjectSettingsSession.cpp
         editor/settings/EditorSettingsStore.cpp
         editor/settings/EditorSettingsStoreSerialization.cpp
         editor/localization/LocalizationService.cpp
@@ -2837,6 +2849,7 @@ target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices
@@ -2967,6 +2980,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalFooter.cpp
             editor/modals/settings/SettingsModalLifecycle.cpp
             editor/modals/settings/SettingsModalNavigation.cpp
+            editor/modals/settings/SettingsModalNavigationProject.cpp
+            editor/modals/settings/SettingsModalNavigationPolicy.cpp
             editor/modals/settings/SettingsModalUpdates.cpp
             editor/modals/settings/SettingsModalPluginDetails.cpp
             editor/modals/settings/SettingsModalPluginList.cpp
@@ -3025,6 +3040,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/performance/GlobalDockPerformancePane.cpp
             editor/screens/workspace/panels/global_dock/panes/physics/GlobalDockPhysicsPane.cpp
             editor/screens/workspace/EditorWorkspaceController.cpp
+        editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
             editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp

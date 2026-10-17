@@ -1,4 +1,5 @@
 #include "Horo/Prefab/PrefabValueOverrides.h"
+#include "JsonUtils.h"
 #include "SceneSourceInternal.h"
 
 #include <stdexcept>
@@ -6,6 +7,30 @@
 #include <utility>
 
 namespace Horo::SceneSource::Detail {
+    namespace {
+        /** @brief Empties the depth-admitted DOM before flattening destruction; checked-iterator proxy allocations remain STL-specific. */
+        void ClearSceneJson(Json &value) noexcept {
+            if (value.is_structured())
+                for (auto &child : value)
+                    ClearSceneJson(child);
+            value.clear();
+        }
+
+        /** @brief Owns only the completed, at-most-64-level parse tree; partial parser state remains upstream-owned. */
+        struct BoundedSceneJson final {
+            Json value;
+            BoundedSceneJson() = default;
+            BoundedSceneJson(const BoundedSceneJson &) = delete;
+            BoundedSceneJson &operator=(const BoundedSceneJson &) = delete;
+            BoundedSceneJson(BoundedSceneJson &&) = delete;
+            BoundedSceneJson &operator=(BoundedSceneJson &&) = delete;
+
+            ~BoundedSceneJson() {
+                ClearSceneJson(value);
+            }
+        };
+    }  // namespace
+
     [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot) {
         WireJson objects = WireJson::array();
         for (const SceneObjectSnapshot &object : snapshot.objects) {
@@ -172,7 +197,14 @@ namespace Horo::SceneSource::Detail {
 
     [[nodiscard]] Result<ParsedScene> ParseScene(const std::string_view contents) {
         try {
-            const Json document = Json::parse(contents);
+            Foundation::JsonParseGuard guard{64};
+            BoundedSceneJson parsed;
+            parsed.value = Json::parse(contents, [&guard](const int depth, const Json::parse_event_t event, const Json &value) {
+                return guard(depth, event, value);
+            });
+            if (guard.IsTooDeep() || guard.HasDuplicate())
+                return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Scene JSON nesting or duplicate keys are invalid."));
+            const Json &document = parsed.value;
             if (!document.is_object() || !document.contains("schemaVersion") || document["schemaVersion"] != kSceneSchemaVersion ||
                 !document.contains("objects") || !document["objects"].is_array() || document["objects"].size() > kMaximumSceneObjects ||
                 (document.contains("prefabInstances") &&

@@ -56,6 +56,7 @@ namespace Horo::Editor {
     class ProjectCreationService;
     class RendererAvailabilitySnapshot;
     class EditorStatusBar;
+    class SettingsModal;
     class EditorPageFileStore;
     class EditorPageThemeCapture;
 
@@ -218,8 +219,13 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorStatusItemRegistry &StatusItems() const noexcept;
 
     private:
-        /** @brief Opens the built-in settings workflow with the actual composed page authority and captured shared theme. */
-        void OpenSettingsModal();
+        /** @brief Creates settings with the active navigation borrow and explicitly composed extension page authority.
+         * @pre The composed settings service is available.
+         * @return An owned modal with admission diagnostics retained for presentation.
+         */
+        [[nodiscard]] std::unique_ptr<SettingsModal> CreateSettingsModal();
+        /** @brief Opens settings with both navigation and extension authorities. */
+        void OpenEditorSettingsModal();
         /** @brief Registers the already-initialized host and borrowed application services without activating native packages. */
         void RegisterApplicationServices(const GuiScreenHostComposition &composition);
         /** @brief Creates and activates extension/importer owners in their existing rollback and destruction order. */

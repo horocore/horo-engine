@@ -1,4 +1,5 @@
 #pragma once
+/** @file SettingsModal.h @brief Host-owned settings workflow with explicitly composed page presentation. */
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
@@ -20,6 +21,12 @@ namespace Horo::Extensions {
 namespace Horo::Editor {
     class EditorPageView;
 
+    /** @brief Paired page authority and theme snapshot supplied by the GUI composition owner. */
+    struct SettingsModalPagePresentation final {
+        std::shared_ptr<Extensions::EditorPageHost> host;          /**< Shared page authority; empty disables extension pages. */
+        std::shared_ptr<const Extensions::EditorThemeFrame> theme; /**< Owner theme capture; required when host is supplied. */
+    };
+
     /** @brief Host-owned editor settings workflow and its transient settings draft. */
     class SettingsModal final : public EditorModal {
     public:
@@ -32,14 +39,14 @@ namespace Horo::Editor {
          * @param logo Presentation logo texture.
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional registry-backed extension marketplace.
-         * @param pageHost Optional explicitly composed restricted settings/modal controller.
-         * @param themeFrame Actual GUI owner theme capture, required whenever pageHost is supplied.
+         * @param navigationSettings Optional live session borrowed only during construction to capture its revocable opening.
+         * @param pages Optional explicitly composed restricted page authority and its GUI owner theme capture.
+         * @throws std::bad_alloc When the supplied page authority cannot allocate its owned presentation.
          */
         SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, std::uintptr_t logo,
                       Extensions::ExtensionInventory *extensionInventory = nullptr,
                       Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
-                      std::shared_ptr<Extensions::EditorPageHost> pageHost = {},
-                      std::shared_ptr<const Extensions::EditorThemeFrame> themeFrame = {});
+                      const NavigationProjectSettingsSession *navigationSettings = nullptr, SettingsModalPagePresentation pages = {});
 
         /** @brief Selects an already-open exact extension settings page for actual modal realization. */
         void SelectExtensionPage(const Extensions::EditorSurfaceProviderIdentity &provider, std::string id);
@@ -65,6 +72,7 @@ namespace Horo::Editor {
         std::shared_ptr<EditorPageView> m_extensionPages;
         bool m_openExtensionPage{};
         bool m_pagesUnsupported{};
+        NavigationProjectSettingsSessionBorrow m_navigationSettings;
         EditorDataBus *m_events = nullptr;
         SettingsState m_draft;
         bool m_revertedPublished = false;

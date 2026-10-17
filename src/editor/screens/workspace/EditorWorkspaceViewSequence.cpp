@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/modals/settings/NavigationSettingsDraft.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
 
 #include <algorithm>
@@ -18,6 +19,8 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceView::DrawDockContent */
     void EditorWorkspaceView::DrawDockContent(const WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
                                               const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const {
+        if (area == WorkspaceDockArea::Document && DrawNavigationDocument(viewModel))
+            return;
         if (area == WorkspaceDockArea::Document && DrawSequenceDocument(viewModel, outCommand))
             return;
         if (panel)
@@ -80,6 +83,34 @@ namespace Horo::Editor {
             outCommand.documentInstance = found->source->identity.instance;
             outCommand.sequenceTimeline = state;
         }
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawNavigationDocumentTabs */
+    void EditorWorkspaceView::DrawNavigationDocumentTabs(const EditorWorkspaceViewModel &viewModel) const {
+        using enum Ui::ButtonVariant;
+        for (const auto &tab : viewModel.navigationDocuments) {
+            ImGui::SameLine();
+            ImGui::PushID(tab.asset.ToString().c_str());
+            if (const auto title = tab.identity.key.source.Value();
+                Ui::Button({.label = title.c_str(),
+                            .variant = viewModel.workspacePanelHost.ActiveDocument() == tab.identity.instance ? Primary : Secondary}))
+                tab.editor->requestFocus = true;
+            ImGui::SameLine();
+            if (Ui::Button({.label = m_context.localization.Get("editor", "workspace.sequence.close").c_str(), .variant = Secondary}))
+                tab.editor->requestClose = true;
+            ImGui::PopID();
+        }
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawNavigationDocument */
+    bool EditorWorkspaceView::DrawNavigationDocument(const EditorWorkspaceViewModel &viewModel) const {
+        const auto tab = std::ranges::find_if(viewModel.navigationDocuments, [&](const auto &value) {
+            return value.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        });
+        if (tab == viewModel.navigationDocuments.end())
+            return false;
+        DrawNavigationDefinitionEditor(*tab->editor, m_context, tab->asset);
         return true;
     }
 }  // namespace Horo::Editor

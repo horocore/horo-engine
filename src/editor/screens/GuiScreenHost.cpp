@@ -489,9 +489,7 @@ namespace Horo::Editor {
             return;
         for (const auto &page : editorPageHost_->Prepared()) {
             if (page.surface.kind == Extensions::EditorSurfaceKind::SettingsPage && page.state == Extensions::EditorPageState::Editing) {
-                auto modal =
-                    std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
-                                                    editorPageHost_, extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr);
+                auto modal = CreateSettingsModal();
                 modal->SelectExtensionPage(page.surface.provider, page.surface.id);
                 static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
                 break;
@@ -588,14 +586,24 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc GuiScreenHost::OpenSettingsModal */
-    void GuiScreenHost::OpenSettingsModal() {
-        if (settingsService_ && modalHost_) {
-            auto modal =
-                std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
-                                                editorPageHost_, extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr);
-            static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
-        }
+    /** @copydoc GuiScreenHost::CreateSettingsModal */
+    std::unique_ptr<SettingsModal> GuiScreenHost::CreateSettingsModal() {
+        auto navigation =
+            activeScreen_ ? activeScreen_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
+        auto modal =
+            std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
+                                            navigation.HasValue() ? navigation.Value() : nullptr,
+                                            SettingsModalPagePresentation{editorPageHost_,
+                                                                          extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr});
+        if (navigation.HasError())
+            modal->Draft().navigationStatus = navigation.ErrorValue().message;
+        return modal;
+    }
+
+    /** @copydoc GuiScreenHost::OpenEditorSettingsModal */
+    void GuiScreenHost::OpenEditorSettingsModal() {
+        if (settingsService_ && modalHost_)
+            static_cast<void>(modalHost_->OpenRoot(CreateSettingsModal()));
     }
 
     /** @copydoc GuiScreenHost::DispatchMenuInvocation */
@@ -625,7 +633,7 @@ namespace Horo::Editor {
                 }
                 return;
             case OpenEditorSettings:
-                OpenSettingsModal();
+                OpenEditorSettingsModal();
                 return;
             case ExitApplication:
                 static_cast<void>(RequestCloseApplication());

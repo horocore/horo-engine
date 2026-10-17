@@ -117,6 +117,11 @@ namespace Horo::Extensions::Tests {
         CHECK(invoke(nullptr) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
         const HoroEditorActivityAction shortPrefix{.structSize = offsetof(HoroEditorActivityAction, revision)};
         CHECK(invoke(&shortPrefix) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        const HoroEditorActivityAction missingSink{.structSize = sizeof(HoroEditorActivityAction),
+                                                   .cancellation = {.isCancellationRequested = +[](const void *) -> uint8_t {
+            return 0;
+        }}};
+        CHECK(invoke(&missingSink) == HORO_EXTENSION_ERROR_INVALID_ARGS);
     }
 
     TEST_CASE("Cancelled action results cannot publish after the provider successfully completes", "[Extensions][Activity][ABI]") {
