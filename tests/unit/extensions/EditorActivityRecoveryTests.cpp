@@ -45,7 +45,7 @@ namespace Horo::Extensions::Tests {
                               return Platform::LoadDynamicLibrary(path);
                           },
                           {},
-                          host} {}
+                          ExtensionEditorHosts{.activities = host}} {}
 
             void RejectNativeLoad(const bool reject = true) noexcept {
                 rejectLoad_ = reject;

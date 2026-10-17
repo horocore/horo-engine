@@ -1,3 +1,4 @@
+#include "../extension_pages/EditorPageView.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
@@ -104,6 +105,10 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavGroup(tools.c_str(), ctx);
         DrawNavItem(st, {diagnostics.c_str(), "D", Diagnostics}, ctx);
         DrawNavItem(st, {plugins.c_str(), "P", Plugins}, ctx);
+        if (st.extensionPages) {
+            const auto &pages = ctx.localization.Get("editor", "settings.extension_pages.title");
+            DrawNavItem(st, {pages.c_str(), "E", ExtensionPages}, ctx);
+        }
     }
 
     void DrawGeneral(SettingsState &st, const EditorGuiContext &ctx) {
@@ -395,6 +400,10 @@ namespace Horo::Editor::SettingsModalInternal {
                 break;
             case Diagnostics:
                 DrawDiagnostics(st, ctx);
+                break;
+            case ExtensionPages:
+                if (st.extensionPages)
+                    st.extensionPages->DrawSettings();
                 break;
             case Plugins:
                 DrawPlugins(st, ctx);

@@ -75,7 +75,8 @@ capability resolver, provider admission, and the narrow Platform Services
 lifecycle host. Native C fixture modes 10 and 11 exercise old-prefix loading
 and the appended operation profile respectively; service-host tests cover
 startup rollback, BUSY drain, off-thread callback ingress and repeat teardown.
-# Platform Services completion error migration
+
+## Platform Services completion error migration
 
 Provider operation callbacks must set `HoroPlatformProviderCompletion::resultCode`
 to a `HoroPlatformProviderResultCode` value. Translate SDK results inside the
@@ -87,3 +88,95 @@ values as Unknown. Never place native error text, credentials, account IDs or
 response bodies in a failure payload. Host processing discards failure payloads.
 The completion struct layout is unchanged, so ABI 1.3 providers only need to
 update the semantic mapping of `resultCode`.
+
+## External C ABI 1.4 → 1.5 settings and modal pages
+
+ABI 1.5 appends `registerEditorPage` to `HoroExtensionHostApi`. It does not
+change any 1.0–1.4 prefix, activity transport, or GameModule SDK21 layout.
+Existing activity modules must continue to request the 1.4 prefix ending at
+`offsetof(HoroExtensionHostApi, registerEditorPage)`, rather than recompiling an
+old initializer with the new full `sizeof`. Rebuild page modules with the
+packaged `EditorPageAbi.h`; query minor5, `HORO_EXTENSION_REQUIRES_EDITOR_PAGE`,
+full host-table size and explicit `editor.page` capability. Load must repeat
+size/version/null checks before dereferencing the new tail. Rollback removes
+page claims/callbacks and uses the unchanged activity profile on an older host;
+it never treats a settings/modal page as an activity or persistent document tab.
+
+A proper explicit1.4 query receives only its original host prefix and no page callback. Page registration additionally requires the validated minor5/page-function/complete-prefix proof at ingress; manifest claims or a composed GUI alone cannot grant transport. The actual C11 legacy-query regression verifies that neither Settings nor Modal claims publish through the old negotiation.
+
+Registration is staging only. The host copies definitions/messages and checks
+manifest ownership, requested/approved permissions and exact capability grants
+before transactional commit. Session `open`/`close` are owner-lane operations;
+opening during module load fails. The host owns draft, focus, cancellation,
+validation and active settings. Callback payloads and cancellation views are
+borrowed for that call only. Native callbacks run on attributed jobs with code
+and capability leases; revocation closes admission before draining callbacks.
+
+Page schema1 supports bool, exact int64 and bounded single-line UTF-8 strings,
+text/label/action and Stack/Group layout. Medium/Neutral styling and automatic
+focus are the supported presentation profile. Row/Grid, path/choice, decimal,
+color/vector, multiline and confirmation actions fail registration explicitly.
+Integer fields use decimal text end-to-end, including signed endpoints and
+values above2^53; converting them through double is invalid.
+
+Settings pages choose one canonical User/Project/Workspace scope. The real GUI
+composition supplies the existing durable filesystem and explicit selected
+project/configuration roots. Apply validates the whole candidate and provider
+findings, durably writes the canonical snapshot, then performs a noexcept active
+swap. Any uncertain write retains dirty `RecoveryRequired` state and original
+error until explicit reload. Modal fields are Session scoped, validate then
+submit, and never persist. Open/draft/focus/modal stack data is never workspace
+state. Reset/cancel do not write. Parent/child workflows require exact provider
+and active parent identity; the existing modal host owns focus/input exclusivity.
+
+Affected callers include `ExtensionManager`, native activation/retirement,
+`EditorSurfaceRegistry`, `GuiScreenHost`, Settings/Modal host adapters, SDK
+packaging/reconfigure/external C11 consumers and native page fixtures. All host
+C++ consumers rebuild against the new additive controller contract. The GUI
+adapter consumes validated `BuildEditorUiRenderSnapshot` from the actual shared
+design tokens/fonts. A private owner-boundary structural capture generation
+tracks real theme changes; it is neither persisted nor a second theme authority.
+
+## Page transport admission and filled icon geometry repair
+
+The ABI1.5 wire layouts and versions remain unchanged. `EditorPageAbi.h` now
+owns the allocation-free C11 structural checks shared by the actual C11 page
+producer and the host ingress/callback adapter. These check complete prefixes
+before tail fields, bounded array extents and pointer/count pairs, exact selected
+value kinds and integer limits. They do not validate arbitrary foreign memory,
+UTF-8 content, manifest ownership, permissions, duplicate identities or FormKit
+semantics; the existing host copy/admission validation remains mandatory.
+Checked invocation retains the caller-held executable lease and exception
+boundary. C11 modules can use the checked session/finding helpers without
+retaining call-lifetime host views. The actual native fixture reports a localized
+negative-value finding, proving the real sink prevents durable publication.
+Existing modules need no binary migration; rebuilt sources can reuse these same
+checks. Old negotiated1.4 sessions still cannot access the appended page callback.
+
+The theme frame's `icons.strokeWidth` now admits finite zero to represent a filled
+font glyph without an outline. Negative and nonfinite widths remain invalid.
+The GUI bridge publishes that zero explicitly; `ImGuiStyle::FrameBorderSize`
+continues to describe control focus/border interaction and is not icon authority.
+The semantic glyph support mask is retained. This is a validity-contract expansion
+without a layout/version change; external host/theme validators should rebuild
+and accept zero rather than substitute an invented positive outline. Affected
+callers are the real GUI theme capture, canonical theme validator, public theme
+header consumers and page view/render tests.
+
+
+### Settings modal C++ composition with navigation
+
+`SettingsModal` now captures both the active navigation session's revocable borrow
+and the explicitly composed extension page host/theme. The sixth optional argument
+remains the navigation session pointer. The seventh argument is
+`SettingsModalPagePresentation`, pairing the shared page host and captured theme.
+Update page-enabled callers to supply the navigation argument (or `nullptr`)
+before that presentation aggregate, and rebuild GUI consumers. The constructor is fallible when it creates an owned page view;
+its allocation can throw instead of satisfying the earlier navigation-only
+`noexcept` contract. This avoids two constructor paths with different authorities.
+
+`GuiScreenHost` owns the common settings factory for menu actions, Welcome-screen
+requests, and provider-selected pages. Each path captures the current navigation
+borrow and admission diagnostics together with the actual page/theme authority.
+Modal lifecycle tests cover navigation retirement, while real host menu tests
+retain original navigation admission failures. Native page ABI 1.5 is unchanged.

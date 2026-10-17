@@ -31,6 +31,7 @@ namespace Horo::Editor::SettingsModalInternal {
         Updates,
         Diagnostics,
         Plugins,
+        ExtensionPages,
     };
 
     struct NavItem {
