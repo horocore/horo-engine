@@ -8,9 +8,11 @@
 namespace Horo::Editor {
     SettingsModal::SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, const std::uintptr_t logo,
                                  Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace) noexcept
+                                 Extensions::ExtensionMarketplaceService *extensionMarketplace,
+                                 const NavigationProjectSettingsSession *navigationSettings) noexcept
         : m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
-          m_extensionMarketplace(extensionMarketplace) {}
+          m_extensionMarketplace(extensionMarketplace),
+          m_navigationSettings(navigationSettings ? navigationSettings->Borrow() : NavigationProjectSettingsSessionBorrow{}) {}
 
     ModalId SettingsModal::Id() const {
         return ModalId{kModalId};
@@ -28,6 +30,7 @@ namespace Horo::Editor {
         m_events = &context.events;
         m_revertedPublished = false;
         LoadSettingsForModal(m_draft, m_settings);
+        m_draft.navigationSettings = m_navigationSettings.Resolve() ? m_navigationSettings : NavigationProjectSettingsSessionBorrow{};
         m_draft.extensionInventory = m_extensionInventory;
         m_draft.extensionMarketplace = m_extensionMarketplace;
         const auto rev = m_settings.Snapshot().revision;
@@ -39,7 +42,7 @@ namespace Horo::Editor {
 
     CloseDecision SettingsModal::CanClose(const ModalCloseReason reason) {
         m_draft.dirty = CollectDraftSettings(m_draft) != m_draft.committed;
-        if (reason == ModalCloseReason::Cancelled || !m_draft.dirty)
+        if (reason == ModalCloseReason::Cancelled || (!m_draft.dirty && !m_draft.navigationProjectDraftDirty))
             return CloseDecision::Allow;
         return CloseDecision::Deny;
     }
@@ -60,6 +63,9 @@ namespace Horo::Editor {
                 EditorSettingsChangedEvent{m_settings.Snapshot().revision, SettingsChangePhase::Reverted, SettingsDomain::All});
             m_revertedPublished = true;
         }
+        m_draft.navigationSettings = {};
+        m_draft.navigationDraft.reset();
+        m_navigationSettings = {};
         m_logCtx.reset();  // pop MDC frame
     }
 

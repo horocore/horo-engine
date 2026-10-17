@@ -78,6 +78,7 @@ namespace {
         doc.settings.networkPreviewPreferences.maxPreviewClients = 6;
         doc.settings.networkPreviewPreferences.simulatedLatencyMilliseconds = 42;
         doc.settings.packages.downloadThreads = 12;
+        doc.settings.navigationOverlay = {true, false, true};
 
         std::string error;
         REQUIRE((SaveEditorSettingsDocument(&doc, &error)));
@@ -99,6 +100,7 @@ namespace {
         REQUIRE((loaded.settings.networkPreviewPreferences.maxPreviewClients == 6));
         REQUIRE((loaded.settings.networkPreviewPreferences.simulatedLatencyMilliseconds == 42));
         REQUIRE((loaded.settings.packages.downloadThreads == 12));
+        REQUIRE((loaded.settings.navigationOverlay == doc.settings.navigationOverlay));
     }
 
     TEST_CASE("Legacy network package setting migrates to the user package group", "[unit][editor][settings][migration]") {

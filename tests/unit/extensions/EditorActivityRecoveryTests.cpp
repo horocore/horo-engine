@@ -20,13 +20,12 @@ namespace Horo::Extensions::Tests {
         struct HostLoaderFailure final {};
 
         /** @brief Owns the real native fixture and its explicit host loader through recovery and teardown. */
-        class NativeRecoveryFixture final {
+        struct NativeRecoveryFixture final {
             bool rejectLoad_{};
             std::size_t loadAttempts_{};
             const Horo::Tests::AllocationProbe::ScopedMeasurement *measurement_{};
             std::size_t admissionRequests_{};
 
-        public:
             Horo::Tests::EditorActivityPackage package;
             JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
             std::shared_ptr<EditorActivityHost> host{std::make_shared<EditorActivityHost>(jobs)};
@@ -37,7 +36,7 @@ namespace Horo::Extensions::Tests {
                           ExtensionHostProfile::Interactive,
                           {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
                           Horo::Tests::CreateAcceptingArtifactGate(),
-                          [this](const std::string &path) -> Result<std::unique_ptr<Platform::DynamicLibrary>> {
+                          [this](const std::string &path) {
                               if (measurement_)
                                   admissionRequests_ = measurement_->Snapshot().requests;
                               ++loadAttempts_;
@@ -231,7 +230,7 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Invalid manifest file bytes reject recovery before native loading and preserve independent ownership",
               "[Extensions][EditorSurface][Recovery][Manifest]") {
-        for (const std::string_view content : {"", "{\"id\":\"fixture.package\"", "{} trailing bytes"}) {
+        for (const std::string_view content : {"", R"({"id":"fixture.package")", "{} trailing bytes"}) {
             NativeRecoveryFixture fixture;
             fixture.RetainIndependentOwner();
             fixture.RejectNativeLoad();
@@ -277,6 +276,7 @@ namespace Horo::Extensions::Tests {
         const std::array<std::string, 2> selected{"fixture.module", "fixture.second"};
         const auto directory = fixture.package.root.string();
         fixture.RejectNativeLoad();
+        bool loaderRejected{};
         {
             const Probe::ScopedMeasurement measurement;
             fixture.MeasureAdmission(&measurement);
@@ -284,9 +284,11 @@ namespace Horo::Extensions::Tests {
                 static_cast<void>(fixture.manager.LoadExtension(directory, {}, selected));
             } catch (const HostLoaderFailure &) {
                 // The loader snapshots the exact preparatory allocation prefix before throwing without allocating.
+                loaderRejected = true;
             }
             fixture.MeasureAdmission(nullptr);
         }
+        REQUIRE(loaderRejected);
         const auto count = fixture.AdmissionRequests();
         REQUIRE(count > 0);
         std::size_t completed{};

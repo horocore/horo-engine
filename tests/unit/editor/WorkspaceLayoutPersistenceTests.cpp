@@ -40,9 +40,9 @@ namespace {
                                                          "release-image-base", "release-frame"};
         constexpr std::string_view prefix{"[workspace-allocation] "};
         std::array<char, 96> text{};
-        auto *cursor = std::copy(prefix.begin(), prefix.end(), text.data());
+        auto *cursor = std::ranges::copy(prefix, text.data()).out;
         const auto label = labels[static_cast<std::size_t>(event)];
-        cursor = std::copy(label.begin(), label.end(), cursor);
+        cursor = std::ranges::copy(label, cursor).out;
         *cursor++ = '=';
         const auto converted = std::to_chars(cursor, text.data() + text.size() - 1, value);
         if (converted.ec != std::errc{})
@@ -204,8 +204,10 @@ TEST_CASE("Workspace layout persistence migrates the former Content Browser host
     REQUIRE((restored.has_value()));
     const TabStackNode *stack = restored->FindTabStack("workspace.bottom.split.horo.global_dock");
     REQUIRE((stack != nullptr));
-    REQUIRE((stack->tabs == std::vector<std::string>{"horo.global_dock"}));
-    REQUIRE((stack->activeTab == "horo.global_dock"));
+    if (stack != nullptr) {
+        REQUIRE((stack->tabs == std::vector<std::string>{"horo.global_dock"}));
+        REQUIRE((stack->activeTab == "horo.global_dock"));
+    }
 }
 
 TEST_CASE("Workspace surface intent uses the existing layout envelope and rejects malformed state", "[unit][editor][Activity]") {

@@ -109,6 +109,8 @@ namespace Horo::Editor {
         /** @brief Draws one persistent document tab and emits its select or close command. */
         void DrawDocumentTab(const std::string &panelId, EditorWorkspaceViewCommandData &outCommand, bool active);
         /** @brief Draws persistent sequence tabs and their explicit focus/close affordances. */
+        void DrawNavigationDocumentTabs(const EditorWorkspaceViewModel &viewModel) const;
+        bool DrawNavigationDocument(const EditorWorkspaceViewModel &viewModel) const;
         void DrawSequenceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Resolves theme-sized document chrome, including its overflow affordance. */
         [[nodiscard]] float DocumentTabHeight(WorkspaceDockArea area) const;

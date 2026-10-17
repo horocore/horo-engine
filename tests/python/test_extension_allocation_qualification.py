@@ -6,7 +6,8 @@ import importlib.util
 from pathlib import Path
 import re
 import json
-import subprocess
+# Only the current interpreter and repository-owned CLI scripts execute, without a shell.
+import subprocess  # nosec B404
 import sys
 
 import pytest
@@ -179,20 +180,30 @@ def test_shared_cli_still_requires_discovery_output(monkeypatch):
     assert error.value.code == 2
 
 
-@pytest.mark.parametrize("family", ["extension", "scene", "character"])
-def test_all_three_standalone_clis_keep_the_same_discovery_contract(tmp_path, family):
+@pytest.mark.parametrize(("family", "route"), [
+    ("extension", None), ("scene", None), ("character", None), ("scene", "navigation"),
+])
+def test_all_three_standalone_clis_keep_the_same_discovery_contract(tmp_path, family, route):
     script = ROOT / f"scripts/ci/run_{family}_allocation_qualification.py"
     spec = importlib.util.spec_from_file_location(f"{family}_cli_contract", script)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    selected = {"tests": [{"name": name, "properties": []} for name in module.CASES]}
+    cases = module.NAVIGATION_CASES if route == "navigation" else module.CASES
+    selected = {"tests": [{"name": name, "properties": []} for name in cases]}
     evidence = tmp_path / "discovery with spaces.json"
     evidence.write_text(json.dumps(selected), encoding="utf-8")
     output = tmp_path / "exact regex.txt"
-    result = subprocess.run([sys.executable, str(script), "--discovery", str(evidence), "--regex-output", str(output)],
-                            cwd=tmp_path, capture_output=True, text=True, check=False)
+    interpreter = Path(sys.executable)
+    assert interpreter.is_absolute() and interpreter.is_file()
+    family_arguments = ["--family", route] if route is not None else []
+    # The executable is pinned to this interpreter; arguments are test-owned paths, never shell input.
+    result = subprocess.run(  # nosec B603, B607
+        ["python3", str(script), *family_arguments, "--discovery", str(evidence), "--regex-output", str(output)],
+        executable=str(interpreter),
+        cwd=tmp_path, capture_output=True, text=True, check=False, shell=False, timeout=30,
+    )
     assert result.returncode == 0, result.stderr
     pattern = output.read_text(encoding="utf-8")
-    for name in module.CASES:
+    for name in cases:
         assert re.fullmatch(pattern, name)
     assert re.fullmatch(pattern, "unexpected case") is None

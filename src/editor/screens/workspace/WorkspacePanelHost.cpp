@@ -233,8 +233,7 @@ namespace Horo::Editor {
         if (const Result<void> closed = m_documentRegistry_->Close(instance); closed.HasError())
             return closed;
 
-        const Result<SerializedDocumentOpenKey> serialized = SerializeDocumentOpenKey(key);
-        if (serialized.HasValue()) {
+        if (const Result<SerializedDocumentOpenKey> serialized = SerializeDocumentOpenKey(key); serialized.HasValue()) {
             std::erase(m_layout.openDocuments, serialized.Value());
         }
         m_documentTabs.erase(tab);
@@ -350,7 +349,7 @@ namespace Horo::Editor {
             RestoreDocumentSnapshot(previousLayout, previousTabs, previousActiveKey);
             return false;
         }
-        const Result<std::vector<WorkspaceDocumentTab>> restoredTabs = OpenRestoredDocumentTabs(restored->openDocuments, error);
+        Result<std::vector<WorkspaceDocumentTab>> restoredTabs = OpenRestoredDocumentTabs(restored->openDocuments, error);
         if (restoredTabs.HasError()) {
             RestoreDocumentSnapshot(previousLayout, previousTabs, previousActiveKey);
             return false;

@@ -97,6 +97,8 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {rendering.c_str(), "R", Rendering}, ctx);
         DrawNavItem(st, {audio.c_str(), "S", Audio}, ctx);
         DrawNavItem(st, {network.c_str(), "N", Network}, ctx);
+        const auto navigation = ctx.localization.Get("editor", "settings.nav.navigation");
+        DrawNavItem(st, {navigation.c_str(), "N", Navigation}, ctx);
         DrawNavItem(st, {packages.c_str(), "K", Packages}, ctx);
         DrawNavItem(st, {updates.c_str(), "U", Updates}, ctx);
         DrawNavGroup(tools.c_str(), ctx);
@@ -381,6 +383,9 @@ namespace Horo::Editor::SettingsModalInternal {
                 break;
             case Network:
                 DrawNetwork(st, ctx);
+                break;
+            case Navigation:
+                DrawNavigationSettings(st, ctx);
                 break;
             case Packages:
                 DrawPackages(st, ctx);

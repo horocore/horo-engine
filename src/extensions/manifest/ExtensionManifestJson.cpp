@@ -243,13 +243,13 @@ namespace Horo::Extensions::ManifestParsing {
     }  // namespace
 
     static_assert(std::is_nothrow_move_constructible_v<Json>);
-    static_assert(std::is_nothrow_move_constructible_v<std::unique_ptr<Json *[]>>);
+    static_assert(std::is_nothrow_move_constructible_v<std::unique_ptr<std::vector<Json *>>>);
     static_assert(!std::is_copy_constructible_v<ManifestDocument> && !std::is_copy_assignable_v<ManifestDocument>);
     static_assert(std::is_nothrow_move_constructible_v<ManifestDocument> && !std::is_move_assignable_v<ManifestDocument>);
 
     /** @copydoc ManifestDocument::ManifestDocument */
     ManifestDocument::ManifestDocument(const std::size_t observedDepth)
-        : retirement_(observedDepth == 0 ? nullptr : std::make_unique_for_overwrite<Json *[]>(observedDepth)),
+        : retirement_(observedDepth == 0 ? nullptr : std::make_unique<std::vector<Json *>>(observedDepth)),
           retirementCapacity_(observedDepth) {}
 
     /** @copydoc ManifestDocument::ManifestDocument */
@@ -263,9 +263,9 @@ namespace Horo::Extensions::ManifestParsing {
             return;
         HORO_INVARIANT(retirementCapacity_ > 0);
         std::size_t depth = 1;
-        retirement_[0] = &document_;
+        (*retirement_)[0] = &document_;
         while (depth != 0) {
-            Json *const current = retirement_[depth - 1];
+            Json *const current = (*retirement_)[depth - 1];
             Json *child = nullptr;
             if (auto *const object = current->get_ptr<Json::object_t *>(); object != nullptr && !object->empty()) {
                 const auto first = object->begin();
@@ -285,7 +285,7 @@ namespace Horo::Extensions::ManifestParsing {
             }
             if (child != nullptr) {
                 HORO_INVARIANT(depth < retirementCapacity_);
-                retirement_[depth++] = child;
+                (*retirement_)[depth++] = child;
             }
         }
     }

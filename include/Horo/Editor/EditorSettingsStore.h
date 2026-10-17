@@ -59,6 +59,14 @@ namespace Horo::Editor {
         bool operator==(const EditorPackageSettings &) const = default;
     };
 
+    /** @brief User-only navigation overlay interest; never read by project policy, baking or packaged runtime. */
+    struct EditorNavigationOverlayPreferences final {
+        bool showAreas{};
+        bool showPaths{};
+        bool showAgents{};
+        bool operator==(const EditorNavigationOverlayPreferences &) const = default;
+    };
+
     /** @brief User-level editor settings persisted in the user configuration directory. */
     struct EditorSettings {  // NOSONAR(cpp:S1820)
         EditorStartupBehavior startupBehavior = EditorStartupBehavior::WelcomeScreen;
@@ -90,7 +98,8 @@ namespace Horo::Editor {
         bool audioEnabled = true;
 
         Network::NetworkPreviewPreferences networkPreviewPreferences{}; /**< User-only local network preview controls. */
-        EditorPackageSettings packages{};                               /**< User-only package acquisition controls. */
+        EditorNavigationOverlayPreferences navigationOverlay{};
+        EditorPackageSettings packages{}; /**< User-only package acquisition controls. */
 
         EditorConsoleLogLevel consoleLogLevel = EditorConsoleLogLevel::Warning;
         bool writeLogToFile = true;

@@ -29,12 +29,12 @@ namespace Horo::Extensions::Tests {
 
     TEST_CASE("Each host availability reason remains identifiable and cannot open an absent surface",
               "[Extensions][EditorSurface][Recovery]") {
+        using enum EditorSurfaceProviderStatus;
         EditorSurfaceRegistry registry;
         const EditorSurfaceWorkspaceState saved{
             .surfaces = {{.surfaceId = "com.example.tools.inspector", .provider = Provider(), .open = true}}};
         REQUIRE(registry.Restore(saved).HasValue());
-        for (const auto status : {EditorSurfaceProviderStatus::Disabled, EditorSurfaceProviderStatus::Incompatible,
-                                  EditorSurfaceProviderStatus::Failed, EditorSurfaceProviderStatus::Missing}) {
+        for (const auto status : {Disabled, Incompatible, Failed, Missing}) {
             REQUIRE(registry.SetProviderStatus(Provider(), status).HasValue());
             REQUIRE(registry.RecoverySnapshot().size() == 1);
             CHECK(registry.RecoverySnapshot().front().status == status);

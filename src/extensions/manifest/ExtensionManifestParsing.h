@@ -6,6 +6,7 @@
 #include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace Horo::Extensions::ManifestParsing {
     using Json = nlohmann::json;
@@ -34,7 +35,8 @@ namespace Horo::Extensions::ManifestParsing {
 
     private:
         Json document_;
-        std::unique_ptr<Json *[]> retirement_;
+        // Moving the owner never moves a checked-STL container or allocates its bookkeeping.
+        std::unique_ptr<std::vector<Json *>> retirement_;
         std::size_t retirementCapacity_ = 0;
     };
 

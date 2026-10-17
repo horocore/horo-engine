@@ -17,13 +17,15 @@ def workspace_path(value):
     return candidate
 
 
-def parse_evidence_arguments(description):
+def parse_evidence_arguments(description, *, families=()):
     """Preserve the common discovery/JUnit CLI and require an explicit discovery output."""
     parser = argparse.ArgumentParser(description=description)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--discovery", type=workspace_path)
     mode.add_argument("--output-junit", type=workspace_path)
     parser.add_argument("--regex-output", type=workspace_path)
+    if families:
+        parser.add_argument("--family", choices=families, default=families[0])
     arguments = parser.parse_args()
     if arguments.discovery is not None and arguments.regex_output is None:
         parser.error("--discovery requires --regex-output")

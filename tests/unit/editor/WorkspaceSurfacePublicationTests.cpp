@@ -15,8 +15,13 @@ namespace Horo::Editor::Tests {
         /** @brief Fault injection around the real native commit, retaining the exact committed receipt. */
         class PublicationFiles final : public TestSupport::NativePublicationFiles {
         public:
-            bool failBefore{};
-            bool failAfter{};
+            void FailBeforeCommit(const bool fail) noexcept {
+                failBefore_ = fail;
+            }
+
+            void FailAfterCommit(const bool fail) noexcept {
+                failAfter_ = fail;
+            }
 
             void ThrowOnCleanup() noexcept {
                 throwCleanup_ = true;
@@ -62,17 +67,19 @@ namespace Horo::Editor::Tests {
                 CheckWriterLease();
                 if (throwReplacement_)
                     throw PublicationFailure{};
-                if (failBefore)
+                if (failBefore_)
                     return Result<void>::Failure(MakeError(PlatformErrors::ConfigurationWriteFailed));
                 auto replaced = native.AtomicReplaceTracked(stage, destination, receipt);
                 if (replaced.HasError())
                     return replaced;
-                if (failAfter)
+                if (failAfter_)
                     return Result<void>::Failure(MakeError(PlatformErrors::ConfigurationWriteFailed));
                 return replaced;
             }
 
         private:
+            bool failBefore_{};
+            bool failAfter_{};
             bool throwCleanup_{};
             bool throwReplacement_{};
             std::size_t cleanupCalls_{};
@@ -111,14 +118,14 @@ namespace Horo::Editor::Tests {
         REQUIRE(initial.WasCommitted());
         auto candidate = layout;
         candidate.surfaces.front().state = {6, 7};
-        files.failBefore = true;
+        files.FailBeforeCommit(true);
         AtomicFileReplacementReceipt before;
         REQUIRE_FALSE(WorkspaceLayoutPersistence::Save(files, before, path, candidate));
         CHECK_FALSE(before.WasCommitted());
         REQUIRE(WorkspaceLayoutPersistence::Load(path));
         CHECK(WorkspaceLayoutPersistence::Load(path)->surfaces == layout.surfaces);
-        files.failBefore = false;
-        files.failAfter = true;
+        files.FailBeforeCommit(false);
+        files.FailAfterCommit(true);
         AtomicFileReplacementReceipt after;
         std::string error;
         REQUIRE_FALSE(WorkspaceLayoutPersistence::Save(files, after, path, candidate, &error));
@@ -165,7 +172,7 @@ namespace Horo::Editor::Tests {
                 const auto layout = Layout();
                 AtomicFileReplacementReceipt initial;
                 REQUIRE(WorkspaceLayoutPersistence::Save(files, initial, path, layout));
-                files.failBefore = true;
+                files.FailBeforeCommit(true);
                 files.ThrowOnCleanup();
                 if (throwPublication)
                     files.ThrowOnReplacement();
@@ -197,7 +204,7 @@ namespace Horo::Editor::Tests {
         REQUIRE(WorkspaceLayoutPersistence::Save(files, receipt, path, Layout()));
         CHECK(receipt.WasCommitted());
         CHECK(files.WriterChecks() == 2);
-        files.failBefore = true;
+        files.FailBeforeCommit(true);
         AtomicFileReplacementReceipt rejected;
         REQUIRE_FALSE(WorkspaceLayoutPersistence::Save(files, rejected, path, Layout()));
         CHECK_FALSE(rejected.WasCommitted());

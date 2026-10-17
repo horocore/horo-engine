@@ -1,3 +1,4 @@
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Foundation/Platform.h"
 
@@ -40,7 +41,8 @@ namespace {
         REQUIRE((host.ClosePanel("horo.global_dock").Succeeded()));
         const auto *document = host.Layout().FindTabStack("workspace.document");
         REQUIRE((document != nullptr));
-        REQUIRE((document->activeTab == "horo.viewport"));
+        if (document != nullptr)
+            REQUIRE((document->activeTab == "horo.viewport"));
         REQUIRE((!host.ClosePanel("missing").Succeeded()));
     }
 
@@ -103,7 +105,8 @@ namespace {
         const auto opened = host.OpenDocument(key);
         REQUIRE(opened.HasValue());
 
-        const auto path = std::filesystem::temp_directory_path() / "horo_workspace_document_tabs.json";
+        const Horo::Tests::OwnedTestDirectory directory{"workspace-document-tabs"};
+        const auto path = directory.Path() / "layout.json";
         std::string error;
         Horo::NativeDurableFileSystem files;
         Horo::AtomicFileReplacementReceipt receipt;
