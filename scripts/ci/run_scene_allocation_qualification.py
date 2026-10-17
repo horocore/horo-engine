@@ -4,13 +4,14 @@
 import json
 from pathlib import Path
 import sys
+import runpy
 from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
-if __name__ == "__main__":
-    from allocation_qualification_cli import parse_evidence_arguments, write_case_regex
-else:
-    from scripts.ci.allocation_qualification_cli import parse_evidence_arguments, write_case_regex
+# Resolve the trusted sibling identically for direct CLI and file-spec loading.
+EVIDENCE = runpy.run_path(str(Path(__file__).with_name("allocation_qualification_cli.py")))
+parse_evidence_arguments = EVIDENCE["parse_evidence_arguments"]
+write_case_regex = EVIDENCE["write_case_regex"]
 
 WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
 

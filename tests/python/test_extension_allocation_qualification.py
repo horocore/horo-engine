@@ -11,14 +11,13 @@ import sys
 
 import pytest
 
-from scripts.ci import allocation_qualification_cli as EVIDENCE
-
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
     "extension_allocation_qualification", ROOT / "scripts/ci/run_extension_allocation_qualification.py"
 )
 QUALIFICATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(QUALIFICATION)
+EVIDENCE = QUALIFICATION.EVIDENCE
 
 
 def discovery():
@@ -150,7 +149,7 @@ def test_shared_admission_and_actual_writer_reject_traversal(tmp_path, monkeypat
     outside = tmp_path / "must not be created.txt"
     argument = outside if absolute else Path("..") / outside.name
     with pytest.raises(ArgumentTypeError):
-        EVIDENCE.workspace_path(argument)
+        EVIDENCE["workspace_path"](argument)
     with pytest.raises(ValueError):
         QUALIFICATION.write_case_regex(argument, QUALIFICATION.CASES)
     assert not outside.exists()
@@ -162,7 +161,7 @@ def test_shared_writer_rechecks_symlink_after_argument_admission(tmp_path, monke
     monkeypatch.chdir(root)
     inside = root / "evidence"
     inside.mkdir()
-    admitted = EVIDENCE.workspace_path(inside / "regex.txt")
+    admitted = EVIDENCE["workspace_path"](inside / "regex.txt")
     inside.rmdir()
     try:
         inside.symlink_to(tmp_path, target_is_directory=True)

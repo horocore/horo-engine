@@ -2,15 +2,17 @@
 """Verify the complete Extension and Workspace allocation sweeps in the supported Release ABI."""
 
 import json
+from pathlib import Path
 import re
 import sys
+import runpy
 from defusedxml import ElementTree as element_tree
 from defusedxml.common import DefusedXmlException
 
-if __name__ == "__main__":
-    from allocation_qualification_cli import parse_evidence_arguments, write_case_regex
-else:
-    from scripts.ci.allocation_qualification_cli import parse_evidence_arguments, write_case_regex
+# Resolve the trusted sibling identically for direct CLI and file-spec loading.
+EVIDENCE = runpy.run_path(str(Path(__file__).with_name("allocation_qualification_cli.py")))
+parse_evidence_arguments = EVIDENCE["parse_evidence_arguments"]
+write_case_regex = EVIDENCE["write_case_regex"]
 
 PREFIX = "HoroExtensionManagerAllocationTests::"
 WORKSPACE_CASE = "HoroWorkspaceLayoutPersistenceTests::Split parsing releases every owned allocation when any allocation fails"

@@ -8,8 +8,6 @@ from html import escape
 
 import pytest
 
-from scripts.ci import allocation_qualification_cli as EVIDENCE
-
 ROOT = Path(__file__).resolve().parents[2]
 PARSER_STEP_ID = "id: qualification_python"
 SPEC = importlib.util.spec_from_file_location(
@@ -17,6 +15,7 @@ SPEC = importlib.util.spec_from_file_location(
 )
 QUALIFICATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(QUALIFICATION)
+EVIDENCE = QUALIFICATION.EVIDENCE
 
 
 @pytest.fixture(autouse=True)
@@ -131,8 +130,8 @@ def test_cli_paths_cannot_escape_workspace(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     outside = tmp_path.parent / "outside.xml"
     with pytest.raises(ArgumentTypeError):
-        EVIDENCE.workspace_path(outside)
-    assert EVIDENCE.workspace_path("inside.xml") == tmp_path / "inside.xml"
+        EVIDENCE["workspace_path"](outside)
+    assert EVIDENCE["workspace_path"]("inside.xml") == tmp_path / "inside.xml"
 
 
 def test_cli_paths_reject_symlink_escape(tmp_path, monkeypatch):
@@ -144,7 +143,7 @@ def test_cli_paths_reject_symlink_escape(tmp_path, monkeypatch):
         pytest.skip("Host does not permit test symlink creation")
     escaped = link / "evidence.xml"
     with pytest.raises(ArgumentTypeError):
-        EVIDENCE.workspace_path(escaped)
+        EVIDENCE["workspace_path"](escaped)
 
 
 @pytest.mark.parametrize("absolute", [False, True])
