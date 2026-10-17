@@ -99,6 +99,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SaveScene */
     void EditorWorkspaceController::SaveScene(const bool overwriteConflict) {
+        if (m_navigationSettings) {
+            if (const auto saved = SaveNavigationDocuments(); saved.HasError())
+                LOG_ERROR("editor.navigation_document", "Coordinated save failed: %s", saved.ErrorValue().message.c_str());
+            return;  // The canonical active Scene participated in the same source-save session.
+        }
         if (!m_defaultScenePath.has_value() || m_mutations == nullptr || m_durableFiles == nullptr) {
             LOG_ERROR("editor.scene_document", "Save rejected because the project scene path or "
                                                "durable writer services are unavailable.");
@@ -144,6 +149,14 @@ namespace Horo::Editor {
             LOG_ERROR("editor.scene_document", "Destination save rejected because '%s' is not absolute.", destination.string().c_str());
             return std::nullopt;
         }
+        if (destination.extension() != ".horo") {
+            LOG_ERROR("editor.scene_document", "Destination save requires a .horo scene path.");
+            return std::nullopt;
+        }
+        if (const auto inspected = InspectProjectSceneFingerprint(m_sourceOpenService.ProjectRoot(), destination); inspected.HasError()) {
+            LOG_ERROR("editor.scene_document", "Destination save rejected: %s", inspected.ErrorValue().message.c_str());
+            return std::nullopt;
+        }
         return destination;
     }
 
@@ -173,6 +186,9 @@ namespace Horo::Editor {
             LOG_ERROR("editor.collision", "Save or discard collision settings before changing the active Scene identity.");
             return;
         }
+        if (!copyOnly && !PrepareNavigationSceneReplacement("Save As"))
+            return;
+
         const SceneDocumentSnapshot snapshot = m_document.Snapshot();
         auto saved = SaveProjectSceneToPath(std::filesystem::path{m_viewModel.projectRoot}, *destination, snapshot, true, *m_mutations,
                                             *m_durableFiles);
@@ -193,12 +209,12 @@ namespace Horo::Editor {
             return;
         }
 
-        CommitSceneSaveAs(snapshot, saved.Value().fingerprint, *destination);
+        CompleteSceneSaveAs(snapshot, saved.Value().fingerprint, *destination);
     }
 
-    /** @copydoc EditorWorkspaceController::CommitSceneSaveAs */
-    void EditorWorkspaceController::CommitSceneSaveAs(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
-                                                      const std::filesystem::path &destination) {
+    /** @copydoc EditorWorkspaceController::CompleteSceneSaveAs */
+    void EditorWorkspaceController::CompleteSceneSaveAs(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
+                                                        const std::filesystem::path &destination) {
         const std::filesystem::path projectRoot{m_viewModel.projectRoot};
         if (const Result<void> defaultSceneUpdated = SetProjectDefaultScenePath(projectRoot, destination, *m_mutations, *m_durableFiles);
             defaultSceneUpdated.HasError()) {

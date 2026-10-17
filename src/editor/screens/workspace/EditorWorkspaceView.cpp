@@ -950,6 +950,7 @@ namespace Horo::Editor {
         for (const std::string &panelId : stack->tabs)
             DrawDocumentTab(panelId, outCommand, !viewModel.workspacePanelHost.ActiveDocument().has_value() && stack->activeTab == panelId);
         DrawSequenceDocumentTabs(viewModel, outCommand);
+        DrawNavigationDocumentTabs(viewModel);
         ImGui::PopStyleVar();
         ImGui::EndChild();
     }

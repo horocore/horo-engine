@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the exact Scene allocation probes unsupported by MSVC Debug iterator proxies."""
+"""Run exact Scene, Navigation or Collision probes unsupported by MSVC Debug iterator proxies."""
 
 import argparse
 import json
@@ -24,6 +24,13 @@ CASES = frozenset(PREFIX + name for name in (
     "Cache pressure after validated worker completion does not discard complete Scene output",
     "Cancellation during completion memoization cannot publish a validated definition",
 ))
+NAVIGATION_PREFIX = "HoroNavigationProjectSettingsTests::"
+NAVIGATION_PHASES = {
+    NAVIGATION_PREFIX + "Every navigation commit allocation failure precedes all owner publication": "commit",
+    NAVIGATION_PREFIX + "Every navigation grouped replay allocation failure preserves all owner histories": "replay",
+    NAVIGATION_PREFIX + "Scene decoding releases completed DOM without allocating during retirement": "scene",
+}
+NAVIGATION_CASES = frozenset(NAVIGATION_PHASES)
 
 
 COLLISION_PHASES = {
@@ -53,25 +60,38 @@ def verify_discovery(document, cases=CASES):
         if any(prop.get("name") == "DISABLED" and prop.get("value") for prop in test.get("properties", [])):
             raise ValueError(f"Scene allocation test is disabled: {test['name']}")
 
-
-def verify_junit(path, selected_cases=CASES):
+def verify_junit(path, cases=CASES):
     """Count actual cases rather than assertions and reject every skipped or failed execution."""
     path = Path(path).resolve()
     if not path.is_relative_to(Path.cwd().resolve()):
         raise ValueError(WORKSPACE_EVIDENCE_ERROR)
     root = ET.parse(path).getroot()
-    cases = list(root.iter("testcase"))
-    names = [case.get("name") for case in cases]
-    if len(cases) != len(selected_cases) or set(names) != selected_cases:
-        raise ValueError(f"Scene allocation execution differs: expected {len(selected_cases)}, got {len(cases)}")
-    for case in cases:
+    executed = list(root.iter("testcase"))
+    names = [case.get("name") for case in executed]
+    if len(executed) != len(cases) or set(names) != cases:
+        raise ValueError(f"Scene allocation execution differs: expected {len(cases)}, got {len(executed)}")
+    for case in executed:
         failed = any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))
         if failed or case.get("status") in ("notrun", "disabled"):
             raise ValueError(f"Scene allocation test did not pass: {case.get('name')}")
+    if cases == NAVIGATION_CASES:
+        verify_navigation_positions(executed)
     for suite in root.iter("testsuite"):
         for field in ("failures", "errors", "skipped", "disabled"):
             if int(suite.get(field, "0")):
                 raise ValueError(f"Scene allocation suite has nonzero {field}")
+
+
+def verify_navigation_positions(executed):
+    """Require completed evidence for every measured allocation, without a platform-specific upper bound."""
+    for case in executed:
+        if case.get("status") != "run":
+            raise ValueError(f"Navigation allocation case did not execute: {case.get('name')}")
+        phase = NAVIGATION_PHASES[case.get("name")]
+        pattern = rf"\[navigation-allocation\] {phase} measured=(\d+) completed=(\d+)"
+        markers = re.findall(pattern, "".join(case.itertext()))
+        if len(markers) != 1 or int(markers[0][0]) == 0 or markers[0][0] != markers[0][1]:
+            raise ValueError(f"Navigation fault positions incomplete: {phase}")
 
 
 def write_regex(path, cases=CASES):
@@ -119,9 +139,10 @@ def main():
     mode.add_argument("--discovery", type=workspace_path)
     mode.add_argument("--output-junit", type=workspace_path)
     parser.add_argument("--regex-output", type=workspace_path)
-    parser.add_argument("--family", choices=("scene", "collision"), default="scene")
+    parser.add_argument("--family", choices=("scene", "navigation", "collision"), default="scene")
     args = parser.parse_args()
-    cases = COLLISION_CASES if args.family == "collision" else CASES
+    families = {"scene": CASES, "navigation": NAVIGATION_CASES, "collision": COLLISION_CASES}
+    cases = families[args.family]
     if args.discovery:
         if args.regex_output is None:
             parser.error("--discovery requires --regex-output")
@@ -131,8 +152,8 @@ def main():
         if args.family == "collision":
             verify_collision_positions(args.output_junit)
         else:
-            verify_junit(args.output_junit)
-        print(f"Scene allocation qualification: {len(cases)} cases passed; zero failures, errors or skips.")
+            verify_junit(args.output_junit, cases)
+        print(f"{args.family} allocation qualification: {len(cases)} cases passed; zero failures, errors or skips.")
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@
 #include <vector>
 
 namespace Horo::Editor {
+    class NavigationProjectSettingsSession;
 
     /**
      * @file GuiScreen.h
@@ -125,6 +126,14 @@ namespace Horo::Editor {
     class GuiScreen {
     public:
         virtual ~GuiScreen() = default;
+
+        /** @brief Returns this project host's navigation settings authority.
+         * @return Borrowed owner, explicit null for nonproject screens, or original admission failure.
+         * @pre The host keeps this screen alive until its owned modal has closed.
+         */
+        [[nodiscard]] virtual Result<NavigationProjectSettingsSession *> NavigationSettings() {
+            return Result<NavigationProjectSettingsSession *>::Success(nullptr);
+        }
 
         /** @brief Returns stable identifier for this screen class. */
         [[nodiscard]] virtual ScreenId Id() const = 0;

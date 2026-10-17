@@ -2077,7 +2077,10 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroEngine::EditorServices
     )
     add_executable(HoroEditorPresentationTests
+            unit/editor/CollisionSettingsPresentationTests.cpp
             unit/editor/SettingsModalPresentationTests.cpp
+            unit/editor/NavigationDefinitionPresentationTests.cpp
+            unit/editor/NavigationPolicyPresentationTests.cpp
             unit/editor/ProjectCreationViewPresentationTests.cpp
             unit/editor/AssetImportModalPresentationTests.cpp
             unit/editor/AssetImportSourcePreviewTests.cpp
@@ -2395,6 +2398,22 @@ target_compile_features(HoroCollisionSettingsPublicConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroCollisionSettingsPublicConsumer PRIVATE HoroEngine::ProjectCollisionSettings HoroEngine::EditorServices)
 add_test(NAME HoroCollisionSettingsPublicConsumer COMMAND HoroCollisionSettingsPublicConsumer)
 set_tests_properties(HoroCollisionSettingsPublicConsumer PROPERTIES LABELS "unit;project;physics;headless;ci-windows;sonar-coverage")
+add_executable(HoroNavigationProjectSettingsTests
+        unit/editor/NavigationProjectSettingsTests.cpp
+        unit/editor/NavigationProjectSettingsSessionTests.cpp
+        unit/editor/NavigationSettingsWorkflowTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroNavigationProjectSettingsTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationProjectSettingsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroNavigationProjectSettingsTests PRIVATE Catch2::Catch2WithMain
+        HoroEngine::EditorServices HoroEngine::ProjectSettings HoroEngine::NavigationApi nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroNavigationProjectSettingsTests LABELS "unit;editor;navigation;headless;ci-navigation")
+add_executable(HoroNavigationProjectSettingsPublicConsumer support/NavigationProjectSettingsPublicConsumer.cpp)
+target_compile_features(HoroNavigationProjectSettingsPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroNavigationProjectSettingsPublicConsumer PRIVATE
+        HoroEngine::EditorServices HoroEngine::ProjectSettings HoroEngine::NavigationApi)
+add_test(NAME HoroNavigationProjectSettingsPublicConsumer COMMAND HoroNavigationProjectSettingsPublicConsumer)
+set_tests_properties(HoroNavigationProjectSettingsPublicConsumer PROPERTIES LABELS "unit;editor;navigation;headless;ci-navigation;ci-windows")
 
 add_executable(HoroEditorSettingsStoreTests
         unit/editor/EditorSettingsStoreTests.cpp
@@ -2468,6 +2487,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
+            unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
             unit/editor/EditorWorkspaceControllerPolicyTestSupport.h
@@ -2476,7 +2496,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
 
     target_include_directories(HoroEditorWorkspaceControllerTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers"
-        "${PROJECT_SOURCE_DIR}/tests/support")
+        "${PROJECT_SOURCE_DIR}/tests" "${PROJECT_SOURCE_DIR}/tests/support")
     target_compile_features(HoroEditorWorkspaceControllerTests PRIVATE cxx_std_20)
     target_compile_definitions(HoroEditorWorkspaceControllerTests PRIVATE
             HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
@@ -2910,6 +2930,7 @@ add_executable(HoroEditorViewportSceneTests
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroSceneDocumentTests
+        unit/editor/NavigationSettingsSceneReloadTests.cpp
         unit/editor/SceneDocumentTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp

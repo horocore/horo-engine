@@ -527,17 +527,22 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc GuiScreenHost::OpenSettingsModal */
-    void GuiScreenHost::OpenSettingsModal() {
+    /** @copydoc GuiScreenHost::OpenEditorSettingsModal */
+    void GuiScreenHost::OpenEditorSettingsModal() {
         if (context_ && settingsService_ && modalHost_) {
+            auto navigation =
+                activeScreen_ ? activeScreen_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
             auto collision = activeScreen_ ? activeScreen_->CollisionSettings()
                                            : Result<std::shared_ptr<CollisionProjectSettingsSession>>::Failure(
                                                  MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported)));
             auto modal =
                 std::make_unique<SettingsModal>(*context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
-                                                !collision.HasError() ? std::weak_ptr{collision.Value()}
-                                                                      : std::weak_ptr<CollisionProjectSettingsSession>{},
+                                                navigation.HasValue() ? navigation.Value() : nullptr,
+                                                collision.HasValue() ? std::weak_ptr{collision.Value()}
+                                                                     : std::weak_ptr<CollisionProjectSettingsSession>{},
                                                 collision.HasError() ? std::optional<Error>{collision.ErrorValue()} : std::nullopt);
+            if (navigation.HasError())
+                modal->Draft().navigationStatus = navigation.ErrorValue().message;
             static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
         }
     }
@@ -569,7 +574,7 @@ namespace Horo::Editor {
                 }
                 return;
             case OpenEditorSettings:
-                OpenSettingsModal();
+                OpenEditorSettingsModal();
                 return;
             case ExitApplication:
                 static_cast<void>(RequestCloseApplication());

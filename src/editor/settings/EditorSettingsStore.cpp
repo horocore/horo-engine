@@ -240,6 +240,12 @@ namespace Horo::Editor {
         void ApplyRenderingGroup(const std::string &json, EditorSettings &s) {
             if (auto v = FindStringValue(json, "viewportMode"); v.has_value())
                 s.viewportMode = ParseViewportMode(*v);
+            if (auto v = FindBoolValue(json, "navigationShowAreas"); v.has_value())
+                s.navigationOverlay.showAreas = *v;
+            if (auto v = FindBoolValue(json, "navigationShowPaths"); v.has_value())
+                s.navigationOverlay.showPaths = *v;
+            if (auto v = FindBoolValue(json, "navigationShowAgents"); v.has_value())
+                s.navigationOverlay.showAgents = *v;
             if (auto v = FindBoolValue(json, "gridOverlay"); v.has_value())
                 s.gridOverlay = *v;
             if (auto v = FindStringValue(json, "renderingTier"); v.has_value())

@@ -243,3 +243,14 @@ then passes unchanged to the same canonical DOM parser without its discard
 callback. This avoids callback-parser destruction of discarded structured values
 while preserving the completed-DOM owner and all existing typed schema checks.
 No persistent-allocation-failure or checked-MSVC-Debug guarantee is implied.
+
+## Main navigation settings integration
+
+The Settings modal constructor keeps main's optional navigation-session pointer before
+the collision weak session and typed opening error. The host supplies both explicit
+project openings through `GuiScreenHost::OpenEditorSettingsModal`; welcome and other
+existing callers keep their defaults. Collision callers pass `nullptr` for navigation
+when no navigation owner exists. Rebuild affected GUI, Settings lifecycle and public
+consumers together. Neither settings domain owns the other domain's session, and
+retiring a navigation opening leaves a live collision opening usable. Workspace leave
+and Save As retain both document groups' dirty-state and shutdown checks.

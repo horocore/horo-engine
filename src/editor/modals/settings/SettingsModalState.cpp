@@ -33,6 +33,7 @@ namespace Horo::Editor {
         out.audioOutputDevice = static_cast<EditorAudioOutputDevice>(std::clamp(st.audio.audioOutputDevice, 0, 2));
         out.audioEnabled = st.audio.audioEnabled;
 
+        out.navigationOverlay = st.navigationOverlay;
         out.networkPreviewPreferences.maxPreviewClients = static_cast<std::uint32_t>(std::max(st.network.maxPreviewClients, 0));
         out.networkPreviewPreferences.simulatedLatencyMilliseconds = static_cast<std::uint32_t>(std::max(st.network.simulatedLatencyMs, 0));
         out.packages.downloadThreads = st.packages.downloadThreads;
@@ -72,6 +73,7 @@ namespace Horo::Editor {
         st.audio.audioOutputDevice = static_cast<int>(settings.audioOutputDevice);
         st.audio.audioEnabled = settings.audioEnabled;
 
+        st.navigationOverlay = settings.navigationOverlay;
         st.network.maxPreviewClients = static_cast<int>(settings.networkPreviewPreferences.maxPreviewClients);
         st.network.simulatedLatencyMs = static_cast<int>(settings.networkPreviewPreferences.simulatedLatencyMilliseconds);
         st.packages.downloadThreads = settings.packages.downloadThreads;
@@ -96,6 +98,8 @@ namespace Horo::Editor {
 
     /** @copydoc SettingsModal.h */
     [[nodiscard]] bool ApplySettings(SettingsState &state, EditorSettingsService &settings) {
+        if (state.navigationProjectDraftDirty)
+            return false;
         const EditorSettings draft = CollectDraftSettings(state);
         const Result<EditorSettingsSnapshot> result =
             settings.Commit(EditorSettingsDraft{.baseRevision = state.settingsRevision, .settings = draft});

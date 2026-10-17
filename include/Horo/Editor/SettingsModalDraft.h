@@ -2,9 +2,11 @@
 
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/NavigationProjectSettingsSession.h"
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace Horo::Extensions {
@@ -14,6 +16,7 @@ namespace Horo::Extensions {
 
 namespace Horo::Editor {
     class EditorSettingsService;
+    struct NavigationSettingsDraft;
 
     struct SettingsGeneralTab {
         int startupAction = 0;
@@ -175,6 +178,11 @@ namespace Horo::Editor {
         RenderingTab rendering{};
         AudioTab audio{};
         NetworkTab network{};
+        EditorNavigationOverlayPreferences navigationOverlay{};
+        NavigationProjectSettingsSessionBorrow navigationSettings;
+        std::shared_ptr<NavigationSettingsDraft> navigationDraft;
+        std::string navigationStatus;
+        bool navigationProjectDraftDirty{};
         PackagesTab packages{};
         DiagnosticsTab diagnostics{};
 

@@ -29,10 +29,12 @@ namespace Horo::Editor {
          * @param extensionMarketplace Optional registry-backed extension marketplace.
          * @param collision Weak exact project opening; never extends canonical Scene or project lifetime.
          * @param collisionError Original typed opening failure for actionable project settings presentation.
+         * @param navigationSettings Optional live session borrowed only during construction to capture its revocable opening.
          */
         SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, std::uintptr_t logo,
                       Extensions::ExtensionInventory *extensionInventory = nullptr,
                       Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
+                      const NavigationProjectSettingsSession *navigationSettings = nullptr,
                       std::weak_ptr<CollisionProjectSettingsSession> collision = {}, std::optional<Error> collisionError = {}) noexcept;
 
         [[nodiscard]] ModalId Id() const override;
@@ -54,6 +56,7 @@ namespace Horo::Editor {
         std::uintptr_t m_logo = 0;
         Extensions::ExtensionInventory *m_extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *m_extensionMarketplace = nullptr;
+        NavigationProjectSettingsSessionBorrow m_navigationSettings;
         EditorDataBus *m_events = nullptr;
         SettingsState m_draft;
         bool m_revertedPublished = false;

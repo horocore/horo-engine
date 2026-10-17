@@ -9,6 +9,7 @@
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Foundation/DataBus.h"
 #include "support/CollisionSettingsTestSupport.h"
+#include "support/OwnedTestDirectory.h"
 #include "support/editor/ScopedTestHome.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -154,7 +155,7 @@ namespace {
         Tests::CollisionSettings::Project project;
         auto owner = project.Open();
         SettingsFixture fixture;
-        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, owner);
+        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, nullptr, owner);
         auto *view = modal.get();
         REQUIRE(fixture.host.OpenRoot(std::move(modal)).HasValue());
         fixture.host.OnUpdate(0);
@@ -194,7 +195,7 @@ namespace {
         Tests::CollisionSettings::Project project;
         auto owner = project.Open();
         SettingsFixture fixture;
-        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, owner);
+        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, nullptr, owner);
         auto *view = modal.get();
         REQUIRE(fixture.host.OpenRoot(std::move(modal)).HasValue());
         fixture.host.OnUpdate(0);
@@ -212,3 +213,39 @@ namespace {
         CHECK(replacement->Snapshot().HasValue());
     }
 }  // namespace
+
+TEST_CASE("Settings modal keeps navigation and collision borrows independent during navigation retirement",
+          "[unit][editor][settings][navigation]") {
+    const Horo::TestSupport::ScopedTestHome home{"horo-settings-navigation-borrow"};
+    Horo::Tests::CollisionSettings::Project collisionProject;
+    auto collision = collisionProject.Open();
+    SettingsFixture fixture;
+    Horo::Tests::OwnedTestDirectory directory{"settings-navigation-borrow"};
+    Horo::NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations{files};
+    Horo::Assets::AssetRegistry registry;
+    REQUIRE(registry.Publish(std::vector<Horo::Assets::AssetRecord>{}).status == Horo::Assets::AssetRegistryBuildStatus::Complete);
+    auto opened = NavigationProjectSettingsSession::Open(directory.Path(), registry, files, mutations, 1);
+    REQUIRE(opened.HasValue());
+    auto session = std::move(opened).Value();
+    auto ownedModal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, session.get(), collision);
+    auto *modal = ownedModal.get();
+    REQUIRE(fixture.host.OpenRoot(std::move(ownedModal)).HasValue());
+    SECTION("retired before queued opening") {
+        session.reset();
+        fixture.host.OnUpdate(0);
+        REQUIRE(modal->Draft().navigationSettings.Resolve() == nullptr);
+    }
+    SECTION("retired after opening") {
+        fixture.host.OnUpdate(0);
+        REQUIRE(modal->Draft().navigationSettings.Resolve() == session.get());
+        session->Close();
+        REQUIRE(modal->Draft().navigationSettings.Resolve() == nullptr);
+        session.reset();
+        REQUIRE(modal->Draft().navigationSettings.Resolve() == nullptr);
+    }
+    REQUIRE(modal->Draft().collision.owner.lock() == collision);
+    REQUIRE(collision->Snapshot().HasValue());
+    REQUIRE(fixture.host.RequestClose(ModalId{SettingsModal::kModalId}, ModalCloseReason::Cancelled).HasValue());
+    fixture.host.OnUpdate(0);
+}
