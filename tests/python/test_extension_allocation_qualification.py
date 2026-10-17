@@ -195,7 +195,8 @@ def test_all_three_standalone_clis_keep_the_same_discovery_contract(tmp_path, mo
     evidence.write_text(json.dumps(selected), encoding="utf-8")
     output = tmp_path / "exact regex.txt"
     interpreter = Path(sys.executable)
-    assert interpreter.is_absolute() and interpreter.is_file()
+    assert interpreter.is_absolute()
+    assert interpreter.is_file()
     family_arguments = ["--family", route] if route is not None else []
     ambient = tmp_path / "untrusted ambient modules"
     ambient.mkdir()
