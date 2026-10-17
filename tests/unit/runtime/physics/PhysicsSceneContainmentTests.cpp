@@ -1,16 +1,10 @@
 #include "PhysicsSceneActivationTestSupport.h"
+#include "PhysicsSceneWorldTestAccess.h"
 #include "PhysicsWorldInternal.h"
 
 #include <limits>
 
 namespace Horo::Physics {
-    /** @brief Borrows the aggregate world solely for deterministic containment regression coverage. */
-    struct PhysicsSceneContainmentTestAccess final {
-        static PhysicsWorld &World(PhysicsSceneActivationCandidate &candidate) {
-            return *candidate.physics_;
-        }
-    };
-
 #if HORO_TEST_PHYSICS_NATIVE
     namespace {
         TEST_CASE("Scene quarantine retires authored bindings while preserving the finite aggregate", "[physics][scene][nonfinite]") {

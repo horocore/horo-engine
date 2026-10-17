@@ -45,7 +45,7 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
                                                       .kind = HORO_EDITOR_INSPECTOR,
                                                       .surfaceId = TEXT("fixture.inspector"),
                                                       .labelKey = TEXT("fixture.inspector"),
-                                                      .behaviorType = TEXT("project.counter"),
+                                                      .behaviorType = TEXT("game.fixture.counter"),
                                                       .behaviorSchemaVersion = 3,
                                                       .fields = fields,
                                                       .fieldCount = 1,

@@ -155,7 +155,7 @@ namespace Horo::Editor {
         StopCameraCutPreview();
         LOG_INFO("editor.play_session", "Beginning play session for '%s'...", m_viewModel.projectRoot.c_str());
         if (m_gameplayRegistry == nullptr)
-            m_gameplayRegistry = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot);
+            m_gameplayRegistry = ProjectGameplayRegistry::Discover(m_viewModel.projectRoot, m_gameplayRetirements);
         if (m_gameplayRegistry->HasBlockingDiagnostics()) {
             const std::string diagMsg = m_gameplayRegistry->Diagnostics().front().error.message;
             LOG_ERROR("editor.play_session", "Play session blocked by gameplay diagnostic: %s", diagMsg.c_str());
@@ -174,7 +174,7 @@ namespace Horo::Editor {
         if (auto cloned = m_runtimeScene.CloneActive(Runtime::SceneRuntimeId{0x8000000000000001ULL}); cloned.HasValue())
             preparedScene = std::move(cloned).Value();
         const Result<void> started = m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(),
-                                                         m_gameplayRegistry->Components(), std::move(preparedScene));
+                                                         m_gameplayRegistry->Components(), std::move(preparedScene), m_triggerBinding);
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())

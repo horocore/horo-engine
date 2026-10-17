@@ -986,6 +986,7 @@ target_include_directories(HoroGameplayRuntime PUBLIC ${PROJECT_SOURCE_DIR}/incl
 target_link_libraries(HoroGameplayRuntime PUBLIC HoroEngine::GameplayApi HoroEngine::RuntimeScene HoroEngine::Runtime PRIVATE HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 
 add_library(HoroGameplayModuleHost STATIC
+    gameplay/module/GameModuleRetirement.cpp
         gameplay/module/GameModuleHostDetail.h
         gameplay/module/GameModuleHostAccess.cpp
         gameplay/module/GameModuleHostLifecycle.cpp
@@ -2255,6 +2256,7 @@ target_link_libraries(HoroAndroidInputIntegration PUBLIC HoroEngine::Input)
 add_library(HoroRuntimeUiInput STATIC
         runtime/ui/input/UiTextInputAdapter.cpp
         runtime/ui/input/UiNavigationInput.cpp
+        runtime/ui/input/UiInputDebugger.cpp
         runtime/ui/input/UiPointerInput.cpp
 )
 add_library(HoroEngine::RuntimeUiInput ALIAS HoroRuntimeUiInput)
@@ -3138,6 +3140,7 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorThemeTokensBehavior.cpp
         extensions/host/ExtensionActivationTransaction.cpp
         extensions/host/ExtensionModuleResolution.cpp
+        extensions/host/ExtensionModuleSelection.cpp
         extensions/host/HeadlessExtensionHost.cpp
         extensions/host/ExtensionAbiValidation.cpp
         extensions/host/ExtensionAbiConformance.cpp
@@ -3202,16 +3205,36 @@ target_link_libraries(HoroExtensions
         PRIVATE nlohmann_json::nlohmann_json CURL::libcurl miniz lunasvg::lunasvg
 )
 
+# Deliberate non-installed interface: only package host composition targets share these verified staging mechanics.
+add_library(HoroPackageContentStagingInternal STATIC packages/host_support/PackageContentStaging.cpp)
+target_compile_features(HoroPackageContentStagingInternal PUBLIC cxx_std_20)
+target_include_directories(HoroPackageContentStagingInternal PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/packages/host_support>")
+target_link_libraries(HoroPackageContentStagingInternal PUBLIC HoroEngine::PackageSecurity)
+
 # Application-owned package-to-extension composition; neither package verification nor the native host owns the other's lifecycle.
 add_library(HoroPackageLifecycle STATIC
         packages/lifecycle/PackageLifecycle.cpp
         packages/lifecycle/PackageLifecycleErrors.cpp
         packages/lifecycle/PackageActivationCandidates.cpp
         packages/lifecycle/PackageActivationComposition.cpp
+        packages/lifecycle/PackageModuleHost.cpp
+        packages/lifecycle/PackageModuleCandidate.cpp
+        packages/lifecycle/PackageModuleComposition.cpp
+        packages/lifecycle/PackageModuleRetirementQueue.cpp
+        packages/lifecycle/NativePackageModuleHost.cpp
+        packages/lifecycle/ScriptPackageModuleHost.cpp
 )
 add_library(HoroEngine::PackageLifecycle ALIAS HoroPackageLifecycle)
 target_compile_features(HoroPackageLifecycle PUBLIC cxx_std_20)
 target_link_libraries(HoroPackageLifecycle PUBLIC HoroEngine::Foundation HoroEngine::PackageSecurity HoroEngine::Extensions HoroEngine::Assets)
+target_link_libraries(HoroPackageLifecycle PRIVATE HoroPackageContentStagingInternal)
+
+add_library(HoroPackageGameplayHost STATIC packages/gameplay/GameplayPackageModuleHost.cpp)
+add_library(HoroEngine::PackageGameplayHost ALIAS HoroPackageGameplayHost)
+target_compile_features(HoroPackageGameplayHost PUBLIC cxx_std_20)
+target_link_libraries(HoroPackageGameplayHost PUBLIC HoroEngine::PackageLifecycle HoroEngine::GameplayModuleHost
+    PRIVATE HoroPackageContentStagingInternal)
+
 
 # Application coordination is shared; adapters depend on it, never the inverse.
 add_library(HoroPackageApplication STATIC
@@ -3286,5 +3309,12 @@ target_link_libraries(HoroPrefabCookHost
         PUBLIC HoroEngine::Application HoroEngine::Assets HoroEngine::EditorServices
                HoroPackageSecurity HoroEngine::PrefabAuthoring HoroEngine::SceneCook
         PRIVATE HoroEngine::SceneRuntimeConversion nlohmann_json::nlohmann_json)
+
+# Explicit application composition; portable Scene/Assets never depend back on the solver.
+add_library(HoroPhysicsTriggerVolumeHost STATIC application/assets/PhysicsTriggerVolumeHost.cpp)
+add_library(HoroEngine::PhysicsTriggerVolumeHost ALIAS HoroPhysicsTriggerVolumeHost)
+target_compile_features(HoroPhysicsTriggerVolumeHost PUBLIC cxx_std_20)
+target_link_libraries(HoroPhysicsTriggerVolumeHost PUBLIC HoroEngine::PrefabCookHost
+        HoroEngine::PhysicsSceneIntegration HoroEngine::SceneRuntimeConversion)
 
 include(HoroPublicHeaderOwnership)

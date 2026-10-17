@@ -139,6 +139,22 @@ namespace Horo::Physics::Detail {
                 return Runtime::SceneStructuralOwner::Physics;
             }
 
+            Result<void> ValidateBaselines(const Runtime::RuntimeSceneView active,
+                                           const std::span<const Runtime::SceneBaselinePreparationView> baselines) const override {
+                if (!registration_->active || registration_->active->closed || !active.IsCurrent() ||
+                    registration_->active->scene != active.RuntimeId() ||
+                    !registration_->active->authority->IsCurrent(registration_->active->evidence))
+                    return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+                try {
+                    for (const auto &baseline : baselines)
+                        if (const auto valid = ValidateBaselineProof(baseline, registration_->active->simulation); valid.HasError())
+                            return valid;
+                    return Result<void>::Success();
+                } catch (const std::bad_alloc &) {
+                    return Result<void>::Failure(MakeError(PhysicsErrors::CapacityExceeded));
+                }
+            }
+
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(
                 const Runtime::RuntimeSceneView active, const std::span<const Runtime::RuntimeEntityView> created,
                 const std::span<const Runtime::EntityRef> destroyed) override {
@@ -153,6 +169,28 @@ namespace Horo::Physics::Detail {
             }
 
         private:
+            /** @brief Checks every portable producer constraint against its exact immutable baseline resource closure. */
+            static Result<void> ValidateBaselineProof(const Runtime::SceneBaselinePreparationView &baseline,
+                                                      const PhysicsWorldSimulationBinding &simulation) {
+                for (const auto &evidence : baseline.definition.TriggerVolumeEvidence()) {
+                    const auto &binding = evidence.binding;
+                    const auto found = std::ranges::find(baseline.resources, binding.material.id, [](const auto &resource) {
+                        return resource.metadata.id;
+                    });
+                    if (found == baseline.resources.end() || found->metadata.expectedType != binding.material.expectedType)
+                        return Result<void>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid));
+                    const auto artifact = Assets::DecodeCookedArtifactBytes(found->artifact.Bytes());
+                    if (artifact.HasError())
+                        return Result<void>::Failure(artifact.ErrorValue());
+                    if (artifact.Value().id != binding.material.id || artifact.Value().type != binding.material.expectedType)
+                        return Result<void>::Failure(MakeError(PhysicsErrors::MaterialDescriptorInvalid));
+                    if (const auto valid = ValidateTriggerVolumeProjectMaterial(binding, simulation, artifact.Value().payload);
+                        valid.HasError())
+                        return valid;
+                }
+                return Result<void>::Success();
+            }
+
             /** @brief Detached descriptor and binding projections shared by the preparation phases. */
             struct GroupPlan {
                 struct ColliderBindingInput {

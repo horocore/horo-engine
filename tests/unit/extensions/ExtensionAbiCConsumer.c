@@ -104,7 +104,7 @@ static int InspectorShapeContract(void) {
                                                 .kind = HORO_EDITOR_INSPECTOR,
                                                 .surfaceId = {"fixture", 7},
                                                 .labelKey = {"fixture", 7},
-                                                .behaviorType = {"project.counter", 15},
+                                                .behaviorType = {"game.fixture.counter", 20},
                                                 .behaviorSchemaVersion = 3,
                                                 .fields = &field,
                                                 .fieldCount = 1};

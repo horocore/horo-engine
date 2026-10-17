@@ -66,6 +66,19 @@ namespace Horo::Gameplay {
             return Result<std::unique_ptr<BehaviorRegistry>>::Success(std::move(registry));
         }
 
+        /** @brief Establish code-image ownership and shadow cleanup before opening native code or resolving exports. */
+        [[nodiscard]] Result<std::shared_ptr<Detail::GameModuleCodeImage>> OpenCodeImage(const std::filesystem::path &libraryPath,
+                                                                                         const bool ownedShadow) {
+            auto image = std::make_shared<Detail::GameModuleCodeImage>(std::unique_ptr<Platform::DynamicLibrary>{});
+            if (ownedShadow)
+                image->shadowArtifact = libraryPath;
+            auto loaded = Platform::LoadDynamicLibrary(libraryPath.string());
+            if (loaded.HasError())
+                return Result<std::shared_ptr<Detail::GameModuleCodeImage>>::Failure(loaded.ErrorValue());
+            image->library = std::move(loaded).Value();
+            return Result<std::shared_ptr<Detail::GameModuleCodeImage>>::Success(std::move(image));
+        }
+
         /** @brief Check the host-bound principal before factories; unavailable/denied optional access does not disable the module. */
         Result<std::shared_ptr<GameplayPhysicsContext>> ResolvePhysicsContext(const std::shared_ptr<GameplayPhysicsContext> &physics,
                                                                               const std::string &moduleId) {
@@ -96,55 +109,73 @@ namespace Horo::Gameplay {
         }
     }  // namespace
 
+    /** @copydoc GameModuleHost::ValidateArtifact */
+    Result<void> GameModuleHost::ValidateArtifact(const std::filesystem::path &libraryPath,
+                                                  const GameModuleLoadExpectation &expectation) const {
+        if (!libraryPath.is_absolute())
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor));
+        auto image = Platform::LoadDynamicLibrary(libraryPath.string());
+        if (image.HasError())
+            return Result<void>::Failure(image.ErrorValue());
+        if (auto validated = ReadValidatedExports(*image.Value(), expectation); validated.HasError())
+            return Result<void>::Failure(validated.ErrorValue());
+        return Result<void>::Success();
+    }
+
     /** @copydoc GameModuleHost::Load */
-    Result<std::unique_ptr<LoadedGameModule>> GameModuleHost::Load(const std::filesystem::path &libraryPath,
-                                                                   const GameModuleLoadExpectation &expectation) const {
+    Result<GameModuleLoadCandidate> GameModuleHost::Load(const std::filesystem::path &libraryPath,
+                                                         const GameModuleLoadExpectation &expectation) const {
         return LoadArtifact(libraryPath, expectation, false);
     }
 
     /** @copydoc GameModuleHost::LoadArtifact */
-    Result<std::unique_ptr<LoadedGameModule>> GameModuleHost::LoadArtifact(const std::filesystem::path &libraryPath,
-                                                                           const GameModuleLoadExpectation &expectation,
-                                                                           const bool ownedShadow) const {
+    Result<GameModuleLoadCandidate> GameModuleHost::LoadArtifact(const std::filesystem::path &libraryPath,
+                                                                 const GameModuleLoadExpectation &expectation,
+                                                                 const bool ownedShadow) const {
         if (!libraryPath.is_absolute())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(
+            return Result<GameModuleLoadCandidate>::Failure(
                 MakeError(GameplayErrors::InvalidGameModuleDescriptor, "Gameplay module path must be absolute."));
 
-        auto image = std::make_shared<Detail::GameModuleCodeImage>(std::unique_ptr<Platform::DynamicLibrary>{});
-        if (ownedShadow)
-            image->shadowArtifact = libraryPath;
-        auto loaded = Platform::LoadDynamicLibrary(libraryPath.string());
-        if (loaded.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(loaded.ErrorValue());
-        image->library = std::move(loaded).Value();
+        auto image = OpenCodeImage(libraryPath, ownedShadow);
+        if (image.HasError())
+            return Result<GameModuleLoadCandidate>::Failure(image.ErrorValue());
         auto impl = std::make_shared<LoadedGameModule::Impl>();
-        impl->codeImage = std::move(image);
+        impl->codeImage = std::move(image).Value();
         impl->loadedArtifactPath = libraryPath;
 
         auto exports = ReadValidatedExports(*impl->codeImage->library, expectation);
         if (exports.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(exports.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(exports.ErrorValue());
         const ValidatedModuleExports validated = exports.Value();
         impl->moduleId = validated.descriptor->moduleId;
         impl->buildFingerprint = validated.descriptor->buildFingerprint;
         impl->descriptorRevision = validated.bundle->descriptorRevision;
         impl->destroy = validated.bundle->lifecycle.destroy;
-        if (auto bound = BindRuntimeServices(*impl); bound.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(bound.ErrorValue());
+        if (const auto bound = BindRuntimeServices(*impl); bound.HasError())
+            return Result<GameModuleLoadCandidate>::Failure(bound.ErrorValue());
 
         auto registry = BuildRegistry(*validated.bundle);
         if (registry.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(registry.ErrorValue());
+            return Result<GameModuleLoadCandidate>::Failure(registry.ErrorValue());
         impl->registries.registry = std::move(registry).Value();
 
-        impl->gameplayModule = validated.bundle->lifecycle.create();
-        if (impl->gameplayModule == nullptr)
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(
-                MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object."));
-        if (Result<void> activated = impl->RegisterAndStart(hostCapabilities_); activated.HasError())
-            return Result<std::unique_ptr<LoadedGameModule>>::Failure(activated.ErrorValue());
-        return Result<std::unique_ptr<LoadedGameModule>>::Success(
-            std::unique_ptr<LoadedGameModule>{new LoadedGameModule{std::move(impl)}});  // NOSONAR(cpp:S5950)
+        // Allocate the exported RAII wrapper before any module factory can publish work.
+        auto owner = std::make_unique<LoadedGameModule>(LoadedGameModule::ConstructionKey{}, impl);
+        std::optional<Error> diagnostic;
+        auto initializationFailure =
+            MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay host initialization failed after factory admission.");
+        try {
+            impl->gameplayModule = validated.bundle->lifecycle.create();
+            if (impl->gameplayModule == nullptr)
+                diagnostic = MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object.");
+            else if (auto activated = impl->RegisterAndStart(hostCapabilities_); activated.HasError())
+                diagnostic = activated.ErrorValue();
+        } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
+            diagnostic = std::move(initializationFailure);
+        }
+        if (diagnostic)
+            owner->RequestRetirement();
+        return Result<GameModuleLoadCandidate>::Success({std::move(owner), std::move(diagnostic)});
     }
 
     /** @copydoc GameModuleHost::BindRuntimeServices */

@@ -60,7 +60,7 @@ namespace Horo::Extensions::Tests {
         if (loaded.HasError())
             UNSCOPED_INFO(loaded.ErrorValue().message);
         REQUIRE(loaded.HasValue());
-        auto available = host.inspectors->Contributions("project.counter", 3);
+        auto available = host.inspectors->Contributions("game.fixture.counter", 3);
         REQUIRE(available.HasValue());
         REQUIRE(available.Value().size() == 1);
         const auto retained = available.Value().front();
@@ -74,7 +74,7 @@ namespace Horo::Extensions::Tests {
         CHECK(host.inspectors->Contributions("unapproved.other.type", 3).Value().empty());
         host.manager.UnloadExtension("fixture.package");
         CHECK_FALSE(retained.context.IsUsable());
-        CHECK(host.inspectors->Contributions("project.counter", 3).Value().empty());
+        CHECK(host.inspectors->Contributions("game.fixture.counter", 3).Value().empty());
     }
 
     TEST_CASE("ABI1.5 negotiation cannot read or register the ABI1.6 inspector tail", "[Extensions][Inspector][ABI]") {
@@ -90,10 +90,10 @@ namespace Horo::Extensions::Tests {
         query(1);
         CHECK(host.manager.LoadExtension(package.root.string()).HasError());
         CHECK(prefix() == offsetof(HoroExtensionHostApi, registerEditorInspector));
-        CHECK(host.inspectors->Contributions("project.counter", 3).Value().empty());
+        CHECK(host.inspectors->Contributions("game.fixture.counter", 3).Value().empty());
         query(2);  // A1.6-only required bit is also refused during explicit1.5 negotiation, before native load.
         CHECK(host.manager.LoadExtension(package.root.string()).HasError());
-        CHECK(host.inspectors->Contributions("project.counter", 3).Value().empty());
+        CHECK(host.inspectors->Contributions("game.fixture.counter", 3).Value().empty());
         query(0);
     }
 

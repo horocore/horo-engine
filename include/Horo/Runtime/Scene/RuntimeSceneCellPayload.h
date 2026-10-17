@@ -55,6 +55,7 @@ namespace Horo::Runtime {
         std::span<const SceneAssetDependency> dependencies;
         std::span<const SceneCellComponentSchema> componentSchemas;
         std::span<const SceneCellBehaviorSchema> behaviorSchemas;
+        std::span<const TriggerVolumeMigrationEvidence> triggerVolumeEvidence; /**< Complete portable binding constraints. */
     };
 
     /** @brief Owned immutable CoreEcs semantic baseline; encoding remains the Scene provider's responsibility. */

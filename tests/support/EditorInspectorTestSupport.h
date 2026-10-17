@@ -17,7 +17,7 @@ namespace Horo::Extensions::Tests::InspectorSupport {
     /** @brief Complete copied declaration has exact constraints and localization, but no authored value authority. */
     inline EditorInspectorDefinition Definition() {
         EditorInspectorDefinition value;
-        value.behaviorType = "project.counter";
+        value.behaviorType = "game.fixture.counter";
         value.behaviorSchemaVersion = 3;
         value.form.id = {"fixture.inspector"};
         value.form.title = {EditorUiTextKind::LocalizationKey, "fixture.title"};
@@ -92,7 +92,7 @@ namespace Horo::Extensions::Tests::InspectorSupport {
 
         /** @brief Returns one actual immutable discovery copy for source/controller/GUI regression composition. */
         EditorInspectorContribution Contribution() const {
-            auto found = host.Contributions("project.counter", 3);
+            auto found = host.Contributions("game.fixture.counter", 3);
             REQUIRE(found.HasValue());
             REQUIRE(found.Value().size() == 1);
             return found.Value().front();

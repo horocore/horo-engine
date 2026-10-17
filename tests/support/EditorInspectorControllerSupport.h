@@ -1,6 +1,8 @@
 #pragma once
 #include "EditorInspectorTestSupport.h"
+#include "Horo/Foundation/Paths.h"
 #include "OwnedTestDirectory.h"
+#include "editor/gameplay/ProjectGameplayRegistry.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <fstream>
@@ -23,15 +25,16 @@ namespace Horo::Editor::Tests::InspectorControllerSupport {
             const auto source = project.Path() / "assets/scripts/Counter.horo_script";
             {
                 std::ofstream out{source};
-                out << "return horo.behavior { type_id='project.counter', display_name='Counter', schema_version=3, "
+                out << "return horo.behavior { type_id='game.fixture.counter', display_name='Counter', schema_version=3, "
                        "fields={{name='count', default=9007199254740993}, {name='future', default='preserve'}} }";
                 REQUIRE(out.good());
             }
             {
                 std::ofstream out{source.string() + ".meta"};
-                out << R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":"project.counter"})";
+                out << R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":"game.fixture.counter"})";
                 REQUIRE(out.good());
             }
+            ValidateAuthoredBehavior(source);
             REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
             controller = std::make_unique<EditorWorkspaceController>(project.Path(), runtime, Assets::AssetRegistrySnapshot{},
                                                                      EditorWorkspaceDependencies{.documentSessionOwner =
@@ -43,7 +46,7 @@ namespace Horo::Editor::Tests::InspectorControllerSupport {
             EditorWorkspaceViewCommandData attach;
             attach.command = EditorWorkspaceViewCommand::AttachBehaviorToObject;
             attach.objectPayload = object;
-            attach.behaviorTypePayload = Gameplay::BehaviorTypeId::Parse("project.counter").Value();
+            attach.behaviorTypePayload = Gameplay::BehaviorTypeId::Parse("game.fixture.counter").Value();
             Process(attach);
             REQUIRE(controller->ViewModel().objects.front().components.behaviors.size() == 1);
             attachment = controller->ViewModel().objects.front().components.behaviors.front().instanceId;
@@ -51,6 +54,24 @@ namespace Horo::Editor::Tests::InspectorControllerSupport {
             select.command = EditorWorkspaceViewCommand::SelectObject;
             select.objectPayload = object;
             Process(select);
+        }
+
+        /** @brief Proves the real source and catalog accept the canonical identity before controller admission. */
+        void ValidateAuthoredBehavior(const std::filesystem::path &source) const {
+            REQUIRE(ProjectLayout::ScriptsRoot(project.Path()) == source.parent_path());
+            const auto loaded = Gameplay::LuaBehaviorProgram::LoadFiles(source, source.string() + ".meta");
+            if (loaded.HasError())
+                UNSCOPED_INFO(loaded.ErrorValue().domain.Value()
+                              << ":" << loaded.ErrorValue().code.Value() << ": " << loaded.ErrorValue().message);
+            REQUIRE(loaded.HasValue());
+            REQUIRE(loaded.Value()->Descriptor().typeId.Value() == "game.fixture.counter");
+            const auto discovered = ProjectGameplayRegistry::Discover(project.Path());
+            for (const auto &diagnostic : discovered->Diagnostics())
+                UNSCOPED_INFO(diagnostic.source.string() << ": " << diagnostic.error.domain.Value() << ":" << diagnostic.error.code.Value()
+                                                         << ": " << diagnostic.error.message);
+            REQUIRE(discovered->Diagnostics().empty());
+            REQUIRE(discovered->Registry().Registrations().size() == 1);
+            REQUIRE(discovered->Registry().Registrations().front().descriptor.typeId == loaded.Value()->Descriptor().typeId);
         }
 
         /** @brief Sends actual user intent and pumps only the existing lifecycle commit owner. */
@@ -66,7 +87,7 @@ namespace Horo::Editor::Tests::InspectorControllerSupport {
             const auto &view = controller->ViewModel();
             return {provider.provider,
                     "fixture.inspector",
-                    Gameplay::BehaviorTypeId::Parse("project.counter").Value(),
+                    Gameplay::BehaviorTypeId::Parse("game.fixture.counter").Value(),
                     3,
                     view.inspectorDocumentGeneration,
                     view.inspectorBehaviorRegistryRevision,

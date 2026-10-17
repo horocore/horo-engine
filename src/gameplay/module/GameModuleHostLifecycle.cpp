@@ -26,38 +26,42 @@ namespace Horo::Gameplay {
             return capabilities;
         }
 
-        [[nodiscard]] Result<void> InvokeRegister(IGameModule &gameModule, GameRegistrationContext &context) noexcept {
+        [[nodiscard]] Result<void> InvokeRegister(IGameModule &gameModule, GameRegistrationContext &context) {
+            // Native module callbacks may throw arbitrary types; preserve typed rollback diagnostics at the host boundary.
             try {
                 return gameModule.Register(context);
-            } catch (...) {
+            } catch (...) {  // NOSONAR: native ABI boundary.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay module registration threw an exception."));
             }
         }
 
-        [[nodiscard]] Result<void> InvokeStart(IGameModule &gameModule, GameRuntimeContext &context) noexcept {
+        [[nodiscard]] Result<void> InvokeStart(IGameModule &gameModule, GameRuntimeContext &context) {
+            // Native module callbacks may throw arbitrary types; preserve typed rollback diagnostics at the host boundary.
             try {
                 return gameModule.Start(context);
-            } catch (...) {
+            } catch (...) {  // NOSONAR: native ABI boundary.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayFactoryFailed, "Gameplay module startup threw an exception."));
             }
         }
 
-        [[nodiscard]] Result<GameModuleReloadSnapshot> InvokePrepareReload(IGameModule &gameModule, GameRuntimeContext &context) noexcept {
+        [[nodiscard]] Result<GameModuleReloadSnapshot> InvokePrepareReload(IGameModule &gameModule, GameRuntimeContext &context) {
+            // Native module callbacks may throw arbitrary types; preserve typed rollback diagnostics at the host boundary.
             try {
                 return gameModule.PrepareReload(context);
-            } catch (...) {
+            } catch (...) {  // NOSONAR: native ABI boundary.
                 return Result<GameModuleReloadSnapshot>::Failure(
                     MakeError(GameplayErrors::GameplayReloadRestartRequired, "Gameplay reload quiescence callback threw an exception."));
             }
         }
 
         [[nodiscard]] Result<void> InvokeRestoreReload(IGameModule &gameModule, const GameModuleReloadSnapshot &snapshot,
-                                                       GameRuntimeContext &context) noexcept {
+                                                       GameRuntimeContext &context) {
+            // Native module callbacks may throw arbitrary types; preserve typed rollback diagnostics at the host boundary.
             try {
                 return gameModule.RestoreReload(snapshot, context);
-            } catch (...) {
+            } catch (...) {  // NOSONAR: native ABI boundary.
                 return Result<void>::Failure(
                     MakeError(GameplayErrors::GameplayReloadRestoreFailed, "Gameplay reload restore callback threw an exception."));
             }
@@ -208,6 +212,11 @@ namespace Horo::Gameplay {
             projectServices->RequestCancellation();
         if (gameplayModule != nullptr && startAttempted)
             gameplayModule->Stop(runtimeContext);  // NOSONAR: exact-generation module boundary; path analysis is unrelated.
+        // Mutable public context copies may contain module-emitted shared owners; release them while code and module still exist.
+        runtimeContext.physics.reset();
+        runtimeContext.navigation.reset();
+        runtimeContext.activeServices = {};
+        runtimeContext.capabilities = {};
         projectServices.reset();
         runtimeContext.navigation.reset();
         navigation.reset();

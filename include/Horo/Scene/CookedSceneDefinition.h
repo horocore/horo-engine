@@ -5,7 +5,12 @@
  */
 #include "Horo/Runtime/Scene/RuntimeSceneDefinition.h"
 
+#include <string_view>
+
 namespace Horo::SceneCook {
+    /** @brief Required wire version including portable trigger migration constraints; v1 content requires recook. */
+    inline constexpr std::string_view CookedSceneFormat = "horo.scene.runtime.v2";
+
     /** @brief Positive immutable load/cook limits for one complete scene payload. */
     struct CookedSceneLimits final {
         std::size_t maximumEntities{100'000};

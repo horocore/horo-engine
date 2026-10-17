@@ -10,7 +10,8 @@ TEST_CASE("loaded gameplay declarations participate in durable capture and aggre
     GameModuleHost moduleHost;
     auto loadedResult = moduleHost.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(loadedResult.HasValue());
-    auto loaded = std::move(loadedResult).Value();
+    REQUIRE_FALSE(loadedResult.Value().diagnostic);
+    auto loaded = std::move(loadedResult).Value().owner;
     auto event = loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation());
     REQUIRE(event.HasValue());
     CanonicalStateParticipantRegistry registry;
@@ -67,28 +68,30 @@ TEST_CASE("game module host validates fingerprint and keeps factories alive thro
 
     auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(loaded.HasValue());
-    REQUIRE(loaded.Value()->ModuleId() == "game.tests");
-    RequireFrozenRegistries(*loaded.Value());
-    REQUIRE(loaded.Value()->ActiveServices().size() == 1);
-    REQUIRE(loaded.Value()->Capabilities().size() == 1);
-    REQUIRE_FALSE(loaded.Value()->Cancellation().IsCancellationRequested());
+    REQUIRE_FALSE(loaded.Value().diagnostic);
+    REQUIRE(loaded.Value().owner->ModuleId() == "game.tests");
+    RequireFrozenRegistries(*loaded.Value().owner);
+    REQUIRE(loaded.Value().owner->ActiveServices().size() == 1);
+    REQUIRE(loaded.Value().owner->Capabilities().size() == 1);
+    REQUIRE_FALSE(loaded.Value().owner->Cancellation().IsCancellationRequested());
 
     {
-        auto systems = GameplaySystemRuntime::Create(loaded.Value()->Systems(), loaded.Value()->ActiveServices(),
-                                                     loaded.Value()->Capabilities(), loaded.Value()->Cancellation());
+        auto systems = GameplaySystemRuntime::Create(loaded.Value().owner->Systems(), loaded.Value().owner->ActiveServices(),
+                                                     loaded.Value().owner->Capabilities(), loaded.Value().owner->Cancellation());
         REQUIRE(systems.HasValue());
         REQUIRE(systems.Value()->Execute(GameplaySystemPhase::Gameplay, GameplayThreadAffinity::RuntimeOwner, 1.0 / 60.0).HasValue());
         systems.Value()->Shutdown();
     }
 
     {
-        Tests::ActiveBehaviorRuntime active = Tests::ActivateBehaviorRuntime(Definition(), SceneRuntimeId{7}, loaded.Value()->Registry());
+        Tests::ActiveBehaviorRuntime active =
+            Tests::ActivateBehaviorRuntime(Definition(), SceneRuntimeId{7}, loaded.Value().owner->Registry());
         const GameplayInputAction move{GameplayActionId{"game.tests.move"}, 3.0F, 0.0F, true, true, false};
         REQUIRE(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, SceneObjectId{1}, {&move, 1}).x == 3.0F);
         active.runtime->Shutdown();
     }
 
-    std::unique_ptr<LoadedGameModule> active = std::move(loaded).Value();
+    std::unique_ptr<LoadedGameModule> active = std::move(loaded).Value().owner;
     auto reloadSnapshot = active->PrepareReload();
     REQUIRE(reloadSnapshot.HasValue());
     REQUIRE(active->Cancellation().IsCancellationRequested());
@@ -100,16 +103,18 @@ TEST_CASE("game module host validates fingerprint and keeps factories alive thro
 
     auto replacement = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(replacement.HasValue());
-    REQUIRE(replacement.Value()->RestoreReload(reloadSnapshot.Value()).HasValue());
+    REQUIRE_FALSE(replacement.Value().diagnostic);
+    REQUIRE(replacement.Value().owner->RestoreReload(reloadSnapshot.Value()).HasValue());
 }
 
 TEST_CASE("game module host publishes native replication registrations") {
     GameModuleHost host;
     auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(loaded.HasValue());
-    REQUIRE(loaded.Value()->Replication().IsFrozen());
+    REQUIRE_FALSE(loaded.Value().diagnostic);
+    REQUIRE(loaded.Value().owner->Replication().IsFrozen());
 
-    auto replication = loaded.Value()->Replication().Acquire();
+    auto replication = loaded.Value().owner->Replication().Acquire();
     REQUIRE(replication.HasValue());
     REQUIRE(replication.Value().Registrations().size() == 1);
     REQUIRE(replication.Value().Descriptors()->Schemas().size() == 1);
@@ -147,9 +152,10 @@ TEST_CASE("game module generation remains pinned by external behavior and system
         GameModuleHost host;
         auto loadedResult = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
         REQUIRE(loadedResult.HasValue());
-        auto replication = loadedResult.Value()->Replication().Acquire();
+        REQUIRE_FALSE(loadedResult.Value().diagnostic);
+        auto replication = loadedResult.Value().owner->Replication().Acquire();
         REQUIRE(replication.HasValue());
-        std::unique_ptr<LoadedGameModule> loaded = std::move(loadedResult).Value();
+        std::unique_ptr<LoadedGameModule> loaded = std::move(loadedResult).Value().owner;
 
         RequireRestartRequired(loaded->PrepareReload());
         RequireRestartRequired(loaded->Replication().Acquire());
@@ -169,7 +175,8 @@ TEST_CASE("game module host validates an independent shadow artifact and removes
     GameModuleHost host;
     auto loaded = host.LoadShadowCopy(std::filesystem::path{HORO_TEST_GAME_MODULE_PATH}, root, Expectation());
     REQUIRE(loaded.HasValue());
-    std::unique_ptr<LoadedGameModule> module = std::move(loaded).Value();
+    REQUIRE_FALSE(loaded.Value().diagnostic);
+    std::unique_ptr<LoadedGameModule> module = std::move(loaded).Value().owner;
     const std::filesystem::path shadowPath = module->LoadedArtifactPath();
     REQUIRE(std::filesystem::equivalent(shadowPath.parent_path(), root));
     REQUIRE(shadowPath != std::filesystem::path{HORO_TEST_GAME_MODULE_PATH});
@@ -275,7 +282,8 @@ TEST_CASE("native module restart after releasing generation leases preserves rep
     {
         auto first = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
         REQUIRE(first.HasValue());
-        std::unique_ptr<LoadedGameModule> loaded = std::move(first).Value();
+        REQUIRE_FALSE(first.Value().diagnostic);
+        std::unique_ptr<LoadedGameModule> loaded = std::move(first).Value().owner;
         auto prior = loaded->Replication().Acquire();
         REQUIRE(prior.HasValue());
         fingerprint = prior.Value().Descriptors()->Fingerprint();
@@ -289,7 +297,8 @@ TEST_CASE("native module restart after releasing generation leases preserves rep
     }  // Every old native generation lease is released before restart; only copied inert evidence remains.
     auto replacement = host.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
     REQUIRE(replacement.HasValue());
-    auto current = replacement.Value()->Replication().Acquire();
+    REQUIRE_FALSE(replacement.Value().diagnostic);
+    auto current = replacement.Value().owner->Replication().Acquire();
     REQUIRE(current.HasValue());
     CHECK(current.Value().Descriptors()->Fingerprint() == fingerprint);
     CHECK(current.Value().Serializers().Encode(schema, field, 3.5).Value() == encodedEvidence);

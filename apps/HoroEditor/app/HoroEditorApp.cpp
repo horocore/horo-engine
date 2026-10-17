@@ -1,6 +1,7 @@
 #include "HoroEditorApp.h"
 
 #include "EditorPresentationSurface.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
 #include "EditorSurfaceLifecycleQualification.h"
 #endif
@@ -1024,6 +1025,7 @@ namespace Horo::Editor {
                 screenHost_->Shutdown();
                 p_->operationServices.shaderBuild.Shutdown();
                 p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
+                (void)screenHost_->GameplayRetirements()->Close();
                 try {
                     if (authorities_.packages->Close().HasError())
                         std::terminate();
@@ -1605,6 +1607,7 @@ namespace Horo::Editor {
 
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
             const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
+            auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             GuiScreenHost
                 screenHost{guiContext,
                            GuiScreenHostComposition{.modalHost = p.modalHost,
@@ -1643,7 +1646,8 @@ namespace Horo::Editor {
                                                          .knownPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
                                                          .approvedPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
                                                          .availableCapabilities = {{"horo.editor.inspector"},
-                                                                                   {"horo.editor.property-drawer"}}}}};
+                                                                                   {"horo.editor.property-drawer"}}},
+                                                    .gameplayRetirements = gameplayRetirements}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);

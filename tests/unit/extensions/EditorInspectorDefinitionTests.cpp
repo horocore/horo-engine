@@ -11,7 +11,7 @@ namespace Horo::Extensions::Tests {
         const auto contribution = fixture.Contribution();
         const auto revision = fixture.host.Revision();
         CHECK(ValidateEditorInspectorDefinition(contribution.context.Surface(), *contribution.definition).HasValue());
-        CHECK(contribution.definition->behaviorType == "project.counter");
+        CHECK(contribution.definition->behaviorType == "game.fixture.counter");
         CHECK(ValidateEditorInspectorValue(contribution.definition->fields.front(), EditorInspectorScalar{INT64_MIN}).HasValue());
         CHECK(ValidateEditorInspectorValue(contribution.definition->fields.front(), EditorInspectorScalar{INT64_MAX}).HasValue());
         CHECK(ValidateEditorInspectorValue(contribution.definition->fields.front(), EditorInspectorScalar{std::int64_t{9007199254740993LL}})
@@ -80,17 +80,17 @@ namespace Horo::Extensions::Tests {
         CHECK(fixture.host.Revision() == version);
         bool rejected{};
         std::thread other{[&] {
-            rejected = fixture.host.Contributions("project.counter", 3).HasError();
+            rejected = fixture.host.Contributions("game.fixture.counter", 3).HasError();
         }};
         other.join();
         CHECK(rejected);
         fixture.registration->Reset();
         CHECK(fixture.host.Revision() != version);
         CHECK_FALSE(retained.context.IsUsable());
-        CHECK(fixture.host.Contributions("project.counter", 3).Value().empty());
+        CHECK(fixture.host.Contributions("game.fixture.counter", 3).Value().empty());
         fixture.host.BeginShutdown();
         CHECK(fixture.host.Revision() == 0);
-        CHECK(fixture.host.Contributions("project.counter", 3).HasError());
+        CHECK(fixture.host.Contributions("game.fixture.counter", 3).HasError());
     }
 
     TEST_CASE("Property drawers use canonical authority and require exactly their declared typed field",

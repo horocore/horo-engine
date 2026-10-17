@@ -1,5 +1,6 @@
 #include "GameplayModuleTestSupport.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameplayRegistrationRuntime.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "RuntimeUiCapabilityTestSupport.h"
 #include "unit/gameplay/GameplayAiTestSupport.h"
@@ -7,6 +8,32 @@
 #include <cstring>
 
 namespace Horo::Tests::UiAccess {
+    TEST_CASE("Busy native retirement revokes UI admission before actual system generation leases drain",
+              "[runtime-ui][native][lifetime]") {
+        Fixture fixture;
+        auto anchor = fixture.Client();
+        Gameplay::GameModuleHost host{Gameplay::GameModuleHostOptions{{}, {.runtimeUi = anchor}}};
+        auto candidate = Take(host.Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                     ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)}));
+        REQUIRE_FALSE(candidate.diagnostic);
+        auto module = std::move(candidate.owner);
+        auto retained = module->RuntimeUiContext();
+        REQUIRE(retained != nullptr);
+        REQUIRE(retained->Validate().HasValue());
+        auto runtime = Take(Gameplay::GameplaySystemRuntime::Create(module->Systems(), module->ActiveServices(), module->Capabilities(),
+                                                                    module->Cancellation()));
+        module->RequestRetirement();
+        CHECK(module->TryRetire().HasError());
+        const auto revoked = retained->Validate();
+        REQUIRE(revoked.HasError());
+        CHECK(revoked.ErrorValue().code.Value() == UiErrors::CapabilityRevoked.code.Value());
+        CHECK(anchor->Validate().HasValue());
+        runtime.reset();
+        REQUIRE(module->TryRetire().HasValue());
+        CHECK(retained->Validate().HasError());
+        CHECK(anchor->Validate().HasValue());
+    }
+
     namespace {
         using Copy = void (*)(std::shared_ptr<const RuntimeUiClient> *);
         using Queue = void (*)(Result<RuntimeUiRequestId> *);
@@ -43,7 +70,8 @@ namespace Horo::Tests::UiAccess {
         auto loaded = host->Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", Gameplay::CurrentGameplayBuildFingerprint(),
                                                               ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)});
         REQUIRE(loaded.HasValue());
-        auto module = std::move(loaded).Value();
+        REQUIRE_FALSE(loaded.Value().diagnostic);
+        auto module = std::move(loaded).Value().owner;
         REQUIRE(module->RuntimeUiContext() != nullptr);
         auto escapedAi = module->AiContext();
         REQUIRE(escapedAi != nullptr);
