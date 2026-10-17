@@ -457,8 +457,14 @@ namespace Horo::Extensions {
         auto lock = state_->Lock();
         if (state_->shutdown)
             return Failure(ExtensionErrors::EditorSurfaceRegistryShutdown);
-        ++state_->revision;
+        if (const auto found = std::ranges::find_if(state_->providers,
+                                                    [&provider](const auto &entry) {
+            return entry.provider == provider;
+        });
+            found == state_->providers.end() && state_->providers.size() >= state_->limits.maximumWorkspaceEntries)
+            return Failure(ExtensionErrors::EditorSurfaceRegistryCapacityExceeded);
         SetProviderConfiguredStatus(*state_, provider, status);
+        ++state_->revision;
         return Result<void>::Success();
     }
 

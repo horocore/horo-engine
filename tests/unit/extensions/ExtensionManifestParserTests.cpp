@@ -1,7 +1,10 @@
+#include "AllocationProbe.h"
 #include "Horo/Extensions/ExtensionManifest.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <cstdio>
+#include <new>
 #include <string>
 #include <string_view>
 
@@ -17,6 +20,44 @@ namespace Horo::Extensions::Tests {
                 "kind": "native"
             }]
         })json";
+
+#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0
+        /** @brief Exercises every measured ordinary/aligned request, including completed DOM retirement and schema-error unwind. */
+        void RequireEveryManifestAllocationFailure(const std::string_view input, const ExtensionManifestLimits &limits, const bool valid) {
+            namespace Probe = Horo::Tests::AllocationProbe;
+            REQUIRE(ParseExtensionManifest(input, limits).HasValue() == valid);
+            std::size_t measured{};
+            {
+                const Probe::ScopedMeasurement measurement;
+                static_cast<void>(ParseExtensionManifest(input, limits));
+                measured = measurement.Snapshot().requests;
+            }
+            REQUIRE(measured > 0);
+            std::size_t completed{};
+            for (std::size_t index = 0; index < measured; ++index) {
+                INFO(index);
+                const auto allocationsBefore = Probe::Count();
+                const auto freesBefore = Probe::FreeCount();
+                bool failed{};
+                {
+                    const Probe::ScopedFailure failure{index};
+                    try {
+                        static_cast<void>(ParseExtensionManifest(input, limits));
+                    } catch (const std::bad_alloc &) {
+                        failed = true;
+                    }
+                }
+                const auto allocations = Probe::Count() - allocationsBefore;
+                const auto frees = Probe::FreeCount() - freesBefore;
+                CHECK(failed);
+                CHECK(allocations == frees + 1);
+                ++completed;
+            }
+            std::fprintf(stderr, "[manifest-allocation] measured=%zu completed=%zu\n", measured, completed);
+            CHECK(completed == measured);
+        }
+
+#endif
 
         void RequireError(const Result<ExtensionManifest> &result, const std::string_view path, const std::string_view diagnosticCode) {
             REQUIRE(result.HasError());
@@ -443,4 +484,30 @@ namespace Horo::Extensions::Tests {
             RequireError(result, "$.contributions", "extension.manifest.collection_limit");
         }
     }
+
+#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0
+    TEST_CASE("Completed manifest DOM retirement preserves every allocation failure on valid and rejected schemas",
+              "[Extensions][Manifest][Allocation]") {
+        SECTION("valid compound manifest") {
+            RequireEveryManifestAllocationFailure(
+                R"({"id":"fixture.package","version":"1.0.0","modules":[{"id":"fixture.module","version":"1.0.0","kind":"native","roles":["editor-presentation"],"requiredCapabilities":["editor.activity"]}],"contributions":[{"type":"editor.panel","id":"fixture.panel","module":"fixture.module"}]})",
+                {}, true);
+        }
+        SECTION("schema rejection retains compound children") {
+            RequireEveryManifestAllocationFailure(
+                R"({"id":"fixture.package","version":"1.0.0","futureAuthority":{"nested":[{"values":[1,2,3]},[],{},"retained"]}})", {},
+                false);
+        }
+        SECTION("custom depth above sixty four remains admitted before schema rejection") {
+            const auto source = std::string{R"({"futureAuthority":)"} + std::string(80, '[') + "0" + std::string(80, ']') + "}";
+            ExtensionManifestLimits limits;
+            limits.maximumNestingDepth = 81;
+            RequireError(ParseExtensionManifest(source, limits), "$.futureAuthority", "extension.manifest.unknown_field");
+            RequireEveryManifestAllocationFailure(source, limits, false);
+            limits.maximumNestingDepth = 80;
+            RequireError(ParseExtensionManifest(source, limits), "$", "extension.manifest.nesting_limit");
+        }
+    }
+#endif
+
 }  // namespace Horo::Extensions::Tests

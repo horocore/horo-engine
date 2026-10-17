@@ -320,7 +320,7 @@
       "text": "Oyun oturumu onaylandı"
     },
     "workspace.global_dock.network.replication": {
-      "text": "Çoğaltma"
+      "text": "176 nesne çoğaltılıyor · RPC kuyruğu: 0"
     },
     "workspace.global_dock.network.rpc": {
       "text": "RPC"
@@ -1840,7 +1840,6 @@
     "workspace.global_dock.network.footer.tick": {"text": "Tick 64 Hz"},
     "workspace.global_dock.network.footer.tracing": {"text": "0 kayıp · izleme kullanılabilir"},
     "workspace.global_dock.network.ping": {"text": "42 ms · Bant genişliği: 12.3 kb/s ↓ · 3.1 kb/s ↑"},
-    "workspace.global_dock.network.replication": {"text": "176 nesne çoğaltılıyor · RPC kuyruğu: 0"},
     "workspace.global_dock.network.connection": {"text": "1 eş · Sunucu yetkili · tik 64 Hz"},
     "workspace.global_dock.localization.locale": {"text": "tr-TR · Geri dönüş: en-US · 3 yüklü"},
     "workspace.global_dock.localization.strings": {"text": "1.247 çevrildi · 0 eksik · 18 belirsiz"},
@@ -2299,6 +2298,13 @@
     "workspace.packages.recovery_hint": {
       "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
     },
+    "workspace.extensions.recovery": {"text": "Kullanılamayan eklenti yüzeyleri"},
+    "workspace.extensions.retained": {"text": "Çalışma alanı durumu korunuyor. Bu yüzeyleri geri yüklemek için sağlayıcıyı geri yükleyin veya etkinleştirin. Sağlayıcı yüzeylerini kapatmak kayıtlı sunum verilerini korur."},
+    "workspace.extensions.close": {"text": "Sağlayıcının çalışma alanı yüzeylerini kapat"},
+    "workspace.extensions.disabled": {"text": "Sağlayıcı devre dışı."},
+    "workspace.extensions.incompatible": {"text": "Sağlayıcı bu ana uygulamayla uyumlu değil."},
+    "workspace.extensions.failed": {"text": "Sağlayıcı etkinleştirilemedi."},
+    "workspace.extensions.missing": {"text": "Sağlayıcı veya katkı kullanılamıyor."},
     "settings.navigation.open_definition": {
       "text": "Gezinme tanımını aç"
     },

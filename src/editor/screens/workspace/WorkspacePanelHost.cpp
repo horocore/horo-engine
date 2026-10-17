@@ -233,8 +233,7 @@ namespace Horo::Editor {
         if (const Result<void> closed = m_documentRegistry_->Close(instance); closed.HasError())
             return closed;
 
-        const Result<SerializedDocumentOpenKey> serialized = SerializeDocumentOpenKey(key);
-        if (serialized.HasValue()) {
+        if (const Result<SerializedDocumentOpenKey> serialized = SerializeDocumentOpenKey(key); serialized.HasValue()) {
             std::erase(m_layout.openDocuments, serialized.Value());
         }
         m_documentTabs.erase(tab);
@@ -328,8 +327,9 @@ namespace Horo::Editor {
         return Result<std::vector<WorkspaceDocumentTab>>::Success(std::move(restoredTabs));
     }
 
-    bool WorkspacePanelHost::SaveLayout(const std::filesystem::path &path, std::string *error) const {
-        return WorkspaceLayoutPersistence::Save(path, m_layout, error);
+    bool WorkspacePanelHost::SaveLayout(DurableFileSystem &files, AtomicFileReplacementReceipt &receipt, const std::filesystem::path &path,
+                                        std::string *error) const {
+        return WorkspaceLayoutPersistence::Save(files, receipt, path, m_layout, error);
     }
 
     bool WorkspacePanelHost::RestoreLayout(const std::filesystem::path &path, std::string *error) {
@@ -349,7 +349,7 @@ namespace Horo::Editor {
             RestoreDocumentSnapshot(previousLayout, previousTabs, previousActiveKey);
             return false;
         }
-        const Result<std::vector<WorkspaceDocumentTab>> restoredTabs = OpenRestoredDocumentTabs(restored->openDocuments, error);
+        Result<std::vector<WorkspaceDocumentTab>> restoredTabs = OpenRestoredDocumentTabs(restored->openDocuments, error);
         if (restoredTabs.HasError()) {
             RestoreDocumentSnapshot(previousLayout, previousTabs, previousActiveKey);
             return false;

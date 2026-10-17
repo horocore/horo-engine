@@ -2429,10 +2429,16 @@ add_executable(HoroUiCanvasDocumentTests
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices nlohmann_json::nlohmann_json)
 add_executable(HoroWorkspaceLayoutPersistenceTests
+        unit/editor/WorkspaceSurfacePublicationTests.cpp
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
         support/AllocationProbe.cpp
 )
 target_link_libraries(HoroWorkspaceLayoutPersistenceTests PRIVATE HoroEngine::EditorServices)
+add_library(HoroWorkspaceRecoveryPublicHeaderConsumer OBJECT support/WorkspaceRecoveryPublicContract.cpp)
+target_compile_features(HoroWorkspaceRecoveryPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroWorkspaceRecoveryPublicHeaderConsumer PRIVATE HoroEngine::EditorServices HoroEngine::Extensions)
+target_sources(HoroWorkspaceLayoutPersistenceTests PRIVATE $<TARGET_OBJECTS:HoroWorkspaceRecoveryPublicHeaderConsumer>)
+
 add_executable(HoroActivityBarLayoutTests
         unit/editor/ActivityBarLayoutTests.cpp
 )
@@ -2615,7 +2621,7 @@ if (HORO_BUILD_EDITOR_GUI)
             PRIVATE
             HoroEngine::Gui
     )
-    add_executable(HoroExtensionActivityViewTests unit/editor/ExtensionActivityViewTests.cpp support/AllocationProbe.cpp)
+    add_executable(HoroExtensionActivityViewTests unit/editor/ExtensionActivityViewTests.cpp unit/editor/ExtensionRecoveryViewTests.cpp support/AllocationProbe.cpp)
     target_sources(HoroGuiPublicHeaderConsumer PRIVATE support/GuiScreenHostPublicContract.cpp)
     target_compile_features(HoroExtensionActivityViewTests PRIVATE cxx_std_20)
     target_include_directories(HoroExtensionActivityViewTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
@@ -4157,6 +4163,7 @@ add_test(NAME HoroEditorActivityBoundaryTests COMMAND HoroEditorActivityBoundary
 set_tests_properties(HoroEditorActivityBoundaryTests PROPERTIES LABELS "unit;extensions;headless;sonar-coverage;ci-windows")
 
 add_executable(HoroExtensionManagerTests
+        support/AllocationProbe.cpp
         unit/extensions/ApplicationCapabilityRegistryTests.cpp
         unit/extensions/ExtensionActivationTransactionTests.cpp
         unit/extensions/ExtensionRetirementTests.cpp
@@ -4164,8 +4171,10 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExtensionActivationStateTests.cpp
         unit/extensions/EditorSurfaceDescriptorTests.cpp
         unit/extensions/EditorSvgIconTests.cpp
+        unit/extensions/EditorActivityRecoveryTests.cpp
         unit/extensions/EditorActivityHostTests.cpp
         unit/extensions/EditorSurfaceContextTests.cpp
+        unit/extensions/EditorSurfaceRecoveryTests.cpp
         unit/extensions/EditorSurfaceRegistryTests.cpp
         unit/extensions/EditorActivityRegistryTests.cpp
         unit/extensions/EditorCommandRegistryTests.cpp
@@ -4303,6 +4312,16 @@ if(TARGET HoroAssetImporterBasicExample)
     )
 endif()
 add_test(NAME HoroExtensionManagerTests COMMAND HoroExtensionManagerTests)
+if(NOT MSVC OR CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+    foreach(extension_allocation_case IN ITEMS
+            "Every recovery admission allocation failure precedes native callbacks and preserves independent status"
+            "Completed manifest DOM retirement preserves every allocation failure on valid and rejected schemas")
+        add_test(NAME "HoroExtensionManagerAllocationTests::${extension_allocation_case}"
+                COMMAND HoroExtensionManagerTests "${extension_allocation_case}")
+        set_tests_properties("HoroExtensionManagerAllocationTests::${extension_allocation_case}"
+                PROPERTIES LABELS "unit;extensions;allocation" TIMEOUT 90)
+    endforeach()
+endif()
 
 add_executable(HoroProcessObserverTests unit/extensions/ProcessObserverRegistryTests.cpp)
 target_compile_features(HoroProcessObserverTests PRIVATE cxx_std_20)

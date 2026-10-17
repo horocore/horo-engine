@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Run exact Scene or Navigation probes unsupported by MSVC Debug iterator proxies."""
 
-import argparse
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 import sys
-from defusedxml import ElementTree as ET
+import runpy
+from defusedxml import ElementTree
 from defusedxml.common import DefusedXmlException
+
+# Resolve the trusted sibling identically for direct CLI and file-spec loading.
+EVIDENCE = runpy.run_path(str(Path(__file__).with_name("allocation_qualification_cli.py")))
+parse_evidence_arguments = EVIDENCE["parse_evidence_arguments"]
+write_case_regex = EVIDENCE["write_case_regex"]
 
 WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
 
@@ -53,7 +58,7 @@ def verify_junit(path, cases=CASES):
     path = Path(path).resolve()
     if not path.is_relative_to(Path.cwd().resolve()):
         raise ValueError(WORKSPACE_EVIDENCE_ERROR)
-    root = ET.parse(path).getroot()
+    root = ElementTree.parse(path).getroot()
     executed = list(root.iter("testcase"))
     names = [case.get("name") for case in executed]
     if len(executed) != len(cases) or set(names) != cases:
@@ -84,38 +89,14 @@ def verify_navigation_positions(executed):
 
 def write_regex(path, cases=CASES):
     """Write only resolved workspace evidence, including for direct non-CLI callers."""
-    path = Path(path).resolve()
-    if not path.is_relative_to(Path.cwd().resolve()):
-        raise ValueError(WORKSPACE_EVIDENCE_ERROR)
-    # CTest uses POSIX extended syntax: noncapturing Python groups are not supported.
-    pattern = "^(" + "|".join(re.escape(name) for name in sorted(cases)) + ")$"
-    path.write_text(pattern, encoding="utf-8")
-
-
-def workspace_path(value):
-    """Reject CLI traversal and symlink escapes before reading or writing workspace evidence."""
-    root = Path.cwd().resolve()
-    candidate = Path(value).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError as error:
-        raise argparse.ArgumentTypeError(WORKSPACE_EVIDENCE_ERROR) from error
-    return candidate
+    write_case_regex(path, cases)
 
 
 def main():
     """Validate discovery before execution, or validate the resulting exact Release JUnit."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--discovery", type=workspace_path)
-    mode.add_argument("--output-junit", type=workspace_path)
-    parser.add_argument("--regex-output", type=workspace_path)
-    parser.add_argument("--family", choices=("scene", "navigation"), default="scene")
-    args = parser.parse_args()
+    args = parse_evidence_arguments(__doc__, families=("scene", "navigation"))
     cases = NAVIGATION_CASES if args.family == "navigation" else CASES
     if args.discovery:
-        if args.regex_output is None:
-            parser.error("--discovery requires --regex-output")
         verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")), cases)
         write_regex(args.regex_output, cases)
     else:
@@ -126,6 +107,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, ET.ParseError, DefusedXmlException) as error:
+    except (ValueError, OSError, ElementTree.ParseError, DefusedXmlException) as error:
         print(f"Scene allocation qualification failed: {error}", file=sys.stderr)
         sys.exit(1)

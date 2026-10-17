@@ -2838,6 +2838,7 @@ add_library(HoroEditorServices STATIC
         editor/modals/EditorModalHost.cpp
         editor/screens/workspace/WorkspaceLayout.cpp
         editor/screens/workspace/WorkspacePanelHost.cpp
+        editor/screens/workspace/WorkspaceLayoutFileStore.cpp
         editor/screens/workspace/WorkspaceLayoutPersistence.cpp
         editor/screens/workspace/ActivityBarLayout.cpp
         editor/screens/workspace/WorkspaceSplitterInteraction.cpp
@@ -3064,6 +3065,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
+            editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp
@@ -3114,6 +3116,7 @@ add_library(HoroExtensions STATIC
         extensions/discovery/DiscoveryPaths.cpp
         extensions/discovery/DiscoveryPlan.cpp
         extensions/discovery/DiscoveryRootPolicy.cpp
+        extensions/host/ExtensionManagerRecovery.cpp
         extensions/host/ExtensionManager.cpp
         extensions/host/ExtensionManagerRetirement.cpp
         extensions/host/ExtensionPlatformProviderCopy.cpp
@@ -3126,6 +3129,7 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorActivityAction.cpp
         extensions/host/EditorSurfaceRegistry.cpp
         extensions/host/EditorSurfaceRegistryOperations.cpp
+        extensions/host/EditorSurfaceRegistryRecovery.cpp
         extensions/host/EditorSurfaceRegistryPersistence.cpp
         extensions/host/EditorSurfaceRegistryInternal.h
         extensions/host/EditorCommandRegistry.cpp

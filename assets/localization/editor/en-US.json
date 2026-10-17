@@ -320,7 +320,7 @@
       "text": "Gameplay session admitted"
     },
     "workspace.global_dock.network.replication": {
-      "text": "Replication"
+      "text": "176 objects replicating · RPC queue: 0"
     },
     "workspace.global_dock.network.rpc": {
       "text": "RPC"
@@ -1840,7 +1840,6 @@
     "workspace.global_dock.network.footer.tick": {"text": "Tick 64 Hz"},
     "workspace.global_dock.network.footer.tracing": {"text": "0 dropped · tracing available"},
     "workspace.global_dock.network.ping": {"text": "42 ms · Bandwidth: 12.3 kb/s ↓ · 3.1 kb/s ↑"},
-    "workspace.global_dock.network.replication": {"text": "176 objects replicating · RPC queue: 0"},
     "workspace.global_dock.network.connection": {"text": "1 peer · Server-authoritative · tick 64 Hz"},
     "workspace.global_dock.localization.locale": {"text": "tr-TR · Fallback: en-US · 3 loaded"},
     "workspace.global_dock.localization.strings": {"text": "1,247 translated · 0 missing · 18 fuzzy"},
@@ -2299,6 +2298,13 @@
     "workspace.packages.recovery_hint": {
       "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
     },
+    "workspace.extensions.recovery": {"text": "Unavailable extension surfaces"},
+    "workspace.extensions.retained": {"text": "Your workspace state is retained. Restore or enable the provider to recover these surfaces. Closing provider surfaces preserves their saved presentation data."},
+    "workspace.extensions.close": {"text": "Close provider workspace surfaces"},
+    "workspace.extensions.disabled": {"text": "The provider is disabled."},
+    "workspace.extensions.incompatible": {"text": "The provider is incompatible with this host."},
+    "workspace.extensions.failed": {"text": "The provider failed activation."},
+    "workspace.extensions.missing": {"text": "The provider or contribution is unavailable."},
     "settings.navigation.open_definition": {
       "text": "Open Navigation Definition"
     },
