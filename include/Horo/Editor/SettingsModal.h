@@ -27,10 +27,12 @@ namespace Horo::Editor {
          * @param logo Presentation logo texture.
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional registry-backed extension marketplace.
+         * @param navigationSettings Optional live session borrowed only during construction to capture its revocable opening.
          */
         SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, std::uintptr_t logo,
                       Extensions::ExtensionInventory *extensionInventory = nullptr,
-                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr) noexcept;
+                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
+                      const NavigationProjectSettingsSession *navigationSettings = nullptr) noexcept;
 
         [[nodiscard]] ModalId Id() const override;
         [[nodiscard]] ModalPresentation Presentation() const override;
@@ -51,6 +53,7 @@ namespace Horo::Editor {
         std::uintptr_t m_logo = 0;
         Extensions::ExtensionInventory *m_extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *m_extensionMarketplace = nullptr;
+        NavigationProjectSettingsSessionBorrow m_navigationSettings;
         EditorDataBus *m_events = nullptr;
         SettingsState m_draft;
         bool m_revertedPublished = false;

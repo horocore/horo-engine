@@ -8,6 +8,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ReloadExternalScene */
     void EditorWorkspaceController::ReloadExternalScene() {
+        if (!PrepareNavigationSceneReplacement("Scene replacement"))
+            return;
+
         if (!m_defaultScenePath.has_value() || m_mutations == nullptr || m_durableFiles == nullptr)
             return;
 
@@ -59,6 +62,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::RestoreSceneRecovery */
     void EditorWorkspaceController::RestoreSceneRecovery() {
+        if (!PrepareNavigationSceneReplacement("Scene replacement"))
+            return;
+
         if (!m_defaultScenePath.has_value())
             return;
         Result<std::optional<ProjectSceneRecoveryRecord>> recovery =

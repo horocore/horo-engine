@@ -502,6 +502,13 @@ ADR-106 publication neither advances history nor clears dirty state, and undo do
 not delete cooked artifacts. A deliberate cross-document edit requires a staged
 multi-document transaction; UI surfaces cannot write either document directly.
 
+The project settings binding and staged catalog/reference implementation are
+specified in [Navigation project settings](../../guides/navigation-project-settings.md).
+Project policy never duplicates the definition catalog. Destructive review lists
+unsupported prefab owners and disables confirmation rather than assuming an
+empty reference set. Per-file durable saves and the in-memory multi-document
+transaction have deliberately separate guarantees.
+
 ## Gameplay AI Asset Documents
 
 [ADR-111](../../adr/111-gameplay-ai-document-panel-and-runtime-debug-ownership.md)
