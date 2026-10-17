@@ -38,7 +38,7 @@ namespace Horo::Editor {
     /** @copydoc NavigationProjectSettingsSession::Open */
     Result<std::unique_ptr<NavigationProjectSettingsSession>> NavigationProjectSettingsSession::Open(
         std::filesystem::path root, const Assets::AssetRegistry &registry, DurableFileSystem &files, ProjectMutationCoordinator &mutations,
-        const std::uint64_t generation, SceneDocumentTransactions *activeScene,
+        const std::uint64_t generation, const SceneDocumentTransactions *activeScene,
         const std::span<const Application::NavigationTargetProviderEvidence> targets) {
         try {
             using Return = Result<std::unique_ptr<NavigationProjectSettingsSession>>;

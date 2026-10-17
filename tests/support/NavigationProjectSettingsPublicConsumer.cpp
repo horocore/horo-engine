@@ -30,6 +30,14 @@ namespace {
     template <typename Session>
     concept ConstSave = requires(const Session &session) { session.SaveDocuments(); };
 
+    template <typename Session>
+    concept ConstSceneOpen =
+        requires(std::filesystem::path root, const Horo::Assets::AssetRegistry &registry, Horo::DurableFileSystem &files,
+                 Horo::Editor::ProjectMutationCoordinator &mutations, const Horo::Editor::SceneDocumentTransactions *activeScene) {
+            Session::Open(root, registry, files, mutations, std::uint64_t{7}, activeScene);
+        };
+
+    static_assert(ConstSceneOpen<Horo::Editor::NavigationProjectSettingsSession>);
     static_assert(ConstPreview<Horo::Editor::NavigationProjectSettingsSession>);
     static_assert(!ConstCommit<Horo::Editor::NavigationProjectSettingsSession>);
     static_assert(!ConstSave<Horo::Editor::NavigationProjectSettingsSession>);

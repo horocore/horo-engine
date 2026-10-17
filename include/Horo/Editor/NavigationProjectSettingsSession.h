@@ -48,13 +48,14 @@ namespace Horo::Editor {
         /** @brief Loads all registered project navigation/Scene inputs from real bounded physically-contained source bytes.
          * @param root Explicit authorized project root. @param registry Host registry. @param files Host durable filesystem.
          * @param mutations Shared project writer gate. @param generation Fresh host-issued opening generation.
-         * @param activeScene Optional canonical editor Scene port; matching asset reuses that exact root/history.
+         * @param activeScene Optional observational Scene port borrow; matching asset retains its weak canonical root/history handle.
+         * The port is inspected during Open only; later publication still requires explicit mutable session commands.
          * @param targets Explicit immutable target/provider metadata; absence remains unknown.
          * @return Persistent session or original parse/containment/availability failure, never a fabricated empty inventory.
          */
         [[nodiscard]] static Result<std::unique_ptr<NavigationProjectSettingsSession>> Open(
             std::filesystem::path root, const Assets::AssetRegistry &registry, DurableFileSystem &files,
-            ProjectMutationCoordinator &mutations, std::uint64_t generation, SceneDocumentTransactions *activeScene = nullptr,
+            ProjectMutationCoordinator &mutations, std::uint64_t generation, const SceneDocumentTransactions *activeScene = nullptr,
             std::span<const Application::NavigationTargetProviderEvidence> targets = {});
         ~NavigationProjectSettingsSession();
         /** @brief Captures this exact opening for UI presentation. @return Non-owning revocable owner-thread handle. */

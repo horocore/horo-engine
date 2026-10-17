@@ -11,7 +11,9 @@ using namespace Horo::Tests::NavigationSettingsSupport;
 TEST_CASE("Navigation project session repairs canonical active Scene and saves actual independent source files",
           "[navigation][settings][session]") {
     SessionProjectFixture project;
-    auto opened = project.Open();
+    const E::SceneDocumentTransactions *activeScene = &project.scene;
+    auto opened =
+        E::NavigationProjectSettingsSession::Open(project.root, project.registry, project.files, project.mutations, 7, activeScene);
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();
     REQUIRE_FALSE(session->Policy());

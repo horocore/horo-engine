@@ -200,6 +200,22 @@ remove the admission boundary. Definition/Scene source loaders are static helper
 because they inspect only their explicit arguments, while completed Scene JSON
 cleanup owners cannot be copied or moved into a second cleanup authority.
 
+## Observational active Scene opening borrow
+
+`NavigationProjectSettingsSession::Open` now accepts a pointer to a const
+`SceneDocumentTransactions` port. Opening reads its snapshot and existing weak
+owner handle; it does not invoke a document command or retain the borrowed port
+pointer. A matching source still shares the exact canonical owner/history through
+the same weak handle. Later publication, undo/redo and save require the existing
+mutable session methods; no command was made const and no const cast was added.
+
+Mutable-pointer callers remain source-compatible. The workspace controller,
+headless/session fixtures and public consumer must rebuild with the matching
+EditorServices library because this host C++ factory symbol changes. The public
+consumer admits a const port while rejecting const command methods; the existing
+real active-Scene repair/save/reopen test opens through that const borrow. Project
+wire formats, object layouts and native module/capability ABI exports are unchanged.
+
 ## Navigation presentation regression coverage
 
 `HoroEditorPresentationTests` exercises the actual definition and policy views
