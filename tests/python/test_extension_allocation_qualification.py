@@ -3,6 +3,7 @@
 from argparse import ArgumentTypeError
 from html import escape
 import importlib.util
+import os
 from pathlib import Path
 import re
 import json
@@ -183,7 +184,7 @@ def test_shared_cli_still_requires_discovery_output(monkeypatch):
 @pytest.mark.parametrize(("family", "route"), [
     ("extension", None), ("scene", None), ("character", None), ("scene", "navigation"),
 ])
-def test_all_three_standalone_clis_keep_the_same_discovery_contract(tmp_path, family, route):
+def test_all_three_standalone_clis_keep_the_same_discovery_contract(tmp_path, monkeypatch, family, route):
     script = ROOT / f"scripts/ci/run_{family}_allocation_qualification.py"
     spec = importlib.util.spec_from_file_location(f"{family}_cli_contract", script)
     module = importlib.util.module_from_spec(spec)
@@ -196,10 +197,19 @@ def test_all_three_standalone_clis_keep_the_same_discovery_contract(tmp_path, fa
     interpreter = Path(sys.executable)
     assert interpreter.is_absolute() and interpreter.is_file()
     family_arguments = ["--family", route] if route is not None else []
-    # The executable is pinned to this interpreter; arguments are test-owned paths, never shell input.
+    ambient = tmp_path / "untrusted ambient modules"
+    ambient.mkdir()
+    (ambient / "defusedxml.py").write_text(
+        'raise RuntimeError("Standalone CLI imported ambient PYTHONPATH")\n', encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(ambient))
+    monkeypatch.setenv("PATH", os.defpath)
+    # Resolve argv[0] through this interpreter's directory so CPython retains its venv.
+    environment = dict(os.environ, PATH=str(interpreter.parent) + os.pathsep + os.environ["PATH"])
+    # Isolated mode rejects ambient module injection while exercising real script entry points.
     result = subprocess.run(  # nosec B603, B607
-        ["python3", str(script), *family_arguments, "--discovery", str(evidence), "--regex-output", str(output)],
-        executable=str(interpreter),
+        ["python3", "-I", str(script), *family_arguments, "--discovery", str(evidence), "--regex-output", str(output)],
+        executable=str(interpreter), env=environment,
         cwd=tmp_path, capture_output=True, text=True, check=False, shell=False, timeout=30,
     )
     assert result.returncode == 0, result.stderr
