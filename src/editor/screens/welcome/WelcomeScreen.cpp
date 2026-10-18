@@ -181,11 +181,11 @@ namespace Horo::Editor {
                     const std::filesystem::path root{project.rootPath};
                     auto modified = std::filesystem::last_write_time(root, error);
                     if (error)
-                        modified = std::filesystem::file_time_type::min();
+                        modified = (std::filesystem::file_time_type::min)();
                     error.clear();
                     const auto metadataModified = std::filesystem::last_write_time(root / ".horo/project.json", error);
                     if (!error)
-                        modified = std::max(modified, metadataModified);
+                        modified = (std::max)(modified, metadataModified);
                     viewState_.projectModifiedTimes.push_back(modified);
                 }
             }

@@ -93,6 +93,8 @@ namespace Horo::Editor {
         }
 
         static_cast<void>(m_durableFiles->SyncDirectory(directory));
+        if (nativeBehavior)
+            NavigateContentBrowser(directory, true);
         RefreshContentBrowserAfterMutation();
         if (nativeBehavior)
             m_nativeBuildDebounceSeconds = 0.25F;

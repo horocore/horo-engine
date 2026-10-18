@@ -1,6 +1,7 @@
 #include "HoroEditorApp.h"
 
 #include "EditorAudioPreviewHost.h"
+#include "EditorFrameAdmission.h"
 #include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
@@ -1362,11 +1363,11 @@ namespace Horo::Editor {
             }
 
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
+                focusedWidgetInputContext_.Reset();
                 auto renderBegun = BeginRenderFrame(context);
                 if (renderBegun.HasError())
                     return Result<void>::Failure(renderBegun.ErrorValue());
 
-                focusedWidgetInputContext_.Reset();
                 if (renderBegun.Value()) {
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                     qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiBegin);
@@ -1572,6 +1573,8 @@ namespace Horo::Editor {
 #endif
                 auto begun = p_->presentation.renderFrontend.BeginFrame(
                     Render::FrameDescriptor{.frameNumber = context.frameNumber, .outputExtent = outputExtent});
+                if (begun.HasError() && IsDeferredFrameAdmission(begun.ErrorValue()))
+                    return Result<bool>::Success(false);
                 if (begun.HasError())
                     return Result<bool>::Failure(begun.ErrorValue());
                 frame_.emplace(std::move(begun).Value());

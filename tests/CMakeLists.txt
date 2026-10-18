@@ -2226,6 +2226,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/NavigationDefinitionPresentationTests.cpp
             unit/editor/NavigationPolicyPresentationTests.cpp
             unit/editor/ProjectCreationViewPresentationTests.cpp
+            unit/editor/GameplayBehaviorModalPresentationTests.cpp
             unit/editor/AssetImportModalPresentationTests.cpp
             unit/editor/AssetImportSourcePreviewTests.cpp
             unit/editor/ScreenViewPresentationTests.cpp

@@ -339,8 +339,15 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         const std::string baseName = SuggestGameplayBehaviorBaseName(*destination, kind);
+        const auto browse = [this](const std::string_view title) -> std::optional<std::filesystem::path> {
+            auto dialogContext = input_.router.PushContext(Input::InputContextId{"editor.native_dialog.behavior_destination"},
+                                                           Input::InputContextKind::NativeDialog);
+            const std::string selected = pfd::select_folder(std::string{title}).result();
+            return selected.empty() ? std::nullopt : std::optional{std::filesystem::path{selected}};
+        };
         Result<void> opened =
             modalHost_.OpenRoot(std::make_unique<GameplayBehaviorFilenameModal>(context_, kind, destination->string(), baseName,
+                                                                                controller_->ViewModel().projectRoot, browse,
                                                                                 [this](CreateGameplayBehaviorRequest request) {
             if (!controller_) {
                 return;

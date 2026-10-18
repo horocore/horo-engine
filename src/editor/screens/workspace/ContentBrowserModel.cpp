@@ -327,13 +327,26 @@ namespace Horo::Editor {
         return !error && std::filesystem::is_directory(status);
     }
 
+    /** @copydoc IsProjectContentBrowserDirectoryTargetAllowed */
+    bool IsProjectContentBrowserDirectoryTargetAllowed(const std::filesystem::path &absoluteProjectRoot,
+                                                       const std::filesystem::path &absoluteTarget) {
+        const auto projectRoot = NormalizeAbsolute(absoluteProjectRoot);
+        if (!IsContentBrowserDirectoryTargetAllowed(projectRoot, absoluteTarget))
+            return false;
+        return IsContentBrowserDirectoryTargetAllowed(ProjectLayout::AssetRoot(projectRoot), absoluteTarget) ||
+               IsContentBrowserDirectoryTargetAllowed(projectRoot / "source", absoluteTarget);
+    }
+
     /** @copydoc BuildContentBrowserDirectory */
     ContentBrowserDirectory BuildContentBrowserDirectory(const std::filesystem::path &absoluteProjectRoot,
                                                          const std::filesystem::path &requestedAbsoluteDirectory,
                                                          const Assets::AssetRegistrySnapshot &snapshot,
                                                          const Assets::AssetImporterCatalogSnapshot *importerCatalog) {
         const std::filesystem::path projectRoot = NormalizeAbsolute(absoluteProjectRoot);
-        const std::filesystem::path assetRoot = NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
+        const std::filesystem::path sourceRoot = NormalizeAbsolute(projectRoot / "source");
+        const bool browsingSource = IsProjectContentBrowserDirectoryTargetAllowed(projectRoot, requestedAbsoluteDirectory) &&
+                                    IsContentBrowserDirectoryTargetAllowed(sourceRoot, requestedAbsoluteDirectory);
+        const std::filesystem::path assetRoot = browsingSource ? sourceRoot : NormalizeAbsolute(ProjectLayout::AssetRoot(projectRoot));
         std::filesystem::path currentDirectory =
             requestedAbsoluteDirectory.empty() ? assetRoot : NormalizeAbsolute(requestedAbsoluteDirectory);
         if (!IsContentBrowserDirectoryTargetAllowed(assetRoot, currentDirectory))
