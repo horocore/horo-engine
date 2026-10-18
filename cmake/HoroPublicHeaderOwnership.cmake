@@ -1206,6 +1206,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/CollisionProjectSettingsSession.h
     Horo/Editor/NavigationProjectSettingsSession.h
     Horo/Editor/AudioEditorDocument.h
+    Horo/Editor/AudioComponentPreview.h
     Horo/Editor/MixerAssetDocument.h
     Horo/Editor/CinematicPropertyBindings.h
     Horo/Editor/ActivityBarLayout.h

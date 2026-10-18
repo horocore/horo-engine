@@ -135,3 +135,10 @@ and capability `horo.editor.property-drawer`. Underscore authority aliases are
 rejected. Passive Stack/Group nodes use the shared FormKit nonfocusable-container
 contract; native copying preserves that semantic requirement without relaxing
 the form validator.
+
+### Workspace host composition
+
+`EditorWorkspaceDependencies::gameplay` groups the borrowed build service, copied
+build environment and shared module retirement queue. Application hosts pass
+`gameplay.builds`, `gameplay.environment` and `gameplay.retirements` together;
+workspace ownership and retirement ordering remain unchanged.

@@ -31,6 +31,9 @@ includes=(
     "$workspace/apps/HoroEditor/app/ConfiguredEditorUpdateBackend.cpp"
     "$workspace/apps/HoroEditor/app/RenderGraphInspectionPane.cpp"
     "$workspace/apps/HoroEditor/app/EditorSurfaceLifecycleQualification.cpp"
+    "$workspace/apps/HoroEditor/app/EditorAudioPreviewHost.cpp"
+    "$workspace/apps/HoroEditor/app/EditorAudioPreviewDecode.cpp"
+    "$workspace/apps/HoroEditor/app/EditorAudioPreviewPreparation.cpp"
 )
 reports=()
 for manifest in "${manifests[@]}"; do

@@ -1,9 +1,11 @@
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Utf8.h"
 #include "SourceDocumentInternal.h"
 
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <system_error>
 
 namespace Horo::Editor {
     namespace {
@@ -13,17 +15,24 @@ namespace Horo::Editor {
     }  // namespace
 
     namespace Detail {
-        /** @brief Revalidates physical project containment and the exact registry key before each disk access. */
+        /** @copydoc Detail::SourcePath */
         Result<std::filesystem::path> SourcePath(const std::filesystem::path &projectRoot, const DocumentIdentity &identity,
                                                  const std::filesystem::path &path) {
-            if (!identity.IsValid() || identity.key.kind != DocumentKind::Source || !path.is_absolute())
+            try {
+                if (!identity.IsValid() || identity.key.kind != DocumentKind::Source || !path.is_absolute())
+                    return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
+                std::error_code error;
+                const auto canonical = std::filesystem::weakly_canonical(path, error);
+                if (error || !Foundation::Paths::HasPathPrefix(projectRoot, canonical))
+                    return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
+                const auto encoded = canonical.lexically_relative(projectRoot).generic_u8string();
+                if (const std::string source{encoded.begin(), encoded.end()};
+                    !IsValidUtf8ScalarSequence(source) || source.find('\0') != std::string::npos || source != identity.key.source.Value())
+                    return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
+                return Result<std::filesystem::path>::Success(canonical);
+            } catch (const std::system_error &) {
                 return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
-            std::error_code error;
-            const auto canonical = std::filesystem::weakly_canonical(path, error);
-            if (error || !Foundation::Paths::HasPathPrefix(projectRoot, canonical) ||
-                canonical.lexically_relative(projectRoot).generic_string() != identity.key.source.Value())
-                return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
-            return Result<std::filesystem::path>::Success(canonical);
+            }
         }
 
         /** @brief Advances only a successfully prepared observation; exhaustion rejects without wraparound. */

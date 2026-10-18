@@ -60,7 +60,7 @@ namespace Horo::Editor {
             navigated = m_sourceOpenNavigator(result);
         } else {
             navigated = m_diagnosticSourceNavigator(DiagnosticSourceRequest{
-                .absolutePath = result.location.absolutePath.string(),
+                .absolutePath = result.location.absolutePath,
                 .line = result.line,
                 .column = result.column,
             });

@@ -43,6 +43,8 @@ namespace Horo::Editor {
         float lightOuterConeDegrees{45.0F};
         std::optional<Runtime::TriggerVolumeComponent> triggerVolume;
         std::optional<Runtime::AudioSourceComponent> audioSource;
+        std::string audioSoundIdentity; /**< Uncommitted UUID text; only validated typed source values become commands. */
+        std::optional<Runtime::AudioListenerComponent> audioListener;
     };
 
     /** @brief Semantic name-widget events consumed without an ImGui dependency. */
@@ -88,6 +90,9 @@ namespace Horo::Editor {
         bool committed{false};
         bool removeRequested{false};
     };
+
+    /** @brief Semantic listener edit, translated to a typed component command. */
+    using InspectorAudioListenerEdit = InspectorAudioSourceEdit;
 
     /**
      * @brief Owns Inspector draft and preview lifecycle independently from rendering.
@@ -149,6 +154,9 @@ namespace Horo::Editor {
         /** @brief Reduces one AudioSource edit into a typed component command. */
         [[nodiscard]] EditorWorkspaceViewCommandData ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit, const SceneObject &object,
                                                                           bool allowCommands);
+        /** @brief Reduces one listener edit into a typed component command. */
+        [[nodiscard]] EditorWorkspaceViewCommandData ApplyAudioListenerEdit(const InspectorAudioListenerEdit &edit,
+                                                                            const SceneObject &object, bool allowCommands);
 
         /** @brief Reports whether the current transform draft is valid. */
         [[nodiscard]] bool IsTransformValid() const noexcept;
@@ -170,6 +178,8 @@ namespace Horo::Editor {
 
         /** @brief Reports whether the current AudioSource draft is valid. */
         [[nodiscard]] bool IsAudioSourceValid() const noexcept;
+        /** @brief Reports whether the authored listener draft obeys runtime bounds. */
+        [[nodiscard]] bool IsAudioListenerValid() const noexcept;
 
     private:
         struct ObjectTransformBaseline {
@@ -188,6 +198,7 @@ namespace Horo::Editor {
         void ResetLightDraft(const SceneObject &object);
         void ResetTriggerVolumeDraft(const SceneObject &object);
         void ResetAudioSourceDraft(const SceneObject &object);
+        void ResetAudioListenerDraft(const SceneObject &object);
         void ClearTransformInteraction() noexcept;
         [[nodiscard]] EditorWorkspaceViewCommandData RejectInvalidTransform(bool committed);
         [[nodiscard]] EditorWorkspaceViewCommandData ResetTransformToIdentity();

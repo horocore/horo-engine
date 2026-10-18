@@ -1,5 +1,6 @@
 #include "HoroEditorApp.h"
 
+#include "EditorAudioPreviewHost.h"
 #include "EditorPresentationSurface.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
@@ -1591,6 +1592,7 @@ namespace Horo::Editor {
             ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
+            EditorAudioPreviewHost audioPreview{MakeSdl3AudioPreviewOutput};
             Assets::AssetRegistry assetRegistry;
             CollisionInventoryEvidence collisionInventory;
             AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry, collisionInventory};
@@ -1691,6 +1693,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
+            screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);

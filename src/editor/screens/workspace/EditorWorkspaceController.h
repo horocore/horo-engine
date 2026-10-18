@@ -3,6 +3,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Cinematic/CameraCutRuntime.h"
+#include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorEngineEventBridge.h"
@@ -21,6 +22,7 @@
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -46,11 +48,23 @@ namespace Horo::Editor {
     /** @brief Platform navigation capability for one validated diagnostic source location. */
     using DiagnosticSourceNavigator = std::function<bool(const DiagnosticSourceRequest &)>;
 
+    /** @brief Host-owned collision evidence borrowed for the workspace lifetime; null members mean unavailable. */
+    struct EditorWorkspaceCollisionEvidence {
+        CollisionInventoryEvidence *inventory{};
+        CollisionActivationEvidence *activation{};
+    };
+
+    /** @brief Explicit gameplay build and module-retirement services captured by the application host. */
+    struct EditorWorkspaceGameplayServices {
+        Application::GameplayBuildService *builds{};
+        Application::GameplayBuildEnvironment environment{};
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
+    };
+
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
-        CollisionInventoryEvidence *collisionInventory{};
-        CollisionActivationEvidence *collisionActivation{};
+        EditorWorkspaceCollisionEvidence collision{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
         std::shared_ptr<const Assets::IAssetRegistrySource> assetRegistrySource;
@@ -58,16 +72,16 @@ namespace Horo::Editor {
         JobSystem *jobs{};
         SourceOpenNavigator sourceOpenNavigator{};
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
-        Application::GameplayBuildService *gameplayBuilds{};
-        Application::GameplayBuildEnvironment gameplayBuildEnvironment{};
+        EditorWorkspaceGameplayServices gameplay{};
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
-        std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
-        PCGDocumentCatalog pcgCatalog{.revision = 1}; /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
+        PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
+        PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -79,6 +93,13 @@ namespace Horo::Editor {
                                   const EditorWorkspaceDependencies &dependencies = {});
         ~EditorWorkspaceController();
 
+        /** @brief Starts captured audio through the injected host, never through a widget/backend bypass.
+         * @param object Exact selected authored source. @param revision Expected document revision. @return Typed admission/failure. */
+        [[nodiscard]] Result<void> StartAudioPreview(SceneObjectId object, DocumentRevision revision);
+        /** @brief Revokes only this workspace's output, retaining native ownership in the application. */
+        void StopAudioPreview() noexcept;
+        /** @brief Reconciles authoring/selection changes and copies current typed preview facts. */
+        void ReconcileAudioPreview();
         /** @brief Opens cached project collision authoring bound to this exact canonical Scene opening.
          * @return Shared owner or typed unavailable/source failure; presentation retains weak references only. */
         [[nodiscard]] Result<std::shared_ptr<CollisionProjectSettingsSession>> CollisionSettings();
@@ -261,6 +282,13 @@ namespace Horo::Editor {
         std::optional<Result<bool>> m_sourceCloseOutcome;
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
+        PrefabHierarchySourceCapture m_prefabSourceCapture;
+        Assets::AssetId m_workspaceSession;
+        std::uint64_t m_prefabPublication{};
+        std::uint64_t m_prefabObservedDocumentEpoch{};
+        std::optional<PrefabHierarchySources> m_prefabSources;
+        CancellationSource m_prefabCancellation;
+
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
@@ -436,6 +464,9 @@ namespace Horo::Editor {
         [[nodiscard]] bool ProcessComponentCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessObjectPropertyCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessObjectComponentValueCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Routes typed audio authoring and preview intents on the workspace owner lane.
+         * @param cmd Copied workspace intent. @return True when this is an audio command. */
+        [[nodiscard]] bool ProcessAudioComponentCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessBehaviorCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessContentBrowserCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessContentBrowserNavigationCommand(const EditorWorkspaceViewCommandData &cmd);
@@ -470,6 +501,15 @@ namespace Horo::Editor {
         /** @brief Prepares bounded overlap replacement and copied projection before atomically publishing explicit owner approval. */
         [[nodiscard]] Result<void> PublishInspectorApproval(const InspectorExtensionEdit &request,
                                                             const Extensions::EditorInspectorContribution &contribution);
+        /** @brief Explicit source refresh; publishes a complete bounded cache or repairable typed placement failures. */
+        void RefreshPrefabHierarchy(const SceneDocumentSnapshot &document);
+        /** @brief Prepares all allocating source/row storage, then publishes one immutable owner generation.
+         * @throws std::bad_alloc before publication; the outer refresh boundary preserves the prior cache. */
+        void PrepareAndPublishPrefabHierarchy(const SceneDocumentSnapshot &document, std::uint64_t publication);
+        /** @brief Routes exact source/member gestures after owner/session/revision and protected-boundary checks. */
+        [[nodiscard]] bool ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
+        void RetirePrefabHierarchy() noexcept;
         /** @brief Atomically commits the current default-scene snapshot and updates dirty state on
          * success. */
         /** @brief Routes typed source publication/close intent through workspace-owned document services. */
@@ -622,5 +662,7 @@ namespace Horo::Editor {
         void RefreshContentBrowserAfterMutation();
         void RequestContentBrowserRefresh();
         void ReconcileContentBrowserNavigation();
+        IAudioComponentPreview *m_audioPreview{};
+        Assets::AssetId m_audioPreviewWorkspace;
     };
 }  // namespace Horo::Editor

@@ -169,3 +169,19 @@ def test_python_api_has_no_tool_selection_or_process_launch_authority() -> None:
     assert '--include "${includes[@]}"' in host
     assert '--add-tracefile "${reports[@]}"' in host
     assert '--jobs 2' in host
+
+
+def test_audio_preview_host_test_sources_are_collected() -> None:
+    """Application sources exercised by the headless host must reach the report."""
+    repository = SCRIPTS.parent
+    cmake = (repository / "tests/CMakeLists.txt").read_text()
+    target = cmake.split("add_executable(HoroAudioComponentPreviewHostTests", 1)[1].split(")", 1)[0]
+    application_sources = [
+        token.strip('"').removeprefix("${PROJECT_SOURCE_DIR}/")
+        for token in target.split()
+        if "${PROJECT_SOURCE_DIR}/apps/" in token
+    ]
+    assert application_sources
+    host = (repository / ".github/scripts/collect_sonar_coverage.sh").read_text()
+    for source in application_sources:
+        assert f'"$workspace/{source}"' in host

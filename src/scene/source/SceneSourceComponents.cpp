@@ -515,6 +515,13 @@ namespace Horo::SceneSource::Detail {
             AppendTriggerVolumeJson(value, *components.triggerVolume);
         if (components.audioSource)
             AppendAudioSourceJson(value, *components.audioSource);
+        if (components.audioListener) {
+            const auto &listener = *components.audioListener;
+            value["audioListener"] = {{"view", listener.view},
+                                      {"priority", listener.priority},
+                                      {"weight", listener.weight},
+                                      {"enabled", listener.enabled}};
+        }
         AppendNavigationComponents(value, components);
         AppendAiComponents(value, components);
         AppendPhysicsComponents(value, components);

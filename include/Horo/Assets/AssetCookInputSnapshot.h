@@ -38,6 +38,21 @@ namespace Horo::Assets {
         [[nodiscard]] static Result<AssetCookInputSnapshot> Capture(const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry,
                                                                     const AssetCookLimits &limits, std::uint64_t maximumCapturedBytes,
                                                                     const CancellationToken &cancellation = {});
+        /**
+         * @brief Captures only explicitly selected registered source/sidecar pairs using the ordinary capture checks.
+         * @param sourceRoot Absolute project root protected by the host lease. @param registry Original pinned publication.
+         * @param selected Unique stable asset identities; missing or duplicate identities reject the entire capture.
+         * @param limits Per-source and selected-count bounds. @param maximumCapturedBytes Aggregate retained byte budget.
+         * @param cancellation Cooperative stop fence checked between reads and before publication.
+         * @return Complete selected capture retaining the original registry revision, or typed read/identity/capacity failure.
+         * @throws std::bad_alloc on bounded allocation failure; no source or registry is modified.
+         * @details Selection is explicit source-loading policy, not dependency discovery. The caller supplies a complete
+         * closure before consuming the snapshot. Containment and observed digest checks match Capture; this does not
+         * establish an operating-system atomic snapshot or retained-directory identity capability.
+         */
+        [[nodiscard]] static Result<AssetCookInputSnapshot> CaptureSelected(
+            const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry, std::span<const AssetId> selected,
+            const AssetCookLimits &limits, std::uint64_t maximumCapturedBytes, const CancellationToken &cancellation = {});
         /** @brief Returns the exact pinned registry. @return Borrowed immutable registry. */
         [[nodiscard]] const AssetRegistrySnapshot &Registry() const noexcept;
         /** @brief Returns the native root read by the host capture. @return Borrowed absolute source root. */
@@ -58,6 +73,10 @@ namespace Horo::Assets {
         [[nodiscard]] Result<void> VerifyUnchanged(const CancellationToken &cancellation = {}) const;
 
     private:
+        /** @brief Shares the ordinary bounded pair capture without replacing the authoritative registry publication. */
+        [[nodiscard]] static Result<AssetCookInputSnapshot> CaptureRecords(
+            const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry, std::span<const AssetRecord> records,
+            const AssetCookLimits &limits, std::uint64_t maximumCapturedBytes, const CancellationToken &cancellation);
         struct State;
 
         explicit AssetCookInputSnapshot(std::shared_ptr<const State> state) noexcept : state_(std::move(state)) {}

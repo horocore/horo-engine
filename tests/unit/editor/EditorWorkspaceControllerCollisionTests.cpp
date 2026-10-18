@@ -34,14 +34,28 @@ namespace Horo::Editor {
 
         EditorWorkspaceDependencies Services(Project &project) {
             return {.mutableAssetRegistry = &project.registry,
-                    .collisionInventory = &project.inventory,
-                    .collisionActivation = &project.activation,
+                    .collision = {.inventory = &project.inventory, .activation = &project.activation},
                     .mutations = &project.mutations,
                     .durableFiles = &project.files,
                     .assetRegistrySource = project.source,
                     .documentSessionOwner = IdOf<Assets::AssetId>(40)};
         }
     }  // namespace
+
+    TEST_CASE("Workspace collision grouped evidence requires both host-owned inputs", "[gui][collision][workspace]") {
+        Project project;
+        PrepareWorkspace(project);
+        Runtime::RuntimeSceneService runtime;
+        auto dependencies = Services(project);
+        SECTION("missing inventory") {
+            dependencies.collision.inventory = nullptr;
+        }
+        SECTION("missing activation") {
+            dependencies.collision.activation = nullptr;
+        }
+        EditorWorkspaceController controller{project.root, runtime, project.registry.Snapshot(), dependencies};
+        CHECK(controller.CollisionSettings().HasError());
+    }
 
     TEST_CASE("Workspace collision Save Copy and rejected Save As retain exact authoring owner", "[gui][collision][workspace]") {
         Project project;

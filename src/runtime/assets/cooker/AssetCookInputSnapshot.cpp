@@ -1,6 +1,7 @@
 #include "Horo/Assets/AssetCookInputSnapshot.h"
 
 #include "../AssetErrors.h"
+#include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
 #include <fstream>
@@ -12,7 +13,9 @@ namespace Horo::Assets {
 
         /** @brief Rejects escaping and symlinked path components before a bounded host read. */
         Result<std::filesystem::path> CheckedPath(const std::filesystem::path &root, const std::string_view relative) {
-            const std::filesystem::path path{relative};
+            if (!IsValidUtf8ScalarSequence(relative) || relative.find('\0') != std::string_view::npos)
+                return Result<std::filesystem::path>::Failure(MakeError(CookErrors::SourceReadFailed));
+            const std::filesystem::path path{std::u8string{relative.begin(), relative.end()}};
             if (path.empty() || path.is_absolute() || path != path.lexically_normal())
                 return Result<std::filesystem::path>::Failure(MakeError(CookErrors::SourceReadFailed));
             auto current = root;
@@ -72,19 +75,47 @@ namespace Horo::Assets {
     Result<AssetCookInputSnapshot> AssetCookInputSnapshot::Capture(const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry,
                                                                    const AssetCookLimits &limits, const std::uint64_t maximumCapturedBytes,
                                                                    const CancellationToken &cancellation) {
+        const auto records = registry.Records();
+        return CaptureRecords(sourceRoot, std::move(registry), records, limits, maximumCapturedBytes, cancellation);
+    }
+
+    /** @copydoc AssetCookInputSnapshot::CaptureSelected */
+    Result<AssetCookInputSnapshot> AssetCookInputSnapshot::CaptureSelected(
+        const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry, const std::span<const AssetId> selected,
+        const AssetCookLimits &limits, const std::uint64_t maximumCapturedBytes, const CancellationToken &cancellation) {
+        if (selected.size() > limits.maximumAssets)
+            return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::TooLarge));
+        std::vector<AssetId> identities(selected.begin(), selected.end());
+        std::ranges::sort(identities);
+        if (std::ranges::adjacent_find(identities) != identities.end())
+            return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::MalformedArtifact));
+        std::vector<AssetRecord> records;
+        records.reserve(identities.size());
+        for (const auto id : identities) {
+            const auto *record = registry.Find(id);
+            if (record == nullptr)
+                return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::SourceReadFailed));
+            records.push_back(*record);
+        }
+        return CaptureRecords(sourceRoot, std::move(registry), records, limits, maximumCapturedBytes, cancellation);
+    }
+
+    /** @copydoc AssetCookInputSnapshot::CaptureRecords */
+    Result<AssetCookInputSnapshot> AssetCookInputSnapshot::CaptureRecords(
+        const std::filesystem::path &sourceRoot, AssetRegistrySnapshot registry, const std::span<const AssetRecord> records,
+        const AssetCookLimits &limits, const std::uint64_t maximumCapturedBytes, const CancellationToken &cancellation) {
         if (std::error_code error; !sourceRoot.is_absolute() || std::filesystem::is_symlink(sourceRoot, error) || error)
             return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::SourceReadFailed));
         if (std::error_code error; !std::filesystem::is_directory(sourceRoot, error) || error || limits.maximumSourceBytes == 0 ||
-                                   limits.maximumAssets == 0 || maximumCapturedBytes == 0 ||
-                                   registry.Records().size() > limits.maximumAssets)
+                                   limits.maximumAssets == 0 || maximumCapturedBytes == 0 || records.size() > limits.maximumAssets)
             return Result<AssetCookInputSnapshot>::Failure(MakeError(CookErrors::SourceReadFailed));
         auto state = std::make_shared<State>();
         state->root = sourceRoot;
         state->registry = std::move(registry);
-        state->sources.reserve(state->registry.Records().size());
-        state->sidecarDigests.reserve(state->registry.Records().size());
+        state->sources.reserve(records.size());
+        state->sidecarDigests.reserve(records.size());
         std::uint64_t retained{};
-        for (const auto &record : state->registry.Records()) {
+        for (const auto &record : records) {
             auto bytes = Read(sourceRoot, record.sourcePath.String(),
                               std::min<std::uint64_t>(limits.maximumSourceBytes, maximumCapturedBytes - retained), cancellation);
             if (bytes.HasError())

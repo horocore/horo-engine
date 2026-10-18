@@ -456,7 +456,7 @@ namespace Horo::Editor {
         if (activated && record.source.has_value()) {
             command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
             command.diagnosticSource = DiagnosticSourceRequest{
-                .absolutePath = record.source->absolutePath,
+                .absolutePath = std::filesystem::path{record.source->absolutePath},
                 .line = record.source->line,
                 .column = record.source->column,
             };
