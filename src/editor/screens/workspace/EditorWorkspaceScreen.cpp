@@ -236,6 +236,10 @@ namespace Horo::Editor {
                 return Result<void>::Success();
             }
 
+            Result<NavigationProjectSettingsSession *> NavigationSettings() override {
+                return controller_ ? controller_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
+            }
+
             void OnUpdate(float dt) override {
                 if (controller_) {
                     while (const auto destination = view_.UpdateExtensionActivities())
@@ -250,6 +254,7 @@ namespace Horo::Editor {
                                                   : Packages::PackageActivationBoundary::Running;
                         static_cast<void>(packages_.pump(std::filesystem::path{model.projectRoot}, boundary));
                     }
+                    controller_->UpdateNavigationSettingsProjection();
                     controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
                     controller_->UpdateExternalSceneWatch(dt);
                     controller_->UpdateGameplaySources(dt);
@@ -399,7 +404,8 @@ namespace Horo::Editor {
             LeaveDecision CanLeave(const LeaveTarget &) const override {
                 using enum LeaveAction;
                 using enum LeaveDisposition;
-                if (controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments())) {
+                if (controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() ||
+                                    controller_->HasDirtyNavigationDocuments())) {
                     auto graphs = controller_->PCGDocuments().Snapshots();
                     if (graphs.HasError())
                         return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
@@ -413,44 +419,59 @@ namespace Horo::Editor {
                 return LeaveDecision{.disposition = Allow, .requirement = std::nullopt};
             }
 
+            /** @brief Saves canonical owners in the existing order and retires them only after every required save succeeds. */
+            Result<LeaveDecision> SaveForLeave() {
+                using enum LeaveDisposition;
+                if (!controller_)
+                    return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+                if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
+                    return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                EditorWorkspaceViewCommandData command;
+                command.command = EditorWorkspaceViewCommand::SaveScene;
+                controller_->ProcessCommand(command);
+                if (controller_->ViewModel().isDirty || controller_->SavePCGDocuments().HasError() || controller_->HasDirtyPCGDocuments())
+                    return Result<LeaveDecision>::Success({.disposition = Deny, .requirement = std::nullopt});
+                if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
+                    return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
+                    return Result<LeaveDecision>::Failure(graphs.ErrorValue());
+                return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+            }
+
+            /** @brief Applies the explicit discard decision without bypassing either document group's shutdown admission. */
+            Result<LeaveDecision> DiscardForLeave() {
+                using enum LeaveDisposition;
+                if (!controller_)
+                    return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+                EditorWorkspaceViewCommandData command;
+                command.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
+                controller_->ProcessCommand(command);
+                if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
+                    return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
+                    return Result<LeaveDecision>::Failure(graphs.ErrorValue());
+                return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+            }
+
             Result<LeaveDecision> ResolveLeave(const LeaveTarget &, const LeaveResolution &resolution) override {
                 using enum LeaveAction;
                 using enum LeaveDisposition;
-                if (resolution.subject != 1 || resolution.revision != 1) {
+                if (resolution.subject != 1 || resolution.revision != 1)
                     return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
-                }
                 if (controller_ && resolution.action != Stay) {
                     if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
                         return Result<LeaveDecision>::Failure(current.ErrorValue());
                 }
-                if (resolution.action == Save) {
-                    if (controller_) {
-                        EditorWorkspaceViewCommandData command;
-                        command.command = EditorWorkspaceViewCommand::SaveScene;
-                        controller_->ProcessCommand(command);
-                        if (controller_->ViewModel().isDirty || controller_->SavePCGDocuments().HasError() ||
-                            controller_->HasDirtyPCGDocuments()) {
-                            return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Deny, .requirement = std::nullopt});
-                        }
-                        if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
-                            return Result<LeaveDecision>::Failure(graphs.ErrorValue());
-                    }
-                    return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Allow, .requirement = std::nullopt});
+                switch (resolution.action) {
+                    case Save:
+                        return SaveForLeave();
+                    case Discard:
+                        return DiscardForLeave();
+                    case Stay:
+                        return Result<LeaveDecision>::Success({.disposition = Deny, .requirement = std::nullopt});
+                    default:
+                        return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceLeaveActionNotAllowed));
                 }
-                if (resolution.action == Discard) {
-                    if (controller_) {
-                        EditorWorkspaceViewCommandData command;
-                        command.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
-                        controller_->ProcessCommand(command);
-                        if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
-                            return Result<LeaveDecision>::Failure(graphs.ErrorValue());
-                    }
-                    return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Allow, .requirement = std::nullopt});
-                }
-                if (resolution.action == Stay) {
-                    return Result<LeaveDecision>::Success(LeaveDecision{.disposition = Deny, .requirement = std::nullopt});
-                }
-                return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceLeaveActionNotAllowed));
             }
 
             void OnLeave() override {
@@ -463,6 +484,9 @@ namespace Horo::Editor {
                     if (const auto gameplay = controller_->ShutdownGameplayModules(); gameplay.HasError())
                         LOG_WARN("editor.gameplay", "Gameplay retirement remains owned by the application: %s",
                                  gameplay.ErrorValue().message.c_str());
+                    if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
+                        LOG_ERROR("editor.navigation_document", "Navigation document shutdown is incomplete: %s",
+                                  navigation.ErrorValue().message.c_str());
                     if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
                         LOG_ERROR("editor.pcg_document", "Graph shutdown recovery is incomplete: %s", graphs.ErrorValue().message.c_str());
                 }
@@ -650,9 +674,13 @@ namespace Horo::Editor {
                                                  surface.focused, surface.activityVisible, surface.opaqueState, placement);
                 }
                 std::string error;
+                AtomicFileReplacementReceipt receipt;
                 if (const auto path = std::filesystem::path{controller_->ViewModel().projectRoot} / ".horo" / "editor_workspace.json";
-                    !WorkspaceLayoutPersistence::Save(path, layout, &error))
-                    LOG_WARN("editor.workspace", "Cannot save workspace state: %s", error.c_str());
+                    !projectServices_.durableFiles ||
+                    !WorkspaceLayoutPersistence::Save(*projectServices_.durableFiles, receipt, path, layout, &error)) {
+                    LOG_WARN("editor.workspace", "Cannot confirm workspace state publication: %s", error.c_str());
+                    return;
+                }
                 workspacePersistenceAdmitted_ = false;
             }
 

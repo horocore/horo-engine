@@ -13,6 +13,25 @@ namespace {
         bytes.back() = 1;
         return {{Assets::AssetId::FromBytes(bytes), 1}, 1, 1, true, {}};
     }
+
+    /** @brief Supply complete canonical bindings so each invalid text case changes exactly one admitted input. */
+    SceneObject BoundObject() {
+        SceneObject object{.id = {7}, .name = "Bound physics"};
+        std::array<std::uint8_t, 16> bytes{};
+        bytes.back() = 1;
+        const auto asset = Assets::AssetId::FromBytes(bytes);
+        object.components.rigidBody = Runtime::RigidBodyComponent{.id = {1}, .body = {10}};
+        object.components.colliders.push_back({.id = {2},
+                                               .collider = {20},
+                                               .body = {{7}, {10}},
+                                               .collisionProfile = Physics::CollisionProfileId::FromBytes(bytes),
+                                               .materials = {{Physics::PhysicsMaterialSlotId::FromValue(1), asset}}});
+        object.components.physicsConstraints.push_back({.id = {3},
+                                                        .constraint = {30},
+                                                        .first = {.body = {{7}, {10}}},
+                                                        .second = Runtime::PhysicsConstraintBodyEndpoint{.body = {{8}, {11}}}});
+        return object;
+    }
 }  // namespace
 
 TEST_CASE("Physics Inspector staging never publishes an unresolved body collider set", "[unit][editor][physics][inspector]") {
@@ -90,4 +109,59 @@ TEST_CASE("Physics Inspector authority revocation discards an unpublished creati
     context.canEdit = true;
     CHECK(session.Begin(object, context, 1));
     CHECK_FALSE(session.body);
+}
+
+TEST_CASE("Physics Inspector preserves complete existing bindings and both constraint endpoints", "[unit][editor][physics][inspector]") {
+    PhysicsInspectorSession session;
+    const auto object = BoundObject();
+    REQUIRE(session.Begin(object, Context(), 1));
+    const auto request = session.Request();
+    REQUIRE(request.HasValue());
+    CHECK(request.Value().values.body == object.components.rigidBody);
+    CHECK(request.Value().values.colliders == object.components.colliders);
+    CHECK(request.Value().values.constraints == object.components.physicsConstraints);
+    CHECK(request.Value().selectionRevision == 1);
+    CHECK_FALSE(session.dirty);
+}
+
+TEST_CASE("Physics Inspector refuses invalid material and endpoint text without losing captured values",
+          "[unit][editor][physics][inspector]") {
+    PhysicsInspectorSession session;
+    const auto object = BoundObject();
+    REQUIRE(session.Begin(object, Context(), 1));
+    SECTION("first endpoint") {
+        session.constraints.front().firstObject.valid = false;
+    }
+    SECTION("second endpoint") {
+        session.constraints.front().secondBody.valid = false;
+    }
+    SECTION("material slot") {
+        session.colliders.front().materials.front().slot.valid = false;
+    }
+    SECTION("material asset") {
+        session.colliders.front().materials.front().asset.valid = false;
+    }
+    CHECK(session.Request().HasError());
+    session.Cancel();
+    const auto restored = session.Request();
+    REQUIRE(restored.HasValue());
+    CHECK(restored.Value().values.constraints == object.components.physicsConstraints);
+    CHECK(restored.Value().values.colliders == object.components.colliders);
+    CHECK_FALSE(session.dirty);
+}
+
+TEST_CASE("Physics Inspector slot exhaustion preserves every captured contributor", "[unit][editor][physics][inspector]") {
+    PhysicsInspectorSession session;
+    SceneObject object{.id = {7}, .name = "Exhausted draft"};
+    object.components.colliders.push_back({.id = {2}, .collider = {std::numeric_limits<std::uint64_t>::max()}, .body = {{7}, {10}}});
+    object.components.physicsConstraints.push_back(
+        {.id = {3}, .constraint = {std::numeric_limits<std::uint64_t>::max()}, .first = {.body = {{7}, {10}}}});
+    REQUIRE(session.Begin(object, Context(), 1));
+    session.AddCollider();
+    session.AddConstraint();
+    REQUIRE(session.colliders.size() == 1);
+    REQUIRE(session.constraints.size() == 1);
+    CHECK(session.colliders.front().value == object.components.colliders.front());
+    CHECK(session.constraints.front().value == object.components.physicsConstraints.front());
+    CHECK_FALSE(session.dirty);
 }

@@ -470,7 +470,7 @@ namespace Horo::Extensions {
         float smallSize{12.0F};
         float mediumSize{16.0F};
         float largeSize{24.0F};
-        float strokeWidth{1.5F};
+        float strokeWidth{1.5F}; /**< Zero denotes a filled glyph with no outline; otherwise finite positive logical width. */
     };
 
     /** @brief Effective accessibility settings captured with the theme frame. */

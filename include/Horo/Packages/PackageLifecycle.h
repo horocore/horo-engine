@@ -70,7 +70,7 @@ namespace Horo::Packages {
         std::size_t maximumExtensions{64U};
         std::size_t maximumRetiredCompositions{16U}; /**< Held callbacks/catalogs cannot cause unbounded native retention. */
         std::vector<std::shared_ptr<IPackageModuleHost>> moduleHosts;
-        std::shared_ptr<Extensions::EditorActivityHost> editorActivityHost; /**< Explicit presentation owner, never discovered. */
+        Extensions::ExtensionEditorHosts editorHosts; /**< Explicit activity/page publication owners, never discovered. */
         std::shared_ptr<PackageModuleRetirementQueue> moduleRetirements;
         /**< Explicit drain owner required for mixed-role hosts. */ /**< Explicit owning hosts, selected before activation. */
     };

@@ -82,7 +82,7 @@ namespace Horo::Packages {
         using enum Extensions::ExtensionModuleRole;
         return role == BackendCapability || role == HeadlessTooling ||
                (role == EditorPresentation && impl_->configuration.profile == Extensions::ExtensionHostProfile::Interactive &&
-                static_cast<bool>(impl_->configuration.editorActivityHost));
+                (impl_->configuration.editorHosts.activities || impl_->configuration.editorHosts.pages));
     }
 
     /** @copydoc NativePackageModuleHost::Activate */

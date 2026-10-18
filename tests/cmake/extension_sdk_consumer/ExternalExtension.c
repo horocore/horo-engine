@@ -1,10 +1,11 @@
 #include "Horo/Extensions/EditorActivityAbi.h"
+#include "Horo/Extensions/EditorPageAbi.h"
 #include "Horo/Extensions/ExtensionAbi.h"
 
 #include <stddef.h>
 
 _Static_assert(HORO_EXTENSION_ABI_VERSION == 1, "Unexpected extension ABI major");
-_Static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 4, "Unexpected extension ABI minor");
+_Static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 5, "Unexpected extension ABI minor");
 _Static_assert(HORO_EXTENSION_SDK_ABI_MAJOR == HORO_EXTENSION_ABI_VERSION, "SDK metadata and ABI header major versions disagree");
 _Static_assert(HORO_EXTENSION_SDK_ABI_MIN_HOST_MINOR == 0, "Unexpected oldest supported host minor");
 _Static_assert(HORO_EXTENSION_SDK_ABI_PUBLISHED_MINOR == HORO_EXTENSION_ABI_MINOR_VERSION,
@@ -50,3 +51,7 @@ HORO_EXTENSION_EXPORT void horo_extension_unload(HoroExtensionModuleApi *module)
     if (module != NULL)
         *module = (HoroExtensionModuleApi){0};
 }
+
+_Static_assert(sizeof(((HoroEditorPageValue *)0)->integerValue) == sizeof(int64_t), "Page integers are exact signed64 transport");
+_Static_assert(offsetof(HoroExtensionHostApi, registerEditorPage) > offsetof(HoroExtensionHostApi, registerEditorActivity),
+               "ABI1.5 tail preserves1.4 prefix");

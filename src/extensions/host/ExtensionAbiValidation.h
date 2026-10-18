@@ -18,7 +18,9 @@ namespace Horo::Extensions {
      * @brief Negotiate inert moduleApi requirements before invoking its load entry point.
      * @param query Optional moduleApi query; null selects the legacy 1.0 contract.
      * @param host Complete host-owned capability table offered to the moduleApi.
+     * @param negotiated Optional host-owned output receiving validated requirements on success; zero for legacy/no query or failure.
      * @return Success only for supported versions, sizes, and required functions.
      */
-    [[nodiscard]] HoroExtensionStatus NegotiateModuleAbi(HoroExtensionQueryFunc query, const HoroExtensionHostApi &host) noexcept;
+    [[nodiscard]] HoroExtensionStatus NegotiateModuleAbi(HoroExtensionQueryFunc query, const HoroExtensionHostApi &host,
+                                                         HoroExtensionRequirements *negotiated = nullptr) noexcept;
 }  // namespace Horo::Extensions

@@ -110,7 +110,7 @@ namespace Horo::Extensions::Tests {
             return HORO_EXTENSION_SUCCESS;
         }, [](HoroExtensionRequirements *r) -> HoroExtensionStatus {
             QueryLegacy(r);
-            r->requiredFunctions = 8;
+            r->requiredFunctions = UINT32_C(0x80000000);
             return HORO_EXTENSION_SUCCESS;
         }};
         for (const auto query : invalid)
@@ -137,6 +137,8 @@ namespace Horo::Extensions::Tests {
         };
         const HoroExtensionQueryFunc editorQuery = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
             QueryCurrent(requirements);
+            requirements->minimumHostMinor = 4;
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorPage);
             requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY;
             return HORO_EXTENSION_SUCCESS;
         };
@@ -180,5 +182,39 @@ namespace Horo::Extensions::Tests {
         CHECK(moduleApi.moduleId.length == 8);
         CHECK(moduleApi.moduleVersion.data == nullptr);
         CHECK(moduleApi.moduleVersion.length == 0);
+    }
+
+    TEST_CASE("Page transport requires explicit ABI1.5 function and complete prefix negotiation", "[Extensions][ABI][EditorPage]") {
+        const HoroExtensionHostApi host{.structSize = sizeof(HoroExtensionHostApi),
+                                        .abiVersion = 1,
+                                        .abiMinorVersion = 5,
+                                        .registerEditorPage = [](void *, const HoroEditorPageDescriptor *,
+                                                                 HoroEditorPageSessionApi *) -> HoroExtensionStatus {
+            return HORO_EXTENSION_SUCCESS;
+        }};
+        const HoroExtensionQueryFunc oldVersion = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryCurrent(requirements);
+            requirements->minimumHostMinor = 4;
+            requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_PAGE;
+            return HORO_EXTENSION_SUCCESS;
+        };
+        const HoroExtensionQueryFunc oldPrefix = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryCurrent(requirements);
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorPage);
+            requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_PAGE;
+            return HORO_EXTENSION_SUCCESS;
+        };
+        const HoroExtensionQueryFunc current = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryCurrent(requirements);
+            requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_PAGE;
+            return HORO_EXTENSION_SUCCESS;
+        };
+        HoroExtensionRequirements negotiated{};
+        CHECK(NegotiateModuleAbi(oldVersion, host, &negotiated) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        CHECK(negotiated.requiredFunctions == 0);
+        CHECK(NegotiateModuleAbi(oldPrefix, host) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        REQUIRE(NegotiateModuleAbi(current, host, &negotiated) == HORO_EXTENSION_SUCCESS);
+        CHECK(negotiated.minimumHostMinor == 5);
+        CHECK(negotiated.requiredFunctions == HORO_EXTENSION_REQUIRES_EDITOR_PAGE);
     }
 }  // namespace Horo::Extensions::Tests
