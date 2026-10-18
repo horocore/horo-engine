@@ -1,4 +1,5 @@
 #include "EditorActivityPackageSupport.h"
+#include "EditorInspectorTestSupport.h"
 #include "GameplayRetirementTestSupport.h"
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
@@ -14,6 +15,8 @@
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Extensions/EditorPageHost.h"
+#include "Horo/Extensions/EditorThemeTokens.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -29,6 +32,7 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <future>
+#include <imgui.h>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -160,7 +164,9 @@ namespace {
             ~UpdateBinding() {
                 gui.updates = previous;
             }
-        } binding{gui};
+        };
+
+        UpdateBinding binding{gui};
 
         gui.updates = &session;
         session.SetAutomaticDownload(true);
@@ -256,6 +262,62 @@ namespace {
     }
 
     static_assert(!std::is_copy_constructible_v<RecordingScreen> && !std::is_move_constructible_v<RecordingScreen>);
+
+    /** @brief Exercises the real owner update without granting or constructing page authority. */
+    void CheckInspectorOnlyThemeUpdate(GuiScreenHost &host) {
+        REQUIRE(host.Services().TryGet<Extensions::EditorInspectorHost>() != nullptr);
+        CHECK(host.Services().TryGet<Extensions::EditorPageHost>() == nullptr);
+        const auto *frame = host.Services().TryGetConst<Extensions::EditorThemeFrame>();
+        REQUIRE(frame != nullptr);
+        REQUIRE(frame->revision != 0);
+        const auto openingRevision = frame->revision;
+        auto &overlay = ImGui::GetStyle().Colors[ImGuiCol_ModalWindowDimBg];
+        overlay.x = overlay.x < 0.5F ? 0.75F : 0.25F;
+        host.OnUpdate(0.0F);
+        CHECK(host.Services().TryGetConst<Extensions::EditorThemeFrame>() == frame);
+        CHECK(frame->revision > openingRevision);
+        CHECK(frame->colors.overlay.red == overlay.x);
+    }
+
+    TEST_CASE("Inspector-only host refreshes its borrowed theme without a page host", "[unit][editor][inspector][theme]") {
+        ImGuiContext *previous = ImGui::GetCurrentContext();
+        const auto destroy = [previous](ImGuiContext *context) {
+            ImGui::DestroyContext(context);
+            ImGui::SetCurrentContext(previous);
+        };
+        const std::unique_ptr<ImGuiContext, decltype(destroy)> imgui{ImGui::CreateContext(), destroy};
+        auto &io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        auto *font = io.Fonts->AddFontDefault();
+        REQUIRE(io.Fonts->Build());
+        EngineDataBus engineEvents;
+        EditorDataBus editorEvents;
+        Input::InputRouter input;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
+        ProjectCreationService creation{jobs, engineEvents};
+        LocalizationService localization{LocaleTag{"en-US"}};
+        ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
+        EditorSettingsService settings{DefaultEditorSettings(), configuration, editorEvents, localization};
+        EditorModalHost modals{editorEvents, input};
+        const Theme::Fonts fonts{.sans = font, .sansCompact = font, .sansEmphasis = font, .icon = font};
+        ThemeContext theme{fonts};
+        EditorSettingsSnapshot settingsSnapshot = settings.Snapshot();
+        EditorGuiContext gui{engineEvents, editorEvents, localization, theme, settingsSnapshot};
+        RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
+                                               "opengl"};
+        GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
+                                                         .settingsService = settings,
+                                                         .localization = localization,
+                                                         .engineEvents = engineEvents,
+                                                         .creationService = creation,
+                                                         .jobs = jobs,
+                                                         .inputRouter = input,
+                                                         .rendererAvailability = renderers,
+                                                         .extensionInspectorPolicy = Extensions::Tests::InspectorSupport::Policy()}};
+        CheckInspectorOnlyThemeUpdate(host);
+        host.Shutdown();
+        jobs.Shutdown(ShutdownPolicy::Cancel);
+    }
 
     TEST_CASE("GUI inventory activation uses explicit artifact authority and revokes package surfaces on shutdown",
               "[unit][editor][Activity][ABI]") {

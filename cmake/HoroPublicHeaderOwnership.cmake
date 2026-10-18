@@ -1187,6 +1187,7 @@ horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
     Horo/Editor/NavigationDefinitionDocument.h
     Horo/Editor/NavigationSettingsWorkflow.h
     Horo/Editor/SceneDocumentTransaction.h
+    Horo/Editor/InspectorBehaviorBinding.h
     Horo/Editor/PhysicsInspector.h
     Horo/Editor/EditorDataBus.h
 )
@@ -1290,7 +1291,9 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/EditorActivityHost.h
     Horo/Extensions/EditorPageDefinition.h
     Horo/Extensions/EditorPageHost.h
+    Horo/Extensions/EditorInspectorHost.h
     Horo/Extensions/EditorPageAbi.h
+    Horo/Extensions/EditorInspectorAbi.h
     Horo/Extensions/ExtensionAbiConformance.h
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h

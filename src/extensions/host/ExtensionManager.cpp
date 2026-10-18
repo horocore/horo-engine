@@ -2,6 +2,7 @@
 
 #include "../capabilities/asset_pipeline_points/ExternalAssetImporter.h"
 #include "EditorActivitySession.h"
+#include "EditorInspectorNativeSession.h"
 #include "EditorPageNativeSession.h"
 #include "ExtensionAbiValidation.h"
 #include "ExtensionActivationTransaction.h"
@@ -312,13 +313,14 @@ namespace Horo::Extensions {
                     .abiMinorVersion = HORO_EXTENSION_ABI_MINOR_VERSION,
                     .registerPlatformServicesProvider = allowPlatformProvider ? &RegisterPlatformProvider : nullptr,
                     .registerEditorActivity = registration.editorHost ? &RegisterExternalEditorActivity : nullptr,
-                    .registerEditorPage = registration.pageHost ? &RegisterExternalEditorPage : nullptr};
+                    .registerEditorPage = registration.pageHost ? &RegisterExternalEditorPage : nullptr,
+                    .registerEditorInspector = registration.inspectorHost ? &RegisterExternalEditorInspector : nullptr};
         }
 
         /** @brief Validates the returned module table and exact activity/drawer declarations before activation publication. */
         [[nodiscard]] Result<void> ValidateLoadedModule(HoroExtensionModuleApi &moduleApi, const ExtensionManifest &manifest,
                                                         const ExtensionModuleManifest &manifestModule,
-                                                        const std::size_t registeredActivities) {
+                                                        const AssetImporterRegistrationSession &registration) {
             if (!NormalizeModuleApi(moduleApi) || !MatchesDeclaredModule(moduleApi, manifestModule.id, manifestModule.version))
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::InvalidManifest, "Loaded module table or identity/version is invalid."));
@@ -329,10 +331,13 @@ namespace Horo::Extensions {
                                                                   [&manifestModule](const auto &claim) {
                 return claim.owningModule == manifestModule.id && claim.type == "editor.panel";
             });
-                static_cast<std::size_t>(declaredActivities) != registeredActivities || declaredPanels != declaredActivities)
+                static_cast<std::size_t>(declaredActivities) != registration.lifetime->editorActivities.size() ||
+                declaredPanels != declaredActivities)
                 return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected,
                                                        "Native module did not register every declared activity/drawer pair."));
-            return Result<void>::Success();
+            if (auto inspectors = ValidateEditorInspectorClaims(registration); inspectors.HasError())
+                return inspectors;
+            return ValidateEditorPageClaims(registration);
         }
 
         /** @brief Grants the page tail only from validated inert negotiation; old1.4 prefix clients cannot access page transport. */
@@ -351,6 +356,14 @@ namespace Horo::Extensions {
                 if (negotiated.minimumHostMinor == 4 &&
                     negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorPage))
                     hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorPage);
+            }
+            registration.inspectorTransportNegotiated =
+                negotiated.minimumHostMinor >= 6 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR) != 0;
+            if (!registration.inspectorTransportNegotiated) {
+                hostApi.registerEditorInspector = nullptr;
+                if (negotiated.minimumHostMinor == 5 &&
+                    negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorInspector))
+                    hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorInspector);
             }
             return Result<void>::Success();
         }
@@ -382,8 +395,10 @@ namespace Horo::Extensions {
                 .extensionModule = &manifestModule,
                 .lifetime = lifetime,
                 .retirement = retirement,
+                .error = MakeError(ExtensionErrors::ContributionRejected),
                 .editorHost = editorHosts.activities,
                 .pageHost = editorHosts.pages,
+                .inspectorHost = editorHosts.inspectors,
             };
             HoroExtensionHostApi hostApi = MakeHostApi(registration, allowPlatformProvider);
             if (auto negotiated = NegotiateActivation(*library, hostApi, registration); negotiated.HasError())
@@ -395,11 +410,8 @@ namespace Horo::Extensions {
                                                   : MakeError(ExtensionErrors::LoadFailed, "Extension load function returned an error.");
                 return RejectActivatedModule(lifetime, moduleApi, registration, std::move(error));
             }
-            if (auto validated = ValidateLoadedModule(moduleApi, manifest, manifestModule, lifetime->editorActivities.size());
-                validated.HasError())
+            if (auto validated = ValidateLoadedModule(moduleApi, manifest, manifestModule, registration); validated.HasError())
                 return RejectActivatedModule(lifetime, moduleApi, registration, std::move(validated).ErrorValue());
-            if (auto pages = ValidateEditorPageClaims(registration); pages.HasError())
-                return RejectActivatedModule(lifetime, moduleApi, registration, std::move(pages).ErrorValue());
             lifetime->moduleApi = moduleApi;
             lifetime->loaded = true;
             return Result<ActivatedModule>::Success({.lifetime = std::move(lifetime),
@@ -586,6 +598,8 @@ namespace Horo::Extensions {
                                                            Assets::AssetImporterCatalog *catalog) {
             if (auto editor = CommitEditorActivities(transaction.Lifetimes()); editor.HasError())
                 return editor;
+            if (auto inspectors = CommitEditorInspectors(transaction.Lifetimes()); inspectors.HasError())
+                return inspectors;
             if (auto pages = CommitEditorPages(transaction.Lifetimes()); pages.HasError())
                 return pages;
             return CommitContributions(transaction.Contributions(), catalog);
@@ -625,6 +639,11 @@ namespace Horo::Extensions {
             m_editorHosts.pages.reset();
         if (!m_editorHosts.pages)
             std::erase(m_hostCapabilities, std::string{HORO_EDITOR_PAGE_HOST_CAPABILITY});
+        if (m_hostProfile != ExtensionHostProfile::Interactive ||
+            !std::ranges::binary_search(m_hostCapabilities, std::string{HORO_EDITOR_INSPECTOR_HOST_CAPABILITY}))
+            m_editorHosts.inspectors.reset();
+        if (!m_editorHosts.inspectors)
+            std::erase(m_hostCapabilities, std::string{HORO_EDITOR_INSPECTOR_HOST_CAPABILITY});
         if (!m_libraryLoader)
             m_libraryLoader = [](const std::string &path) {
                 return Platform::LoadDynamicLibrary(path);

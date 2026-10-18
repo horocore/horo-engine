@@ -180,3 +180,12 @@ requests, and provider-selected pages. Each path captures the current navigation
 borrow and admission diagnostics together with the actual page/theme authority.
 Modal lifecycle tests cover navigation retirement, while real host menu tests
 retain original navigation admission failures. Native page ABI 1.5 is unchanged.
+
+## External C ABI 1.5 → 1.6 inspector declarations
+
+ABI 1.6 appends `registerEditorInspector` after the unchanged 1.5 page prefix.
+Inspector declarations require explicit 1.6 negotiation and document-owner
+approval; a 1.5 module retains its existing page behavior and cannot use the new
+callback. Rebuild host composition callers with `ExtensionEditorHosts`. See
+[the inspector migration guide](extension-inspector-migration.md) for the scalar
+profile, approval lifetime, actual document transactions and affected consumers.

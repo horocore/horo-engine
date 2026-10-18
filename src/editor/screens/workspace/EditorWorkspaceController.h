@@ -36,6 +36,10 @@
 #include <utility>
 #include <vector>
 
+namespace Horo::Extensions {
+    class EditorInspectorHost;
+}
+
 namespace Horo::Editor {
     class ILocalizationService;
     struct EditorViewportPickResult;
@@ -50,6 +54,13 @@ namespace Horo::Editor {
         CollisionActivationEvidence *activation{};
     };
 
+    /** @brief Explicit gameplay build and module-retirement services captured by the application host. */
+    struct EditorWorkspaceGameplayServices {
+        Application::GameplayBuildService *builds{};
+        Application::GameplayBuildEnvironment environment{};
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
+    };
+
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
@@ -61,17 +72,16 @@ namespace Horo::Editor {
         JobSystem *jobs{};
         SourceOpenNavigator sourceOpenNavigator{};
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
-        Application::GameplayBuildService *gameplayBuilds{};
-        Application::GameplayBuildEnvironment gameplayBuildEnvironment{};
+        EditorWorkspaceGameplayServices gameplay{};
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
+        Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
-        std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
-        PrefabHierarchySourceCapture prefabSources;   /**< Explicit host loader; never discovered by panels. */
-        PCGDocumentCatalog pcgCatalog{.revision = 1}; /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
+        PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -325,6 +335,14 @@ namespace Horo::Editor {
         std::unique_ptr<NavigationProjectSettingsSession> m_navigationSettings;
         std::uint64_t m_navigationOpening{1};
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
+        Assets::AssetId m_inspectorDocumentOwner;
+        SceneDocumentTransactions m_inspectorDocument;
+        std::uint64_t m_inspectorDocumentGeneration{};
+        std::uint64_t m_inspectorBehaviorRegistryRevision{};
+        std::uint64_t m_inspectorApprovalRevision{};
+        bool m_inspectorAdmissionClosed{};
+        Extensions::EditorInspectorHost *m_inspectorHost{};
+        std::vector<InspectorProviderApproval> m_inspectorApprovals;
         CreateSceneObjectUseCase m_createSceneObject{m_document, m_documentCommands};
         InstantiateSceneAssetUseCase m_instantiateSceneAsset{m_document, m_documentCommands};
         EditorSelectionModel m_selection{m_document, m_dataBus};
@@ -470,6 +488,19 @@ namespace Horo::Editor {
                                     const std::vector<std::string> &displacedPanelIds);
         void MovePanelActivitySlot(const EditorWorkspaceViewCommandData &cmd);
         void RefreshSceneProjections();
+        /** @brief Rebinds the sole borrowed transaction port at canonical Scene projection refresh with a never-reused host epoch. */
+        void RefreshInspectorDocumentPort();
+        /** @brief Retires approvals before an actual project behavior catalog publication; epochs never wrap. */
+        void InvalidateInspectorBehaviorBindings();
+        /** @brief Revalidates provider/selection/schema/current owner and submits exactly one existing atomic transaction. */
+        [[nodiscard]] Result<SceneTransactionResult> ApplyInspectorBehaviorEdit(const InspectorExtensionEdit &request);
+        /** @brief Admits only explicit current user approval for a resolved selected type and exact provider/declaration fields. */
+        [[nodiscard]] Result<void> ApproveInspectorContribution(const InspectorExtensionEdit &request);
+        /** @brief Routes explicit provider approval and typed edit gestures through the canonical owner lane. */
+        bool ProcessInspectorContributionCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Prepares bounded overlap replacement and copied projection before atomically publishing explicit owner approval. */
+        [[nodiscard]] Result<void> PublishInspectorApproval(const InspectorExtensionEdit &request,
+                                                            const Extensions::EditorInspectorContribution &contribution);
         /** @brief Explicit source refresh; publishes a complete bounded cache or repairable typed placement failures. */
         void RefreshPrefabHierarchy(const SceneDocumentSnapshot &document);
         /** @brief Prepares all allocating source/row storage, then publishes one immutable owner generation.

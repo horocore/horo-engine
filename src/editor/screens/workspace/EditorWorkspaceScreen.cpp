@@ -18,6 +18,7 @@
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Extensions/EditorInspectorHost.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -241,25 +242,7 @@ namespace Horo::Editor {
                 publishedRevisions_.viewportScene = controller_->CurrentViewportSceneRevision();
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen entered for '%s'", controller_->ViewModel().projectRoot.c_str());
 
-                PanelContext panelContext{
-                    .dataBus = controller_->DataBus(),
-                    .guiRenderer = panelServices_.guiRenderer,
-                    .viewportRenderer = panelServices_.viewportRenderer,
-                    .inputRouter = &input_.router,
-                    .workspaceInputContext = &input_.context,
-                    .logQuery = panelServices_.logQuery,
-                    .buildOutputQuery = panelServices_.buildOutputQuery,
-                    .gameplayBuilds = panelServices_.gameplayBuilds,
-                    .projectRoot = controller_->ViewModel().projectRoot,
-                    .operationQuery = panelServices_.operationQuery,
-                    .operationControl = panelServices_.operationControl,
-                    // Built-in panels have no extension activation identity; extension hosts inject
-                    // their own provider-owned context at the descriptor activation boundary.
-                    .surfaceEvents = nullptr,
-                    .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
-                    .networkDebuggerControl = panelServices_.networkDebuggerControl,
-                };
-                contributions_.panels.AttachAll(panelContext);
+                AttachWorkspacePanels();
                 UpdateStatusItems();
                 if (auto committed = activation.Commit(); committed.HasError()) {
                     contributions_.panels.DetachAll();
@@ -553,6 +536,31 @@ namespace Horo::Editor {
             }
 
         private:
+            /** @brief Attaches built-in panels to the actual workspace services before session publication. */
+            void AttachWorkspacePanels() {
+                PanelContext panelContext{
+                    .dataBus = controller_->DataBus(),
+                    .guiRenderer = panelServices_.guiRenderer,
+                    .viewportRenderer = panelServices_.viewportRenderer,
+                    .inputRouter = &input_.router,
+                    .workspaceInputContext = &input_.context,
+                    .logQuery = panelServices_.logQuery,
+                    .buildOutputQuery = panelServices_.buildOutputQuery,
+                    .gameplayBuilds = panelServices_.gameplayBuilds,
+                    .projectRoot = controller_->ViewModel().projectRoot,
+                    .operationQuery = panelServices_.operationQuery,
+                    .operationControl = panelServices_.operationControl,
+                    // Built-in panels have no extension activation identity; extension hosts inject
+                    // their own provider-owned context at the descriptor activation boundary.
+                    .surfaceEvents = nullptr,
+                    .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
+                    .networkDebuggerControl = panelServices_.networkDebuggerControl,
+                    .extensionInspectors = services_.TryGet<Extensions::EditorInspectorHost>(),
+                    .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
+                };
+                contributions_.panels.AttachAll(panelContext);
+            }
+
             /** @brief Requires the exact graph sessions and revisions captured by the dirty-leave prompt. */
             /** @brief Captures the cached dirty draft at the explicit leave decision, without filesystem access. */
             Result<void> CaptureLeaveCollision() const {
@@ -629,18 +637,20 @@ namespace Horo::Editor {
                                                                     .assetRegistrySource = std::move(registrySource).Value(),
                                                                     .importerCatalog = projectServices_.importerCatalog,
                                                                     .jobs = &services_.Get<JobSystem>(),
-                                                                    .gameplayBuilds = services_.TryGet<Application::GameplayBuildService>(),
-                                                                    .gameplayBuildEnvironment =
-                                                                        gameplayEnvironment != nullptr
-                                                                            ? *gameplayEnvironment
-                                                                            : Application::GameplayBuildEnvironment{},
+                                                                    .gameplay = {.builds =
+                                                                                     services_.TryGet<Application::GameplayBuildService>(),
+                                                                                 .environment =
+                                                                                     gameplayEnvironment != nullptr
+                                                                                         ? *gameplayEnvironment
+                                                                                         : Application::GameplayBuildEnvironment{},
+                                                                                 .retirements = host_.GameplayRetirements()},
                                                                     .localization = &context_.localization,
                                                                     .engineEvents = &context_.engineEvents,
                                                                     .networkDebugger =
                                                                         services_.TryGet<Application::NetworkDebuggerService>(),
                                                                     .documentSessionOwner = sessionOwner,
+                                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                                     .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-                                                                    .gameplayRetirements = host_.GameplayRetirements(),
                                                                     .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
                                                                 });
                 if (controller_->InitializationError().has_value()) {

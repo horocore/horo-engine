@@ -104,6 +104,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPCGSceneBakeContractConsumer
     HoroPCGSceneBakePublicHeaderConsumer
     HoroEditorModelPublicHeaderConsumer
+    HoroInspectorBehaviorBindingTests
+    HoroInspectorBehaviorPublicHeaderConsumer
     HoroPCGDocumentTests
     HoroPCGDocumentPublicHeaderConsumer
     HoroMixerDocumentTests

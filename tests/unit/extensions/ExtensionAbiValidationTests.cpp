@@ -185,7 +185,7 @@ namespace Horo::Extensions::Tests {
     }
 
     TEST_CASE("Page transport requires explicit ABI1.5 function and complete prefix negotiation", "[Extensions][ABI][EditorPage]") {
-        const HoroExtensionHostApi host{.structSize = sizeof(HoroExtensionHostApi),
+        const HoroExtensionHostApi host{.structSize = offsetof(HoroExtensionHostApi, registerEditorInspector),
                                         .abiVersion = 1,
                                         .abiMinorVersion = 5,
                                         .registerEditorPage = [](void *, const HoroEditorPageDescriptor *,
@@ -194,18 +194,24 @@ namespace Horo::Extensions::Tests {
         }};
         const HoroExtensionQueryFunc oldVersion = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
             QueryCurrent(requirements);
+            requirements->minimumHostMinor = 5;
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorInspector);
             requirements->minimumHostMinor = 4;
             requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_PAGE;
             return HORO_EXTENSION_SUCCESS;
         };
         const HoroExtensionQueryFunc oldPrefix = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
             QueryCurrent(requirements);
+            requirements->minimumHostMinor = 5;
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorInspector);
             requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorPage);
             requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_PAGE;
             return HORO_EXTENSION_SUCCESS;
         };
         const HoroExtensionQueryFunc current = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
             QueryCurrent(requirements);
+            requirements->minimumHostMinor = 5;
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorInspector);
             requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_PAGE;
             return HORO_EXTENSION_SUCCESS;
         };
@@ -216,5 +222,33 @@ namespace Horo::Extensions::Tests {
         REQUIRE(NegotiateModuleAbi(current, host, &negotiated) == HORO_EXTENSION_SUCCESS);
         CHECK(negotiated.minimumHostMinor == 5);
         CHECK(negotiated.requiredFunctions == HORO_EXTENSION_REQUIRES_EDITOR_PAGE);
+    }
+
+    TEST_CASE("Inspector transport requires explicit ABI1.6 and rejects use through a1.5 prefix", "[Extensions][ABI][Inspector]") {
+        HoroExtensionHostApi host{.structSize = sizeof(HoroExtensionHostApi),
+                                  .abiVersion = 1,
+                                  .abiMinorVersion = 6,
+                                  .registerEditorInspector = [](void *, const HoroEditorInspectorDescriptor *) -> HoroExtensionStatus {
+            return HORO_EXTENSION_SUCCESS;
+        }};
+        const HoroExtensionQueryFunc current = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryCurrent(requirements);
+            requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR;
+            return HORO_EXTENSION_SUCCESS;
+        };
+        const HoroExtensionQueryFunc legacy = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
+            QueryCurrent(requirements);
+            requirements->minimumHostMinor = 5;
+            requirements->requiredHostApiSize = offsetof(HoroExtensionHostApi, registerEditorInspector);
+            requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR;
+            return HORO_EXTENSION_SUCCESS;
+        };
+        REQUIRE(NegotiateModuleAbi(current, host) == HORO_EXTENSION_SUCCESS);
+        CHECK(NegotiateModuleAbi(legacy, host) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        host.structSize = offsetof(HoroExtensionHostApi, registerEditorInspector);
+        CHECK(NegotiateModuleAbi(current, host) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        host.structSize = sizeof(host);
+        host.registerEditorInspector = nullptr;
+        CHECK(NegotiateModuleAbi(current, host) == HORO_EXTENSION_ERROR_INVALID_ARGS);
     }
 }  // namespace Horo::Extensions::Tests

@@ -18,6 +18,8 @@ namespace Horo::Extensions {
     class EditorActivityHost;
     struct EditorPageNativeSession;
     class EditorPageHost;
+    class EditorInspectorHost;
+    struct EditorInspectorNativeSession;
 
     /** @brief Preallocated native closure retained if module teardown fails; never allocated during destruction. */
     struct ExtensionNativeClosure final {
@@ -52,6 +54,7 @@ namespace Horo::Extensions {
         std::weak_ptr<ExtensionRetirement> retirement;
         std::vector<std::shared_ptr<EditorActivitySession>> editorActivities;
         std::vector<std::shared_ptr<EditorPageNativeSession>> editorPages;
+        std::vector<std::shared_ptr<EditorInspectorNativeSession>> editorInspectors;
     };
 
     /** @brief Host-side state used only during one module load transaction. */
@@ -69,6 +72,9 @@ namespace Horo::Extensions {
         std::shared_ptr<EditorPageHost> pageHost;
         std::uint64_t pageGeneration{};
         bool pageTransportNegotiated{};
+        std::shared_ptr<EditorInspectorHost> inspectorHost;
+        std::uint64_t inspectorGeneration{};
+        bool inspectorTransportNegotiated{};
     };
 
     /**
