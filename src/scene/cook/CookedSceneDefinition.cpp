@@ -226,7 +226,7 @@ namespace Horo::SceneCook {
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::TooLarge));
             try {
                 Foundation::JsonParseGuard guard{32};
-                const auto root = Json::parse(bytes.begin(), bytes.end(), std::ref(guard));
+                const auto root = guard.Parse(bytes.begin(), bytes.end());
                 if (guard.HasDuplicate() || guard.IsTooDeep() || !root.is_object() || !root.contains("revision") ||
                     !root["revision"].is_number_unsigned() || root["revision"].get<std::uint64_t>() == 0)
                     return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(SceneCookErrors::Invalid));

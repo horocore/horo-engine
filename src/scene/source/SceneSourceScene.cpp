@@ -218,9 +218,7 @@ namespace Horo::SceneSource::Detail {
         try {
             Foundation::JsonParseGuard guard{64};
             BoundedSceneJson parsed;
-            parsed.value = Json::parse(contents, [&guard](const int depth, const Json::parse_event_t event, const Json &value) {
-                return guard(depth, event, value);
-            });
+            parsed.value = guard.Parse(contents.begin(), contents.end());
             if (guard.IsTooDeep() || guard.HasDuplicate())
                 return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Scene JSON nesting or duplicate keys are invalid."));
             const Json &document = parsed.value;

@@ -2016,6 +2016,10 @@ add_executable(HoroFoundationSha256Tests
 )
 target_compile_features(HoroFoundationSha256Tests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationSha256Tests PRIVATE HoroEngine::Foundation)
+add_executable(HoroFoundationJsonTests unit/foundation/JsonParseGuardTests.cpp)
+target_compile_features(HoroFoundationJsonTests PRIVATE cxx_std_20)
+target_link_libraries(HoroFoundationJsonTests PRIVATE HoroFoundationJsonInternal)
+horo_register_catch_test(HoroFoundationJsonTests LABELS "unit;foundation;json;headless")
 add_executable(HoroStructuredLogStoreTests
         unit/foundation/StructuredLogStoreTests.cpp
 )
