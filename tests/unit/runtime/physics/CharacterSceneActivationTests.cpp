@@ -254,6 +254,14 @@ namespace Horo::Physics {
             Test::RequireError(*foreign, PhysicsErrors::ThreadAffinityViolation);
         }
 
+        /** @brief Advances the actual host once, preserving phase context and typed failure diagnostics. */
+        void RequireHostTick(Application::Internal::ScenePhysicsHost &host, std::string_view phase) {
+            INFO(phase);
+            const auto tick = host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667));
+            INFO((tick.HasError() ? tick.ErrorValue().code.Value() + ": " + tick.ErrorValue().message : "tick succeeded"));
+            REQUIRE(tick.HasValue());
+        }
+
         TEST_CASE("Application observer follows the sole Scene-owned pair across failed replacement and retirement",
                   "[physics][scene][character][host][canonical]") {
             auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
@@ -272,15 +280,9 @@ namespace Horo::Physics {
             CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 0);
             CHECK(host.Borrow().Value().character.PublishedTick().completedTick == 0);
             const auto preparedRevision = host.Borrow().Value().character.Descriptor().physicsSnapshotRevision;
-            const auto firstTick = host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667));
-            INFO((firstTick.HasError() ? firstTick.ErrorValue().code.Value() + ": " + firstTick.ErrorValue().message
-                                       : "first tick succeeded"));
-            REQUIRE(firstTick.HasValue());
+            RequireHostTick(host, "first tick");
             CHECK(host.Borrow().Value().character.Descriptor().physicsSnapshotRevision == preparedRevision);
-            const auto secondTick = host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667));
-            INFO((secondTick.HasError() ? secondTick.ErrorValue().code.Value() + ": " + secondTick.ErrorValue().message
-                                        : "second tick succeeded"));
-            REQUIRE(secondTick.HasValue());
+            RequireHostTick(host, "second tick");
             CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 2);
             CHECK(host.Borrow().Value().character.PublishedTick().completedTick == 2);
             auto retained = host.Borrow().Value().character.IssueCapability().Value();
@@ -294,10 +296,7 @@ namespace Horo::Physics {
             CHECK(retained.Validate().HasError());
             auto replacementGrant = host.Borrow().Value().character.IssueCapability().Value();
             CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 0);
-            const auto replacementTick = host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667));
-            INFO((replacementTick.HasError() ? replacementTick.ErrorValue().code.Value() + ": " + replacementTick.ErrorValue().message
-                                             : "replacement tick succeeded"));
-            REQUIRE(replacementTick.HasValue());
+            RequireHostTick(host, "replacement tick");
             RequireForeignHostBorrowRejected(host);
             REQUIRE(assets.service.QueueUnload().HasValue());
             REQUIRE(assets.service.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Context(assets.cancellation.Token()))
