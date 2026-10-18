@@ -736,9 +736,13 @@ namespace Horo::Editor {
                                                  surface.focused, surface.activityVisible, surface.opaqueState, placement);
                 }
                 std::string error;
+                AtomicFileReplacementReceipt receipt;
                 if (const auto path = std::filesystem::path{controller_->ViewModel().projectRoot} / ".horo" / "editor_workspace.json";
-                    !WorkspaceLayoutPersistence::Save(path, layout, &error))
-                    LOG_WARN("editor.workspace", "Cannot save workspace state: %s", error.c_str());
+                    !projectServices_.durableFiles ||
+                    !WorkspaceLayoutPersistence::Save(*projectServices_.durableFiles, receipt, path, layout, &error)) {
+                    LOG_WARN("editor.workspace", "Cannot confirm workspace state publication: %s", error.c_str());
+                    return;
+                }
                 workspacePersistenceAdmitted_ = false;
             }
 

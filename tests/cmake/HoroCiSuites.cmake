@@ -20,6 +20,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCollisionSettingsPublicConsumer
     HoroPublicationLockFoundationConsumer
     HoroProjectCollisionSettingsPublicHeaderConsumer
+    HoroWorkspaceLayoutPersistenceTests
+    HoroWorkspaceRecoveryPublicHeaderConsumer
     HoroNavigationProjectSettingsTests
     HoroNavigationProjectSettingsPublicConsumer
     HoroPhysicsTests

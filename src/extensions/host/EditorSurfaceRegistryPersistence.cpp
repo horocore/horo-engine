@@ -36,6 +36,19 @@ namespace Horo::Extensions {
             return pending;
         }
 
+        /** @brief Retains precise host availability in restore reports without treating policy as activation evidence. */
+        void ReportUnavailable(const std::string &id, const EditorSurfaceProviderStatus status, EditorSurfaceRestoreReport &report) {
+            using enum EditorSurfaceProviderStatus;
+            if (status == Disabled)
+                report.disabledProvider.push_back(id);
+            else if (status == Incompatible)
+                report.incompatibleProvider.push_back(id);
+            else if (status == Failed)
+                report.failedProvider.push_back(id);
+            else
+                report.missingProvider.push_back(id);
+        }
+
         [[nodiscard]] const ErrorCodeDescriptor *StageWorkspaceEntry(const EditorSurfaceRegistryState &state,
                                                                      const EditorSurfaceWorkspaceEntry &entry,
                                                                      std::vector<PendingSurfaceState> &pending,
@@ -49,10 +62,7 @@ namespace Horo::Extensions {
                     pending.size() >= availablePending)
                     return &ExtensionErrors::EditorSurfaceRegistryCapacityExceeded;
                 pending.push_back(PendingSurfaceState{.persistence = EditorSurfacePersistence::Workspace, .entry = entry});
-                if (ConfiguredStatus(state, entry.provider) == EditorSurfaceProviderStatus::Disabled)
-                    report.disabledProvider.push_back(entry.surfaceId);
-                else
-                    report.missingProvider.push_back(entry.surfaceId);
+                ReportUnavailable(entry.surfaceId, ConfiguredStatus(state, entry.provider), report);
                 return nullptr;
             }
             if (entry.activityPlacement && !surface->descriptor.activity)
@@ -61,10 +71,8 @@ namespace Horo::Extensions {
                 return &ExtensionErrors::EditorSurfaceRegistryStateInvalid;
             if (const EditorSurfaceProviderStatus status = EffectiveStatus(state, *surface); status == EditorSurfaceProviderStatus::Active)
                 report.restored.push_back(entry.surfaceId);
-            else if (status == EditorSurfaceProviderStatus::Disabled)
-                report.disabledProvider.push_back(entry.surfaceId);
             else
-                report.missingProvider.push_back(entry.surfaceId);
+                ReportUnavailable(entry.surfaceId, status, report);
             return nullptr;
         }
 

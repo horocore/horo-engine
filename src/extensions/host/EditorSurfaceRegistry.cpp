@@ -62,7 +62,7 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] bool IsValidStatus(const EditorSurfaceProviderStatus status) noexcept {
-            return static_cast<std::uint8_t>(status) <= static_cast<std::uint8_t>(EditorSurfaceProviderStatus::Missing);
+            return static_cast<std::uint8_t>(status) <= static_cast<std::uint8_t>(EditorSurfaceProviderStatus::Failed);
         }
 
         [[nodiscard]] bool SameProvider(const EditorSurfaceProviderKey &left, const EditorSurfaceProviderKey &right) noexcept {

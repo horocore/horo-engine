@@ -2338,6 +2338,13 @@
     "settings.collision.impact.inventory": {"text": "Incomplete or changed project inventory: refresh sources before deletion"},
     "settings.collision.impact.trigger": {"text": "Trigger capture is unavailable or stale: provide the exact cooked binding before deletion"},
     "settings.collision.impact.active": {"text": "Active generation or Play session blocks semantic replacement"},
+    "workspace.extensions.recovery": {"text": "Unavailable extension surfaces"},
+    "workspace.extensions.retained": {"text": "Your workspace state is retained. Restore or enable the provider to recover these surfaces. Closing provider surfaces preserves their saved presentation data."},
+    "workspace.extensions.close": {"text": "Close provider workspace surfaces"},
+    "workspace.extensions.disabled": {"text": "The provider is disabled."},
+    "workspace.extensions.incompatible": {"text": "The provider is incompatible with this host."},
+    "workspace.extensions.failed": {"text": "The provider failed activation."},
+    "workspace.extensions.missing": {"text": "The provider or contribution is unavailable."},
     "settings.extension_pages.title": {
       "text": "Extension pages"
     },

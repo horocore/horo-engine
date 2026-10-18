@@ -2338,6 +2338,13 @@
     "settings.collision.impact.inventory": {"text": "Eksik veya değişmiş proje envanteri: silmeden önce kaynakları yenileyin"},
     "settings.collision.impact.trigger": {"text": "Tetikleyici kopyası yok veya eski: silmeden önce tam derlenmiş bağı sağlayın"},
     "settings.collision.impact.active": {"text": "Etkin nesil veya oynatma oturumu anlamsal değiştirmeyi engelliyor"},
+    "workspace.extensions.recovery": {"text": "Kullanılamayan eklenti yüzeyleri"},
+    "workspace.extensions.retained": {"text": "Çalışma alanı durumu korunuyor. Bu yüzeyleri geri yüklemek için sağlayıcıyı geri yükleyin veya etkinleştirin. Sağlayıcı yüzeylerini kapatmak kayıtlı sunum verilerini korur."},
+    "workspace.extensions.close": {"text": "Sağlayıcının çalışma alanı yüzeylerini kapat"},
+    "workspace.extensions.disabled": {"text": "Sağlayıcı devre dışı."},
+    "workspace.extensions.incompatible": {"text": "Sağlayıcı bu ana uygulamayla uyumlu değil."},
+    "workspace.extensions.failed": {"text": "Sağlayıcı etkinleştirilemedi."},
+    "workspace.extensions.missing": {"text": "Sağlayıcı veya katkı kullanılamıyor."},
     "settings.extension_pages.title": {
       "text": "Uzantı sayfaları"
     },

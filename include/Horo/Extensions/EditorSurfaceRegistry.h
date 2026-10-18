@@ -37,6 +37,8 @@ namespace Horo::Extensions {
         Active,
         Disabled,
         Missing,
+        Incompatible,
+        Failed,
     };
 
     /** @brief Durable user placement of an activity; provider declarations remain immutable. */
@@ -102,6 +104,14 @@ namespace Horo::Extensions {
         std::vector<std::string> restored;
         std::vector<std::string> disabledProvider;
         std::vector<std::string> missingProvider;
+        std::vector<std::string> incompatibleProvider;
+        std::vector<std::string> failedProvider;
+    };
+
+    /** @brief Identifiable unavailable workspace intent; never carries activation, callbacks or capabilities. */
+    struct EditorSurfaceRecoverySnapshot final {
+        EditorSurfaceWorkspaceEntry intent;
+        EditorSurfaceProviderStatus status{EditorSurfaceProviderStatus::Missing};
     };
 
     /** @brief Copied host snapshot of one registered external surface. */
@@ -240,12 +250,27 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<EditorSurfaceOperation> Close(std::string_view surfaceId) const;
 
         /**
+         * @brief Closes all workspace intent for one exact provider, preserving paired contribution invariants without missing metadata.
+         * @param provider Stable package/module identity from the recovery projection.
+         * @return Success or invalid/shutdown failure; opaque bytes and placement remain unchanged.
+         * @details Closes registered and pending workspace surfaces together, never invokes a provider, and grants no capability.
+         */
+        [[nodiscard]] Result<void> CloseProviderWorkspace(const EditorSurfaceProviderKey &provider) const;
+
+        /**
          * @brief Changes provider availability without changing the persisted open intent.
          * @param provider Stable extension/module identity; activation generations are not persisted.
          * @param status New host availability state.
          * @return Success or a typed malformed/shutdown failure.
          */
         [[nodiscard]] Result<void> SetProviderStatus(const EditorSurfaceProviderKey &provider, EditorSurfaceProviderStatus status) const;
+
+        /**
+         * @brief Updates only previously admitted provider records for an extension without allocating on success.
+         * @param extensionId Exact host-owned package identity. @param status Host availability reason.
+         * @return Success or invalid/shutdown failure; no new provider records or activation are created.
+         */
+        [[nodiscard]] Result<void> SetExtensionProviderStatus(std::string_view extensionId, EditorSurfaceProviderStatus status) const;
 
         /**
          * @brief Replaces one surface's bounded opaque presentation state.
@@ -271,6 +296,13 @@ namespace Horo::Extensions {
         /** @brief Returns deterministic copied snapshots in contribution-ID order. */
         [[nodiscard]] std::vector<EditorSurfaceSnapshot> Snapshot() const;
 
+        /**
+         * @brief Copies bounded unavailable workspace entries in stable contribution-ID order.
+         * @return Pending or unavailable registered intent with current host-owned reason; active contributions are excluded.
+         * @details Missing metadata is never fabricated. Returned opaque bytes remain untrusted presentation state.
+         */
+        [[nodiscard]] std::vector<EditorSurfaceRecoverySnapshot> RecoverySnapshot() const;
+
         /** @brief Checks exact active publication without copying a form or granting new authority.
          * @param provider Exact activation. @param surfaceId Contribution identity. @return Whether registered, enabled and context-live.
          */
@@ -285,6 +317,17 @@ namespace Horo::Extensions {
 
     private:
         friend class EditorSurfaceRegistration;
+        friend class ExtensionManager;
+
+        /**
+         * @brief Stages bounded recovery rows before atomically publishing their statuses; invokes no provider.
+         * @param providers Exact host-admitted stable keys; an empty span does not change the revision.
+         * @param status Process-local recovery reason to publish for every key.
+         * @return Success after publication, or validation/capacity/shutdown error without mutation.
+         * @throws std::bad_alloc Before publication only; all statuses and the revision remain unchanged.
+         */
+        [[nodiscard]] Result<void> SetProviderStatuses(std::span<const EditorSurfaceProviderKey> providers,
+                                                       EditorSurfaceProviderStatus status) const;
 
         static void Remove(const std::shared_ptr<EditorSurfaceRegistryState> &registry,
                            const std::shared_ptr<EditorSurfaceState> &surface) noexcept;
