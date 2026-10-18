@@ -457,7 +457,7 @@ namespace Horo::Editor {
         m_extensionRecovery.Draw();
         const ImVec2 display{contentRegion.width, contentRegion.height};
 
-        const float menuH = UsesNativeEditorMenuBar() ? 0.0F : kMenuBarH;
+        constexpr float menuH = kMenuBarH;
         const float recoveryH = viewModel.recoveryAvailable ? kRecoveryBarH : 0.0F;
         const float externalConflictH = viewModel.sceneExternalConflict ? kRecoveryBarH : 0.0F;
         // The shell has already removed its persistent status-bar height.
@@ -465,12 +465,10 @@ namespace Horo::Editor {
 
         float curY = 0.0F;
 
-        // ── Menu bar ────────────────────────────────────────────────────
-        if (menuH > 0.0F) {
-            DrawMenuBar(display, viewModel, outCommand);
-            if (!m_inputRouter.IsContextActive(m_workspaceInputContext)) {
-                outCommand.menuInvocation.reset();
-            }
+        // Play controls remain in-window even when application menus are native.
+        DrawMenuBar(display, viewModel, outCommand);
+        if (!m_inputRouter.IsContextActive(m_workspaceInputContext)) {
+            outCommand.menuInvocation.reset();
         }
         curY += menuH;
 
@@ -616,6 +614,18 @@ namespace Horo::Editor {
                 drawButton("workspace.play.stop", "workspace_play_stop", !transition, EditorWorkspaceViewCommand::StopPlay);
             }
         }
+
+        /** @brief Draws the fallback menu model while preserving each dropdown's balanced begin/end lifetime. */
+        void DrawFallbackMenus(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
+                               const EditorGuiContext &context) {
+            for (const EditorMenuItem &menu : GetEditorMenuModel().menus) {
+                const std::string &label = context.localization.Get("editor", menu.labelKey);
+                if (Ui::BeginMenuDropdown(label.c_str(), context.theme.fonts)) {
+                    DrawFallbackMenuChildren(menu, viewModel, outCommand, context);
+                    Ui::EndMenuDropdown();
+                }
+            }
+        }
     }  // namespace
 
     void EditorWorkspaceView::DrawMenuBar(const ImVec2 &display, const EditorWorkspaceViewModel &viewModel,
@@ -636,24 +646,20 @@ namespace Horo::Editor {
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar);
 
         if (ImGui::BeginMenuBar()) {
-            constexpr ImVec2 logoSize(26.0F, 26.0F);
-            const ImVec2 logoMin = ImGui::GetCursorScreenPos();
-            if (ImGui::InvisibleButton("##HoroAppLogo", logoSize)) {
-                outCommand.menuInvocation = EditorMenuInvocation{EditorMenuAction::OpenProject, std::nullopt};
-            }
-            if (m_logoTexture != 0) {
-                ImGui::GetWindowDrawList()->AddImage(m_logoTexture, logoMin, ImVec2(logoMin.x + logoSize.x, logoMin.y + logoSize.y));
-            } else {
-                ImGui::GetWindowDrawList()->AddText(logoMin, Theme::U32(Theme::Accent()), "HORO");
-            }
-            ImGui::SameLine(0.0F, 10.0F);
-
-            for (const EditorMenuItem &menu : GetEditorMenuModel().menus) {
-                const std::string &label = m_context.localization.Get("editor", menu.labelKey);
-                if (Ui::BeginMenuDropdown(label.c_str(), m_context.theme.fonts)) {
-                    DrawFallbackMenuChildren(menu, viewModel, outCommand, m_context);
-                    Ui::EndMenuDropdown();
+            if (!UsesNativeEditorMenuBar()) {
+                constexpr ImVec2 logoSize(26.0F, 26.0F);
+                const ImVec2 logoMin = ImGui::GetCursorScreenPos();
+                if (ImGui::InvisibleButton("##HoroAppLogo", logoSize)) {
+                    outCommand.menuInvocation = EditorMenuInvocation{EditorMenuAction::OpenProject, std::nullopt};
                 }
+                if (m_logoTexture != 0) {
+                    ImGui::GetWindowDrawList()->AddImage(m_logoTexture, logoMin, ImVec2(logoMin.x + logoSize.x, logoMin.y + logoSize.y));
+                } else {
+                    ImGui::GetWindowDrawList()->AddText(logoMin, Theme::U32(Theme::Accent()), "HORO");
+                }
+                ImGui::SameLine(0.0F, 10.0F);
+
+                DrawFallbackMenus(viewModel, outCommand, m_context);
             }
 
             const std::string version = std::format("Horo Engine {}", HORO_ENGINE_VERSION_STRING);

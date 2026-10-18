@@ -85,6 +85,7 @@ namespace Horo::Editor {
           m_playSession(dependencies.networkDebugger) {
         if (dependencies.gameplayRetirements)
             m_gameplayRetirements = dependencies.gameplayRetirements;
+        m_physicsDocumentOwner = dependencies.documentSessionOwner;
         if (dependencies.engineEvents != nullptr) {
             m_engineEventBridge = std::make_unique<EditorEngineEventBridge>(*dependencies.engineEvents, m_dataBus);
             m_engineEventBridge->Attach();

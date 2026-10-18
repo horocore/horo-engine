@@ -1131,7 +1131,10 @@ destroy the session on its owner thread after all work has joined.
 The initial reload policy is a cold rebuild. Native solver state, velocity, sleep
 state and contact caches are not transferred. The session can advance its active
 world for an exact host fixed tick, but this API does not publish dynamic poses to
-RuntimeScene or apply them to authoring data. The graphical editor currently
+RuntimeScene or apply them to authoring data. The graphical Inspector authors canonical body/collider/sensor/fixed-distance values through
+one Scene document transaction and aggregate typed validation; see
+[Physics Inspector Controls](../../guides/physics-inspector-controls.md). This authoring UI does
+not select or activate a solver. The graphical editor currently
 composes an explicit Null Physics runtime and clones only core scene storage for
 play, without cloning activation participants. A later editor composition ticket
 must select an available solver, create a separate play-scene aggregate with this

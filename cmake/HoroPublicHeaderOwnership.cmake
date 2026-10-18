@@ -1187,6 +1187,7 @@ horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
     Horo/Editor/NavigationDefinitionDocument.h
     Horo/Editor/NavigationSettingsWorkflow.h
     Horo/Editor/SceneDocumentTransaction.h
+    Horo/Editor/PhysicsInspector.h
     Horo/Editor/EditorDataBus.h
 )
 horo_configure_target_header_boundary(HoroEditorViewportScene)

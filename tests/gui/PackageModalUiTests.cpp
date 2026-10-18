@@ -108,6 +108,33 @@ namespace {
         ui.ItemClick(path.c_str());
     }
 
+    /** @brief Records owner snapshots only on a failed bounded handoff, without waiting on worker state. */
+    void LogAwaitFailure(ImGuiTestContext &ui, const PackageUi &fixture, const PackageOperationKind kind, const unsigned polls,
+                         const std::chrono::steady_clock::time_point started) {
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+        ui.LogInfo("Package handoff failed: expectedKind=%u polls=%u elapsedSeconds=%.6f sourceCalls=%llu operationPresent=%d",
+                   static_cast<unsigned>(kind), polls, elapsed, static_cast<unsigned long long>(fixture.application.source.calls.load()),
+                   fixture.operation.has_value());
+        if (fixture.operation) {
+            const auto &operation = *fixture.operation;
+            ui.LogInfo("Package operation: id=%llu kind=%u outcome=%u phase=%u completion=%.6f packages=%llu/%llu",
+                       static_cast<unsigned long long>(operation.id.value), static_cast<unsigned>(operation.kind),
+                       static_cast<unsigned>(operation.outcome), static_cast<unsigned>(operation.phase), operation.completion,
+                       static_cast<unsigned long long>(operation.completedPackages),
+                       static_cast<unsigned long long>(operation.totalPackages));
+            if (operation.diagnostic)
+                ui.LogInfo("Package diagnostic: %s:%s %s", operation.diagnostic->domain.Value().c_str(),
+                           operation.diagnostic->code.Value().c_str(), operation.diagnostic->message.c_str());
+        }
+        if (const auto jobs = fixture.application.jobs.SnapshotIfChanged(0)) {
+            ui.LogInfo("Package retained jobs: count=%llu revision=%llu", static_cast<unsigned long long>(jobs->jobs.size()),
+                       static_cast<unsigned long long>(jobs->revision));
+            for (const auto &job : jobs->jobs)
+                ui.LogInfo("Package job: id=%llu state=%u started=%d finished=%d", static_cast<unsigned long long>(job.id),
+                           static_cast<unsigned>(job.state), job.timing.startedAt.has_value(), job.timing.finishedAt.has_value());
+        }
+    }
+
     // Four five-second operations at one cooperative frame per five milliseconds, plus UI gestures.
     constexpr std::size_t kPackageAsyncFrameBudget = 5000;
 
@@ -125,9 +152,15 @@ namespace {
 
     /** @brief Waits for the exact operation's owner-published terminal snapshot. */
     bool AwaitTerminal(ImGuiTestContext &ui, const PackageUi &fixture, const PackageOperationKind kind) {
-        return AwaitCondition(ui, [&fixture, kind] {
+        const auto started = std::chrono::steady_clock::now();
+        unsigned polls = 0;
+        const bool terminal = AwaitCondition(ui, [&fixture, kind, &polls] {
+            ++polls;
             return fixture.operation && fixture.operation->kind == kind && fixture.operation->outcome != PackageOperationOutcome::Running;
         });
+        if (!terminal)
+            LogAwaitFailure(ui, fixture, kind, polls, started);
+        return terminal;
     }
 
     void CheckRun(const Horo::Tests::EditorUiScenarioResult &result) {
