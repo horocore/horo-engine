@@ -48,6 +48,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshSceneProjections() {
         const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
         m_viewModel.documentRevision = documentSnapshot.revision;
+        RefreshPhysicsInspectorPort();
         m_viewModel.objects.clear();
         m_viewModel.objects.reserve(documentSnapshot.objects.size());
         for (const SceneObjectSnapshot &object : documentSnapshot.objects) {

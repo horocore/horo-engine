@@ -288,8 +288,18 @@ namespace Horo::Editor {
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
+        /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
+        void RefreshPhysicsInspectorPort();
+        /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
+        void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Check the actual selection authority and exact owner fence before candidate preparation. */
+        [[nodiscard]] Result<SceneTransactionSnapshot> CapturePhysicsInspectorSnapshot(const EditorWorkspaceViewCommandData &command) const;
+        Assets::AssetId m_physicsDocumentOwner;
+        std::uint64_t m_physicsReplacementEpoch{};
+        const std::thread::id m_physicsOwnerThread{std::this_thread::get_id()};
         SceneDocument m_document;
         EditorHistory m_history;
+        std::optional<SceneDocumentTransactions> m_physicsTransactions;
         std::optional<SceneDocumentTransactions> m_collisionScene;
         std::shared_ptr<CollisionProjectSettingsSession> m_collisionSettings;
         std::unique_ptr<SceneDocumentTransactions> m_navigationScene;

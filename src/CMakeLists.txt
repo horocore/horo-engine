@@ -2711,6 +2711,7 @@ add_library(HoroEditorModel STATIC
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentTransaction.cpp
+        editor/document/PhysicsInspector.cpp
         editor/document/SceneDocumentTransactionErrors.cpp
         editor/navigation/NavigationDefinitionDocument.cpp
         editor/navigation/NavigationSettingsWorkflow.cpp
@@ -3088,6 +3089,12 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelCharacterWidgets.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsConstraint.cpp
+            editor/screens/workspace/panels/inspector/PhysicsInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
@@ -3136,6 +3143,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSourcePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
+        editor/screens/workspace/EditorWorkspaceControllerPhysics.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserGameplay.cpp
