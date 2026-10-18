@@ -1,3 +1,4 @@
+#include "Horo/Audio/AudioErrors.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
@@ -5,18 +6,22 @@
 #include "Horo/Foundation/DataBus.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace {
     class TestLocalization final : public Horo::Editor::ILocalizationService {
     public:
         [[nodiscard]] const std::string &Get(const std::string_view, const std::string_view localKey) const override {
+            requestedKeys_.emplace_back(localKey);
             const auto [entry, inserted] = values_.try_emplace(std::string(localKey), localKey);
             static_cast<void>(inserted);
             return entry->second;
@@ -26,7 +31,16 @@ namespace {
             values_.insert_or_assign(std::string(key), std::move(value));
         }
 
+        void ClearRequests() {
+            requestedKeys_.clear();
+        }
+
+        [[nodiscard]] bool Requested(const std::string_view key) const {
+            return std::ranges::find(requestedKeys_, key) != requestedKeys_.end();
+        }
+
     private:
+        mutable std::vector<std::string> requestedKeys_;
         mutable std::unordered_map<std::string, std::string> values_;
     };
 }  // namespace
@@ -279,24 +293,53 @@ TEST_CASE("Audio inspector draws narrow localized enabled disabled and error sta
         }
 }
 
+namespace {
+    /** @brief Activates the existing shared card action using the live scoped widget identity. */
+    void ActivateAudioCardAction(const std::string_view card, const char *action) {
+        ImGuiWindow *found{};
+        for (auto *window : GImGui->Windows)
+            if (std::string_view{window->Name}.find(card) != std::string_view::npos)
+                found = window;
+        REQUIRE(found);
+        REQUIRE(found->WasActive);
+        const auto titleScope = ImHashStr("title_bar", 0, found->ID);
+        const auto actionScope = ImHashStr(action, 0, titleScope);
+        ImGui::ActivateItemByID(ImHashStr("##card_action", 0, actionScope));
+    }
+
+    /** @brief Activates a real preview button in the inspector content window, independent of its pixel position. */
+    void ActivateAudioPreviewButton(const char *label) {
+        const auto *parent = ImGui::FindWindowByName("AudioInspectorRender");
+        REQUIRE(parent);
+        ImGuiWindow *content{};
+        for (auto *window : GImGui->Windows)
+            if (window->ParentWindow == parent && std::string_view{window->Name}.find("##Content") != std::string_view::npos)
+                content = window;
+        REQUIRE(content);
+        REQUIRE(content->WasActive);
+        ImGui::ActivateItemByID(content->GetID(label));
+    }
+
+    struct PreviewFailureCase final {
+        const Horo::ErrorCodeDescriptor *error;
+        const char *key;
+    };
+
+    struct PreviewPhaseCase final {
+        Horo::Audio::AudioFrontendPhase phase;
+        const char *key;
+    };
+}  // namespace
+
 TEST_CASE("Audio listener inspector reset preserves disabled authoring while restoring defaults", "[unit][editor][audio]") {
     AudioInspectorFrame frame;
     auto &components = frame.model.objects.front().components;
     components.audioSource.reset();
     components.audioListener = Horo::Runtime::AudioListenerComponent{12, -27, 0.25F, false};
-    const auto original = components.audioListener;
+    const auto original = components;
     REQUIRE(frame.Draw().command == Horo::Editor::EditorWorkspaceViewCommand::None);
     REQUIRE(frame.Draw().command == Horo::Editor::EditorWorkspaceViewCommand::None);
-    ImGuiWindow *listenerWindow{};
-    for (auto *window : GImGui->Windows)
-        if (std::string_view{window->Name}.find("##AudioListenerCard") != std::string_view::npos)
-            listenerWindow = window;
-    REQUIRE(listenerWindow);
-    REQUIRE(listenerWindow->WasActive);
-    // Activate the real shared card reset action by its scoped widget identity, without depending on pixel offsets.
-    const auto titleScope = ImHashStr("title_bar", 0, listenerWindow->ID);
-    const auto resetScope = ImHashStr("reset", 0, titleScope);
-    ImGui::ActivateItemByID(ImHashStr("##card_action", 0, resetScope));
+    ActivateAudioCardAction("##AudioListenerCard", "reset");
     const auto command = frame.Draw();
     REQUIRE(command.command == Horo::Editor::EditorWorkspaceViewCommand::UpdateAudioListenerComponent);
     REQUIRE(command.audioListenerPayload.has_value());
@@ -304,5 +347,95 @@ TEST_CASE("Audio listener inspector reset preserves disabled authoring while res
     CHECK(command.audioListenerPayload->view == 0);
     CHECK(command.audioListenerPayload->priority == 0);
     CHECK(command.audioListenerPayload->weight == 1.0F);
-    CHECK(components.audioListener == original);
+    CHECK(frame.model.objects.front().components == original);
+}
+
+TEST_CASE("Audio preview failures select their localized outcome without publishing source edits", "[unit][editor][audio]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    const auto outcome =
+        GENERATE(PreviewFailureCase{&AudioComponentPreviewErrors::MissingAsset, "workspace.inspector.audio.asset_missing"},
+                 PreviewFailureCase{&AudioComponentPreviewErrors::MissingListener, "workspace.inspector.audio.listener_missing"},
+                 PreviewFailureCase{&AudioComponentPreviewErrors::MissingBus, "workspace.inspector.audio.bus_missing"},
+                 PreviewFailureCase{&AudioComponentPreviewErrors::ProviderUnavailable, "workspace.inspector.audio.provider_missing"},
+                 PreviewFailureCase{&AudioComponentPreviewErrors::Busy, "workspace.inspector.audio.busy"},
+                 PreviewFailureCase{&AudioComponentPreviewErrors::Stale, "workspace.inspector.audio.stale"},
+                 PreviewFailureCase{&Audio::AudioErrors::BackendFailed, "workspace.inspector.audio.preview_failed"});
+    CAPTURE(outcome.key);
+    AudioInspectorFrame frame;
+    frame.model.audioPreviewAvailable = true;
+    frame.model.audioPreviewFailure = MakeError(*outcome.error);
+    const auto original = frame.model.objects.front().components;
+    frame.Draw();
+    frame.localization.ClearRequests();
+    CHECK(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    CHECK(frame.localization.Requested(outcome.key));
+    CHECK(frame.model.objects.front().components == original);
+}
+
+TEST_CASE("Audio preview phases remain localized read-only status", "[unit][editor][audio]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    using enum Audio::AudioFrontendPhase;
+    const auto state = GENERATE(PreviewPhaseCase{Prepared, "workspace.inspector.audio.preview_opening"},
+                                PreviewPhaseCase{Opening, "workspace.inspector.audio.preview_opening"},
+                                PreviewPhaseCase{Starting, "workspace.inspector.audio.preview_opening"},
+                                PreviewPhaseCase{Active, "workspace.inspector.audio.preview_active"},
+                                PreviewPhaseCase{Closing, "workspace.inspector.audio.preview_closing"},
+                                PreviewPhaseCase{Retained, "workspace.inspector.audio.preview_closing"},
+                                PreviewPhaseCase{Closed, "workspace.inspector.audio.preview_closed"});
+    CAPTURE(state.key);
+    AudioInspectorFrame frame;
+    frame.model.audioPreviewAvailable = true;
+    frame.model.audioPreview.emplace().output.emplace().phase = state.phase;
+    const auto original = frame.model.objects.front().components;
+    frame.Draw();
+    frame.localization.ClearRequests();
+    CHECK(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    CHECK(frame.localization.Requested(state.key));
+    CHECK(frame.model.objects.front().components == original);
+}
+
+TEST_CASE("Audio source reset preserves disabled admission and restores authored defaults", "[unit][editor][audio]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    AudioInspectorFrame frame;
+    auto &components = frame.model.objects.front().components;
+    components.audioListener.reset();
+    components.audioSource->enabled = false;
+    components.audioSource->playback.gain = 0.25F;
+    components.audioSource->playback.pitch = 2.0F;
+    const auto original = components;
+    REQUIRE(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    REQUIRE(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    ActivateAudioCardAction("##AudioSourceCard", "reset");
+    const auto command = frame.Draw();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::UpdateAudioSourceComponent);
+    REQUIRE(command.audioSourcePayload);
+    auto expected = Runtime::AudioSourceComponent{};
+    expected.enabled = false;
+    CHECK(*command.audioSourcePayload == expected);
+    CHECK(frame.model.objects.front().components == original);
+}
+
+TEST_CASE("Audio preview buttons submit exact revision-bound intents without changing authored values", "[unit][editor][audio]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    AudioInspectorFrame frame;
+    frame.model.audioPreviewAvailable = true;
+    const auto asset = Assets::AssetId::Parse("11111111-1111-4111-8111-111111111111");
+    REQUIRE(asset.HasValue());
+    frame.model.objects.front().components.audioSource->sound =
+        Audio::AudioSoundReference::ForClip(Audio::AudioClipId::Create(asset.Value()).Value()).Value();
+    const auto original = frame.model.objects.front().components;
+    REQUIRE(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    REQUIRE(frame.Draw().command == EditorWorkspaceViewCommand::None);
+    ActivateAudioPreviewButton("workspace.inspector.audio.preview");
+    const auto start = frame.Draw();
+    REQUIRE(start.command == EditorWorkspaceViewCommand::StartAudioComponentPreview);
+    CHECK(start.objectPayload == frame.model.objects.front().id);
+    CHECK(start.audioPreviewRevision == frame.model.documentRevision);
+    ActivateAudioPreviewButton("workspace.inspector.audio.stop");
+    CHECK(frame.Draw().command == EditorWorkspaceViewCommand::StopAudioComponentPreview);
+    CHECK(frame.model.objects.front().components == original);
 }

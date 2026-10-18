@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/NavigationProjectSettingsSession.h"
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace Horo::Extensions {
@@ -13,6 +15,8 @@ namespace Horo::Extensions {
 
 namespace Horo::Editor {
     class EditorSettingsService;
+    class EditorPageView;
+    struct NavigationSettingsDraft;
 
     struct SettingsGeneralTab {
         int startupAction = 0;
@@ -147,9 +151,16 @@ namespace Horo::Editor {
         RenderingTab rendering{};
         AudioTab audio{};
         NetworkTab network{};
+        EditorNavigationOverlayPreferences navigationOverlay{};
+        NavigationProjectSettingsSessionBorrow navigationSettings;
+        std::shared_ptr<NavigationSettingsDraft> navigationDraft;
+        std::string navigationStatus;
+        bool navigationProjectDraftDirty{};
         PackagesTab packages{};
         DiagnosticsTab diagnostics{};
 
+        std::shared_ptr<EditorPageView>
+            extensionPages; /**< Transient host-rendered extension workflow; never part of EditorSettings persistence. */
         int pluginSectionTab = 0;
         Extensions::ExtensionInventory *extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr;

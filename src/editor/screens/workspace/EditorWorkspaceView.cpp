@@ -349,8 +349,9 @@ namespace Horo::Editor {
                                              const std::uintptr_t logoTexture, Input::InputRouter &inputRouter,
                                              Input::InputContextToken &workspaceInputContext, Extensions::EditorActivityHost *activityHost,
                                              IEditorGuiRenderer *renderer)
-        : m_extensions(context, activityHost, renderer), m_context(context), m_panelRegistry(panelRegistry), m_logoTexture(logoTexture),
-          m_inputRouter(inputRouter), m_workspaceInputContext(workspaceInputContext) {}
+        : m_extensions(context, activityHost, renderer), m_extensionRecovery(context, activityHost ? &activityHost->Registry() : nullptr),
+          m_context(context), m_panelRegistry(panelRegistry), m_logoTexture(logoTexture), m_inputRouter(inputRouter),
+          m_workspaceInputContext(workspaceInputContext) {}
 
     bool EditorWorkspaceView::EnsurePanelDragCapture() {
         if (m_panelDragCapture.IsActive()) {
@@ -453,9 +454,10 @@ namespace Horo::Editor {
             m_panelDragContext.Reset();
             m_panelDragCandidateId.clear();
         }
+        m_extensionRecovery.Draw();
         const ImVec2 display{contentRegion.width, contentRegion.height};
 
-        const float menuH = UsesNativeEditorMenuBar() ? 0.0F : kMenuBarH;
+        constexpr float menuH = kMenuBarH;
         const float recoveryH = viewModel.recoveryAvailable ? kRecoveryBarH : 0.0F;
         const float externalConflictH = viewModel.sceneExternalConflict ? kRecoveryBarH : 0.0F;
         // The shell has already removed its persistent status-bar height.
@@ -463,12 +465,10 @@ namespace Horo::Editor {
 
         float curY = 0.0F;
 
-        // ── Menu bar ────────────────────────────────────────────────────
-        if (menuH > 0.0F) {
-            DrawMenuBar(display, viewModel, outCommand);
-            if (!m_inputRouter.IsContextActive(m_workspaceInputContext)) {
-                outCommand.menuInvocation.reset();
-            }
+        // Play controls remain in-window even when application menus are native.
+        DrawMenuBar(display, viewModel, outCommand);
+        if (!m_inputRouter.IsContextActive(m_workspaceInputContext)) {
+            outCommand.menuInvocation.reset();
         }
         curY += menuH;
 
@@ -634,23 +634,25 @@ namespace Horo::Editor {
                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar);
 
         if (ImGui::BeginMenuBar()) {
-            constexpr ImVec2 logoSize(26.0F, 26.0F);
-            const ImVec2 logoMin = ImGui::GetCursorScreenPos();
-            if (ImGui::InvisibleButton("##HoroAppLogo", logoSize)) {
-                outCommand.menuInvocation = EditorMenuInvocation{EditorMenuAction::OpenProject, std::nullopt};
-            }
-            if (m_logoTexture != 0) {
-                ImGui::GetWindowDrawList()->AddImage(m_logoTexture, logoMin, ImVec2(logoMin.x + logoSize.x, logoMin.y + logoSize.y));
-            } else {
-                ImGui::GetWindowDrawList()->AddText(logoMin, Theme::U32(Theme::Accent()), "HORO");
-            }
-            ImGui::SameLine(0.0F, 10.0F);
+            if (!UsesNativeEditorMenuBar()) {
+                constexpr ImVec2 logoSize(26.0F, 26.0F);
+                const ImVec2 logoMin = ImGui::GetCursorScreenPos();
+                if (ImGui::InvisibleButton("##HoroAppLogo", logoSize)) {
+                    outCommand.menuInvocation = EditorMenuInvocation{EditorMenuAction::OpenProject, std::nullopt};
+                }
+                if (m_logoTexture != 0) {
+                    ImGui::GetWindowDrawList()->AddImage(m_logoTexture, logoMin, ImVec2(logoMin.x + logoSize.x, logoMin.y + logoSize.y));
+                } else {
+                    ImGui::GetWindowDrawList()->AddText(logoMin, Theme::U32(Theme::Accent()), "HORO");
+                }
+                ImGui::SameLine(0.0F, 10.0F);
 
-            for (const EditorMenuItem &menu : GetEditorMenuModel().menus) {
-                const std::string &label = m_context.localization.Get("editor", menu.labelKey);
-                if (Ui::BeginMenuDropdown(label.c_str(), m_context.theme.fonts)) {
-                    DrawFallbackMenuChildren(menu, viewModel, outCommand, m_context);
-                    Ui::EndMenuDropdown();
+                for (const EditorMenuItem &menu : GetEditorMenuModel().menus) {
+                    const std::string &label = m_context.localization.Get("editor", menu.labelKey);
+                    if (Ui::BeginMenuDropdown(label.c_str(), m_context.theme.fonts)) {
+                        DrawFallbackMenuChildren(menu, viewModel, outCommand, m_context);
+                        Ui::EndMenuDropdown();
+                    }
                 }
             }
 
@@ -950,6 +952,7 @@ namespace Horo::Editor {
         for (const std::string &panelId : stack->tabs)
             DrawDocumentTab(panelId, outCommand, !viewModel.workspacePanelHost.ActiveDocument().has_value() && stack->activeTab == panelId);
         DrawSequenceDocumentTabs(viewModel, outCommand);
+        DrawNavigationDocumentTabs(viewModel);
         ImGui::PopStyleVar();
         ImGui::EndChild();
     }

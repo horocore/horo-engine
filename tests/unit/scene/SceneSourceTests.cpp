@@ -88,4 +88,17 @@ namespace Horo::SceneSource {
         const std::string oversized(16U * 1024U * 1024U + 1U, ' ');
         CHECK(DecodeSceneSource(oversized).HasError());
     }
+
+    TEST_CASE("Scene source bounds ignored nested fields and rejects duplicate keys", "[unit][scene][serialization]") {
+        const auto nested = [](const std::size_t arrays) {
+            return std::string{R"({"schemaVersion":1,"objects":[],"unknown":)"} + std::string(arrays, '[') + "0" +
+                   std::string(arrays, ']') + "}";
+        };
+        CHECK(DecodeSceneSource(nested(62)).HasValue());
+        CHECK(DecodeSceneSource(nested(63)).HasError());
+        CHECK(DecodeSceneSource(nested(4096)).HasError());
+        CHECK(DecodeSceneSource(R"({"schemaVersion":1,"schemaVersion":1,"objects":[]})").HasError());
+        CHECK(DecodeSceneSource(R"({"schemaVersion":1,"objects":[],"unknown":{"key":1,"key":2}})").HasError());
+        CHECK(DecodeSceneSource(R"({"schemaVersion":1,"objects":[],"unknown":[{"broken":})").HasError());
+    }
 }  // namespace Horo::SceneSource

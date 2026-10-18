@@ -5,19 +5,17 @@
 #include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Foundation/DataBus.h"
+#include "support/OwnedTestDirectory.h"
 #include "support/editor/ScopedTestHome.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <memory>
 #include <string>
-
-namespace Horo::Editor::Theme {
-    struct Fonts;
-}
 
 Horo::Editor::ModalFrameResult Horo::Editor::SettingsModal::Draw() {
     return ModalFrameResult::None();
@@ -34,7 +32,7 @@ namespace {
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
         LocalizationService localization{LocaleTag{"en-US"}};
         EditorSettingsService settings{DefaultEditorSettings(), configuration, events, localization};
-        const Theme::Fonts &fonts = *reinterpret_cast<const Theme::Fonts *>(static_cast<std::uintptr_t>(1));
+        Theme::Fonts fonts{};
         ThemeContext theme{fonts};
         EditorSettingsSnapshot snapshot = settings.Snapshot();
         EditorGuiContext ctx{engineEvents, events, localization, theme, snapshot};
@@ -149,3 +147,35 @@ namespace {
         REQUIRE((reverted == 0));
     }
 }  // namespace
+
+TEST_CASE("Settings modal revocable navigation borrow survives session retirement before or after opening",
+          "[unit][editor][settings][navigation]") {
+    const Horo::TestSupport::ScopedTestHome home{"horo-settings-navigation-borrow"};
+    SettingsFixture fixture;
+    Horo::Tests::OwnedTestDirectory directory{"settings-navigation-borrow"};
+    Horo::NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations{files};
+    Horo::Assets::AssetRegistry registry;
+    REQUIRE(registry.Publish(std::vector<Horo::Assets::AssetRecord>{}).status == Horo::Assets::AssetRegistryBuildStatus::Complete);
+    auto opened = NavigationProjectSettingsSession::Open(directory.Path(), registry, files, mutations, 1);
+    REQUIRE(opened.HasValue());
+    auto session = std::move(opened).Value();
+    auto ownedModal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, session.get());
+    auto *modal = ownedModal.get();
+    REQUIRE(fixture.host.OpenRoot(std::move(ownedModal)).HasValue());
+    SECTION("retired before queued opening") {
+        session.reset();
+        fixture.host.OnUpdate(0);
+        REQUIRE(modal->Draft().navigationSettings.Resolve() == nullptr);
+    }
+    SECTION("retired after opening") {
+        fixture.host.OnUpdate(0);
+        REQUIRE(modal->Draft().navigationSettings.Resolve() == session.get());
+        session->Close();
+        REQUIRE(modal->Draft().navigationSettings.Resolve() == nullptr);
+        session.reset();
+        REQUIRE(modal->Draft().navigationSettings.Resolve() == nullptr);
+    }
+    REQUIRE(fixture.host.RequestClose(ModalId{SettingsModal::kModalId}, ModalCloseReason::Cancelled).HasValue());
+    fixture.host.OnUpdate(0);
+}

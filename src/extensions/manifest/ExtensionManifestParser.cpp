@@ -529,6 +529,6 @@ namespace Horo::Extensions {
         auto parsed = ManifestParsing::ParseBoundedJson(jsonContent, limits);
         if (parsed.HasError())
             return Result<ExtensionManifest>::Failure(parsed.ErrorValue());
-        return ManifestValidator{limits}.Validate(parsed.Value());
+        return ManifestValidator{limits}.Validate(parsed.Value().Document());
     }
 }  // namespace Horo::Extensions
