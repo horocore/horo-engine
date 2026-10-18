@@ -18,7 +18,29 @@ static const HoroEditorInspectorField fields[] = {{.structSize = sizeof(HoroEdit
                                                    .parentNodeId = TEXT("fixture.root"),
                                                    .labelKey = TEXT("fixture.count"),
                                                    .minimumInteger = INT64_MIN,
-                                                   .maximumInteger = INT64_MAX}};
+                                                   .maximumInteger = INT64_MAX},
+                                                  {.structSize = sizeof(HoroEditorInspectorField),
+                                                   .kind = HORO_EDITOR_INSPECTOR_BOOLEAN,
+                                                   .fieldId = TEXT("flag"),
+                                                   .nodeId = TEXT("fixture.flag"),
+                                                   .parentNodeId = TEXT("fixture.root"),
+                                                   .labelKey = TEXT("fixture.count")},
+                                                  {.structSize = sizeof(HoroEditorInspectorField),
+                                                   .kind = HORO_EDITOR_INSPECTOR_NUMBER,
+                                                   .flags = HORO_EDITOR_PAGE_INTEGER_MINIMUM | HORO_EDITOR_PAGE_INTEGER_MAXIMUM,
+                                                   .fieldId = TEXT("number"),
+                                                   .nodeId = TEXT("fixture.number"),
+                                                   .parentNodeId = TEXT("fixture.root"),
+                                                   .labelKey = TEXT("fixture.count"),
+                                                   .minimumNumber = -1.5,
+                                                   .maximumNumber = 2.5},
+                                                  {.structSize = sizeof(HoroEditorInspectorField),
+                                                   .kind = HORO_EDITOR_INSPECTOR_STRING,
+                                                   .fieldId = TEXT("text"),
+                                                   .nodeId = TEXT("fixture.text"),
+                                                   .parentNodeId = TEXT("fixture.root"),
+                                                   .labelKey = TEXT("fixture.count"),
+                                                   .maximumStringBytes = 64}};
 
 /** @brief Negotiates an explicit current or legacy prefix before any registration call. */
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequirements *requirements) {
@@ -26,9 +48,10 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequ
         return HORO_EXTENSION_ERROR_INVALID_ARGS;
     *requirements = (HoroExtensionRequirements){.structSize = sizeof(*requirements),
                                                 .abiMajorVersion = 1,
-                                                .minimumHostMinor = queryMode ? 5 : 6,
-                                                .requiredHostApiSize = queryMode ? offsetof(HoroExtensionHostApi, registerEditorInspector)
-                                                                                 : sizeof(HoroExtensionHostApi),
+                                                .minimumHostMinor = (queryMode == 1 || queryMode == 2) ? 5 : 6,
+                                                .requiredHostApiSize = (queryMode == 1 || queryMode == 2)
+                                                                           ? offsetof(HoroExtensionHostApi, registerEditorInspector)
+                                                                           : sizeof(HoroExtensionHostApi),
                                                 .requiredFunctions = queryMode == 1 ? 0 : HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR};
     return HORO_EXTENSION_SUCCESS;
 }
@@ -48,7 +71,7 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
                                                       .behaviorType = TEXT("game.fixture.counter"),
                                                       .behaviorSchemaVersion = 3,
                                                       .fields = fields,
-                                                      .fieldCount = 1,
+                                                      .fieldCount = queryMode == 3 ? 4 : 1,
                                                       .presentationNodes = nodes,
                                                       .presentationNodeCount = 1,
                                                       .messages = messages,

@@ -1,9 +1,29 @@
 #include "EditorInspectorControllerSupport.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::Editor::Tests {
     using InspectorControllerSupport::Fixture;
+
+    namespace {
+        /** @brief Couples an actual authored Lua scalar with exact owner values before and after editing. */
+        struct ScalarProfile final {
+            Extensions::EditorInspectorFieldKind kind;
+            std::string_view luaDefault;
+            Gameplay::BehaviorFieldValue initial;
+            Gameplay::BehaviorFieldValue replacement;
+        };
+
+        /** @brief Reads a field from the live owner projection without retaining references across edits. */
+        const Gameplay::BehaviorFieldValue &FieldValue(const Fixture &fixture, std::string_view name) {
+            const auto &fields = fixture.controller->ViewModel().objects.front().components.behaviors.front().fields;
+            const auto field = std::ranges::find(fields, name, &Gameplay::BehaviorField::name);
+            REQUIRE(field != fields.end());
+            return field->value;
+        }
+    }  // namespace
 
     TEST_CASE("Inspector declarations cannot edit a resolved project type before actual owner approval", "[editor][inspector][authority]") {
         Fixture fixture;
@@ -70,4 +90,39 @@ namespace Horo::Editor::Tests {
         CHECK(fixture.Value() == 9007199254740993LL);
         CHECK(fixture.controller->ViewModel().documentRevision == before);
     }
+
+    TEST_CASE("Actual inspector owner preserves every supported scalar kind through approval edit undo and redo",
+              "[editor][inspector][scalar][history]") {
+        using enum Extensions::EditorInspectorFieldKind;
+        const auto profile = GENERATE(ScalarProfile{Boolean, "true", true, false},
+                                      ScalarProfile{Integer, "9007199254740993", std::int64_t{9007199254740993LL}, std::int64_t{INT64_MIN}},
+                                      ScalarProfile{Number, "1.25", 1.25, -0.125},
+                                      ScalarProfile{String, "'başlangıç'", std::string{"başlangıç"}, std::string{"son değer"}});
+        Fixture fixture{InspectorControllerSupport::Presentation(profile.kind), profile.luaDefault};
+        CHECK(FieldValue(fixture, "count") == profile.initial);
+        const auto before = fixture.controller->ViewModel().documentRevision;
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::UpdateInspectorBehaviorField;
+        command.inspectorEdit = fixture.Request();
+        command.inspectorEdit->value = profile.replacement;
+        fixture.Process(command);
+        CHECK(FieldValue(fixture, "count") == profile.initial);
+        CHECK(fixture.controller->ViewModel().documentRevision == before);
+        fixture.Approve();
+        command.inspectorEdit = fixture.Request();
+        command.inspectorEdit->value = profile.replacement;
+        fixture.Process(command);
+        CHECK(FieldValue(fixture, "count") == profile.replacement);
+        CHECK(fixture.controller->ViewModel().documentRevision.value == before.value + 1);
+        CHECK(FieldValue(fixture, "future") == Gameplay::BehaviorFieldValue{std::string{"preserve"}});
+        command = {};
+        command.command = EditorWorkspaceViewCommand::UndoScene;
+        fixture.Process(command);
+        CHECK(FieldValue(fixture, "count") == profile.initial);
+        command.command = EditorWorkspaceViewCommand::RedoScene;
+        fixture.Process(command);
+        CHECK(FieldValue(fixture, "count") == profile.replacement);
+        CHECK(FieldValue(fixture, "future") == Gameplay::BehaviorFieldValue{std::string{"preserve"}});
+    }
+
 }  // namespace Horo::Editor::Tests

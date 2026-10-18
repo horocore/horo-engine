@@ -6,8 +6,35 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <fstream>
+#include <string_view>
+#include <utility>
 
 namespace Horo::Editor::Tests::InspectorControllerSupport {
+    /** @brief Admits the matching primitive without giving the provider authored-value authority. */
+    inline Extensions::EditorInspectorDefinition Presentation(Extensions::EditorInspectorFieldKind kind) {
+        using namespace Extensions;
+        using enum EditorInspectorFieldKind;
+        auto value = Extensions::Tests::InspectorSupport::Definition();
+        const auto &base = EditorUiNodeBaseOf(value.form.nodes.front());
+        auto &field = value.fields.front();
+        field = {.field = "count", .kind = kind, .node = {"fixture.count"}};
+        switch (kind) {
+            case Boolean:
+                value.form.nodes.front().payload = EditorUiBooleanNode{base, {"count"}, false};
+                break;
+            case Integer:
+                break;
+            case Number:
+                value.form.nodes.front().payload = EditorUiNumberNode{.base = base, .binding = {"count"}, .value = 0.0};
+                break;
+            case String:
+                field.maximumStringBytes = 64;
+                value.form.nodes.front().payload = EditorUiTextFieldNode{.base = base, .binding = {"count"}, .maximumBytes = 64};
+                break;
+        }
+        return value;
+    }
+
     /** @brief Uses actual Lua project discovery, workspace selection and canonical document/history owners. */
     struct Fixture final {
         Extensions::Tests::InspectorSupport::Fixture provider;
@@ -19,14 +46,20 @@ namespace Horo::Editor::Tests::InspectorControllerSupport {
         Gameplay::BehaviorInstanceId attachment;
         std::uint64_t tick{};
 
-        /** @brief Publishes actual authored behavior metadata before real controller discovery and attachment. */
-        Fixture() {
+        /** @brief Publishes actual authored behavior metadata before real controller discovery and attachment.
+         * @param definition Provider presentation admitted through the real host.
+         * @param defaultValue Trusted Lua scalar expression authored by the test, then parsed by the production loader.
+         */
+        explicit Fixture(Extensions::EditorInspectorDefinition definition = Extensions::Tests::InspectorSupport::Definition(),
+                         std::string_view defaultValue = "9007199254740993")
+            : provider(std::move(definition)) {
             std::filesystem::create_directories(project.Path() / "assets/scripts");
             const auto source = project.Path() / "assets/scripts/Counter.horo_script";
             {
                 std::ofstream out{source};
                 out << "return horo.behavior { type_id='game.fixture.counter', display_name='Counter', schema_version=3, "
-                       "fields={{name='count', default=9007199254740993}, {name='future', default='preserve'}} }";
+                       "fields={{name='count', default="
+                    << defaultValue << "}, {name='future', default='preserve'}} }";
                 REQUIRE(out.good());
             }
             {

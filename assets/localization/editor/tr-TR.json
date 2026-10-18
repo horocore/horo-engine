@@ -2302,6 +2302,13 @@
     "workspace.packages.recovery_hint": {
       "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
     },
+    "workspace.extensions.recovery": {"text": "Kullanılamayan eklenti yüzeyleri"},
+    "workspace.extensions.retained": {"text": "Çalışma alanı durumu korunuyor. Bu yüzeyleri geri yüklemek için sağlayıcıyı geri yükleyin veya etkinleştirin. Sağlayıcı yüzeylerini kapatmak kayıtlı sunum verilerini korur."},
+    "workspace.extensions.close": {"text": "Sağlayıcının çalışma alanı yüzeylerini kapat"},
+    "workspace.extensions.disabled": {"text": "Sağlayıcı devre dışı."},
+    "workspace.extensions.incompatible": {"text": "Sağlayıcı bu ana uygulamayla uyumlu değil."},
+    "workspace.extensions.failed": {"text": "Sağlayıcı etkinleştirilemedi."},
+    "workspace.extensions.missing": {"text": "Sağlayıcı veya katkı kullanılamıyor."},
     "settings.extension_pages.title": {
       "text": "Uzantı sayfaları"
     },

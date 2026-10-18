@@ -1291,6 +1291,15 @@ The host owns layout persistence, focus routing, docking, shortcut conflicts,
 workspace-state byte limits, and safe teardown. Extension surfaces persist only
 bounded presentation state under their contribution ID. State for a missing
 provider remains opaque and cannot grant capabilities when the provider returns.
+The existing surface registry also owns the bounded unavailable-surface recovery
+projection. Host availability distinguishes disabled, missing, incompatible and
+failed activation without persisting these process facts as authority. The GUI
+renders identifiable saved-open placeholders and can close their intent without
+discarding opaque bytes. Native admission and reinstallation must still establish
+real contexts and registrations. Workspace publication uses the composed durable
+filesystem's exclusive writer/private stage/tracked atomic replacement; a failed
+replacement never deletes the previous document, and uncertain postcommit
+durability retains recovery intent. See [workspace recovery migration](../../guides/extension-workspace-recovery-migration.md).
 
 GUI modules do not draw directly, bypass modal interaction exclusivity, install
 process-global shortcuts, or retain direct editor internals. The host performs

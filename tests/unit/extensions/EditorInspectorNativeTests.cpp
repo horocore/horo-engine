@@ -77,7 +77,7 @@ namespace Horo::Extensions::Tests {
         CHECK(host.inspectors->Contributions("game.fixture.counter", 3).Value().empty());
     }
 
-    TEST_CASE("ABI1.5 negotiation cannot read or register the ABI1.6 inspector tail", "[Extensions][Inspector][ABI]") {
+    TEST_CASE("Legacy negotiation refuses inspector tails while ABI1.6 admits all scalar kinds", "[Extensions][Inspector][ABI]") {
         InspectorPackage package;
         Host host;
         auto library =
@@ -94,6 +94,25 @@ namespace Horo::Extensions::Tests {
         query(2);  // A1.6-only required bit is also refused during explicit1.5 negotiation, before native load.
         CHECK(host.manager.LoadExtension(package.root.string()).HasError());
         CHECK(host.inspectors->Contributions("game.fixture.counter", 3).Value().empty());
+        query(3);
+        REQUIRE(host.manager.LoadExtension(package.root.string()).HasValue());
+        const auto contributions = host.inspectors->Contributions("game.fixture.counter", 3);
+        REQUIRE(contributions.HasValue());
+        REQUIRE(contributions.Value().size() == 1);
+        const auto &definition = *contributions.Value().front().definition;
+        REQUIRE(definition.fields.size() == 4);
+        CHECK(definition.fields[1].kind == EditorInspectorFieldKind::Boolean);
+        CHECK(definition.fields[2].kind == EditorInspectorFieldKind::Number);
+        CHECK(definition.fields[2].minimumNumber == -1.5);
+        CHECK(definition.fields[2].maximumNumber == 2.5);
+        CHECK(definition.fields[3].kind == EditorInspectorFieldKind::String);
+        CHECK(definition.fields[3].maximumStringBytes == 64);
+        const auto &number = std::get<EditorUiNumberNode>(definition.form.nodes[3].payload);
+        CHECK(std::get<double>(number.value) == -1.5);
+        CHECK(std::get<EditorUiBooleanNode>(definition.form.nodes[2].payload).value == false);
+        CHECK(std::get<EditorUiTextFieldNode>(definition.form.nodes[4].payload).maximumBytes == 64);
+        host.manager.UnloadExtension("fixture.package");
+        CHECK_FALSE(contributions.Value().front().context.IsUsable());
         query(0);
     }
 
