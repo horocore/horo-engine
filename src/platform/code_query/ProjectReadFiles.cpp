@@ -24,6 +24,12 @@ namespace Horo::Platform::ProjectReadErrors {
 }  // namespace Horo::Platform::ProjectReadErrors
 
 namespace Horo::Platform {
+    /** @copydoc IProjectReadFiles::SourceText */
+    Result<ProjectReadTextSnapshot> IProjectReadFiles::SourceText(std::string_view, const ProjectReadContext &,
+                                                                  const ProjectSourceReadLimits &) const {
+        return Result<ProjectReadTextSnapshot>::Failure(MakeError(ProjectReadErrors::Unavailable));
+    }
+
     /** @copydoc IProjectReadFiles::Inventory */
     Result<ProjectInventory> IProjectReadFiles::Inventory(std::string_view, ProjectInventoryDepth, const ProjectReadContext &,
                                                           const ProjectInventoryLimits &) const {

@@ -10,6 +10,66 @@ namespace Horo::Editor {
             return MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported),
                              "The project host must supply complete registry and explicit collision activation evidence.");
         }
+
+        /** @brief Combines actual owner receipts without discovering a backend or retaining borrowed capture storage. */
+        std::optional<EditorSceneCollisionReceipt> CombinedReceipt(const EditorPreviewCollisionReceiptSource &preview,
+                                                                   const EditorPlaySessionController &play, const bool running) {
+            using enum EditorScenePhysicsState;
+            const auto edit = preview.read ? preview.read() : std::nullopt;
+            if (!edit)
+                return std::nullopt;
+            if (!running)
+                return edit;
+            const auto game = play.CollisionReceipt();
+            if (!game || game->projectId != edit->projectId || game->documentRevision != edit->documentRevision ||
+                game->fingerprint != edit->fingerprint || ((game->state == NoPhysics) != (edit->state == NoPhysics)))
+                return std::nullopt;
+            return edit->state == Active ? edit : game;
+        }
+
+        CollisionActivationState ReceiptState(const std::optional<EditorSceneCollisionReceipt> &receipt) noexcept {
+            if (!receipt)
+                return CollisionActivationState::Unknown;
+            switch (receipt->state) {
+                case EditorScenePhysicsState::NoPhysics:
+                    return CollisionActivationState::NoPhysics;
+                case EditorScenePhysicsState::Inactive:
+                    return CollisionActivationState::Inactive;
+                case EditorScenePhysicsState::Active:
+                    return CollisionActivationState::Active;
+            }
+            return CollisionActivationState::Unknown;
+        }
+
+        /** @brief Copies capture identity only on an evidence transition; normal unchanged frames allocate nothing here. */
+        void RefreshReceipt(CollisionActivationEvidence &evidence, const EditorPreviewCollisionReceiptSource &preview,
+                            const EditorPlaySessionController &play, const bool running) {
+            const auto receipt = CombinedReceipt(preview, play, running);
+            const auto state = ReceiptState(receipt);
+            const bool active = state == CollisionActivationState::Active;
+            const auto project = receipt ? receipt->projectId : std::string_view{};
+            const auto revision = active ? receipt->documentRevision : 0;
+            const auto generation = active ? receipt->generation : 0;
+            const auto fingerprint = active ? receipt->fingerprint : 0;
+            if (evidence.state == state && evidence.playRunning == running && evidence.projectId == project &&
+                evidence.documentRevision == revision && evidence.generation == generation && evidence.fingerprint == fingerprint)
+                return;
+            if (evidence.revision == std::numeric_limits<std::uint64_t>::max()) {
+                evidence.state = CollisionActivationState::Unknown;
+                evidence.documentRevision = 0;
+                evidence.generation = 0;
+                evidence.fingerprint = 0;
+                return;
+            }
+            ++evidence.revision;
+            evidence.state = state;
+            evidence.playRunning = running;
+            evidence.projectId = project;
+            evidence.documentRevision = revision;
+            evidence.generation = generation;
+            evidence.fingerprint = fingerprint;
+        }
+
     }  // namespace
 
     Result<void> EditorWorkspaceController::BindCollisionScene() {
@@ -82,9 +142,11 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshCollisionActivation() {
         if (!m_collisionActivation)
             return;
-        if (const bool running =
-                m_playSession.State() != EditorPlaySessionState::Idle && m_playSession.State() != EditorPlaySessionState::Failed;
-            m_collisionActivation->playRunning != running) {
+        const bool running =
+            m_playSession.State() != EditorPlaySessionState::Idle && m_playSession.State() != EditorPlaySessionState::Failed;
+        if (m_previewCollisionReceipt)
+            RefreshReceipt(*m_collisionActivation, *m_previewCollisionReceipt, m_playSession, running);
+        else if (m_collisionActivation->playRunning != running) {
             if (m_collisionActivation->revision == std::numeric_limits<std::uint64_t>::max()) {
                 m_collisionActivation->state = CollisionActivationState::Unknown;
                 m_collisionActivation->documentRevision = 0;

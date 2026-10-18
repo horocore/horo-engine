@@ -26,6 +26,21 @@ namespace Horo::Editor {
         [[nodiscard]] bool Any() const noexcept;
     };
 
+    /** @brief Persistent editing text for stable Character bindings; invalid text never enters the document. */
+    struct InspectorCharacterBindings final {
+        std::array<std::string, 9> text;
+        bool valid{true};
+        bool componentValid{};
+    };
+
+    /** @brief Semantic Character-widget interactions, separate from typed authored values. */
+    struct InspectorCharacterEdit final {
+        bool changed{};
+        bool committed{};
+        bool cancelRequested{};
+        bool removeRequested{};
+    };
+
     /** @brief UI-independent draft values owned by one Inspector edit session. */
     struct InspectorObjectDraft {
         std::optional<SceneObjectId> object;
@@ -43,6 +58,8 @@ namespace Horo::Editor {
         float lightOuterConeDegrees{45.0F};
         std::optional<Runtime::TriggerVolumeComponent> triggerVolume;
         std::optional<Runtime::AudioSourceComponent> audioSource;
+        std::optional<Runtime::CharacterControllerComponent> characterController;
+        InspectorCharacterBindings characterBindings;
         std::string audioSoundIdentity; /**< Uncommitted UUID text; only validated typed source values become commands. */
         std::optional<Runtime::AudioListenerComponent> audioListener;
     };
@@ -158,6 +175,12 @@ namespace Horo::Editor {
         [[nodiscard]] EditorWorkspaceViewCommandData ApplyAudioListenerEdit(const InspectorAudioListenerEdit &edit,
                                                                             const SceneObject &object, bool allowCommands);
 
+        /** @brief Reduces a Character edit into one validated typed document command; invalid text remains draft-only. */
+        [[nodiscard]] EditorWorkspaceViewCommandData ApplyCharacterEdit(const InspectorCharacterEdit &edit, const SceneObject &object,
+                                                                        bool allowCommands);
+        /** @brief Reports finite geometry/policy, binding-text validity and enabled completeness. */
+        [[nodiscard]] bool IsCharacterValid() const;
+
         /** @brief Reports whether the current transform draft is valid. */
         [[nodiscard]] bool IsTransformValid() const noexcept;
 
@@ -194,10 +217,9 @@ namespace Horo::Editor {
         void SynchronizeDraft(std::span<const SceneObject> objects, std::span<const SceneObjectId> selectedObjects,
                               std::optional<SceneObjectId> primary, DocumentRevision revision);
         void ResetTransformDraft();
-        void ResetCameraDraft(const SceneObject &object);
         void ResetLightDraft(const SceneObject &object);
-        void ResetTriggerVolumeDraft(const SceneObject &object);
         void ResetAudioSourceDraft(const SceneObject &object);
+        void ResetCharacterDraft(const SceneObject &object);
         void ResetAudioListenerDraft(const SceneObject &object);
         void ClearTransformInteraction() noexcept;
         [[nodiscard]] EditorWorkspaceViewCommandData RejectInvalidTransform(bool committed);

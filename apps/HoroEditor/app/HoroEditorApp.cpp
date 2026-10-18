@@ -2,7 +2,10 @@
 
 #include "EditorAudioPreviewHost.h"
 #include "EditorPresentationSurface.h"
+#include "EditorProjectSceneHost.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
+#include "Horo/Physics/PhysicsErrors.h"
+#include "ScenePhysicsHost.h"
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
 #include "EditorSurfaceLifecycleQualification.h"
 #endif
@@ -229,6 +232,37 @@ namespace Horo::Editor {
             CollisionInventoryEvidence &evidence_;
         };
 
+        /** @brief Admits project scope before any new project's registry is installed. */
+        class SceneScopeProjectOpenContributor final : public IProjectOpenDerivedStateContributor {
+        public:
+            SceneScopeProjectOpenContributor(std::filesystem::path root, const Physics::PhysicsRuntimeMode mode)
+                : root_(std::move(root)), mode_(mode) {}
+
+            std::string_view Id() const noexcept override {
+                return "horo.scene.project_scope";
+            }
+
+            Result<std::unique_ptr<IPreparedProjectOpenDerivedState>> Prepare(const std::filesystem::path &root,
+                                                                              const CancellationToken &cancellation) override {
+                if (cancellation.IsCancellationRequested())
+                    return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(MakeError(ProjectOpenErrors::Cancelled));
+                if (const auto admitted = Application::Internal::ValidateEditorPreviewProjectScope(root_, root, mode_); admitted.HasError())
+                    return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Failure(admitted.ErrorValue());
+                return Result<std::unique_ptr<IPreparedProjectOpenDerivedState>>::Success(std::make_unique<PreparedScope>());
+            }
+
+        private:
+            class PreparedScope final : public IPreparedProjectOpenDerivedState {
+            public:
+                Result<std::string> Install() override {
+                    return Result<std::string>::Success("startup-project-scope");
+                }
+            };
+
+            std::filesystem::path root_;
+            Physics::PhysicsRuntimeMode mode_;
+        };
+
         struct EditorGuiOptions {
             bool textPreview = false;
             bool exitAfterFirstFrame = false;
@@ -236,6 +270,10 @@ namespace Horo::Editor {
             std::uint32_t frameRateLimit = 0;
             std::string rendererBackend;
             std::string projectRoot;
+            std::optional<Physics::PhysicsRuntimeMode> physicsMode{Physics::PhysicsRuntimeMode::Null};
+            std::string cookedRoot;
+            std::string cookTarget;
+            bool cookOptionsValid{true};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             bool qualifySurfaceLifecycle = false;
 #endif
@@ -541,6 +579,9 @@ namespace Horo::Editor {
         None,
         Renderer,
         Project,
+        Physics,
+        CookedRoot,
+        CookTarget,
         FrameRateLimit,
         ExitAfterFrames
     };
@@ -555,6 +596,17 @@ namespace Horo::Editor {
                 return true;
             case Project:
                 opts.projectRoot = value;
+                return true;
+            case Physics:
+                opts.physicsMode = Application::Internal::ParseScenePhysicsHostMode(value);
+                return true;
+            case CookedRoot:
+                opts.cookedRoot = value;
+                opts.cookOptionsValid = !value.empty();
+                return true;
+            case CookTarget:
+                opts.cookTarget = value;
+                opts.cookOptionsValid = !value.empty();
                 return true;
             case FrameRateLimit:
                 opts.frameRateLimit = ParseFrameRateLimit(value);
@@ -591,18 +643,35 @@ namespace Horo::Editor {
             pending = Renderer;
         else if (argument == "--project")
             pending = Project;
+        else if (argument.starts_with("--physics="))
+            opts.physicsMode = Application::Internal::ParseScenePhysicsHostMode(argument.substr(std::string_view{"--physics="}.size()));
+        else if (argument == "--physics")
+            pending = Physics;
+        else if (argument == "--cooked-root")
+            pending = CookedRoot;
+        else if (argument == "--cook-target")
+            pending = CookTarget;
+        else if (argument.starts_with("--cooked-root="))
+            opts.cookedRoot = argument.substr(std::string_view{"--cooked-root="}.size());
+        else if (argument.starts_with("--cook-target="))
+            opts.cookTarget = argument.substr(std::string_view{"--cook-target="}.size());
     }
 
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
+        using enum PendingEditorOption;
         EditorGuiOptions opts;
-        PendingEditorOption pending = PendingEditorOption::None;
+        PendingEditorOption pending = None;
         for (const char *rawArgument : args.subspan(std::min<std::size_t>(1, args.size()))) {
             const std::string_view argument{rawArgument};
             if (!ConsumeEditorOptionValue(argument, pending, opts))
                 ApplyEditorOptionFlag(argument, pending, opts);
         }
-        if (pending == PendingEditorOption::FrameRateLimit)
+        if (pending == FrameRateLimit)
             opts.frameRateLimit = 1001;
+        if (pending == Physics)
+            opts.physicsMode.reset();
+        if (pending == CookedRoot || pending == CookTarget || opts.cookedRoot.empty() != opts.cookTarget.empty())
+            opts.cookOptionsValid = false;
         return opts;
     }
 
@@ -648,8 +717,18 @@ namespace Horo::Editor {
             return RendererAvailabilitySnapshot{std::move(entries), std::string{activeBackendId}};
         }
 
-        [[nodiscard]] int RelaunchEditorForProject(const char *executable, const EditorRendererRestartRequest &request) {
-            std::vector<std::string> arguments{executable, "--renderer", request.backendId, "--project", request.projectRoot};
+        [[nodiscard]] int RelaunchEditorForProject(const char *executable, const EditorRendererRestartRequest &request,
+                                                   const EditorGuiOptions &options) {
+            std::vector<std::string> arguments{executable,
+                                               "--renderer",
+                                               request.backendId,
+                                               "--project",
+                                               request.projectRoot,
+                                               "--physics",
+                                               std::string{Application::Internal::ScenePhysicsHostModeName(options.physicsMode.value())}};
+            if (!options.cookedRoot.empty()) {
+                arguments.insert(arguments.end(), {"--cooked-root", options.cookedRoot, "--cook-target", options.cookTarget});
+            }
             std::vector<char *> nativeArguments;
             nativeArguments.reserve(arguments.size() + 1);
             for (std::string &argument : arguments) {
@@ -1550,6 +1629,61 @@ namespace Horo::Editor {
             return healthy && completed;
         }
 
+        /** @brief Captures explicit cooked selection and Physics mode before constructing Scene owners. */
+        [[nodiscard]] Result<Application::Internal::EditorProjectScenePolicy> CaptureEditorScenePolicy(const EditorGuiOptions &options) {
+            Application::Internal::EditorProjectScenePolicy scenePolicy{.physicsMode = options.physicsMode.value()};
+            if (!options.cookedRoot.empty()) {
+                auto target = Assets::AssetCookTargetId::Parse(options.cookTarget);
+                if (target.HasError()) {
+                    LOG_ERROR("editor.runtime", "Invalid explicit cook target: %s", target.ErrorValue().message.c_str());
+                    return Result<Application::Internal::EditorProjectScenePolicy>::Failure(target.ErrorValue());
+                }
+                auto root = Application::Internal::ParseSceneHostAbsolutePath(options.cookedRoot);
+                if (root.HasError()) {
+                    LOG_ERROR("editor.runtime", "Invalid cook root: %s", root.ErrorValue().message.c_str());
+                    return Result<Application::Internal::EditorProjectScenePolicy>::Failure(root.ErrorValue());
+                }
+                scenePolicy.cooked.emplace(std::move(root).Value(), std::move(target).Value());
+            }
+            return Result<Application::Internal::EditorProjectScenePolicy>::Success(std::move(scenePolicy));
+        }
+
+        /** @brief Parses an optional startup project path without granting implicit project scope. */
+        [[nodiscard]] Result<std::filesystem::path> CaptureEditorPreviewRoot(const EditorGuiOptions &options) {
+            std::filesystem::path previewProjectRoot;
+            if (!options.projectRoot.empty()) {
+                auto root = Application::Internal::ParseSceneHostAbsolutePath(options.projectRoot);
+                if (root.HasError()) {
+                    LOG_ERROR("editor.runtime", "Invalid project root: %s", root.ErrorValue().message.c_str());
+                    return Result<std::filesystem::path>::Failure(root.ErrorValue());
+                }
+                previewProjectRoot = std::move(root).Value();
+            }
+            return Result<std::filesystem::path>::Success(std::move(previewProjectRoot));
+        }
+
+        /** @brief Runs paced frames and retains cancellation, fatal-shutdown and requested-frame completion semantics. */
+        [[nodiscard]] bool RunEditorFrames(const EditorGuiOptions &options, EditorRuntimeParticipant &participant,
+                                           Runtime::RuntimeHost &runtime, GuiScreenHost &screenHost) {
+            bool healthy = true;
+            bool completedFrame = false;
+            while (!screenHost.IsApplicationCloseRequested() && (runtime.State() == Runtime::RuntimeLifecycleState::Running ||
+                                                                 runtime.State() == Runtime::RuntimeLifecycleState::Suspended)) {
+                if (const Result<void> frame = RunPacedEditorFrame(participant, runtime); frame.HasError()) {
+                    if (frame.ErrorValue().code.Value() != "runtime.host.cancelled" &&
+                        frame.ErrorValue().code.Value() != Render::FramePacingErrors::Cancelled.code.Value()) {
+                        LOG_ERROR("editor.runtime", "Host frame failed: %s", frame.ErrorValue().message.c_str());
+                        screenHost.RequestFatalShutdown();
+                        healthy = false;
+                    }
+                    break;
+                }
+                completedFrame = true;
+            }
+            return healthy && screenHost.IsApplicationCloseRequested() &&
+                   ((!options.exitAfterFirstFrame && options.exitAfterFrames == 0) || completedFrame);
+        }
+
         /** @brief Runs the actual editor startup and reports failures to the process boundary. */
         std::optional<EditorRendererRestartRequest> RunEditorMainLoop(RunEditorMainLoopParams &p) {
             ThemeContext themeContext{p.fonts};
@@ -1592,33 +1726,41 @@ namespace Horo::Editor {
             ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
+            auto capturedPolicy = CaptureEditorScenePolicy(p.options);
+            if (capturedPolicy.HasError())
+                return std::nullopt;
+            auto scenePolicy = std::move(capturedPolicy).Value();
+            auto capturedRoot = CaptureEditorPreviewRoot(p.options);
+            if (capturedRoot.HasError())
+                return std::nullopt;
+            auto previewProjectRoot = std::move(capturedRoot).Value();
+            auto preparedPreview = Application::Internal::PrepareEditorProjectPreview(previewProjectRoot, p.background.jobs, scenePolicy);
+            if (preparedPreview.HasError()) {
+                LOG_ERROR("editor.runtime", "Scene project capture rejected: %s", preparedPreview.ErrorValue().message.c_str());
+                return std::nullopt;
+            }
+            // RuntimeHost receives the sole preview service; captured assets/native authorities
+            // remain alive here through RuntimeHost and screen teardown. Play owns distinct services.
+            auto preview = std::move(preparedPreview).Value();
+            auto runtimeScene = std::move(preview.scenes);
+            Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
+            auto playSceneFactory = Application::Internal::MakeEditorProjectSceneFactory(p.background.jobs, scenePolicy);
+            // Null is explicit; canonical activation needs an exact owner receipt.
+            CollisionActivationEvidence collisionActivation{.revision = 1};
+            if (preview.physicsMode == Physics::PhysicsRuntimeMode::Null)
+                collisionActivation.state = CollisionActivationState::NoPhysics;
+            const EditorPreviewCollisionReceiptSource previewCollisionReceipt{[&preview]() noexcept {
+                return preview.owners->CollisionReceipt();
+            }};
             EditorAudioPreviewHost audioPreview{MakeSdl3AudioPreviewOutput};
             Assets::AssetRegistry assetRegistry;
             CollisionInventoryEvidence collisionInventory;
             AssetRegistryProjectOpenContributor assetRegistryContributor{assetRegistry, collisionInventory};
-            std::array<IProjectOpenDerivedStateContributor *, 1> projectOpenContributors{&assetRegistryContributor};
+            SceneScopeProjectOpenContributor sceneScopeContributor{previewProjectRoot, preview.physicsMode};
+            std::array<IProjectOpenDerivedStateContributor *, 2> projectOpenContributors{&sceneScopeContributor, &assetRegistryContributor};
             ProjectOpenService projectOpenService{p.background.jobs,      durableFiles,          projectOpenPreflight,
                                                   mutationCoordinator,    migrationTransactions, p.rendererAvailability,
                                                   projectOpenContributors};
-            const auto physicsSettings = Physics::PhysicsWorldSettings::Capture({});
-            const auto characterSettings = Character::CharacterWorldSettings::Capture({});
-            auto physicsRuntime = Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Null);
-            if (physicsSettings.HasError() || characterSettings.HasError() || physicsRuntime.HasError()) {
-                LOG_ERROR("editor.runtime", "Scene Physics composition could not be prepared.");
-                return std::nullopt;
-            }
-            Physics::PhysicsSceneActivationAuthority physicsSceneAuthority;
-            auto runtimeScene = std::make_unique<Runtime::RuntimeSceneService>();
-            Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
-            auto physicsParticipant = std::make_unique<
-                Physics::PhysicsSceneActivationParticipant>(*physicsRuntime.Value(), physicsSceneAuthority,
-                                                            Physics::PhysicsSceneActivationSettings{physicsSettings.Value(),
-                                                                                                    characterSettings.Value()});
-            if (const Result<void> added = runtimeScene->AddActivationParticipant(std::move(physicsParticipant)); added.HasError()) {
-                LOG_ERROR("editor.runtime", "Scene Physics participant registration failed: %s", added.ErrorValue().message.c_str());
-                return std::nullopt;
-            }
-            auto collisionActivation = CaptureCollisionActivation(physicsRuntime.Value()->Mode());
             ScreenRegistry screenRegistry;
             RegisterWelcomeScreen(screenRegistry);
             RegisterProjectCreationScreen(screenRegistry);
@@ -1692,10 +1834,12 @@ namespace Horo::Editor {
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
+            screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
             screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
+            screenHost.Services().RegisterConst<EditorPreviewCollisionReceiptSource>(previewCollisionReceipt);
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);
             screenHost.Services().Register<DurableFileSystem>(durableFiles);
             screenHost.Services().Register<Application::GameplayBuildService>(gameplayBuildService);
@@ -1749,23 +1893,7 @@ namespace Horo::Editor {
                 return std::nullopt;
             }
 
-            bool healthy = true;
-            bool completedFrame = false;
-            while (!screenHost.IsApplicationCloseRequested() && (runtime->State() == Runtime::RuntimeLifecycleState::Running ||
-                                                                 runtime->State() == Runtime::RuntimeLifecycleState::Suspended)) {
-                if (const Result<void> frame = RunPacedEditorFrame(*pacingParticipant, *runtime); frame.HasError()) {
-                    if (frame.ErrorValue().code.Value() != "runtime.host.cancelled" &&
-                        frame.ErrorValue().code.Value() != Render::FramePacingErrors::Cancelled.code.Value()) {
-                        LOG_ERROR("editor.runtime", "Host frame failed: %s", frame.ErrorValue().message.c_str());
-                        screenHost.RequestFatalShutdown();
-                        healthy = false;
-                    }
-                    break;
-                }
-                completedFrame = true;
-            }
-            healthy = healthy && screenHost.IsApplicationCloseRequested() &&
-                      ((!p.options.exitAfterFirstFrame && p.options.exitAfterFrames == 0) || completedFrame);
+            const bool healthy = RunEditorFrames(p.options, *pacingParticipant, *runtime, screenHost);
             p.healthy = CompleteEditorRuntimeShutdown(*runtime, *pacingParticipant, healthy);
             RequestUpdateActivationOnExit(updateSession, screenHost.IsApplicationCloseRequested(), rendererRestart.has_value());
             return rendererRestart;
@@ -1831,8 +1959,23 @@ namespace Horo::Editor {
         ConfigurationSchema moduleSchema;
     };
 
+    /** @brief Validates explicit application Physics selection before project/native frontend creation. */
+    [[nodiscard]] static bool ValidateEditorPhysicsOptions(const EditorGuiOptions &options) {
+        if (!options.physicsMode || !options.cookOptionsValid ||
+            (*options.physicsMode == Physics::PhysicsRuntimeMode::Canonical && options.projectRoot.empty())) {
+            const auto error =
+                MakeError(Physics::PhysicsErrors::DescriptorInvalid,
+                          "Select --physics null or --physics canonical. Canonical Scene activation requires an explicit --project root.");
+            LOG_CRITICAL("editor.physics", "%s", error.message.c_str());
+            return false;
+        }
+        return true;
+    }
+
     /** @brief Validates startup inputs and composes the editor's installed modules. */
     [[nodiscard]] static std::optional<PreparedEditorStartup> PrepareEditorStartup(EditorGuiOptions options) {
+        if (!ValidateEditorPhysicsOptions(options))
+            return std::nullopt;
         std::string projectName;
         if (!ConfigureStartupProject(options, projectName))
             return std::nullopt;
@@ -2040,7 +2183,7 @@ namespace Horo::Editor {
             LOG_INFO("editor.renderer", "Restarting editor with project renderer '%s' for '%s'.",
                      session.rendererRestart->backendId.c_str(), session.rendererRestart->projectRoot.c_str());
             Log::Logger::Shutdown();
-            return RelaunchEditorForProject(executablePath, *session.rendererRestart);
+            return RelaunchEditorForProject(executablePath, *session.rendererRestart, startup.options);
         }
         startup.modules->DeactivateAll();
         Log::Logger::Shutdown();

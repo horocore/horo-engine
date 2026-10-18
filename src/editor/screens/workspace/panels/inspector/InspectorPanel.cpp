@@ -18,6 +18,23 @@
 namespace Horo::Editor {
     using namespace InspectorPanelDetail;
 
+    namespace {
+        /** @brief Draws the localized multi-selection heading without borrowing panel state. */
+        void DrawMultiSelectionTitle(const std::size_t selectedObjectCount, const EditorGuiContext &context) {
+            ImGui::SetCursorPos({14.0F, ImGui::GetCursorPosY() + 14.0F});
+            const std::string label =
+                std::format("{} {}", selectedObjectCount, context.localization.Get("editor", "workspace.inspector.objects_selected"));
+            {
+                Theme::ScopedTextStyle textStyle(context.theme.fonts.sansEmphasis, std::max(14.0F, Theme::TextPx::Title() * 0.92F),
+                                                 Theme::FontPx::SansEmphasis);
+                ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
+                ImGui::TextUnformatted(label.c_str());
+                ImGui::PopStyleColor();
+            }
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.0F);
+        }
+    }  // namespace
+
     /** @copydoc InspectorPanel::InspectorPanel */
     InspectorPanel::InspectorPanel() = default;
     /** @copydoc InspectorPanel::~InspectorPanel */
@@ -199,20 +216,6 @@ namespace Horo::Editor {
                 m_contributions->Draw(attached.instanceId, viewModel, command, context);
             ImGui::PopID();
         }
-    }
-
-    void InspectorPanel::DrawMultiSelectionTitle(const std::size_t selectedObjectCount, const EditorGuiContext &context) const {
-        ImGui::SetCursorPos({14.0F, ImGui::GetCursorPosY() + 14.0F});
-        const std::string label =
-            std::format("{} {}", selectedObjectCount, context.localization.Get("editor", "workspace.inspector.objects_selected"));
-        {
-            Theme::ScopedTextStyle textStyle(context.theme.fonts.sansEmphasis, std::max(14.0F, Theme::TextPx::Title() * 0.92F),
-                                             Theme::FontPx::SansEmphasis);
-            ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
-            ImGui::TextUnformatted(label.c_str());
-            ImGui::PopStyleColor();
-        }
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.0F);
     }
 
     InspectorNameEdit InspectorPanel::DrawObjectTitleWidgets(const SceneObject &object, EditorWorkspaceViewCommandData &command,

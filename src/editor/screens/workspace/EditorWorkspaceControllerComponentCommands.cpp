@@ -8,6 +8,9 @@ namespace Horo::Editor {
 
     bool EditorWorkspaceController::ProcessObjectPropertyCommand(const EditorWorkspaceViewCommandData &cmd) {
         switch (cmd.command) {
+            case EditorWorkspaceViewCommand::UpdatePhysicsComponents:
+                ApplyPhysicsInspectorCommand(cmd);
+                break;
             case EditorWorkspaceViewCommand::UpdateObjectName:
                 if (cmd.objectPayload.has_value() && cmd.stringPayload.has_value()) {
                     HandleDocumentCommandResult(m_documentCommands.Execute(
@@ -37,9 +40,6 @@ namespace Horo::Editor {
 
     bool EditorWorkspaceController::ProcessObjectComponentValueCommand(const EditorWorkspaceViewCommandData &cmd) {
         switch (cmd.command) {
-            case EditorWorkspaceViewCommand::UpdatePhysicsComponents:
-                ApplyPhysicsInspectorCommand(cmd);
-                break;
             case EditorWorkspaceViewCommand::UpdateCameraComponent:
                 if (cmd.objectPayload.has_value() && cmd.cameraPayload.has_value()) {
                     HandleDocumentCommandResult(m_documentCommands.Execute(
@@ -60,6 +60,12 @@ namespace Horo::Editor {
                                                     SetSceneObjectTriggerVolumeCommand{*cmd.objectPayload, *cmd.triggerVolumePayload}),
                                                 "Update trigger volume");
                 }
+                break;
+            case EditorWorkspaceViewCommand::UpdateCharacterComponent:
+                if (cmd.objectPayload && cmd.characterPayload)
+                    HandleDocumentCommandResult(m_documentCommands.Execute(
+                                                    SetSceneObjectCharacterCommand{*cmd.objectPayload, *cmd.characterPayload}),
+                                                "Update Character");
                 break;
             case EditorWorkspaceViewCommand::UpdateObjectEditorState:
                 if (cmd.objectPayload.has_value() && cmd.editorStatePayload.has_value()) {

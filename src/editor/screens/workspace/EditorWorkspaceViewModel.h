@@ -121,6 +121,7 @@ namespace Horo::Editor {
         UpdateTriggerVolumeComponent,
         UpdatePhysicsComponents,
         UpdateAudioSourceComponent,
+        UpdateCharacterComponent,
         StartAudioComponentPreview,
         StopAudioComponentPreview,
         UpdateAudioListenerComponent,
@@ -264,6 +265,7 @@ namespace Horo::Editor {
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
         std::optional<PhysicsInspectorRequest> physicsPayload;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
+        std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
         std::optional<Runtime::AudioListenerComponent> audioListenerPayload;
         std::optional<DocumentRevision> audioPreviewRevision;
         std::optional<SceneObjectEditorState> editorStatePayload = std::nullopt;

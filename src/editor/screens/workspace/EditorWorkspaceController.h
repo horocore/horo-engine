@@ -52,13 +52,15 @@ namespace Horo::Editor {
     struct EditorWorkspaceCollisionEvidence {
         CollisionInventoryEvidence *inventory{};
         CollisionActivationEvidence *activation{};
+        const EditorPreviewCollisionReceiptSource *previewReceipt{};
     };
 
-    /** @brief Explicit gameplay build and module-retirement services captured by the application host. */
+    /** @brief Explicit gameplay build, play-scene and module-retirement services captured by the application host. */
     struct EditorWorkspaceGameplayServices {
         Application::GameplayBuildService *builds{};
         Application::GameplayBuildEnvironment environment{};
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> retirements;
+        EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
     };
 
     /** @brief Optional services used by the workspace without transferring their ownership. */
@@ -275,6 +277,7 @@ namespace Horo::Editor {
         void UpdateNavigationDocumentTabs();
         Runtime::RuntimeSceneService &m_runtimeScene;
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
+        EditorPlaySceneFactory m_playSceneFactory;
         Assets::AssetRegistrySnapshot m_assetRegistry;
         DocumentIdentityRegistry m_documentRegistry;
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
@@ -292,6 +295,7 @@ namespace Horo::Editor {
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
+        const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
         Assets::AssetId m_collisionSceneOwner;
         std::uint64_t m_collisionSceneGeneration{};
         ProjectMutationCoordinator *m_mutations{};

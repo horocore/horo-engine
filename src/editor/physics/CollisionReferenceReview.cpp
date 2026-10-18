@@ -51,6 +51,32 @@ namespace Horo::Editor {
             });
         }
 
+        /** @brief Inventories the actual durable Character bindings, including disabled configured components. */
+        void CharacterImpacts(const SceneSource::SceneObjectSnapshot &object, const std::string &path,
+                              const Physics::NormalizedCollisionSchema &candidate, std::vector<CollisionReferenceImpact> &impacts) {
+            if (!object.components.characterController)
+                return;
+            const auto &character = *object.components.characterController;
+            const auto &collision = character.collision;
+            for (const auto profile : {collision.profile, collision.requiredProfile})
+                if (profile)
+                    Append(impacts, {path, object.id, profile, false, candidate.ResolveProfile(*profile).HasError(),
+                                     CollisionImpactReason::ProfileReference});
+            if (collision.requiredLayer) {
+                const bool missing = std::ranges::none_of(candidate.Layers(), [&](const auto &layer) {
+                    return layer.id == *collision.requiredLayer && (!character.enabled || layer.enabled);
+                });
+                Append(impacts, {path, object.id, {}, false, missing, CollisionImpactReason::LayerReference, collision.requiredLayer, {}});
+            }
+            if (collision.queryChannel) {
+                const bool missing = std::ranges::none_of(candidate.QueryChannels(), [&](const auto &channel) {
+                    return channel.id == *collision.queryChannel && (!character.enabled || channel.enabled);
+                });
+                Append(impacts,
+                       {path, object.id, {}, false, missing, CollisionImpactReason::QueryChannelReference, {}, collision.queryChannel});
+            }
+        }
+
         /** @brief Lists exact authored collider references and explicitly unavailable extension/prefab owners. */
         void SceneImpacts(const SceneSource::SceneSourceView &scene, const std::string &path,
                           const Physics::NormalizedCollisionSchema &candidate, const bool retires,
@@ -58,6 +84,7 @@ namespace Horo::Editor {
                           std::vector<CollisionReferenceImpact> &impacts) {
             using enum CollisionImpactReason;
             for (const auto &object : scene.objects) {
+                CharacterImpacts(object, path, candidate, impacts);
                 for (const auto &collider : object.components.colliders) {
                     const auto profile = candidate.ResolveProfile(collider.collisionProfile);
                     Append(impacts, {path, object.id, collider.collisionProfile, false, profile.HasError(), ProfileReference});

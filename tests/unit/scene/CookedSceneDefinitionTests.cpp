@@ -74,6 +74,48 @@ TEST_CASE("Cooked scene payload honors the same exact bounds for encoding and de
     REQUIRE(DecodeCookedSceneDefinition(encoded.Value(), {1}, {2}, limits).HasError());
 }
 
+TEST_CASE("Verified cooked Scene admission retains embedded revision without weakening exact revision callers",
+          "[scene][character][cook]") {
+    const auto encoded = EncodeCookedSceneDefinition(Scene());
+    REQUIRE(encoded.HasValue());
+    const auto decoded = DecodeCookedSceneWithEmbeddedRevision(encoded.Value(), {1});
+    REQUIRE(decoded.HasValue());
+    CHECK(decoded.Value().Id() == Runtime::SceneDefinitionId{1});
+    CHECK(decoded.Value().Revision() == Runtime::SceneDefinitionRevision{2});
+    CHECK(EncodeCookedSceneDefinition(decoded.Value()).Value() == encoded.Value());
+    CHECK(DecodeCookedSceneDefinition(encoded.Value(), {1}, {9}).HasError());
+    CHECK(DecodeCookedSceneWithEmbeddedRevision(encoded.Value(), {9}).HasError());
+}
+
+TEST_CASE("Verified cooked Scene admission rejects missing zero malformed and duplicate durable revisions", "[scene][character][cook]") {
+    const auto encoded = EncodeCookedSceneDefinition(Scene()).Value();
+    auto document = nlohmann::json::parse(encoded);
+    SECTION("zero revision") {
+        document["revision"] = std::uint64_t{0};
+    }
+    SECTION("missing revision") {
+        document.erase("revision");
+    }
+    SECTION("wrong revision type") {
+        document["revision"] = "2";
+    }
+    SECTION("foreign Scene identity") {
+        document["scene"] = std::uint64_t{9};
+    }
+    auto invalid = document.dump() + '\n';
+    SECTION("duplicate revision") {
+        invalid.insert(1, "\"revision\":2,");
+    }
+    SECTION("malformed JSON") {
+        invalid.front() = '!';
+    }
+    SECTION("noncanonical bytes") {
+        invalid.insert(1, " ");
+    }
+    const std::vector<std::uint8_t> bytes{invalid.begin(), invalid.end()};
+    CHECK(DecodeCookedSceneWithEmbeddedRevision(bytes, {1}).HasError());
+}
+
 TEST_CASE("Trigger migration proof survives cooked bytes and rejects malformed required metadata", "[native][trigger][prefab-cook]") {
     SceneSource::SceneObjectSnapshot object{.id = {874}, .components = {.triggerVolume = Runtime::TriggerVolumeComponent{}}};
     const std::array objects{object};
@@ -160,4 +202,11 @@ TEST_CASE("Cooked scene decoding rejects unhandled components without dropping r
     REQUIRE(valid.HasValue());
     REQUIRE(valid.Value().Entities().front().components.camera.has_value());
     REQUIRE_FALSE(valid.Value().Entities().front().components.camera->enabled);
+}
+
+TEST_CASE("Scene asset identity preserves the canonical SHA256 little-endian compact vector", "[scene][cook][identity]") {
+    const auto asset = Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc");
+    REQUIRE(asset.HasValue());
+    // Independent SHA-256 vector: 38ef79ae6082031faf789a38d68aa7396de05d067a20d5aa3c511d0561e967fd.
+    CHECK(SceneDefinitionIdForAsset(asset.Value()) == Runtime::SceneDefinitionId{2234773191861595960ULL});
 }

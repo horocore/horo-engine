@@ -9,7 +9,7 @@
 namespace Horo::Editor {
 
     namespace {
-        /** @brief Classifies the typed authored component set for hierarchy presentation. */
+        /** @brief Classifies the complete typed authored component set for hierarchy presentation. */
         SceneObjectKind PresentedKind(const SceneObjectSnapshot &object) {
             int componentCount = 0;
             using enum SceneObjectKind;
@@ -34,6 +34,11 @@ namespace Horo::Editor {
             if (object.components.audioSource.has_value()) {
                 componentCount++;
                 singleComponentKind = AudioSource;
+            }
+
+            if (object.components.characterController) {
+                ++componentCount;
+                singleComponentKind = GameObject;
             }
 
             return componentCount == 1 ? singleComponentKind : GameObject;

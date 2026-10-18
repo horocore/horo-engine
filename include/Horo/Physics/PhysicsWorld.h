@@ -30,6 +30,10 @@ namespace Horo {
     class JobSystem;
 }
 
+namespace Horo::Character::Detail {
+    class CharacterScenePlacement;
+}
+
 namespace Horo::Physics {
     class PhysicsSceneActivationParticipant;
     class NormalizedCollisionSchema;
@@ -510,6 +514,7 @@ namespace Horo::Physics {
 
     private:
         friend struct PhysicsWorldContainmentTestAccess;
+        friend class Character::Detail::CharacterScenePlacement;
         friend class PhysicsSceneActivationCandidate;
         friend class PhysicsSceneBodyPreparation;
         friend class PhysicsRuntime;

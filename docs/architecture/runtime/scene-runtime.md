@@ -76,6 +76,14 @@ LIFO order after incrementing the generation. A slot at the configured maximum
 generation is retired permanently; generations never wrap and therefore cannot
 make an ancient reference valid again.
 
+Initial construction consumes the immutable definition's existing schema and
+unique-ID proof, so inserting into fresh private storage does not rescan prior
+authored IDs. Definitions with parent references build a temporary load-time
+identity index to resolve parents independently of declaration order; flat
+construction needs no extra parent index. Dynamic structural creation still
+validates schema, parent generations and duplicate authored IDs before insertion.
+No view lookup, entity identity, generation or publication contract changes.
+
 The steady-state path with no pending transition or structural batch performs no
 scene-owned heap allocation. Definition building, candidate preparation,
 activation, and structural mutation are load/mutation paths and may allocate.

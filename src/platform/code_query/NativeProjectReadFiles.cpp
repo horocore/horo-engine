@@ -13,8 +13,7 @@ namespace Horo::Platform {
         using CodeFilesTesting::Boundary;
 
         /** @brief Validates hard native budgets independently of any application query configuration. */
-        bool ValidLimits(const ProjectReadLimits &limits) {
-            const ProjectReadLimits hard;
+        bool ValidLimits(const ProjectReadLimits &limits, const ProjectReadLimits &hard = {}) {
             return limits.maximumEntries > 0 && limits.maximumEntries <= hard.maximumEntries && limits.maximumFileBytes > 0 &&
                    limits.maximumFileBytes <= hard.maximumFileBytes && limits.maximumManifestBytes > 0 &&
                    limits.maximumManifestBytes <= hard.maximumManifestBytes && limits.maximumDuration.count() > 0 &&
@@ -57,6 +56,16 @@ namespace Horo::Platform {
                 return CaptureText(path, input, limits, false);
             }
 
+            /** @copydoc IProjectReadFiles::SourceText */
+            Result<ProjectReadTextSnapshot> SourceText(const std::string_view path, const ProjectReadContext &input,
+                                                       const ProjectSourceReadLimits &limits) const override {
+                const ProjectSourceReadLimits sourceHard;
+                const ProjectReadLimits hard{.maximumFileBytes = sourceHard.maximumFileBytes,
+                                             .maximumDuration = sourceHard.maximumDuration};
+                const ProjectReadLimits requested{.maximumFileBytes = limits.maximumFileBytes, .maximumDuration = limits.maximumDuration};
+                return CaptureText(path, input, requested, false, hard);
+            }
+
             /** @copydoc IProjectReadFiles::InventoryText */
             Result<ProjectReadTextSnapshot> InventoryText(std::string_view path, const ProjectReadContext &input) const override {
                 return CaptureText(path, input, {}, true);
@@ -65,13 +74,14 @@ namespace Horo::Platform {
         private:
             /** @brief Shares one native byte reader while preserving distinct query and inventory hardlink admission. */
             Result<ProjectReadTextSnapshot> CaptureText(std::string_view path, const ProjectReadContext &input,
-                                                        const ProjectReadLimits &limits, bool allowRegularHardlinks) const {
+                                                        const ProjectReadLimits &limits, bool allowRegularHardlinks,
+                                                        const ProjectReadLimits &hard = {}) const {
                 try {
                     if (input.projectIdentity != identity_ || input.projectGeneration != generation_)
                         return Result<ProjectReadTextSnapshot>::Failure(MakeError(ProjectReadErrors::Stale));
                     if (!(allowRegularHardlinks ? SafeInventoryPath(path) : IsSafeProjectReadPath(path)))
                         return Result<ProjectReadTextSnapshot>::Failure(MakeError(ProjectReadErrors::UnsafePath));
-                    if (!ValidLimits(limits))
+                    if (!ValidLimits(limits, hard))
                         return Result<ProjectReadTextSnapshot>::Failure(MakeError(ProjectReadErrors::Invalid));
                     const auto context = allowRegularHardlinks ? input : BoundedContext(input, limits);
                     if (auto stop = CheckProjectReadContext(context); stop.HasError())

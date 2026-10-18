@@ -178,6 +178,13 @@ namespace {
             const auto before = editor.FirstViewportObjectPosition();
             IM_CHECK(before.has_value());
             const std::uint64_t authoringRevision = editor.ViewportDocumentRevision();
+            if (!ui.ItemExists("//**/###workspace_play_play")) {
+                ui.LogInfo("Play toolbar unavailable; display size %.0f x %.0f", ImGui::GetIO().DisplaySize.x,
+                           ImGui::GetIO().DisplaySize.y);
+                ImGuiTestItemList items;
+                ui.GatherItems(&items, "//##MenuBar");
+                ui.LogItemList(&items);
+            }
             ui.ItemClick("//**/###workspace_play_play");
             for (int frame = 0; frame < 120; ++frame) {
                 const ImGuiTestItemInfo pause = ui.ItemInfo("//**/###workspace_play_pause", ImGuiTestOpFlags_NoError);
@@ -334,6 +341,10 @@ namespace {
             editor.DrawFrame(context);
         }, [&editor, project](Tests::UiScenarioPipe &pipeline) {
             Tests::FullEditorSetups::CreateProjectAndOpenWorkspace(pipeline, editor, project);
+            pipeline.Step("Workspace retains Play controls alongside the host menu", [](ImGuiTestContext &ui) {
+                IM_CHECK(ui.ItemExists("//**/###workspace_play_play"));
+                IM_CHECK(ui.ItemExists("//**/###workspace_play_profiles"));
+            });
         }, Tests::EditorUiScenarioBudget::Extended(1400), &editor.Input());
 
         INFO(result.testEngineLog);

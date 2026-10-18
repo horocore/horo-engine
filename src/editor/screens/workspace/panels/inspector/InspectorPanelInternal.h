@@ -348,6 +348,12 @@ namespace Horo::Editor::InspectorPanelDetail {
                                     .c_str(),
                                 nullptr, context.theme.fonts))
             selectComponent(ComponentType::AudioSource);
+        if (!object.components.characterController &&
+            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.character.title") +
+                                 "###inspector_component_character")
+                                    .c_str(),
+                                nullptr, context.theme.fonts))
+            selectComponent(ComponentType::CharacterController);
         if (!object.components.audioListener.has_value() &&
             Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.kind.audio_listener") +
                                  "###inspector_component_audio_listener")

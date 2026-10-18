@@ -25,6 +25,7 @@ namespace Horo::SceneSource::Detail {
     using WireJson = JsonEncoding::Detail::CanonicalJsonValue<true>;
 
     inline constexpr std::uint32_t kSceneSchemaVersion = 1;
+    inline constexpr std::uint32_t kCharacterSceneSchemaVersion = 2;
     inline constexpr std::uintmax_t kMaximumProjectMetadataBytes = 64U * 1024U;
     inline constexpr std::uintmax_t kMaximumSceneBytes = 16U * 1024U * 1024U;
     inline constexpr std::uintmax_t kMaximumRecoveryBytes = 20U * 1024U * 1024U;
@@ -77,6 +78,9 @@ namespace Horo::SceneSource::Detail {
     [[nodiscard]] Result<Runtime::NavigationAgentComponent> ParseNavigationAgent(const Json &value);
     [[nodiscard]] Result<AI::AiAgentComponent> ParseAiAgent(const Json &value);
     [[nodiscard]] Result<AI::AiControllerComponent> ParseAiController(const Json &value);
+
+    [[nodiscard]] Result<Runtime::CharacterControllerComponent> ParseCharacterController(const Json &value);
+    void AppendCharacterController(WireJson &value, const Runtime::CharacterControllerComponent &component);
 
     [[nodiscard]] Result<Runtime::RigidBodyComponent> ParseRigidBody(const Json &value);
     [[nodiscard]] Result<std::vector<Runtime::ColliderComponent>> ParseColliders(const Json &value);

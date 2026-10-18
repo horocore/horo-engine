@@ -151,13 +151,68 @@ TEST_CASE("Native reads reject hard links and symlink descendants before reading
     if (error)
         SKIP("The test filesystem cannot create hard links.");
     CHECK(files->Text("hard.cpp", QueryTest::Context(), {}).HasError());
+    CHECK(files->SourceText("hard.cpp", QueryTest::Context(), {}).HasError());
     std::filesystem::remove(directory.root / "hard.cpp");
     std::filesystem::create_directory_symlink(external.root, directory.root / "escape", error);
     if (error)
         SKIP("The host does not grant symlink creation for this test.");
     CHECK(files->Text("escape/secret.cpp", QueryTest::Context(), {}).HasError());
+    CHECK(files->SourceText("escape/secret.cpp", QueryTest::Context(), {}).HasError());
     CHECK(files->Files({}, QueryTest::Context(), {}).HasError());
     CHECK(CreateNativeProjectReadFiles(directory.root / "escape", "project-one", 3).HasError());
+}
+
+TEST_CASE("Native source capture admits its full byte ceiling without widening interactive queries", "[unit][platform][source-read]") {
+    QueryTest::Directory directory;
+    const ProjectSourceReadLimits hard;
+    const std::string bytes(hard.maximumFileBytes, 's');
+    directory.Write("large.scene", bytes);
+    const auto files = directory.Files();
+    auto context = QueryTest::Context();
+    context.deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+    const auto source = files->SourceText("large.scene", context, {});
+    REQUIRE(source.HasValue());
+    CHECK(*source.Value().text == bytes);
+    CHECK(source.Value().projectIdentity == context.projectIdentity);
+    CHECK(source.Value().projectGeneration == context.projectGeneration);
+    CHECK(QueryTest::Matches(files->Text("large.scene", context, {}).ErrorValue(), ProjectReadErrors::Capacity));
+    CHECK(QueryTest::Matches(files->Text("large.scene", context, {.maximumFileBytes = bytes.size()}).ErrorValue(),
+                             ProjectReadErrors::Invalid));
+    directory.Write("large.scene", std::string(hard.maximumFileBytes + 1, 's'));
+    CHECK(QueryTest::Matches(files->SourceText("large.scene", context, {}).ErrorValue(), ProjectReadErrors::Capacity));
+    CHECK(*source.Value().text == bytes);
+}
+
+TEST_CASE("Native source capture keeps caller stop fences and independent hard policy", "[unit][platform][source-read]") {
+    QueryTest::Directory directory;
+    directory.Write("source.scene", "bounded source");
+    const auto files = directory.Files();
+    ProjectSourceReadLimits limits;
+    ++limits.maximumFileBytes;
+    CHECK(QueryTest::Matches(files->SourceText("source.scene", QueryTest::Context(), limits).ErrorValue(), ProjectReadErrors::Invalid));
+    limits = {};
+    limits.maximumDuration += std::chrono::milliseconds{1};
+    CHECK(QueryTest::Matches(files->SourceText("source.scene", QueryTest::Context(), limits).ErrorValue(), ProjectReadErrors::Invalid));
+    auto context = QueryTest::Context();
+    context.deadline = std::chrono::steady_clock::now();
+    CHECK(QueryTest::Matches(files->SourceText("source.scene", context, {}).ErrorValue(), ProjectReadErrors::Deadline));
+    context = QueryTest::Context();
+    context.projectGeneration = 4;
+    CHECK(QueryTest::Matches(files->SourceText("source.scene", context, {}).ErrorValue(), ProjectReadErrors::Stale));
+    directory.Write("source.scene", std::string(20000, 's'));
+    unsigned chunks{};
+    bool revoked{};
+    const auto observed = FilesWithSecondReadObserver(directory, chunks, [&revoked] {
+        revoked = true;
+    });
+    context = QueryTest::Context();
+    context.authorityStopped = [&revoked] {
+        return revoked;
+    };
+    CHECK(QueryTest::Matches(observed->SourceText("source.scene", context, {}).ErrorValue(), ProjectReadErrors::Cancelled));
+    CHECK(chunks == 2);
+    CHECK(revoked);
+    CHECK(files->Text("source.scene", QueryTest::Context(), {}).HasValue());
 }
 
 TEST_CASE("Component substitution cannot redirect a retained directory traversal", "[unit][platform][code-query]") {

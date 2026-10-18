@@ -89,6 +89,15 @@ Rules:
 - symlink traversal is explicit for security-sensitive operations
 - path comparisons are tested on Windows, macOS, and Linux semantics
 
+Project reads retain native directory identities through descendant traversal and
+content capture. `IProjectReadFiles::Text` and `Files` retain their interactive
+1 MiB ceiling. Load-time source payloads use the separate `SourceText` operation
+and `ProjectSourceReadLimits`, bounded to 16 MiB and 30 seconds. The caller's
+original authority, cancellation and absolute deadline still apply, including
+between native reads; links, reparses and multiple hardlinks remain rejected.
+Restricted readers refuse source capture by default. Source capture grants no
+write authority and does not widen code-query admission.
+
 Filesystem writes that protect user data use temporary same-filesystem writes
 and atomic replacement when supported.
 

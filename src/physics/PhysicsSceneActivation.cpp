@@ -1,5 +1,6 @@
 #include "Horo/Physics/PhysicsSceneActivation.h"
 
+#include "CharacterScenePlacement.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsCollisionSchema.h"
 #include "Horo/Physics/PhysicsErrors.h"
@@ -128,6 +129,56 @@ namespace Horo::Physics::Detail {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Creates and spawns exact prepared controllers through the real Physics overlap adapter before any simulation tick. */
+        [[nodiscard]] Result<void> StageSceneCharacters(StagedPhysicsScene &staged, const PhysicsScenePlan &plan) {
+            if (plan.characters.empty())
+                return Result<void>::Success();
+            auto &physics = *staged.physics;
+            auto &character = *staged.character;
+            const auto &owner = character.Descriptor();
+            if (auto bound = Character::Detail::CharacterScenePlacement::BindInitialQueries(physics, character,
+                                                                                            plan.characters.front().owner.runtime);
+                bound.HasError())
+                return bound;
+            Character::CharacterPhysicsQueryAdapter adapter{physics};
+            const auto query = adapter.Context({owner.sceneGeneration, owner.identity, owner.physicsWorld, owner.collisionFilterGeneration,
+                                                owner.originGeneration, 0, owner.physicsSnapshotRevision});
+            staged.characterBindings.reserve(plan.characters.size());
+            staged.placements.reserve(plan.characters.size());
+            for (const auto &planned : plan.characters) {
+                auto descriptor = planned.descriptor;
+                descriptor.characterWorld = owner.identity;
+                descriptor.physicsWorld = owner.physicsWorld;
+                if (planned.excludedBody) {
+                    const auto found = std::ranges::find_if(staged.bodyBindings, [&](const auto &body) {
+                        return body.object == planned.excludedBody->object && body.body == planned.excludedBody->body;
+                    });
+                    if (found == staged.bodyBindings.end())
+                        return Result<void>::Failure(
+                            AddActivationContext(MakeError(PhysicsErrors::DescriptorInvalid,
+                                                           "Character excluded body is not an enabled staged body."),
+                                                 "character selector", planned.object, planned.component.value, std::nullopt));
+                    descriptor.selectors.excludedBody = found->handle;
+                }
+                auto handle = character.CreateController(descriptor);
+                if (handle.HasError())
+                    return Result<void>::Failure(AddActivationContext(handle.ErrorValue(), "character create", planned.object,
+                                                                      planned.component.value, descriptor.defaultMaterial.asset));
+                if (auto spawned = Character::Detail::CharacterScenePlacement::Spawn(character, handle.Value(), query, planned.heading);
+                    spawned.HasError())
+                    return Result<void>::Failure(AddActivationContext(spawned.ErrorValue(), "character spawn", planned.object,
+                                                                      planned.component.value, descriptor.defaultMaterial.asset));
+                auto transform = character.ControllerTransform(handle.Value());
+                if (transform.HasError())
+                    return Result<void>::Failure(transform.ErrorValue());
+                staged.characterBindings.emplace_back(planned.object, planned.component, handle.Value());
+                staged.placements.emplace_back(planned.owner, transform.Value().position, transform.Value().heading);
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc StagePhysicsScene */
     Result<StagedPhysicsScene> StagePhysicsScene(std::unique_ptr<PhysicsWorld> physics,
                                                  std::unique_ptr<Character::CharacterWorld> character, const PhysicsWorldId identity,
@@ -150,6 +201,8 @@ namespace Horo::Physics::Detail {
         if (const Result<void> constraints = StageSceneConstraints(*staged.physics, plan, bodyHandles, staged.constraintBindings);
             constraints.HasError())
             return abort(constraints.ErrorValue());
+        if (auto characters = StageSceneCharacters(staged, plan); characters.HasError())
+            return abort(characters.ErrorValue());
         if (const Result<void> activated = staged.character->Activate(); activated.HasError())
             return abort(activated.ErrorValue());
         return Result<StagedPhysicsScene>::Success(std::move(staged));
@@ -270,6 +323,24 @@ namespace Horo::Physics {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Validates capabilities and complete durable project bindings before issuing native world identity. */
+        Result<Detail::PhysicsScenePlan> BuildAdmittedPlan(const PhysicsRuntime &runtime, const Runtime::RuntimeSceneDefinition &definition,
+                                                           const Runtime::RuntimeSceneView scene,
+                                                           const PhysicsSceneActivationSettings &settings) {
+            if (const Result<void> capabilities = Detail::RequirePhysicsSceneCapabilities(runtime, definition); capabilities.HasError())
+                return Result<Detail::PhysicsScenePlan>::Failure(capabilities.ErrorValue());
+            if (const auto evidence = ValidateTriggerVolumeEvidence(definition, scene, settings); evidence.HasError())
+                return Result<Detail::PhysicsScenePlan>::Failure(evidence.ErrorValue());
+            Result<Detail::PhysicsScenePlan> builtPlan = Detail::BuildPhysicsScenePlan(definition, scene);
+            if (builtPlan.HasError())
+                return Result<Detail::PhysicsScenePlan>::Failure(builtPlan.ErrorValue());
+            Detail::PhysicsScenePlan plan = std::move(builtPlan).Value();
+            if (auto bindings = Detail::ValidateCharacterProjectBindings(plan.characters, settings.simulation); bindings.HasError())
+                return Result<Detail::PhysicsScenePlan>::Failure(bindings.ErrorValue());
+            return Result<Detail::PhysicsScenePlan>::Success(std::move(plan));
+        }
+
     }  // namespace
 
     /** @copydoc PhysicsSceneActivationParticipant::Prepare */
@@ -284,16 +355,12 @@ namespace Horo::Physics {
                 MakeError(PhysicsErrors::QuerySnapshotStale, "The Physics definition does not match the resolved scene generation."));
 
         try {
-            if (const Result<void> capabilities = Detail::RequirePhysicsSceneCapabilities(*runtime_, definition); capabilities.HasError())
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(capabilities.ErrorValue());
-            if (const auto evidence = ValidateTriggerVolumeEvidence(definition, scene, settings_); evidence.HasError())
-                return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(evidence.ErrorValue());
-            Result<Detail::PhysicsScenePlan> builtPlan = Detail::BuildPhysicsScenePlan(definition, scene);
+            auto builtPlan = BuildAdmittedPlan(*runtime_, definition, scene, settings_);
             if (builtPlan.HasError())
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(builtPlan.ErrorValue());
             Detail::PhysicsScenePlan plan = std::move(builtPlan).Value();
             const PhysicsSceneActivationEvidence evidence = authority_->Capture();
-            if (!plan.bodies.empty() && settings_.simulation.schema &&
+            if ((!plan.bodies.empty() || !plan.characters.empty()) && settings_.simulation.schema &&
                 settings_.simulation.generation != evidence.collisionFilterGeneration)
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(
                     MakeError(PhysicsErrors::QuerySnapshotStale,
@@ -320,6 +387,8 @@ namespace Horo::Physics {
                                                                       .bodyBindings = std::move(resources.bodyBindings),
                                                                       .shapeBindings = std::move(resources.shapeBindings),
                                                                       .constraintBindings = std::move(resources.constraintBindings),
+                                                                      .characterBindings = std::move(resources.characterBindings),
+                                                                      .placements = std::move(resources.placements),
                                                                       .structuralRegistration = structuralRegistration_,
                                                                       .structuralState = std::move(structural)});
             return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(std::move(candidate));

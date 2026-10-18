@@ -34,6 +34,12 @@ namespace Horo::Platform {
         std::chrono::milliseconds maximumDuration{1000};
     };
 
+    /** @brief Independent finite load-time source-text policy; interactive query limits remain unchanged. */
+    struct ProjectSourceReadLimits final {
+        std::size_t maximumFileBytes{16U << 20U};
+        std::chrono::milliseconds maximumDuration{30000};
+    };
+
     /** @brief Explicit asset-inventory policy, separate from interactive code-query limits.
      * @details One million entries and 64 MiB of relative names bound tooling memory;
      * the host may reduce these ceilings. No payload bytes are included in this budget.
@@ -143,5 +149,14 @@ namespace Horo::Platform {
          */
         [[nodiscard]] virtual Result<ProjectReadTextSnapshot> Text(std::string_view path, const ProjectReadContext &context,
                                                                    const ProjectReadLimits &limits) const = 0;
+        /** @brief Captures load-time source text through retained directory identities under a separate finite budget.
+         * @param path Portable relative regular file; links, reparses and multiple hardlinks remain rejected.
+         * @param context Original authority, cancellation and absolute deadline; the operation never extends it.
+         * @param limits At most 16 MiB and 30 seconds, reducible by the caller.
+         * @return Owned bytes/revision or typed failure; restricted implementations refuse by default.
+         * @details This operation does not raise the 1 MiB Text/Files query ceiling or grant write authority.
+         */
+        [[nodiscard]] virtual Result<ProjectReadTextSnapshot> SourceText(std::string_view path, const ProjectReadContext &context,
+                                                                         const ProjectSourceReadLimits &limits) const;
     };
 }  // namespace Horo::Platform

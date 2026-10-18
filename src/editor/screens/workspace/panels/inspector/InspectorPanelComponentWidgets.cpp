@@ -159,6 +159,14 @@ namespace Horo::Editor {
                                            context.localization.Get("editor", "workspace.inspector.audio_source_invalid"),
                                            context.theme.fonts, 8.0F);
         }
+        if (object.components.characterController) {
+            if (const auto edit = DrawCharacterWidgets(context);
+                !TryAdoptComponentRemoval(edit, object, command, ComponentType::CharacterController))
+                AdoptCommand(command, m_editSession.ApplyCharacterEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
+            DrawValidationMessageIfInvalid(m_editSession.IsCharacterValid(),
+                                           context.localization.Get("editor", "workspace.inspector.character.invalid"), context.theme.fonts,
+                                           8.0F);
+        }
         if (object.components.audioListener.has_value()) {
             const InspectorAudioListenerEdit audioEdit = DrawAudioListenerWidgets(context);
             ApplyAudioListenerEdit(audioEdit, object, command);

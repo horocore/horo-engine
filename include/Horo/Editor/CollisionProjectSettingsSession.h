@@ -73,7 +73,9 @@ namespace Horo::Editor {
         OpaqueOwner,
         InventoryIncomplete,
         TriggerCaptureStale,
-        ActiveGeneration
+        ActiveGeneration,
+        LayerReference,
+        QueryChannelReference
     };
 
     /** @brief Existing authored owner referencing a stable profile, or an owner whose typed inventory is unsupported. */
@@ -84,6 +86,8 @@ namespace Horo::Editor {
         bool unsupported{};
         bool blocksPublication{};
         CollisionImpactReason reason{CollisionImpactReason::ProfileReference};
+        std::optional<Physics::CollisionLayerId> layer;             /**< Exact durable Character filter identity, when present. */
+        std::optional<Physics::PhysicsQueryChannelId> queryChannel; /**< Exact durable Character query intent, when present. */
     };
 
     /** @brief Immutable source review owned by one exact opening/draft and host generation. */

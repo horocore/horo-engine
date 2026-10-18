@@ -56,7 +56,6 @@ namespace Horo::Editor {
         /** @brief Draw cached portable Physics drafts and submit only explicit complete gestures to the host. */
         void DrawPhysicsInspector(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
-        void DrawMultiSelectionTitle(std::size_t selectedObjectCount, const EditorGuiContext &context) const;
 
         [[nodiscard]] InspectorNameEdit DrawObjectTitleWidgets(const SceneObject &object, EditorWorkspaceViewCommandData &command,
                                                                const EditorGuiContext &context);
@@ -65,6 +64,7 @@ namespace Horo::Editor {
         [[nodiscard]] InspectorLightEdit DrawLightWidgets(const EditorGuiContext &context);
         [[nodiscard]] InspectorTriggerVolumeEdit DrawTriggerVolumeWidgets(const EditorGuiContext &context);
         [[nodiscard]] InspectorAudioSourceEdit DrawAudioSourceWidgets(const EditorGuiContext &context);
+        [[nodiscard]] InspectorCharacterEdit DrawCharacterWidgets(const EditorGuiContext &context);
         [[nodiscard]] InspectorAudioListenerEdit DrawAudioListenerWidgets(const EditorGuiContext &context);
         void DrawAudioPreview(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                               const EditorGuiContext &context);

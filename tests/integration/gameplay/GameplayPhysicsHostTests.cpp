@@ -1,6 +1,7 @@
 #include "GameplayModuleTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "GameplayWorldComposition.h"
+#include "GameplayWorldSelectionTestSupport.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
@@ -17,21 +18,8 @@ namespace {
     using namespace Horo::Gameplay;
     using namespace Horo::Physics;
 
-    GameplayWorldSelection Native(const GameplayPhysicsPermission permission = GameplayPhysicsPermission::Granted) {
-        return {.moduleId = "game.tests",
-                .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
-                .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
-                .physicsPermission = permission,
-                .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>()};
-    }
-
-    GameplayWorldSelection Script(const GameplayPhysicsPermission permission = GameplayPhysicsPermission::Granted) {
-        const std::filesystem::path root{HORO_TEST_SOURCE_ROOT};
-        return {.moduleId = "game.tests",
-                .scriptSource = root / "tests/fixtures/gameplay_physics/PhysicsContext.horo_script",
-                .scriptSidecar = root / "tests/fixtures/gameplay_physics/PhysicsContext.horo_script.meta",
-                .physicsPermission = permission};
-    }
+    using TestSupport::Native;
+    using TestSupport::Script;
 
     std::unique_ptr<Runtime::RuntimeScene> Scene(const bool script = false, const std::uint64_t runtime = 7) {
         auto definition =

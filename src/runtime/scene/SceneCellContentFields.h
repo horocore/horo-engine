@@ -7,7 +7,7 @@
 #include <type_traits>
 
 namespace Horo::Runtime::CellCookDetail {
-    // Field order is the version-2 semantic key and Scene provider wire contract.
+    // Field order is the version-3 semantic key and Scene provider wire contract.
     // Const and mutable tuples share this single field mapping. Tuples borrow the source;
     // no padding, pointers, or allocations enter the stream. Empty markers are
     // represented by their enclosing variant tag and contribute no payload bytes.
@@ -369,11 +369,37 @@ namespace Horo::Runtime::CellCookDetail {
     }
 
     template <class T>
+        requires std::same_as<std::remove_cv_t<T>, CharacterSceneGeometry>
+    inline auto ContentFields(T &v) {
+        return std::tie(v.capsule, v.crouchedCapsule, v.up, v.gravity);
+    }
+
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, CharacterSceneMovement>
+    inline auto ContentFields(T &v) {
+        return std::tie(v.skinWidthMeters, v.minimumMoveDistanceMeters, v.maximumStepHeightMeters, v.maximumSlopeDegrees,
+                        v.preserveHorizontalSpeed, v.steepSlopePolicy, v.maximumContacts, v.jumpSpeedMetersPerSecond,
+                        v.dynamicPlatformSupport, v.inheritPlatformHeading, v.platformLeaveVelocity);
+    }
+
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, CharacterSceneCollision>
+    inline auto ContentFields(T &v) {
+        return std::tie(v.profile, v.queryChannel, v.defaultMaterial, v.requiredLayer, v.requiredProfile, v.excludedBody);
+    }
+
+    template <class T>
+        requires std::same_as<std::remove_cv_t<T>, CharacterControllerComponent>
+    inline auto ContentFields(T &v) {
+        return std::tie(v.id, v.schemaVersion, v.enabled, v.geometry, v.movement, v.collision);
+    }
+
+    template <class T>
         requires std::same_as<std::remove_cv_t<T>, RuntimeComponentSet>
     inline auto ContentFields(T &v) {
         return std::tie(v.camera, v.light, v.audioSource, v.audioListener, v.uiCanvas, v.navigationSurface, v.navigationRegion,
-                        v.navigationModifier, v.navigationLink, v.navigationAgent, v.aiAgent, v.aiController, v.rigidBody, v.colliders,
-                        v.physicsConstraints, v.behaviors, v.gameplayComponents);
+                        v.navigationModifier, v.navigationLink, v.navigationAgent, v.aiAgent, v.aiController, v.characterController,
+                        v.rigidBody, v.colliders, v.physicsConstraints, v.behaviors, v.gameplayComponents);
     }
 
     template <class T>

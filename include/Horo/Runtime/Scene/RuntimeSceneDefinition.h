@@ -12,6 +12,7 @@
 #include "Horo/Gameplay/BehaviorTypes.h"
 #include "Horo/Gameplay/Component.h"
 #include "Horo/Math/SceneMath.h"
+#include "Horo/Runtime/Scene/CharacterSceneComponents.h"
 #include "Horo/Runtime/Scene/NavigationSceneComponents.h"
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 #include "Horo/Runtime/Scene/PrimitiveMeshDescriptor.h"
@@ -43,6 +44,7 @@ namespace Horo::Runtime {
         std::optional<NavigationAgentComponent> navigationAgent;
         std::optional<AI::AiAgentComponent> aiAgent;
         std::optional<AI::AiControllerComponent> aiController;
+        std::optional<CharacterControllerComponent> characterController;
         std::optional<RigidBodyComponent> rigidBody;
         std::vector<ColliderComponent> colliders;
         std::vector<PhysicsConstraintComponent> physicsConstraints;

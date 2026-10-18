@@ -67,6 +67,15 @@ namespace Horo::Runtime {
     /** @brief Finite admission bound for one aggregate Scene preparation. */
     inline constexpr std::size_t MaximumSceneActivationParticipants = 256;
 
+    /** @brief Explicit host dependency order; placement producers finish before pose-dependent preparation. */
+    enum class SceneActivationPhase : std::uint8_t {
+        InitialPlacement,
+        DerivedResources
+    };
+    /** @brief Host-only activation virtual contract revision; all host participants must rebuild together. */
+    inline constexpr std::uint32_t SceneActivationParticipantContractVersion = 2;
+    struct SceneInitialPlacement;
+
     /** @brief Detached subsystem state prepared for one aggregate runtime-scene candidate. */
     class SceneActivationCandidate {
     public:
@@ -80,6 +89,15 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] virtual SceneCanonicalDatasetProjection CanonicalDatasetProjection() const noexcept {
             return SceneCanonicalDatasetProjection::Unqualified;
+        }
+
+        /** @brief Borrows bounded immutable initial world poses from an InitialPlacement producer.
+         * @return Empty for ordinary resource owners; storage remains owned by this candidate through preparation.
+         * @details Scene validates exact owner identity, uniqueness and representable parent-relative TRS before
+         * applying all facts to its private candidate. No source document or active Scene is changed.
+         */
+        [[nodiscard]] virtual std::span<const SceneInitialPlacement> InitialPlacements() const noexcept {
+            return {};
         }
 
         /** @brief Installs fully validated state after every aggregate participant has passed validation.
@@ -139,11 +157,20 @@ namespace Horo::Runtime {
     public:
         virtual ~SceneActivationParticipant() = default;
 
+        /** @brief Declares preparation dependency without backend discovery or incidental registration ordering.
+         * @return InitialPlacement only for owners projecting recovered initial poses; all other owners derive resources afterward.
+         */
+        [[nodiscard]] virtual SceneActivationPhase PreparationPhase() const noexcept {
+            return SceneActivationPhase::DerivedResources;
+        }
+
         /** @brief Prepares scene-owned subsystem storage before immutable activation validation.
          * @param scene Exact unpublished candidate whose identity the host uses for preparation.
          * @return Success or typed preparation failure; the service destroys the entire candidate on failure.
-         * @details Host adapters may attach already admitted VFX state here. No active Scene, publication callback,
-         * service registration or backend selection is allowed. Existing participants require no mutable preparation.
+         * @details This hook runs within the declared phase before that phase's immutable Prepare calls.
+         * Derived owners, including VFX adapters, observe finalized initial placement and may attach admitted VFX state here. No active
+         * Scene, publication callback, service registration or backend selection is allowed. Existing participants require no mutable
+         * preparation.
          */
         [[nodiscard]] virtual Result<void> PrepareOwnedScene(RuntimeScene &scene) {
             (void)scene;
@@ -222,6 +249,13 @@ namespace Horo::Runtime {
         }
 
         [[nodiscard]] constexpr auto operator<=>(const EntityRef &) const noexcept = default;
+    };
+
+    /** @brief Exact candidate entity and authoritative collision-root world pose, with no mutable Scene borrow. */
+    struct SceneInitialPlacement final {
+        EntityRef owner;
+        Math::Vec3 position;
+        Math::Quaternion heading;
     };
 
     /** @brief Testable generation-retirement policy; production uses the uint32 maximum. */
@@ -703,6 +737,8 @@ namespace Horo::Runtime {
     private:
         friend class RuntimeSceneView;
         friend class RuntimeSceneService;
+        /** @brief Atomically applies validated initial poses to this private candidate, preserving topology generations. */
+        [[nodiscard]] Result<void> ApplyInitialPlacements(std::span<const SceneInitialPlacement> placements);
 
         [[nodiscard]] Result<StructuralCommitResult> CommitWithRegistry(
             const SceneCommandBuffer &commands, const Assets::AssetRegistry *registry,
@@ -756,6 +792,13 @@ namespace Horo::Runtime {
                                                   const SceneBaselineOwnership &ownership) const;
         [[nodiscard]] Result<void> BindBaselineReferences(RuntimeSceneStorage &storage, const BaselineAttachment &baseline) const;
         [[nodiscard]] Result<EntityRef> CreateEntity(RuntimeSceneStorage &storage, const RuntimeEntityCreateInfo &info) const;
+        /** @brief Inserts one fully admitted entity into private candidate storage.
+         * @param storage Unpublished construction or structural-transaction candidate.
+         * @param info Schema-valid input with admitted parent and a unique authored identity, when present.
+         * @return Generation-qualified entity reference or the existing slot-capacity failure.
+         * @pre The caller has proved schema, parent validity and authored identity uniqueness before any mutation.
+         */
+        [[nodiscard]] Result<EntityRef> InsertValidatedEntity(RuntimeSceneStorage &storage, const RuntimeEntityCreateInfo &info) const;
         [[nodiscard]] Result<void> DestroyEntity(RuntimeSceneStorage &storage, EntityRef entity) const;
         [[nodiscard]] bool IsValid(const RuntimeSceneStorage &storage, EntityRef entity) const noexcept;
 
@@ -777,9 +820,24 @@ namespace Horo::Runtime {
     public:
         /** @brief Creates an assetless scene service for editor previews and headless typed-scene tests. */
         RuntimeSceneService();
+        /** @brief Creates an assetless service with an explicitly assigned first runtime identity.
+         * @param initialRuntimeId First candidate identity; zero leaves preparation inadmissible.
+         * @details Each completely prepared private aggregate consumes one identity; failed preparation retains it.
+         * Identities advance monotonically without reuse; exhausting uint64 rejects further preparation.
+         * Zero is rejected by preparation before participant, restore or publication callbacks, not by construction.
+         * The host must reserve a disjoint identity range when multiple services coexist; a seed alone does not establish uniqueness.
+         */
+        explicit RuntimeSceneService(SceneRuntimeId initialRuntimeId);
         /** @brief Creates a scene service with borrowed asset services. @param registry Registry that outlives this
          * service. @param loads Load service that outlives this service. @param limits Per-candidate preparation limits. */
         RuntimeSceneService(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads, RuntimeSceneAssetLimits limits = {});
+        /** @brief Creates an asset-backed service with an explicitly assigned first runtime identity.
+         * @param registry Registry that outlives this service. @param loads Load service that outlives this service.
+         * @param limits Per-candidate preparation limits. @param initialRuntimeId First candidate identity.
+         * @details Uses the same nonzero, monotonic and exhaustion contract as the assetless seeded constructor.
+         */
+        RuntimeSceneService(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads, RuntimeSceneAssetLimits limits,
+                            SceneRuntimeId initialRuntimeId);
         ~RuntimeSceneService() override;
         /** @brief Adds one owned activation participant before startup. @param participant Non-null unique owner.
          * @return Success or a typed invalid-input/lifecycle error. */
@@ -903,6 +961,7 @@ namespace Horo::Runtime {
         void CancelPreparation(bool waitForCompletion) noexcept;
         [[nodiscard]] Result<void> SubmitPreparationLoads();
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
+        [[nodiscard]] Result<void> PrepareParticipantPhase(const RuntimeSceneDefinition &definition, SceneActivationPhase phase);
         [[nodiscard]] Result<void> CommitDeferredChanges();
         /** @brief Waits for owners and validates every candidate before any ownership transfer.
          * @return Ready, pending, or the original typed preparation/validation failure. */

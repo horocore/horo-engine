@@ -19,16 +19,41 @@ target_include_directories(HoroHostModuleComposition PUBLIC
 )
 target_link_libraries(HoroHostModuleComposition PUBLIC HoroEngine::Foundation HoroEngine::PlatformServices)
 
+# Application-only observer; Scene remains the sole native candidate owner. Only
+# this header and its declared non-installed Physics boundary reach consumers.
+set(HORO_SCENE_PHYSICS_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_physics_host_headers")
+file(MAKE_DIRECTORY "${HORO_SCENE_PHYSICS_HOST_HEADERS}")
+configure_file(common/ScenePhysicsHost.h "${HORO_SCENE_PHYSICS_HOST_HEADERS}/ScenePhysicsHost.h" COPYONLY)
+configure_file(common/CommittedSceneAssets.h "${HORO_SCENE_PHYSICS_HOST_HEADERS}/CommittedSceneAssets.h" COPYONLY)
+add_library(HoroScenePhysicsHost STATIC common/ScenePhysicsHost.cpp common/CommittedSceneAssets.cpp)
+target_compile_features(HoroScenePhysicsHost PUBLIC cxx_std_20)
+target_include_directories(HoroScenePhysicsHost PUBLIC "${HORO_SCENE_PHYSICS_HOST_HEADERS}")
+target_link_libraries(HoroScenePhysicsHost PUBLIC HoroPhysicsSceneHostInternal HoroEngine::SceneCook HoroEngine::Assets
+        HoroEngine::ProjectPhysicsCapture)
+
+set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_project_scene_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
+configure_file(common/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
+add_library(HoroEditorSceneProductHost STATIC common/EditorProjectSceneHost.cpp)
+target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
+target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
+target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySceneHostInternal HoroScenePhysicsHost
+        HoroEngine::Application HoroEngine::ProjectCollisionSettings)
+
 add_library(HoroNetworkProductHost STATIC
     common/NetworkProductHost.cpp
     common/HeadlessNetworkServices.cpp
+    common/HeadlessSceneLoadBoundary.cpp
+    common/HeadlessProjectScene.cpp
     common/GameplayWorldComposition.cpp
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/common)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
-    HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication)
+    HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
+    HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
 
 # The terminal/headless composition remains available without GUI or GPU targets.
 add_executable(horo-engine
@@ -39,6 +64,7 @@ add_executable(horo-engine
     horo-engine/cli_host/McpServe.cpp
     horo-engine/cli_host/McpStdio.cpp
     horo-engine/NetworkProductLaunch.cpp
+    horo-engine/NetworkProductLaunchOptions.cpp
 )
 target_compile_features(horo-engine PRIVATE cxx_std_20)
 if(MINGW)
@@ -50,7 +76,8 @@ target_compile_definitions(horo-engine PRIVATE
     HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}"
     HORO_PRODUCT_HAS_GNS=$<BOOL:${HORO_BUILD_NETWORK_GNS}>
 )
-target_link_libraries(horo-engine PRIVATE HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
+target_link_libraries(horo-engine PRIVATE HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles
+    HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
     HoroNetworkProductHost HoroPackageProjectHost HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
     HoroEngine::Runtime
     HoroEngine::CliHost
@@ -301,6 +328,9 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::Runtime
             HoroEngine::RuntimeScene
             HoroEngine::PhysicsSceneIntegration
+            HoroEditorSceneProductHost
+            HoroEditorPlaySceneHostInternal
+            HoroScenePhysicsHost
             HoroEngine::Extensions
             HoroEngine::Platform
             HoroEngine::ProjectMigrations

@@ -919,6 +919,7 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/SaveContentWorld.cpp
         runtime/scene/SaveContentSnapshot.cpp
         runtime/scene/RuntimeScene.cpp
+        runtime/scene/RuntimeSceneInitialPlacement.cpp
         runtime/scene/RuntimeSceneCommandApplier.h
         runtime/scene/RuntimeSceneBaseline.cpp
         runtime/scene/RuntimeSceneBaselineCommands.cpp
@@ -1121,6 +1122,7 @@ add_library(HoroPhysicsModel STATIC
         physics/PhysicsErrors.cpp
         physics/PhysicsFilterIdentity.cpp
         runtime/scene/PhysicsSceneComponents.cpp
+        runtime/scene/CharacterSceneComponents.cpp
 )
 add_library(HoroEngine::PhysicsModel ALIAS HoroPhysicsModel)
 target_compile_features(HoroPhysicsModel PUBLIC cxx_std_20)
@@ -1470,16 +1472,34 @@ target_link_libraries(HoroProjectCollisionSettings
         PUBLIC HoroEngine::Application HoroEngine::Physics HoroEngine::Assets
         PRIVATE HoroFoundationJsonInternal nlohmann_json::nlohmann_json)
 
+# A single production-only header; no broad Physics source root or installed SDK surface.
+set(_horo_character_scene_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/character-scene")
+file(MAKE_DIRECTORY "${_horo_character_scene_headers}")
+configure_file(physics/internal/CharacterScenePlacement.h "${_horo_character_scene_headers}/CharacterScenePlacement.h" COPYONLY)
+add_library(HoroCharacterScenePlacementInternal INTERFACE)
+target_include_directories(HoroCharacterScenePlacementInternal INTERFACE "$<BUILD_INTERFACE:${_horo_character_scene_headers}>")
+target_link_libraries(HoroCharacterScenePlacementInternal INTERFACE HoroEngine::Physics)
+
 add_library(HoroPhysicsSceneIntegration STATIC
         physics/PhysicsCellAttachments.cpp
         physics/PhysicsSceneActivation.cpp
         physics/PhysicsSceneStructural.cpp
         physics/PhysicsSceneActivationPlan.cpp
+        physics/CharacterSceneActivationPlan.cpp
         physics/PhysicsSceneActivationCapabilities.cpp
         physics/PhysicsSceneActivationLifecycle.cpp)
 add_library(HoroEngine::PhysicsSceneIntegration ALIAS HoroPhysicsSceneIntegration)
 target_compile_features(HoroPhysicsSceneIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene HoroEngine::SceneCellPayload)
+target_link_libraries(HoroPhysicsSceneIntegration PUBLIC HoroEngine::Physics HoroEngine::RuntimeScene HoroEngine::SceneCellPayload
+        PRIVATE HoroCharacterScenePlacementInternal)
+
+# A separate application-only lifetime borrow; never installed/exported with the Gameplay SDK.
+set(_horo_physics_scene_host_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/physics-scene-host")
+file(MAKE_DIRECTORY "${_horo_physics_scene_host_headers}")
+configure_file(physics/internal/PhysicsSceneHostAccess.h "${_horo_physics_scene_host_headers}/PhysicsSceneHostAccess.h" COPYONLY)
+add_library(HoroPhysicsSceneHostInternal INTERFACE)
+target_include_directories(HoroPhysicsSceneHostInternal INTERFACE "$<BUILD_INTERFACE:${_horo_physics_scene_host_headers}>")
+target_link_libraries(HoroPhysicsSceneHostInternal INTERFACE HoroEngine::PhysicsSceneIntegration)
 
 add_library(HoroCharacterInput STATIC runtime/character/input/DesiredMotionAdapter.cpp)
 add_library(HoroEngine::CharacterInput ALIAS HoroCharacterInput)
@@ -2640,6 +2660,8 @@ add_library(HoroSceneSource STATIC
         scene/source/SceneSourceCommon.cpp
         scene/source/SceneSourceComponents.cpp
         scene/source/SceneSourcePhysics.cpp
+        scene/source/SceneSourceCharacter.cpp
+        scene/source/SceneSourceCharacterParsing.cpp
         scene/source/SceneSourceComponentParsing.cpp
         scene/source/SceneSourceNavigationParsing.cpp
         scene/source/SceneSourcePhysicsParsing.cpp
@@ -2825,6 +2847,14 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
     )
 endif ()
 
+# Explicit application-to-Editor ownership contract; never installed or exported to modules.
+set(_horo_editor_play_host_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_play_host_headers")
+file(MAKE_DIRECTORY "${_horo_editor_play_host_headers}")
+configure_file(editor/gameplay/EditorPlaySceneHost.h "${_horo_editor_play_host_headers}/EditorPlaySceneHost.h" COPYONLY)
+add_library(HoroEditorPlaySceneHostInternal INTERFACE)
+target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_INTERFACE:${_horo_editor_play_host_headers}>")
+target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
+
 add_library(HoroEditorServices STATIC
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
@@ -2942,6 +2972,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::Input
         HoroEngine::ProjectMigrations
         PRIVATE
+        HoroEditorPlaySceneHostInternal
         HoroEngine::PlatformProjectReadFiles
         HoroSceneSourceCodecInternal
         nlohmann_json::nlohmann_json
@@ -3076,18 +3107,21 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/hierarchy/HierarchyPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPrefabSelection.cpp
             editor/screens/workspace/panels/inspector/InspectorEditSession.cpp
+            editor/screens/workspace/panels/inspector/InspectorCharacterEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorContributionView.cpp
             editor/screens/workspace/panels/inspector/InspectorContributionProjection.cpp
             editor/screens/workspace/panels/inspector/InspectorAudioEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelCharacterWidgets.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelPhysicsConstraint.cpp
+            editor/screens/workspace/panels/inspector/PhysicsInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/InspectorAudioEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelAudioWidgets.cpp
-        editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
-        editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
-        editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
-        editor/screens/workspace/panels/inspector/InspectorPanelPhysicsConstraint.cpp
-        editor/screens/workspace/panels/inspector/PhysicsInspectorSession.cpp
-        editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
@@ -3409,11 +3443,19 @@ target_link_libraries(HoroPrefabCookHost
                HoroPackageSecurity HoroEngine::PrefabAuthoring HoroEngine::SceneCook
         PRIVATE HoroEngine::SceneRuntimeConversion nlohmann_json::nlohmann_json)
 
+# Runtime host evidence capture has no Prefab cook or Editor dependency. The cook
+# convenience target retains its existing public contract by linking this owner.
+add_library(HoroProjectPhysicsCapture STATIC application/assets/ProjectPhysicsCapture.cpp)
+add_library(HoroEngine::ProjectPhysicsCapture ALIAS HoroProjectPhysicsCapture)
+target_compile_features(HoroProjectPhysicsCapture PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectPhysicsCapture PUBLIC HoroEngine::PhysicsSceneIntegration
+        HoroEngine::SceneRuntimeConversion HoroEngine::Assets)
+
 # Explicit application composition; portable Scene/Assets never depend back on the solver.
 add_library(HoroPhysicsTriggerVolumeHost STATIC application/assets/PhysicsTriggerVolumeHost.cpp)
 add_library(HoroEngine::PhysicsTriggerVolumeHost ALIAS HoroPhysicsTriggerVolumeHost)
 target_compile_features(HoroPhysicsTriggerVolumeHost PUBLIC cxx_std_20)
-target_link_libraries(HoroPhysicsTriggerVolumeHost PUBLIC HoroEngine::PrefabCookHost
+target_link_libraries(HoroPhysicsTriggerVolumeHost PUBLIC HoroEngine::ProjectPhysicsCapture HoroEngine::PrefabCookHost
         HoroEngine::PhysicsSceneIntegration HoroEngine::SceneRuntimeConversion)
 
 include(HoroPublicHeaderOwnership)

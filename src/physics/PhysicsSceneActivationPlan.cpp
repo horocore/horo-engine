@@ -1,7 +1,9 @@
 #include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "PhysicsSceneActivationInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <memory>
 #include <ranges>
@@ -66,16 +68,12 @@ namespace Horo::Physics::Detail {
             return Result<Runtime::RuntimeSceneAssetView>::Success(*resolved);
         }
 
-        [[nodiscard]] Result<Math::Transform> ResolveWorldTransform(const Runtime::RuntimeSceneView scene, std::size_t slot,
-                                                                    std::vector<std::uint8_t> &states,
-                                                                    std::vector<std::optional<Math::Transform>> &cache);
-
         [[nodiscard]] Result<Math::Mat4> ComposeWorldMatrix(const Runtime::RuntimeSceneView scene, const Runtime::RuntimeEntityView &entity,
                                                             const Math::Mat4 &localMatrix, std::vector<std::uint8_t> &states,
                                                             std::vector<std::optional<Math::Transform>> &cache) {
             if (!entity.parent.has_value())
                 return Result<Math::Mat4>::Success(localMatrix);
-            const Result<Math::Transform> parent = ResolveWorldTransform(scene, entity.parent->entity.index, states, cache);
+            const Result<Math::Transform> parent = ResolveSceneWorldTransform(scene, entity.parent->entity.index, states, cache);
             if (parent.HasError())
                 return Result<Math::Mat4>::Failure(parent.ErrorValue());
             const Result<Math::Mat4> parentMatrix = parent.Value().TryToMatrix();
@@ -84,42 +82,46 @@ namespace Horo::Physics::Detail {
             return Result<Math::Mat4>::Success(Math::Multiply(parentMatrix.Value(), localMatrix));
         }
 
-        [[nodiscard]] Result<Math::Transform> ResolveWorldTransform(const Runtime::RuntimeSceneView scene, const std::size_t slot,
-                                                                    std::vector<std::uint8_t> &states,
-                                                                    std::vector<std::optional<Math::Transform>> &cache) {
-            if (slot >= states.size())
-                return Result<Math::Transform>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Physics body entity slot is outside the scene view."));
-            if (states[slot] == 2)
-                return Result<Math::Transform>::Success(*cache[slot]);
-            if (states[slot] == 1)
-                return Result<Math::Transform>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Physics scene hierarchy contains a parent cycle."));
-            const std::optional<Runtime::RuntimeEntityView> entity = scene.EntityAt(slot);
-            if (!entity.has_value() || entity->localTransform == nullptr)
-                return Result<Math::Transform>::Failure(
-                    MakeError(PhysicsErrors::DescriptorInvalid, "Physics body entity is inactive or has no local transform."));
+    }  // namespace
 
-            states[slot] = 1;
-            const Result<Math::Mat4> local = entity->localTransform->TryToMatrix();
-            if (local.HasError()) {
-                states[slot] = 0;
-                return Result<Math::Transform>::Failure(local.ErrorValue());
-            }
-            const Result<Math::Mat4> worldMatrix = ComposeWorldMatrix(scene, *entity, local.Value(), states, cache);
-            if (worldMatrix.HasError()) {
-                states[slot] = 0;
-                return Result<Math::Transform>::Failure(worldMatrix.ErrorValue());
-            }
-            const Result<Math::Transform> decomposed = Math::TryDecomposeAffineTRS(worldMatrix.Value());
-            if (decomposed.HasError()) {
-                states[slot] = 0;
-                return decomposed;
-            }
-            cache[slot] = decomposed.Value();
-            states[slot] = 2;
+    [[nodiscard]] Result<Math::Transform> ResolveSceneWorldTransform(const Runtime::RuntimeSceneView scene, const std::size_t slot,
+                                                                     std::vector<std::uint8_t> &states,
+                                                                     std::vector<std::optional<Math::Transform>> &cache) {
+        if (slot >= states.size())
+            return Result<Math::Transform>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "Physics body entity slot is outside the scene view."));
+        if (states[slot] == 2)
+            return Result<Math::Transform>::Success(*cache[slot]);
+        if (states[slot] == 1)
+            return Result<Math::Transform>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "Physics scene hierarchy contains a parent cycle."));
+        const std::optional<Runtime::RuntimeEntityView> entity = scene.EntityAt(slot);
+        if (!entity.has_value() || entity->localTransform == nullptr)
+            return Result<Math::Transform>::Failure(
+                MakeError(PhysicsErrors::DescriptorInvalid, "Physics body entity is inactive or has no local transform."));
+
+        states[slot] = 1;
+        const Result<Math::Mat4> local = entity->localTransform->TryToMatrix();
+        if (local.HasError()) {
+            states[slot] = 0;
+            return Result<Math::Transform>::Failure(local.ErrorValue());
+        }
+        const Result<Math::Mat4> worldMatrix = ComposeWorldMatrix(scene, *entity, local.Value(), states, cache);
+        if (worldMatrix.HasError()) {
+            states[slot] = 0;
+            return Result<Math::Transform>::Failure(worldMatrix.ErrorValue());
+        }
+        const Result<Math::Transform> decomposed = Math::TryDecomposeAffineTRS(worldMatrix.Value());
+        if (decomposed.HasError()) {
+            states[slot] = 0;
             return decomposed;
         }
+        cache[slot] = decomposed.Value();
+        states[slot] = 2;
+        return decomposed;
+    }
+
+    namespace {
 
         [[nodiscard]] Result<PhysicsPose> ToPhysicsPose(const Runtime::AuthoredPhysicsPose &pose) {
             PhysicsPose result{pose.translation, pose.rotation};
@@ -191,7 +193,7 @@ namespace Horo::Physics::Detail {
                 return ContextFailure<PlannedBody>(PhysicsErrors::DescriptorInvalid, "body", view.owner, component.id.value, std::nullopt,
                                                    "The authored body object is not present in the runtime scene.");
             const Result<Math::Transform> worldTransform =
-                ResolveWorldTransform(scene, entity->entity.index, transformStates, transformCache);
+                ResolveSceneWorldTransform(scene, entity->entity.index, transformStates, transformCache);
             if (worldTransform.HasError())
                 return ContextFailureFromPlanError<PlannedBody>(worldTransform.ErrorValue(), "body", view.owner, component.id.value,
                                                                 std::nullopt);
@@ -407,7 +409,11 @@ namespace Horo::Physics::Detail {
         Result<std::vector<PlannedBody>> bodies = BuildPlannedBodies(views.Value(), scene);
         if (bodies.HasError())
             return Result<PhysicsScenePlan>::Failure(bodies.ErrorValue());
+        auto characters = BuildPlannedCharacters(definition, scene);
+        if (characters.HasError())
+            return Result<PhysicsScenePlan>::Failure(characters.ErrorValue());
         PhysicsScenePlan plan;
+        plan.characters = std::move(characters).Value();
         plan.bodies = std::move(bodies).Value();
         if (const Result<void> colliders = AppendPlannedColliders(definition, scene, views.Value(), plan.bodies); colliders.HasError())
             return Result<PhysicsScenePlan>::Failure(colliders.ErrorValue());
