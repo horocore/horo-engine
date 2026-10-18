@@ -14,6 +14,7 @@ namespace Horo::Editor {
         /** @brief Combines actual owner receipts without discovering a backend or retaining borrowed capture storage. */
         std::optional<EditorSceneCollisionReceipt> CombinedReceipt(const EditorPreviewCollisionReceiptSource &preview,
                                                                    const EditorPlaySessionController &play, const bool running) {
+            using enum EditorScenePhysicsState;
             const auto edit = preview.read ? preview.read() : std::nullopt;
             if (!edit)
                 return std::nullopt;
@@ -21,10 +22,9 @@ namespace Horo::Editor {
                 return edit;
             const auto game = play.CollisionReceipt();
             if (!game || game->projectId != edit->projectId || game->documentRevision != edit->documentRevision ||
-                game->fingerprint != edit->fingerprint ||
-                ((game->state == EditorScenePhysicsState::NoPhysics) != (edit->state == EditorScenePhysicsState::NoPhysics)))
+                game->fingerprint != edit->fingerprint || ((game->state == NoPhysics) != (edit->state == NoPhysics)))
                 return std::nullopt;
-            return edit->state == EditorScenePhysicsState::Active ? edit : game;
+            return edit->state == Active ? edit : game;
         }
 
         CollisionActivationState ReceiptState(const std::optional<EditorSceneCollisionReceipt> &receipt) noexcept {
@@ -56,7 +56,9 @@ namespace Horo::Editor {
                 return;
             if (evidence.revision == std::numeric_limits<std::uint64_t>::max()) {
                 evidence.state = CollisionActivationState::Unknown;
-                evidence.documentRevision = evidence.generation = evidence.fingerprint = 0;
+                evidence.documentRevision = 0;
+                evidence.generation = 0;
+                evidence.fingerprint = 0;
                 return;
             }
             ++evidence.revision;

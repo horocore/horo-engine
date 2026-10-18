@@ -42,8 +42,8 @@ namespace Horo::Physics::Detail {
                 auto ancestor = entity;
                 std::size_t depth{};
                 while (ancestor) {
-                    const auto &controller = ancestor->components->characterController;
-                    if (controller && controller->enabled && (native || ancestor->entity != entity->entity))
+                    if (const auto &controller = ancestor->components->characterController;
+                        controller && controller->enabled && (native || ancestor->entity != entity->entity))
                         return Result<void>::Failure(
                             AddActivationContext(MakeError(PhysicsErrors::OperationUnsupported,
                                                            "Enabled native contributors and nested controllers below a Character root "
@@ -53,7 +53,10 @@ namespace Horo::Physics::Detail {
                     if (!ancestor->parent)
                         break;
                     auto parent = scene.Get(*ancestor->parent);
-                    if (parent.HasError() || ++depth > scene.SlotCount())
+                    if (parent.HasError())
+                        return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Character parent hierarchy is invalid."));
+                    ++depth;
+                    if (depth > scene.SlotCount())
                         return Result<void>::Failure(MakeError(PhysicsErrors::DescriptorInvalid, "Character parent hierarchy is invalid."));
                     ancestor = parent.Value();
                 }
@@ -89,7 +92,8 @@ namespace Horo::Physics::Detail {
 
         /** @brief Copies durable values into the existing runtime descriptor, retaining no authoring storage. */
         [[nodiscard]] Character::CharacterControllerDescriptor CharacterDescriptor(const Runtime::CharacterControllerComponent &component,
-                                                                                   Math::Transform world, PhysicsQueryMaterial material,
+                                                                                   const Math::Transform &world,
+                                                                                   const PhysicsQueryMaterial &material,
                                                                                    std::uint64_t sceneGeneration) {
             const auto &geometry = component.geometry;
             const auto &movement = component.movement;
@@ -140,8 +144,9 @@ namespace Horo::Physics::Detail {
             };
             if (auto query = schema.ResolveQuery(descriptor.collisionProfile, descriptor.queryChannel); query.HasError())
                 return contextual(query.ErrorValue());
-            const auto channel = std::ranges::find(schema.QueryChannels(), descriptor.queryChannel, &CollisionQueryChannelDefinition::id);
-            if (channel == schema.QueryChannels().end() || !channel->enabled)
+            if (const auto channel =
+                    std::ranges::find(schema.QueryChannels(), descriptor.queryChannel, &CollisionQueryChannelDefinition::id);
+                channel == schema.QueryChannels().end() || !channel->enabled)
                 return contextual(MakeError(PhysicsErrors::DescriptorInvalid, "Character query channel is absent or disabled."));
             if (descriptor.selectors.requiredLayer) {
                 const auto layer = std::ranges::find(schema.Layers(), *descriptor.selectors.requiredLayer, &CollisionLayerDefinition::id);
@@ -177,9 +182,9 @@ namespace Horo::Physics::Detail {
             auto material = CharacterMaterial(definition, scene, entity.object, component);
             if (material.HasError())
                 return Result<std::vector<PlannedCharacter>>::Failure(material.ErrorValue());
-            result.push_back({entity.object, component.id, *owner,
-                              CharacterDescriptor(component, world.Value(), material.Value(), scene.RuntimeId().value),
-                              world.Value().rotation, component.collision.excludedBody});
+            result.emplace_back(entity.object, component.id, *owner,
+                                CharacterDescriptor(component, world.Value(), material.Value(), scene.RuntimeId().value),
+                                world.Value().rotation, component.collision.excludedBody);
         }
         std::ranges::sort(result, {}, [](const auto &value) {
             return value.object.value;

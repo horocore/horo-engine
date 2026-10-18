@@ -352,6 +352,12 @@ namespace Horo::Editor::InspectorPanelDetail {
                                     .c_str(),
                                 nullptr, context.theme.fonts))
             selectComponent(ComponentType::CharacterController);
+        if (!object.components.audioListener.has_value() &&
+            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.inspector.kind.audio_listener") +
+                                 "###inspector_component_audio_listener")
+                                    .c_str(),
+                                nullptr, context.theme.fonts))
+            selectComponent(ComponentType::AudioListener);
         for (const Gameplay::BehaviorDescriptor &descriptor : viewModel.availableBehaviors) {
             const bool alreadyAttached =
                 std::ranges::any_of(object.components.behaviors, [&descriptor](const Gameplay::BehaviorComponent &behavior) {

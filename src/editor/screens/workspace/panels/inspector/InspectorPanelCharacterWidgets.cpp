@@ -8,7 +8,7 @@ namespace Horo::Editor {
 
     namespace {
         /** @brief Accumulates semantic edit events while every shared control is still drawn. */
-        void Merge(Ui::PropertyEditResult &target, const Ui::PropertyEditResult value) noexcept {
+        void Merge(Ui::PropertyEditResult &target, const Ui::PropertyEditResult &value) noexcept {
             target.changed |= value.changed;
             target.committed |= value.committed;
         }
@@ -31,7 +31,7 @@ namespace Horo::Editor {
             const auto edit = Ui::DrawFloat3PropRow(context.localization.Get("editor", key).c_str(), key, fields, context.theme.fonts);
             if (edit.changed)
                 value = {fields[0], fields[1], fields[2]};
-            return edit;
+            return {.changed = edit.changed, .committed = edit.committed};
         }
 
         /** @brief Draws capsule dimensions in canonical meters, independent of visual hierarchy scale. */
@@ -53,14 +53,14 @@ namespace Horo::Editor {
             auto result = Capsule(geometry.capsule, false, context);
             Merge(result, Vector("workspace.inspector.character.up", geometry.up, context));
             Merge(result, Vector("workspace.inspector.character.gravity", geometry.gravity, context));
-            bool crouched = geometry.crouchedCapsule.has_value();
-            if (Boolean("workspace.inspector.character.crouch", crouched, context)) {
+            if (bool crouched = geometry.crouchedCapsule.has_value(); Boolean("workspace.inspector.character.crouch", crouched, context)) {
                 if (crouched)
                     geometry.crouchedCapsule =
                         Runtime::PhysicsCapsuleCollider{geometry.capsule.radiusMeters, geometry.capsule.cylindricalHalfHeightMeters * 0.5F};
                 else
                     geometry.crouchedCapsule.reset();
-                result.changed = result.committed = true;
+                result.changed = true;
+                result.committed = true;
             }
             if (geometry.crouchedCapsule)
                 Merge(result, Capsule(*geometry.crouchedCapsule, true, context));
@@ -85,19 +85,19 @@ namespace Horo::Editor {
             bool changed = Boolean("workspace.inspector.character.preserve_speed", movement.preserveHorizontalSpeed, context);
             changed |= Boolean("workspace.inspector.character.dynamic_platform", movement.dynamicPlatformSupport, context);
             changed |= Boolean("workspace.inspector.character.platform_heading", movement.inheritPlatformHeading, context);
-            const std::array slopes{context.localization.Get("editor", "workspace.inspector.character.stop").c_str(),
-                                    context.localization.Get("editor", "workspace.inspector.character.slide").c_str()};
-            int slope = static_cast<int>(movement.steepSlopePolicy);
-            if (Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.steep_policy").c_str(),
+            const auto slopes = std::array{context.localization.Get("editor", "workspace.inspector.character.stop").c_str(),
+                                           context.localization.Get("editor", "workspace.inspector.character.slide").c_str()};
+            if (int slope = static_cast<int>(movement.steepSlopePolicy);
+                Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.steep_policy").c_str(),
                                      "steep_policy", slope, slopes, context.theme.fonts)) {
                 movement.steepSlopePolicy = static_cast<Character::CharacterSteepSlopePolicy>(slope);
                 changed = true;
             }
-            const std::array leave{context.localization.Get("editor", "workspace.inspector.character.none").c_str(),
-                                   context.localization.Get("editor", "workspace.inspector.character.linear").c_str(),
-                                   context.localization.Get("editor", "workspace.inspector.character.point").c_str()};
-            int velocity = static_cast<int>(movement.platformLeaveVelocity);
-            if (Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.leave_velocity").c_str(),
+            const auto leave = std::array{context.localization.Get("editor", "workspace.inspector.character.none").c_str(),
+                                          context.localization.Get("editor", "workspace.inspector.character.linear").c_str(),
+                                          context.localization.Get("editor", "workspace.inspector.character.point").c_str()};
+            if (int velocity = static_cast<int>(movement.platformLeaveVelocity);
+                Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.leave_velocity").c_str(),
                                      "leave_velocity", velocity, leave, context.theme.fonts)) {
                 movement.platformLeaveVelocity = static_cast<Character::CharacterPlatformLeaveVelocityPolicy>(velocity);
                 changed = true;
@@ -145,8 +145,10 @@ namespace Horo::Editor {
         if (card.BeginBody()) {
             Merge(edit, Geometry(draft.characterController->geometry, context));
             Merge(edit, Movement(draft.characterController->movement, context));
-            if (Policies(draft.characterController->movement, context))
-                edit.changed = edit.committed = true;
+            if (Policies(draft.characterController->movement, context)) {
+                edit.changed = true;
+                edit.committed = true;
+            }
             Merge(edit, Bindings(draft.characterBindings, context));
             card.Finish();
         }

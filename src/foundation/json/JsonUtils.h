@@ -109,7 +109,7 @@ namespace Horo::Foundation {
                 return Value();
             }
 
-            bool key(Json::string_t &value) {
+            bool key(const Json::string_t &value) {
                 return guard_.Observe(depth_, Json::parse_event_t::key, value);
             }
 
@@ -129,7 +129,7 @@ namespace Horo::Foundation {
                 return End(Json::parse_event_t::array_end);
             }
 
-            template <typename Exception> bool parse_error(std::size_t, const Json::string_t &, const Exception &) {
+            template <typename Exception> bool parse_error(std::size_t, const Json::string_t &, const Exception &) const {
                 return false;
             }
 

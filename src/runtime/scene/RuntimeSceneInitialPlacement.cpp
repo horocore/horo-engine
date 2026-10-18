@@ -15,6 +15,38 @@ namespace Horo::Runtime {
             return Result<T>::Failure(MakeError(SceneErrors::InvalidCandidate, message));
         }
 
+        /** @brief Captures one unresolved ancestor chain, rejecting stale parents and cycles before matrix publication. */
+        [[nodiscard]] Result<void> ResolvePlacementPath(RuntimeSceneView scene, std::size_t start, std::vector<std::uint8_t> &states,
+                                                        std::vector<std::size_t> &path) {
+            std::optional<std::size_t> current = start;
+            while (current.has_value() && states[*current] != 2) {
+                if (states[*current] == 1)
+                    return InvalidPlacement<void>("Initial placement encountered a parent cycle.");
+                states[*current] = 1;
+                path.push_back(*current);
+                const auto entity = scene.EntityAt(*current);
+                if (!entity || !entity->localTransform)
+                    return InvalidPlacement<void>("Initial placement parent is absent.");
+                if (entity->parent && scene.Get(*entity->parent).HasError())
+                    return InvalidPlacement<void>("Initial placement parent belongs to a stale Scene generation.");
+                current = entity->parent ? std::optional<std::size_t>{entity->parent->entity.index} : std::nullopt;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves one admitted entity after its parent matrix is available, honoring an explicit world override. */
+        [[nodiscard]] Result<Math::Mat4> PlacementMatrix(RuntimeSceneView scene, std::size_t index, const Matrices &overrides,
+                                                         const Matrices &matrices) {
+            if (overrides[index])
+                return Result<Math::Mat4>::Success(*overrides[index]);
+            const auto entity = scene.EntityAt(index);
+            auto local = entity->localTransform->TryToMatrix();
+            if (local.HasError())
+                return Result<Math::Mat4>::Failure(local.ErrorValue());
+            return Result<Math::Mat4>::Success(entity->parent ? Math::Multiply(*matrices[entity->parent->entity.index], local.Value())
+                                                              : local.Value());
+        }
+
         /** @brief Resolves candidate hierarchy iteratively; storage and work are bounded by the Scene's slot count. */
         [[nodiscard]] Result<Matrices> WorldMatrices(RuntimeSceneView scene, const Matrices &overrides) {
             Matrices matrices(scene.SlotCount());
@@ -24,32 +56,15 @@ namespace Horo::Runtime {
             for (std::size_t start = 0; start < scene.SlotCount(); ++start) {
                 if (!scene.EntityAt(start) || states[start] == 2)
                     continue;
-                std::optional<std::size_t> current = start;
-                while (current && states[*current] != 2) {
-                    if (states[*current] == 1)
-                        return InvalidPlacement<Matrices>("Initial placement encountered a parent cycle.");
-                    states[*current] = 1;
-                    path.push_back(*current);
-                    const auto entity = scene.EntityAt(*current);
-                    if (!entity || !entity->localTransform)
-                        return InvalidPlacement<Matrices>("Initial placement parent is absent.");
-                    if (entity->parent && scene.Get(*entity->parent).HasError())
-                        return InvalidPlacement<Matrices>("Initial placement parent belongs to a stale Scene generation.");
-                    current = entity->parent ? std::optional<std::size_t>{entity->parent->entity.index} : std::nullopt;
-                }
+                if (auto resolved = ResolvePlacementPath(scene, start, states, path); resolved.HasError())
+                    return Result<Matrices>::Failure(resolved.ErrorValue());
                 while (!path.empty()) {
                     const std::size_t index = path.back();
                     path.pop_back();
-                    const auto entity = scene.EntityAt(index);
-                    if (overrides[index])
-                        matrices[index] = overrides[index];
-                    else {
-                        auto local = entity->localTransform->TryToMatrix();
-                        if (local.HasError())
-                            return Result<Matrices>::Failure(local.ErrorValue());
-                        matrices[index] =
-                            entity->parent ? Math::Multiply(*matrices[entity->parent->entity.index], local.Value()) : local.Value();
-                    }
+                    auto matrix = PlacementMatrix(scene, index, overrides, matrices);
+                    if (matrix.HasError())
+                        return Result<Matrices>::Failure(matrix.ErrorValue());
+                    matrices[index] = matrix.Value();
                     states[index] = 2;
                 }
             }
@@ -67,7 +82,7 @@ namespace Horo::Runtime {
         }
 
         /** @brief Retains exact authored scale only when it reproduces the already admitted local pose. */
-        [[nodiscard]] Math::Transform PreserveAuthoredScale(const Math::Mat4 &local, Math::Transform admitted,
+        [[nodiscard]] Math::Transform PreserveAuthoredScale(const Math::Mat4 &local, const Math::Transform &admitted,
                                                             const Math::Vec3 authoredScale) {
             auto preserved = admitted;
             preserved.scale = authoredScale;
@@ -91,9 +106,9 @@ namespace Horo::Runtime {
         /** @brief Replaces the world pose while preserving the original representable visual scale. */
         [[nodiscard]] Result<Math::Mat4> PlacedWorld(const SceneInitialPlacement &placement, const Math::Mat4 &original) {
             const auto &q = placement.heading;
-            const double norm = static_cast<double>(q.x) * q.x + static_cast<double>(q.y) * q.y + static_cast<double>(q.z) * q.z +
-                                static_cast<double>(q.w) * q.w;
-            if (!Math::IsFinite(placement.position) || !Math::IsFinite(q) || std::abs(norm - 1.0) > 1.0e-6)
+            if (const double norm = static_cast<double>(q.x) * q.x + static_cast<double>(q.y) * q.y + static_cast<double>(q.z) * q.z +
+                                    static_cast<double>(q.w) * q.w;
+                !Math::IsFinite(placement.position) || !Math::IsFinite(q) || std::abs(norm - 1.0) > 1.0e-6)
                 return InvalidPlacement<Math::Mat4>("Initial placement pose must be finite with a unit heading.");
             auto visual = ExactPlacementTransform(original);
             if (visual.HasError())

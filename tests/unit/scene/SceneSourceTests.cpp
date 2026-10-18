@@ -50,6 +50,25 @@ namespace Horo::SceneSource {
         }
     }
 
+    TEST_CASE("Scene source rejects malformed listener values without inventing legacy listeners", "[unit][scene][serialization][audio]") {
+        const std::string prefix =
+            R"({"schemaVersion":1,"objects":[{"id":1,"parent":null,"name":"Listener","transform":{"translation":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1]},"primitiveMesh":null,"components":)";
+        const std::string suffix = "}]}";
+        for (const auto listener :
+             {R"({"view":17,"priority":0,"weight":1,"enabled":true})", R"({"view":-1,"priority":0,"weight":1,"enabled":true})",
+              R"({"view":0,"priority":2147483648,"weight":1,"enabled":true})",
+              R"({"view":0,"priority":18446744073709551615,"weight":1,"enabled":true})",
+              R"({"view":0,"priority":-2147483649,"weight":1,"enabled":true})", R"({"view":0,"priority":0,"weight":0,"enabled":true})",
+              R"({"view":0,"priority":0,"weight":-1,"enabled":true})", R"({"view":0,"priority":0,"weight":1,"enabled":"true"})",
+              R"({"view":0,"priority":0,"weight":1})"}) {
+            INFO(listener);
+            CHECK(DecodeSceneSource(prefix + "{\"audioListener\":" + listener + "}" + suffix).HasError());
+        }
+        const auto legacy = DecodeSceneSource(prefix + "{}" + suffix);
+        REQUIRE(legacy.HasValue());
+        CHECK_FALSE(legacy.Value().objects.front().components.audioListener);
+    }
+
     TEST_CASE("Scene source rejects malformed future and structurally incomplete input", "[unit][scene][serialization]") {
         CHECK(DecodeSceneSource("{").HasError());
         CHECK(DecodeSceneSource(R"({"schemaVersion":3,"objects":[]})").HasError());

@@ -6,6 +6,7 @@ namespace Horo::Editor::SceneDocumentErrors {
     extern const ErrorCodeDescriptor HistoryEntryTooLarge;
     extern const ErrorCodeDescriptor InvalidAudioSource;
     extern const ErrorCodeDescriptor InvalidCharacter;
+    extern const ErrorCodeDescriptor InvalidAudioListener;
     extern const ErrorCodeDescriptor InvalidBehavior;
     extern const ErrorCodeDescriptor InvalidCamera;
     extern const ErrorCodeDescriptor InvalidLight;

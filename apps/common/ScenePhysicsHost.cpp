@@ -116,8 +116,8 @@ namespace Horo::Application::Internal {
         }
 
         Result<void> PrepareOwnedScene(Runtime::RuntimeScene &scene) override {
-            const auto identity = scene.View().RuntimeId().value;
-            if (host_.identities_.first.value == 0 || host_.identities_.last.value < host_.identities_.first.value ||
+            if (const auto identity = scene.View().RuntimeId().value;
+                host_.identities_.first.value == 0 || host_.identities_.last.value < host_.identities_.first.value ||
                 identity < host_.identities_.first.value || identity > host_.identities_.last.value)
                 return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState,
                                                        "Scene identity is outside the application's reserved Physics identity range."));
@@ -147,8 +147,7 @@ namespace Horo::Application::Internal {
     };
 
     /** @copydoc ScenePhysicsHost::ScenePhysicsHost */
-    ScenePhysicsHost::ScenePhysicsHost(const ScenePhysicsIdentityRange identities)
-        : identities_(identities), owner_(std::this_thread::get_id()) {}
+    ScenePhysicsHost::ScenePhysicsHost(const ScenePhysicsIdentityRange identities) : identities_(identities) {}
 
     /** @copydoc ScenePhysicsHost::MakeParticipant */
     Result<std::unique_ptr<Runtime::SceneActivationParticipant>> ScenePhysicsHost::MakeParticipant(

@@ -154,17 +154,25 @@ namespace Horo::Editor {
         if (object.components.audioSource.has_value()) {
             const InspectorAudioSourceEdit audioEdit = DrawAudioSourceWidgets(context);
             ApplyAudioSourceEdit(audioEdit, object, command);
+            DrawAudioPreview(object, viewModel, command, context);
             DrawValidationMessageIfInvalid(m_editSession.IsAudioSourceValid(),
                                            context.localization.Get("editor", "workspace.inspector.audio_source_invalid"),
                                            context.theme.fonts, 8.0F);
         }
         if (object.components.characterController) {
-            const auto edit = DrawCharacterWidgets(context);
-            if (!TryAdoptComponentRemoval(edit, object, command, ComponentType::CharacterController))
+            if (const auto edit = DrawCharacterWidgets(context);
+                !TryAdoptComponentRemoval(edit, object, command, ComponentType::CharacterController))
                 AdoptCommand(command, m_editSession.ApplyCharacterEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
             DrawValidationMessageIfInvalid(m_editSession.IsCharacterValid(),
                                            context.localization.Get("editor", "workspace.inspector.character.invalid"), context.theme.fonts,
                                            8.0F);
+        }
+        if (object.components.audioListener.has_value()) {
+            const InspectorAudioListenerEdit audioEdit = DrawAudioListenerWidgets(context);
+            ApplyAudioListenerEdit(audioEdit, object, command);
+            DrawValidationMessageIfInvalid(m_editSession.IsAudioListenerValid(),
+                                           context.localization.Get("editor", "workspace.inspector.audio_listener_invalid"),
+                                           context.theme.fonts, 8.0F);
         }
         DrawPhysicsInspector(object, viewModel, command, context);
         DrawBehaviors(object, viewModel, command, context);
@@ -284,57 +292,4 @@ namespace Horo::Editor {
                 .removeRequested = header.removeRequested};
     }
 
-    InspectorAudioSourceEdit InspectorPanel::DrawAudioSourceWidgets(const EditorGuiContext &context) {
-        InspectorObjectDraft &draft = m_editSession.Draft();
-        if (!draft.audioSource.has_value())
-            return {};
-
-        Ui::Card card(Ui::CardProps{.id = "##AudioSourceCard"});
-        const ComponentTitleBarResult header =
-            DrawComponentTitleBar(card, context.localization.Get("editor", "workspace.inspector.audio_source").c_str(),
-                                  {.enabled = draft.audioSource->enabled}, context);
-        if (header.resetRequested) {
-            const bool enabled = draft.audioSource->enabled;
-            draft.audioSource = Runtime::AudioSourceComponent{};
-            draft.audioSource->enabled = enabled;
-        }
-        if (header.toggleEnabledRequested)
-            draft.audioSource->enabled = !draft.audioSource->enabled;
-        const bool cancelRequested = IsInspectorCardEscapeRequested();
-        if (!card.BeginBody())
-            return {.cancelRequested = cancelRequested,
-                    .committed = header.resetRequested || header.toggleEnabledRequested,
-                    .removeRequested = header.removeRequested};
-        ImGui::BeginDisabled(!draft.audioSource->enabled);
-
-        const bool gainValid = std::isfinite(draft.audioSource->playback.gain) && draft.audioSource->playback.gain >= 0.0F;
-        const Ui::PropertyEditResult gainEdit =
-            Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_gain").c_str(), "audio_source_gain",
-                                 draft.audioSource->playback.gain, context.theme.fonts,
-                                 Ui::FloatPropertyOptions{.speed = 0.01F, .error = !gainValid});
-
-        const bool pitchValid = std::isfinite(draft.audioSource->playback.pitch) && draft.audioSource->playback.pitch > 0.0F &&
-                                draft.audioSource->playback.pitch <= 8.0F;
-        const Ui::PropertyEditResult pitchEdit =
-            Ui::DrawFloatPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_pitch").c_str(), "audio_source_pitch",
-                                 draft.audioSource->playback.pitch, context.theme.fonts,
-                                 Ui::FloatPropertyOptions{.speed = 0.01F, .error = !pitchValid});
-
-        const std::array<const char *, 2> spatialEntries{
-            context.localization.Get("editor", "workspace.value.off").c_str(),
-            context.localization.Get("editor", "workspace.value.on").c_str(),
-        };
-        int spatialInt = draft.audioSource->playback.spatialMode == Audio::AudioSpatialMode::ThreeD ? 1 : 0;
-        const bool spatialChanged =
-            Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.audio_source_spatial").c_str(),
-                                 "audio_source_spatial", spatialInt, spatialEntries, context.theme.fonts);
-        if (spatialChanged)
-            draft.audioSource->playback.spatialMode = spatialInt != 0 ? Audio::AudioSpatialMode::ThreeD : Audio::AudioSpatialMode::TwoD;
-
-        const bool committed =
-            gainEdit.committed || pitchEdit.committed || spatialChanged || header.resetRequested || header.toggleEnabledRequested;
-        ImGui::EndDisabled();
-        card.Finish();
-        return {.cancelRequested = cancelRequested, .committed = committed, .removeRequested = header.removeRequested};
-    }
 }  // namespace Horo::Editor

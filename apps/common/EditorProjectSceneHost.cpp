@@ -194,8 +194,7 @@ namespace Horo::Application::Internal {
         if (mode == Physics::PhysicsRuntimeMode::Null)
             return Result<void>::Success();
         std::error_code error;
-        const bool same = std::filesystem::equivalent(startupRoot, incomingRoot, error);
-        if (error || !same)
+        if (const bool same = std::filesystem::equivalent(startupRoot, incomingRoot, error); error || !same)
             return Result<void>::Failure(MakeError(InvalidProjectScene, "Canonical Physics preview owns its startup project's captures. "
                                                                         "Restart the editor with --project for the selected project."));
         return Result<void>::Success();
@@ -204,8 +203,7 @@ namespace Horo::Application::Internal {
     /** @copydoc MakeEditorProjectSceneFactory */
     Editor::EditorProjectPlaySceneFactory MakeEditorProjectSceneFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
         return [&jobs, policy = std::move(policy)](const std::filesystem::path &root, const Runtime::SceneRuntimeId identity,
-                                                   const Runtime::RuntimeSceneDefinition &definition)
-                   -> Result<std::unique_ptr<Editor::EditorPlaySceneHost>> {
+                                                   const Runtime::RuntimeSceneDefinition &definition) {
             if (identity.value < Editor::EditorFirstPlayScene.value)
                 return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(MakeError(InvalidProjectScene));
             auto host =

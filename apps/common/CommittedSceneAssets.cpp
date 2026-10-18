@@ -54,7 +54,7 @@ namespace Horo::Application::Internal {
     /** @copydoc CommittedSceneAssets::Find */
     const Assets::AssetCookArtifact *CommittedSceneAssets::Find(const Assets::AssetId id) const noexcept {
         const auto found = std::ranges::find(artifacts_, id, &Assets::AssetCookArtifact::id);
-        return found == artifacts_.end() ? nullptr : &*found;
+        return found == artifacts_.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc CommittedSceneAssets::DecodeScene */

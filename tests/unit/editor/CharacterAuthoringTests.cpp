@@ -90,4 +90,24 @@ namespace Horo::Editor {
         CHECK(fixture.document.Objects().front().components.camera.has_value());
         CHECK(fixture.Character() == changed);
     }
+
+    TEST_CASE("Character and AudioListener removal preserve each other's exact undo values", "[editor][character][audio][authoring]") {
+        CharacterDocument fixture;
+        REQUIRE(fixture.commands.Execute(AddSceneObjectComponentCommand{fixture.object, ComponentType::AudioListener}).HasValue());
+        const Runtime::AudioListenerComponent listener{7, -4, 0.5F, true};
+        REQUIRE(fixture.commands.Execute(SetSceneObjectAudioListenerCommand{fixture.object, listener}).HasValue());
+        const auto before = fixture.document.Objects().front().components;
+        for (const ComponentType type : {ComponentType::CharacterController, ComponentType::AudioListener}) {
+            REQUIRE(fixture.commands.Execute(RemoveSceneObjectComponentCommand{fixture.object, type}).HasValue());
+            const auto &removed = fixture.document.Objects().front().components;
+            CHECK(removed.characterController.has_value() == (type != ComponentType::CharacterController));
+            CHECK(removed.audioListener.has_value() == (type != ComponentType::AudioListener));
+            REQUIRE(fixture.commands.Undo().HasValue());
+            CHECK(fixture.document.Objects().front().components == before);
+            REQUIRE(fixture.commands.Redo().HasValue());
+            CHECK(fixture.document.Objects().front().components != before);
+            REQUIRE(fixture.commands.Undo().HasValue());
+            CHECK(fixture.document.Objects().front().components == before);
+        }
+    }
 }  // namespace Horo::Editor

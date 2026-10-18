@@ -1,10 +1,46 @@
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "editor/document/SceneDocumentInternal.h"
 
+#include <type_traits>
+
 namespace Horo::Editor {
     using namespace SceneDocumentDetail;
 
     namespace {
+        using OptionalComponentDelta = Result<std::optional<SceneCommandDelta>>;
+
+        /** @brief Prepares an absent component addition without publishing document or history state. */
+        [[nodiscard]] OptionalComponentDelta PrepareOptionalComponentDelta(const SceneObjectSnapshot &object,
+                                                                           const AddSceneObjectComponentCommand &command) {
+            if (HasComponent(object.components, command.type))
+                return OptionalComponentDelta::Success(std::nullopt);
+            return OptionalComponentDelta::Success(SceneCommandDelta{ComponentAddedDelta{object.id, command.type}});
+        }
+
+        /** @brief Retains all typed optional values for exact removal undo, including combined Character and AudioListener authoring. */
+        [[nodiscard]] OptionalComponentDelta PrepareOptionalComponentDelta(const SceneObjectSnapshot &object,
+                                                                           const RemoveSceneObjectComponentCommand &command) {
+            if (!HasComponent(object.components, command.type))
+                return OptionalComponentDelta::Success(std::nullopt);
+            return OptionalComponentDelta::Success(
+                SceneCommandDelta{ComponentRemovedDelta{object.id, command.type, object.components.camera, object.components.light,
+                                                        object.components.triggerVolume, object.components.audioSource,
+                                                        object.components.characterController, object.components.audioListener}});
+        }
+
+        /** @brief Prepares a validated Character replacement while preserving stable identity and no-op history behavior. */
+        [[nodiscard]] OptionalComponentDelta PrepareOptionalComponentDelta(const SceneObjectSnapshot &object,
+                                                                           const SetSceneObjectCharacterCommand &command) {
+            const auto &current = object.components.characterController;
+            if (!current || current->id != command.character.id)
+                return OptionalComponentDelta::Failure(
+                    MakeDocumentError(SceneDocumentErrors::InvalidCharacter,
+                                      "Character replacement requires its existing stable component identity."));
+            if (*current == command.character)
+                return OptionalComponentDelta::Success(std::nullopt);
+            return OptionalComponentDelta::Success(SceneCommandDelta{CharacterChangedDelta{object.id, *current, command.character}});
+        }
+
         [[nodiscard]] Result<void> ConfigurePrimitiveCreationCommand(const Runtime::PrimitiveDescriptor &descriptor,
                                                                      CreateSceneObjectCommand &command) {
             if (descriptor.meshType.has_value()) {
@@ -187,41 +223,21 @@ namespace Horo::Editor {
 
     /** @copydoc SceneDocumentCommandExecutor::Execute(const SceneOptionalComponentCommand&) */
     Result<SceneCommandResult> SceneDocumentCommandExecutor::Execute(const SceneOptionalComponentCommand &request) {
-        return std::visit([this](const auto &command) -> Result<SceneCommandResult> {
-            using Command = std::decay_t<decltype(command)>;
+        return std::visit([this]<typename Command>(const Command &command) {
             if constexpr (std::is_same_v<Command, SetSceneObjectCharacterCommand>) {
                 if (auto valid = Runtime::ValidateCharacterControllerComponent(command.character); valid.HasError())
                     return Result<SceneCommandResult>::Failure(valid.ErrorValue());
-                return WithEditableObject(m_document, m_document.m_objects, command.object,
-                                          [this, &command](const SceneObjectSnapshot &object) {
-                    const auto &current = object.components.characterController;
-                    if (!current || current->id != command.character.id)
-                        return Result<SceneCommandResult>::Failure(
-                            MakeDocumentError(SceneDocumentErrors::InvalidCharacter,
-                                              "Character replacement requires its existing stable component identity."));
-                    if (*current == command.character)
-                        return ComponentNoOpResult(m_document, object.id);
-                    return CommitObject(
-                        {CharacterChangedDelta{object.id, *current, command.character}, object.id, DocumentChangeKind::ComponentChanged});
-                });
-            } else {
-                return WithEditableObject(m_document, m_document.m_objects, command.object,
-                                          [this, &command](const SceneObjectSnapshot &object) {
-                    if constexpr (std::is_same_v<Command, AddSceneObjectComponentCommand>) {
-                        if (HasComponent(object.components, command.type))
-                            return ComponentNoOpResult(m_document, object.id);
-                        return CommitObject(
-                            {ComponentAddedDelta{object.id, command.type}, command.object, DocumentChangeKind::ComponentChanged});
-                    } else {
-                        if (!HasComponent(object.components, command.type))
-                            return ComponentNoOpResult(m_document, object.id);
-                        return CommitObject({ComponentRemovedDelta{object.id, command.type, object.components.camera,
-                                                                   object.components.light, object.components.triggerVolume,
-                                                                   object.components.audioSource, object.components.characterController},
-                                             command.object, DocumentChangeKind::ComponentChanged});
-                    }
-                });
             }
+            return WithEditableObject(m_document, m_document.m_objects, command.object,
+                                      [this, &command](const SceneObjectSnapshot &object) {
+                auto prepared = PrepareOptionalComponentDelta(object, command);
+                if (prepared.HasError())
+                    return Result<SceneCommandResult>::Failure(prepared.ErrorValue());
+                auto &delta = prepared.Value();
+                if (!delta.has_value())
+                    return ComponentNoOpResult(m_document, object.id);
+                return CommitObject({std::move(*delta), object.id, DocumentChangeKind::ComponentChanged});
+            });
         }, request);
     }
 

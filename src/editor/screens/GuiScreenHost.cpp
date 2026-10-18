@@ -4,6 +4,7 @@
 #include "../modals/extension_pages/EditorPageThemeCapture.h"
 #include "EditorPageFileStore.h"
 #include "Horo/Editor/AssetImportModal.h"
+#include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
@@ -522,6 +523,8 @@ namespace Horo::Editor {
     }
 
     void GuiScreenHost::OnUpdate(float dt) {
+        if (auto *audio = services_.TryGet<IAudioComponentPreview>())
+            static_cast<void>(audio->Pump());
         if (!shutdown_ && context_.updates != nullptr)
             context_.updates->Poll();
         if (editorActivityHost_)

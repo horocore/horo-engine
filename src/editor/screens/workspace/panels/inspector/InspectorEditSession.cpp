@@ -402,11 +402,6 @@ namespace Horo::Editor {
         return m_draft.triggerVolume.has_value();
     }
 
-    /** @copydoc InspectorEditSession::IsAudioSourceValid */
-    bool InspectorEditSession::IsAudioSourceValid() const noexcept {
-        return m_draft.audioSource.has_value() && IsValidAudioSourceComponent(*m_draft.audioSource);
-    }
-
     /** @copydoc InspectorEditSession::ApplyTriggerVolumeEdit */
     EditorWorkspaceViewCommandData InspectorEditSession::ApplyTriggerVolumeEdit(const InspectorTriggerVolumeEdit &edit,
                                                                                 const SceneObject &object, const bool allowCommands) {
@@ -423,26 +418,6 @@ namespace Horo::Editor {
 
         EditorWorkspaceViewCommandData command = MakeObjectCommand(EditorWorkspaceViewCommand::UpdateTriggerVolumeComponent, object.id);
         command.triggerVolumePayload = *m_draft.triggerVolume;
-        return command;
-    }
-
-    /** @copydoc InspectorEditSession::ApplyAudioSourceEdit */
-    EditorWorkspaceViewCommandData InspectorEditSession::ApplyAudioSourceEdit(const InspectorAudioSourceEdit &edit,
-                                                                              const SceneObject &object, const bool allowCommands) {
-        if (m_baselines.size() != 1 || m_draft.object != object.id || !object.components.audioSource.has_value() ||
-            !m_draft.audioSource.has_value()) {
-            return {};
-        }
-        if (edit.cancelRequested) {
-            ResetAudioSourceDraft(object);
-            return {};
-        }
-        if (!allowCommands || !edit.committed || !IsValidAudioSourceComponent(*m_draft.audioSource) ||
-            *m_draft.audioSource == *object.components.audioSource)
-            return {};
-
-        EditorWorkspaceViewCommandData command = MakeObjectCommand(EditorWorkspaceViewCommand::UpdateAudioSourceComponent, object.id);
-        command.audioSourcePayload = *m_draft.audioSource;
         return command;
     }
 
@@ -464,8 +439,26 @@ namespace Horo::Editor {
         m_draft.triggerVolume = object.components.triggerVolume;
     }
 
+    /** @brief Captures a displayed UUID without turning a numeric runtime identity into an asset identity. */
+    static std::string AudioAssetText(const std::optional<Runtime::AudioSourceComponent> &source) {
+        if (!source)
+            return {};
+        if (const auto *clip = std::get_if<Audio::AudioClipId>(&source->sound.target))
+            return clip->Asset().ToString();
+        if (const auto *sound = std::get_if<Audio::AudioSoundId>(&source->sound.target))
+            return sound->Asset().ToString();
+        if (const auto *extension = std::get_if<Audio::AudioSoundExtensionReference>(&source->sound.target))
+            return extension->definition.Asset().ToString();
+        return {};
+    }
+
     void InspectorEditSession::ResetAudioSourceDraft(const SceneObject &object) {
         m_draft.audioSource = object.components.audioSource;
+        m_draft.audioSoundIdentity = AudioAssetText(m_draft.audioSource);
+    }
+
+    void InspectorEditSession::ResetAudioListenerDraft(const SceneObject &object) {
+        m_draft.audioListener = object.components.audioListener;
     }
 
     void InspectorEditSession::ClearTransformInteraction() noexcept {
@@ -524,6 +517,8 @@ namespace Horo::Editor {
             m_draft.characterController.reset();
             m_draft.characterBindings = {};
         }
+        m_draft.audioSoundIdentity = AudioAssetText(m_draft.audioSource);
+        m_draft.audioListener = m_baselines.size() == 1 ? primaryObject->components.audioListener : std::nullopt;
         ResetTransformDraft();
     }
 

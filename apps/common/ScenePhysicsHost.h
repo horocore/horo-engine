@@ -88,7 +88,7 @@ namespace Horo::Application::Internal {
 
     private:
         ScenePhysicsIdentityRange identities_;
-        std::thread::id owner_;
+        std::thread::id owner_{std::this_thread::get_id()};
         Participant *participant_{};
         Physics::PhysicsSceneActivationCandidate *published_{};
     };

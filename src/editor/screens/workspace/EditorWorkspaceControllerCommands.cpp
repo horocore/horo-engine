@@ -35,6 +35,7 @@ namespace Horo::Editor {
             LOG_WARN("editor.viewport_picking", "Discarded a stale runtime-scene pick result.");
             return;
         }
+        m_viewModel.prefabSelection.reset();
         ApplyViewportPickSelection(picked.Value(), request);
         RefreshSelectionProjection();
     }

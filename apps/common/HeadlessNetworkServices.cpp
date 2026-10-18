@@ -216,7 +216,7 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(
                         MakeError(Network::NetworkErrors::NetworkModeInvalid, "Each world record admits exactly one Scene candidate."));
                 const auto &input = *owners_->configured;
-                const auto boundary = input.load;
+                const auto &boundary = input.load;
                 record_->sceneCancellation = boundary.cancellation;
                 record_->scenes = std::make_unique<Runtime::RuntimeSceneService>(input.registry, input.loads,
                                                                                  Runtime::RuntimeSceneAssetLimits{}, request_.scene);

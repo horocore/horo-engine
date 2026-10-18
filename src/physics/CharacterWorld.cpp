@@ -99,9 +99,9 @@ namespace Horo::Character {
     Result<CharacterPlacementResult> CharacterWorld::SpawnControllerWithHeading(const CharacterControllerHandle &handle,
                                                                                 const CharacterPhysicsQueryContext &query,
                                                                                 const Math::Quaternion heading) {
-        const double norm = static_cast<double>(heading.x) * heading.x + static_cast<double>(heading.y) * heading.y +
-                            static_cast<double>(heading.z) * heading.z + static_cast<double>(heading.w) * heading.w;
-        if (!Math::IsFinite(heading) || std::abs(norm - 1.0) > CharacterUnitSquaredNormTolerance)
+        if (const double norm = static_cast<double>(heading.x) * heading.x + static_cast<double>(heading.y) * heading.y +
+                                static_cast<double>(heading.z) * heading.z + static_cast<double>(heading.w) * heading.w;
+            !Math::IsFinite(heading) || std::abs(norm - 1.0) > CharacterUnitSquaredNormTolerance)
             return Result<CharacterPlacementResult>::Failure(
                 MakeError(CharacterErrors::DescriptorInvalid, "Initial heading must be unit length."));
         if (const auto ready = Detail::RequirePlacementMutation(*impl_); ready.HasError())

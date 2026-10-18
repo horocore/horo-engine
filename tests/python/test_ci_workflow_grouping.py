@@ -99,6 +99,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroPrefabOverrideModelPublicHeaderConsumer", "HoroPrefabAuthoringPublicHeaderConsumer",
     "HoroSceneSourceModelPublicHeaderConsumer", "HoroSceneSourcePublicHeaderConsumer",
     "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests", "HoroSceneDocumentTests",
+    "HoroAssetCookServiceTests", "HoroAssetsPublicHeaderConsumer",
     "HoroAssetRegistryTests", "HoroInputTests", "HoroAndroidInputTests", "HoroAndroidInputIntegrationPublicHeaderConsumer",
     "HoroInputSdlTests", "HoroRuntimeUiInputTests",
     "HoroRuntimeUiInputDebuggerTests", "HoroRuntimeUiInputDebuggerContractConsumer",
@@ -386,7 +387,7 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
     assert targets("HORO_CI_AUDIO_TARGETS") == {
         "HoroAudioRealtimeSafetyHarnessTests", "HoroAudioWatchdogTests", "HoroAudioNullTests",
         "HoroAudioDspTests", "HoroCoreAudioDspTests", "HoroAudioCommandTests", "HoroAudioMixerTests",
-        "HoroAudioEditorPreviewTests", "HoroAudioFrontendPublicHeaderConsumer",
+        "HoroAudioEditorPreviewTests", "HoroAudioComponentPreviewHostTests", "HoroAudioFrontendPublicHeaderConsumer",
     }
     assert preset("configurePresets", "ci-native-debug")["cacheVariables"]["CMAKE_BUILD_TYPE"] == "Debug"
     assert preset("configurePresets", "ci-audio-release")["cacheVariables"]["CMAKE_BUILD_TYPE"] == "Release"

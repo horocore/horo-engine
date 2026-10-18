@@ -24,7 +24,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Uses root-owned native reads and canonical conversion; no second Scene parser or asset authority. */
         Result<Runtime::RuntimeSceneDefinition> ReadProductSceneSource(const HeadlessProjectSceneOptions &launch,
-                                                                       HeadlessProjectSceneResources &resources,
+                                                                       const HeadlessProjectSceneResources &resources,
                                                                        const ProjectMetadata &metadata) {
             auto files = Platform::CreateNativeProjectReadFiles(launch.projectRoot, metadata.projectId, 1);
             if (files.HasError())
@@ -68,8 +68,8 @@ namespace Horo::Application::Internal {
             auto candidate = Assets::PrepareAssetRegistryCandidate(launch.projectRoot);
             if (candidate.HasError())
                 return Result<void>::Failure(candidate.ErrorValue());
-            const auto published = resources.registry.Publish(std::move(candidate).Value());
-            if (published.status != Assets::AssetRegistryBuildStatus::Complete)
+            if (const auto published = resources.registry.Publish(std::move(candidate).Value());
+                published.status != Assets::AssetRegistryBuildStatus::Complete)
                 return Result<void>::Failure(published.diagnostics.empty() ? MakeError(Net::NetworkErrors::NetworkModeInvalid)
                                                                            : published.diagnostics.front().error);
             if (!launch.cookedRoot.empty()) {
@@ -103,8 +103,7 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(captured.ErrorValue());
                 simulation = std::move(captured).Value();
             }
-            resources.settings.emplace(
-                Physics::PhysicsSceneActivationSettings{std::move(physics).Value(), std::move(character).Value(), std::move(simulation)});
+            resources.settings.emplace(std::move(physics).Value(), std::move(character).Value(), std::move(simulation));
             return Result<void>::Success();
         }
 
@@ -119,8 +118,7 @@ namespace Horo::Application::Internal {
         auto metadata = LoadProjectMetadata(launch.projectRoot);
         if (metadata.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(metadata.ErrorValue());
-        const auto assets = CaptureProductAssets(launch, *resources);
-        if (assets.HasError())
+        if (const auto assets = CaptureProductAssets(launch, *resources); assets.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(assets.ErrorValue());
         auto definition = launch.scene.starts_with("source:") ? ReadProductSceneSource(launch, *resources, metadata.Value())
                                                               : ReadProductCookedScene(launch, *resources);
@@ -134,8 +132,7 @@ namespace Horo::Application::Internal {
         resources->loads =
             std::make_unique<Assets::AssetLoadService>(resources->jobs,
                                                        resources->committed ? resources->committed->Provider() : resources->empty);
-        const auto settings = CaptureProductPhysics(launch, *resources, metadata.Value().projectId);
-        if (settings.HasError())
+        if (const auto settings = CaptureProductPhysics(launch, *resources, metadata.Value().projectId); settings.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(settings.ErrorValue());
         return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Success(std::move(resources));
     }

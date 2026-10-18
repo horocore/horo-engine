@@ -2,6 +2,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
@@ -26,6 +27,7 @@
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Platform/SecureRandom.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
@@ -72,6 +74,26 @@ namespace Horo::Editor {
             ProjectMutationCoordinator *mutations{nullptr};
             DurableFileSystem *durableFiles{nullptr};
         };
+
+        /** @brief Composes the explicit project loader and retains its cooperative lease through cache publication. */
+        PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations) {
+            return [root, mutations](const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
+                                     const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation) {
+                if (mutations == nullptr)
+                    return Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+                auto lease = mutations->TryAcquire({root, ProjectMutationOwner::Asset, "prefab.hierarchy.capture"});
+                if (lease.HasError())
+                    return Result<PreparedPrefabHierarchySources>::Failure(lease.ErrorValue());
+                auto project = Application::LoadProjectSourceDocument(root);
+                if (project.HasError())
+                    return Result<PreparedPrefabHierarchySources>::Failure(project.ErrorValue());
+                auto sources =
+                    CapturePrefabHierarchySources(root, registry, roots, limits, project.Value().metadata.horoVersion.value, cancellation);
+                if (sources.HasError())
+                    return Result<PreparedPrefabHierarchySources>::Failure(sources.ErrorValue());
+                return Result<PreparedPrefabHierarchySources>::Success({std::move(sources).Value(), std::move(lease).Value()});
+            };
+        }
 
         struct WorkspacePublishedRevisions {
             DocumentRevision scene{};
@@ -206,7 +228,7 @@ namespace Horo::Editor {
                     return Result<void>::Failure(reserved.ErrorValue());
                 }
                 ProjectSessionActivationLease activation = std::move(reserved).Value();
-                std::string projectRoot = activation.Candidate().projectRoot.string();
+                const std::filesystem::path &projectRoot = activation.Candidate().projectRoot;
 
                 if (auto initialized = InitializeController(projectRoot); initialized.HasError())
                     return initialized;
@@ -260,6 +282,7 @@ namespace Horo::Editor {
                         controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
                                                      .targetIndex = static_cast<int>(*destination),
                                                      .stringPayload = std::string{}});
+                    controller_->ReconcileAudioPreview();
                     controller_->UpdatePlayPresentation(dt);
                     if (packages_.pump) {
                         const auto &model = controller_->ViewModel();
@@ -582,17 +605,13 @@ namespace Horo::Editor {
             }
 
             /** @brief Owns the exact project path and app closure across asynchronous Play preparation. */
-            EditorPlaySceneFactory BindPlayFactory(const std::string &projectRoot) const {
+            EditorPlaySceneFactory BindPlayFactory(const std::filesystem::path &projectRoot) const {
                 EditorPlaySceneFactory playSceneFactory;
                 if (const auto *projectFactory = services_.TryGet<EditorProjectPlaySceneFactory>()) {
                     // Copy the application closure and exact project path into the workspace. No
                     // reference to this screen or its activation stack survives asynchronous Start.
-                    playSceneFactory =
-                        [factory = *projectFactory,
-                         root =
-                             std::filesystem::path{std::u8string{projectRoot.begin(),
-                                                                 projectRoot.end()}}](const Runtime::SceneRuntimeId identity,
-                                                                                      const Runtime::RuntimeSceneDefinition &definition) {
+                    playSceneFactory = [factory = *projectFactory, root = projectRoot](const Runtime::SceneRuntimeId identity,
+                                                                                       const Runtime::RuntimeSceneDefinition &definition) {
                         return factory(root, identity, definition);
                     };
                 }
@@ -600,7 +619,7 @@ namespace Horo::Editor {
             }
 
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
-            Result<void> InitializeController(const std::string &projectRoot) {
+            Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =
@@ -615,31 +634,31 @@ namespace Horo::Editor {
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
-                controller_ =
-                    std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
-                                                                EditorWorkspaceDependencies{
-                                                                    .mutableAssetRegistry = projectServices_.assetRegistry,
-                                                                    .collisionInventory = projectServices_.collisionInventory,
-                                                                    .collisionActivation = projectServices_.collisionActivation,
-                                                                    .previewCollisionReceipt = projectServices_.previewCollisionReceipt,
-                                                                    .mutations = projectServices_.mutations,
-                                                                    .durableFiles = projectServices_.durableFiles,
-                                                                    .assetRegistrySource = std::move(registrySource).Value(),
-                                                                    .importerCatalog = projectServices_.importerCatalog,
-                                                                    .jobs = &services_.Get<JobSystem>(),
-                                                                    .gameplayBuilds = services_.TryGet<Application::GameplayBuildService>(),
-                                                                    .gameplayBuildEnvironment =
-                                                                        gameplayEnvironment != nullptr
-                                                                            ? *gameplayEnvironment
-                                                                            : Application::GameplayBuildEnvironment{},
-                                                                    .localization = &context_.localization,
-                                                                    .engineEvents = &context_.engineEvents,
-                                                                    .networkDebugger =
-                                                                        services_.TryGet<Application::NetworkDebuggerService>(),
-                                                                    .documentSessionOwner = sessionOwner,
-                                                                    .gameplayRetirements = host_.GameplayRetirements(),
-                                                                    .playSceneFactory = BindPlayFactory(projectRoot),
-                                                                });
+                controller_ = std::make_unique<
+                    EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
+                                               EditorWorkspaceDependencies{
+                                                   .mutableAssetRegistry = projectServices_.assetRegistry,
+                                                   .collision = {.inventory = projectServices_.collisionInventory,
+                                                                 .activation = projectServices_.collisionActivation,
+                                                                 .previewReceipt = projectServices_.previewCollisionReceipt},
+                                                   .mutations = projectServices_.mutations,
+                                                   .durableFiles = projectServices_.durableFiles,
+                                                   .assetRegistrySource = std::move(registrySource).Value(),
+                                                   .importerCatalog = projectServices_.importerCatalog,
+                                                   .jobs = &services_.Get<JobSystem>(),
+                                                   .gameplay = {.builds = services_.TryGet<Application::GameplayBuildService>(),
+                                                                .environment = gameplayEnvironment != nullptr
+                                                                                   ? *gameplayEnvironment
+                                                                                   : Application::GameplayBuildEnvironment{},
+                                                                .retirements = host_.GameplayRetirements()},
+                                                   .localization = &context_.localization,
+                                                   .engineEvents = &context_.engineEvents,
+                                                   .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
+                                                   .documentSessionOwner = sessionOwner,
+                                                   .audioPreview = services_.TryGet<IAudioComponentPreview>(),
+                                                   .playSceneFactory = BindPlayFactory(projectRoot),
+                                                   .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                               });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
                     controller_.reset();

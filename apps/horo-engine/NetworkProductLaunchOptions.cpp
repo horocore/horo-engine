@@ -109,22 +109,23 @@ namespace Horo::Application::Internal {
 
         /** @brief Applies one admitted unique option; paths retain the canonical native UTF-8 conversion. */
         Result<void> ApplySceneOption(const SceneOption option, const std::string_view value, HeadlessProjectSceneOptions &input) {
+            using enum SceneOption;
             switch (option) {
-                case SceneOption::Project:
-                case SceneOption::CookRoot: {
+                case Project:
+                case CookRoot: {
                     auto path = ParseSceneHostAbsolutePath(value);
                     if (path.HasError())
                         return Result<void>::Failure(path.ErrorValue());
-                    (option == SceneOption::Project ? input.projectRoot : input.cookedRoot) = std::move(path).Value();
+                    (option == Project ? input.projectRoot : input.cookedRoot) = std::move(path).Value();
                     break;
                 }
-                case SceneOption::Scene:
+                case Scene:
                     input.scene = value;
                     break;
-                case SceneOption::CookTarget:
+                case CookTarget:
                     input.cookTarget = value;
                     break;
-                case SceneOption::Physics: {
+                case Physics: {
                     const auto mode = ParseScenePhysicsHostMode(value);
                     if (!mode)
                         return Result<void>::Failure(
@@ -132,15 +133,15 @@ namespace Horo::Application::Internal {
                     input.physicsMode = *mode;
                     break;
                 }
-                case SceneOption::Timeout: {
+                case Timeout: {
                     std::uint32_t milliseconds{};
-                    const auto parsed = std::from_chars(value.data(), value.data() + value.size(), milliseconds);
-                    if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || milliseconds == 0 || milliseconds > 60'000)
+                    if (const auto parsed = std::from_chars(value.data(), value.data() + value.size(), milliseconds);
+                        parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || milliseconds == 0 || milliseconds > 60'000)
                         return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
                     input.loadTimeout = std::chrono::milliseconds{milliseconds};
                     break;
                 }
-                case SceneOption::Count:
+                case Count:
                     return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
             }
             return Result<void>::Success();
@@ -187,8 +188,8 @@ namespace Horo::Application::Internal {
                 const auto optionIndex = static_cast<std::size_t>(found - SceneOptionNames.begin());
                 if (seen[optionIndex])
                     return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Duplicate product Scene option."));
-                const auto applied = ApplySceneOption(static_cast<SceneOption>(optionIndex), arguments[index + 1], launch.sceneInput);
-                if (applied.HasError())
+                if (const auto applied = ApplySceneOption(static_cast<SceneOption>(optionIndex), arguments[index + 1], launch.sceneInput);
+                    applied.HasError())
                     return applied;
                 seen[optionIndex] = true;
                 index += 2;
@@ -200,6 +201,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc ParseNetworkProductLaunch */
     [[nodiscard]] Result<ProductLaunch> ParseNetworkProductLaunch(const std::span<char *> arguments) {
+        using enum Net::NetworkProjectRole;
         if (arguments.size() < 2) {
             return Result<ProductLaunch>::Failure(
                 MakeError(Net::NetworkErrors::NetworkModeInvalid,
@@ -211,8 +213,8 @@ namespace Horo::Application::Internal {
             return Result<ProductLaunch>::Failure(
                 MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid mode or bounded frame count."));
         launch.role = *role;
-        const bool listener = *role == Net::NetworkProjectRole::DedicatedServer || *role == Net::NetworkProjectRole::ListenServer;
-        const bool outbound = *role == Net::NetworkProjectRole::Client || *role == Net::NetworkProjectRole::ListenServer;
+        const bool listener = *role == DedicatedServer || *role == ListenServer;
+        const bool outbound = *role == Client || *role == ListenServer;
         const std::size_t modeArgumentCount = 2 + static_cast<std::size_t>(listener) + static_cast<std::size_t>(outbound);
         if (arguments.size() < modeArgumentCount)
             return Result<ProductLaunch>::Failure(

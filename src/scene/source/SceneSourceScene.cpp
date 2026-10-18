@@ -237,10 +237,11 @@ namespace Horo::SceneSource::Detail {
                     scene.unsupportedComponentOwners.push_back(object.Value().id);
                 scene.objects.push_back(std::move(object).Value());
             }
-            const bool character = std::ranges::any_of(scene.objects, [](const auto &object) {
+            if (const bool character = std::ranges::any_of(scene.objects,
+                                                           [](const auto &object) {
                 return object.components.characterController.has_value();
             });
-            if (character && document["schemaVersion"] != kCharacterSceneSchemaVersion)
+                character && document["schemaVersion"] != kCharacterSceneSchemaVersion)
                 return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Character components require Scene source schema2."));
             if (document.contains("prefabInstances")) {
                 scene.prefabInstances.reserve(document["prefabInstances"].size());

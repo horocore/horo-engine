@@ -36,7 +36,8 @@ namespace Horo::Editor {
             } else
                 collision.defaultMaterial.reset();
             if (!text[6].empty() || !text[7].empty()) {
-                std::uint64_t object{}, body{};
+                std::uint64_t object{};
+                std::uint64_t body{};
                 if (!PositiveInteger(text[6], object) || !PositiveInteger(text[7], body))
                     return false;
                 collision.excludedBody = Runtime::PhysicsBodyReference{{object}, {body}};

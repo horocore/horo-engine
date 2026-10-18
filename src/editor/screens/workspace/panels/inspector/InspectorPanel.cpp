@@ -22,6 +22,9 @@ namespace Horo::Editor {
     }
 
     void InspectorPanel::OnDetach() {
+        m_prefabEntry = nullptr;
+        m_prefabPresentedTarget.reset();
+        m_prefabPresentation.reset();
         m_nameInputContext.Reset();
         m_physicsSession.Clear();
         m_inputRouter = nullptr;
@@ -57,13 +60,22 @@ namespace Horo::Editor {
             return;
         }
 
+        if (!vm.prefabSelection) {
+            m_prefabEntry = nullptr;
+            m_prefabPresentedTarget.reset();
+            m_prefabPresentation.reset();
+        }
         std::array<SceneObjectId, 1> fallbackSelection{};
         std::span<const SceneObjectId> selectedObjects = vm.selectedObjects;
         if (selectedObjects.empty() && vm.primarySelection.has_value()) {
             fallbackSelection.front() = *vm.primarySelection;
             selectedObjects = fallbackSelection;
         }
-        if (!selectedObjects.empty() && FindSelectedObject(vm) != nullptr) {
+        if (vm.prefabSelection) {
+            AdoptCommand(cmd, m_editSession.Clear());
+            m_nameInputContext.Reset();
+            DrawPrefabSelection(vm, cmd, ctx);
+        } else if (!selectedObjects.empty() && FindSelectedObject(vm) != nullptr) {
             DrawSelection(vm, selectedObjects, cmd, ctx);
             if (selectedObjects.size() == 1) {
                 if (const auto *selected = FindSelectedObject(vm); selected != nullptr)
@@ -283,6 +295,13 @@ namespace Horo::Editor {
         if (TryAdoptComponentRemoval(edit, object, command, ComponentType::AudioSource))
             return;
         AdoptCommand(command, m_editSession.ApplyAudioSourceEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
+    }
+
+    void InspectorPanel::ApplyAudioListenerEdit(const InspectorAudioListenerEdit &edit, const SceneObject &object,
+                                                EditorWorkspaceViewCommandData &command) {
+        if (TryAdoptComponentRemoval(edit, object, command, ComponentType::AudioListener))
+            return;
+        AdoptCommand(command, m_editSession.ApplyAudioListenerEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
     }
 
     void InspectorPanel::DrawEmptyState(EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {

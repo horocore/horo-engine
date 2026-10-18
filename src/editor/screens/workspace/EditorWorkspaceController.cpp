@@ -73,19 +73,22 @@ namespace Horo::Editor {
           m_assetRegistry(assetRegistry), m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
-          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collisionInventory),
-          m_collisionActivation(dependencies.collisionActivation), m_previewCollisionReceipt(dependencies.previewCollisionReceipt),
+          m_prefabSourceCapture(dependencies.prefabSources), m_workspaceSession(dependencies.documentSessionOwner),
+          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collision.inventory),
+          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
           m_collisionSceneOwner(dependencies.documentSessionOwner), m_mutations(dependencies.mutations),
           m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assetRegistrySource),
           m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceOpenNavigator), m_diagnosticSourceNavigator(dependencies.diagnosticSourceNavigator),
-          m_gameplayBuilds(dependencies.gameplayBuilds), m_gameplayBuildEnvironment(dependencies.gameplayBuildEnvironment),
+          m_gameplayBuilds(dependencies.gameplay.builds), m_gameplayBuildEnvironment(dependencies.gameplay.environment),
           m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
-          m_playSession(dependencies.networkDebugger) {
-        if (dependencies.gameplayRetirements)
-            m_gameplayRetirements = dependencies.gameplayRetirements;
+          m_playSession(dependencies.networkDebugger), m_audioPreview(dependencies.audioPreview),
+          m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
+        m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
+        if (dependencies.gameplay.retirements)
+            m_gameplayRetirements = dependencies.gameplay.retirements;
         m_physicsDocumentOwner = dependencies.documentSessionOwner;
         if (dependencies.engineEvents != nullptr) {
             m_engineEventBridge = std::make_unique<EditorEngineEventBridge>(*dependencies.engineEvents, m_dataBus);
@@ -94,8 +97,7 @@ namespace Horo::Editor {
         m_viewModel.workspacePanelHost.AttachDocumentIdentityRegistry(m_documentRegistry);
         if (!m_diagnosticSourceNavigator) {
             m_diagnosticSourceNavigator = [](const DiagnosticSourceRequest &source) {
-                const std::filesystem::path path{source.absolutePath};
-                return OpenInExternalEditor(path) || RevealInNativeFileManager(path);
+                return OpenInExternalEditor(source.absolutePath) || RevealInNativeFileManager(source.absolutePath);
             };
         }
         const std::filesystem::path absoluteProjectRoot = ResolveProjectRoot(projectRoot);

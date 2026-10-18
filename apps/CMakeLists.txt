@@ -197,6 +197,9 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
+        HoroEditor/app/EditorAudioPreviewHost.cpp
+        HoroEditor/app/EditorAudioPreviewDecode.cpp
+        HoroEditor/app/EditorAudioPreviewPreparation.cpp
         HoroEditor/app/RenderGraphInspectionPane.cpp
         HoroEditor/app/EditorUserStateMigration.cpp
         HoroEditor/app/ConfiguredEditorUpdateBackend.cpp
@@ -340,6 +343,14 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroThirdParty::ImGui
             nlohmann_json::nlohmann_json
     )
+
+    target_link_libraries(HoroEditor PRIVATE HoroAudioFrontendComposition HoroEngine::AudioImport HoroEngine::AudioNull)
+    if(TARGET HoroAudioSdl3)
+        target_link_libraries(HoroEditor PRIVATE HoroEngine::AudioSdl3)
+        target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=1)
+    else()
+        target_compile_definitions(HoroEditor PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
+    endif()
 
     if(HORO_ENABLE_OPENTELEMETRY)
         target_compile_definitions(HoroEditor PRIVATE HORO_HAS_OPENTELEMETRY=1)

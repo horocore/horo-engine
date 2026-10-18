@@ -4,8 +4,10 @@
 
 #include <algorithm>
 #include <format>
+#include <functional>
 #include <ranges>
 #include <string_view>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -33,7 +35,7 @@ namespace Horo::Editor {
         /** @brief Resolves the actual Play runner only during one synchronous Scene structural transaction. */
         class PlayGameplayParticipant final : public Runtime::SceneStructuralParticipant {
         public:
-            explicit PlayGameplayParticipant(const std::unique_ptr<Gameplay::BehaviorRuntime> &runtime) : runtime_(runtime) {}
+            explicit PlayGameplayParticipant(std::function<Gameplay::BehaviorRuntime *()> runtime) : runtime_(std::move(runtime)) {}
 
             Runtime::SceneStructuralOwner Owner() const noexcept override {
                 return Runtime::SceneStructuralOwner::Gameplay;
@@ -42,14 +44,17 @@ namespace Horo::Editor {
             Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(Runtime::RuntimeSceneView scene,
                                                                                std::span<const Runtime::RuntimeEntityView> created,
                                                                                std::span<const Runtime::EntityRef> destroyed) override {
-                if (!runtime_)
+                auto *runtime = runtime_();
+                if (!runtime)
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
                         MakeError(Gameplay::GameplayErrors::InvalidBehaviorComponent, "Play has no active Gameplay structural owner."));
-                return runtime_->MakeStructuralParticipant()->Prepare(scene, created, destroyed);
+                return runtime->MakeStructuralParticipant()->Prepare(scene, created, destroyed);
             }
 
         private:
-            const std::unique_ptr<Gameplay::BehaviorRuntime> &runtime_;
+            // The Scene host is retired by the controller before its captured owner dies.
+            // Resolve only during synchronous structural preparation so reload replacement stays visible.
+            std::function<Gameplay::BehaviorRuntime *()> runtime_;
         };
 
         [[nodiscard]] Error InvalidTransition(const char *message) {
@@ -178,7 +183,9 @@ namespace Horo::Editor {
         ++nextRuntimeId_;
         preparationCancellation_ = CancellationSource{};
         preparationFrame_ = 1;
-        if (const auto registered = sceneHost_->Scenes().AddStructuralParticipant(std::make_unique<PlayGameplayParticipant>(behaviors_));
+        if (const auto registered = sceneHost_->Scenes().AddStructuralParticipant(std::make_unique<PlayGameplayParticipant>([this] {
+            return behaviors_.get();
+        }));
             registered.HasError())
             return registered;
         if (const auto started = sceneHost_->Scenes().Startup(preparationCancellation_.Token()); started.HasError())

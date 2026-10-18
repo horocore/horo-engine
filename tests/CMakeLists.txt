@@ -121,6 +121,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp)
 target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PhysicsInspectorPublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
@@ -651,6 +652,17 @@ target_compile_features(HoroAudioEditorPreviewTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAudioEditorPreviewTests PRIVATE
     HoroEngine::EditorServices HoroAudioFrontendComposition HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioEditorPreviewTests LABELS "unit;audio;editor;headless;lifecycle")
+add_executable(HoroAudioComponentPreviewHostTests
+    unit/editor/AudioComponentPreviewHostTests.cpp
+    "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewHost.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewDecode.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewPreparation.cpp")
+target_compile_features(HoroAudioComponentPreviewHostTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroAudioComponentPreviewHostTests PRIVATE HORO_EDITOR_AUDIO_SDL3=0)
+target_include_directories(HoroAudioComponentPreviewHostTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
+target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE HoroEngine::EditorServices HoroAudioFrontendComposition
+    HoroEngine::AudioImport HoroEngine::AudioNull)
+horo_register_catch_test(HoroAudioComponentPreviewHostTests LABELS "unit;audio;editor;headless;lifecycle")
 target_sources(HoroAudioFrontendPublicHeaderConsumer PRIVATE support/AudioFrontendPublicContract.cpp)
 target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/AudioEditorDocumentPublicContract.cpp)
 target_sources(HoroAudioDspPublicHeaderConsumer PRIVATE support/CoreStereoSpatialPublicContract.cpp)
@@ -2534,10 +2546,15 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
             unit/editor/EditorWorkspaceControllerDockingTests.cpp
             unit/editor/EditorWorkspaceControllerInspectorTests.cpp
+            unit/editor/EditorWorkspaceAudioPreviewTests.cpp
+            ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewHost.cpp
+            ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewDecode.cpp
+            ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewPreparation.cpp
             unit/editor/EditorWorkspaceControllerPhysicsTests.cpp
             unit/editor/EditorWorkspaceControllerAssetMutationTests.cpp
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
+            unit/editor/EditorWorkspaceControllerPrefabTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
@@ -2548,14 +2565,19 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceNativeGameplayReloadTests.cpp
     )
 
-    target_include_directories(HoroEditorWorkspaceControllerTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers"
-        "${PROJECT_SOURCE_DIR}/tests" "${PROJECT_SOURCE_DIR}/tests/support")
+    target_include_directories(HoroEditorWorkspaceControllerTests PRIVATE
+            "${PROJECT_SOURCE_DIR}/tests/helpers"
+            "${PROJECT_SOURCE_DIR}/tests"
+            "${PROJECT_SOURCE_DIR}/tests/support"
+            "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
     target_compile_features(HoroEditorWorkspaceControllerTests PRIVATE cxx_std_20)
     target_compile_definitions(HoroEditorWorkspaceControllerTests PRIVATE
+            HORO_EDITOR_AUDIO_SDL3=0
             HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
             HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
     )
-    target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json)
+    target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json
+        HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull)
     add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule)
     add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)
     target_compile_features(HoroCameraCutEditorIntegrationTests PRIVATE cxx_std_20)
@@ -2624,6 +2646,9 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroHierarchyPanelRenderTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
     )
+    target_sources(HoroHierarchyPanelRenderTests PRIVATE unit/editor/PrefabHierarchyPanelRenderTests.cpp)
+    target_compile_definitions(HoroHierarchyPanelRenderTests PRIVATE
+            HORO_TEST_LOCALIZATION_DIR="${PROJECT_SOURCE_DIR}/assets/localization/editor")
     target_link_libraries(HoroHierarchyPanelRenderTests
             PRIVATE
             HoroEngine::Gui
@@ -2631,6 +2656,8 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroHierarchyEditSessionTests
             unit/editor/HierarchyEditSessionTests.cpp
+            unit/editor/PrefabHierarchyEditSessionTests.cpp
+            support/AllocationProbe.cpp
     )
 
     target_compile_features(HoroHierarchyEditSessionTests PRIVATE cxx_std_20)
@@ -2655,6 +2682,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroInspectorEditSessionTests
             unit/editor/InspectorEditSessionTests.cpp
             unit/editor/InspectorCharacterEditSessionTests.cpp
+            unit/editor/InspectorAudioComponentTests.cpp
             unit/editor/PhysicsInspectorSessionTests.cpp
     )
 
@@ -2997,13 +3025,17 @@ add_executable(HoroSceneDocumentTests
         unit/editor/PhysicsInspectorTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
+        unit/editor/AudioListenerAuthoringTests.cpp
         unit/editor/SceneDocumentExtractionTests.cpp
         unit/editor/SceneDocumentPrefabTests.cpp
         unit/editor/SceneDocumentPrefabValueTests.cpp
+        unit/editor/PrefabHierarchyProjectionTests.cpp
+        unit/editor/PrefabHierarchySourcesTests.cpp
 )
+
 target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
+target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction HoroEngine::SceneCook HoroEngine::EditorServices HoroPrefabHierarchyInternal)
 target_include_directories(HoroSceneDocumentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
-target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction)
 add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentPersistenceTests.cpp
         unit/editor/SceneDocumentRecoveryPathTests.cpp
@@ -3014,6 +3046,7 @@ add_executable(HoroSceneDocumentPersistenceTests
         unit/editor/SceneDocumentFileWatchPersistenceTests.cpp
         unit/editor/SceneDocumentPersistenceTestSupport.cpp
 )
+
 target_compile_features(HoroSceneDocumentPersistenceTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentPersistenceTests PRIVATE HoroEngine::EditorServices)
 add_executable(HoroSceneSourceTests

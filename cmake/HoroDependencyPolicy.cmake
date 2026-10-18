@@ -216,8 +216,9 @@ horo_allow_target_dependencies(TARGET HoroPhysicsTriggerVolumeHost
 horo_allow_target_dependencies(TARGET HoroPrefabCookHost
     DEPENDENCIES HoroApplication HoroAssets HoroEditorServices HoroPackageSecurity HoroPrefabAuthoring HoroSceneCook HoroSceneRuntimeConversion)
 horo_allow_target_dependencies(TARGET HoroSceneSourceCodecInternal DEPENDENCIES HoroSceneSource)
+horo_allow_target_dependencies(TARGET HoroPrefabHierarchyInternal)
 horo_allow_target_dependencies(TARGET HoroEditorModel
-    DEPENDENCIES HoroNavigationApi HoroAssets HoroFoundation HoroAI HoroPrefab HoroPrefabAuthoring HoroPrefabSceneExpansion HoroSceneModel HoroRuntimeScene HoroSceneSourceModel HoroSceneSourceCodecInternal HoroSceneRuntimeConversion)
+    DEPENDENCIES HoroNavigationApi HoroAssets HoroFoundation HoroAI HoroPrefab HoroPrefabAuthoring HoroPrefabSceneExpansion HoroSceneModel HoroRuntimeScene HoroSceneSourceModel HoroSceneSourceCodecInternal HoroSceneRuntimeConversion HoroPrefabHierarchyInternal)
 horo_allow_target_dependencies(TARGET HoroEditorViewportScene DEPENDENCIES HoroEditorModel)
 horo_allow_target_dependencies(TARGET HoroEditorViewportResources
     DEPENDENCIES HoroEditorViewportScene HoroRenderFrontend)
@@ -228,7 +229,7 @@ horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorPlaySceneHostInternal DEPENDENCIES HoroRuntimeScene HoroGameplayRuntime)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource
+    DEPENDENCIES HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
@@ -283,6 +284,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroEditorSceneProductHost
         HoroEditorPlaySceneHostInternal
         HoroScenePhysicsHost
+        HoroAudioFrontendComposition HoroAudioImport HoroAudioSdl3 HoroAudioNull
         HoroPackageProjectHost
         HoroShaderBuild
         HoroGui

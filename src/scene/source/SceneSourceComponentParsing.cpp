@@ -1,6 +1,7 @@
 #include "SceneSourceInternal.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <functional>
 #include <limits>
@@ -422,6 +423,22 @@ namespace Horo::SceneSource::Detail {
         return Result<void>::Success();
     }
 
+    /** @brief Parses an explicitly authored listener without inventing a listener for legacy scenes. */
+    [[nodiscard]] Result<Runtime::AudioListenerComponent> ParseAudioListenerComponent(const Json &value) {
+        if (!value.is_object() || !HasFields(value, {"view", "priority", "weight", "enabled"}) || !value["view"].is_number_unsigned() ||
+            value["view"].get<std::uint64_t>() > 16 || !value["priority"].is_number_integer() ||
+            (value["priority"].is_number_unsigned() && value["priority"].get<std::uint64_t>() > std::numeric_limits<std::int32_t>::max()) ||
+            !value["weight"].is_number() || !value["enabled"].is_boolean())
+            return Result<Runtime::AudioListenerComponent>::Failure(PersistenceError(SceneInvalid, "Audio listener is invalid."));
+        const auto priority = value["priority"].get<std::int64_t>();
+        const float weight = value["weight"].get<float>();
+        if (priority < std::numeric_limits<std::int32_t>::min() || priority > std::numeric_limits<std::int32_t>::max() ||
+            !std::isfinite(weight) || weight <= 0.0F)
+            return Result<Runtime::AudioListenerComponent>::Failure(PersistenceError(SceneInvalid, "Audio listener values are invalid."));
+        return Result<Runtime::AudioListenerComponent>::Success(
+            {value["view"].get<std::uint32_t>(), static_cast<std::int32_t>(priority), weight, value["enabled"].get<bool>()});
+    }
+
     [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value, std::size_t &recognized) {
         recognized = 0;
         if (!value.is_object()) {
@@ -439,6 +456,8 @@ namespace Horo::SceneSource::Detail {
         if (auto parsed = parse("triggerVolume", components.triggerVolume, ParseTriggerVolumeComponent); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("audioSource", components.audioSource, ParseAudioSourceComponent); parsed.HasError())
+            return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
+        if (auto parsed = parse("audioListener", components.audioListener, ParseAudioListenerComponent); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("navigationSurface", components.navigationSurface, ParseNavigationSurface); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());

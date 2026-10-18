@@ -1,3 +1,4 @@
+#include "Horo/Assets/AssetCookInputSnapshot.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
@@ -77,7 +78,13 @@ namespace {
     class Module final : public IGameModule {
     public:
         Result<void> Register(GameRegistrationContext &) override {
-            return VerifyCharacterAuthoringModel();
+            if (auto character = VerifyCharacterAuthoringModel(); character.HasError())
+                return character;
+            // The source-free exported Assets archive must supply the additive host factory symbol.
+            // An empty root rejects before any filesystem access and grants no project authority.
+            const auto rejected = Assets::AssetCookInputSnapshot::CaptureSelected({}, {}, {}, {}, 1);
+            return rejected.HasError() ? Result<void>::Success()
+                                       : Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent));
         }
 
         Result<void> Start(GameRuntimeContext &context) override {

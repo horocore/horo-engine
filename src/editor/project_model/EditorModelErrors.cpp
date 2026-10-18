@@ -32,6 +32,15 @@ namespace Horo::Editor {
             .retryable = false,
             .userActionable = true,
         };
+        const ErrorCodeDescriptor InvalidAudioListener{
+            .domain = SceneDocumentDomain,
+            .code = ErrorCode{"scene_document.invalid_audio_listener"},
+            .defaultSeverity = ErrorSeverity::Error,
+            .summary = "Scene audio listener is invalid.",
+            .remediationHint = "Use a view in 0..16 and a finite positive listener weight.",
+            .retryable = false,
+            .userActionable = true,
+        };
         const ErrorCodeDescriptor InvalidBehavior{
             .domain = SceneDocumentDomain,
             .code = ErrorCode{"scene_document.invalid_behavior"},

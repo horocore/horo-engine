@@ -351,3 +351,17 @@ capture until explicitly implemented. Native composition supplies the real
 operation; no Scene data migration, GameModule SDK change or query-limit increase
 is involved. Platform ceiling/stop/path regressions and the actual CLI test with
 an authored Scene larger than 1 MiB qualify this boundary.
+
+## Workspace host composition update
+
+Private workspace composition now supplies collision inventory, activation and
+the borrowed preview receipt source through `EditorWorkspaceDependencies::collision`.
+Its `gameplay` group supplies the borrowed build service, copied build environment
+and shared module retirement queue. The explicit Play factory remains independently
+owned by the application. Callers migrate these named fields together; ownership,
+shutdown ordering and the exact receipt authority remain unchanged.
+
+Play structural preparation resolves the controller's current BehaviorRuntime at
+each synchronous transaction. It must observe initialization and reload replacement
+rather than capturing a null or retired runtime at Scene-host construction.
+The controller shuts down its Scene host before the captured owner is destroyed.

@@ -10,6 +10,7 @@ set(HORO_CI_AUDIO_TARGETS
     HoroAudioCommandTests
     HoroAudioMixerTests
     HoroAudioEditorPreviewTests
+    HoroAudioComponentPreviewHostTests
     HoroAudioFrontendPublicHeaderConsumer
 )
 
@@ -146,6 +147,8 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroPrefabSceneExpansionTests
     HoroPrefabSceneExpansionContractConsumer
     HoroAssetRegistryTests
+    HoroAssetCookServiceTests
+    HoroAssetsPublicHeaderConsumer
     HoroInputTests
     HoroAndroidInputTests
     HoroAndroidInputIntegrationPublicHeaderConsumer

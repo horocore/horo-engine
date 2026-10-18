@@ -402,10 +402,10 @@ namespace Horo::Runtime {
                     candidate.slots[index].generation != scene.storage_.slots[index].generation)
                     return Result<void>::Failure(MakeError(SceneErrors::CharacterStructuralUnsupported));
                 std::optional<std::size_t> ancestor = index;
-                while (ancestor) {
+                while (ancestor.has_value()) {
                     const auto &before = scene.storage_.slots[*ancestor];
-                    const auto &after = candidate.slots[*ancestor];
-                    if (before.parent != after.parent || before.localTransform != after.localTransform)
+                    if (const auto &after = candidate.slots[*ancestor];
+                        before.parent != after.parent || before.localTransform != after.localTransform)
                         return Result<void>::Failure(MakeError(SceneErrors::CharacterStructuralUnsupported));
                     ancestor = before.parent ? std::optional<std::size_t>{before.parent->index} : std::nullopt;
                 }

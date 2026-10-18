@@ -165,15 +165,15 @@ namespace Horo::Physics::Detail {
                 if (handle.HasError())
                     return Result<void>::Failure(AddActivationContext(handle.ErrorValue(), "character create", planned.object,
                                                                       planned.component.value, descriptor.defaultMaterial.asset));
-                auto spawned = Character::Detail::CharacterScenePlacement::Spawn(character, handle.Value(), query, planned.heading);
-                if (spawned.HasError())
+                if (auto spawned = Character::Detail::CharacterScenePlacement::Spawn(character, handle.Value(), query, planned.heading);
+                    spawned.HasError())
                     return Result<void>::Failure(AddActivationContext(spawned.ErrorValue(), "character spawn", planned.object,
                                                                       planned.component.value, descriptor.defaultMaterial.asset));
                 auto transform = character.ControllerTransform(handle.Value());
                 if (transform.HasError())
                     return Result<void>::Failure(transform.ErrorValue());
-                staged.characterBindings.push_back({planned.object, planned.component, handle.Value()});
-                staged.placements.push_back({planned.owner, transform.Value().position, transform.Value().heading});
+                staged.characterBindings.emplace_back(planned.object, planned.component, handle.Value());
+                staged.placements.emplace_back(planned.owner, transform.Value().position, transform.Value().heading);
             }
             return Result<void>::Success();
         }
