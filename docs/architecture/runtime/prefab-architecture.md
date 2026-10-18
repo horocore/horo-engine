@@ -1058,3 +1058,31 @@ replace the authoritative Asset Registry or narrow canonical Prefab source limit
 See [Prefab hierarchy](../../guides/prefab-hierarchy.md) for migration, finite
 capture limits, lifecycle policy and the distinction between cooperative drift
 checks and an OS atomic filesystem snapshot.
+
+## Application-owned cooked template composition
+
+`HoroEditorSceneProductHost` and `HoroNetworkProductHost` are application
+composition roots. They explicitly own the cooked template provider and the
+AI Scene integration for each exact Scene lifetime, alongside the existing
+Physics and Gameplay participants. The editor host directly links
+`HoroAISceneIntegration`, `HoroPrefabRuntime` and `HoroSceneRuntimeConversion`;
+the network/headless host also directly links `HoroAISceneIntegration`. These
+edges compose peer services at the host boundary, without adding dependencies
+from Scene Runtime to Prefab, AI or Gameplay.
+
+`HoroRuntimeScene` owns the inert built-in component identity/count metadata in
+`BuiltinSceneComponents.h`. `HoroSceneRuntimeConversion` owns the bounded
+canonical Scene codec adapter in `PrefabComponentProjection.h`. The application
+supplies that adapter to runtime prefab spawning; Prefab Runtime neither
+discovers a codec nor reads authoring source files. Unsupported native component
+representations fail explicitly, and unknown project-owned payloads retain their
+registered component identity and complete bytes.
+
+The host registers all required structural participants before Scene startup.
+Scene remains the sole publisher of the complete group: failed Physics, AI or
+Gameplay preparation rolls back unpublished candidates and preserves resident
+state. Provider cancellation and admission close before Scene teardown; Scene
+drains its owners before host AI shutdown and native module retirement. Owned
+providers and borrowed providers obey the same exact Scene identity fences.
+Public-header consumers and real multi-owner rollback/lifecycle tests qualify
+the two narrow headers and the application composition.

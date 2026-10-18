@@ -38,7 +38,8 @@ add_library(HoroEditorSceneProductHost STATIC common/EditorProjectSceneHost.cpp)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySceneHostInternal HoroScenePhysicsHost
-        HoroEngine::Application HoroEngine::ProjectCollisionSettings)
+        HoroEngine::Application HoroEngine::ProjectCollisionSettings HoroEngine::AISceneIntegration
+        HoroEngine::PrefabRuntime HoroEngine::SceneRuntimeConversion)
 
 add_library(HoroNetworkProductHost STATIC
     common/NetworkProductHost.cpp
@@ -52,7 +53,7 @@ target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua
     HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
-    HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion)
+    HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
 
 # The terminal/headless composition remains available without GUI or GPU targets.

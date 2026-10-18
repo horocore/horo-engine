@@ -26,6 +26,15 @@ namespace Horo::Gameplay {
         return state_->submitDespawn(*state_, instance, notBeforeTick, scope_, revocation_.Token(), cancellation);
     }
 
+    /** @copydoc GameplayPrefabContext::CurrentTick */
+    Result<std::uint64_t> GameplayPrefabContext::CurrentTick() const {
+        if (auto valid = state_->Check(); valid.HasError())
+            return Result<std::uint64_t>::Failure(valid.ErrorValue());
+        if (revocation_.Token().IsCancellationRequested())
+            return Result<std::uint64_t>::Failure(MakeError(Prefab::PrefabErrors::Cancelled));
+        return Result<std::uint64_t>::Success(state_->tick);
+    }
+
     /** @copydoc GameplayPrefabContext::Revoke */
     void GameplayPrefabContext::Revoke() const noexcept {
         revocation_.RequestCancellation();
@@ -142,7 +151,9 @@ namespace Horo::Prefab {
             return nullptr;
         if (operation_->error)
             return &*operation_->error;
-        return operation_->receipt ? operation_->receipt->Failure() : nullptr;
+        if (const auto *failure = operation_->receipt ? operation_->receipt->Failure() : nullptr)
+            return failure;
+        return operation_->status == PrefabSpawnState::Cancelled ? &operation_->cancelledFailure : nullptr;
     }
 
     /** @copydoc PrefabOperation::Cancel */
@@ -153,9 +164,9 @@ namespace Horo::Prefab {
 
     /** @copydoc PrefabSpawnService::PrefabSpawnService */
     PrefabSpawnService::PrefabSpawnService(PrefabTemplateProvider &provider, Runtime::RuntimeSceneService &scenes,
-                                           const Gameplay::ComponentRegistry *components)
+                                           const Gameplay::ComponentRegistry *components, const PrefabComponentProjector *projector)
         : state_(
-              std::make_shared<Detail::PrefabSpawnState>(provider, scenes, components,
+              std::make_shared<Detail::PrefabSpawnState>(provider, scenes, components, projector,
                                                          +[](Detail::PrefabSpawnState &state, const PrefabSpawnRequest &request,
                                                              const std::uint64_t scope, const CancellationToken &revocation,
                                                              const CancellationToken &cancellation,
@@ -276,5 +287,6 @@ namespace Horo::Prefab {
         state_->provider = nullptr;
         state_->scenes = nullptr;
         state_->components = nullptr;
+        state_->projector = nullptr;
     }
 }  // namespace Horo::Prefab

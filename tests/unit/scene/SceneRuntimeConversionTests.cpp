@@ -1,6 +1,10 @@
+#include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
+#include "SceneSourceInternal.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
+#include <limits>
 
 namespace {
     using namespace Horo;
@@ -14,20 +18,23 @@ namespace {
         const Application::HoroVersion version = Application::ParseHoroVersion("1.2.3").Value();
         Assets::AssetRegistry registry;
 
-        PrefabSourceResolverSnapshot Resolver(const std::string_view rootName = "Root") {
+        PrefabSourceResolverSnapshot Resolver(const std::string_view rootName = "Root", std::vector<RawComponentPayload> components = {},
+                                              std::vector<RawComponentPayload> childComponents = {}) {
             REQUIRE(registry
                         .Publish({{asset, Assets::AssetTypeId::Parse("core.prefab").Value(),
                                    ProjectPath::Parse("assets/hierarchy.prefab").Value(),
                                    ProjectPath::Parse("assets/hierarchy.prefab.horo").Value()}})
                         .status == Assets::AssetRegistryBuildStatus::Complete);
-            auto document = PrefabDocument::Create({.projectVersion = version,
-                                                    .assetId = asset,
-                                                    .objects = {{.localId = {0}, .name = std::string{rootName}},
-                                                                {.localId = {3},
-                                                                 .parentLocalId = LocalObjectId{0},
-                                                                 .name = "Child",
-                                                                 .localTransform = {.translation = {0, 4, 0}}}}},
-                                                   limits);
+            auto document =
+                PrefabDocument::Create({.projectVersion = version,
+                                        .assetId = asset,
+                                        .objects = {{.localId = {0}, .name = std::string{rootName}, .components = std::move(components)},
+                                                    {.localId = {3},
+                                                     .parentLocalId = LocalObjectId{0},
+                                                     .name = "Child",
+                                                     .localTransform = {.translation = {0, 4, 0}},
+                                                     .components = std::move(childComponents)}}},
+                                       limits);
             REQUIRE(document.HasValue());
             auto canonical = document.Value().SerializeCanonical();
             REQUIRE(canonical.HasValue());
@@ -111,4 +118,52 @@ TEST_CASE("Headless scene conversion rejects incomplete expansion without publis
     REQUIRE(objects.size() == 1);
     REQUIRE(placements.size() == 2);
     REQUIRE(ConvertSceneSourceToRuntime({objects, placements}, {1}, {2}).HasError());
+}
+
+TEST_CASE("Prefab Physics local endpoints reject wide Scene IDs instead of aliasing a local object", "[native][prefab-cook][physics]") {
+    ConversionFixture fixture;
+    const auto endpoint = GENERATE(std::uint64_t{3}, (std::uint64_t{1} << 32U) | 3U, std::numeric_limits<std::uint64_t>::max());
+    CAPTURE(endpoint);
+    SceneObjectComponentSet typed;
+    typed.rigidBody = Runtime::RigidBodyComponent{.id = {1}, .body = {1}};
+    typed.colliders.push_back({.id = {2},
+                               .collider = {1},
+                               .body = {{endpoint}, {1}},
+                               .collisionProfile = Physics::CollisionProfileId::Parse("00000000-0000-0000-0000-000000000001").Value(),
+                               .materials = {{Physics::PhysicsMaterialSlotId::FromValue(1),
+                                              Assets::AssetId::Parse("00000000-0000-0000-0000-000000000002").Value()}}});
+    const auto json = Detail::ComponentsJson(typed).ToJson();
+    const auto payload = [](const std::string_view type, const std::string &bytes, const std::uint64_t occurrence) {
+        RawComponentPayload result{.instance = PrefabComponentInstanceId::Create(occurrence).Value(),
+                                   .component = {.typeId = Gameplay::ComponentTypeId::Parse(type).Value(),
+                                                 .schemaVersion = 1,
+                                                 .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson}};
+        for (const unsigned char value : bytes)
+            result.component.payload.push_back(static_cast<std::byte>(value));
+        return result;
+    };
+    const auto resolver = fixture.Resolver("Physics", {},
+                                           {payload("game.horo.rigid_body", json.at("rigidBody").dump(), 1),
+                                            payload("game.horo.collider", json.at("colliders").at(0).dump(), 2)});
+    const std::vector<SceneObjectSnapshot> objects{{.id = {900}, .name = "Containing scene"}};
+    const std::vector<ScenePrefabInstance> placements{fixture.Placement(7)};
+    const auto converted = ConvertSceneSourceToRuntime({objects, placements}, {1}, {2}, resolver, fixture.limits);
+    std::string diagnostic;
+    if (converted.HasError())
+        for (const Error *error = &converted.ErrorValue(); error; error = error->cause.Get())
+            diagnostic.append(error->code.Value()).append(": ").append(error->message).append("\n");
+    INFO(diagnostic);
+    if (endpoint > std::numeric_limits<std::uint32_t>::max()) {
+        REQUIRE(converted.HasError());
+        bool rejectedWideIdentity{};
+        for (const Error *error = &converted.ErrorValue(); error; error = error->cause.Get())
+            rejectedWideIdentity = rejectedWideIdentity || error->code.Value() == PrefabErrors::ReferenceRewriteInvalid.code.Value();
+        CHECK(rejectedWideIdentity);
+    } else {
+        REQUIRE(converted.HasValue());
+        const auto &child = converted.Value().Entities()[2];
+        REQUIRE(child.components.colliders.size() == 1);
+        CHECK(child.components.colliders.front().body.object == child.object);
+    }
+    CHECK(typed.colliders.front().body.object.value == endpoint);
 }

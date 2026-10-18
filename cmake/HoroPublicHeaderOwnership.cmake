@@ -11,6 +11,7 @@ horo_configure_target_header_boundary(HoroSceneSource PUBLIC_HEADERS
     Horo/Scene/SceneSource.h
 )
 horo_configure_target_header_boundary(HoroSceneRuntimeConversion PUBLIC_HEADERS
+    Horo/Scene/PrefabComponentProjection.h
     Horo/Scene/SceneRuntimeConversion.h
     Horo/Scene/ScenePrefabExpansionOwner.h
 )
@@ -477,6 +478,7 @@ horo_configure_target_header_boundary(HoroGameplayApi PUBLIC_HEADERS
     Horo/Gameplay/SystemRegistry.h
 )
 horo_configure_target_header_boundary(HoroRuntimeScene PUBLIC_HEADERS
+    Horo/Runtime/Scene/BuiltinSceneComponents.h
     Horo/Runtime/Scene/AudioSceneExtraction.h
     Horo/Runtime/Scene/NavigationSceneComponents.h
     Horo/Runtime/Scene/PersistentEntityIdentity.h

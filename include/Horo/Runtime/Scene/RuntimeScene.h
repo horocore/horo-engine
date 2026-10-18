@@ -593,10 +593,30 @@ namespace Horo::Runtime {
         AI
     };
 
+    /** @brief Explicit structural preparation order, independent of host registration order. */
+    enum class SceneStructuralPreparationPhase {
+        Identity,
+        DerivedResources
+    };
+
+    /** @brief AI-owned identity reservation for one new verified prefab entity in the private candidate. */
+    struct SceneAgentIdentityProjection final {
+        EntityRef entity;
+        AI::AgentId original;
+        AI::AgentId resolved;
+    };
+
     /** @brief Unpublished subsystem additions/removals owned until aggregate commit or rollback. */
     class SceneStructuralCandidate {
     public:
         virtual ~SceneStructuralCandidate() = default;
+
+        /** @brief Borrows complete identity facts until candidate destruction; only the AI identity producer may return facts.
+         * @return Empty for existing derived owners. Scene validates the complete set before dependent preparation. */
+        [[nodiscard]] virtual std::span<const SceneAgentIdentityProjection> AgentIdentities() const noexcept {
+            return {};
+        }
+
         /** @brief Rechecks exact owner generations after every candidate has prepared. @return Typed failure without publication. */
         [[nodiscard]] virtual Result<void> ValidatePublication() const = 0;
         /** @brief Publishes fully reserved owner state at the drained lifecycle safe point; no callbacks/allocation/failure. */
@@ -615,12 +635,19 @@ namespace Horo::Runtime {
     };
 
     /** @brief Host structural-participant virtual contract revision; external host implementations must rebuild. */
-    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 2;
+    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 3;
 
     /** @brief Application-composed subsystem participant for bounded Scene group transactions. */
     class SceneStructuralParticipant {
     public:
         virtual ~SceneStructuralParticipant() = default;
+
+        /** @brief Declares preparation authority. Exactly one AI owner may produce identities; existing owners remain derived.
+         * @return Explicit phase, never inferred from registration order. */
+        [[nodiscard]] virtual SceneStructuralPreparationPhase PreparationPhase() const noexcept {
+            return SceneStructuralPreparationPhase::DerivedResources;
+        }
+
         /** @brief Names the one subsystem this participant owns. @return Stable owner category. */
         [[nodiscard]] virtual SceneStructuralOwner Owner() const noexcept = 0;
         /** @brief Prevalidates every attached/replacement baseline before any owner prepares a native candidate.

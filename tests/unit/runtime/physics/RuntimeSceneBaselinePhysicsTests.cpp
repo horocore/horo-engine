@@ -1,5 +1,6 @@
 #include "Horo/Application/PhysicsTriggerVolumeHost.h"
 #include "Horo/Assets/AssetCook.h"
+#include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "PhysicsSceneActivationTestSupport.h"
 
 namespace Horo::Physics {
@@ -164,7 +165,13 @@ namespace Horo::Physics {
                 artifact.id = material;
                 artifact.type = type;
                 artifact.target = AssetCookTargetId::Parse("test-host").Value();
-                artifact.payload = {1, 2, 3};
+                const auto materialValue =
+                    PhysicsMaterialAsset::Create({.id = PhysicsMaterialAssetId::FromAssetId(material), .sourceRevision = 1});
+                REQUIRE(materialValue.HasValue());
+                const auto payload = EncodePhysicsMaterialAsset(materialValue.Value());
+                REQUIRE(payload.HasValue());
+                for (const auto byte : payload.Value())
+                    artifact.payload.push_back(std::to_integer<std::uint8_t>(byte));
                 artifact.payloadDigest = ComputeSha256(std::as_bytes(std::span{artifact.payload}));
                 auto encoded = Assets::EncodeCookedArtifact(artifact).Value();
                 cache = Assets::AssetPayloadCache::Create(2, 1024 * 1024).Value();

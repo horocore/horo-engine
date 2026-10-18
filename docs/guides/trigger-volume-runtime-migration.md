@@ -152,7 +152,7 @@ no compatibility fallback: encode/cook the selected real project material first.
 
 ## Host structural participant contract migration
 
-`SceneStructuralParticipantContractVersion` is now 2. The new virtual
+This migration introduced `SceneStructuralParticipantContractVersion` 2. The virtual
 `SceneStructuralParticipant::ValidateBaselines` receives every exact attached or
 replacement baseline and its immutable resource leases for one transaction. Scene
 calls all owners' prevalidation before any owner `Prepare`; the existing single

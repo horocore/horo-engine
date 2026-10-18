@@ -165,11 +165,41 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Decodes one independent capability grant without inferring authority from cooked-file presence. */
+        Result<void> ReadPrefabPermission(std::span<char *> arguments, std::size_t &index, std::optional<bool> &grant) {
+            if (grant.has_value() || arguments.size() - index < 2)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Duplicate or missing prefab permission."));
+            const std::string_view value{arguments[index + 1]};
+            if (value != "grant" && value != "deny")
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Prefab permission must be grant or deny."));
+            grant = value == "grant";
+            index += 2;
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates the complete option set before recording any explicit prefab grant. */
+        Result<void> ApplyPrefabPermission(ProductLaunch &launch, std::optional<bool> grant) {
+            if (!grant.has_value())
+                return Result<void>::Success();
+            if (!launch.gameplay || (*grant && launch.sceneInput.scene.empty()))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                              "Prefab permission requires selected gameplay and grant requires a configured project Scene."));
+            launch.gameplay->prefabPermission = *grant ? GameplayPrefabPermission::Granted : GameplayPrefabPermission::Denied;
+            return Result<void>::Success();
+        }
+
         /** @brief Keeps legacy gameplay suffix parsing separate from paired explicit Scene options. */
         Result<void> ParseSceneOptions(const std::span<char *> arguments, ProductLaunch &launch) {
             SeenSceneOptions seen{};
+            std::optional<bool> prefabGrant;
             for (std::size_t index = 0; index < arguments.size();) {
                 const std::string_view key{arguments[index]};
+                if (key == "--prefab") {
+                    if (auto permission = ReadPrefabPermission(arguments, index, prefabGrant); permission.HasError())
+                        return permission;
+                    continue;
+                }
                 if (key == "--game-module" || key == "--game-script") {
                     if (launch.gameplay || arguments.size() - index < 5)
                         return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
@@ -194,6 +224,8 @@ namespace Horo::Application::Internal {
                 seen[optionIndex] = true;
                 index += 2;
             }
+            if (auto permission = ApplyPrefabPermission(launch, prefabGrant); permission.HasError())
+                return permission;
             return ValidateSceneOptions(seen, launch.sceneInput);
         }
 

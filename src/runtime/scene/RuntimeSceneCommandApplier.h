@@ -1,10 +1,12 @@
 #pragma once
 
 /** @file RuntimeSceneCommandApplier.h @brief Target-private structural command application against detached Scene storage. */
+#include "Horo/Runtime/Scene/BuiltinSceneComponents.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "RuntimeSceneErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <ranges>
 #include <utility>
@@ -118,8 +120,10 @@ namespace Horo::Runtime {
         /** @brief Validates complete occurrence metadata before resolving its interfaces. */
         [[nodiscard]] static Result<void> ValidateInterfaceMembers(const RuntimeEntityGroupEntry &entry) {
             if (!entry.members.empty() &&
-                entry.members.size() != entry.info.components.behaviors.size() + entry.info.components.gameplayComponents.size())
+                entry.members.size() != entry.info.components.behaviors.size() + entry.info.components.gameplayComponents.size() +
+                                            BuiltinSceneComponentCount(entry.info.components, entry.info.primitiveMesh.has_value()))
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+            std::array<std::size_t, static_cast<std::size_t>(BuiltinSceneComponentKind::Count)> builtinOccurrences{};
             for (std::size_t member = 0; member < entry.members.size(); ++member) {
                 const auto &identity = entry.members[member];
                 const bool exists = identity.instance != 0 && std::visit([&]<typename Type>(const Type &type) {
@@ -127,10 +131,15 @@ namespace Horo::Runtime {
                         return std::ranges::any_of(entry.info.components.behaviors, [&](const auto &component) {
                             return component.typeId == type && component.instanceId.value == identity.instance;
                         });
-                    else
+                    else {
+                        if (const auto kind = FindBuiltinSceneComponent(type.Value())) {
+                            auto &seen = builtinOccurrences[static_cast<std::size_t>(*kind)];
+                            return ++seen <= BuiltinSceneComponentCount(entry.info.components, *kind, entry.info.primitiveMesh.has_value());
+                        }
                         return std::ranges::any_of(entry.info.components.gameplayComponents, [&](const auto &component) {
                             return component.typeId == type;
                         });
+                    }
                 }, identity.type);
                 if (!exists || std::find(entry.members.begin(), entry.members.begin() + static_cast<std::ptrdiff_t>(member), identity) !=
                                    entry.members.begin() + static_cast<std::ptrdiff_t>(member))
@@ -346,9 +355,26 @@ namespace Horo::Runtime {
             return resourceGroup;
         }
 
+        /** @brief Native Navigation has only whole-Scene activation today; structural work must never silently omit that owner. */
+        static bool HasEnabledNavigation(const RuntimeComponentSet &components) {
+            const auto enabled = [](const auto &value) {
+                return value && value->enabled;
+            };
+            return enabled(components.navigationSurface) || enabled(components.navigationRegion) ||
+                   enabled(components.navigationModifier) || enabled(components.navigationLink) || enabled(components.navigationAgent);
+        }
+
         /** @brief Requires explicit composition of each owner needed by the projected typed components. */
         Result<void> ValidateOwners(const std::span<const RuntimeEntityView> created, const std::span<const EntityRef> destroyed,
                                     const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants) const {
+            if (std::ranges::any_of(created,
+                                    [](const auto &entity) {
+                return HasEnabledNavigation(*entity.components);
+            }) ||
+                std::ranges::any_of(destroyed, [&](const auto &entity) {
+                return HasEnabledNavigation(scene.storage_.slots[entity.entity.index].components);
+            }))
+                return Result<void>::Failure(MakeError(SceneErrors::NavigationStructuralUnsupported));
             const auto needs = [&](SceneStructuralOwner owner) {
                 const auto componentsNeed = [owner](const RuntimeComponentSet &components) {
                     using enum SceneStructuralOwner;
@@ -413,9 +439,104 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
+        /** @brief Requires exact retained prefab provenance, never a name or an authored numeric-ID heuristic. */
+        static bool RequiresPrefabIdentity(const RuntimeEntityView &entity) {
+            return entity.components && entity.components->aiAgent && !entity.groupSpawnLineage.empty() &&
+                   std::ranges::any_of(entity.groupAssets, [&](const auto &asset) {
+                return asset.metadata.id == entity.groupSpawnLineage.back() && asset.metadata.expectedType.Value() == "core.prefab" &&
+                       !asset.artifact.Bytes().empty();
+            });
+        }
+
+        /** @brief Rejects duplicate ownership and foreign identity authorities before any owner prepares. */
+        static Result<void> ValidatePreparationAuthorities(
+            const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants) {
+            for (std::size_t index = 0; index < participants.size(); ++index) {
+                const auto &participant = participants[index];
+                if (!participant || (participant->PreparationPhase() == SceneStructuralPreparationPhase::Identity &&
+                                     participant->Owner() != SceneStructuralOwner::AI))
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (participants[previous]->Owner() == participant->Owner())
+                        return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Duplicate structural owner authority."));
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates complete, entity-qualified AI facts without mutating the detached Scene candidate. */
+        static Result<void> ValidateAgentIdentityFacts(const std::span<const RuntimeEntityView> created,
+                                                       const std::span<const SceneAgentIdentityProjection> facts) {
+            for (std::size_t index = 0; index < facts.size(); ++index) {
+                const auto &fact = facts[index];
+                const auto entity = std::ranges::find(created, fact.entity, &RuntimeEntityView::entity);
+                if (entity == created.end() || !RequiresPrefabIdentity(*entity) || !fact.original.IsValid() || !fact.resolved.IsValid() ||
+                    entity->components->aiAgent->agent != fact.original)
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Foreign or malformed AI identity fact."));
+                for (std::size_t previous = 0; previous < index; ++previous)
+                    if (facts[previous].entity == fact.entity || facts[previous].resolved == fact.resolved)
+                        return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Duplicate AI identity fact."));
+            }
+            for (const auto &entity : created)
+                if (RequiresPrefabIdentity(entity) &&
+                    std::ranges::find(facts, entity.entity, &SceneAgentIdentityProjection::entity) == facts.end())
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Incomplete prefab AI identity reservation."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates all identity facts before mutating the private candidate or preparing dependent owners. */
+        Result<void> ApplyAgentIdentities(const std::span<const RuntimeEntityView> created,
+                                          const std::span<const SceneAgentIdentityProjection> facts) const {
+            if (auto valid = ValidateAgentIdentityFacts(created, facts); valid.HasError())
+                return valid;
+            for (const auto &fact : facts) {
+                for (std::size_t index = 0; index < candidate.slots.size(); ++index) {
+                    const auto &slot = candidate.slots[index];
+                    if (!slot.active || !slot.components.aiAgent)
+                        continue;
+                    const EntityRef entity{scene.runtimeId_, {static_cast<std::uint32_t>(index), slot.generation}};
+                    if (entity == fact.entity)
+                        continue;
+                    const auto other = std::ranges::find(facts, entity, &SceneAgentIdentityProjection::entity);
+                    const auto identity = other == facts.end() ? slot.components.aiAgent->agent : other->resolved;
+                    if (identity == fact.resolved)
+                        return Result<void>::Failure(
+                            MakeError(SceneErrors::InvalidCandidate, "Reserved AI identity conflicts with Scene."));
+                }
+            }
+            for (const auto &fact : facts)
+                candidate.slots[fact.entity.entity.index].components.aiAgent->agent = fact.resolved;
+            return Result<void>::Success();
+        }
+
+        /** @brief Prepares one explicit owner phase and rejects identity facts from derived-resource owners. */
+        Result<void> PrepareOwnerPhase(const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
+                                       const SceneStructuralPreparationPhase phase, const std::span<const RuntimeEntityView> created,
+                                       const std::span<const EntityRef> destroyed,
+                                       std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners,
+                                       std::span<const SceneAgentIdentityProjection> &identities) const {
+            for (const auto &participant : participants) {
+                if (participant->PreparationPhase() != phase)
+                    continue;
+                auto prepared = participant->Prepare(scene.View(), created, destroyed);
+                if (prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+                if (!prepared.Value())
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
+                const auto facts = prepared.Value()->AgentIdentities();
+                if (phase == SceneStructuralPreparationPhase::Identity)
+                    identities = facts;
+                else if (!facts.empty())
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Derived owner returned identity facts."));
+                owners.push_back(std::move(prepared).Value());
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Prepares and validates all owner candidates before Scene's final admission fence. */
         Result<void> PrepareOwners(const std::span<const std::unique_ptr<SceneStructuralParticipant>> participants,
                                    std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const {
+            if (auto authorities = ValidatePreparationAuthorities(participants); authorities.HasError())
+                return authorities;
             if (auto characters = ValidateCharacterStructuralChanges(); characters.HasError())
                 return characters;
             if (const auto valid = ValidateGroupReferences(); valid.HasError())
@@ -426,19 +547,20 @@ namespace Horo::Runtime {
             if (const auto valid = ValidateOwners(created, destroyed, participants); valid.HasError())
                 return valid;
             owners.reserve(participants.size());
-            if (resourceGroup) {
-                for (const auto &participant : participants) {
-                    auto prepared = participant->Prepare(scene.View(), created, destroyed);
-                    if (prepared.HasError())
-                        return Result<void>::Failure(prepared.ErrorValue());
-                    if (!prepared.Value())
-                        return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
-                    owners.push_back(std::move(prepared).Value());
+            if (!resourceGroup)
+                return Result<void>::Success();
+            std::span<const SceneAgentIdentityProjection> identities;
+            for (const auto phase : {SceneStructuralPreparationPhase::Identity, SceneStructuralPreparationPhase::DerivedResources}) {
+                if (auto prepared = PrepareOwnerPhase(participants, phase, created, destroyed, owners, identities); prepared.HasError())
+                    return prepared;
+                if (phase == SceneStructuralPreparationPhase::Identity) {
+                    if (auto applied = ApplyAgentIdentities(created, identities); applied.HasError())
+                        return applied;
                 }
-                for (const auto &owner : owners) {
-                    if (auto valid = owner->ValidatePublication(); valid.HasError())
-                        return Result<void>::Failure(valid.ErrorValue());
-                }
+            }
+            for (const auto &owner : owners) {
+                if (auto valid = owner->ValidatePublication(); valid.HasError())
+                    return Result<void>::Failure(valid.ErrorValue());
             }
             return Result<void>::Success();
         }

@@ -13,6 +13,10 @@
 #include <optional>
 #include <string_view>
 
+namespace Horo::Gameplay {
+    class ComponentRegistry;
+}
+
 namespace Horo::Editor {
     /** @brief Host-reserved namespace divider; edit preview admission stays strictly below this value. */
     inline constexpr std::uint64_t EditorPlaySceneNamespace = 0x8000000000000000ULL;
@@ -62,6 +66,30 @@ namespace Horo::Editor {
         [[nodiscard]] virtual Result<Gameplay::BehaviorRuntimeServiceBindings> GameplayServices() {
             return Result<Gameplay::BehaviorRuntimeServiceBindings>::Success({});
         }
+
+        /** @brief Acquires the explicitly granted prefab capability after aggregate readiness.
+         * @param registry Frozen project-owned behavior snapshot, outliving its runtime.
+         * @param components Frozen Scene-epoch project component metadata, outliving this host.
+         * @return Host-owned context or an empty context for denied/unselected composition; no ambient provider discovery. */
+        [[nodiscard]] virtual Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &,
+                                                                                                      const Gameplay::ComponentRegistry &) {
+            return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(nullptr);
+        }
+
+        /** @brief Drives owned pending prefab preparation and the sole Scene safe-point transaction.
+         * @param frame Actual owner-lane frame/cancellation boundary. @return Original preparation/commit failure. */
+        [[nodiscard]] virtual Result<void> CommitSceneChanges(const Runtime::FrameContext &frame) {
+            return Scenes().OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame);
+        }
+
+        /** @brief Advances capability tick admission before behavior fixed callbacks without simulating or blocking.
+         * @param delta Actual host fixed quantum. @return Admission failure or success for a host without prefabs. */
+        [[nodiscard]] virtual Result<void> BeginFixedUpdate(Gameplay::FixedDeltaTime) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Revokes module-owned pending prefab work before behavior reload; resident Scene groups keep their leases. */
+        virtual void QuiesceGameplay() noexcept {}
 
         /** @brief Borrows actual capture/publication facts without allocating or inferring a backend.
          * @return Owner-lane receipt or unknown for hosts which supply no verified Physics evidence.

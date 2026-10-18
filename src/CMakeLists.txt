@@ -905,6 +905,7 @@ target_compile_definitions(HoroGameplayApi PRIVATE
 )
 
 add_library(HoroRuntimeScene STATIC
+        runtime/scene/BuiltinSceneComponents.cpp
         runtime/scene/AudioSceneExtraction.cpp
         runtime/scene/NavigationSceneComponents.cpp
         runtime/scene/PersistentEntityIdentity.cpp
@@ -2688,6 +2689,7 @@ target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
 
 # Shared headless conversion owner. Editor is a downstream snapshot adapter, not a cook dependency.
 add_library(HoroSceneRuntimeConversion STATIC
+        scene/source/PrefabComponentProjection.cpp
         scene/source/ScenePrefabCachedConversion.cpp
         scene/source/ScenePrefabValueProjection.cpp
         scene/source/SceneRuntimeConversion.cpp

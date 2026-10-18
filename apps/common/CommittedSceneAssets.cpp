@@ -41,6 +41,9 @@ namespace Horo::Application::Internal {
             // Keep the actual verified metadata and bytes. This provider is populated only from
             // committed envelopes, never from synthetic material or Scene artifacts.
             result->provider_.Insert(entry.assetId, artifact.Value().payload);
+            // Transfer the original verified envelope, including its framing and whole-artifact digest input.
+            // The decoded payload provider retains its established Scene/material loading semantics.
+            result->artifactProvider_.Insert(entry.assetId, std::move(contents.Value().artifacts[index]));
             result->artifacts_.push_back(std::move(artifact).Value());
         }
         return Result<std::unique_ptr<CommittedSceneAssets>>::Success(std::move(result));
@@ -49,6 +52,11 @@ namespace Horo::Application::Internal {
     /** @copydoc CommittedSceneAssets::Provider */
     const Assets::IAssetProvider &CommittedSceneAssets::Provider() const noexcept {
         return provider_;
+    }
+
+    /** @copydoc CommittedSceneAssets::ArtifactProvider */
+    const Assets::IAssetProvider &CommittedSceneAssets::ArtifactProvider() const noexcept {
+        return artifactProvider_;
     }
 
     /** @copydoc CommittedSceneAssets::Find */

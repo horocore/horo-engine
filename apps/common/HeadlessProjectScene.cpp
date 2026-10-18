@@ -132,6 +132,8 @@ namespace Horo::Application::Internal {
         resources->loads =
             std::make_unique<Assets::AssetLoadService>(resources->jobs,
                                                        resources->committed ? resources->committed->Provider() : resources->empty);
+        if (resources->committed)
+            resources->prefabLoads = std::make_unique<Assets::AssetLoadService>(resources->jobs, resources->committed->ArtifactProvider());
         if (const auto settings = CaptureProductPhysics(launch, *resources, metadata.Value().projectId); settings.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(settings.ErrorValue());
         return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Success(std::move(resources));

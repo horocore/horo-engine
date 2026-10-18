@@ -5,6 +5,7 @@
 
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
+#include "Horo/Runtime/Scene/BuiltinSceneComponents.h"
 
 #include <algorithm>
 #include <functional>
@@ -36,6 +37,8 @@ namespace Horo::Prefab::Detail {
         std::shared_ptr<PrefabInstanceState> prepared;
         std::shared_ptr<const Runtime::SceneStructuralReceipt> receipt;
         std::optional<Error> error;
+        const Error cancelledFailure{
+            MakeError(PrefabErrors::Cancelled)}; /**< Prepared before admission; noexcept shutdown only borrows it. */
         std::vector<Assets::AssetId> lineage;
 
         /** @brief Records committed identity evidence without allocation, including shutdown during post-commit hooks. */
@@ -74,9 +77,10 @@ namespace Horo::Prefab::Detail {
                                                   const CancellationToken &, const CancellationToken &)>;
 
         PrefabSpawnState(PrefabTemplateProvider &templates, Runtime::RuntimeSceneService &sceneService,
-                         const Gameplay::ComponentRegistry *registry, SpawnDispatcher spawn, DespawnDispatcher despawn)
+                         const Gameplay::ComponentRegistry *registry, const PrefabComponentProjector *codec, SpawnDispatcher spawn,
+                         DespawnDispatcher despawn)
             : submitSpawn(std::move(spawn)), submitDespawn(std::move(despawn)), provider(&templates), scenes(&sceneService),
-              components(registry) {
+              components(registry), projector(codec) {
             if (const auto active = scenes->ActiveScene())
                 scene = active->RuntimeId();
         }
@@ -239,8 +243,10 @@ namespace Horo::Prefab::Detail {
         /** @brief Projects existing immutable members through current schema metadata, never a source parser or override engine. */
         struct Projection final {
             std::vector<Runtime::RuntimeComponentSet> components;
+            std::vector<std::optional<Runtime::PrimitiveMeshDescriptor>> primitiveMeshes;
             std::vector<std::vector<Runtime::RuntimeGroupMemberIdentity>> members;
             std::vector<std::vector<Runtime::RuntimeGroupReference>> references;
+            std::vector<std::vector<Runtime::GroupPhysicsBodyReference>> physicsReferences;
         };
 
         /** @brief Projects one cooked member while retaining the original behavior identity allocation order. */
@@ -250,6 +256,18 @@ namespace Horo::Prefab::Detail {
             auto &target = projection.components[entity];
             const auto &source = data.entities[entity].members[member];
             if (const auto *raw = std::get_if<RawComponentPayload>(&source)) {
+                if (projector) {
+                    auto projected = projector->Project(*raw, target, projection.primitiveMeshes[entity]);
+                    if (projected.HasError())
+                        return Result<void>::Failure(projected.ErrorValue());
+                    if (projected.Value()) {
+                        projection.members[entity].emplace_back(raw->component.typeId, raw->instance.Value());
+                        return Result<void>::Success();
+                    }
+                }
+                if (Runtime::FindBuiltinSceneComponent(raw->component.typeId.Value()))
+                    return Result<void>::Failure(MakeError(PrefabErrors::ComponentTypeUnregistered,
+                                                           "A canonical built-in component requires the host's typed projector."));
                 if (!components || !components->IsFrozen())
                     return Result<void>::Failure(MakeError(PrefabErrors::ComponentTypeUnregistered));
                 auto inspected = components->Inspect(raw->component);
@@ -300,6 +318,88 @@ namespace Horo::Prefab::Detail {
             }
         }
 
+        /** @brief Resolves a body in the exact source occurrence; no numeric Scene-ID inference crosses the prefab boundary. */
+        static Result<Runtime::RuntimeGroupEntitySlot> ResolveBody(const CookedPrefabData &data, const Projection &projection,
+                                                                   const std::size_t owner,
+                                                                   const Runtime::PhysicsBodyReference &reference) {
+            const auto &source = data.entities[owner].provenance;
+            std::optional<std::size_t> found;
+            for (std::size_t index = 0; index < data.entities.size(); ++index) {
+                const auto &target = data.entities[index].provenance;
+                if (source.sourceAsset != target.sourceAsset || target.sourceObject.SourceObject().value != reference.object.value ||
+                    !std::ranges::equal(source.sourceObject.NestedInstanceScope(), target.sourceObject.NestedInstanceScope()))
+                    continue;
+                if (found)
+                    return Result<Runtime::RuntimeGroupEntitySlot>::Failure(MakeError(PrefabErrors::CorruptedPayload));
+                found = index;
+            }
+            if (!found || !projection.components[*found].rigidBody || !projection.components[*found].rigidBody->enabled ||
+                projection.components[*found].rigidBody->body != reference.body)
+                return Result<Runtime::RuntimeGroupEntitySlot>::Failure(
+                    MakeError(PrefabErrors::CorruptedPayload, "Prefab Physics endpoint has no exact enabled source body."));
+            return Result<Runtime::RuntimeGroupEntitySlot>::Success({*found});
+        }
+
+        /** @brief Builds complete typed endpoint fixups before Scene reserves any entity or native owner. */
+        static Result<void> ProjectPhysicsReferences(const CookedPrefabData &data, Projection &projection) {
+            projection.physicsReferences.resize(data.entities.size());
+            for (std::size_t index = 0; index < projection.components.size(); ++index) {
+                const auto append = [&](const Runtime::GroupPhysicsReferenceKind kind, const std::size_t component,
+                                        const Runtime::PhysicsBodyReference &reference) -> Result<void> {
+                    auto target = ResolveBody(data, projection, index, reference);
+                    if (target.HasError())
+                        return Result<void>::Failure(target.ErrorValue());
+                    projection.physicsReferences[index].push_back({kind, component, target.Value(), reference.body});
+                    return Result<void>::Success();
+                };
+                const auto &components = projection.components[index];
+                for (std::size_t collider = 0; collider < components.colliders.size(); ++collider) {
+                    const auto &value = components.colliders[collider];
+                    if (!value.enabled)
+                        continue;
+                    if (auto valid = append(Runtime::GroupPhysicsReferenceKind::ColliderBody, collider, value.body); valid.HasError())
+                        return valid;
+                }
+                for (std::size_t constraint = 0; constraint < components.physicsConstraints.size(); ++constraint) {
+                    const auto &value = components.physicsConstraints[constraint];
+                    if (!value.enabled)
+                        continue;
+                    if (auto valid = append(Runtime::GroupPhysicsReferenceKind::ConstraintFirst, constraint, value.first.body);
+                        valid.HasError())
+                        return valid;
+                    const auto *second = std::get_if<Runtime::PhysicsConstraintBodyEndpoint>(&value.second);
+                    if (!second)
+                        continue;
+                    if (auto valid = append(Runtime::GroupPhysicsReferenceKind::ConstraintSecond, constraint, second->body);
+                        valid.HasError())
+                        return valid;
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Rejects malformed authored duplicates within one exact template occurrence before AI remapping.
+         * Repeated nested placements have distinct canonical scopes and may carry the same source-authored identity. */
+        static Result<void> ValidateAgentSources(const CookedPrefabData &data, const Projection &projection) {
+            for (std::size_t index = 0; index < projection.components.size(); ++index) {
+                const auto &agent = projection.components[index].aiAgent;
+                if (!agent)
+                    continue;
+                if (!agent->agent.IsValid())
+                    return Result<void>::Failure(MakeError(PrefabErrors::CorruptedPayload));
+                const auto &source = data.entities[index].provenance;
+                for (std::size_t previous = 0; previous < index; ++previous) {
+                    const auto &other = projection.components[previous].aiAgent;
+                    const auto &origin = data.entities[previous].provenance;
+                    if (other && other->agent == agent->agent && source.sourceAsset == origin.sourceAsset &&
+                        std::ranges::equal(source.sourceObject.NestedInstanceScope(), origin.sourceObject.NestedInstanceScope()))
+                        return Result<void>::Failure(MakeError(PrefabErrors::CorruptedPayload,
+                                                               "One prefab source occurrence contains duplicate authored AI identities."));
+                }
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Reserves ordered projection containers and stops on the first typed member failure. */
         [[nodiscard]] Result<Projection> Project(const PrefabSpawnOperation &operation) {
             if (auto valid = ValidateInputs(operation); valid.HasError())
@@ -314,6 +414,7 @@ namespace Horo::Prefab::Detail {
             Projection projection;
             const auto &data = operation.lease->Template()->Data();
             projection.components.resize(data.entities.size());
+            projection.primitiveMeshes.resize(data.entities.size());
             projection.members.resize(data.entities.size());
             projection.references.resize(data.entities.size());
             for (std::size_t entity = 0; entity < data.entities.size(); ++entity) {
@@ -322,6 +423,10 @@ namespace Horo::Prefab::Detail {
                         return Result<Projection>::Failure(projected.ErrorValue());
                 }
             }
+            if (auto valid = ValidateAgentSources(data, projection); valid.HasError())
+                return Result<Projection>::Failure(valid.ErrorValue());
+            if (auto valid = ProjectPhysicsReferences(data, projection); valid.HasError())
+                return Result<Projection>::Failure(valid.ErrorValue());
             ProjectReferences(operation, projection);
             return Result<Projection>::Success(std::move(projection));
         }
@@ -351,13 +456,15 @@ namespace Horo::Prefab::Detail {
                 auto projection = std::move(projected).Value();
                 auto queued =
                     provider->QueuePreparedGroup(*operation.lease, std::move(projection.components), operation.cancellation.Token(),
-                                                 {.rootPlacement = operation.request.placement,
+                                                 {.physicsReferences = std::move(projection.physicsReferences),
+                                                  .rootPlacement = operation.request.placement,
                                                   .parent = operation.request.parent,
                                                   .receipt = &operation.receipt,
                                                   .scopeCancellation = operation.scopeCancellation,
                                                   .members = std::move(projection.members),
                                                   .references = std::move(projection.references),
-                                                  .spawnLineage = operation.lineage});
+                                                  .spawnLineage = operation.lineage,
+                                                  .primitiveMeshes = std::move(projection.primitiveMeshes)});
                 if (queued.HasError())
                     return Result<void>::Failure(queued.ErrorValue());
             }
@@ -421,6 +528,7 @@ namespace Horo::Prefab::Detail {
         PrefabTemplateProvider *provider;
         Runtime::RuntimeSceneService *scenes;
         const Gameplay::ComponentRegistry *components;
+        const PrefabComponentProjector *projector;
         const std::thread::id owner{std::this_thread::get_id()};
         Runtime::SceneRuntimeId scene;
         std::shared_ptr<const std::byte> identity{std::make_shared<const std::byte>()};

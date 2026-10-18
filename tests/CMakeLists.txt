@@ -841,9 +841,9 @@ target_compile_features(HoroPrefabPhysicsPublicHeaderConsumer PRIVATE cxx_std_20
 target_link_libraries(HoroPrefabPhysicsPublicHeaderConsumer PRIVATE HoroEngine::PhysicsSceneIntegration)
 add_test(NAME HoroPrefabPhysicsPublicHeaderConsumer COMMAND HoroPrefabPhysicsPublicHeaderConsumer)
 
-add_executable(HoroPrefabAIGroupTests unit/runtime/ai/PrefabAIGroupTests.cpp)
+add_executable(HoroPrefabAIGroupTests unit/runtime/ai/PrefabAIGroupTests.cpp unit/runtime/ai/PrefabAIIdentityTests.cpp)
 target_compile_features(HoroPrefabAIGroupTests PRIVATE cxx_std_20)
-target_link_libraries(HoroPrefabAIGroupTests PRIVATE HoroEngine::AISceneIntegration)
+target_link_libraries(HoroPrefabAIGroupTests PRIVATE HoroEngine::AISceneIntegration HoroEngine::Prefab)
 target_include_directories(HoroPrefabAIGroupTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 horo_register_catch_test(HoroPrefabAIGroupTests LABELS "unit;ai;prefab;headless")
 
@@ -1658,7 +1658,8 @@ set_tests_properties(HoroTriggerVolumeConversionPublicHeaderConsumer PROPERTIES 
 add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp
         unit/scene/ScenePrefabExpansionTests.cpp unit/scene/ScenePrefabExpansionOwnerTests.cpp
         unit/scene/ScenePrefabCanonicalWireTests.cpp unit/scene/ScenePrefabValueOverrideTests.cpp support/AllocationProbe.cpp)
-target_sources(HoroSceneRuntimeConversionTests PRIVATE unit/scene/ScenePrefabExpansionQualificationTests.cpp)
+target_sources(HoroSceneRuntimeConversionTests PRIVATE unit/scene/ScenePrefabExpansionQualificationTests.cpp
+        unit/scene/PrefabBuiltinProjectionTests.cpp)
 target_include_directories(HoroSceneRuntimeConversionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_compile_features(HoroSceneRuntimeConversionTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneRuntimeConversionTests PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook nlohmann_json::nlohmann_json HoroSceneSourceCodecInternal)
@@ -1690,6 +1691,7 @@ set_tests_properties(HoroProjectPhysicsCaptureBoundaryConsumer PROPERTIES LABELS
 add_executable(HoroPrefabCookPublicHeaderConsumer support/PrefabCookPublicHeaderConsumer.cpp)
 add_executable(HoroPrefabSceneCookHostTests
         unit/application/PrefabSceneCookHostTests.cpp
+        unit/application/CommittedPrefabAssetTests.cpp
         unit/application/PhysicsTriggerVolumeHostTests.cpp
         unit/application/PrefabTemplateCookHostTests.cpp
         unit/application/PrefabCookSchemaContextTests.cpp
@@ -1701,7 +1703,7 @@ target_compile_features(HoroPrefabSceneCookHostTests PRIVATE cxx_std_20)
 target_include_directories(HoroPrefabSceneCookHostTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/support
         ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
-target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroEngine::PhysicsTriggerVolumeHost HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
+target_link_libraries(HoroPrefabSceneCookHostTests PRIVATE HoroScenePhysicsHost HoroEngine::PhysicsTriggerVolumeHost HoroEngine::PrefabCookHost HoroEngine::PrefabRuntime HoroEngine::SceneSource nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroPrefabSceneCookHostTests LABELS "unit;prefab;headless;host")
 target_compile_features(HoroPrefabCookPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabCookPublicHeaderConsumer PRIVATE HoroEngine::SceneRuntimeConversion HoroEngine::SceneCook HoroEngine::Assets HoroEngine::PrefabCookHost)
@@ -1713,7 +1715,9 @@ target_compile_features(HoroCookedPrefabTests PRIVATE cxx_std_20)
 target_link_libraries(HoroCookedPrefabTests PRIVATE HoroEngine::Prefab)
 horo_register_catch_test(HoroCookedPrefabTests LABELS "unit;prefab;headless")
 
-add_executable(HoroPrefabTemplateProviderTests unit/runtime/prefab/PrefabTemplateProviderTests.cpp)
+add_executable(HoroPrefabTemplateProviderTests
+    unit/runtime/prefab/PrefabTemplateProviderTests.cpp
+    unit/runtime/prefab/PrefabTemplateProjectionTests.cpp)
 target_compile_features(HoroPrefabTemplateProviderTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabTemplateProviderTests PRIVATE HoroEngine::PrefabRuntime HoroEngine::PrefabAuthoring)
 horo_register_catch_test(HoroPrefabTemplateProviderTests LABELS "unit;prefab;headless")
@@ -1729,6 +1733,12 @@ target_compile_features(HoroPrefabSpawnPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroPrefabSpawnPublicHeaderConsumer PRIVATE HoroEngine::PrefabRuntime HoroEngine::GameplayRuntime)
 add_test(NAME HoroPrefabSpawnPublicHeaderConsumer COMMAND HoroPrefabSpawnPublicHeaderConsumer)
 set_tests_properties(HoroPrefabSpawnPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;gameplay;headless")
+
+add_executable(HoroPrefabBuiltinProjectionPublicConsumer support/PrefabBuiltinProjectionPublicConsumer.cpp)
+target_compile_features(HoroPrefabBuiltinProjectionPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabBuiltinProjectionPublicConsumer PRIVATE HoroEngine::PrefabRuntime HoroEngine::SceneRuntimeConversion)
+add_test(NAME HoroPrefabBuiltinProjectionPublicConsumer COMMAND HoroPrefabBuiltinProjectionPublicConsumer)
+set_tests_properties(HoroPrefabBuiltinProjectionPublicConsumer PROPERTIES LABELS "unit;prefab;headless;public_headers;ci-windows")
 
 add_executable(HoroPrefabTemplateProviderPublicHeaderConsumer support/PrefabTemplateProviderPublicHeaderConsumer.cpp)
 target_compile_features(HoroPrefabTemplateProviderPublicHeaderConsumer PRIVATE cxx_std_20)
@@ -1878,20 +1888,22 @@ add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTest
     integration/gameplay/HeadlessSceneLoadBoundaryTests.cpp
     integration/gameplay/GameplayRetirementHostTests.cpp
     integration/gameplay/PrefabGameplayHostTests.cpp
+    integration/gameplay/PrefabAtomicOwnerTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
     integration/gameplay/GameplayCharacterAirborneTests.cpp
     integration/gameplay/GameplayCharacterGeometryTests.cpp
     integration/gameplay/GameplayCharacterStepTests.cpp
     integration/gameplay/LuaPhysicsLifecycleTests.cpp)
 target_compile_features(HoroGameplayPhysicsTests PRIVATE cxx_std_20)
-target_include_directories(HoroGameplayPhysicsTests PRIVATE "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/unit/runtime/physics")
+target_include_directories(HoroGameplayPhysicsTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support" "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/unit/runtime/physics"
+    "${PROJECT_SOURCE_DIR}/tests/unit/runtime/ai")
 target_compile_definitions(HoroGameplayPhysicsTests PRIVATE
     HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
     HORO_TEST_SOURCE_ROOT="${PROJECT_SOURCE_DIR}"
     HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
     HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
 target_link_libraries(HoroGameplayPhysicsTests PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayModuleHost HoroEngine::Platform
-    HoroNetworkProductHost)
+    HoroNetworkProductHost nlohmann_json::nlohmann_json)
 add_dependencies(HoroGameplayPhysicsTests HoroTestGameModule)
 horo_register_catch_test(HoroGameplayPhysicsTests LABELS "unit;gameplay;physics;headless")
 add_test(NAME HoroGameplayProductLaunchContract
@@ -1972,7 +1984,8 @@ target_link_libraries(HoroLuaBehaviorTests PRIVATE HoroEngine::GameplayLua)
 add_executable(HoroEditorPlaySessionControllerTests
         unit/editor/EditorPlaySessionControllerTests.cpp
 )
-target_sources(HoroEditorPlaySessionControllerTests PRIVATE unit/editor/EditorCharacterSceneProductTests.cpp)
+target_sources(HoroEditorPlaySessionControllerTests PRIVATE unit/editor/EditorCharacterSceneProductTests.cpp
+        unit/editor/EditorPrefabProductTests.cpp)
 target_include_directories(HoroEditorPlaySessionControllerTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/integration/gameplay
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/application

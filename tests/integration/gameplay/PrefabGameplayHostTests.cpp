@@ -2,6 +2,7 @@
 #include "GameplayWorldComposition.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Platform/DynamicLibrary.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -45,26 +46,39 @@ namespace {
         static_assert(sizeof(copy) == sizeof(symbol));
         std::memcpy(&copy, &symbol, sizeof(copy));
         copy(&escaped.spawn, &escaped.despawn, &escaped.instance);
-        REQUIRE(escaped.spawn.State() == Prefab::PrefabSpawnState::Committed);
-        REQUIRE(escaped.despawn.State() == Prefab::PrefabSpawnState::Committed);
         return escaped;
     }
 
     /** @brief Observes host-owned completion storage after its originating module code has been unloaded. */
     void RequireCommitted(const EscapedPrefabOperations &escaped) {
+        REQUIRE(escaped.spawn.State() == Prefab::PrefabSpawnState::Committed);
         REQUIRE(escaped.spawn.Spawned().HasValue());
         REQUIRE(escaped.instance.Root().IsValid());
         REQUIRE(escaped.despawn.State() == Prefab::PrefabSpawnState::Committed);
     }
 
+    /** @brief Persistent payload admitted by the real module's frozen schema without interpreting or rewriting its bytes. */
+    Prefab::RawComponentPayload NativeMovementComponent() {
+        Prefab::RawComponentPayload component{.instance = Prefab::PrefabComponentInstanceId::Create(42).Value(),
+                                              .component = {.typeId =
+                                                                Gameplay::ComponentTypeId::Parse("game.tests.movement_settings").Value(),
+                                                            .schemaVersion = 2,
+                                                            .encoding = Gameplay::ComponentPayloadEncoding::CanonicalJson}};
+        for (const unsigned char value : std::string_view{R"({"speed":4.25,"retained":"opaque"})"})
+            component.component.payload.push_back(static_cast<std::byte>(value));
+        return component;
+    }
+
     /** @brief Publishes the exact immutable two-entity cooked artifact used by the native module. */
     Sha256Digest PublishSpawnArtifact(Assets::MemoryAssetProvider &bytes, const Assets::AssetId asset, const Assets::AssetTypeId &type,
-                                      const AssetCookTargetId &target) {
+                                      const AssetCookTargetId &target, const bool includeNativeComponent = false) {
         Prefab::CookedPrefabData candidate;
         candidate.assetId = asset;
         Prefab::CookedPrefabEntity root;
         root.provenance = {asset, {}, ComputeSha256(std::as_bytes(std::span("source", 6)))};
         root.members.emplace_back(Gameplay::BehaviorComponent{{5}, Gameplay::BehaviorTypeId::Parse("game.tests.dynamic_mover").Value()});
+        if (includeNativeComponent)
+            root.members.emplace_back(NativeMovementComponent());
         auto child = root;
         child.parent = Prefab::CookedPrefabEntitySlot{0};
         child.provenance.sourceObject = Prefab::PrefabObjectAddress::Create({}, {7}).Value();
@@ -104,7 +118,8 @@ namespace {
 
     /** @brief Asserts complete actual native spawn and despawn publication before testing post-image observation. */
     void RequireSpawnThenDespawn(GameplayWorldComposition &gameplay, const Runtime::RuntimeSceneService &scenes,
-                                 const Runtime::FrameContext &frame, const CancellationToken &cancellation) {
+                                 const Runtime::FrameContext &frame, const CancellationToken &cancellation,
+                                 const bool nativeComponents = false) {
         FixedTick(gameplay, 1, cancellation);
         CHECK(Count(scenes) == 1);
         for (std::size_t attempt = 0; attempt < 2000 && Count(scenes) != 3; ++attempt) {
@@ -113,53 +128,166 @@ namespace {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
         REQUIRE(Count(scenes) == 3);
+        if (nativeComponents) {
+            const auto scene = scenes.ActiveScene();
+            const auto expected = NativeMovementComponent().component;
+            std::size_t projected{};
+            for (std::size_t index = 0; index < scene->SlotCount(); ++index) {
+                const auto entity = scene->EntityAt(index);
+                if (!entity || entity->components->gameplayComponents.empty())
+                    continue;
+                REQUIRE(entity->components->gameplayComponents.size() == 1);
+                CHECK(entity->components->gameplayComponents.front() == expected);
+                ++projected;
+            }
+            CHECK(projected == 2);
+        }
         FixedTick(gameplay, 2, cancellation);
         REQUIRE(gameplay.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
         CHECK(Count(scenes) == 1);
     }
+
+    /** @brief Owns authorities in dependency order, including the stable structural-participant slot. */
+    struct HostFixture final {
+        const Assets::AssetId asset{Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value()};
+        const Assets::AssetTypeId type{Assets::AssetTypeId::Parse("core.prefab").Value()};
+        const AssetCookTargetId target{AssetCookTargetId::Parse("linux-x64").Value()};
+        bool nativeComponents{};
+        Assets::MemoryAssetProvider bytes;
+        const Sha256Digest artifactDigest{PublishSpawnArtifact(bytes, asset, type, target, nativeComponents)};
+        JobSystem jobs{{1, 16}};
+        Assets::AssetLoadService loads{jobs, bytes};
+        Assets::AssetRegistry registry;
+        CancellationSource cancellation;
+        GameplayWorldComposition *activeGameplay{};
+        Runtime::RuntimeSceneService scenes{registry, loads};
+        Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellation.Token()};
+        std::unique_ptr<Prefab::PrefabTemplateProvider> templates;
+        std::unique_ptr<GameplayWorldComposition> gameplay;
+
+        explicit HostFixture(const bool includeNativeComponents = false) : nativeComponents(includeNativeComponents) {
+            REQUIRE(registry
+                        .Publish({{asset, type, ProjectPath::Parse("assets/spawn.prefab").Value(),
+                                   ProjectPath::Parse("assets/spawn.prefab.horo").Value()}})
+                        .status == Assets::AssetRegistryBuildStatus::Complete);
+            REQUIRE(scenes.AddStructuralParticipant(MakeGameplayStructuralParticipant(activeGameplay)).HasValue());
+            REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
+            REQUIRE(scenes.QueuePreparation(MakeSpawnerScene(asset, artifactDigest)).HasValue());
+            REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+        }
+
+        ~HostFixture() {
+            activeGameplay = nullptr;
+            if (gameplay)
+                gameplay->Shutdown();
+            scenes.Shutdown();
+        }
+
+        void Activate(const bool ownedProvider) {
+            if (!ownedProvider) {
+                templates = std::make_unique<Prefab::PrefabTemplateProvider>(registry, loads, scenes,
+                                                                             Prefab::PrefabLimitProfile::Create({}).Value());
+                REQUIRE(templates->Startup(cancellation.Token()).HasValue());
+            }
+            GameplayWorldSelection selection{.moduleId = "game.tests",
+                                             .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
+                                             .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
+                                             .prefabPermission = GameplayPrefabPermission::Granted,
+                                             .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>()};
+            const GameplayPrefabServices assets{registry, loads, Prefab::PrefabLimitProfile::Create({}).Value(), {}, cancellation.Token()};
+            auto composition = ownedProvider ? GameplayWorldComposition::Create(scenes, assets, nullptr, 1, selection)
+                                             : GameplayWorldComposition::Create(scenes, *templates, nullptr, 1, selection);
+            REQUIRE(composition.HasValue());
+            gameplay = std::move(composition).Value();
+            activeGameplay = gameplay.get();
+        }
+
+        void Retire(EscapedPrefabOperations &escaped) {
+            activeGameplay->Shutdown();
+            escaped.image.reset();  // Actual native unload precedes observation and service weak-slot retirement.
+            gameplay.reset();
+            activeGameplay = nullptr;
+            if (templates)
+                templates->Shutdown();
+            REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+            CHECK(Count(scenes) == 1);
+            REQUIRE(scenes.QueueUnload().HasValue());
+            REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+            CHECK_FALSE(scenes.ActiveScene().has_value());
+        }
+    };
 }  // namespace
 
 TEST_CASE("Production Gameplay composition routes a native module through cooked preparation Scene publication and despawn",
           "[prefab][gameplay][host]") {
-    const auto asset = Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value();
-    const auto type = Assets::AssetTypeId::Parse("core.prefab").Value();
-    const auto target = AssetCookTargetId::Parse("linux-x64").Value();
+    HostFixture host;
+    SECTION("borrowed provider") {
+        host.Activate(false);
+        RequireSpawnThenDespawn(*host.gameplay, host.scenes, host.frame, host.cancellation.Token());
+        auto escaped = CapturePrefabOperations();
+        host.Retire(escaped);
+        RequireCommitted(escaped);
+    }
+    SECTION("composition-owned provider") {
+        host.Activate(true);
+        RequireSpawnThenDespawn(*host.gameplay, host.scenes, host.frame, host.cancellation.Token());
+        auto escaped = CapturePrefabOperations();
+        host.Retire(escaped);
+        RequireCommitted(escaped);
+    }
+    SECTION("composition-owned provider retires an unpublished native request") {
+        host.Activate(true);
+        FixedTick(*host.gameplay, 1, host.cancellation.Token());
+        auto escaped = CapturePrefabOperations();
+        REQUIRE(escaped.spawn.State() == Prefab::PrefabSpawnState::Pending);
+        REQUIRE(Count(host.scenes) == 1);
+        host.Retire(escaped);
+        CHECK(escaped.spawn.State() == Prefab::PrefabSpawnState::Cancelled);
+        const auto result = escaped.spawn.Spawned();
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == Prefab::PrefabErrors::Cancelled.code.Value());
+    }
+}
+
+TEST_CASE("Owned cooked prefab composition rejects invalid asset admission before module activation", "[prefab][gameplay][host]") {
     Assets::MemoryAssetProvider bytes;
-    const auto artifactDigest = PublishSpawnArtifact(bytes, asset, type, target);
     JobSystem jobs{{1, 16}};
     Assets::AssetLoadService loads{jobs, bytes};
     Assets::AssetRegistry registry;
-    REQUIRE(registry
-                .Publish({{asset, type, ProjectPath::Parse("assets/spawn.prefab").Value(),
-                           ProjectPath::Parse("assets/spawn.prefab.horo").Value()}})
-                .status == Assets::AssetRegistryBuildStatus::Complete);
     Runtime::RuntimeSceneService scenes{registry, loads};
-    std::unique_ptr<GameplayWorldComposition> gameplay;
-    GameplayWorldComposition *activeGameplay{};
-    REQUIRE(scenes.AddStructuralParticipant(MakeGameplayStructuralParticipant(activeGameplay)).HasValue());
     CancellationSource cancellation;
-    REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
-    REQUIRE(scenes.QueuePreparation(MakeSpawnerScene(asset, artifactDigest)).HasValue());
-    Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellation.Token()};
-    REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
-    Prefab::PrefabTemplateProvider templates{registry, loads, scenes, Prefab::PrefabLimitProfile::Create({}).Value()};
-    REQUIRE(templates.Startup(cancellation.Token()).HasValue());
-    GameplayWorldSelection selection{.moduleId = "game.tests",
-                                     .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
-                                     .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
-                                     .prefabPermission = GameplayPrefabPermission::Granted,
-                                     .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>()};
-    auto composition = GameplayWorldComposition::Create(scenes, templates, nullptr, 1, selection);
-    REQUIRE(composition.HasValue());
-    gameplay = std::move(composition).Value();
-    activeGameplay = gameplay.get();
-    RequireSpawnThenDespawn(*activeGameplay, scenes, frame, cancellation.Token());
+    Prefab::PrefabTemplateProviderLimits limits;
+    GameplayWorldSelection selection{.moduleId = "game.tests", .nativeArtifact = "must-not-load"};
+    const ErrorCodeDescriptor *expected = &Prefab::PrefabErrors::AdmissionRejected;
+    SECTION("missing host permission") {}
+    SECTION("cancelled host scope") {
+        selection.prefabPermission = GameplayPrefabPermission::Granted;
+        cancellation.RequestCancellation();
+        expected = &Prefab::PrefabErrors::Cancelled;
+    }
+    SECTION("invalid provider capacity") {
+        selection.prefabPermission = GameplayPrefabPermission::Granted;
+        limits.maximumOutstanding = 0;
+        expected = &Prefab::PrefabErrors::LimitProfileInvalid;
+    }
+    const GameplayPrefabServices assets{registry, loads, Prefab::PrefabLimitProfile::Create({}).Value(), limits, cancellation.Token()};
+    const auto result = GameplayWorldComposition::Create(scenes, assets, nullptr, 1, selection);
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == expected->code.Value());
+    CHECK_FALSE(scenes.ActiveScene().has_value());
+}
+
+TEST_CASE("Production cooked prefab composition retains opaque components from its actual native module registry",
+          "[prefab][gameplay][host][components]") {
+    HostFixture host{true};
+    bool owned{};
+    SECTION("borrowed provider") {}
+    SECTION("composition-owned provider") {
+        owned = true;
+    }
+    host.Activate(owned);
+    RequireSpawnThenDespawn(*host.gameplay, host.scenes, host.frame, host.cancellation.Token(), true);
     auto escaped = CapturePrefabOperations();
-    activeGameplay->Shutdown();
-    escaped.image.reset();  // Actual native module unloaded before both retained observations and service weak slots.
+    host.Retire(escaped);
     RequireCommitted(escaped);
-    gameplay.reset();  // Drops the service's final weak observation slots after native image retirement.
-    activeGameplay = nullptr;
-    templates.Shutdown();
-    scenes.Shutdown();
 }

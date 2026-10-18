@@ -28,6 +28,7 @@ namespace Horo::Application::Internal {
         std::unique_ptr<CommittedSceneAssets> committed;
         Assets::MemoryAssetProvider empty;
         std::unique_ptr<Assets::AssetLoadService> loads;
+        std::unique_ptr<Assets::AssetLoadService> prefabLoads;
         std::shared_ptr<const ProjectCollisionSettings> collision;
         CancellationSource cancellation;
         std::chrono::steady_clock::time_point deadline;

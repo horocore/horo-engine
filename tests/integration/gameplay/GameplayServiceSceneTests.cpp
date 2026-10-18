@@ -2,6 +2,7 @@
 #include "GameplayWorldSelectionTestSupport.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PhysicsTestUtils.h"
+#include "ScenePhysicsHost.h"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -46,4 +47,44 @@ TEST_CASE("Service-backed gameplay rejects a prefab grant when no provider was s
     selection.prefabPermission = GameplayPrefabPermission::Granted;
     Physics::Test::RequireError(GameplayWorldComposition::Create(scenes, nullptr, 1, selection), Prefab::PrefabErrors::AdmissionRejected);
     CHECK_FALSE(scenes.ActiveScene().has_value());
+}
+
+TEST_CASE("Explicit Null Scene host advances gameplay quanta without manufacturing native publications",
+          "[gameplay-physics][host][scene][null]") {
+    auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Null);
+    REQUIRE(runtime.HasValue());
+    PhysicsSceneActivationAuthority authority;
+    ScenePhysicsHost host;
+    Runtime::RuntimeSceneService scenes;
+    auto physics = PhysicsWorldSettings::Capture({});
+    auto character = Character::CharacterWorldSettings::Capture({});
+    REQUIRE(physics.HasValue());
+    REQUIRE(character.HasValue());
+    auto participant = host.MakeParticipant(*runtime.Value(), authority, {std::move(physics).Value(), std::move(character).Value(), {}});
+    REQUIRE(participant.HasValue());
+    REQUIRE(scenes.AddActivationParticipant(std::move(participant).Value()).HasValue());
+    CancellationSource cancellation;
+    REQUIRE(scenes.Startup(cancellation.Token()).HasValue());
+    Runtime::SceneDefinitionBuilder builder{{1}, {1}};
+    auto definition = std::move(builder).Build();
+    REQUIRE(definition.HasValue());
+    REQUIRE(scenes.QueuePreparation(std::move(definition).Value()).HasValue());
+    REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = 1, .cancellation = cancellation.Token()})
+                .HasValue());
+    REQUIRE_FALSE(scenes.TakeOperationError());
+    auto scope = host.Borrow();
+    REQUIRE(scope.HasValue());
+    REQUIRE(scope.Value().physics.State() == PhysicsWorldState::ActiveNull);
+    REQUIRE(host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667)).HasValue());
+    REQUIRE(host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667)).HasValue());
+    CHECK(host.AdvanceFixedTick(Duration{}).HasError());
+    CHECK(scope.Value().physics.PublishedTick().completedTick == 0);
+    CHECK(scope.Value().physics.PublishedTick().publicationRevision == 0);
+    CHECK(scope.Value().character.PublishedTick().completedTick == 0);
+    Physics::Test::RequireError(scope.Value().physics.AdvanceFixedTick({.simulationTick = 1,
+                                                                        .sceneGeneration = scope.Value().scene.value,
+                                                                        .fixedDelta = Duration::FromNanoseconds(16'666'667)}),
+                                PhysicsErrors::CapabilityUnavailable);
+    scenes.Shutdown();
+    CHECK_FALSE(host.HasPublishedScene());
 }

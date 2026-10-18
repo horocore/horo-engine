@@ -24,6 +24,8 @@ namespace Horo::AI::Detail {
             std::shared_ptr<AiSceneRuntimeState> state;
             Runtime::RuntimeSceneView scene;
             std::uint64_t revision{};
+            std::uint64_t lastAgentIdentity{};
+            std::vector<Runtime::SceneAgentIdentityProjection> identities;
             std::vector<AgentRuntimeState> additions;
             std::vector<Horo::Handle<AgentHandleTag>> slots;
             std::vector<std::size_t> removals;
@@ -37,6 +39,10 @@ namespace Horo::AI::Detail {
                     CancelOwnedWork(agent);
                 for (auto &agent : retired)
                     CancelOwnedWork(agent);
+            }
+
+            std::span<const Runtime::SceneAgentIdentityProjection> AgentIdentities() const noexcept override {
+                return identities;
             }
 
             Result<void> ValidatePublication() const override {
@@ -64,6 +70,7 @@ namespace Horo::AI::Detail {
                 }
                 additions.clear();
                 state->agentsByOwner.swap(owners);
+                state->lastAgentIdentity = lastAgentIdentity;
                 ++state->revision;
                 published = true;
             }
@@ -89,6 +96,10 @@ namespace Horo::AI::Detail {
 
         Runtime::SceneStructuralOwner Owner() const noexcept override {
             return Runtime::SceneStructuralOwner::AI;
+        }
+
+        Runtime::SceneStructuralPreparationPhase PreparationPhase() const noexcept override {
+            return Runtime::SceneStructuralPreparationPhase::Identity;
         }
 
         Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView scene,
@@ -123,7 +134,9 @@ namespace Horo::AI::Detail {
                 if (!agent.retired && std::ranges::find(destroyed, agent.record.owner) != destroyed.end())
                     candidate->removals.push_back(index);
             }
-            const auto agents = ProjectAgents(created);
+            auto agents = ProjectAgents(created);
+            if (auto reserved = ReserveIdentities(*candidate, agents, created); reserved.HasError())
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(reserved.ErrorValue());
             // Reuse only retired slots with a fresh generation. Exhausted generations remain permanent tombstones.
             for (std::size_t index = 0; index < state.agents.size() && candidate->slots.size() < agents.size(); ++index) {
                 const auto &agent = state.agents[index];
@@ -152,6 +165,41 @@ namespace Horo::AI::Detail {
             candidate->additions = std::move(prepared).Value();
             PreparePublicationStorage(*candidate, agents, appended);
             return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
+        }
+
+        /** @brief Recognizes exact new prefab admission without rewriting ordinary authored Scene identities. */
+        static bool IsPrefabAgent(const Runtime::RuntimeEntityView &entity) {
+            return entity.components && entity.components->aiAgent && !entity.groupSpawnLineage.empty() &&
+                   std::ranges::any_of(entity.groupAssets, [&](const auto &asset) {
+                return asset.metadata.id == entity.groupSpawnLineage.back() && asset.metadata.expectedType.Value() == "core.prefab" &&
+                       !asset.artifact.Bytes().empty();
+            });
+        }
+
+        /** @brief Reserves detached logical IDs; rollback does not advance the published owner's high-water. */
+        static Result<void> ReserveIdentities(StructuralCandidate &candidate, std::span<AiSceneAgentDescriptor> agents,
+                                              const std::span<const Runtime::RuntimeEntityView> created) {
+            candidate.lastAgentIdentity = candidate.state->lastAgentIdentity;
+            // Ordinary authored IDs retain their established identity and reserve their domain before any prefab allocation.
+            for (const auto &agent : agents) {
+                const auto entity = std::ranges::find(created, agent.owner, &Runtime::RuntimeEntityView::entity);
+                if (entity == created.end())
+                    return Failure<void>("AI identity input has no exact candidate entity.");
+                if (!IsPrefabAgent(*entity))
+                    candidate.lastAgentIdentity = std::max(candidate.lastAgentIdentity, agent.agent.agent.Value());
+            }
+            candidate.identities.reserve(agents.size());
+            for (auto &agent : agents) {
+                const auto entity = std::ranges::find(created, agent.owner, &Runtime::RuntimeEntityView::entity);
+                if (!IsPrefabAgent(*entity))
+                    continue;
+                if (!agent.agent.agent.IsValid() || candidate.lastAgentIdentity == std::numeric_limits<std::uint64_t>::max())
+                    return Failure<void>("Prefab AI identity reservation is invalid or exhausted.");
+                const auto original = agent.agent.agent;
+                agent.agent.agent = AgentId::Create(++candidate.lastAgentIdentity).Value();
+                candidate.identities.push_back({agent.owner, original, agent.agent.agent});
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Copies only typed AI projections into detached agent descriptors. */

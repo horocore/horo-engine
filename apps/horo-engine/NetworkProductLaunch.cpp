@@ -400,10 +400,14 @@ namespace Horo::Application::Internal {
                                   Net::NetworkDiagnosticProvider::Native);
             auto factories = ProductFactories(launch.role, launch.bind, launch.connect, debugger);
             if (resources) {
-                auto configured = ComposeHeadlessSceneNetworkServices(std::move(scene),
-                                                                      {launch.sceneInput.physicsMode, *resources->settings,
-                                                                       resources->registry, *resources->loads, resources->load},
-                                                                      std::move(factories), launch.gameplay);
+                HeadlessSceneActivationInput input{.mode = launch.sceneInput.physicsMode,
+                                                   .settings = *resources->settings,
+                                                   .registry = resources->registry,
+                                                   .loads = *resources->loads,
+                                                   .load = resources->load,
+                                                   .prefabLoads = resources->prefabLoads.get()};
+                auto configured =
+                    ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay);
                 if (configured.HasError())
                     return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
                 factories = std::move(configured).Value();

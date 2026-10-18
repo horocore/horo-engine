@@ -83,6 +83,7 @@ namespace Horo::Application::Internal {
         /** @brief Advances the explicitly paired Character-before-Physics stages for one ordinary host quantum.
          * @param delta Exact immutable positive fixed quantum. @return Original query/Character/Physics failure.
          * @details Uses the previous completed Physics publication for Character queries; never used to advance loading.
+         * Explicit Null composition omits both stages without publishing a Physics or Character tick.
          */
         [[nodiscard]] Result<void> AdvanceFixedTick(Duration delta);
 

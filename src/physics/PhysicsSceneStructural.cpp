@@ -1,5 +1,6 @@
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "PhysicsSceneActivationInternal.h"
 
 #include <algorithm>
@@ -71,24 +72,49 @@ namespace Horo::Physics::Detail {
             }, geometry);
         }
 
-        /** @brief Uses only the admitted named closure, preserving activation's exact dependency policy. */
+        enum class StructuralAssetKind {
+            Shape,
+            Material
+        };
+
+        /** @brief Validates payload content while its decoded envelope or active Scene storage remains alive. */
+        Result<void> ValidateAssetPayload(const Assets::AssetId asset, const Assets::AssetTypeId &type,
+                                          const std::span<const std::uint8_t> payload, const StructuralAssetKind kind) {
+            const auto &code =
+                kind == StructuralAssetKind::Material ? PhysicsErrors::MaterialDescriptorInvalid : PhysicsErrors::ShapeArtifactInvalid;
+            if (payload.empty())
+                return Result<void>::Failure(MakeError(code, "Required structural resource has an empty payload."));
+            if (kind == StructuralAssetKind::Shape)
+                return Result<void>::Success();
+            if (type.Value() != PhysicsMaterialAssetTypeName)
+                return Result<void>::Failure(MakeError(code, "A structural collider requires a canonical Physics material asset."));
+            const auto material = DecodePhysicsMaterialAsset(std::as_bytes(payload));
+            if (material.HasError())
+                return Result<void>::Failure(material.ErrorValue());
+            if (material.Value().Id().Asset() != asset)
+                return Result<void>::Failure(MakeError(code, "Structural material content differs from its admitted asset identity."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Uses only the admitted named closure; decoded payload views never escape their owning envelope. */
         Result<void> ValidateAsset(const Runtime::RuntimeEntityView &entity, const Runtime::RuntimeSceneView active,
-                                   const Assets::AssetId asset, const ErrorCodeDescriptor &code) {
+                                   const Assets::AssetId asset, const StructuralAssetKind kind) {
+            const auto &code =
+                kind == StructuralAssetKind::Material ? PhysicsErrors::MaterialDescriptorInvalid : PhysicsErrors::ShapeArtifactInvalid;
             for (const auto &resource : entity.groupAssets) {
                 if (resource.metadata.id != asset)
                     continue;
-                const auto bytes = resource.artifact.Bytes();
-                auto decoded = Assets::DecodeCookedArtifactBytes(bytes);
+                const auto decoded = Assets::DecodeCookedArtifactBytes(resource.artifact.Bytes());
                 if (decoded.HasError())
                     return Result<void>::Failure(decoded.ErrorValue());
-                if (decoded.Value().id != asset || decoded.Value().type != resource.metadata.expectedType ||
-                    decoded.Value().payload.empty())
+                if (decoded.Value().id != asset || decoded.Value().type != resource.metadata.expectedType)
                     return Result<void>::Failure(MakeError(code, "Structural resource does not match its admitted identity/type."));
-                return Result<void>::Success();
+                return ValidateAssetPayload(asset, decoded.Value().type, decoded.Value().payload, kind);
             }
-            if (const auto resolved = active.FindAsset(asset); !resolved || !resolved->type || resolved->bytes.empty())
+            const auto resolved = active.FindAsset(asset);
+            if (!resolved || !resolved->type)
                 return Result<void>::Failure(MakeError(code, "Required structural resource is absent from the admitted closure."));
-            return Result<void>::Success();
+            return ValidateAssetPayload(asset, *resolved->type, resolved->bytes, kind);
         }
 
         /** @brief Complete native additions and generation-qualified tables, published together without allocation. */
@@ -278,12 +304,12 @@ namespace Horo::Physics::Detail {
                 const bool hasChildren = !children.empty();
                 const auto *analytic = std::get_if<Runtime::PhysicsAnalyticCollider>(&collider.source);
                 for (const auto &material : collider.materials)
-                    if (const auto valid = ValidateAsset(contributor, active, material.material, PhysicsErrors::MaterialDescriptorInvalid);
+                    if (const auto valid = ValidateAsset(contributor, active, material.material, StructuralAssetKind::Material);
                         valid.HasError())
                         return Result<void>::Failure(valid.ErrorValue());
                 if (!analytic) {
                     const auto asset = std::get<Runtime::PhysicsShapeAssetReference>(collider.source).asset;
-                    if (const auto valid = ValidateAsset(contributor, active, asset, PhysicsErrors::ShapeArtifactInvalid); valid.HasError())
+                    if (const auto valid = ValidateAsset(contributor, active, asset, StructuralAssetKind::Shape); valid.HasError())
                         return Result<void>::Failure(valid.ErrorValue());
                     return Result<void>::Failure(
                         MakeError(PhysicsErrors::OperationUnsupported,

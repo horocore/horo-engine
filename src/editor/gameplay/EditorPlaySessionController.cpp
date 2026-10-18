@@ -156,6 +156,12 @@ namespace Horo::Editor {
             Fail(error);
             return Result<void>::Failure(std::move(error));
         }
+        if (!components.IsFrozen()) {
+            const auto error = InvalidTransition("Play requires frozen project component metadata.");
+            Fail(error);
+            return Result<void>::Failure(error);
+        }
+        prefabComponents_ = components;
         auto converted = ConvertSceneDocumentToRuntime(authoring, Runtime::SceneDefinitionId{2}, triggerBinding);
         if (converted.HasError()) {
             Fail(converted.ErrorValue());
@@ -203,7 +209,7 @@ namespace Horo::Editor {
         const auto token = preparationCancellation_.Token();
         const Runtime::FrameContext frame{.frameNumber = preparationFrame_++, .cancellation = token};
         auto &scenes = sceneHost_->Scenes();
-        if (const auto advanced = scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame); advanced.HasError()) {
+        if (const auto advanced = sceneHost_->CommitSceneChanges(frame); advanced.HasError()) {
             Fail(advanced.ErrorValue());
             return advanced;
         }
@@ -218,7 +224,13 @@ namespace Horo::Editor {
             Fail(services.ErrorValue());
             return Result<void>::Failure(services.ErrorValue());
         }
-        auto runtime = Gameplay::BehaviorRuntime::Create(scenes, *pendingRegistry_, {}, std::move(services).Value());
+        auto prefabs = sceneHost_->PrefabServices(*pendingRegistry_, prefabComponents_);
+        if (prefabs.HasError()) {
+            Fail(prefabs.ErrorValue());
+            return Result<void>::Failure(prefabs.ErrorValue());
+        }
+        auto runtime =
+            Gameplay::BehaviorRuntime::Create(scenes, *pendingRegistry_, {}, std::move(services).Value(), std::move(prefabs).Value());
         pendingRegistry_ = nullptr;
         if (runtime.HasError()) {
             Fail(runtime.ErrorValue());
@@ -238,7 +250,7 @@ namespace Horo::Editor {
         const auto token = preparationCancellation_.Token();
         const Runtime::FrameContext frame{.frameNumber = preparationFrame_++, .cancellation = token};
         auto &scenes = sceneHost_->Scenes();
-        if (const auto committed = scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame); committed.HasError())
+        if (const auto committed = sceneHost_->CommitSceneChanges(frame); committed.HasError())
             return committed;
         if (auto failure = scenes.TakeOperationError())
             return Result<void>::Failure(std::move(*failure));
@@ -277,6 +289,8 @@ namespace Horo::Editor {
             state_ = EditorPlaySessionState::Stopping;
         if (debugger_)
             debugger_->Producer().Detach();
+        if (sceneHost_)
+            sceneHost_->QuiesceGameplay();
         if (behaviors_)
             behaviors_->Shutdown();
         behaviors_.reset();
@@ -285,6 +299,7 @@ namespace Horo::Editor {
         if (sceneHost_)
             sceneHost_->Shutdown();
         sceneHost_.reset();
+        prefabComponents_ = Gameplay::ComponentRegistry{};
         stepPending_ = false;
         authoringRevision_ = {};
         state_ = EditorPlaySessionState::Idle;
@@ -299,6 +314,10 @@ namespace Horo::Editor {
             !shouldTick)
             return Result<void>::Success();
         stepPending_ = false;
+        if (const auto admitted = sceneHost_->BeginFixedUpdate(delta); admitted.HasError()) {
+            Fail(admitted.ErrorValue());
+            return admitted;
+        }
         if (Result<void> updated = behaviors_->FixedUpdate(input, delta); updated.HasError()) {
             Error error = updated.ErrorValue();
             Fail(error);
@@ -351,6 +370,7 @@ namespace Horo::Editor {
             return Result<EditorPlayReloadSnapshot>::Failure(captured.ErrorValue());
         EditorPlayReloadSnapshot snapshot{std::move(captured).Value(), state_};
         state_ = Reloading;
+        sceneHost_->QuiesceGameplay();
         if (debugger_)
             debugger_->Producer().Detach();
         behaviors_->Shutdown();
@@ -368,7 +388,13 @@ namespace Horo::Editor {
             lastError_ = services.ErrorValue();
             return Result<void>::Failure(services.ErrorValue());
         }
-        auto replacement = Gameplay::BehaviorRuntime::Create(sceneHost_->Scenes(), registry, {}, std::move(services).Value());
+        auto prefabs = sceneHost_->PrefabServices(registry, prefabComponents_);
+        if (prefabs.HasError()) {
+            lastError_ = prefabs.ErrorValue();
+            return Result<void>::Failure(prefabs.ErrorValue());
+        }
+        auto replacement =
+            Gameplay::BehaviorRuntime::Create(sceneHost_->Scenes(), registry, {}, std::move(services).Value(), std::move(prefabs).Value());
         if (replacement.HasError()) {
             lastError_ = replacement.ErrorValue();
             return Result<void>::Failure(replacement.ErrorValue());
@@ -376,6 +402,7 @@ namespace Horo::Editor {
         behaviors_ = std::move(replacement).Value();
         if (Result<void> restored = behaviors_->RestoreReloadSnapshot(snapshot.behaviors); restored.HasError()) {
             Error error = restored.ErrorValue();
+            sceneHost_->QuiesceGameplay();
             behaviors_->Shutdown();
             behaviors_.reset();
             lastError_ = error;
@@ -423,6 +450,8 @@ namespace Horo::Editor {
     void EditorPlaySessionController::Fail(Error error) noexcept {
         if (debugger_)
             debugger_->Producer().Detach();
+        if (sceneHost_)
+            sceneHost_->QuiesceGameplay();
         if (behaviors_)
             behaviors_->Shutdown();
         behaviors_.reset();
@@ -431,6 +460,7 @@ namespace Horo::Editor {
         if (sceneHost_)
             sceneHost_->Shutdown();
         sceneHost_.reset();
+        prefabComponents_ = Gameplay::ComponentRegistry{};
         stepPending_ = false;
         lastError_ = std::move(error);
         state_ = EditorPlaySessionState::Failed;
