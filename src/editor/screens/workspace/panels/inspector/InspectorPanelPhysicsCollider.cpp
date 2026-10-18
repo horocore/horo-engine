@@ -54,8 +54,7 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
             for (std::size_t index = 0; index < draft.materials.size(); ++index) {
                 ImGui::PushID(static_cast<int>(index));
                 auto &material = draft.materials[index];
-                auto slot = material.value.slot.Value();
-                if (Integer(context, "workspace.physics.material_slot", material.slot, slot)) {
+                if (auto slot = material.value.slot.Value(); Integer(context, "workspace.physics.material_slot", material.slot, slot)) {
                     material.value.slot = Physics::PhysicsMaterialSlotId::FromValue(slot);
                     changed = true;
                 }

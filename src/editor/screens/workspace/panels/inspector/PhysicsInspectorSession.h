@@ -41,6 +41,14 @@ namespace Horo::Editor {
         PhysicsInspectorText secondBody;
     };
 
+    /** @brief Detached editable values and text; exact owner identity remains private to the session. */
+    struct PhysicsInspectorDraft final {
+        std::optional<Runtime::RigidBodyComponent> body;
+        std::vector<PhysicsInspectorColliderDraft> colliders;
+        std::vector<PhysicsInspectorConstraintDraft> constraints;
+        bool dirty{};
+    };
+
     /** @brief One transient exact-owner draft, invalidated by actual selection/document replacement or detach. */
     class PhysicsInspectorSession final {
     public:
@@ -66,14 +74,21 @@ namespace Horo::Editor {
         static PhysicsInspectorText Decimal(std::uint64_t value);
         /** @brief Bounded canonical UUID text representation; empty remains an invalid explicit input. */
         static PhysicsInspectorText Identity(std::string_view value);
-        std::optional<Runtime::RigidBodyComponent> body;
-        std::vector<PhysicsInspectorColliderDraft> colliders;
-        std::vector<PhysicsInspectorConstraintDraft> constraints;
-        bool dirty{};
+
+        /** @brief Access editable draft data; no document/history mutation occurs. @return The session-owned mutable draft. */
+        [[nodiscard]] PhysicsInspectorDraft &Draft() noexcept {
+            return draft_;
+        }
+
+        /** @brief Inspect the current uncommitted draft. @return The session-owned immutable draft. */
+        [[nodiscard]] const PhysicsInspectorDraft &Draft() const noexcept {
+            return draft_;
+        }
 
     private:
         /** @brief Allocate a never-colliding object-local component identity within the complete staged set. */
         [[nodiscard]] std::uint64_t NextComponentId() const noexcept;
+        PhysicsInspectorDraft draft_;
         SceneSource::SceneObjectId object_;
         SceneTransactionContext context_;
         std::uint64_t selectionRevision_{};

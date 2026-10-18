@@ -27,8 +27,8 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
     /** @copydoc Pose */
     bool Pose(const EditorGuiContext &context, Runtime::AuthoredPhysicsPose &value) {
         bool changed = Vector(context, "workspace.physics.translation", value.translation);
-        Math::Vec3 imaginary{value.rotation.x, value.rotation.y, value.rotation.z};
-        if (Vector(context, "workspace.physics.rotation_xyz", imaginary)) {
+        if (Math::Vec3 imaginary{value.rotation.x, value.rotation.y, value.rotation.z};
+            Vector(context, "workspace.physics.rotation_xyz", imaginary)) {
             value.rotation.x = imaginary.x;
             value.rotation.y = imaginary.y;
             value.rotation.z = imaginary.z;

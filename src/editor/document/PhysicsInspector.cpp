@@ -15,14 +15,15 @@ namespace Horo::Editor {
 
         /** @brief Reject reassigned generations and advance only an actual existing payload change. */
         template <typename Component> Result<void> Advance(Component &after, const Component *before) {
+            using enum SceneTransactionFailure;
             if (!before)
-                return after.generation == 1 ? Result<void>::Success() : Result<void>::Failure(Rejected(SceneTransactionFailure::Invalid));
+                return after.generation == 1 ? Result<void>::Success() : Result<void>::Failure(Rejected(Invalid));
             if (after.schemaVersion != before->schemaVersion || after.generation != before->generation)
-                return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
+                return Result<void>::Failure(Rejected(Stale));
             if (after == *before)
                 return Result<void>::Success();
             if (after.generation == std::numeric_limits<std::uint64_t>::max())
-                return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
+                return Result<void>::Failure(Rejected(Capacity));
             ++after.generation;
             return Result<void>::Success();
         }
@@ -64,8 +65,8 @@ namespace Horo::Editor {
             for (const auto &object : snapshot.objects) {
                 const auto &current = object.id == candidate.id ? candidate : object;
                 const auto &components = current.components;
-                const bool canonical = components.rigidBody || !components.colliders.empty() || !components.physicsConstraints.empty();
-                if (canonical && components.triggerVolume && components.triggerVolume->enabled)
+                if (const bool canonical = components.rigidBody || !components.colliders.empty() || !components.physicsConstraints.empty();
+                    canonical && components.triggerVolume && components.triggerVolume->enabled)
                     return Result<void>::Failure(Rejected(SceneTransactionFailure::Invalid));
                 views.emplace_back(Runtime::SceneObjectId{current.id.value}, components.rigidBody ? &*components.rigidBody : nullptr,
                                    components.colliders, components.physicsConstraints);
@@ -86,8 +87,8 @@ namespace Horo::Editor {
         if (baseline == snapshot.objects.end() || baseline->generated)
             return Return::Failure(Rejected(SceneTransactionFailure::Unauthorized));
         const auto baselineBytes = SceneDocumentDetail::EstimateSceneObjectOwnedMemoryBytes(*baseline);
-        const auto viewBytes = snapshot.objects.size() * sizeof(Runtime::PhysicsSceneComponentView);
-        if (baselineBytes > limits.maximumPreparedBytes || viewBytes > limits.maximumPreparedBytes - baselineBytes ||
+        if (const auto viewBytes = snapshot.objects.size() * sizeof(Runtime::PhysicsSceneComponentView);
+            baselineBytes > limits.maximumPreparedBytes || viewBytes > limits.maximumPreparedBytes - baselineBytes ||
             !Fits(values, limits.maximumPreparedBytes - baselineBytes - viewBytes))
             return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
         const auto fingerprint =

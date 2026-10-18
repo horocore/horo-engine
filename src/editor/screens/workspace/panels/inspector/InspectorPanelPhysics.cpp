@@ -7,15 +7,15 @@ namespace Horo::Editor {
 
         /** @brief Draw a staged body's portable fields; removal remains part of the same uncommitted gesture. */
         void DrawBody(PhysicsInspectorSession &session, const EditorGuiContext &context) {
-            if (!session.body)
+            if (!session.Draft().body)
                 return;
             Ui::Card card({.id = "physics_body"});
             card.DrawTitleBar({.id = "title", .title = Label(context, "workspace.physics.body"), .fonts = context.theme.fonts});
             if (card.BeginBody()) {
-                session.dirty = Body(context, *session.body) || session.dirty;
+                session.Draft().dirty = Body(context, *session.Draft().body) || session.Draft().dirty;
                 if (Action(context, "workspace.physics.remove_body")) {
-                    session.body.reset();
-                    session.dirty = true;
+                    session.Draft().body.reset();
+                    session.Draft().dirty = true;
                 }
             }
             card.Finish();
@@ -23,20 +23,20 @@ namespace Horo::Editor {
 
         /** @brief Draw each collider in bounded authored order using stable index-local control scopes. */
         void DrawColliders(PhysicsInspectorSession &session, const EditorGuiContext &context) {
-            for (std::size_t index = 0; index < session.colliders.size(); ++index) {
+            for (std::size_t index = 0; index < session.Draft().colliders.size(); ++index) {
                 ImGui::PushID(static_cast<int>(index));
                 Ui::Card card({.id = "physics_collider"});
                 card.DrawTitleBar({.id = "title", .title = Label(context, "workspace.physics.collider"), .fonts = context.theme.fonts});
                 bool remove = false;
                 if (card.BeginBody()) {
-                    session.dirty = Collider(context, session.colliders[index]) || session.dirty;
+                    session.Draft().dirty = Collider(context, session.Draft().colliders[index]) || session.Draft().dirty;
                     remove = Action(context, "workspace.physics.remove_collider");
                 }
                 card.Finish();
                 ImGui::PopID();
                 if (remove) {
-                    session.colliders.erase(session.colliders.begin() + static_cast<std::ptrdiff_t>(index));
-                    session.dirty = true;
+                    session.Draft().colliders.erase(session.Draft().colliders.begin() + static_cast<std::ptrdiff_t>(index));
+                    session.Draft().dirty = true;
                     break;
                 }
             }
@@ -44,20 +44,20 @@ namespace Horo::Editor {
 
         /** @brief Keep each constraint's two frames and parameters together in one shared card. */
         void DrawConstraints(PhysicsInspectorSession &session, const EditorGuiContext &context) {
-            for (std::size_t index = 0; index < session.constraints.size(); ++index) {
+            for (std::size_t index = 0; index < session.Draft().constraints.size(); ++index) {
                 ImGui::PushID(static_cast<int>(index));
                 Ui::Card card({.id = "physics_constraint"});
                 card.DrawTitleBar({.id = "title", .title = Label(context, "workspace.physics.constraint"), .fonts = context.theme.fonts});
                 bool remove = false;
                 if (card.BeginBody()) {
-                    session.dirty = Constraint(context, session.constraints[index]) || session.dirty;
+                    session.Draft().dirty = Constraint(context, session.Draft().constraints[index]) || session.Draft().dirty;
                     remove = Action(context, "workspace.physics.remove_constraint");
                 }
                 card.Finish();
                 ImGui::PopID();
                 if (remove) {
-                    session.constraints.erase(session.constraints.begin() + static_cast<std::ptrdiff_t>(index));
-                    session.dirty = true;
+                    session.Draft().constraints.erase(session.Draft().constraints.begin() + static_cast<std::ptrdiff_t>(index));
+                    session.Draft().dirty = true;
                     break;
                 }
             }
@@ -65,12 +65,13 @@ namespace Horo::Editor {
 
         /** @brief Stage additions without publishing incomplete body/collider or unresolved asset bindings. */
         void DrawAdditions(PhysicsInspectorSession &session, const EditorGuiContext &context) {
-            if (!session.body && Action(context, "workspace.physics.add_body"))
+            if (!session.Draft().body && Action(context, "workspace.physics.add_body"))
                 session.AddBody();
-            if (Action(context, "workspace.physics.add_collider", session.colliders.size() < Runtime::MaximumPhysicsCollidersPerBody))
+            if (Action(context, "workspace.physics.add_collider",
+                       session.Draft().colliders.size() < Runtime::MaximumPhysicsCollidersPerBody))
                 session.AddCollider();
             if (Action(context, "workspace.physics.add_constraint",
-                       session.constraints.size() < Runtime::MaximumPhysicsConstraintsPerObject))
+                       session.Draft().constraints.size() < Runtime::MaximumPhysicsConstraintsPerObject))
                 session.AddConstraint();
         }
 
@@ -78,11 +79,11 @@ namespace Horo::Editor {
         void DrawActions(PhysicsInspectorSession &session, bool &inputError, const SceneObjectId object,
                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
             const bool apply =
-                Action(context, "workspace.physics.apply", session.dirty && command.command == EditorWorkspaceViewCommand::None);
-            const bool cancel =
-                Action(context, "workspace.physics.cancel", session.dirty) ||
-                (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
-            if (cancel) {
+                Action(context, "workspace.physics.apply", session.Draft().dirty && command.command == EditorWorkspaceViewCommand::None);
+            if (const bool cancel =
+                    Action(context, "workspace.physics.cancel", session.Draft().dirty) ||
+                    (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
+                cancel) {
                 session.Cancel();
                 inputError = false;
                 return;
@@ -112,13 +113,13 @@ namespace Horo::Editor {
         Ui::ContextMenuSeparator();
         if (!canEdit)
             Ui::Hint(Label(context, "workspace.physics.unavailable"), context.theme.fonts);
-        if (item("workspace.physics.add_body", "###inspector_physics_body", !m_physicsSession.body))
+        if (item("workspace.physics.add_body", "###inspector_physics_body", !m_physicsSession.Draft().body))
             m_physicsSession.AddBody();
         if (item("workspace.physics.add_collider", "###inspector_physics_collider",
-                 m_physicsSession.colliders.size() < Runtime::MaximumPhysicsCollidersPerBody))
+                 m_physicsSession.Draft().colliders.size() < Runtime::MaximumPhysicsCollidersPerBody))
             m_physicsSession.AddCollider();
         if (item("workspace.physics.add_constraint", "###inspector_physics_constraint",
-                 m_physicsSession.constraints.size() < Runtime::MaximumPhysicsConstraintsPerObject))
+                 m_physicsSession.Draft().constraints.size() < Runtime::MaximumPhysicsConstraintsPerObject))
             m_physicsSession.AddConstraint();
     }
 
@@ -129,7 +130,8 @@ namespace Horo::Editor {
         if (m_physicsSession.Begin(object, viewModel.physicsContext, viewModel.physicsSelectionRevision))
             m_physicsInputError = false;
         // Absent components use the normal add-component route. A dirty empty draft still needs Apply/Cancel for removal.
-        if (!m_physicsSession.body && m_physicsSession.colliders.empty() && m_physicsSession.constraints.empty() && !m_physicsSession.dirty)
+        if (!m_physicsSession.Draft().body && m_physicsSession.Draft().colliders.empty() && m_physicsSession.Draft().constraints.empty() &&
+            !m_physicsSession.Draft().dirty)
             return;
         Ui::FieldLabel(Label(context, "workspace.physics.title"), context.theme.fonts);
         Ui::Hint(Label(context, "workspace.physics.authoring_only"), context.theme.fonts);

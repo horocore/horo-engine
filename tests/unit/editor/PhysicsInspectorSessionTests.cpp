@@ -39,16 +39,16 @@ TEST_CASE("Physics Inspector staging never publishes an unresolved body collider
     const SceneObject object{.id = {7}, .name = "Physical object"};
     CHECK(session.Begin(object, Context(), 1));
     session.AddBody();
-    REQUIRE(session.body.has_value());
-    REQUIRE(session.colliders.size() == 1);
-    CHECK(session.colliders.front().value.body.object.value == object.id.value);
-    CHECK_FALSE(session.colliders.front().value.collisionProfile.IsValid());
-    CHECK_FALSE(session.colliders.front().materials.front().value.material.IsValid());
+    REQUIRE(session.Draft().body.has_value());
+    REQUIRE(session.Draft().colliders.size() == 1);
+    CHECK(session.Draft().colliders.front().value.body.object.value == object.id.value);
+    CHECK_FALSE(session.Draft().colliders.front().value.collisionProfile.IsValid());
+    CHECK_FALSE(session.Draft().colliders.front().materials.front().value.material.IsValid());
     CHECK(session.Request().HasError());
     session.Cancel();
-    CHECK_FALSE(session.body.has_value());
-    CHECK(session.colliders.empty());
-    CHECK_FALSE(session.dirty);
+    CHECK_FALSE(session.Draft().body.has_value());
+    CHECK(session.Draft().colliders.empty());
+    CHECK_FALSE(session.Draft().dirty);
 }
 
 TEST_CASE("Physics Inspector invalid identity text and exact selection revisions are retained", "[unit][editor][physics][inspector]") {
@@ -56,16 +56,16 @@ TEST_CASE("Physics Inspector invalid identity text and exact selection revisions
     const SceneObject object{.id = {7}, .name = "Physical object"};
     REQUIRE(session.Begin(object, Context(), 1));
     session.AddBody();
-    session.colliders.front().profile = PhysicsInspectorSession::Identity("invalid");
+    session.Draft().colliders.front().profile = PhysicsInspectorSession::Identity("invalid");
     CHECK_FALSE(session.Begin(object, Context(), 1));
-    CHECK_FALSE(session.colliders.front().profile.valid);
+    CHECK_FALSE(session.Draft().colliders.front().profile.valid);
     REQUIRE(session.Begin(object, Context(), 3));
-    CHECK_FALSE(session.body.has_value());
-    CHECK(session.colliders.empty());
+    CHECK_FALSE(session.Draft().body.has_value());
+    CHECK(session.Draft().colliders.empty());
     session.AddConstraint();
     session.Clear();
-    CHECK(session.constraints.empty());
-    CHECK_FALSE(session.dirty);
+    CHECK(session.Draft().constraints.empty());
+    CHECK_FALSE(session.Draft().dirty);
 }
 
 TEST_CASE("Physics Inspector decimal identities preserve the complete uint64 range", "[unit][editor][physics][inspector]") {
@@ -88,10 +88,10 @@ TEST_CASE("Physics Inspector exhausted local identities cannot leave a partial s
     object.components.colliders.push_back(collider);
     REQUIRE(session.Begin(object, Context(), 1));
     session.AddBody();
-    CHECK_FALSE(session.body.has_value());
-    REQUIRE(session.colliders.size() == 1);
-    CHECK(session.colliders.front().value == collider);
-    CHECK_FALSE(session.dirty);
+    CHECK_FALSE(session.Draft().body.has_value());
+    REQUIRE(session.Draft().colliders.size() == 1);
+    CHECK(session.Draft().colliders.front().value == collider);
+    CHECK_FALSE(session.Draft().dirty);
 }
 
 TEST_CASE("Physics Inspector authority revocation discards an unpublished creation draft", "[unit][editor][physics][inspector]") {
@@ -100,15 +100,15 @@ TEST_CASE("Physics Inspector authority revocation discards an unpublished creati
     auto context = Context();
     REQUIRE(session.Begin(object, context, 1));
     session.AddBody();
-    REQUIRE(session.body);
+    REQUIRE(session.Draft().body);
     context.canEdit = false;
     CHECK(session.Begin(object, context, 1));
-    CHECK_FALSE(session.body);
-    CHECK(session.colliders.empty());
-    CHECK_FALSE(session.dirty);
+    CHECK_FALSE(session.Draft().body);
+    CHECK(session.Draft().colliders.empty());
+    CHECK_FALSE(session.Draft().dirty);
     context.canEdit = true;
     CHECK(session.Begin(object, context, 1));
-    CHECK_FALSE(session.body);
+    CHECK_FALSE(session.Draft().body);
 }
 
 TEST_CASE("Physics Inspector preserves complete existing bindings and both constraint endpoints", "[unit][editor][physics][inspector]") {
@@ -121,7 +121,8 @@ TEST_CASE("Physics Inspector preserves complete existing bindings and both const
     CHECK(request.Value().values.colliders == object.components.colliders);
     CHECK(request.Value().values.constraints == object.components.physicsConstraints);
     CHECK(request.Value().selectionRevision == 1);
-    CHECK_FALSE(session.dirty);
+    const auto &captured = static_cast<const PhysicsInspectorSession &>(session).Draft();
+    CHECK_FALSE(captured.dirty);
 }
 
 TEST_CASE("Physics Inspector refuses invalid material and endpoint text without losing captured values",
@@ -130,16 +131,16 @@ TEST_CASE("Physics Inspector refuses invalid material and endpoint text without 
     const auto object = BoundObject();
     REQUIRE(session.Begin(object, Context(), 1));
     SECTION("first endpoint") {
-        session.constraints.front().firstObject.valid = false;
+        session.Draft().constraints.front().firstObject.valid = false;
     }
     SECTION("second endpoint") {
-        session.constraints.front().secondBody.valid = false;
+        session.Draft().constraints.front().secondBody.valid = false;
     }
     SECTION("material slot") {
-        session.colliders.front().materials.front().slot.valid = false;
+        session.Draft().colliders.front().materials.front().slot.valid = false;
     }
     SECTION("material asset") {
-        session.colliders.front().materials.front().asset.valid = false;
+        session.Draft().colliders.front().materials.front().asset.valid = false;
     }
     CHECK(session.Request().HasError());
     session.Cancel();
@@ -147,7 +148,7 @@ TEST_CASE("Physics Inspector refuses invalid material and endpoint text without 
     REQUIRE(restored.HasValue());
     CHECK(restored.Value().values.constraints == object.components.physicsConstraints);
     CHECK(restored.Value().values.colliders == object.components.colliders);
-    CHECK_FALSE(session.dirty);
+    CHECK_FALSE(session.Draft().dirty);
 }
 
 TEST_CASE("Physics Inspector slot exhaustion preserves every captured contributor", "[unit][editor][physics][inspector]") {
@@ -159,9 +160,9 @@ TEST_CASE("Physics Inspector slot exhaustion preserves every captured contributo
     REQUIRE(session.Begin(object, Context(), 1));
     session.AddCollider();
     session.AddConstraint();
-    REQUIRE(session.colliders.size() == 1);
-    REQUIRE(session.constraints.size() == 1);
-    CHECK(session.colliders.front().value == object.components.colliders.front());
-    CHECK(session.constraints.front().value == object.components.physicsConstraints.front());
-    CHECK_FALSE(session.dirty);
+    REQUIRE(session.Draft().colliders.size() == 1);
+    REQUIRE(session.Draft().constraints.size() == 1);
+    CHECK(session.Draft().colliders.front().value == object.components.colliders.front());
+    CHECK(session.Draft().constraints.front().value == object.components.physicsConstraints.front());
+    CHECK_FALSE(session.Draft().dirty);
 }

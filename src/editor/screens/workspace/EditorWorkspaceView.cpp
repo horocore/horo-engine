@@ -614,6 +614,18 @@ namespace Horo::Editor {
                 drawButton("workspace.play.stop", "workspace_play_stop", !transition, EditorWorkspaceViewCommand::StopPlay);
             }
         }
+
+        /** @brief Draws the fallback menu model while preserving each dropdown's balanced begin/end lifetime. */
+        void DrawFallbackMenus(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
+                               const EditorGuiContext &context) {
+            for (const EditorMenuItem &menu : GetEditorMenuModel().menus) {
+                const std::string &label = context.localization.Get("editor", menu.labelKey);
+                if (Ui::BeginMenuDropdown(label.c_str(), context.theme.fonts)) {
+                    DrawFallbackMenuChildren(menu, viewModel, outCommand, context);
+                    Ui::EndMenuDropdown();
+                }
+            }
+        }
     }  // namespace
 
     void EditorWorkspaceView::DrawMenuBar(const ImVec2 &display, const EditorWorkspaceViewModel &viewModel,
@@ -647,13 +659,7 @@ namespace Horo::Editor {
                 }
                 ImGui::SameLine(0.0F, 10.0F);
 
-                for (const EditorMenuItem &menu : GetEditorMenuModel().menus) {
-                    const std::string &label = m_context.localization.Get("editor", menu.labelKey);
-                    if (Ui::BeginMenuDropdown(label.c_str(), m_context.theme.fonts)) {
-                        DrawFallbackMenuChildren(menu, viewModel, outCommand, m_context);
-                        Ui::EndMenuDropdown();
-                    }
-                }
+                DrawFallbackMenus(viewModel, outCommand, m_context);
             }
 
             const std::string version = std::format("Horo Engine {}", HORO_ENGINE_VERSION_STRING);

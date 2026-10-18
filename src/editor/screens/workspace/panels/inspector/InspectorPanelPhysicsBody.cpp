@@ -6,7 +6,7 @@ namespace Horo::Editor::PhysicsInspectorWidgets {
         bool Motion(const EditorGuiContext &context, Runtime::RigidBodyComponent &body) {
             const std::array entries{Label(context, "workspace.physics.static"), Label(context, "workspace.physics.kinematic"),
                                      Label(context, "workspace.physics.dynamic")};
-            int motion = static_cast<int>(body.motion);
+            auto motion = static_cast<int>(body.motion);
             if (!Ui::DrawComboPropRow(Label(context, "workspace.physics.motion"), "motion", motion, entries, context.theme.fonts))
                 return false;
             body.motion = static_cast<Runtime::AuthoredPhysicsMotionType>(motion);

@@ -34,8 +34,8 @@ namespace Horo::Editor {
             draft.shapePart = Decimal(asset->subresource.value);
         }
         for (const auto &material : value.materials)
-            draft.materials.push_back(
-                {material, Decimal(material.slot.Value()), Identity(material.material.IsValid() ? material.material.ToString() : "")});
+            draft.materials.emplace_back(material, Decimal(material.slot.Value()),
+                                         Identity(material.material.IsValid() ? material.material.ToString() : ""));
         return draft;
     }
 
@@ -68,34 +68,34 @@ namespace Horo::Editor {
 
     /** @copydoc PhysicsInspectorSession::Clear */
     void PhysicsInspectorSession::Clear() noexcept {
-        body.reset();
-        colliders.clear();
-        constraints.clear();
+        draft_.body.reset();
+        draft_.colliders.clear();
+        draft_.constraints.clear();
         baseline_ = {};
         context_ = {};
         object_ = {};
-        dirty = false;
+        draft_.dirty = false;
     }
 
     /** @copydoc PhysicsInspectorSession::Cancel */
     void PhysicsInspectorSession::Cancel() {
-        body = baseline_.body;
-        colliders.clear();
-        constraints.clear();
+        draft_.body = baseline_.body;
+        draft_.colliders.clear();
+        draft_.constraints.clear();
         for (const auto &value : baseline_.colliders)
-            colliders.push_back(CaptureCollider(value));
+            draft_.colliders.push_back(CaptureCollider(value));
         for (const auto &value : baseline_.constraints)
-            constraints.push_back(CaptureConstraint(value));
-        dirty = false;
+            draft_.constraints.push_back(CaptureConstraint(value));
+        draft_.dirty = false;
     }
 
     /** @copydoc PhysicsInspectorSession::Request */
     Result<PhysicsInspectorRequest> PhysicsInspectorSession::Request() const {
         using Return = Result<PhysicsInspectorRequest>;
-        PhysicsInspectorRequest request{context_, selectionRevision_, {body, {}, {}}};
-        for (const auto &draft : colliders) {
-            const bool assetShape = std::holds_alternative<Runtime::PhysicsShapeAssetReference>(draft.value.source);
-            if (!draft.bodyObject.valid || !draft.bodySlot.valid || !draft.profile.valid ||
+        PhysicsInspectorRequest request{context_, selectionRevision_, {draft_.body, {}, {}}};
+        for (const auto &draft : draft_.colliders) {
+            if (const bool assetShape = std::holds_alternative<Runtime::PhysicsShapeAssetReference>(draft.value.source);
+                !draft.bodyObject.valid || !draft.bodySlot.valid || !draft.profile.valid ||
                 (assetShape && (!draft.shapeAsset.valid || !draft.shapePart.valid)))
                 return Return::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Invalid)));
             auto value = draft.value;
@@ -107,9 +107,9 @@ namespace Horo::Editor {
             }
             request.values.colliders.push_back(std::move(value));
         }
-        for (const auto &draft : constraints) {
-            const bool secondBody = std::holds_alternative<Runtime::PhysicsConstraintBodyEndpoint>(draft.value.second);
-            if (!draft.firstObject.valid || !draft.firstBody.valid ||
+        for (const auto &draft : draft_.constraints) {
+            if (const bool secondBody = std::holds_alternative<Runtime::PhysicsConstraintBodyEndpoint>(draft.value.second);
+                !draft.firstObject.valid || !draft.firstBody.valid ||
                 (secondBody && (!draft.secondObject.valid || !draft.secondBody.valid)))
                 return Return::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Invalid)));
             request.values.constraints.push_back(draft.value);
@@ -119,10 +119,10 @@ namespace Horo::Editor {
 
     /** @copydoc PhysicsInspectorSession::NextComponentId */
     std::uint64_t PhysicsInspectorSession::NextComponentId() const noexcept {
-        std::uint64_t highest = body ? body->id.value : 0;
-        for (const auto &draft : colliders)
+        std::uint64_t highest = draft_.body ? draft_.body->id.value : 0;
+        for (const auto &draft : draft_.colliders)
             highest = std::max(highest, draft.value.id.value);
-        for (const auto &draft : constraints)
+        for (const auto &draft : draft_.constraints)
             highest = std::max(highest, draft.value.id.value);
         return highest == std::numeric_limits<std::uint64_t>::max() ? 0 : highest + 1;
     }
@@ -130,52 +130,53 @@ namespace Horo::Editor {
     /** @copydoc PhysicsInspectorSession::AddBody */
     void PhysicsInspectorSession::AddBody() {
         const auto next = NextComponentId();
-        const bool exhaustedSlot = std::ranges::any_of(colliders, [](const auto &draft) {
+        if (const bool exhaustedSlot = std::ranges::any_of(draft_.colliders,
+                                                           [](const auto &draft) {
             return draft.value.collider.value == std::numeric_limits<std::uint64_t>::max();
         });
-        if (body || next == 0 || next == std::numeric_limits<std::uint64_t>::max() || exhaustedSlot ||
-            colliders.size() >= Runtime::MaximumPhysicsCollidersPerBody)
+            draft_.body || next == 0 || next == std::numeric_limits<std::uint64_t>::max() || exhaustedSlot ||
+            draft_.colliders.size() >= Runtime::MaximumPhysicsCollidersPerBody)
             return;
         Runtime::RigidBodyComponent value;
         value.id.value = NextComponentId();
         value.body.value = 1;
-        body = value;
+        draft_.body = value;
         AddCollider();
-        dirty = true;
+        draft_.dirty = true;
     }
 
     /** @copydoc PhysicsInspectorSession::AddCollider */
     void PhysicsInspectorSession::AddCollider() {
-        if (colliders.size() >= Runtime::MaximumPhysicsCollidersPerBody || NextComponentId() == 0)
+        if (draft_.colliders.size() >= Runtime::MaximumPhysicsCollidersPerBody || NextComponentId() == 0)
             return;
         std::uint64_t slot = 0;
-        for (const auto &draft : colliders)
+        for (const auto &draft : draft_.colliders)
             slot = std::max(slot, draft.value.collider.value);
         if (slot == std::numeric_limits<std::uint64_t>::max())
             return;
         Runtime::ColliderComponent value;
         value.id.value = NextComponentId();
         value.collider.value = slot + 1;
-        value.body = {Runtime::SceneObjectId{object_.value}, body ? body->body : Runtime::PhysicsBodySlotId{}};
+        value.body = {Runtime::SceneObjectId{object_.value}, draft_.body ? draft_.body->body : Runtime::PhysicsBodySlotId{}};
         value.materials.push_back({Physics::PhysicsMaterialSlotId::FromValue(1), {}});
-        colliders.push_back(CaptureCollider(value));
-        dirty = true;
+        draft_.colliders.push_back(CaptureCollider(value));
+        draft_.dirty = true;
     }
 
     /** @copydoc PhysicsInspectorSession::AddConstraint */
     void PhysicsInspectorSession::AddConstraint() {
-        if (constraints.size() >= Runtime::MaximumPhysicsConstraintsPerObject || NextComponentId() == 0)
+        if (draft_.constraints.size() >= Runtime::MaximumPhysicsConstraintsPerObject || NextComponentId() == 0)
             return;
         std::uint64_t slot = 0;
-        for (const auto &draft : constraints)
+        for (const auto &draft : draft_.constraints)
             slot = std::max(slot, draft.value.constraint.value);
         if (slot == std::numeric_limits<std::uint64_t>::max())
             return;
         Runtime::PhysicsConstraintComponent value;
         value.id.value = NextComponentId();
         value.constraint.value = slot + 1;
-        value.first.body = {Runtime::SceneObjectId{object_.value}, body ? body->body : Runtime::PhysicsBodySlotId{}};
-        constraints.push_back(CaptureConstraint(value));
-        dirty = true;
+        value.first.body = {Runtime::SceneObjectId{object_.value}, draft_.body ? draft_.body->body : Runtime::PhysicsBodySlotId{}};
+        draft_.constraints.push_back(CaptureConstraint(value));
+        draft_.dirty = true;
     }
 }  // namespace Horo::Editor
