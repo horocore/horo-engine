@@ -56,7 +56,8 @@ namespace Horo::Extensions {
             using enum EditorSurfaceKind;
             const bool persistent = (descriptor.kind == Panel || descriptor.kind == Tab || descriptor.kind == ActivityItem) &&
                                     descriptor.persistence != EditorSurfacePersistence::None;
-            const bool transient = (descriptor.kind == SettingsPage || descriptor.kind == Modal || descriptor.kind == ModalPage) &&
+            const bool transient = (descriptor.kind == SettingsPage || descriptor.kind == Modal || descriptor.kind == ModalPage ||
+                                    descriptor.kind == Inspector || descriptor.kind == PropertyDrawer) &&
                                    descriptor.persistence == EditorSurfacePersistence::None && !descriptor.openByDefault;
             return persistent || transient;
         }

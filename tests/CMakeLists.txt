@@ -2546,6 +2546,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
             unit/editor/EditorWorkspaceControllerDockingTests.cpp
             unit/editor/EditorWorkspaceControllerInspectorTests.cpp
+            unit/editor/EditorInspectorControllerTests.cpp
             unit/editor/EditorWorkspaceAudioPreviewTests.cpp
             ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewHost.cpp
             ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewDecode.cpp
@@ -2734,6 +2735,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/ExtensionRecoveryViewTests.cpp
             unit/editor/EditorPageViewTests.cpp
             unit/editor/EditorPageFileStoreTests.cpp
+            unit/editor/EditorInspectorViewTests.cpp
             support/AllocationProbe.cpp)
     target_sources(HoroGuiPublicHeaderConsumer PRIVATE support/GuiScreenHostPublicContract.cpp)
     target_compile_features(HoroExtensionActivityViewTests PRIVATE cxx_std_20)
@@ -4197,7 +4199,7 @@ target_link_libraries(HoroExtensionDiscoveryTests PRIVATE HoroEngine::Extensions
 add_test(NAME HoroExtensionDiscoveryTests COMMAND HoroExtensionDiscoveryTests)
 
 add_executable(HoroExtensionAbiCConsumer unit/extensions/ExtensionAbiCConsumer.c)
-target_sources(HoroExtensionsPublicHeaderConsumer PRIVATE support/EditorActivityPublicContract.cpp support/EditorPagePublicContract.cpp)
+target_sources(HoroExtensionsPublicHeaderConsumer PRIVATE support/EditorActivityPublicContract.cpp support/EditorPagePublicContract.cpp support/EditorInspectorPublicContract.cpp)
 target_compile_features(HoroExtensionAbiCConsumer PRIVATE c_std_11)
 set_target_properties(HoroExtensionAbiCConsumer PROPERTIES C_EXTENSIONS OFF)
 target_link_libraries(HoroExtensionAbiCConsumer PRIVATE HoroEngine::Extensions)
@@ -4307,6 +4309,8 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/EditorPageDefinitionTests.cpp
         unit/extensions/EditorPageHostTests.cpp
         unit/extensions/EditorPageNativeTests.cpp
+        unit/extensions/EditorInspectorNativeTests.cpp
+        unit/extensions/EditorInspectorDefinitionTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
         unit/extensions/ExtensionManifestParserTests.cpp
         unit/extensions/ScriptExportDescriptorTests.cpp
@@ -4317,6 +4321,12 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExternalImporterRegistrationTests.cpp
         integration/extensions/HeadlessExtensionHostTests.cpp
 )
+add_library(HoroEditorInspectorFixture MODULE fixtures/extensions/EditorInspectorModule.c)
+target_compile_features(HoroEditorInspectorFixture PRIVATE c_std_11)
+set_target_properties(HoroEditorInspectorFixture PROPERTIES C_EXTENSIONS OFF)
+target_link_libraries(HoroEditorInspectorFixture PRIVATE HoroEngine::Extensions)
+add_dependencies(HoroExtensionManagerTests HoroEditorInspectorFixture)
+target_compile_definitions(HoroExtensionManagerTests PRIVATE HORO_EDITOR_INSPECTOR_FIXTURE="$<TARGET_FILE:HoroEditorInspectorFixture>")
 add_library(HoroEditorPageFixture MODULE fixtures/extensions/EditorPageModule.c)
 target_compile_features(HoroEditorPageFixture PRIVATE c_std_11)
 set_target_properties(HoroEditorPageFixture PROPERTIES C_EXTENSIONS OFF)
@@ -5181,6 +5191,16 @@ add_test(NAME HoroCharacterAllocationJunitPathContract
         -DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_character_allocation_qualification.py
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CharacterAllocationJunitPathContract.cmake")
 set_tests_properties(HoroCharacterAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
+
+add_executable(HoroInspectorBehaviorBindingTests unit/editor/InspectorBehaviorBindingTests.cpp)
+target_compile_features(HoroInspectorBehaviorBindingTests PRIVATE cxx_std_20)
+target_link_libraries(HoroInspectorBehaviorBindingTests PRIVATE HoroEngine::EditorModel Catch2::Catch2WithMain)
+horo_register_catch_test(HoroInspectorBehaviorBindingTests LABELS "unit;editor;inspector;headless;ci-windows;sonar-coverage")
+
+add_library(HoroInspectorBehaviorPublicHeaderConsumer OBJECT support/InspectorBehaviorPublicContract.cpp)
+target_compile_features(HoroInspectorBehaviorPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroInspectorBehaviorPublicHeaderConsumer PRIVATE HoroEngine::EditorModel)
+target_sources(HoroInspectorBehaviorBindingTests PRIVATE $<TARGET_OBJECTS:HoroInspectorBehaviorPublicHeaderConsumer>)
 
 horo_finalize_ci_suites()
 

@@ -217,9 +217,7 @@ namespace Horo::Editor {
         void SynchronizeDraft(std::span<const SceneObject> objects, std::span<const SceneObjectId> selectedObjects,
                               std::optional<SceneObjectId> primary, DocumentRevision revision);
         void ResetTransformDraft();
-        void ResetCameraDraft(const SceneObject &object);
         void ResetLightDraft(const SceneObject &object);
-        void ResetTriggerVolumeDraft(const SceneObject &object);
         void ResetAudioSourceDraft(const SceneObject &object);
         void ResetCharacterDraft(const SceneObject &object);
         void ResetAudioListenerDraft(const SceneObject &object);

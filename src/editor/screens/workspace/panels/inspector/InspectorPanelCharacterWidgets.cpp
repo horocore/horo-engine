@@ -87,7 +87,7 @@ namespace Horo::Editor {
             changed |= Boolean("workspace.inspector.character.platform_heading", movement.inheritPlatformHeading, context);
             const auto slopes = std::array{context.localization.Get("editor", "workspace.inspector.character.stop").c_str(),
                                            context.localization.Get("editor", "workspace.inspector.character.slide").c_str()};
-            if (int slope = static_cast<int>(movement.steepSlopePolicy);
+            if (auto slope = static_cast<int>(movement.steepSlopePolicy);
                 Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.steep_policy").c_str(),
                                      "steep_policy", slope, slopes, context.theme.fonts)) {
                 movement.steepSlopePolicy = static_cast<Character::CharacterSteepSlopePolicy>(slope);
@@ -96,7 +96,7 @@ namespace Horo::Editor {
             const auto leave = std::array{context.localization.Get("editor", "workspace.inspector.character.none").c_str(),
                                           context.localization.Get("editor", "workspace.inspector.character.linear").c_str(),
                                           context.localization.Get("editor", "workspace.inspector.character.point").c_str()};
-            if (int velocity = static_cast<int>(movement.platformLeaveVelocity);
+            if (auto velocity = static_cast<int>(movement.platformLeaveVelocity);
                 Ui::DrawComboPropRow(context.localization.Get("editor", "workspace.inspector.character.leave_velocity").c_str(),
                                      "leave_velocity", velocity, leave, context.theme.fonts)) {
                 movement.platformLeaveVelocity = static_cast<Character::CharacterPlatformLeaveVelocityPolicy>(velocity);

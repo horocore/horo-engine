@@ -46,6 +46,7 @@ namespace Horo::Editor {
     }  // namespace
 
     void EditorWorkspaceController::RefreshSceneProjections() {
+        RefreshInspectorDocumentPort();
         ReconcileAudioPreview();
         const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
         m_viewModel.documentRevision = documentSnapshot.revision;

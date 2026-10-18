@@ -225,7 +225,8 @@ namespace Horo::Editor::InspectorPanelDetail {
     [[nodiscard]] inline BehaviorCardResult DrawBehaviorCard(const Gameplay::BehaviorComponent &attached,
                                                              const Gameplay::BehaviorDescriptor *descriptor,
                                                              const std::span<const char *const, 2> enabledEntries,
-                                                             const EditorGuiContext &context) {
+                                                             const EditorGuiContext &context,
+                                                             const std::span<const std::string> customFields = {}) {
         const bool missing = descriptor == nullptr;
         const std::string sectionText =
             missing ? context.localization.Get("editor", "workspace.inspector.behavior_missing") + " — " + attached.typeId.Value()
@@ -253,7 +254,8 @@ namespace Horo::Editor::InspectorPanelDetail {
         }
         if (!missing) {
             for (Gameplay::BehaviorField &field : result.edited.fields)
-                result.committed |= DrawBehaviorField(field, enabledEntries, context);
+                if (std::ranges::find(customFields, field.name) == customFields.end())
+                    result.committed |= DrawBehaviorField(field, enabledEntries, context);
         }
         ImGui::EndDisabled();
         return result;

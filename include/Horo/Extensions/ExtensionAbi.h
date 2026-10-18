@@ -9,6 +9,7 @@
  * ownership across this boundary.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef _WIN32
@@ -27,7 +28,7 @@
 
 enum {  // NOSONAR(cpp:S3642) C ABI constant group
     HORO_EXTENSION_ABI_VERSION = 1,
-    HORO_EXTENSION_ABI_MINOR_VERSION = 5,
+    HORO_EXTENSION_ABI_MINOR_VERSION = 6,
     HORO_ASSET_IMPORTER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION_2 = 2,
@@ -409,6 +410,14 @@ typedef HoroExtensionStatus (*HoroRegisterEditorPageFunc)(void *hostContext, con
                                                           struct HoroEditorPageSessionApi *session);
 #endif
 
+/** @brief ABI1.6 inert inspector declaration registration; no document or rendering callback crosses this boundary. */
+struct HoroEditorInspectorDescriptor;
+#ifdef __cplusplus
+using HoroRegisterEditorInspectorFunc = HoroExtensionStatus (*)(void *hostContext, const struct HoroEditorInspectorDescriptor *descriptor);
+#else
+typedef HoroExtensionStatus (*HoroRegisterEditorInspectorFunc)(void *hostContext, const struct HoroEditorInspectorDescriptor *descriptor);
+#endif
+
 struct HoroExtensionHostApi {
     /** @brief Size of this struct for append-only ABI negotiation. */
     uint32_t structSize;
@@ -426,8 +435,20 @@ struct HoroExtensionHostApi {
     HoroRegisterEditorActivityFunc registerEditorActivity;
     /** @brief Appended in 1.5; check structSize and editor.page host capability before reading. */
     HoroRegisterEditorPageFunc registerEditorPage;
+    /** @brief Appended in1.6; check complete prefix and editor.inspector host capability before reading. */
+    HoroRegisterEditorInspectorFunc registerEditorInspector;
 };
 typedef struct HoroExtensionHostApi HoroExtensionHostApi;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
+
+/** @brief Checks the exact inspector host prefix, major/minor and callback before a native client reads or invokes the tail.
+ * @param host Call-lifetime host table, or null. Supplied memory must cover its declared prefix.
+ * @return Nonzero when ABI1.6 inspector transport is available; no permission, registration or document authority is granted.
+ * @details The check deliberately uses this field's end rather than sizeof the growing host table, retaining append-only compatibility.
+ */
+static inline int HoroExtensionHasEditorInspectorTransport(const HoroExtensionHostApi *host) {
+    return host && host->structSize >= offsetof(HoroExtensionHostApi, registerEditorInspector) + sizeof(host->registerEditorInspector) &&
+           host->abiVersion == HORO_EXTENSION_ABI_VERSION && host->abiMinorVersion >= 6 && host->registerEditorInspector;
+}
 
 struct HoroExtensionModuleApi {
     /** @brief Size of this struct for append-only ABI negotiation. */
@@ -443,6 +464,7 @@ enum {  // NOSONAR(cpp:S3642) C ABI function requirement bits.
     HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER = 2,
     HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY = 4,
     HORO_EXTENSION_REQUIRES_EDITOR_PAGE = 8,
+    HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR = 16,
 };
 
 /**

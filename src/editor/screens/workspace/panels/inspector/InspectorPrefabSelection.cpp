@@ -3,6 +3,26 @@
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Draws typed prefab ownership actions from immutable projection evidence without panel state. */
+        void DrawPrefabOwnershipActions(const PrefabHierarchyEntry &entry, const PrefabHierarchyProjection &projection,
+                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+            using enum PrefabHierarchyAction;
+            for (const auto action : {OpenSource, LocateInstance}) {
+                const auto key =
+                    action == OpenSource ? "workspace.hierarchy.prefab.open_source" : "workspace.hierarchy.prefab.locate_instance";
+                if (Ui::Button({.label = context.localization.Get("editor", key).c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = context.theme.fonts.sans,
+                                .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+                    command.command = EditorWorkspaceViewCommand::PrefabHierarchy;
+                    command.prefabHierarchy = PrefabHierarchyCommand{projection.documentSession, projection.publication,
+                                                                     projection.documentRevision, entry.target, action};
+                }
+            }
+        }
+    }  // namespace
+
     /** @copydoc InspectorPanel::DrawPrefabSelection */
     void InspectorPanel::DrawPrefabSelection(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                              const EditorGuiContext &context) {
@@ -36,20 +56,4 @@ namespace Horo::Editor {
         DrawPrefabOwnershipActions(*entry, *viewModel.prefabHierarchy, command, context);
     }
 
-    /** @copydoc InspectorPanel::DrawPrefabOwnershipActions */
-    void InspectorPanel::DrawPrefabOwnershipActions(const PrefabHierarchyEntry &entry, const PrefabHierarchyProjection &projection,
-                                                    EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const {
-        using enum PrefabHierarchyAction;
-        for (const auto action : {OpenSource, LocateInstance}) {
-            const auto key = action == OpenSource ? "workspace.hierarchy.prefab.open_source" : "workspace.hierarchy.prefab.locate_instance";
-            if (Ui::Button({.label = context.localization.Get("editor", key).c_str(),
-                            .variant = Ui::ButtonVariant::Secondary,
-                            .font = context.theme.fonts.sans,
-                            .style = {.width = Ui::StyleWidth::FillAvailable}})) {
-                command.command = EditorWorkspaceViewCommand::PrefabHierarchy;
-                command.prefabHierarchy = PrefabHierarchyCommand{projection.documentSession, projection.publication,
-                                                                 projection.documentRevision, entry.target, action};
-            }
-        }
-    }
 }  // namespace Horo::Editor

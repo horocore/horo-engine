@@ -365,3 +365,8 @@ Play structural preparation resolves the controller's current BehaviorRuntime at
 each synchronous transaction. It must observe initialization and reload replacement
 rather than capturing a null or retired runtime at Scene-host construction.
 The controller shuts down its Scene host before the captured owner is destroyed.
+
+The private workspace dependency bundle stores the host-bound play-scene factory
+under `gameplay.sceneFactory`, alongside gameplay build and module-retirement
+services. Application composition passes the factory explicitly; the workspace
+does not discover a concrete backend.

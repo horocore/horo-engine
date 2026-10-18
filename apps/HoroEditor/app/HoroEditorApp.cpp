@@ -1788,40 +1788,46 @@ namespace Horo::Editor {
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
             const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
-            GuiScreenHost screenHost{guiContext,
-                                     GuiScreenHostComposition{.modalHost = p.modalHost,
-                                                              .settingsService = p.settings,
-                                                              .localization = p.localization,
-                                                              .engineEvents = p.engineEvents,
-                                                              .creationService = p.projectCreationService,
-                                                              .jobs = p.background.jobs,
-                                                              .inputRouter = p.inputRouter,
-                                                              .rendererAvailability = p.rendererAvailability,
-                                                              .screenRegistry = std::move(screenRegistry),
-                                                              .workspacePanelRegistry = std::move(workspacePanelRegistry),
-                                                              .logoTexture = (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
-                                                              .extensionInventory =
-                                                                  extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
-                                                              .extensionMarketplace =
-                                                                  extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
-                                                              .nativeDialogs = &nativeDialogs,
-                                                              .extensionSettingsFiles = &durableFiles,
-                                                              .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
-                                                              .extensionPagePolicy =
-                                                                  {.revision = 1,
-                                                                   .knownPermissions = {{"editor.settings"},
-                                                                                        {"editor.modal"},
-                                                                                        {"configuration.user.write"},
-                                                                                        {"configuration.project.write"},
-                                                                                        {"configuration.workspace.write"}},
-                                                                   .approvedPermissions = {{"editor.settings"},
-                                                                                           {"editor.modal"},
-                                                                                           {"configuration.user.write"},
-                                                                                           {"configuration.project.write"},
-                                                                                           {"configuration.workspace.write"}},
-                                                                   .availableCapabilities = {{"horo.editor.settings"},
-                                                                                             {"horo.editor.modal"}}},
-                                                              .gameplayRetirements = gameplayRetirements}};
+            GuiScreenHost
+                screenHost{guiContext,
+                           GuiScreenHostComposition{.modalHost = p.modalHost,
+                                                    .settingsService = p.settings,
+                                                    .localization = p.localization,
+                                                    .engineEvents = p.engineEvents,
+                                                    .creationService = p.projectCreationService,
+                                                    .jobs = p.background.jobs,
+                                                    .inputRouter = p.inputRouter,
+                                                    .rendererAvailability = p.rendererAvailability,
+                                                    .screenRegistry = std::move(screenRegistry),
+                                                    .workspacePanelRegistry = std::move(workspacePanelRegistry),
+                                                    .logoTexture = (std::uintptr_t)(void *)(intptr_t)p.textures.logo,
+                                                    .extensionInventory =
+                                                        extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
+                                                    .extensionMarketplace =
+                                                        extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
+                                                    .nativeDialogs = &nativeDialogs,
+                                                    .extensionSettingsFiles = &durableFiles,
+                                                    .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
+                                                    .extensionPagePolicy = {.revision = 1,
+                                                                            .knownPermissions = {{"editor.settings"},
+                                                                                                 {"editor.modal"},
+                                                                                                 {"configuration.user.write"},
+                                                                                                 {"configuration.project.write"},
+                                                                                                 {"configuration.workspace.write"}},
+                                                                            .approvedPermissions = {{"editor.settings"},
+                                                                                                    {"editor.modal"},
+                                                                                                    {"configuration.user.write"},
+                                                                                                    {"configuration.project.write"},
+                                                                                                    {"configuration.workspace.write"}},
+                                                                            .availableCapabilities = {{"horo.editor.settings"},
+                                                                                                      {"horo.editor.modal"}}},
+                                                    .extensionInspectorPolicy =
+                                                        {.revision = 1,
+                                                         .knownPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
+                                                         .approvedPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
+                                                         .availableCapabilities = {{"horo.editor.inspector"},
+                                                                                   {"horo.editor.property-drawer"}}},
+                                                    .gameplayRetirements = gameplayRetirements}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);

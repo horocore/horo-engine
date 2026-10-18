@@ -309,7 +309,9 @@ namespace Horo::Editor {
             return {};
         }
         if (edit.cancelRequested) {
-            ResetCameraDraft(object);
+            m_draft.camera = object.components.camera;
+            if (m_draft.camera.has_value())
+                m_draft.cameraFieldOfViewDegrees = m_draft.camera->verticalFieldOfViewRadians * RadiansToDegrees;
             return {};
         }
         if (!allowCommands || !edit.committed || !IsValidCameraComponent(*m_draft.camera) || *m_draft.camera == *object.components.camera)
@@ -410,7 +412,7 @@ namespace Horo::Editor {
             return {};
         }
         if (edit.cancelRequested) {
-            ResetTriggerVolumeDraft(object);
+            m_draft.triggerVolume = object.components.triggerVolume;
             return {};
         }
         if (!allowCommands || !edit.committed || *m_draft.triggerVolume == *object.components.triggerVolume)
@@ -421,22 +423,12 @@ namespace Horo::Editor {
         return command;
     }
 
-    void InspectorEditSession::ResetCameraDraft(const SceneObject &object) {
-        m_draft.camera = object.components.camera;
-        if (m_draft.camera.has_value())
-            m_draft.cameraFieldOfViewDegrees = m_draft.camera->verticalFieldOfViewRadians * RadiansToDegrees;
-    }
-
     void InspectorEditSession::ResetLightDraft(const SceneObject &object) {
         m_draft.light = object.components.light;
         if (!m_draft.light.has_value())
             return;
         m_draft.lightInnerConeDegrees = m_draft.light->innerConeRadians * RadiansToDegrees;
         m_draft.lightOuterConeDegrees = m_draft.light->outerConeRadians * RadiansToDegrees;
-    }
-
-    void InspectorEditSession::ResetTriggerVolumeDraft(const SceneObject &object) {
-        m_draft.triggerVolume = object.components.triggerVolume;
     }
 
     /** @brief Captures a displayed UUID without turning a numeric runtime identity into an asset identity. */

@@ -69,8 +69,9 @@ namespace Horo::Editor {
                                                          Runtime::RuntimeSceneService &runtimeScene,
                                                          const Assets::AssetRegistrySnapshot &assetRegistry,
                                                          const EditorWorkspaceDependencies &dependencies)
-        : m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding), m_playSceneFactory(dependencies.playSceneFactory),
-          m_assetRegistry(assetRegistry), m_sourceOpenService(projectRoot, m_documentRegistry),
+        : m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding),
+          m_playSceneFactory(dependencies.gameplay.sceneFactory), m_assetRegistry(assetRegistry),
+          m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
           m_prefabSourceCapture(dependencies.prefabSources), m_workspaceSession(dependencies.documentSessionOwner),
@@ -89,6 +90,8 @@ namespace Horo::Editor {
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
+        m_inspectorDocumentOwner = dependencies.documentSessionOwner;
+        m_inspectorHost = dependencies.inspectorHost;
         m_physicsDocumentOwner = dependencies.documentSessionOwner;
         if (dependencies.engineEvents != nullptr) {
             m_engineEventBridge = std::make_unique<EditorEngineEventBridge>(*dependencies.engineEvents, m_dataBus);
@@ -121,6 +124,7 @@ namespace Horo::Editor {
         for (const ProjectGameplayDiagnostic &diagnostic : m_gameplayRegistry->Diagnostics())
             LOG_ERROR("editor.gameplay", "Gameplay source '%s' is invalid: %s", diagnostic.source.string().c_str(),
                       diagnostic.error.message.c_str());
+        InvalidateInspectorBehaviorBindings();
         for (const Gameplay::BehaviorRegistration &registration : m_gameplayRegistry->Registry().Registrations())
             m_viewModel.availableBehaviors.push_back(registration.descriptor);
     }
