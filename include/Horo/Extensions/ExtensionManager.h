@@ -9,6 +9,7 @@
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Security/ArtifactSignature.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
@@ -20,6 +21,7 @@ namespace Horo::Assets {
 }
 
 namespace Horo::Extensions {
+    enum class EditorSurfaceProviderStatus : std::uint8_t;
     struct ExtensionModuleLifetime;
     class EditorActivityHost;
     class EditorPageHost;
@@ -150,6 +152,19 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<void> AcquireProviderDependencies(std::span<const std::string> providers, std::string_view extensionId,
                                                                std::vector<std::shared_ptr<ExtensionModuleLifetime>> &dependencies,
                                                                std::vector<std::shared_ptr<ExtensionExecutableLease>> &leases) const;
+        /** @brief Reads the actual bounded manifest and reserves failure presentation before dependency/native admission. */
+        [[nodiscard]] Result<ExtensionManifest> ReadRecoveryManifest(const std::string &extensionDir,
+                                                                     std::span<const std::string> selectedModules) const;
+        /** @brief Narrows the explicit owning-host plan while preserving precise incompatible-provider presentation.
+         * @param manifest Admitted manifest whose contribution set is narrowed only after successful plan validation.
+         * @param selectedModules Explicit independently owned roots; empty retains complete-package admission.
+         * @return The Main owning-host module plan, or its original failure after recovery presentation.
+         */
+        [[nodiscard]] Result<ExtensionModulePlan> ResolveRecoveryPlan(ExtensionManifest &manifest,
+                                                                      std::span<const std::string> selectedModules) const;
+        /** @brief Reserves or updates bounded host recovery reasons without invoking a provider or granting activation. */
+        [[nodiscard]] Result<void> ReportEditorProviderStatus(const ExtensionManifest &manifest, EditorSurfaceProviderStatus status,
+                                                              std::span<const std::string> selectedModules = {}) const;
         void RetireRecord(const std::string &extensionId);
         void CloseForDestruction() noexcept;
     };

@@ -2298,6 +2298,13 @@
     "workspace.packages.recovery_hint": {
       "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
     },
+    "workspace.extensions.recovery": {"text": "Unavailable extension surfaces"},
+    "workspace.extensions.retained": {"text": "Your workspace state is retained. Restore or enable the provider to recover these surfaces. Closing provider surfaces preserves their saved presentation data."},
+    "workspace.extensions.close": {"text": "Close provider workspace surfaces"},
+    "workspace.extensions.disabled": {"text": "The provider is disabled."},
+    "workspace.extensions.incompatible": {"text": "The provider is incompatible with this host."},
+    "workspace.extensions.failed": {"text": "The provider failed activation."},
+    "workspace.extensions.missing": {"text": "The provider or contribution is unavailable."},
     "settings.extension_pages.title": {
       "text": "Extension pages"
     },

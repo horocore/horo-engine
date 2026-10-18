@@ -349,8 +349,9 @@ namespace Horo::Editor {
                                              const std::uintptr_t logoTexture, Input::InputRouter &inputRouter,
                                              Input::InputContextToken &workspaceInputContext, Extensions::EditorActivityHost *activityHost,
                                              IEditorGuiRenderer *renderer)
-        : m_extensions(context, activityHost, renderer), m_context(context), m_panelRegistry(panelRegistry), m_logoTexture(logoTexture),
-          m_inputRouter(inputRouter), m_workspaceInputContext(workspaceInputContext) {}
+        : m_extensions(context, activityHost, renderer), m_extensionRecovery(context, activityHost ? &activityHost->Registry() : nullptr),
+          m_context(context), m_panelRegistry(panelRegistry), m_logoTexture(logoTexture), m_inputRouter(inputRouter),
+          m_workspaceInputContext(workspaceInputContext) {}
 
     bool EditorWorkspaceView::EnsurePanelDragCapture() {
         if (m_panelDragCapture.IsActive()) {
@@ -453,6 +454,7 @@ namespace Horo::Editor {
             m_panelDragContext.Reset();
             m_panelDragCandidateId.clear();
         }
+        m_extensionRecovery.Draw();
         const ImVec2 display{contentRegion.width, contentRegion.height};
 
         const float menuH = UsesNativeEditorMenuBar() ? 0.0F : kMenuBarH;

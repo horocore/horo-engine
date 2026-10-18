@@ -67,6 +67,28 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.extensions", "Built-in extension activation state was rejected.");
         }
 
+        /** @brief Copies actual inventory availability into the existing surface authority after startup admission.
+         * Desired enablement changes remain restart-applied while a provider is active.
+         */
+        void PublishRecoveryReasons(const Extensions::EditorSurfaceRegistry &registry, const Extensions::ExtensionInventory &inventory) {
+            using enum Extensions::EditorSurfaceProviderStatus;
+            for (const auto &entry : inventory.Entries()) {
+                if (entry.runtimeActive)
+                    continue;
+                auto status = Missing;
+                if (!entry.enabled)
+                    status = Disabled;
+                else if (entry.hostCompatibility == Extensions::ExtensionHostCompatibilityState::Incompatible ||
+                         entry.hostCompatibility == Extensions::ExtensionHostCompatibilityState::UnsupportedInHostProfile)
+                    status = Incompatible;
+                else if (entry.activationOutcome == Extensions::ExtensionActivationOutcome::Failed)
+                    status = Failed;
+                for (const auto &providerModule : entry.modules)
+                    if (const auto recorded = registry.SetProviderStatus({entry.packageId, providerModule.id}, status); recorded.HasError())
+                        LOG_WARN("editor.extensions", "Recovery reason admission failed: %s", recorded.ErrorValue().message.c_str());
+            }
+        }
+
         /** @brief Loads eligible user extensions and publishes their typed activation outcomes. */
         void ActivateUserExtensions(Extensions::ExtensionManager &manager, Extensions::ExtensionInventory &inventory) {
             for (const auto &extension : inventory.Entries()) {
@@ -142,8 +164,10 @@ namespace Horo::Editor {
                                                            Extensions::ExtensionEditorHosts{.activities = editorActivityHost_,
                                                                                             .pages = editorPageHost_});
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
-        if (extensionInventory_ != nullptr)
+        if (extensionInventory_ != nullptr) {
             ActivateUserExtensions(*extensionManager_, *extensionInventory_);
+            PublishRecoveryReasons(editorActivityHost_->Registry(), *extensionInventory_);
+        }
         if (auto published = importerCatalogCandidate_->Publish(); published.HasValue())
             importerCatalog_ = std::move(published).Value();
         if (!importerCatalog_) {
