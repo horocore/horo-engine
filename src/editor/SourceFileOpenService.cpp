@@ -36,7 +36,7 @@ namespace Horo::Editor {
                 if (!IsValidUtf8ScalarSequence(text) || text.find('\0') != std::string::npos)
                     return Result<SourceDocumentId>::Failure(MakeError(SourceOpenErrors::Unsafe));
                 return SourceDocumentId::Parse(text);
-            } catch (const std::filesystem::filesystem_error &) {
+            } catch (const std::system_error &) {
                 return Result<SourceDocumentId>::Failure(MakeError(SourceOpenErrors::Unsafe));
             }
         }
@@ -51,7 +51,7 @@ namespace Horo::Editor {
                 if (classification.kind != NativeSource && classification.kind != HoroScript && classification.kind != ProjectText)
                     return Result<void>::Failure(MakeError(SourceOpenErrors::Unsupported));
                 return Result<void>::Success();
-            } catch (const std::filesystem::filesystem_error &) {
+            } catch (const std::system_error &) {
                 return Result<void>::Failure(MakeError(SourceOpenErrors::Unsafe));
             }
         }
@@ -335,7 +335,7 @@ namespace Horo::Editor {
                 .absolutePath = canonicalPath,
                 .document = document.Value(),
             });
-        } catch (const std::filesystem::filesystem_error &) {
+        } catch (const std::system_error &) {
             return Result<SourceOpenLocation>::Failure(MakeError(SourceOpenErrors::Unsafe));
         }
     }

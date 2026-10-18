@@ -214,7 +214,7 @@ TEST_CASE("Relative absolute and internal symlink paths focus one canonical sour
 
 TEST_CASE("Source opening preserves spaces and non-ASCII project-relative identities", "[unit][editor][source][paths]") {
     TemporaryProject project;
-    const std::filesystem::path relative{u8"kaynak/oyuncu/Player Move ş 日本.cpp"};
+    const std::filesystem::path relative{u8"kaynak/oyuncu/Player Move \u015f \u65e5\u672c \U0001f680.cpp"};
     project.Write(relative);
     SourceFileOpenService service{project.Root()};
 
@@ -225,6 +225,7 @@ TEST_CASE("Source opening preserves spaces and non-ASCII project-relative identi
     REQUIRE(opened.HasValue());
     const auto encoded = relative.generic_u8string();
     REQUIRE((opened.Value().location.document.Value() == std::string{encoded.begin(), encoded.end()}));
+    CHECK(opened.Value().location.document.Value() == "kaynak/oyuncu/Player Move \xc5\x9f \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x9a\x80.cpp");
     REQUIRE(opened.Value().location.absolutePath.filename() == relative.filename());
     const auto absolute = service.Open({.path = project.Root() / relative, .origin = SourceOpenOrigin::Command});
     REQUIRE(absolute.HasValue());
@@ -239,7 +240,7 @@ TEST_CASE("Native Unicode source paths retain containment and malformed-path adm
     DocumentIdentityRegistry registry;
     SourceFileOpenService service{project.Root(), registry};
     SECTION("Unicode traversal cannot escape") {
-        RequireUnsafeNativePath(service, registry, std::filesystem::path{u8"../outside ş 日本.cpp"});
+        RequireUnsafeNativePath(service, registry, std::filesystem::path{u8"../outside \u015f \u65e5\u672c.cpp"});
     }
     SECTION("embedded NUL cannot alias an existing source") {
         std::filesystem::path input{u8"source/gameplay/Present.cpp"};
@@ -251,7 +252,16 @@ TEST_CASE("Native Unicode source paths retain containment and malformed-path adm
     SECTION("malformed native encoding cannot become a document identity") {
 #ifdef _WIN32
         std::wstring text = L"source/gameplay/Bad";
-        text.push_back(static_cast<wchar_t>(0xd800));
+        SECTION("unpaired leading surrogate") {
+            text.push_back(static_cast<wchar_t>(0xd800));
+        }
+        SECTION("unpaired trailing surrogate") {
+            text.push_back(static_cast<wchar_t>(0xdc00));
+        }
+        SECTION("leading surrogate followed by a non-surrogate") {
+            text.push_back(static_cast<wchar_t>(0xdbff));
+            text.push_back(L'A');
+        }
         RequireUnsafeNativePath(service, registry, std::filesystem::path{text + L".cpp"});
 #else
         const auto input = std::filesystem::path{std::string{"source/gameplay/Bad"} + "\xc0\xaf" + ".cpp"};

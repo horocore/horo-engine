@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <system_error>
 
 namespace Horo::Editor {
     namespace {
@@ -25,11 +26,11 @@ namespace Horo::Editor {
                 if (error || !Foundation::Paths::HasPathPrefix(projectRoot, canonical))
                     return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
                 const auto encoded = canonical.lexically_relative(projectRoot).generic_u8string();
-                const std::string source{encoded.begin(), encoded.end()};
-                if (!IsValidUtf8ScalarSequence(source) || source.find('\0') != std::string::npos || source != identity.key.source.Value())
+                if (const std::string source{encoded.begin(), encoded.end()};
+                    !IsValidUtf8ScalarSequence(source) || source.find('\0') != std::string::npos || source != identity.key.source.Value())
                     return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
                 return Result<std::filesystem::path>::Success(canonical);
-            } catch (const std::filesystem::filesystem_error &) {
+            } catch (const std::system_error &) {
                 return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
             }
         }
