@@ -3,6 +3,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -99,5 +100,68 @@ namespace Horo::SceneSource {
         invalid = ConfiguredCharacter();
         invalid.geometry.gravity.x = std::numeric_limits<float>::infinity();
         CHECK(Runtime::ValidateCharacterControllerComponent(invalid).HasError());
+    }
+
+    TEST_CASE("Character source rejects malformed nested wire values with actionable errors", "[scene][character][serialization]") {
+        using Json = nlohmann::json;
+        auto character = ConfiguredCharacter();
+        character.collision.excludedBody = Runtime::PhysicsBodyReference{{17}, {9}};
+        const Json document = Json::parse(EncodedCharacter(character));
+        const auto valid = DecodeSceneSource(document.dump());
+        REQUIRE(valid.HasValue());
+        CHECK(valid.Value().objects[0].components.characterController == character);
+        const std::array<std::pair<std::string_view, Json>, 20> invalidValues{
+            {{"/id", 0},
+             {"/schemaVersion", 7},
+             {"/enabled", "true"},
+             {"/geometry", false},
+             {"/geometry/capsule", false},
+             {"/geometry/capsule/radiusMeters", "wide"},
+             {"/geometry/up", Json::array({0, 0})},
+             {"/geometry/crouchedCapsule", false},
+             {"/movement", false},
+             {"/movement/skinWidthMeters", "wide"},
+             {"/movement/dynamicPlatformSupport", 1},
+             {"/movement/platformLeaveVelocity", 3},
+             {"/movement/maximumContacts", std::numeric_limits<std::uint64_t>::max()},
+             {"/collision", false},
+             {"/collision/profile", 1},
+             {"/collision/queryChannel", "invalid"},
+             {"/collision/defaultMaterial/asset", "invalid"},
+             {"/collision/defaultMaterial/slot", -1},
+             {"/collision/excludedBody/object", "seventeen"},
+             {"/collision/excludedBody/body", 0}}};
+        for (const auto &[path, value] : invalidValues) {
+            CAPTURE(path);
+            Json invalid = document;
+            invalid["objects"][0]["components"]["characterController"].at(Json::json_pointer{std::string{path}}) = value;
+            const auto result = DecodeSceneSource(invalid.dump());
+            REQUIRE(result.HasError());
+            CHECK_FALSE(result.ErrorValue().message.empty());
+        }
+    }
+
+    TEST_CASE("Character source requires complete records and rejects duplicate component keys", "[scene][character][serialization]") {
+        using Json = nlohmann::json;
+        const auto encoded = EncodedCharacter(ConfiguredCharacter());
+        const Json document = Json::parse(encoded);
+        for (const std::string_view path :
+             {"/id", "/schemaVersion", "/enabled", "/geometry", "/movement", "/collision", "/geometry/capsule",
+              "/geometry/capsule/radiusMeters", "/geometry/up", "/movement/maximumContacts", "/movement/skinWidthMeters",
+              "/collision/profile", "/collision/queryChannel", "/collision/defaultMaterial/asset"}) {
+            CAPTURE(path);
+            Json invalid = document;
+            const Json::json_pointer pointer{std::string{path}};
+            auto &component = invalid["objects"][0]["components"]["characterController"];
+            REQUIRE(component.at(pointer.parent_pointer()).erase(pointer.back()) == 1);
+            const auto result = DecodeSceneSource(invalid.dump());
+            REQUIRE(result.HasError());
+            CHECK_FALSE(result.ErrorValue().message.empty());
+        }
+        auto duplicate = encoded;
+        ReplaceOnce(duplicate, "\"id\": 7", "\"id\": 7, \"id\": 7");
+        const auto result = DecodeSceneSource(duplicate);
+        REQUIRE(result.HasError());
+        CHECK_FALSE(result.ErrorValue().message.empty());
     }
 }  // namespace Horo::SceneSource

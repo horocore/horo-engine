@@ -3010,7 +3010,7 @@ add_executable(HoroSceneSourceTests
         unit/scene/CharacterSceneSourceTests.cpp
 )
 target_compile_features(HoroSceneSourceTests PRIVATE cxx_std_20)
-target_link_libraries(HoroSceneSourceTests PRIVATE HoroEngine::SceneSource Catch2::Catch2WithMain)
+target_link_libraries(HoroSceneSourceTests PRIVATE HoroEngine::SceneSource Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
 catch_discover_tests(HoroSceneSourceTests TEST_PREFIX "HoroSceneSourceTests::"
         PROPERTIES LABELS "unit;scene;serialization;headless")
 add_executable(HoroEditorViewportPickingTests

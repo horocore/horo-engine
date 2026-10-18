@@ -82,7 +82,7 @@ namespace Horo::Editor {
         /** @brief Includes collision semantics and uncertain durability in the workspace leave guard. */
         [[nodiscard]] bool HasDirtyCollisionSettings() const noexcept;
         /** @brief Saves the exact collision draft with complete reference review. @return Original typed outcome. */
-        [[nodiscard]] Result<void> SaveCollisionSettings();
+        [[nodiscard]] Result<void> SaveCollisionSettings() const;
         /** @brief Revokes modal access before Scene owners retire. @param discardDirty Explicit discard decision.
          * @return Unchanged dirty rejection or successful owner shutdown. */
         [[nodiscard]] Result<void> ShutdownCollisionSettings(bool discardDirty = false);

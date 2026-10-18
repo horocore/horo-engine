@@ -24,6 +24,11 @@ preserves the existing stable component ID. Invalid or missing replacements do
 not mutate document state or consume undo/redo history. This is an internal
 editor contract, not a second executor or runtime authority.
 
+The workspace keeps Play, Pause, Step and Stop controls in its in-window command
+bar on every desktop host. macOS retains its native application menus; native
+menu ownership does not remove the runtime controls or the Play profiles action.
+The command bar reserves its height before workspace panels are laid out.
+
 ## Private candidate placement
 
 Scene activation has two explicit host preparation phases:

@@ -7,6 +7,7 @@
 #include "PhysicsSceneWorldTestAccess.h"
 #include "ScenePhysicsHost.h"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <optional>
@@ -90,6 +91,46 @@ namespace Horo::Physics {
         }
 
 #if HORO_TEST_PHYSICS_NATIVE
+        TEST_CASE("Character preparation requires declared project selectors before native publication",
+                  "[physics][scene][character][bindings][canonical]") {
+            auto runtime = PhysicsRuntime::Create(PhysicsRuntimeMode::Canonical);
+            REQUIRE(runtime.HasValue());
+            PhysicsSceneActivationAuthority authority;
+            AssetSceneFixture assets;
+            InstallCharacterMaterial(assets);
+            const auto settings = Settings();
+            auto source = CharacterSource(assets.material, false);
+            auto &collision = source.objects[1].components.characterController->collision;
+            collision.requiredLayer = settings.simulation.schema->Layers().front().id;
+            collision.requiredProfile = Profile();
+            std::array<std::uint8_t, 16> unknown{};
+            unknown.back() = 99;
+            bool admitted = true;
+            SECTION("Declared layer and profile are retained") {
+                // Keep the valid baseline; preparation is asserted after the sections.
+            }
+            SECTION("An undeclared required layer fails closed") {
+                collision.requiredLayer = CollisionLayerId::FromBytes(unknown);
+                admitted = false;
+            }
+            SECTION("An undeclared required profile fails closed") {
+                collision.requiredProfile = CollisionProfileId::FromBytes(unknown);
+                admitted = false;
+            }
+            const auto definition = CookCharacter(source);
+            const auto scene = assets.Prepare(definition);
+            PhysicsSceneActivationParticipant participant{*runtime.Value(), authority, settings};
+            auto candidate = participant.Prepare(definition, scene);
+            if (admitted) {
+                REQUIRE(candidate.HasValue());
+                CHECK(candidate.Value()->InitialPlacements().size() == 1);
+                candidate.Value()->Shutdown();
+            } else {
+                REQUIRE(candidate.HasError());
+                CHECK_FALSE(candidate.ErrorValue().message.empty());
+            }
+        }
+
         /** @brief Observes the real aggregate-owned Physics candidate without adding a second activation owner. */
         class CharacterOwnerObserver final : public Runtime::SceneActivationParticipant {
         public:

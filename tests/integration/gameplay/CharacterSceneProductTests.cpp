@@ -78,4 +78,34 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(RunCli(SceneArguments(fixture, "source:../escape.scene", "null")).exitCode == 3);
         CHECK(RunCli(SceneArguments(fixture, "cooked:not-an-asset-id", "null")).exitCode == 3);
     }
+
+    TEST_CASE("Terminal Scene options reject duplicate and unbounded requests before project startup", "[character][scene][cli][product]") {
+        const std::string root = Utf8Path(std::filesystem::absolute(std::filesystem::temp_directory_path()));
+        const std::vector<std::vector<std::string>> invalidSuffixes{{"--scene"},
+                                                                    {"--scene", ""},
+                                                                    {"--unknown", "value"},
+                                                                    {"--project", root},
+                                                                    {"--scene", "source:unused.horo"},
+                                                                    {"--cooked-root", root},
+                                                                    {"--cook-target", "native"},
+                                                                    {"--project", root, "--scene", "source:unused.horo", "--physics",
+                                                                     "automatic"},
+                                                                    {"--project", root, "--scene", "source:unused.horo", "--physics",
+                                                                     "null", "--physics", "canonical"},
+                                                                    {"--project", root, "--scene", "source:unused.horo", "--project", root},
+                                                                    {"--project", root, "--scene", "source:unused.horo", "--cooked-root",
+                                                                     "relative", "--cook-target", "native"}};
+        for (const auto &suffix : invalidSuffixes) {
+            CAPTURE(suffix);
+            std::vector<std::string> arguments{"--run-network-product", "standalone", "1"};
+            arguments.insert(arguments.end(), suffix.begin(), suffix.end());
+            CHECK(RunCli(std::move(arguments)).exitCode == 2);
+        }
+        for (const std::string_view timeout : {"0", "-1", "60001", "1ms", "18446744073709551616"}) {
+            CAPTURE(timeout);
+            CHECK(RunCli({"--run-network-product", "standalone", "1", "--project", root, "--scene", "source:unused.horo",
+                          "--load-timeout-ms", std::string{timeout}})
+                      .exitCode == 2);
+        }
+    }
 }  // namespace Horo::Application::CharacterSceneProductTest

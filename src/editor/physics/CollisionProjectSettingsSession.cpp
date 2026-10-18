@@ -60,8 +60,11 @@ namespace Horo::Editor {
                     return Return::Failure(scene.ErrorValue());
                 state->sceneOpening = scene.Value().session;
             }
-            // The private constructor requires direct construction; unique ownership protects control-block admission.
-            auto owned = std::unique_ptr<CollisionProjectSettingsSession>{new CollisionProjectSettingsSession{std::move(state)}};
+            // Keep construction private and reject object allocation failure before admitting shared ownership.
+            auto owned =
+                std::unique_ptr<CollisionProjectSettingsSession>{new (std::nothrow) CollisionProjectSettingsSession{std::move(state)}};
+            if (!owned)
+                return Return::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Capacity)));
             return Return::Success(std::move(owned));
         } catch (const std::bad_alloc &) {
             return Return::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Capacity)));
