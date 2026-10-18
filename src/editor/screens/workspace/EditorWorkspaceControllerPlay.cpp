@@ -290,6 +290,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshSelectionProjection() {
+        ReconcileAudioPreview();
         if (m_viewModel.physicsSelectionRevision != m_selection.Current().revision.value)
             m_viewModel.physicsEditError.clear();
         m_viewModel.physicsSelectionRevision = m_selection.Current().revision.value;

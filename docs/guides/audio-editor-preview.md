@@ -97,3 +97,96 @@ focus, reload and native/worker retirement. It and AudioFrontend's public consum
 join Windows Debug and Release audio qualification. EditorServices' consumer
 compiles the document contract from staged declared dependencies. Native tests
 require hosted qualification when local resource limits prohibit a build.
+
+## Scene source and listener inspector
+
+AUD-009.3 adds an optional authored `audioListener` component to scene source.
+Its fields are `view` (0 through 16), signed 32-bit `priority`, finite positive
+`weight`, and `enabled`. Missing legacy fields remain absent: loading an older
+scene never creates a listener. Source JSON round trips disabled listeners and
+all authored values; runtime conversion omits disabled components. The existing
+runtime listener type and module ABI remain unchanged.
+
+The editor uses typed add, edit and remove commands with atomic history. Undo,
+redo, scene persistence, runtime conversion and cooked-scene canonical encoding
+carry the same listener. Cooked output retains the existing version and canonical
+representation for scenes without listeners. Older readers reject newly authored
+listener content through canonical validation rather than silently discarding it.
+Affected consumers must rebuild SceneSource, SceneCook, EditorModel and the
+inspector. No alternate listener authority is added to runtime component sets.
+
+The source card edits typed sound references, gain, pitch, bus, loop, startup,
+Doppler, spatial mode, priority, concurrency and scene-lifecycle policy. A UUID is
+an asset identity, while bus/group/provider identifiers retain their typed numeric
+representation. Invalid drafts stay in the edit session; they do not mutate the
+scene. New listener and source fields use shared localized property controls.
+
+`IAudioComponentPreview` is a borrowed host capability for scene captures; it
+never fabricates an asset-document identity. The workspace captures the committed
+runtime source/listener and exact workspace, object and revision. A selection or
+revision change requests Stop, while workspace destruction stops its own lane.
+The application continues pumping native retirement after the workspace closes.
+Preview commands do not write source, dirty state or undo history.
+
+The application-private `EditorAudioPreviewHost` explicitly selects SDL3 for the
+interactive editor. A headless composition explicitly selects the real Null
+peer; it is never an automatic replacement for an unavailable SDL3 driver.
+Registered WAV clip previews use the existing importer, resident PCM voice,
+resampler, mixer, command FIFO and AudioFrontend. Unsupported sound-provider
+families, missing assets, listeners, buses and unavailable outputs have typed
+outcomes. Three-dimensional sources require an authored listener. Asset paths
+must remain inside the project, and decoding/storage work has explicit bounds.
+
+The headless host regressions observe finite, bounded, nonzero PCM from the real
+Null callback, transport admission, matching-owner Stop, repeated captures and
+application teardown. This proves HEADLESS_NULL processing and detachment, not
+physical SDL3 device output or human audibility. The actual HoroEditor consumer
+must also compile the SDL3 composition; device qualification is reported
+separately when an audio device is available.
+
+Discovery owns its accepted Enumerate operation until terminal acknowledgement.
+A failed or incomplete host-control step cancels, polls and acknowledges that
+closed-peer operation before backend destruction, preserving the original error.
+Unproven cancellation or a Retained disposition invokes the same process-fatal
+ownership policy; it never discards the backend or pretends cleanup completed.
+
+The application-private output adapter tracks the exact accepted operation until
+terminal acknowledgement. It advances native control only while that operation
+is nonterminal. Explicit headless callback progression runs independently, so an
+idle Active lane continues producing PCM without an invented control operation.
+RuntimeInactive is never suppressed as an idle heuristic: unexpected driver
+failures retain their original error and request normal output retirement.
+
+Invalid or busy Start admission returns a caller-local error and leaves the
+existing owner's workspace/object/revision, output and failure snapshot intact.
+Only an admitted new capture rebinds that snapshot and records its own preparation
+or startup error. A rejected same-owner Start has no diagnostic mutation authority.
+
+Pump continues ordered cleanup after a driver failure, returns that current-call
+failure even when the frontend cleanup step succeeds, and retains the first
+capture failure with its message/cause through teardown. A stored past failure
+does not turn later successful cleanup calls into repeated current-call failures.
+
+The request retains the source-open service's native project-root path. Asset
+registry paths are portable UTF-8 and are converted explicitly to native paths,
+including on Windows; symlink resolution and project-root containment still apply.
+The Unicode WAV fixture constructs its native filename from a UTF-8 literal,
+independently of the decoder's conversion, so mojibake cannot satisfy both sides.
+
+## Audio command family migration
+
+Source and listener replacements enter the same `SceneDocumentCommandExecutor`
+through `SetSceneObjectAudioComponentCommand`, a fixed-storage variant of the
+existing two typed commands. Their payloads contain only Audio IDs, fixed sound
+reference alternatives, scalars and optional fixed IDs. The sum introduces no
+heap storage or second document/history authority. Each alternative retains its
+existing typed validation, missing-component diagnostic and atomic
+`CommitExistingComponent`/`CommitObject` transition.
+
+Existing typed `Execute(SetSceneObjectAudioSourceCommand{...})` and listener
+calls convert implicitly; internal document/editor consumers must rebuild for
+the unified member signature. Undo/redo, invalid-command redo preservation and
+both missing-component cases cover the migration. No gameplay SDK or installed
+public contract changes. The preview cleanup destructors terminate before
+unwinding retained native ownership if any cleanup call throws; an exception
+never proves callback detachment.

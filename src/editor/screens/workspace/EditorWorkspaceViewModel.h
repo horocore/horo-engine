@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/ActivityBarLayout.h"
+#include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Editor/PhysicsInspector.h"
@@ -119,6 +120,9 @@ namespace Horo::Editor {
         UpdateTriggerVolumeComponent,
         UpdatePhysicsComponents,
         UpdateAudioSourceComponent,
+        StartAudioComponentPreview,
+        StopAudioComponentPreview,
+        UpdateAudioListenerComponent,
         UpdateObjectEditorState,
         AddComponentToObject,
         RemoveComponentFromObject,
@@ -257,6 +261,8 @@ namespace Horo::Editor {
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
         std::optional<PhysicsInspectorRequest> physicsPayload;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
+        std::optional<Runtime::AudioListenerComponent> audioListenerPayload;
+        std::optional<DocumentRevision> audioPreviewRevision;
         std::optional<SceneObjectEditorState> editorStatePayload = std::nullopt;
         std::optional<ComponentType> componentTypePayload = std::nullopt;
         std::optional<Gameplay::BehaviorTypeId> behaviorTypePayload = std::nullopt;
@@ -301,6 +307,9 @@ namespace Horo::Editor {
     };
 
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
+        bool audioPreviewAvailable{};
+        std::optional<AudioComponentPreviewSnapshot> audioPreview;
+        std::optional<Error> audioPreviewFailure;
         std::vector<NavigationDefinitionEditorTab> navigationDocuments;
         std::string projectRoot;
         Assets::AssetRegistryRevision assetRegistryRevision{};

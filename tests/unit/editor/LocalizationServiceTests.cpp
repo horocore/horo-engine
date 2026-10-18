@@ -265,4 +265,71 @@ namespace {
                                "workspace.activity.move_earlier", "workspace.activity.move_later"})
             CHECK(service.Get("editor", key).find("workspace.activity.") == std::string::npos);
     }
+
+    constexpr const char *AudioInspectorKeys[] = {
+        "workspace.inspector.audio.allow",
+        "workspace.inspector.audio.asset_missing",
+        "workspace.inspector.audio.bus",
+        "workspace.inspector.audio.bus_missing",
+        "workspace.inspector.audio.busy",
+        "workspace.inspector.audio.clip",
+        "workspace.inspector.audio.concurrency",
+        "workspace.inspector.audio.concurrency_group",
+        "workspace.inspector.audio.doppler",
+        "workspace.inspector.audio.extension",
+        "workspace.inspector.audio.keep_alive",
+        "workspace.inspector.audio.lifecycle",
+        "workspace.inspector.audio.listener_missing",
+        "workspace.inspector.audio.listener_view",
+        "workspace.inspector.audio.listener_weight",
+        "workspace.inspector.audio.loop",
+        "workspace.inspector.audio.max_instances",
+        "workspace.inspector.audio.music",
+        "workspace.inspector.audio.play_on_start",
+        "workspace.inspector.audio.preview",
+        "workspace.inspector.audio.preview_active",
+        "workspace.inspector.audio.preview_closed",
+        "workspace.inspector.audio.preview_closing",
+        "workspace.inspector.audio.preview_failed",
+        "workspace.inspector.audio.preview_opening",
+        "workspace.inspector.audio.priority",
+        "workspace.inspector.audio.provider_id",
+        "workspace.inspector.audio.provider_missing",
+        "workspace.inspector.audio.reject",
+        "workspace.inspector.audio.replace",
+        "workspace.inspector.audio.sound_id",
+        "workspace.inspector.audio.sound_kind",
+        "workspace.inspector.audio.stale",
+        "workspace.inspector.audio.steal_furthest",
+        "workspace.inspector.audio.steal_oldest",
+        "workspace.inspector.audio.steal_priority",
+        "workspace.inspector.audio.steal_quietest",
+        "workspace.inspector.audio.stop",
+        "workspace.inspector.audio.stop_unload",
+        "workspace.inspector.audio.stream",
+        "workspace.inspector.audio.unassigned",
+        "workspace.inspector.audio.variation",
+        "workspace.inspector.audio.virtualize",
+        "workspace.inspector.audio_listener",
+        "workspace.inspector.audio_listener_invalid",
+        "workspace.inspector.kind.audio_listener",
+    };
+
+    TEST_CASE("Audio inspector catalog keys resolve in both shipped locales", "[unit][editor][audio][localization]") {
+        const std::filesystem::path root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+        Horo::Editor::LocalizationError error;
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            for (const auto key : AudioInspectorKeys) {
+                INFO(locale);
+                INFO(key);
+                CHECK_FALSE(service.Get("editor", key).empty());
+                CHECK(service.Get("editor", key) != key);
+            }
+        }
+    }
 }  // namespace

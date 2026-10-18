@@ -213,6 +213,7 @@ namespace {
         IM_CHECK(AwaitCondition(*ctx, [&fixture] {
             return fixture.application.source.entered.try_acquire();
         }));
+        IM_CHECK_EQ(fixture.application.source.calls.load(), 1U);
         IM_CHECK(fixture.operation.has_value());
         IM_CHECK(fixture.operation->outcome == PackageOperationOutcome::Running);
         original = fixture.operation->id;

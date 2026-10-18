@@ -83,7 +83,9 @@ namespace Horo::Editor {
           m_gameplayBuilds(dependencies.gameplayBuilds), m_gameplayBuildEnvironment(dependencies.gameplayBuildEnvironment),
           m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
-          m_playSession(dependencies.networkDebugger) {
+          m_playSession(dependencies.networkDebugger), m_audioPreview(dependencies.audioPreview),
+          m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
+        m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         if (dependencies.gameplayRetirements)
             m_gameplayRetirements = dependencies.gameplayRetirements;
         m_physicsDocumentOwner = dependencies.documentSessionOwner;

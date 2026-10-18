@@ -297,6 +297,13 @@ namespace Horo::Editor {
         AdoptCommand(command, m_editSession.ApplyAudioSourceEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
     }
 
+    void InspectorPanel::ApplyAudioListenerEdit(const InspectorAudioListenerEdit &edit, const SceneObject &object,
+                                                EditorWorkspaceViewCommandData &command) {
+        if (TryAdoptComponentRemoval(edit, object, command, ComponentType::AudioListener))
+            return;
+        AdoptCommand(command, m_editSession.ApplyAudioListenerEdit(edit, object, command.command == EditorWorkspaceViewCommand::None));
+    }
+
     void InspectorPanel::DrawEmptyState(EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         AdoptCommand(command, m_editSession.Clear());
         m_nameInputContext.Reset();
