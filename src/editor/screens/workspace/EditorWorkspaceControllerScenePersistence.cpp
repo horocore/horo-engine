@@ -182,6 +182,10 @@ namespace Horo::Editor {
             return;
         }
 
+        if (!copyOnly && HasDirtyCollisionSettings()) {
+            LOG_ERROR("editor.collision", "Save or discard collision settings before changing the active Scene identity.");
+            return;
+        }
         if (!copyOnly && !PrepareNavigationSceneReplacement("Save As"))
             return;
 
@@ -219,6 +223,8 @@ namespace Horo::Editor {
             return;
         }
 
+        if (auto closed = ShutdownCollisionSettings(); closed.HasError())
+            return;
         if (!CommitSceneSave(snapshot, fingerprint, destination))
             return;
         LOG_INFO("editor.scene_document", "Saved scene revision %llu as '%s'; active document identity was updated.",

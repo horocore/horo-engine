@@ -116,8 +116,7 @@ namespace Horo::Editor {
         m_contentBrowserRefreshPending = false;
         m_contentBrowserLoadingPresented = false;
         if (m_mutableAssetRegistry != nullptr) {
-            if (auto rebuilt =
-                    Assets::RebuildAssetRegistry(*m_mutableAssetRegistry, m_viewModel.projectRoot, Assets::AssetRegistryOpenMode::Edit);
+            if (auto rebuilt = RebuildProjectAssetRegistry(m_viewModel.projectRoot);
                 rebuilt.HasError() || rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Failed) {
                 m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.registry_failed";
                 RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);

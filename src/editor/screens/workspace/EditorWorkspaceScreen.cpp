@@ -11,6 +11,7 @@
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
@@ -64,6 +65,8 @@ namespace Horo::Editor {
 
         struct WorkspaceProjectServices {
             Assets::AssetRegistry *assetRegistry{nullptr};
+            CollisionInventoryEvidence *collisionInventory{};
+            CollisionActivationEvidence *collisionActivation{};
             const Assets::AssetImporterCatalogSnapshot *importerCatalog{nullptr};
             ProjectMutationCoordinator *mutations{nullptr};
             DurableFileSystem *durableFiles{nullptr};
@@ -148,6 +151,13 @@ namespace Horo::Editor {
             EditorStatusItemRegistry &statusItems;
         };
 
+        /** @brief Exact pending leave decision captures; borrowed collision authority never extends project lifetime. */
+        struct WorkspaceLeaveCapture final {
+            std::vector<PCGDocumentSnapshot> pcgDocuments;
+            std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
+            std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
+        };
+
         class EditorWorkspaceScreen final : public GuiScreen {
         public:
             explicit EditorWorkspaceScreen(const EditorServiceRegistry &services, PackageWorkspaceAccess packages)
@@ -173,6 +183,8 @@ namespace Horo::Editor {
                   },
                   projectServices_{
                       .assetRegistry = services.TryGet<Assets::AssetRegistry>(),
+                      .collisionInventory = services.TryGet<CollisionInventoryEvidence>(),
+                      .collisionActivation = services.TryGet<CollisionActivationEvidence>(),
                       .importerCatalog = services.TryGetConst<Assets::AssetImporterCatalogSnapshot>(),
                       .mutations = services.TryGet<ProjectMutationCoordinator>(),
                       .durableFiles = services.TryGet<DurableFileSystem>(),
@@ -401,15 +413,21 @@ namespace Horo::Editor {
                 return true;
             }
 
+            Result<std::shared_ptr<CollisionProjectSettingsSession>> CollisionSettings() override {
+                return controller_ ? controller_->CollisionSettings() : GuiScreen::CollisionSettings();
+            }
+
             LeaveDecision CanLeave(const LeaveTarget &) const override {
                 using enum LeaveAction;
                 using enum LeaveDisposition;
                 if (controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() ||
-                                    controller_->HasDirtyNavigationDocuments())) {
+                                    controller_->HasDirtyCollisionSettings() || controller_->HasDirtyNavigationDocuments())) {
                     auto graphs = controller_->PCGDocuments().Snapshots();
                     if (graphs.HasError())
                         return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
-                    leavePCGDocuments_ = std::move(graphs).Value();
+                    leaveCapture_.pcgDocuments = std::move(graphs).Value();
+                    if (const auto collision = CaptureLeaveCollision(); collision.HasError())
+                        return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
                     LeaveRequirement requirement{.kind = LeaveRequirementKind::DirtyDocument,
                                                  .subject = 1,
                                                  .revision = 1,
@@ -429,7 +447,8 @@ namespace Horo::Editor {
                 EditorWorkspaceViewCommandData command;
                 command.command = EditorWorkspaceViewCommand::SaveScene;
                 controller_->ProcessCommand(command);
-                if (controller_->ViewModel().isDirty || controller_->SavePCGDocuments().HasError() || controller_->HasDirtyPCGDocuments())
+                if (controller_->ViewModel().isDirty || controller_->SaveCollisionSettings().HasError() ||
+                    controller_->SavePCGDocuments().HasError() || controller_->HasDirtyPCGDocuments())
                     return Result<LeaveDecision>::Success({.disposition = Deny, .requirement = std::nullopt});
                 if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
                     return Result<LeaveDecision>::Failure(navigation.ErrorValue());
@@ -446,6 +465,8 @@ namespace Horo::Editor {
                 EditorWorkspaceViewCommandData command;
                 command.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
                 controller_->ProcessCommand(command);
+                if (const auto collision = controller_->ShutdownCollisionSettings(true); collision.HasError())
+                    return Result<LeaveDecision>::Failure(collision.ErrorValue());
                 if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
                     return Result<LeaveDecision>::Failure(navigation.ErrorValue());
                 if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
@@ -460,6 +481,8 @@ namespace Horo::Editor {
                     return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 if (controller_ && resolution.action != Stay) {
                     if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
+                        return Result<LeaveDecision>::Failure(current.ErrorValue());
+                    if (const auto current = ValidateLeaveCollision(); current.HasError())
                         return Result<LeaveDecision>::Failure(current.ErrorValue());
                 }
                 switch (resolution.action) {
@@ -477,6 +500,7 @@ namespace Horo::Editor {
             void OnLeave() override {
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
                 if (controller_) {
+                    static_cast<void>(controller_->ShutdownCollisionSettings(true));
                     if (packages_.retire)
                         static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
                     SaveExtensionWorkspace();
@@ -507,15 +531,47 @@ namespace Horo::Editor {
 
         private:
             /** @brief Requires the exact graph sessions and revisions captured by the dirty-leave prompt. */
+            /** @brief Captures the cached dirty draft at the explicit leave decision, without filesystem access. */
+            Result<void> CaptureLeaveCollision() const {
+                leaveCapture_.collisionOwner.reset();
+                leaveCapture_.collisionRoot.reset();
+                if (!controller_->HasDirtyCollisionSettings())
+                    return Result<void>::Success();
+                auto owner = controller_->CollisionSettings();
+                if (owner.HasError())
+                    return Result<void>::Failure(owner.ErrorValue());
+                auto root = owner.Value()->Snapshot();
+                if (root.HasError())
+                    return Result<void>::Failure(root.ErrorValue());
+                leaveCapture_.collisionOwner = owner.Value();
+                leaveCapture_.collisionRoot = std::move(root).Value();
+                return Result<void>::Success();
+            }
+
+            /** @brief Refuses a delayed save/discard decision after its exact collision draft or opening changed. */
+            Result<void> ValidateLeaveCollision() const {
+                if (controller_->HasDirtyCollisionSettings() != static_cast<bool>(leaveCapture_.collisionRoot))
+                    return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                if (!leaveCapture_.collisionRoot)
+                    return Result<void>::Success();
+                const auto owner = leaveCapture_.collisionOwner.lock();
+                if (const auto currentOwner = controller_->CollisionSettings();
+                    !owner || currentOwner.HasError() || currentOwner.Value() != owner)
+                    return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                if (const auto snapshot = owner->Snapshot(); snapshot.HasError() || snapshot.Value() != leaveCapture_.collisionRoot)
+                    return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                return Result<void>::Success();
+            }
+
             Result<void> ValidateLeavePCGDocuments() const {
                 const auto graphs = controller_->PCGDocuments().Snapshots();
                 if (graphs.HasError())
                     return Result<void>::Failure(graphs.ErrorValue());
-                if (graphs.Value().size() != leavePCGDocuments_.size())
+                if (graphs.Value().size() != leaveCapture_.pcgDocuments.size())
                     return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 for (std::size_t index = 0; index < graphs.Value().size(); ++index) {
                     const auto &current = graphs.Value()[index];
-                    const auto &captured = leavePCGDocuments_[index];
+                    const auto &captured = leaveCapture_.pcgDocuments[index];
                     if (current.session != captured.session || current.revision != captured.revision ||
                         current.catalogRevision != captured.catalogRevision)
                         return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
@@ -536,12 +592,18 @@ namespace Horo::Editor {
                 const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
                 if (!sessionOwner.IsValid())
                     return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
+                auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
+                if (registrySource.HasError())
+                    return Result<void>::Failure(registrySource.ErrorValue());
                 controller_ =
                     std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                                 EditorWorkspaceDependencies{
                                                                     .mutableAssetRegistry = projectServices_.assetRegistry,
+                                                                    .collisionInventory = projectServices_.collisionInventory,
+                                                                    .collisionActivation = projectServices_.collisionActivation,
                                                                     .mutations = projectServices_.mutations,
                                                                     .durableFiles = projectServices_.durableFiles,
+                                                                    .assetRegistrySource = std::move(registrySource).Value(),
                                                                     .importerCatalog = projectServices_.importerCatalog,
                                                                     .jobs = &services_.Get<JobSystem>(),
                                                                     .gameplayBuilds = services_.TryGet<Application::GameplayBuildService>(),
@@ -897,7 +959,7 @@ namespace Horo::Editor {
             WorkspaceProjectServices projectServices_{};
             WorkspacePublishedRevisions publishedRevisions_{};
             std::unique_ptr<EditorWorkspaceController> controller_;
-            mutable std::vector<PCGDocumentSnapshot> leavePCGDocuments_;
+            mutable WorkspaceLeaveCapture leaveCapture_;
             std::unique_ptr<EditorSnackbarHost> snackbarHost_;
             std::optional<Input::InputBindingProfile> previousInputProfile_;
         };

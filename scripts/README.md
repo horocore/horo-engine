@@ -44,15 +44,13 @@ python3 scripts/dev.py run editor
 python3 scripts/dev.py run editor -- --project /path/to/project
 ```
 
-`HORO_DEV_OTEL_EXPORT` is interpreted only by `dev.py`. When enabled, the runner
-configures the optional adapter, performs a TCP reachability check, and launches
-the editor with explicit export approval. It does not start or manage Docker,
-Grafana, or an OpenTelemetry Collector.
+Engine logs, metrics and profiler data are available locally without an external
+service. External OTLP export is disabled by default, including in `.env.example`.
 
-When local Grafana is reachable, the runner also synchronizes the repository
-HoroEditor dashboard before launch. This import can be disabled with
-`HORO_DEV_GRAFANA_AUTO_IMPORT=OFF`; Grafana availability never controls whether
-the editor is allowed to start.
+`HORO_DEV_OTEL_EXPORT=ON` explicitly enables the optional OpenTelemetry adapter.
+The runner then checks the configured collector and passes export approval to
+the editor. It does not install or start a collector. Dashboard import and
+Grafana service checks have been removed; old Grafana environment keys are ignored.
 
 ## Local quality preflight
 

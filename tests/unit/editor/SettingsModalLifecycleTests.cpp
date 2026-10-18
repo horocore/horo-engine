@@ -9,6 +9,7 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Foundation/DataBus.h"
+#include "support/CollisionSettingsTestSupport.h"
 #include "support/OwnedTestDirectory.h"
 #include "support/editor/ScopedTestHome.h"
 
@@ -146,11 +147,77 @@ namespace {
         REQUIRE((committed == 1));
         REQUIRE((reverted == 0));
     }
+
+    TEST_CASE("Collision modal candidates use real typed authoring commands and mandatory review", "[gui][collision][settings]") {
+        Tests::CollisionSettings::Project project;
+        auto owner = project.Open();
+        SettingsFixture fixture;
+        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr,
+                                                     SettingsModalProjectOpening{.collision = owner});
+        auto *view = modal.get();
+        REQUIRE(fixture.host.OpenRoot(std::move(modal)).HasValue());
+        fixture.host.OnUpdate(0);
+        auto &draft = view->Draft().collision;
+        REQUIRE(draft.input.has_value());
+        const auto original = owner->Snapshot().Value();
+        draft.kind = 0;
+        draft.newName = "Actors";
+        draft.initialResponse = 1;
+        REQUIRE(CreateCollisionItem(draft, *owner).HasValue());
+        CHECK(draft.input->schema.layers.size() == 2);
+        CHECK(draft.input->schema.pairs.size() == 3);
+        const auto createdLayer = draft.input->layers.back().id;
+        draft.kind = 1;
+        draft.newName = "Player";
+        draft.initialLayer = 1;
+        REQUIRE(CreateCollisionItem(draft, *owner).HasValue());
+        CHECK(draft.input->schema.profiles.back().layer == createdLayer);
+        draft.kind = 2;
+        draft.newName = "Camera";
+        REQUIRE(CreateCollisionItem(draft, *owner).HasValue());
+        for (const auto &profile : draft.input->schema.profiles)
+            CHECK(profile.queryResponses.size() == 2);
+        CHECK(owner->Snapshot().Value() == original);
+        CHECK_FALSE(owner->IsDirty());
+        const auto reviewed = owner->Preview(*draft.input);
+        REQUIRE(reviewed.HasValue());
+        REQUIRE(reviewed.Value().CanCommit());
+        REQUIRE(owner->Commit(reviewed.Value()).HasValue());
+        RefreshCollisionDraft(draft, *owner);
+        CHECK_FALSE(draft.pending);
+        CHECK(owner->IsDirty());
+        CHECK(fixture.settings.Snapshot().settings == fixture.snapshot.settings);
+    }
+
+    TEST_CASE("Collision modal weak ownership revokes before Scene shutdown and never adopts a replacement", "[gui][collision][lifetime]") {
+        Tests::CollisionSettings::Project project;
+        auto owner = project.Open();
+        SettingsFixture fixture;
+        auto modal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr,
+                                                     SettingsModalProjectOpening{.collision = owner});
+        auto *view = modal.get();
+        REQUIRE(fixture.host.OpenRoot(std::move(modal)).HasValue());
+        fixture.host.OnUpdate(0);
+        auto &draft = view->Draft().collision;
+        const auto priorCount = draft.input->profiles.size();
+        owner->Close();
+        auto replacement = project.Open();
+        draft.kind = 1;
+        draft.newName = "Denied";
+        CHECK(CreateCollisionItem(draft, *owner).HasError());
+        CHECK(draft.input->profiles.size() == priorCount);
+        CHECK(draft.owner.lock() != replacement);
+        REQUIRE(fixture.host.RequestClose(ModalId{SettingsModal::kModalId}, ModalCloseReason::Cancelled).HasValue());
+        fixture.host.OnUpdate(0);
+        CHECK(replacement->Snapshot().HasValue());
+    }
 }  // namespace
 
-TEST_CASE("Settings modal revocable navigation borrow survives session retirement before or after opening",
+TEST_CASE("Settings modal keeps navigation and collision borrows independent during navigation retirement",
           "[unit][editor][settings][navigation]") {
     const Horo::TestSupport::ScopedTestHome home{"horo-settings-navigation-borrow"};
+    Horo::Tests::CollisionSettings::Project collisionProject;
+    auto collision = collisionProject.Open();
     SettingsFixture fixture;
     Horo::Tests::OwnedTestDirectory directory{"settings-navigation-borrow"};
     Horo::NativeDurableFileSystem files;
@@ -160,7 +227,8 @@ TEST_CASE("Settings modal revocable navigation borrow survives session retiremen
     auto opened = NavigationProjectSettingsSession::Open(directory.Path(), registry, files, mutations, 1);
     REQUIRE(opened.HasValue());
     auto session = std::move(opened).Value();
-    auto ownedModal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr, session.get());
+    auto ownedModal = std::make_unique<SettingsModal>(fixture.ctx, fixture.settings, 0, nullptr, nullptr,
+                                                      SettingsModalProjectOpening{.navigation = session.get(), .collision = collision});
     auto *modal = ownedModal.get();
     REQUIRE(fixture.host.OpenRoot(std::move(ownedModal)).HasValue());
     SECTION("retired before queued opening") {
@@ -176,6 +244,8 @@ TEST_CASE("Settings modal revocable navigation borrow survives session retiremen
         session.reset();
         REQUIRE(modal->Draft().navigationSettings.Resolve() == nullptr);
     }
+    REQUIRE(modal->Draft().collision.owner.lock() == collision);
+    REQUIRE(collision->Snapshot().HasValue());
     REQUIRE(fixture.host.RequestClose(ModalId{SettingsModal::kModalId}, ModalCloseReason::Cancelled).HasValue());
     fixture.host.OnUpdate(0);
 }
