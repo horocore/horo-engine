@@ -93,7 +93,7 @@ def test_whole_job_deadlines_leave_individual_fault_case_budget_unchanged():
     for name, job in (("ci.yml", "test"), ("sonar.yml", "sonar")):
         workflow = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
         block = workflow.split(f"\n  {job}:\n", 1)[1]
-        assert "    timeout-minutes: 120" in block
+        assert "    timeout-minutes: 180" in block
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     block = workflow.split("- name: Test Windows Release Navigation settings allocation qualification", 1)[1]
     block = block.split("\n      - name:", 1)[0]
