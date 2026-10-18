@@ -65,31 +65,8 @@ namespace Horo {
             NativePublicationLockState(const NativePublicationLockState &) = delete;
             NativePublicationLockState &operator=(const NativePublicationLockState &) = delete;
 
-            NativePublicationLockState(NativePublicationLockState &&other) noexcept
-                : processKey(std::move(other.processKey)), processRegistered(std::exchange(other.processRegistered, false))
-#if defined(_WIN32)
-                  ,
-                  handle(std::exchange(other.handle, INVALID_HANDLE_VALUE))
-#else
-                  ,
-                  descriptor(std::exchange(other.descriptor, -1))
-#endif
-            {
-            }
-
-            NativePublicationLockState &operator=(NativePublicationLockState &&other) noexcept {
-                if (this != &other) {
-                    Release();
-                    processKey = std::move(other.processKey);
-                    processRegistered = std::exchange(other.processRegistered, false);
-#if defined(_WIN32)
-                    handle = std::exchange(other.handle, INVALID_HANDLE_VALUE);
-#else
-                    descriptor = std::exchange(other.descriptor, -1);
-#endif
-                }
-                return *this;
-            }
+            NativePublicationLockState(NativePublicationLockState &&) = delete;
+            NativePublicationLockState &operator=(NativePublicationLockState &&) = delete;
 
             std::string processKey;
             bool processRegistered{};

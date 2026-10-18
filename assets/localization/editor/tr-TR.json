@@ -320,7 +320,7 @@
       "text": "Oyun oturumu onaylandı"
     },
     "workspace.global_dock.network.replication": {
-      "text": "Çoğaltma"
+      "text": "176 nesne çoğaltılıyor · RPC kuyruğu: 0"
     },
     "workspace.global_dock.network.rpc": {
       "text": "RPC"
@@ -1939,7 +1939,6 @@
     "workspace.global_dock.network.footer.tick": {"text": "Tick 64 Hz"},
     "workspace.global_dock.network.footer.tracing": {"text": "0 kayıp · izleme kullanılabilir"},
     "workspace.global_dock.network.ping": {"text": "42 ms · Bant genişliği: 12.3 kb/s ↓ · 3.1 kb/s ↑"},
-    "workspace.global_dock.network.replication": {"text": "176 nesne çoğaltılıyor · RPC kuyruğu: 0"},
     "workspace.global_dock.network.connection": {"text": "1 eş · Sunucu yetkili · tik 64 Hz"},
     "workspace.global_dock.localization.locale": {"text": "tr-TR · Geri dönüş: en-US · 3 yüklü"},
     "workspace.global_dock.localization.strings": {"text": "1.247 çevrildi · 0 eksik · 18 belirsiz"},
@@ -2439,6 +2438,280 @@
     "settings.collision.impact.opaque": {"text": "Desteklenmeyen prefab/özel sahip: tür güvenli bir sağlayıcı çözene kadar silme engellenir"},
     "settings.collision.impact.inventory": {"text": "Eksik veya değişmiş proje envanteri: silmeden önce kaynakları yenileyin"},
     "settings.collision.impact.trigger": {"text": "Tetikleyici kopyası yok veya eski: silmeden önce tam derlenmiş bağı sağlayın"},
-    "settings.collision.impact.active": {"text": "Etkin nesil veya oynatma oturumu anlamsal değiştirmeyi engelliyor"}
+    "settings.collision.impact.active": {"text": "Etkin nesil veya oynatma oturumu anlamsal değiştirmeyi engelliyor"},
+    "workspace.extensions.recovery": {"text": "Kullanılamayan eklenti yüzeyleri"},
+    "workspace.extensions.retained": {"text": "Çalışma alanı durumu korunuyor. Bu yüzeyleri geri yüklemek için sağlayıcıyı geri yükleyin veya etkinleştirin. Sağlayıcı yüzeylerini kapatmak kayıtlı sunum verilerini korur."},
+    "workspace.extensions.close": {"text": "Sağlayıcının çalışma alanı yüzeylerini kapat"},
+    "workspace.extensions.disabled": {"text": "Sağlayıcı devre dışı."},
+    "workspace.extensions.incompatible": {"text": "Sağlayıcı bu ana uygulamayla uyumlu değil."},
+    "workspace.extensions.failed": {"text": "Sağlayıcı etkinleştirilemedi."},
+    "workspace.extensions.missing": {"text": "Sağlayıcı veya katkı kullanılamıyor."},
+    "settings.extension_pages.title": {
+      "text": "Uzantı sayfaları"
+    },
+    "settings.extension_pages.apply": {
+      "text": "Uygula"
+    },
+    "settings.extension_pages.reset": {
+      "text": "Taslağı sıfırla"
+    },
+    "settings.extension_pages.cancel": {
+      "text": "Taslağı iptal et"
+    },
+    "settings.navigation.open_definition": {
+      "text": "Gezinme tanımını aç"
+    },
+    "settings.navigation.unrepaired": {
+      "text": "Yerine geçen yok; başvurulan kayıt silinemez"
+    },
+    "settings.navigation.save_policy_first": {
+      "text": "Kullanıcı tercihlerini uygulamadan önce proje ilkesi taslağını kaydedin veya iptal edin."
+    },
+    "settings.navigation.unsupported_prefab": {
+      "text": "Desteklenmeyen prefab sahibi; başvurular bilinmiyor, işlem engellendi"
+    },
+    "settings.navigation.unsupported_instances": {
+      "text": "Sahne prefab örnekleri içeriyor; tüm başvurular onarılamıyor"
+    },
+    "settings.navigation.profiles": {
+      "text": "Ajan profilleri"
+    },
+    "settings.navigation.areas": {
+      "text": "Alanlar"
+    },
+    "settings.navigation.filters": {
+      "text": "Sorgu filtreleri"
+    },
+    "settings.navigation.identity": {
+      "text": "Kalıcı kimlik"
+    },
+    "settings.navigation.replacement": {
+      "text": "Yerine geçen kimlik (isteğe bağlı)"
+    },
+    "settings.navigation.name": {
+      "text": "Profil görünen adı"
+    },
+    "settings.navigation.source_identity": {
+      "text": "Proje tanımlayıcı kaynak kimliği"
+    },
+    "settings.navigation.flags": {
+      "text": "Dahil edilen bayraklar / alan bayrakları"
+    },
+    "settings.navigation.excluded": {
+      "text": "Hariç tutulan bayraklar"
+    },
+    "settings.navigation.override_area": {
+      "text": "Maliyet geçersiz kılma alan kimliği"
+    },
+    "settings.navigation.add_override": {
+      "text": "Maliyet geçersiz kılması ekle"
+    },
+    "settings.navigation.clear_overrides": {
+      "text": "Maliyet geçersiz kılmalarını temizle"
+    },
+    "settings.navigation.put": {
+      "text": "Oluşturmayı / güncellemeyi incele"
+    },
+    "settings.navigation.rename_identity": {
+      "text": "Kimlik değişimini incele"
+    },
+    "settings.navigation.delete": {
+      "text": "Silmeyi incele"
+    },
+    "settings.navigation.references": {
+      "text": "Etkilenen başvurular — işlemden önce inceleyin"
+    },
+    "settings.navigation.confirm": {
+      "text": "İncelenen değişiklikleri uygula"
+    },
+    "settings.navigation.committed": {
+      "text": "Değişiklikler belge geçmişine işlendi. Kaynak dosyaları ayrıca kaydedin."
+    },
+    "settings.navigation.undo": {
+      "text": "Belge grubunu geri al"
+    },
+    "settings.navigation.redo": {
+      "text": "Belge grubunu yinele"
+    },
+    "settings.navigation.save_documents": {
+      "text": "Değişen kaynak belgelerini kaydet"
+    },
+    "settings.navigation.saved": {
+      "text": "Kalıcı kaynak yayımı tamamlandı."
+    },
+    "settings.navigation.unavailable": {
+      "text": "Proje gezinme düzenlemesi kullanılamıyor; yetki varsayılmaz."
+    },
+    "settings.navigation.no_definition": {
+      "text": "Kayıtlı gezinme tanımı varlığı yok. Önce kurallı kaynak varlığını içe aktarın veya oluşturun."
+    },
+    "settings.navigation.project_policy": {
+      "text": "Proje gezinme ilkesi"
+    },
+    "settings.navigation.create_policy": {
+      "text": "Açık proje ilkesi taslağı oluştur"
+    },
+    "settings.navigation.default_provider": {
+      "text": "Açık varsayılan sağlayıcı kimliği"
+    },
+    "settings.navigation.bind_definition": {
+      "text": "Seçili tanımı bağla"
+    },
+    "settings.navigation.save_policy": {
+      "text": "Proje ilkesini atomik kaydet"
+    },
+    "settings.navigation.compatibility": {
+      "text": "Hedef / sağlayıcı uyumluluğu"
+    },
+    "settings.navigation.compatibility_unknown": {
+      "text": "Bilinmiyor: ana uygulama hedef/sağlayıcı kanıtı sağlamadı. Bu bir destek garantisi değildir."
+    },
+    "settings.navigation.compatible": {
+      "text": "Yakalanan üst verilerle uyumlu"
+    },
+    "settings.navigation.incompatible": {
+      "text": "Kullanılamıyor / uyumsuz; yedek sağlayıcı seçilmez"
+    },
+    "settings.navigation.local_overlay": {
+      "text": "Yerel geliştirici katmanları (paketlenmez)"
+    },
+    "settings.navigation.show_areas": {
+      "text": "Alanları göster"
+    },
+    "settings.navigation.show_paths": {
+      "text": "Yolları göster"
+    },
+    "settings.navigation.show_agents": {
+      "text": "Ajanları göster"
+    },
+    "settings.navigation.query_kind": {
+      "text": "Sorgu ailesi"
+    },
+    "settings.navigation.query_quality": {
+      "text": "Sorgu kalitesi"
+    },
+    "settings.navigation.query_nodes": {
+      "text": "Sorgu başına en fazla düğüm genişletme"
+    },
+    "settings.navigation.query_points": {
+      "text": "Sorgu başına en fazla sonuç noktası"
+    },
+    "settings.navigation.query_distance": {
+      "text": "En fazla arama uzaklığı (m)"
+    },
+    "settings.navigation.capacity.0": {
+      "text": "En fazla ajan"
+    },
+    "settings.navigation.capacity.1": {
+      "text": "En fazla etkin yüzey"
+    },
+    "settings.navigation.capacity.2": {
+      "text": "En fazla yerleşik döşeme"
+    },
+    "settings.navigation.capacity.3": {
+      "text": "En fazla eşzamanlı sorgu"
+    },
+    "settings.navigation.capacity.4": {
+      "text": "Döşeme başına en fazla bayt"
+    },
+    "settings.navigation.capacity.5": {
+      "text": "En fazla yerleşik bayt"
+    },
+    "settings.navigation.capacity.6": {
+      "text": "Sabit adım başına en fazla iş birimi"
+    },
+    "settings.navigation.geometry.0": {
+      "text": "Yarıçap (m)"
+    },
+    "settings.navigation.geometry.1": {
+      "text": "Yükseklik (m)"
+    },
+    "settings.navigation.geometry.2": {
+      "text": "En fazla eğim (derece)"
+    },
+    "settings.navigation.geometry.3": {
+      "text": "Basamak yüksekliği (m)"
+    },
+    "settings.navigation.geometry.4": {
+      "text": "Hücre boyutu (m)"
+    },
+    "settings.navigation.geometry.5": {
+      "text": "Hücre yüksekliği (m)"
+    },
+    "settings.navigation.geometry.6": {
+      "text": "En küçük bölge boyutu (m)"
+    },
+    "settings.navigation.capability.0": {
+      "text": "Yere bağlı sorgu zorunlu"
+    },
+    "settings.navigation.capability.1": {
+      "text": "Topoloji güncellemesi zorunlu"
+    },
+    "settings.navigation.capability.2": {
+      "text": "Dinamik döşeme oyma zorunlu"
+    },
+    "settings.navigation.capability.3": {
+      "text": "Kalabalıktan kaçınma zorunlu"
+    },
+    "settings.navigation.capability.4": {
+      "text": "Ağ oluşturma zorunlu"
+    },
+    "settings.navigation.capability.5": {
+      "text": "Çalışma anında döşeme yenileme zorunlu"
+    },
+    "settings.navigation.reference.0": {
+      "text": "Yüzey profili"
+    },
+    "settings.navigation.reference.1": {
+      "text": "Bağlantı profili"
+    },
+    "settings.navigation.reference.2": {
+      "text": "Ajan profili"
+    },
+    "settings.navigation.reference.3": {
+      "text": "Ajan filtresi"
+    },
+    "settings.navigation.reference.4": {
+      "text": "Değiştirici alanı"
+    },
+    "settings.navigation.reference.5": {
+      "text": "Filtre alan maliyeti"
+    },
+    "settings.navigation.query_kind.0": {
+      "text": "Yol"
+    },
+    "settings.navigation.query_kind.1": {
+      "text": "En yakın nokta"
+    },
+    "settings.navigation.query_kind.2": {
+      "text": "Işın sorgusu"
+    },
+    "settings.navigation.query_kind.3": {
+      "text": "Örnek konum"
+    },
+    "settings.navigation.query_kind.4": {
+      "text": "Çokgen sorgusu"
+    },
+    "settings.navigation.query_quality.0": {
+      "text": "Düşük"
+    },
+    "settings.navigation.query_quality.1": {
+      "text": "Dengeli"
+    },
+    "settings.navigation.query_quality.2": {
+      "text": "Yüksek"
+    },
+    "settings.nav.navigation": {
+      "text": "Gezinme"
+    },
+    "settings.navigation.invalid_number": {
+      "text": "Belirtilen kapasite içinde tam bir işaretsiz sayı girin; önceki değer korunur."
+    },
+    "settings.navigation.area_cost": {
+      "text": "Alan geçiş maliyeti"
+    },
+    "settings.navigation.override_cost": {
+      "text": "Geçersiz kılınan geçiş maliyeti"
+    }
   }
 }

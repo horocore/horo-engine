@@ -2,7 +2,9 @@
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Platform/ExternalProcess.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <filesystem>
 #include <vector>
 
 namespace Horo::Application::CharacterSceneProductTest {
@@ -22,6 +24,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                 UNSCOPED_INFO(result.ErrorValue().message);
             REQUIRE(result.HasValue());
             REQUIRE(result.Value().reason == ProcessTerminationReason::Exited);
+            UNSCOPED_INFO(output);
             return result.Value();
         }
 
@@ -45,14 +48,18 @@ namespace Horo::Application::CharacterSceneProductTest {
                     "--cook-target",
                     fixture.project.request.assets.target.Value(),
                     "--load-timeout-ms",
-                    "2000"};
+                    "10000"};
         }
     }  // namespace
 
 #if HORO_TEST_PHYSICS_NATIVE
     TEST_CASE("Actual terminal CLI activates authored and committed cooked Character Scenes",
               "[character][scene][cli][product][canonical]") {
-        Fixture fixture;
+        const auto extraObjects = GENERATE(std::size_t{0}, std::size_t{8192});
+        CAPTURE(extraObjects);
+        Fixture fixture{extraObjects};
+        if (extraObjects != 0)
+            REQUIRE(std::filesystem::file_size(fixture.project.project.dir.path / "assets/level.horo") > (1U << 20U));
         CHECK(RunCli(SceneArguments(fixture, "source:assets/level.horo", "canonical")).exitCode == 0);
         CHECK(RunCli(SceneArguments(fixture, "cooked:" + fixture.project.sceneId.ToString(), "canonical")).exitCode == 0);
     }

@@ -30,17 +30,20 @@ namespace Horo::SceneSource {
 
     /**
      * @brief Decodes Scene schema 1 and Character-capable schema 2 without runtime activation.
-     * @param contents Canonical Scene JSON, at most 16 MiB and nesting depth below 64.
-     * Duplicate object keys and deeper inputs reject even in unknown fields. Completed DOM cleanup avoids child-flattening scratch
-     * growth in supported production-STL compositions; checked-iterator MSVC Debug may allocate container proxies inside
-     * noexcept standard-container constructors;
-     * allocation failure during upstream partial JSON parser cleanup remains outside this guarantee.
+     * @param contents Canonical Scene JSON, at most 16 MiB, with unique object keys and parser depths below 64.
+     * @details Completed DOM cleanup avoids child-flattening scratch growth in supported production-STL compositions.
+     * Checked-iterator MSVC Debug may allocate proxies inside noexcept standard-container constructors;
+     * allocation failure during upstream partial parser cleanup remains outside this guarantee.
      * @return Detached values or the existing typed scene-persistence error.
      * @throws std::bad_alloc When allocation capacity is unavailable; the caller owns its allocation-failure boundary.
      * Schema 1 cannot contain Character; absent legacy data stays absent in either schema.
      * Decoding preserves existing component validation and diagnostic semantics. The project host must
      * inspect project compatibility and authorize file access first; decoding grants no trust or write authority.
-     * Scene graph/document admission remains a separate operation.
+     * Scene graph/document admission remains a separate operation. Unknown fields remain ignored within the same
+     * depth bound; duplicate keys and deeper inputs are rejected rather than resolved implicitly.
+     * @throws std::bad_alloc If allocation fails during decoding. Completed DOM cleanup avoids child-flattening scratch allocations in
+     * supported production-STL compositions; MSVC checked-iterator Debug can still allocate proxies inside noexcept standard-container
+     * constructors. Persistent exhaustion during upstream partial-parser cleanup is outside this guarantee.
      */
     [[nodiscard]] Result<SceneSourceDocument> DecodeSceneSource(std::string_view contents);
     /**

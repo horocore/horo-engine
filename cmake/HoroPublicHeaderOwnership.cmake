@@ -175,6 +175,8 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroProjectSettings PUBLIC_HEADERS
+    Horo/Application/NavigationProjectSettings.h
+    Horo/Application/NavigationProjectSettingsStore.h
     Horo/Application/ProjectNetworkSettings.h
 )
 horo_configure_target_header_boundary(HoroReleaseGitHub PUBLIC_HEADERS
@@ -542,6 +544,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetPreviewService.h
     Horo/Assets/AssetProvider.h
     Horo/Assets/AssetRegistry.h
+    Horo/Assets/AssetRegistrySource.h
     Horo/Assets/AssetReimport.h
     Horo/Assets/CookCatalog.h
     Horo/Assets/MeshEditorPayload.h
@@ -844,6 +847,7 @@ horo_configure_target_header_boundary(HoroCinematicScriptBridge PUBLIC_HEADERS
     Horo/Cinematic/ScriptEventCook.h
 )
 horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
+    Horo/Navigation/NavigationSettingsErrors.h
     Horo/Navigation/NavMeshData.h
     Horo/Navigation/NavigationBakeInput.h
     Horo/Navigation/NavigationAreas.h
@@ -1182,6 +1186,8 @@ horo_configure_target_header_boundary(HoroRenderVulkan)
 horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
+    Horo/Editor/NavigationDefinitionDocument.h
+    Horo/Editor/NavigationSettingsWorkflow.h
     Horo/Editor/SceneDocumentTransaction.h
     Horo/Editor/EditorDataBus.h
 )
@@ -1196,7 +1202,9 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/ProjectCollisionSettingsStore.h
+    Horo/Editor/NativeAssetRegistrySource.h
     Horo/Editor/CollisionProjectSettingsSession.h
+    Horo/Editor/NavigationProjectSettingsSession.h
     Horo/Editor/AudioEditorDocument.h
     Horo/Editor/MixerAssetDocument.h
     Horo/Editor/CinematicPropertyBindings.h
@@ -1280,6 +1288,9 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/ExtensionAbi.h
     Horo/Extensions/EditorActivityAbi.h
     Horo/Extensions/EditorActivityHost.h
+    Horo/Extensions/EditorPageDefinition.h
+    Horo/Extensions/EditorPageHost.h
+    Horo/Extensions/EditorPageAbi.h
     Horo/Extensions/ExtensionAbiConformance.h
     Horo/Extensions/ExtensionCapabilityAdmission.h
     Horo/Extensions/ExtensionActivationState.h

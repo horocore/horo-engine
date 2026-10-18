@@ -61,6 +61,7 @@ namespace Horo::Editor {
         DurableFileSystem &files;
         ProjectMutationCoordinator &mutations;
         CollisionInventoryEvidence inventory;
+        const Assets::IAssetRegistrySource &source; /**< Root-bound host source, alive until this session closes. */
         SceneDocumentTransactions *activeScene{};
         std::filesystem::path activeScenePath;
         std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding;

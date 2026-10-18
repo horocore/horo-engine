@@ -7,7 +7,8 @@
 namespace Horo::Editor {
     namespace {
         /** @brief Discards superseded recovery state before any canonical Scene owner replacement. */
-        bool DiscardSupersededRecovery(const std::filesystem::path &root, ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+        bool DiscardSupersededRecovery(const std::filesystem::path &root, const ProjectMutationCoordinator &mutations,
+                                       DurableFileSystem &files) {
             if (const Result<void> recoveryDiscarded = DiscardProjectSceneRecovery(root, mutations, files); recoveryDiscarded.HasError()) {
                 LOG_ERROR("editor.scene_recovery", "External reload could not discard superseded recovery state: %s",
                           recoveryDiscarded.ErrorValue().message.c_str());
@@ -19,6 +20,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ReloadExternalScene */
     void EditorWorkspaceController::ReloadExternalScene() {
+        if (!PrepareNavigationSceneReplacement("Scene replacement"))
+            return;
+
         if (!m_defaultScenePath.has_value() || m_mutations == nullptr || m_durableFiles == nullptr)
             return;
 
@@ -71,6 +75,9 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::RestoreSceneRecovery */
     void EditorWorkspaceController::RestoreSceneRecovery() {
+        if (!PrepareNavigationSceneReplacement("Scene replacement"))
+            return;
+
         if (!m_defaultScenePath.has_value())
             return;
         Result<std::optional<ProjectSceneRecoveryRecord>> recovery =

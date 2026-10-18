@@ -1,5 +1,7 @@
 #include "Horo/Application/ProjectCollisionSettings.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <new>
 
 namespace Horo::Application {
@@ -26,7 +28,11 @@ namespace Horo::Application {
             if (!source.Value().identity.exists)
                 return Result<ProjectCollisionFileSnapshot>::Failure(MakeError(Invalid, "The project collision document is missing."));
             const auto &bytes = source.Value().bytes;
-            auto decoded = DecodeProjectCollisionSettings({reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+            std::string text(bytes.size(), '\0');
+            std::ranges::transform(bytes, text.begin(), [](const std::byte value) {
+                return std::to_integer<char>(value);
+            });
+            auto decoded = DecodeProjectCollisionSettings(text);
             if (decoded.HasError())
                 return Result<ProjectCollisionFileSnapshot>::Failure(decoded.ErrorValue());
             if (decoded.Value().Input().projectId != expectedProjectId)

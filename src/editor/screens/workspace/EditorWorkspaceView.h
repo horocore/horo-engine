@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ExtensionActivityView.h"
+#include "ExtensionRecoveryView.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "WorkspaceSplitterInteraction.h"
@@ -66,6 +67,7 @@ namespace Horo::Editor {
 
         [[nodiscard]] std::optional<Extensions::EditorActivitySide> UpdateExtensionActivities() {
             m_extensions.Update();
+            m_extensionRecovery.Update();
             return m_extensions.TakeNativePanelClear();
         }
 
@@ -73,6 +75,7 @@ namespace Horo::Editor {
 
     private:
         ExtensionActivityView m_extensions;
+        ExtensionRecoveryView m_extensionRecovery;
         const EditorGuiContext &m_context;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;
@@ -106,6 +109,8 @@ namespace Horo::Editor {
         /** @brief Draws one persistent document tab and emits its select or close command. */
         void DrawDocumentTab(const std::string &panelId, EditorWorkspaceViewCommandData &outCommand, bool active);
         /** @brief Draws persistent sequence tabs and their explicit focus/close affordances. */
+        void DrawNavigationDocumentTabs(const EditorWorkspaceViewModel &viewModel) const;
+        bool DrawNavigationDocument(const EditorWorkspaceViewModel &viewModel) const;
         void DrawSequenceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Resolves theme-sized document chrome, including its overflow affordance. */
         [[nodiscard]] float DocumentTabHeight(WorkspaceDockArea area) const;

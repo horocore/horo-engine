@@ -131,8 +131,10 @@ Unknown package/module/role selections fail closed, including optional selection
 
 Applications inject one unambiguous owner for each admitted role.
 `NativePackageModuleHost` uses the existing native extension manager and actual
-importer registrations; presentation additionally requires an explicit
-`EditorActivityHost`. `ScriptPackageModuleHost` uses a native resource receipt
+importer registrations; presentation additionally requires an explicit activity or settings/modal page
+owner supplied through `PackageLifecycleConfiguration::editorHosts`. The same
+`ExtensionEditorHosts` carrier reaches `ExtensionManager`; omitted publication
+owners remain unavailable and headless profiles never admit editor presentation. `ScriptPackageModuleHost` uses a native resource receipt
 and the existing `ScriptInvocationRegistry`/`ScriptCapabilityContext` invocation
 boundary. It does not create a VM, infer script trust, or replace the language
 runtime adapters. Each script package/module has an exact application-injected

@@ -24,7 +24,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             Physics::PhysicsQueryChannelId::FromBytes(Id("00000000-0000-0000-0000-000000000003").Bytes())};
         SceneSource::SceneSourceDocument source;
 
-        Fixture() {
+        /** @brief Cooks actual canonical authored data with optional extra inert Scene objects before product capture. */
+        explicit Fixture(const std::size_t extraObjects = 0) {
             project.request.assets.target = Target("headless-canonical");
             // The generic cook fixture uses synthetic extensions; product discovery needs canonical source/sidecar pairs.
             std::filesystem::rename(project.project.dir.path / "assets/level.scene", project.project.dir.path / "assets/level.horo");
@@ -32,7 +33,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                                     project.project.dir.path / "assets/level.horo.horo");
             WriteCollision();
             WriteMaterial();
-            WriteScene();
+            WriteScene(extraObjects);
             REQUIRE(project.registry
                         .Publish({Record(project.sceneId, "core.scene", "assets/level.horo"),
                                   Record(materialId, "core.physics_material", "assets/controller.horoasset")})
@@ -77,7 +78,7 @@ namespace Horo::Application::CharacterSceneProductTest {
             project.WriteText("assets/controller.horoasset.horo", SidecarJson(materialId.ToString(), "core.physics_material"));
         }
 
-        void WriteScene() {
+        void WriteScene(const std::size_t extraObjects = 0) {
             Runtime::CharacterControllerComponent controller{.id = {7}, .enabled = true};
             controller.collision.profile = profile;
             controller.collision.queryChannel = channel;
@@ -98,6 +99,8 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                        Runtime::PhysicsAnalyticCollider{Runtime::PhysicsStaticPlaneCollider{{0, 1, 0}, 0}},
                                                    .collisionProfile = profile,
                                                    .materials = {{Physics::PhysicsMaterialSlotId::FromValue(1), materialId}}}}}}};
+            for (std::size_t index = 0; index < extraObjects; ++index)
+                source.objects.push_back({.id = {index + 3}, .name = std::string(128, 'x')});
             project.WriteText("assets/level.horo", SceneSource::EncodeSceneSource({source.objects, source.prefabInstances}));
         }
 

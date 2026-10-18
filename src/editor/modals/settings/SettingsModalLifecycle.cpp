@@ -1,19 +1,35 @@
+#include "../extension_pages/EditorPageView.h"
 #include "Horo/Editor/EditorSettingsEvents.h"
 #include "Horo/Editor/SettingsModal.h"
+#include "Horo/Extensions/ExtensionErrors.h"
 #include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "SettingsModalInternal.h"
 
 #include <memory>
 
 namespace Horo::Editor {
+    /** @copydoc SettingsModal::SettingsModal */
     SettingsModal::SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, const std::uintptr_t logo,
                                  Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace,
-                                 std::weak_ptr<CollisionProjectSettingsSession> collision, std::optional<Error> collisionError) noexcept
+                                 Extensions::ExtensionMarketplaceService *extensionMarketplace, SettingsModalProjectOpening projects,
+                                 SettingsModalPagePresentation pages)
         : m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
-          m_extensionMarketplace(extensionMarketplace) {
-        m_draft.collision.owner = std::move(collision);
-        m_draft.collision.error = std::move(collisionError);
+          m_extensionMarketplace(extensionMarketplace),
+          m_navigationSettings(projects.navigation ? projects.navigation->Borrow() : NavigationProjectSettingsSessionBorrow{}) {
+        m_draft.collision.owner = std::move(projects.collision);
+        m_draft.collision.error = std::move(projects.collisionError);
+        m_pagesUnsupported = pages.host && !pages.theme;
+        if (pages.host && pages.theme)
+            m_extensionPages = std::make_shared<EditorPageView>(context, std::move(pages.host), std::move(pages.theme));
+    }
+
+    /** @copydoc SettingsModal::SelectExtensionPage */
+    void SettingsModal::SelectExtensionPage(const Extensions::EditorSurfaceProviderIdentity &provider, std::string id) {
+        if (m_extensionPages) {
+            m_extensionPages->Select(provider, std::move(id));
+            m_openExtensionPage = true;
+        }
     }
 
     ModalId SettingsModal::Id() const {
@@ -29,9 +45,15 @@ namespace Horo::Editor {
     }
 
     Result<void> SettingsModal::OnOpen(EditorModalContext &context) {
+        if (m_pagesUnsupported)
+            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::EditorThemeTokenInvalid));
         m_events = &context.events;
         m_revertedPublished = false;
         LoadSettingsForModal(m_draft, m_settings);
+        m_draft.extensionPages = m_extensionPages;
+        if (m_openExtensionPage)
+            m_draft.activeTab = static_cast<int>(SettingsModalInternal::SettingsTab::ExtensionPages);
+        m_draft.navigationSettings = m_navigationSettings.Resolve() ? m_navigationSettings : NavigationProjectSettingsSessionBorrow{};
         m_draft.extensionInventory = m_extensionInventory;
         m_draft.extensionMarketplace = m_extensionMarketplace;
         if (const auto owner = m_draft.collision.owner.lock()) {
@@ -50,12 +72,14 @@ namespace Horo::Editor {
 
     CloseDecision SettingsModal::CanClose(const ModalCloseReason reason) {
         m_draft.dirty = CollectDraftSettings(m_draft) != m_draft.committed;
-        if (reason == ModalCloseReason::Cancelled || !m_draft.dirty)
+        if (reason == ModalCloseReason::Cancelled || (!m_draft.dirty && !m_draft.navigationProjectDraftDirty))
             return CloseDecision::Allow;
         return CloseDecision::Deny;
     }
 
     void SettingsModal::OnClose(const ModalCloseReason reason) {
+        if (m_extensionPages)
+            m_extensionPages->Cancel();
         m_draft.dirty = CollectDraftSettings(m_draft) != m_draft.committed;
         const char *reasonStr = "app_shutdown";
         if (reason == ModalCloseReason::Completed) {
@@ -72,6 +96,9 @@ namespace Horo::Editor {
             m_revertedPublished = true;
         }
         m_draft.collision = {};
+        m_draft.navigationSettings = {};
+        m_draft.navigationDraft.reset();
+        m_navigationSettings = {};
         m_logCtx.reset();  // pop MDC frame
     }
 

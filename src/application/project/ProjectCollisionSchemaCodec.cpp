@@ -48,8 +48,8 @@ namespace Horo::Application::CollisionCodecInternal {
             schema.layers.push_back(Layer(v));
         for (const auto &v : root["pairs"]) {
             Fields(v, {"first", "second", "response"});
-            schema.pairs.push_back({Identity<Physics::CollisionLayerId>(v["first"]), Identity<Physics::CollisionLayerId>(v["second"]),
-                                    static_cast<Physics::SimulationPairResponse>(Unsigned(v["response"], 2))});
+            schema.pairs.emplace_back(Identity<Physics::CollisionLayerId>(v["first"]), Identity<Physics::CollisionLayerId>(v["second"]),
+                                      static_cast<Physics::SimulationPairResponse>(Unsigned(v["response"], 2)));
         }
         for (const auto &v : root["channels"]) {
             Fields(v, {"id", "enabled"});
@@ -63,7 +63,10 @@ namespace Horo::Application::CollisionCodecInternal {
     /** @copydoc WriteSchema */
     Json WriteSchema(const ProjectCollisionSettings &settings) {
         const auto &s = *settings.Schema();
-        Json layers = Json::array(), pairs = Json::array(), channels = Json::array(), profiles = Json::array();
+        Json layers = Json::array();
+        Json pairs = Json::array();
+        Json channels = Json::array();
+        Json profiles = Json::array();
         for (const auto &v : s.Layers())
             layers.push_back({{"id", v.id.ToString()},
                               {"enabled", v.enabled},

@@ -77,7 +77,7 @@ namespace {
                 return Platform::LoadDynamicLibrary(path);
             };
             if (!headless)
-                configuration.editorActivityHost = editor;
+                configuration.editorHosts.activities = editor;
             native = std::make_shared<NativePackageModuleHost>(configuration);
             script =
                 std::make_shared<ScriptPackageModuleHost>(std::vector<PackageScriptRegistryRealm>{{Parse<HoroPackageId>("fixture.package"),

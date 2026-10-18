@@ -25,6 +25,13 @@ namespace Horo::Application {
         struct BoundedCollisionJson final {
             Json value;
 
+            explicit BoundedCollisionJson(Json initial) noexcept : value(std::move(initial)) {}
+
+            BoundedCollisionJson(const BoundedCollisionJson &) = delete;
+            BoundedCollisionJson &operator=(const BoundedCollisionJson &) = delete;
+            BoundedCollisionJson(BoundedCollisionJson &&) = delete;
+            BoundedCollisionJson &operator=(BoundedCollisionJson &&) = delete;
+
             ~BoundedCollisionJson() {
                 ClearCollisionJson(value);
             }
@@ -75,8 +82,10 @@ namespace Horo::Application {
             return ProjectCollisionSettings::Create(std::move(input));
         } catch (const std::bad_alloc &) {
             return Result<ProjectCollisionSettings>::Failure(MakeError(Invalid, "Collision source allocation failed."));
-        } catch (const std::exception &) {
-            return Result<ProjectCollisionSettings>::Failure(MakeError(Invalid, "Malformed or unsupported collision document value."));
+        } catch (const Json::exception &error) {
+            return Result<ProjectCollisionSettings>::Failure(MakeError(Invalid, "Malformed collision JSON: " + std::string{error.what()}));
+        } catch (const std::invalid_argument &error) {
+            return Result<ProjectCollisionSettings>::Failure(MakeError(Invalid, error.what()));
         }
     }
 

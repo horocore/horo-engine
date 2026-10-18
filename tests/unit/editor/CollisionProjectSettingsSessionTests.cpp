@@ -103,7 +103,7 @@ namespace Horo::Tests::CollisionSettings {
         auto session = project.Open();
         std::weak_ptr<Editor::CollisionProjectSettingsSession> old = session;
         bool foreignRejected{};
-        std::thread worker([&] {
+        std::jthread worker([session, &foreignRejected] {
             foreignRejected = session->Snapshot().HasError();
         });
         worker.join();
@@ -174,6 +174,8 @@ namespace Horo::Tests::CollisionSettings {
         std::size_t allocations{};
         {
             Project project;
+            project.Scene(SceneSource::EncodeSceneSource({{}, {}}));
+            std::filesystem::create_directories(project.root / "Assets/nested/deep/empty");
             auto session = project.Open();
             auto input = session->Snapshot().Value()->Input();
             input.layers.front().name = "Candidate";
@@ -189,6 +191,8 @@ namespace Horo::Tests::CollisionSettings {
         for (std::size_t failure = 0; failure < allocations; ++failure) {
             INFO(failure);
             Project project;
+            project.Scene(SceneSource::EncodeSceneSource({{}, {}}));
+            std::filesystem::create_directories(project.root / "Assets/nested/deep/empty");
             auto session = project.Open();
             const auto before = session->Snapshot().Value();
             auto input = before->Input();

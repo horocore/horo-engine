@@ -10,9 +10,9 @@ namespace Horo::Editor {
             for (const auto &impact : review.Impacts()) {
                 if (!impact.blocksPublication)
                     continue;
-                const auto reason = impact.reason == CollisionImpactReason::ActiveGeneration ? CollisionSettingsFailure::Active
-                                    : impact.unsupported                                     ? CollisionSettingsFailure::Unsupported
-                                                                                             : CollisionSettingsFailure::InUse;
+                using enum CollisionSettingsFailure;
+                const auto ordinaryReason = impact.unsupported ? Unsupported : InUse;
+                const auto reason = impact.reason == CollisionImpactReason::ActiveGeneration ? Active : ordinaryReason;
                 return MakeError(CollisionSettingsError(reason));
             }
             return MakeError(CollisionSettingsError(CollisionSettingsFailure::Stale));

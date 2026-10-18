@@ -12,13 +12,15 @@ namespace Horo::Extensions {
                    requirements.requiredHostApiSize <= host.structSize && requirements.reserved == 0 &&
                    (requirements.requiredFunctions &
                     ~uint32_t{HORO_EXTENSION_REQUIRES_ASSET_IMPORTER | HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER |
-                              HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY}) == 0;
+                              HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY | HORO_EXTENSION_REQUIRES_EDITOR_PAGE}) == 0;
         }
     }  // namespace
 
     /** @copydoc NegotiateModuleAbi */
     HoroExtensionStatus NegotiateModuleAbi(HoroExtensionQueryFunc query,  // NOSONAR(cpp:S5205) Dynamic-library C ABI callback.
-                                           const HoroExtensionHostApi &host) noexcept {
+                                           const HoroExtensionHostApi &host, HoroExtensionRequirements *negotiated) noexcept {
+        if (negotiated != nullptr)
+            *negotiated = {};
         if (query == nullptr)
             return HORO_EXTENSION_SUCCESS;
         HoroExtensionRequirements requirements{.structSize = sizeof(HoroExtensionRequirements)};
@@ -41,6 +43,16 @@ namespace Horo::Extensions {
             (host.structSize < offsetof(HoroExtensionHostApi, registerEditorActivity) + sizeof(host.registerEditorActivity) ||
              host.registerEditorActivity == nullptr))
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
+        if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_PAGE) != 0 &&
+            (requirements.minimumHostMinor < 5 ||
+             requirements.requiredHostApiSize < offsetof(HoroExtensionHostApi, registerEditorPage) + sizeof(host.registerEditorPage)))
+            return HORO_EXTENSION_ERROR_VERSION_MISMATCH;
+        if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_PAGE) != 0 &&
+            (host.structSize < offsetof(HoroExtensionHostApi, registerEditorPage) + sizeof(host.registerEditorPage) ||
+             host.registerEditorPage == nullptr))
+            return HORO_EXTENSION_ERROR_INVALID_ARGS;
+        if (negotiated != nullptr)
+            *negotiated = requirements;
         return HORO_EXTENSION_SUCCESS;
     }
 

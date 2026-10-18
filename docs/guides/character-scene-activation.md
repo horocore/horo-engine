@@ -328,3 +328,21 @@ Initial placement retains exact authored local visual scale when that scale
 recomposes the same already validated local pose within the established Math
 tolerance. This prevents decomposition roundoff from rewriting authored scale,
 while retaining existing shear rejection and the shared Math implementation.
+
+### Authored source read profile
+
+The headless source Scene path uses the retained-handle `SourceText` capability
+with the Scene decoder's 16 MiB ceiling. Interactive `Text`/`Files` queries remain
+limited to 1 MiB; requesting the Scene budget through that query profile is an
+invalid request even for a small file. Cooked input retains its existing decoder.
+The source operation keeps the original absolute load deadline and checks stop
+fences between native transfers. It does not replace handle-relative access with
+an absolute-path reopen or accept links and multiple hardlinks.
+
+`ProjectSourceReadLimits` and the appended `IProjectReadFiles::SourceText` virtual
+operation require rebuilding platform-reader consumers. Existing restricted
+implementations retain their query behavior and return `Unavailable` for source
+capture until explicitly implemented. Native composition supplies the real
+operation; no Scene data migration, GameModule SDK change or query-limit increase
+is involved. Platform ceiling/stop/path regressions and the actual CLI test with
+an authored Scene larger than 1 MiB qualify this boundary.

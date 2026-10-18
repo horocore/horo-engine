@@ -10,6 +10,11 @@ namespace Horo::Tests::CollisionSettings {
                 std::filesystem::permissions(path_, std::filesystem::perms::none, ignored);
             }
 
+            DeniedDirectory(const DeniedDirectory &) = delete;
+            DeniedDirectory &operator=(const DeniedDirectory &) = delete;
+            DeniedDirectory(DeniedDirectory &&) = delete;
+            DeniedDirectory &operator=(DeniedDirectory &&) = delete;
+
             ~DeniedDirectory() {
                 std::error_code ignored;
                 std::filesystem::permissions(path_, prior_, ignored);

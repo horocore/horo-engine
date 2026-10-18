@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Assets/AssetId.h"
+#include "Horo/Assets/AssetRegistrySource.h"
 #include "Horo/Foundation/Paths.h"
 
 #include <filesystem>
@@ -146,4 +147,9 @@ namespace Horo::Assets {
 
     /** @brief Builds an unpublished asset registry candidate by loading the index or rebuilding sidecars. */
     [[nodiscard]] Result<AssetRegistryCandidate> PrepareAssetRegistryCandidate(const std::filesystem::path &projectRoot);
+    /** @brief Builds a fresh unpublished candidate through an explicit host source and the canonical registry decoder.
+     * @param source Borrowed root-bound source, alive for this synchronous call.
+     * @return Complete candidate or typed source/validation failure; no registry or index is published.
+     */
+    [[nodiscard]] Result<AssetRegistryCandidate> PrepareAssetRegistryCandidate(const IAssetRegistrySource &source);
 }  // namespace Horo::Assets

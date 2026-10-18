@@ -26,11 +26,13 @@ namespace Horo::Editor::SettingsModalInternal {
         Rendering,
         Audio,
         Network,
+        Navigation,
         Packages,
         Updates,
         Diagnostics,
         Plugins,
         Collision,
+        ExtensionPages,
     };
 
     struct NavItem {
@@ -79,6 +81,7 @@ namespace Horo::Editor::SettingsModalInternal {
     [[nodiscard]] bool ContainsCaseInsensitive(const char *text, const std::string &query);
 
     void DrawNavigationContent(SettingsState &st, const EditorGuiContext &ctx);
+    void DrawNavigationSettings(SettingsState &state, const EditorGuiContext &context);
     void DrawContent(SettingsState &st, const EditorGuiContext &ctx);
     void DrawCollision(SettingsState &st, const EditorGuiContext &ctx);
     void DrawUpdates(SettingsState &st, const EditorGuiContext &ctx);

@@ -14,10 +14,10 @@ namespace Horo::Editor {
                                           .userActionable = true};
 
         /** @brief Revalidates the complete reviewed inventory and physical source identities while the caller holds the project lease. */
-        Result<void> ValidateReviewedSources(const std::filesystem::path &root,
+        Result<void> ValidateReviewedSources(const std::filesystem::path &root, const Assets::IAssetRegistrySource &source,
                                              const std::optional<CollisionPublicationSourceFence> &reviewed) {
             if (reviewed) {
-                if (auto physical = ValidateCollisionSourceInventory(root, reviewed->inventory); physical.HasError())
+                if (auto physical = ValidateCollisionSourceInventory(source, reviewed->inventory); physical.HasError())
                     return Result<void>::Failure(physical.ErrorValue());
             }
             const std::span<const CollisionSourceFence> sources = reviewed ? reviewed->sources : std::span<const CollisionSourceFence>{};
@@ -34,8 +34,9 @@ namespace Horo::Editor {
 
     /** @copydoc ProjectCollisionSettingsStore::ProjectCollisionSettingsStore */
     ProjectCollisionSettingsStore::ProjectCollisionSettingsStore(DurableFileSystem &files, ProjectMutationCoordinator &mutations,
-                                                                 std::filesystem::path root, std::string projectId)
-        : files_(files), mutations_(mutations), root_(std::move(root)), projectId_(std::move(projectId)) {}
+                                                                 std::filesystem::path root, std::string projectId,
+                                                                 const Assets::IAssetRegistrySource &source)
+        : files_(files), mutations_(mutations), root_(std::move(root)), projectId_(std::move(projectId)), source_(source) {}
 
     /** @copydoc ProjectCollisionSettingsStore::Load */
     Result<Application::ProjectCollisionFileSnapshot> ProjectCollisionSettingsStore::Load() const {
@@ -53,10 +54,10 @@ namespace Horo::Editor {
                               expected->settings->Input().revision == UINT64_MAX)) ||
                 candidate.Input().revision != (expected ? expected->settings->Input().revision + 1 : 1))
                 return Return::Failure(MakeError(Invalid, "Project identity and consecutive revision must match the accepted source."));
-            auto projectLease = mutations_.TryAcquire({root_, ProjectMutationOwner::Save, "collision.settings"});
-            if (projectLease.HasError())
+            if (auto projectLease = mutations_.TryAcquire({root_, ProjectMutationOwner::Save, "collision.settings"});
+                projectLease.HasError())
                 return Return::Failure(projectLease.ErrorValue());
-            if (auto validated = ValidateReviewedSources(root_, reviewed); validated.HasError())
+            if (auto validated = ValidateReviewedSources(root_, source_, reviewed); validated.HasError())
                 return Return::Failure(validated.ErrorValue());
             const auto path = root_ / ".horo/collision.json";
             auto lockPath = Assets::AssetSourcePublicationLockPath(root_, path);

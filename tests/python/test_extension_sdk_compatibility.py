@@ -110,6 +110,7 @@ def test_gameplay_generation_is_distinct_and_matches_real_native_boundary(offlin
 @pytest.mark.parametrize("section", (
     "External C ABI 1.0 → 1.1",
     "External C ABI 1.1 → 1.2 → 1.3",
+    "External C ABI 1.4 → 1.5 settings and modal pages",
     "Gameplay SDK8 → SDK9 (native boundary 8 → 9)",
     "Gameplay SDK9 → SDK10 (native boundary 9 → 10)",
     "Gameplay SDK10 → SDK17 (Navigation and Runtime UI layout)",
@@ -150,3 +151,14 @@ def test_unknown_provenance_is_explicit_not_a_release_attestation():
     assert "not leak-free unload" in guide
     assert "per manager, not globally bounded" in guide
     assert "not an invented transactional package-upgrade API" in guide
+
+
+def test_page_transport_is_in_actual_installed_and_reconfigured_sdk():
+    """New C11 transport must be available to source-free native page modules."""
+    packaging = (ROOT / "cmake/HoroExtensionSdk.cmake").read_text(encoding="utf-8")
+    inventory = (ROOT / "tests/cmake/RunExtensionSdkReconfigureTest.cmake").read_text(encoding="utf-8")
+    metadata = (ROOT / "sdk/extension-sdk.json.in").read_text(encoding="utf-8")
+    for content in (packaging, inventory, metadata):
+        assert "include/Horo/Extensions/EditorPageAbi.h" in content
+    consumer = (ROOT / "tests/cmake/extension_sdk_consumer/ExternalExtension.c").read_text(encoding="utf-8")
+    assert '#include "Horo/Extensions/EditorPageAbi.h"' in consumer

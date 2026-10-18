@@ -2,9 +2,11 @@
 
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorSettingsStore.h"
+#include "Horo/Editor/NavigationProjectSettingsSession.h"
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace Horo::Extensions {
@@ -14,6 +16,8 @@ namespace Horo::Extensions {
 
 namespace Horo::Editor {
     class EditorSettingsService;
+    class EditorPageView;
+    struct NavigationSettingsDraft;
 
     struct SettingsGeneralTab {
         int startupAction = 0;
@@ -132,10 +136,10 @@ namespace Horo::Editor {
 
     /** @brief Refreshes one modal projection only for an explicit open/reset/replay command.
      * @param draft Exact modal-owned candidate. @param owner Owner-thread session resolved for this synchronous call. */
-    void RefreshCollisionDraft(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner);
+    void RefreshCollisionDraft(SettingsCollisionDraft &draft, const CollisionProjectSettingsSession &owner);
     /** @brief Creates one complete candidate definition using the explicitly chosen response; no publication occurs.
      * @param draft Exact local form. @param owner Live session supplies a fresh typed identity. @return Typed preparation outcome. */
-    [[nodiscard]] Result<void> CreateCollisionItem(SettingsCollisionDraft &draft, CollisionProjectSettingsSession &owner);
+    [[nodiscard]] Result<void> CreateCollisionItem(SettingsCollisionDraft &draft, const CollisionProjectSettingsSession &owner);
     /** @brief Removes the selected stable definition from a candidate; review remains mandatory before commit.
      * @param draft Exact local form. @return Typed selection outcome, leaving active worlds and durable source unchanged. */
     [[nodiscard]] Result<void> RemoveCollisionItem(SettingsCollisionDraft &draft);
@@ -175,9 +179,16 @@ namespace Horo::Editor {
         RenderingTab rendering{};
         AudioTab audio{};
         NetworkTab network{};
+        EditorNavigationOverlayPreferences navigationOverlay{};
+        NavigationProjectSettingsSessionBorrow navigationSettings;
+        std::shared_ptr<NavigationSettingsDraft> navigationDraft;
+        std::string navigationStatus;
+        bool navigationProjectDraftDirty{};
         PackagesTab packages{};
         DiagnosticsTab diagnostics{};
 
+        std::shared_ptr<EditorPageView>
+            extensionPages; /**< Transient host-rendered extension workflow; never part of EditorSettings persistence. */
         int pluginSectionTab = 0;
         Extensions::ExtensionInventory *extensionInventory = nullptr;
         Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr;

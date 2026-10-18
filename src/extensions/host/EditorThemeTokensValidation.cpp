@@ -112,7 +112,7 @@ namespace Horo::Extensions {
             return std::isfinite(tokens.smallSize) && tokens.smallSize > 0.0F && std::isfinite(tokens.mediumSize) &&
                    tokens.mediumSize > 0.0F && std::isfinite(tokens.largeSize) && tokens.largeSize > 0.0F &&
                    tokens.smallSize <= tokens.mediumSize && tokens.mediumSize <= tokens.largeSize && std::isfinite(tokens.strokeWidth) &&
-                   tokens.strokeWidth > 0.0F;
+                   tokens.strokeWidth >= 0.0F;
         }
 
         [[nodiscard]] bool ValidateAccessibility(const EditorThemeAccessibility &accessibility) noexcept {

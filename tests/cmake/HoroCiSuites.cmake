@@ -20,6 +20,10 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCollisionSettingsPublicConsumer
     HoroPublicationLockFoundationConsumer
     HoroProjectCollisionSettingsPublicHeaderConsumer
+    HoroWorkspaceLayoutPersistenceTests
+    HoroWorkspaceRecoveryPublicHeaderConsumer
+    HoroNavigationProjectSettingsTests
+    HoroNavigationProjectSettingsPublicConsumer
     HoroPhysicsTests
     HoroCharacterSceneProductTests
     HoroEditorPlaySessionControllerTests
@@ -236,6 +240,8 @@ set(HORO_CI_WINDOWS_TARGETS
 )
 
 set(HORO_CI_NAVIGATION_TARGETS
+    HoroNavigationProjectSettingsTests
+    HoroNavigationProjectSettingsPublicConsumer
     HoroGameplayNavigationIntegrationPublicHeaderConsumer
     HoroGameplayApiPublicHeaderConsumer
     HoroGameplayRuntimePublicHeaderConsumer
@@ -268,6 +274,8 @@ set(HORO_CI_NETWORK_TARGETS
 set(HORO_SONAR_EDITOR_TARGETS
     HoroSettingsModalLifecycleTests
     HoroEditorWorkspaceControllerTests
+    HoroNavigationProjectSettingsTests
+    HoroNavigationProjectSettingsPublicConsumer
     HoroPackageApplicationTests
     HoroFractureDocumentTests
     HoroTerrainAuthoringTests

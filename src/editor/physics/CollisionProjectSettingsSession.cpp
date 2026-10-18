@@ -40,9 +40,10 @@ namespace Horo::Editor {
             auto state = std::make_unique<State>();
             state->root = root;
             state->projectId = std::move(projectId);
-            state->registry = &owners.registry;
-            state->files = &owners.files;
-            state->mutations = &owners.mutations;
+            state->authorities.registry = &owners.registry;
+            state->authorities.source = &owners.source;
+            state->authorities.files = &owners.files;
+            state->authorities.mutations = &owners.mutations;
             state->activeScene = owners.activeScene;
             state->activeScenePath = owners.activeScenePath;
             state->triggerBinding = owners.triggerBinding;
@@ -51,14 +52,17 @@ namespace Horo::Editor {
             state->saved = std::move(loaded).Value();
             state->draft = state->saved.settings;
             state->history.push_back(state->draft);
-            state->store = std::make_unique<ProjectCollisionSettingsStore>(owners.files, owners.mutations, root, state->projectId);
+            state->store =
+                std::make_unique<ProjectCollisionSettingsStore>(owners.files, owners.mutations, root, state->projectId, owners.source);
             if (owners.activeScene) {
                 auto scene = owners.activeScene->Snapshot();
                 if (scene.HasError())
                     return Return::Failure(scene.ErrorValue());
                 state->sceneOpening = scene.Value().session;
             }
-            return Return::Success(std::shared_ptr<CollisionProjectSettingsSession>{new CollisionProjectSettingsSession{std::move(state)}});
+            // The private constructor requires direct construction; unique ownership protects control-block admission.
+            auto owned = std::unique_ptr<CollisionProjectSettingsSession>{new CollisionProjectSettingsSession{std::move(state)}};
+            return Return::Success(std::move(owned));
         } catch (const std::bad_alloc &) {
             return Return::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Capacity)));
         }
@@ -74,8 +78,7 @@ namespace Horo::Editor {
 
     /** @copydoc CollisionProjectSettingsSession::Snapshot */
     Result<std::shared_ptr<const Application::ProjectCollisionSettings>> CollisionProjectSettingsSession::Snapshot() const {
-        const auto admitted = state_->Admit();
-        if (admitted.HasError())
+        if (const auto admitted = state_->Admit(); admitted.HasError())
             return Result<std::shared_ptr<const Application::ProjectCollisionSettings>>::Failure(admitted.ErrorValue());
         return Result<std::shared_ptr<const Application::ProjectCollisionSettings>>::Success(state_->draft);
     }
@@ -107,12 +110,11 @@ namespace Horo::Editor {
 
     /** @copydoc CollisionProjectSettingsSession::ObserveActivation */
     Result<void> CollisionProjectSettingsSession::ObserveActivation(CollisionActivationEvidence evidence) {
-        const auto admitted = state_->Admit();
-        if (admitted.HasError())
+        if (const auto admitted = state_->Admit(); admitted.HasError())
             return admitted;
-        const bool exhaustedRevocation = evidence.revision == UINT64_MAX && state_->activation.revision == UINT64_MAX &&
-                                         evidence.state == CollisionActivationState::Unknown;
-        if (!ValidActivation(evidence, state_->projectId) || (evidence.revision <= state_->activation.revision && !exhaustedRevocation))
+        if (const bool exhaustedRevocation = evidence.revision == UINT64_MAX && state_->activation.revision == UINT64_MAX &&
+                                             evidence.state == CollisionActivationState::Unknown;
+            !ValidActivation(evidence, state_->projectId) || (evidence.revision <= state_->activation.revision && !exhaustedRevocation))
             return Result<void>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Stale)));
         state_->activation = std::move(evidence);
         return Result<void>::Success();
@@ -120,13 +122,12 @@ namespace Horo::Editor {
 
     /** @copydoc CollisionProjectSettingsSession::ObserveInventory */
     Result<void> CollisionProjectSettingsSession::ObserveInventory(const CollisionInventoryEvidence evidence) {
-        const auto admitted = state_->Admit();
-        if (admitted.HasError())
+        if (const auto admitted = state_->Admit(); admitted.HasError())
             return admitted;
         if (static_cast<unsigned>(evidence.status) > static_cast<unsigned>(Assets::AssetRegistryBuildStatus::Failed))
             return Result<void>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Invalid)));
         if (evidence.status == Assets::AssetRegistryBuildStatus::Complete &&
-            (evidence.revision.value == 0 || evidence.revision != state_->registry->Snapshot().Revision()))
+            (evidence.revision.value == 0 || evidence.revision != state_->authorities.registry->Snapshot().Revision()))
             return Result<void>::Failure(MakeError(CollisionSettingsError(CollisionSettingsFailure::Stale)));
         state_->inventory = evidence;
         return Result<void>::Success();
@@ -134,8 +135,7 @@ namespace Horo::Editor {
 
     /** @copydoc CollisionProjectSettingsSession::Activation */
     Result<const CollisionActivationEvidence *> CollisionProjectSettingsSession::Activation() const {
-        const auto admitted = state_->Admit();
-        if (admitted.HasError())
+        if (const auto admitted = state_->Admit(); admitted.HasError())
             return Result<const CollisionActivationEvidence *>::Failure(admitted.ErrorValue());
         return Result<const CollisionActivationEvidence *>::Success(&state_->activation);
     }

@@ -106,4 +106,38 @@ namespace {
         input >> contents;
         CHECK(contents == "keep");
     }
+
+    TEST_CASE("Native publication lock move construction transfers the last exclusion owner", "[unit][foundation][publication]") {
+        LockDirectory directory;
+        Horo::NativeDurableFileSystem files;
+        const auto path = directory.path / "construction.lock";
+        auto acquired = files.TryAcquireExclusive(path, "source owner");
+        REQUIRE(acquired.HasValue());
+        {
+            Horo::ExclusiveFileLock transferred{std::move(acquired).Value()};
+            CHECK(transferred.ProtectsPath(path));
+            CHECK(files.TryAcquireExclusive(path, "while transferred").HasError());
+        }
+        // The original result is still alive: only a true ownership transfer permits reacquisition here.
+        CHECK(files.TryAcquireExclusive(path, "after transferred destruction").HasValue());
+    }
+
+    TEST_CASE("Native publication lock move assignment releases the prior owner and transfers exclusion",
+              "[unit][foundation][publication]") {
+        LockDirectory directory;
+        Horo::NativeDurableFileSystem files;
+        const auto firstPath = directory.path / "first.lock";
+        const auto secondPath = directory.path / "second.lock";
+        auto first = files.TryAcquireExclusive(firstPath, "first owner");
+        auto second = files.TryAcquireExclusive(secondPath, "second owner");
+        REQUIRE(first.HasValue());
+        REQUIRE(second.HasValue());
+        auto destination = std::move(first).Value();
+        destination = std::move(second).Value();
+        CHECK(files.TryAcquireExclusive(firstPath, "prior owner released").HasValue());
+        CHECK(files.TryAcquireExclusive(secondPath, "transferred exclusion").HasError());
+        destination = Horo::ExclusiveFileLock{};
+        // Both original results remain alive, so retained source ownership would still block this acquisition.
+        CHECK(files.TryAcquireExclusive(secondPath, "last owner released").HasValue());
+    }
 }  // namespace

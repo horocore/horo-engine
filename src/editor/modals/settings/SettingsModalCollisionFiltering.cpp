@@ -19,7 +19,7 @@ namespace Horo::Editor::SettingsModalInternal {
         void ResponseControl(const char *id, Response &response, SettingsCollisionDraft &draft, const EditorGuiContext &ctx) {
             const std::array<const char *, 3> labels{Text(ctx, "settings.collision.ignore"), Text(ctx, "settings.collision.overlap"),
                                                      Text(ctx, "settings.collision.block")};
-            int selected = static_cast<int>(response);
+            auto selected = static_cast<int>(response);
             if (Ui::ComboControl(id, &selected, labels.data(), 3, ctx.theme.fonts)) {
                 response = static_cast<Response>(selected);
                 CollisionEdited(draft);
@@ -34,7 +34,8 @@ namespace Horo::Editor::SettingsModalInternal {
             const Ui::ComboItemSource source{.label = [&layers](int index) {
                 return layers[static_cast<std::size_t>(index)].name.c_str();
             }};
-            Ui::SettingRow(Text(ctx, "settings.collision.layer"), nullptr, ctx.theme.fonts, [&] {
+            Ui::SettingRow(Text(ctx, "settings.collision.layer"), nullptr, ctx.theme.fonts,
+                           [&ctx, &draft, &profile, &selected, &layers, &source] {
                 if (Ui::ComboControl("##profile-layer", &selected, static_cast<int>(layers.size()), source, ctx.theme.fonts)) {
                     profile.layer = layers[static_cast<std::size_t>(selected)].id;
                     CollisionEdited(draft);
@@ -46,7 +47,7 @@ namespace Horo::Editor::SettingsModalInternal {
             for (std::size_t index = 0; index < profile.queryResponses.size(); ++index) {
                 auto &entry = profile.queryResponses[index];
                 ImGui::PushID(static_cast<int>(index));
-                Ui::SettingRow(Name(draft.input->channels, entry.channel), nullptr, ctx.theme.fonts, [&] {
+                Ui::SettingRow(Name(draft.input->channels, entry.channel), nullptr, ctx.theme.fonts, [&ctx, &draft, &entry] {
                     ResponseControl("##query-response", entry.response, draft, ctx);
                 });
                 ImGui::PopID();
@@ -80,8 +81,8 @@ namespace Horo::Editor::SettingsModalInternal {
             CollisionEdited(draft);
         if (Ui::CheckboxControl(Text(ctx, "settings.collision.events"), &found->lifecycleEventsEnabled, ctx.theme.fonts))
             CollisionEdited(draft);
-        bool isDefault = draft.input->schema.defaultProfile == id;
-        if (Ui::CheckboxControl(Text(ctx, "settings.collision.default"), &isDefault, ctx.theme.fonts) && isDefault) {
+        if (bool isDefault = draft.input->schema.defaultProfile == id;
+            Ui::CheckboxControl(Text(ctx, "settings.collision.default"), &isDefault, ctx.theme.fonts) && isDefault) {
             draft.input->schema.defaultProfile = id;
             CollisionEdited(draft);
         }

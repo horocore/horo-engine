@@ -437,6 +437,14 @@ namespace Horo::Extensions::Tests {
         });
     }
 
+    TEST_CASE("Filled icon glyphs admit zero outline but never nonfinite stroke geometry", "[Extensions][EditorThemeTokens]") {
+        EditorThemeFrame frame;
+        frame.icons.strokeWidth = 0.0F;
+        REQUIRE(ValidateEditorThemeFrame(frame).HasValue());
+        frame.icons.strokeWidth = std::numeric_limits<float>::quiet_NaN();
+        RequireErrorCode(ValidateEditorThemeFrame(frame), "editor_theme_token_invalid");
+    }
+
     TEST_CASE("Theme token validation rejects invalid fonts, icons, and accessibility", "[Extensions][EditorThemeTokens]") {
         RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.fonts.body = EditorThemeFontRole::None;
@@ -448,7 +456,7 @@ namespace Horo::Extensions::Tests {
             frame.icons.smallSize = 0.0F;
         });
         RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
-            frame.icons.strokeWidth = 0.0F;
+            frame.icons.strokeWidth = -1.0F;
         });
         RequireInvalidThemeFrame([](EditorThemeFrame &frame) {
             frame.accessibility.colorVision = EditorThemeColorVisionMode::Count;

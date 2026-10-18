@@ -1,7 +1,8 @@
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 
+#include "WorkspaceLayoutPersistenceInternal.h"
+
 #include <charconv>
-#include <fstream>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -11,7 +12,6 @@ namespace Horo::Editor {
         constexpr std::size_t MaximumSurfaceEntries = 512;
         constexpr std::size_t MaximumSurfaceStateBytes = 8192;
         constexpr std::size_t MaximumTotalSurfaceStateBytes = 1024U * 1024U;
-        constexpr std::size_t MaximumWorkspaceDocumentBytes = 8U * 1024U * 1024U;
         constexpr std::string_view LegacyContentBrowserPanelId = "horo.content_browser";
         constexpr std::string_view GlobalDockPanelId = "horo.global_dock";
 
@@ -502,54 +502,4 @@ namespace Horo::Editor {
         return result;
     }
 
-    bool WorkspaceLayoutPersistence::Save(const std::filesystem::path &path, const WorkspaceLayout &layout, std::string *error) {
-        const auto encoded = Serialize(layout);
-        if (encoded.empty()) {
-            if (error)
-                *error = "workspace surface state exceeds limit";
-            return false;
-        }
-        std::error_code ec;
-        std::filesystem::create_directories(path.parent_path(), ec);
-        if (ec) {
-            if (error)
-                *error = ec.message();
-            return false;
-        }
-        const std::filesystem::path temp = path.string() + ".tmp";
-        std::ofstream out(temp, std::ios::binary | std::ios::trunc);
-        out << encoded;
-        out.close();
-        if (!out) {
-            if (error)
-                *error = "workspace write failed";
-            return false;
-        }
-        std::filesystem::rename(temp, path, ec);
-        if (ec) {
-            std::filesystem::remove(path, ec);
-            std::filesystem::rename(temp, path, ec);
-        }
-        if (ec && error)
-            *error = ec.message();
-        return !ec;
-    }
-
-    std::optional<WorkspaceLayout> WorkspaceLayoutPersistence::Load(const std::filesystem::path &path, std::string *error) {
-        std::error_code sizeError;
-        if (const auto size = std::filesystem::file_size(path, sizeError); sizeError || size > MaximumWorkspaceDocumentBytes) {
-            if (error)
-                *error = "workspace document unavailable or exceeds limit";
-            return std::nullopt;
-        }
-        const std::ifstream in(path, std::ios::binary);
-        if (!in) {
-            if (error)
-                *error = "workspace file not found";
-            return std::nullopt;
-        }
-        std::stringstream buffer;
-        buffer << in.rdbuf();
-        return Deserialize(buffer.str(), error);
-    }
 }  // namespace Horo::Editor

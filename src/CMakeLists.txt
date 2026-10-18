@@ -435,10 +435,14 @@ target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application
         PRIVATE HoroEngine::ProjectSettings HoroEngine::NavigationApi HoroEngine::Assets nlohmann_json::nlohmann_json)
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
 
-add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp)
+add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp
+        application/project/NavigationProjectSettingsStore.cpp
+        application/project/NavigationProjectSettings.cpp
+        application/project/NavigationProjectSettingsCodec.cpp)
 add_library(HoroEngine::ProjectSettings ALIAS HoroProjectSettings)
 target_compile_features(HoroProjectSettings PUBLIC cxx_std_20)
-target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi)
+target_link_libraries(HoroProjectSettings PRIVATE nlohmann_json::nlohmann_json)
+target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi HoroEngine::NavigationApi HoroEngine::Assets)
 
 add_library(HoroSaveApi STATIC
         runtime/save/SaveErrors.cpp
@@ -1072,6 +1076,7 @@ add_library(HoroAssets STATIC
         runtime/assets/package/AssetChunkPlan.cpp
         runtime/assets/registry/AssetId.cpp
         runtime/assets/registry/AssetRegistry.cpp
+        runtime/assets/registry/AssetRegistrySnapshot.cpp
         runtime/assets/runtime_provider/AssetProviderRead.h
         runtime/assets/runtime_provider/AssetProvider.cpp
         runtime/assets/preview/AssetPreviewService.cpp
@@ -1839,6 +1844,7 @@ add_library(HoroNavigationApi STATIC
         runtime/navigation/api/NavigationLinkBoundaryAnchors.cpp
         runtime/navigation/api/NavigationOutcomes.cpp
         runtime/navigation/api/NavigationProjectProfiles.cpp
+        runtime/navigation/api/NavigationSettingsErrors.cpp
         runtime/navigation/api/NavigationSourceGeometry.cpp
         runtime/navigation/api/NavigationTileDependencies.cpp
         runtime/navigation/api/NavigationTileArtifact.cpp
@@ -2704,6 +2710,10 @@ add_library(HoroEditorModel STATIC
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentTransaction.cpp
+        editor/document/SceneDocumentTransactionErrors.cpp
+        editor/navigation/NavigationDefinitionDocument.cpp
+        editor/navigation/NavigationSettingsWorkflow.cpp
+        editor/navigation/NavigationSettingsWorkflowHistory.cpp
         editor/document/SceneDocumentCommands.cpp
         editor/document/SceneDocumentObjectCommands.cpp
         editor/document/SceneDocumentHistoryCommands.cpp
@@ -2726,6 +2736,8 @@ target_link_libraries(HoroEditorModel
         PUBLIC
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSourceModel
+        HoroEngine::NavigationApi
+        HoroEngine::Assets
         HoroEngine::Foundation
         HoroEngine::AI
         HoroEngine::Prefab
@@ -2837,6 +2849,7 @@ add_library(HoroEditorServices STATIC
         editor/physics/CollisionReferenceReview.cpp
         editor/physics/CollisionReviewFreshness.cpp
         editor/physics/CollisionSourceInventory.cpp
+        editor/physics/NativeAssetRegistrySource.cpp
         editor/pcg/PCGDocumentErrors.cpp
         editor/pcg/PCGGraphDocument.cpp
         editor/pcg/PCGGraphDocumentService.cpp
@@ -2879,6 +2892,7 @@ add_library(HoroEditorServices STATIC
         editor/project_model/RendererAvailability.cpp
         editor/settings/EditorConfiguration.cpp
         editor/settings/EditorSettingsService.cpp
+        editor/navigation/NavigationProjectSettingsSession.cpp
         editor/settings/EditorSettingsStore.cpp
         editor/settings/EditorSettingsStoreSerialization.cpp
         editor/localization/LocalizationService.cpp
@@ -2891,6 +2905,7 @@ add_library(HoroEditorServices STATIC
         editor/modals/EditorModalHost.cpp
         editor/screens/workspace/WorkspaceLayout.cpp
         editor/screens/workspace/WorkspacePanelHost.cpp
+        editor/screens/workspace/WorkspaceLayoutFileStore.cpp
         editor/screens/workspace/WorkspaceLayoutPersistence.cpp
         editor/screens/workspace/ActivityBarLayout.cpp
         editor/screens/workspace/WorkspaceSplitterInteraction.cpp
@@ -2902,6 +2917,7 @@ target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices
@@ -2938,6 +2954,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::ProjectMigrations
         PRIVATE
         HoroEditorPlaySceneHostInternal
+        HoroEngine::PlatformProjectReadFiles
         HoroSceneSourceCodecInternal
         nlohmann_json::nlohmann_json
 )
@@ -3040,6 +3057,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/settings/SettingsModalCollisionDefinitions.cpp
             editor/modals/settings/SettingsModalCollisionFiltering.cpp
             editor/modals/settings/SettingsModalNavigation.cpp
+            editor/modals/settings/SettingsModalNavigationProject.cpp
+            editor/modals/settings/SettingsModalNavigationPolicy.cpp
             editor/modals/settings/SettingsModalUpdates.cpp
             editor/modals/settings/SettingsModalPluginDetails.cpp
             editor/modals/settings/SettingsModalPluginList.cpp
@@ -3101,6 +3120,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/global_dock/panes/physics/GlobalDockPhysicsPane.cpp
             editor/screens/workspace/EditorWorkspaceController.cpp
         editor/screens/workspace/EditorWorkspaceControllerCollision.cpp
+        editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
             editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp
@@ -3124,10 +3144,15 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
+            editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
+        editor/screens/EditorPageFileStore.cpp
+        editor/modals/extension_pages/EditorPageView.cpp
+        editor/modals/extension_pages/EditorPageModal.cpp
+        editor/modals/extension_pages/EditorPageThemeCapture.cpp
     )
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
@@ -3174,6 +3199,7 @@ add_library(HoroExtensions STATIC
         extensions/discovery/DiscoveryPaths.cpp
         extensions/discovery/DiscoveryPlan.cpp
         extensions/discovery/DiscoveryRootPolicy.cpp
+        extensions/host/ExtensionManagerRecovery.cpp
         extensions/host/ExtensionManager.cpp
         extensions/host/ExtensionManagerRetirement.cpp
         extensions/host/ExtensionPlatformProviderCopy.cpp
@@ -3184,8 +3210,16 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorActivityAbiConversion.cpp
         extensions/host/EditorActivitySession.cpp
         extensions/host/EditorActivityAction.cpp
+        extensions/host/EditorPageHost.cpp
+        extensions/host/EditorPageOperations.cpp
+        extensions/host/EditorPageWork.cpp
+        extensions/host/EditorPageAbiConversion.cpp
+        extensions/host/EditorPageNativeOperations.cpp
+        extensions/host/EditorPageNativeSession.cpp
+        extensions/manifest/EditorPageDefinition.cpp
         extensions/host/EditorSurfaceRegistry.cpp
         extensions/host/EditorSurfaceRegistryOperations.cpp
+        extensions/host/EditorSurfaceRegistryRecovery.cpp
         extensions/host/EditorSurfaceRegistryPersistence.cpp
         extensions/host/EditorSurfaceRegistryInternal.h
         extensions/host/EditorCommandRegistry.cpp
@@ -3347,7 +3381,7 @@ target_compile_features(HoroPlatformServicesExtension PUBLIC cxx_std_20)
 target_link_libraries(HoroPlatformServicesExtension PUBLIC HoroEngine::PlatformServices HoroEngine::Extensions)
 
 if (HORO_BUILD_EDITOR_GUI)
-    target_link_libraries(HoroGui PRIVATE HoroEngine::Extensions)
+    target_link_libraries(HoroGui PUBLIC HoroEngine::Extensions)
 endif ()
 
 # Apply the build-tree public/private include contract only after every optional

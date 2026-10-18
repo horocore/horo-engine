@@ -40,7 +40,7 @@ namespace Horo::Application::Internal {
                                                        .projectGeneration = 1,
                                                        .cancellation = resources.cancellation.Token(),
                                                        .deadline = resources.deadline};
-            auto read = files.Value()->Text(path, context, {.maximumFileBytes = 16U * 1024U * 1024U});
+            auto read = files.Value()->SourceText(path, context, {.maximumFileBytes = 16U * 1024U * 1024U});
             if (read.HasError())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(read.ErrorValue());
             auto source = SceneSource::DecodeSceneSource(*read.Value().text);
