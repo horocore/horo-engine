@@ -2,6 +2,7 @@
 
 #include "../AssetErrors.h"
 #include "AssetRegistryJson.h"
+#include "AssetRegistryPaths.h"
 #include "AssetRegistrySnapshotState.h"
 #include "Horo/Foundation/Paths.h"
 
@@ -29,6 +30,12 @@
 namespace Horo::Assets {
     namespace {
         using Json = nlohmann::json;
+        using Detail::HasValidUtf8PathText;
+        using Detail::ParseAssetPath;
+        using Detail::PortableFold;
+        using Detail::Utf8PathText;
+        using Detail::ValidateSourceType;
+
         constexpr std::uintmax_t kMaximumIndexBytes = 16U * 1024U * 1024U;
         constexpr std::uintmax_t kMaximumSidecarBytes = 1U * 1024U * 1024U;
         constexpr std::size_t kMaximumDiagnostics = 256;
@@ -49,13 +56,6 @@ namespace Horo::Assets {
             if (diagnostics.size() >= kMaximumDiagnostics)
                 return;
             diagnostics.emplace_back(Failure(descriptor, std::move(message)), std::string{path});
-        }
-
-        [[nodiscard]] std::string PortableFold(const std::string_view value) {
-            std::string folded{value};
-            for (char &character : folded)
-                character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
-            return folded;
         }
 
         struct RegistryUniquenessState final {
@@ -89,7 +89,7 @@ namespace Horo::Assets {
         }
 
         [[nodiscard]] bool IsSidecarPath(const std::filesystem::path &path) {
-            return path.extension() == ".horo" && IsSupportedSourceExtension(path.stem().extension().string());
+            return path.extension() == ".horo" && IsSupportedSourceExtension(Utf8PathText(path.stem().extension()));
         }
 
         [[nodiscard]] Result<std::string> ReadBounded(const std::filesystem::path &path, const std::uintmax_t maximum,
@@ -97,14 +97,14 @@ namespace Horo::Assets {
             std::error_code error;
             const std::uintmax_t size = std::filesystem::file_size(path, error);
             if (error || size == 0 || size > maximum)
-                return Result<std::string>::Failure(Failure(descriptor, std::format("File size is invalid: {}", path.string())));
+                return Result<std::string>::Failure(Failure(descriptor, std::format("File size is invalid: {}", Utf8PathText(path))));
             std::ifstream input(path, std::ios::binary);
             if (!input)
-                return Result<std::string>::Failure(Failure(descriptor, std::format("Unable to open {}", path.string())));
+                return Result<std::string>::Failure(Failure(descriptor, std::format("Unable to open {}", Utf8PathText(path))));
             std::string contents(size, '\0');
             input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
             if (input.gcount() != static_cast<std::streamsize>(contents.size()) || input.bad())
-                return Result<std::string>::Failure(Failure(descriptor, std::format("Unable to read {}", path.string())));
+                return Result<std::string>::Failure(Failure(descriptor, std::format("Unable to read {}", Utf8PathText(path))));
             return Result<std::string>::Success(std::move(contents));
         }
 
@@ -121,23 +121,6 @@ namespace Horo::Assets {
             } catch (const Json::exception &exception) {
                 return Result<Detail::RegistryJson>::Failure(Failure(descriptor, exception.what()));
             }
-        }
-
-        [[nodiscard]] Result<ProjectPath> ParseAssetPath(const std::string_view value) {
-            if ((!value.starts_with("Assets/") && !value.starts_with("assets/")) || value.size() > 4096)
-                return Result<ProjectPath>::Failure(Failure(AssetErrors::RootInvalid, "Asset path is outside the project asset root."));
-            return ProjectPath::Parse(value);
-        }
-
-        [[nodiscard]] bool IsPrefabSourcePath(const std::string_view sourcePath) {
-            return PortableFold(std::filesystem::path{sourcePath}.extension().string()) == ".prefab";
-        }
-
-        [[nodiscard]] Result<void> ValidateSourceType(const ProjectPath &sourcePath, const AssetTypeId &type) {
-            if (constexpr std::string_view kPrefabAssetType = "core.prefab";
-                IsPrefabSourcePath(sourcePath.String()) != (type.Value() == kPrefabAssetType))
-                return Result<void>::Failure(Failure(AssetErrors::TypeMismatch));
-            return Result<void>::Success();
         }
 
         [[nodiscard]] Result<AssetRecord> ParseRecord(const Json &value, const std::optional<std::string_view> objectId = {}) {
@@ -189,7 +172,7 @@ namespace Horo::Assets {
             else if (kind == AssetRegistrySourceKind::Regular) {
                 if (IsSidecarPath(path))
                     result.sidecars.try_emplace(normalized.substr(0, normalized.size() - 5), path);
-                else if (IsSupportedSourceExtension(path.extension().string()))
+                else if (IsSupportedSourceExtension(Utf8PathText(path.extension())))
                     result.sources.try_emplace(normalized, path);
             }
         }
@@ -210,8 +193,8 @@ namespace Horo::Assets {
                 if (error)
                     return Result<ScannedAssets>::Failure(Failure(AssetErrors::RootInvalid, error.message()));
                 const std::filesystem::path relative = entry.path().lexically_relative(projectRoot);
-                if (const std::string normalized = relative.generic_string(); relative.empty() || normalized.starts_with("..")) {
-                    AddDiagnostic(result.diagnostics, AssetErrors::RootInvalid, entry.path().generic_string());
+                if (const std::string normalized = Utf8PathText(relative); relative.empty() || normalized.starts_with("..")) {
+                    AddDiagnostic(result.diagnostics, AssetErrors::RootInvalid, Utf8PathText(entry.path()));
                 } else if (std::filesystem::is_symlink(status)) {
                     ClassifyEntry(result, normalized, entry.path(), AssetRegistrySourceKind::Link);
                     iterator.disable_recursion_pending();
@@ -319,8 +302,9 @@ namespace Horo::Assets {
 
     /** @copydoc DecodeAssetIdentitySidecar */
     Result<AssetRecord> DecodeAssetIdentitySidecar(const std::string_view sourcePath, const std::string_view contents) {
-        if (sourcePath.size() > 4096U - std::string_view{".horo"}.size())
-            return Result<AssetRecord>::Failure(Failure(AssetErrors::RootInvalid, "Asset or sidecar path exceeds its portable bound."));
+        if (sourcePath.size() > 4096U - std::string_view{".horo"}.size() || !HasValidUtf8PathText(sourcePath))
+            return Result<AssetRecord>::Failure(
+                Failure(AssetErrors::RootInvalid, "Asset or sidecar path is not bounded portable UTF-8 text."));
         if (contents.empty() || contents.size() > kMaximumSidecarBytes)
             return Result<AssetRecord>::Failure(Failure(AssetErrors::SidecarMalformed, "Sidecar byte count is invalid."));
         return DecodeSidecar(sourcePath, contents);
@@ -346,8 +330,9 @@ namespace Horo::Assets {
                 AddDiagnostic(diagnostics, AssetErrors::RegistryIdentityInvalid, record.sourcePath.String());
                 ambiguous = true;
             }
-            if (ValidateSourceType(record.sourcePath, record.type).HasError()) {
-                AddDiagnostic(diagnostics, AssetErrors::TypeMismatch, record.sourcePath.String());
+            if (const auto sourceType = ValidateSourceType(record.sourcePath, record.type); sourceType.HasError()) {
+                if (diagnostics.size() < kMaximumDiagnostics)
+                    diagnostics.emplace_back(sourceType.ErrorValue(), record.sourcePath.String());
                 ambiguous = true;
             }
             const RegistryUniquenessIssues issues = CheckAndRecordUniqueness(record, uniqueness);
@@ -524,6 +509,8 @@ namespace Horo::Assets {
         for (const auto &entry : manifest.entries) {
             if (std::chrono::steady_clock::now() >= manifest.deadline)
                 return Result<AssetRegistryCandidate>::Failure(MakeError(AssetRegistrySourceErrors::Deadline));
+            if (!HasValidUtf8PathText(entry.path))
+                return Result<AssetRegistryCandidate>::Failure(Failure(AssetErrors::RootInvalid));
             const std::u8string utf8Path{entry.path.begin(), entry.path.end()};
             const std::filesystem::path path{utf8Path};
             if (path.is_absolute() || path.lexically_normal().generic_u8string() != utf8Path ||

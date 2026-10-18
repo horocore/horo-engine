@@ -792,6 +792,13 @@ namespace Horo::Runtime {
                                                   const SceneBaselineOwnership &ownership) const;
         [[nodiscard]] Result<void> BindBaselineReferences(RuntimeSceneStorage &storage, const BaselineAttachment &baseline) const;
         [[nodiscard]] Result<EntityRef> CreateEntity(RuntimeSceneStorage &storage, const RuntimeEntityCreateInfo &info) const;
+        /** @brief Inserts one fully admitted entity into private candidate storage.
+         * @param storage Unpublished construction or structural-transaction candidate.
+         * @param info Schema-valid input with admitted parent and a unique authored identity, when present.
+         * @return Generation-qualified entity reference or the existing slot-capacity failure.
+         * @pre The caller has proved schema, parent validity and authored identity uniqueness before any mutation.
+         */
+        [[nodiscard]] Result<EntityRef> InsertValidatedEntity(RuntimeSceneStorage &storage, const RuntimeEntityCreateInfo &info) const;
         [[nodiscard]] Result<void> DestroyEntity(RuntimeSceneStorage &storage, EntityRef entity) const;
         [[nodiscard]] bool IsValid(const RuntimeSceneStorage &storage, EntityRef entity) const noexcept;
 

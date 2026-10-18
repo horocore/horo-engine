@@ -139,6 +139,45 @@ namespace Horo::Tests::CollisionSettings {
         CHECK(expired.ReadCount() == 0);
     }
 
+    TEST_CASE("Registry source rejects malformed UTF8 and NUL identities before native conversion", "[collision][inventory]") {
+        std::string path{"Assets/bad"};
+        SECTION("invalid UTF8") {
+            path += "\xc0\xaf.png";
+        }
+        SECTION("embedded NUL") {
+            path.push_back('\0');
+            path += "ignored.png";
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+        ManifestSource source{{"Assets", {{path, Assets::AssetRegistrySourceKind::Regular}}, deadline}};
+        const auto candidate = Assets::PrepareAssetRegistryCandidate(source);
+        REQUIRE(candidate.HasError());
+        CHECK(candidate.ErrorValue().code.Value() == "asset.registry.root_invalid");
+        CHECK(source.ReadCount() == 0);
+        const auto decoded = Assets::DecodeAssetIdentitySidecar(
+            path, R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.texture"})");
+        REQUIRE(decoded.HasError());
+        CHECK(decoded.ErrorValue().code.Value() == "asset.registry.root_invalid");
+    }
+
+    TEST_CASE("Registry publication retains its prior root after malformed UTF8 source identity", "[collision][inventory]") {
+        const auto valid = Assets::DecodeAssetIdentitySidecar(
+            "Assets/a.png", R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.texture"})");
+        REQUIRE(valid.HasValue());
+        Assets::AssetRegistry registry;
+        REQUIRE(registry.Publish({valid.Value()}).status == Assets::AssetRegistryBuildStatus::Complete);
+        const auto before = registry.Snapshot();
+        auto malformed = valid.Value();
+        malformed.sourcePath = ProjectPath::Parse(std::string{"Assets/"} + "\xc0\xaf.png").Value();
+        const auto rejected = registry.Publish({malformed});
+        CHECK(rejected.status == Assets::AssetRegistryBuildStatus::Failed);
+        REQUIRE(rejected.diagnostics.size() == 1);
+        CHECK(rejected.diagnostics.front().error.code.Value() == "asset.registry.root_invalid");
+        CHECK(registry.Snapshot().Revision() == before.Revision());
+        REQUIRE(registry.Snapshot().Records().size() == 1);
+        CHECK(registry.Snapshot().Records().front().sourcePath.String() == "Assets/a.png");
+    }
+
     TEST_CASE("Native registry source rejects invalid host budgets before admitting a source", "[collision][inventory]") {
         Project project;
         for (const auto &policy : {Editor::AssetRegistryInventoryPolicy{0}, Editor::AssetRegistryInventoryPolicy{(1U << 20U) + 1},
@@ -171,16 +210,31 @@ namespace Horo::Tests::CollisionSettings {
 
     TEST_CASE("Native registry source retains UTF8 registered names through the canonical decoder", "[collision][inventory]") {
         Project project;
-        const auto source = project.root / "Assets" / std::filesystem::path{u8"ışık 图.png"};
+        std::string extension{".png"};
+        std::string assetType{"core.texture"};
+        SECTION("texture identity") {}
+        SECTION("mixed-case Prefab extension") {
+            extension = ".PREFAB";
+            assetType = "core.prefab";
+        }
+        // Universal escapes keep this fixture independent of the compiler's source code page.
+        std::filesystem::path filename{u8"\u0131\u015f\u0131k \u56fe"};
+        filename += extension;
+        const std::string expected = std::string{"Assets/\xc4\xb1\xc5\x9f\xc4\xb1k \xe5\x9b\xbe"} + extension;
+        const auto encodedName = filename.generic_u8string();
+        CHECK("Assets/" + std::string{encodedName.begin(), encodedName.end()} == expected);
+        const auto source = project.root / "Assets" / filename;
         auto metadata = source;
         metadata += ".horo";
         Write(source, "source bytes");
-        Write(metadata, R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.texture"})");
+        Write(metadata,
+              std::string{R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":")"} + assetType + R"("})");
         RequireParity(project, *project.source);
         auto candidate = Assets::PrepareAssetRegistryCandidate(*project.source);
         REQUIRE(candidate.HasValue());
         REQUIRE(candidate.Value().records.size() == 1);
-        CHECK(candidate.Value().records.front().sourcePath.String() == "Assets/ışık 图.png");
+        CHECK(candidate.Value().records.front().sourcePath.String() == expected);
+        CHECK(candidate.Value().records.front().metadataPath.String() == expected + ".horo");
     }
 
     TEST_CASE("Native registry source preserves hardlinked sidecars without weakening query reads", "[collision][inventory]") {
@@ -200,9 +254,10 @@ namespace Horo::Tests::CollisionSettings {
 
     TEST_CASE("Native registry source reports symlinks without traversal and ignores unrelated native names", "[collision][inventory]") {
         Project project;
-        Write(project.root / "Assets/COM1.unrelated", "not a supported asset");
+        Write(project.root / "Assets/ordinary.unrelated", "not a supported asset");
         std::filesystem::create_directories(project.root / "Assets/empty");
 #ifndef _WIN32
+        Write(project.root / "Assets/COM1.unrelated", "not a supported asset");
         std::filesystem::create_directories(project.root / "Assets/CON");
         auto native = Platform::CreateNativeProjectReadFiles(project.root, "collision-project", 1);
         REQUIRE(native.HasValue());
@@ -215,6 +270,11 @@ namespace Horo::Tests::CollisionSettings {
         CHECK(native.Value()->Files("Assets/CON", context, {}).HasError());
 #endif
         RequireParity(project, *project.source);
+        const auto unrelated = Assets::PrepareAssetRegistryCandidate(*project.source);
+        REQUIRE(unrelated.HasValue());
+        CHECK(unrelated.Value().status == Assets::AssetRegistryBuildStatus::Complete);
+        CHECK(unrelated.Value().records.empty());
+        CHECK(unrelated.Value().diagnostics.empty());
         std::error_code error;
         std::filesystem::create_directory_symlink(project.root, project.root / "Assets/cycle", error);
         if (error)

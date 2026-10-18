@@ -1076,6 +1076,7 @@ add_library(HoroAssets STATIC
         runtime/assets/package/AssetChunkPlan.cpp
         runtime/assets/registry/AssetId.cpp
         runtime/assets/registry/AssetRegistry.cpp
+        runtime/assets/registry/AssetRegistryPaths.cpp
         runtime/assets/registry/AssetRegistrySnapshot.cpp
         runtime/assets/runtime_provider/AssetProviderRead.h
         runtime/assets/runtime_provider/AssetProvider.cpp

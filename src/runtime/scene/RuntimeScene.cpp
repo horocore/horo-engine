@@ -11,6 +11,7 @@
 #include <ranges>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 
 namespace Horo::Runtime {
@@ -195,21 +196,31 @@ namespace Horo::Runtime {
         scene->storage_.slots.reserve(definition.Entities().size());
         scene->storage_.authoredIndex.reserve(definition.Entities().size());
 
+        std::optional<std::unordered_map<std::uint64_t, EntityId>> parentIndex;
+        if (std::ranges::any_of(definition.Entities(), [](const auto &entity) {
+            return entity.parent.has_value();
+        })) {
+            parentIndex.emplace();
+            parentIndex->reserve(definition.Entities().size());
+        }
         for (const RuntimeEntityDefinition &entity : definition.Entities()) {
             RuntimeEntityCreateInfo info{entity.localTransform, std::nullopt, entity.object, entity.primitiveMesh, entity.components};
-            Result<EntityRef> created = scene->CreateEntity(scene->storage_, info);
+            // Definition admission proves schema and unique IDs; this candidate contains only entries from that definition.
+            Result<EntityRef> created = scene->InsertValidatedEntity(scene->storage_, info);
             if (created.HasError())
                 return Result<std::unique_ptr<RuntimeScene>>::Failure(created.ErrorValue());
+            if (parentIndex)
+                parentIndex->emplace(entity.object.value, created.Value().entity);
         }
         for (const RuntimeEntityDefinition &entity : definition.Entities()) {
             if (!entity.parent)
                 continue;
-            const std::optional<EntityRef> child = scene->View().Find(entity.object);
-            const std::optional<EntityRef> parent = scene->View().Find(*entity.parent);
-            if (!child || !parent)
+            const auto child = parentIndex->find(entity.object.value);
+            const auto parent = parentIndex->find(entity.parent->value);
+            if (child == parentIndex->end() || parent == parentIndex->end())
                 return Failure<std::unique_ptr<RuntimeScene>>(SceneErrors::ParentNotFound,
                                                               "Definition parent resolution failed during instantiation.");
-            scene->storage_.slots[child->entity.index].parent = parent->entity;
+            scene->storage_.slots[child->second.index].parent = parent->second;
         }
         return Result<std::unique_ptr<RuntimeScene>>::Success(std::move(scene));
     }
@@ -252,6 +263,11 @@ namespace Horo::Runtime {
         }) != storage.authoredIndex.end())
             return Failure<EntityRef>(SceneErrors::DuplicateObject, "Runtime authored object identity already exists.");
 
+        return InsertValidatedEntity(storage, info);
+    }
+
+    /** @copydoc RuntimeScene::InsertValidatedEntity */
+    Result<EntityRef> RuntimeScene::InsertValidatedEntity(RuntimeSceneStorage &storage, const RuntimeEntityCreateInfo &info) const {
         std::uint32_t index{};
         if (!storage.freeList.empty()) {
             index = storage.freeList.back();
