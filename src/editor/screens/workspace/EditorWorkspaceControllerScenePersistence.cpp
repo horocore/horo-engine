@@ -99,6 +99,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SaveScene */
     void EditorWorkspaceController::SaveScene(const bool overwriteConflict) {
+        if (m_navigationSettings) {
+            if (const auto saved = SaveNavigationDocuments(); saved.HasError())
+                LOG_ERROR("editor.navigation_document", "Coordinated save failed: %s", saved.ErrorValue().message.c_str());
+            return;  // The canonical active Scene participated in the same source-save session.
+        }
         if (!m_defaultScenePath.has_value() || m_mutations == nullptr || m_durableFiles == nullptr) {
             LOG_ERROR("editor.scene_document", "Save rejected because the project scene path or "
                                                "durable writer services are unavailable.");
@@ -144,6 +149,14 @@ namespace Horo::Editor {
             LOG_ERROR("editor.scene_document", "Destination save rejected because '%s' is not absolute.", destination.string().c_str());
             return std::nullopt;
         }
+        if (destination.extension() != ".horo") {
+            LOG_ERROR("editor.scene_document", "Destination save requires a .horo scene path.");
+            return std::nullopt;
+        }
+        if (const auto inspected = InspectProjectSceneFingerprint(m_sourceOpenService.ProjectRoot(), destination); inspected.HasError()) {
+            LOG_ERROR("editor.scene_document", "Destination save rejected: %s", inspected.ErrorValue().message.c_str());
+            return std::nullopt;
+        }
         return destination;
     }
 
@@ -169,6 +182,9 @@ namespace Horo::Editor {
             return;
         }
 
+        if (!copyOnly && !PrepareNavigationSceneReplacement("Save As"))
+            return;
+
         const SceneDocumentSnapshot snapshot = m_document.Snapshot();
         auto saved = SaveProjectSceneToPath(std::filesystem::path{m_viewModel.projectRoot}, *destination, snapshot, true, *m_mutations,
                                             *m_durableFiles);
@@ -189,17 +205,23 @@ namespace Horo::Editor {
             return;
         }
 
+        CompleteSceneSaveAs(snapshot, saved.Value().fingerprint, *destination);
+    }
+
+    /** @copydoc EditorWorkspaceController::CompleteSceneSaveAs */
+    void EditorWorkspaceController::CompleteSceneSaveAs(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
+                                                        const std::filesystem::path &destination) {
         const std::filesystem::path projectRoot{m_viewModel.projectRoot};
-        if (const Result<void> defaultSceneUpdated = SetProjectDefaultScenePath(projectRoot, *destination, *m_mutations, *m_durableFiles);
+        if (const Result<void> defaultSceneUpdated = SetProjectDefaultScenePath(projectRoot, destination, *m_mutations, *m_durableFiles);
             defaultSceneUpdated.HasError()) {
             LOG_ERROR("editor.scene_document", "Scene was written to '%s', but the project's default scene could not be updated: %s",
-                      destination->string().c_str(), defaultSceneUpdated.ErrorValue().message.c_str());
+                      destination.string().c_str(), defaultSceneUpdated.ErrorValue().message.c_str());
             return;
         }
 
-        if (!CommitSceneSave(snapshot, saved.Value().fingerprint, *destination))
+        if (!CommitSceneSave(snapshot, fingerprint, destination))
             return;
         LOG_INFO("editor.scene_document", "Saved scene revision %llu as '%s'; active document identity was updated.",
-                 static_cast<unsigned long long>(snapshot.revision.value), destination->string().c_str());
+                 static_cast<unsigned long long>(snapshot.revision.value), destination.string().c_str());
     }
 }  // namespace Horo::Editor

@@ -15,8 +15,7 @@ namespace Horo::Editor {
 
         /** @brief Rejects nonfinite authored numeric values before detached replacement preparation. */
         bool ValidValue(const Gameplay::BehaviorFieldValue &value) {
-            return std::visit([](const auto &typed) {
-                using T = std::decay_t<decltype(typed)>;
+            return std::visit([]<class T>(const T &typed) {
                 if constexpr (std::is_same_v<T, std::monostate>)
                     return false;
                 else if constexpr (std::is_same_v<T, double>)
@@ -89,7 +88,7 @@ namespace Horo::Editor {
                 else
                     field.mixed = field.mixed || field.value != source->value;
             }
-            draft.baselines.push_back({*object, target.attachment, digest.Value()});
+            draft.baselines.emplace_back(*object, target.attachment, digest.Value());
             return Result<void>::Success();
         }
     }  // namespace
@@ -112,7 +111,7 @@ namespace Horo::Editor {
                                      {}};
         draft.baselines.reserve(targets.size());
         for (const auto &field : descriptor.fields)
-            draft.fields.push_back({field.name, field.defaultValue, false});
+            draft.fields.emplace_back(field.name, field.defaultValue, false);
         std::size_t bytes{};
         for (std::size_t i = 0; i < targets.size(); ++i) {
             for (std::size_t j = 0; j < i; ++j)
@@ -131,8 +130,8 @@ namespace Horo::Editor {
                                                                              const std::uint64_t selectionGeneration) {
         if (!selectionGeneration || selectionGeneration != draft.selectionGeneration)
             return Reject<std::vector<SceneObjectReplacement>>(SceneTransactionFailure::Stale);
-        const auto declared = std::ranges::find(draft.fields, field, &InspectorBehaviorValue::field);
-        if (!ValidValue(value) || declared == draft.fields.end() || value.index() != declared->value.index() || draft.baselines.empty() ||
+        if (const auto declared = std::ranges::find(draft.fields, field, &InspectorBehaviorValue::field);
+            !ValidValue(value) || declared == draft.fields.end() || value.index() != declared->value.index() || draft.baselines.empty() ||
             draft.baselines.size() > MaximumInspectorBehaviorSelection)
             return Reject<std::vector<SceneObjectReplacement>>();
         std::vector<SceneObjectReplacement> changes;

@@ -16,8 +16,7 @@ namespace Horo::Editor {
 
         /** @brief Converts only the explicitly supported scalar presentation profile, without coercion or opaque payload parsing. */
         Result<Extensions::EditorInspectorScalar> Scalar(const Gameplay::BehaviorFieldValue &value) {
-            return std::visit([](const auto &typed) -> Result<Extensions::EditorInspectorScalar> {
-                using T = std::decay_t<decltype(typed)>;
+            return std::visit([]<class T>(const T &typed) -> Result<Extensions::EditorInspectorScalar> {
                 if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, std::int64_t> || std::is_same_v<T, double> ||
                               std::is_same_v<T, std::string>)
                     return Result<Extensions::EditorInspectorScalar>::Success(typed);
@@ -41,14 +40,15 @@ namespace Horo::Editor {
         Result<Extensions::ExtensionCapabilityUseLease> AcquireEdit(const InspectorExtensionEdit &request,
                                                                     const Extensions::EditorInspectorContribution &contribution,
                                                                     const std::vector<InspectorProviderApproval> &approvals) {
-            const auto approval = std::ranges::find_if(approvals, [&](const auto &binding) {
+            if (const auto approval = std::ranges::find_if(approvals,
+                                                           [&](const auto &binding) {
                 return binding.provider == request.provider && binding.surface == request.surface && binding.behavior == request.behavior &&
                        binding.schemaVersion == request.schemaVersion && binding.documentGeneration == request.documentGeneration &&
                        binding.behaviorRegistryRevision == request.behaviorRegistryRevision &&
                        binding.declaration == contribution.definition &&
                        std::ranges::find(binding.fields, request.field) != binding.fields.end();
             });
-            if (approval == approvals.end())
+                approval == approvals.end())
                 return Reject<Extensions::ExtensionCapabilityUseLease>(SceneTransactionFailure::Unauthorized);
             const auto field = std::ranges::find(contribution.definition->fields, request.field, &Extensions::EditorInspectorField::field);
             if (field == contribution.definition->fields.end() ||
@@ -139,7 +139,7 @@ namespace Horo::Editor {
         auto changes = PrepareInspectorBehaviorEdit(captured.Value(), request.field, request.value, request.selectionRevision);
         if (changes.HasError())
             return Result<SceneTransactionResult>::Failure(changes.ErrorValue());
-        if (!contribution->context.IsUsable() || !SameSelection(request, m_selection.Current()))
+        if (!lease.Value().IsUsable() || !contribution->context.IsUsable() || !SameSelection(request, m_selection.Current()))
             return Reject<SceneTransactionResult>();
         const auto &current = snapshot.Value();
         return m_inspectorDocument.Execute({current.session, current.revision, current.state, true, {}}, changes.Value());

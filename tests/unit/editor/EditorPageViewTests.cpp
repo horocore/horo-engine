@@ -45,11 +45,14 @@ namespace Horo::Editor::Tests {
         };
 
         /** @brief Exercises the real view and validated projection inside an actual bounded GUI frame. */
-        void Draw(EditorPageView &view, float width) {
+        void Draw(EditorPageView &view, float width, bool settings = false) {
             ImGui::NewFrame();
             ImGui::SetNextWindowSize({width, 440});
             ImGui::Begin("Page fixture", nullptr, ImGuiWindowFlags_NoSavedSettings);
-            view.DrawPage();
+            if (settings)
+                view.DrawSettings();
+            else
+                view.DrawPage();
             ImGui::End();
             ImGui::Render();
         }
@@ -82,6 +85,7 @@ namespace Horo::Editor::Tests {
         EditorPageThemeCapture capture;
         REQUIRE(capture.Update(gui.context).HasValue());
         auto borrowed = std::shared_ptr<Extensions::EditorPageHost>(&fixture.host, [](auto *) {
+            // The stack-owned fixture outlives the view and retains destruction responsibility.
         });
         EditorPageView view{gui.context, borrowed, capture.Frame()};
         view.Select(fixture.provider, fixture.id);
@@ -105,6 +109,7 @@ namespace Horo::Editor::Tests {
         EditorPageThemeCapture capture;
         REQUIRE(capture.Update(gui.context).HasValue());
         auto borrowed = std::shared_ptr<Extensions::EditorPageHost>(&fixture.host, [](auto *) {
+            // The stack-owned fixture outlives the view and retains destruction responsibility.
         });
         PumpEditorPageModals(gui.context, borrowed, capture.Frame(), modals);
         REQUIRE(modals.TopModal());
@@ -115,4 +120,109 @@ namespace Horo::Editor::Tests {
         CHECK(modals.TopModal() == nullptr);
         CHECK(fixture.store.writes == 0);
     }
+
+    TEST_CASE("Settings page renders admitted boolean and text controls inside localized disabled groups", "[editor][EditorPage][View]") {
+        using namespace Extensions;
+        auto definition = Extensions::Tests::PageSupport::Definition(false, "fixture.page");
+        auto &field = definition.fields.front();
+        const EditorUiNodeBase base{.id = {"fixture.input"},
+                                    .parent = {"fixture.group"},
+                                    .label = {EditorUiTextKind::LocalizationKey, "fixture.count"},
+                                    .description = {EditorUiTextKind::LocalizationKey, "fixture.invalid"}};
+        definition.form.nodes.clear();
+        definition.form.nodes.emplace_back(EditorUiContainerNode{.base = {.id = {"fixture.group"},
+                                                                          .label = {EditorUiTextKind::LocalizationKey, "fixture.title"},
+                                                                          .focusPolicy = EditorUiFocusPolicy::Never,
+                                                                          .enabled = false}});
+        SECTION("boolean") {
+            field.setting.type = SettingValueType::Boolean;
+            field.setting.defaultValue = true;
+            definition.form.nodes.emplace_back(EditorUiBooleanNode{base, field.binding, true});
+        }
+        SECTION("text") {
+            field.setting.type = SettingValueType::String;
+            field.setting.defaultValue = std::string{"localized draft"};
+            definition.form.nodes.emplace_back(
+                EditorUiTextFieldNode{.base = base, .binding = field.binding, .value = "localized draft", .maximumBytes = 4096});
+        }
+        definition.form.nodes.emplace_back(EditorUiLabelNode{.base = {.id = {"fixture.label"}, .focusPolicy = EditorUiFocusPolicy::Never},
+                                                             .text = {EditorUiTextKind::LocalizationKey, "fixture.title"}});
+        definition.form.nodes.emplace_back(EditorUiTextNode{.base = {.id = {"fixture.text"}, .focusPolicy = EditorUiFocusPolicy::Never},
+                                                            .text = {EditorUiTextKind::TechnicalText, "safe technical identifier"}});
+        definition.form.nodes.emplace_back(
+            EditorUiActionNode{.base = {.id = {"fixture.action"}, .label = {EditorUiTextKind::LocalizationKey, "fixture.title"}},
+                               .action = {"fixture.action"}});
+        Extensions::Tests::PageSupport::Fixture fixture{false, std::move(definition)};
+        fixture.Begin();
+        Gui gui;
+        EditorPageThemeCapture capture;
+        REQUIRE(capture.Update(gui.context).HasValue());
+        auto borrowed = std::shared_ptr<EditorPageHost>(&fixture.host, [](auto *) {
+            // The stack-owned fixture outlives the view and retains destruction responsibility.
+        });
+        EditorPageView view{gui.context, borrowed, capture.Frame()};
+        view.Select(fixture.provider, fixture.id);
+        Draw(view, 210, true);
+        Draw(view, 210, true);
+        Draw(view, 640, true);
+        REQUIRE(view.Current());
+        CHECK_FALSE(view.Current()->dirty);
+        CHECK(fixture.store.writes == 0);
+        view.Cancel();
+        fixture.host.Update();
+        CHECK(fixture.Page().state == EditorPageState::Cancelled);
+    }
+
+    TEST_CASE("Settings page without an admitted theme retains its draft and can still cancel", "[editor][EditorPage][View]") {
+        Extensions::Tests::PageSupport::Fixture fixture;
+        fixture.Begin();
+        Gui gui;
+        auto borrowed = std::shared_ptr<Extensions::EditorPageHost>(&fixture.host, [](auto *) {
+            // The stack-owned fixture outlives the view and retains destruction responsibility.
+        });
+        EditorPageView view{gui.context, borrowed, {}};
+        view.Select(fixture.provider, fixture.id);
+        Draw(view, 210);
+        REQUIRE(view.Current());
+        CHECK(fixture.Value() == 20);
+        CHECK(fixture.store.writes == 0);
+        view.Cancel();
+        fixture.host.Update();
+        CHECK(fixture.Page().state == Extensions::EditorPageState::Cancelled);
+        EditorPageView detached{gui.context, {}, {}};
+        detached.Cancel();
+        CHECK(detached.Current() == nullptr);
+    }
+
+    TEST_CASE("Actual modal renders its owned page and cancels through the modal close boundary", "[editor][EditorPage][Modal]") {
+        Extensions::Tests::PageSupport::Fixture fixture{true};
+        fixture.Begin();
+        Gui gui;
+        Input::InputRouter input;
+        EditorModalHost modals{gui.editor, input};
+        EditorPageThemeCapture capture;
+        REQUIRE(capture.Update(gui.context).HasValue());
+        auto borrowed = std::shared_ptr<Extensions::EditorPageHost>(&fixture.host, [](auto *) {
+            // The stack-owned fixture outlives the view and retains destruction responsibility.
+        });
+        PumpEditorPageModals(gui.context, borrowed, capture.Frame(), modals);
+        auto *modal = dynamic_cast<EditorPageModal *>(modals.TopModal());
+        REQUIRE(modal);
+        if (!modal)
+            return;
+        CHECK(modal->Owns(fixture.provider, fixture.id));
+        CHECK_FALSE(modal->Owns(fixture.provider, "different.page"));
+        CHECK(modal->Presentation().dimWorkspace);
+        CHECK_FALSE(modal->ClosePolicy().allowOutsideClick);
+        ImGui::NewFrame();
+        modals.Draw();
+        ImGui::Render();
+        CHECK(fixture.store.writes == 0);
+        REQUIRE(modals.RequestClose(modal->Id(), ModalCloseReason::Cancelled).HasValue());
+        modals.OnUpdate(0.0F);
+        fixture.host.Update();
+        CHECK(modals.TopModal() == nullptr);
+        CHECK(fixture.Page().state == Extensions::EditorPageState::Cancelled);
+    }
+
 }  // namespace Horo::Editor::Tests

@@ -17,13 +17,13 @@ namespace Horo::Extensions {
 
         /** @brief Restricts persistent authority to an explicitly selected canonical settings domain. */
         bool PersistentScope(SettingScope scope) noexcept {
-            return scope == SettingScope::User || scope == SettingScope::Project || scope == SettingScope::Workspace;
+            using enum SettingScope;
+            return scope == User || scope == Project || scope == Workspace;
         }
 
         /** @brief Matches each editable primitive to exactly one canonical field without lossy type adaptation. */
         bool MatchesNode(const EditorUiNode &node, const EditorPageField &field) {
-            return std::visit([&](const auto &typed) {
-                using T = std::decay_t<decltype(typed)>;
+            return std::visit([&]<typename T>(const T &typed) {
                 if constexpr (!requires { typed.binding; })
                     return false;
                 else if constexpr (std::is_same_v<T, EditorUiBooleanNode>)
@@ -46,8 +46,7 @@ namespace Horo::Extensions {
                 const auto &base = EditorUiNodeBaseOf(node);
                 if (base.size != EditorUiComponentSize::Medium || base.tone != EditorUiSemanticTone::Neutral)
                     return false;
-                return std::visit([&](const auto &typed) {
-                    using T = std::decay_t<decltype(typed)>;
+                return std::visit([&]<typename T>(const T &typed) {
                     if constexpr (requires { typed.binding; } || requires { typed.action; })
                         if (base.focusPolicy != EditorUiFocusPolicy::Automatic)
                             return false;
@@ -92,8 +91,8 @@ namespace Horo::Extensions {
             });
         }
 
-        /** @brief Requires deterministic unique package messages and an en-US definition for every localized form string. */
-        bool MessagesMatch(const EditorPageDefinition &definition, const EditorSurfaceDescriptor &surface) {
+        /** @brief Validates bounded UTF-8 messages and rejects duplicate locale/key identities before resolving references. */
+        bool MessageDefinitionsValid(const EditorPageDefinition &definition) {
             if (definition.messages.size() > 128)
                 return false;
             for (std::size_t i = 0; i < definition.messages.size(); ++i) {
@@ -105,39 +104,90 @@ namespace Horo::Extensions {
                     if (definition.messages[j].locale == m.locale && definition.messages[j].key == m.key)
                         return false;
             }
-            const auto known = [&](std::string_view key) {
-                return key.empty() || std::ranges::any_of(definition.messages, [&](const auto &m) {
-                    return m.locale == "en-US" && m.key == key;
+            return true;
+        }
+
+        /** @brief Resolves localized references against the required English fallback without inventing a message. */
+        bool KnownMessage(const EditorPageDefinition &definition, std::string_view key) {
+            return key.empty() || std::ranges::any_of(definition.messages, [&](const auto &message) {
+                return message.locale == "en-US" && message.key == key;
+            });
+        }
+
+        /** @brief Technical text is self-contained; localized text requires an admitted English reference. */
+        bool KnownText(const EditorPageDefinition &definition, const EditorUiText &text) {
+            return text.kind == EditorUiTextKind::TechnicalText || KnownMessage(definition, text.value);
+        }
+
+        /** @brief Checks the optional text-bearing fields of one typed form payload. */
+        template <typename T> bool PayloadMessagesMatch(const EditorPageDefinition &definition, const T &typed) {
+            if constexpr (requires { typed.text; })
+                if (!KnownText(definition, typed.text))
+                    return false;
+            if constexpr (requires { typed.message; })
+                if (!KnownText(definition, typed.message))
+                    return false;
+            if constexpr (requires { typed.placeholder; })
+                if (!KnownText(definition, typed.placeholder))
+                    return false;
+            if constexpr (requires { typed.options; })
+                return std::ranges::all_of(typed.options, [&](const auto &choice) {
+                    return KnownText(definition, choice.label);
                 });
-            };
-            if (!known(surface.labelLocalizationKey) || !known(surface.tooltipLocalizationKey) || !known(definition.form.title.value))
+            return true;
+        }
+
+        /** @brief Validates common node text before its typed payload references. */
+        bool NodeMessagesMatch(const EditorPageDefinition &definition, const EditorUiNode &node) {
+            if (const auto &base = EditorUiNodeBaseOf(node); !KnownText(definition, base.label) ||
+                                                             !KnownText(definition, base.description) ||
+                                                             !KnownText(definition, base.accessibleLabel))
                 return false;
-            const auto text = [&](const EditorUiText &t) {
-                return t.kind == EditorUiTextKind::TechnicalText || known(t.value);
-            };
-            if (!text(definition.form.description))
+            return std::visit([&](const auto &typed) {
+                return PayloadMessagesMatch(definition, typed);
+            }, node.payload);
+        }
+
+        /** @brief Requires deterministic unique package messages and an en-US definition for every localized form string. */
+        bool MessagesMatch(const EditorPageDefinition &definition, const EditorSurfaceDescriptor &surface) {
+            if (!MessageDefinitionsValid(definition) || !KnownMessage(definition, surface.labelLocalizationKey) ||
+                !KnownMessage(definition, surface.tooltipLocalizationKey) || !KnownMessage(definition, definition.form.title.value) ||
+                !KnownText(definition, definition.form.description))
                 return false;
             return std::ranges::all_of(definition.form.nodes, [&](const auto &node) {
-                const auto &b = EditorUiNodeBaseOf(node);
-                if (!text(b.label) || !text(b.description) || !text(b.accessibleLabel))
-                    return false;
-                return std::visit([&](const auto &typed) {
-                    if constexpr (requires { typed.text; })
-                        if (!text(typed.text))
-                            return false;
-                    if constexpr (requires { typed.message; })
-                        if (!text(typed.message))
-                            return false;
-                    if constexpr (requires { typed.placeholder; })
-                        if (!text(typed.placeholder))
-                            return false;
-                    if constexpr (requires { typed.options; })
-                        for (const auto &choice : typed.options)
-                            if (!text(choice.label))
-                                return false;
-                    return true;
-                }, node.payload);
+                return NodeMessagesMatch(definition, node);
             });
+        }
+
+        /** @brief Checks each bounded choice's encoding and uniqueness without altering the candidate. */
+        bool ChoicesValid(const EditorPageField &field) {
+            for (std::size_t i = 0; i < field.choices.size(); ++i) {
+                const auto &choice = field.choices[i];
+                if (choice.size() > field.maximumStringBytes || choice.find('\0') != std::string::npos ||
+                    !IsValidUtf8ScalarSequence(choice))
+                    return false;
+                for (std::size_t j = 0; j < i; ++j)
+                    if (field.choices[j] == choice)
+                        return false;
+            }
+            return true;
+        }
+
+        /** @brief Preserves signed integer constraints and the original rejection of choices on numeric values. */
+        bool IntegerValueValid(const EditorPageField &field, const SettingValue &value) {
+            if (const auto *number = std::get_if<std::int64_t>(&value))
+                return (!field.minimum.has_value() || *number >= *field.minimum) &&
+                       (!field.maximum.has_value() || *number <= *field.maximum) && field.choices.empty();
+            return !field.minimum.has_value() && !field.maximum.has_value();
+        }
+
+        /** @brief Validates string bounds and choice membership with the same exact UTF-8 representation. */
+        bool StringValueValid(const EditorPageField &field, const SettingValue &value) {
+            if (const auto *text = std::get_if<std::string>(&value))
+                return text->size() <= field.maximumStringBytes && text->find('\0') == std::string::npos &&
+                       IsValidUtf8ScalarSequence(*text) &&
+                       (field.choices.empty() || std::ranges::find(field.choices, *text) != field.choices.end()) && ChoicesValid(field);
+            return field.choices.empty();
         }
     }  // namespace
 
@@ -146,34 +196,17 @@ namespace Horo::Extensions {
         if (!ConfigurationSchema::MatchesType(field.setting.type, value) || field.maximumStringBytes > 4096 || field.choices.size() > 64 ||
             (field.minimum.has_value() && field.maximum.has_value() && *field.minimum > *field.maximum))
             return Invalid();
-        if (const auto *number = std::get_if<std::int64_t>(&value)) {
-            if ((field.minimum.has_value() && *number < *field.minimum) || (field.maximum.has_value() && *number > *field.maximum) ||
-                !field.choices.empty())
-                return Invalid();
-        } else if (field.minimum.has_value() || field.maximum.has_value())
-            return Invalid();
-        if (const auto *text = std::get_if<std::string>(&value)) {
-            if (text->size() > field.maximumStringBytes || text->find('\0') != std::string::npos || !IsValidUtf8ScalarSequence(*text) ||
-                (!field.choices.empty() && std::ranges::find(field.choices, *text) == field.choices.end()))
-                return Invalid();
-            for (std::size_t i = 0; i < field.choices.size(); ++i) {
-                if (field.choices[i].size() > field.maximumStringBytes || field.choices[i].find('\0') != std::string::npos ||
-                    !IsValidUtf8ScalarSequence(field.choices[i]))
-                    return Invalid();
-                for (std::size_t j = 0; j < i; ++j)
-                    if (field.choices[j] == field.choices[i])
-                        return Invalid();
-            }
-        } else if (!field.choices.empty())
+        if (!IntegerValueValid(field, value) || !StringValueValid(field, value))
             return Invalid();
         return Result<void>::Success();
     }
 
     /** @copydoc ValidateEditorPageDefinition */
     Result<void> ValidateEditorPageDefinition(const EditorSurfaceDescriptor &surface, const EditorPageDefinition &definition) {
-        const bool settings = surface.kind == EditorSurfaceKind::SettingsPage;
-        const bool modal = surface.kind == EditorSurfaceKind::Modal || surface.kind == EditorSurfaceKind::ModalPage;
-        if ((surface.kind == EditorSurfaceKind::ModalPage) != !surface.placement.target.empty() || (!settings && !modal) ||
+        using enum EditorSurfaceKind;
+        const bool settings = surface.kind == SettingsPage;
+        const bool modal = surface.kind == Modal || surface.kind == ModalPage;
+        if ((surface.kind == ModalPage) != !surface.placement.target.empty() || (!settings && !modal) ||
             surface.persistence != EditorSurfacePersistence::None || surface.openByDefault ||
             definition.schemaVersion != EditorPageSchemaVersion || definition.fields.size() > MaximumEditorPageFields)
             return Invalid();
@@ -199,8 +232,8 @@ namespace Horo::Extensions {
         if (text.empty() || text.size() > 20)
             return Result<std::int64_t>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
         std::int64_t value{};
-        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
+        if (const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
             return Result<std::int64_t>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
         return Result<std::int64_t>::Success(value);
     }

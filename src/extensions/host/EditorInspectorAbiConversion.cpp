@@ -33,26 +33,26 @@ namespace Horo::Extensions {
                     field.minimumInteger = input.minimumInteger;
                 if ((input.flags & HORO_EDITOR_PAGE_INTEGER_MAXIMUM) != 0)
                     field.maximumInteger = input.maximumInteger;
-                form.nodes.push_back({EditorUiNumberNode{.base = base,
-                                                         .binding = {field.field},
-                                                         .numberKind = EditorUiNumberKind::Integer,
-                                                         .value = std::int64_t{0}}});
+                form.nodes.emplace_back(EditorUiNumberNode{.base = base,
+                                                           .binding = {field.field},
+                                                           .numberKind = EditorUiNumberKind::Integer,
+                                                           .value = std::int64_t{0}});
             } else if (field.kind == EditorInspectorFieldKind::Number) {
                 if ((input.flags & HORO_EDITOR_PAGE_INTEGER_MINIMUM) != 0)
                     field.minimumNumber = input.minimumNumber;
                 if ((input.flags & HORO_EDITOR_PAGE_INTEGER_MAXIMUM) != 0)
                     field.maximumNumber = input.maximumNumber;
                 const auto placeholder = field.minimumNumber.value_or(field.maximumNumber.value_or(0));
-                form.nodes.push_back({EditorUiNumberNode{.base = base,
-                                                         .binding = {field.field},
-                                                         .value = placeholder,
-                                                         .minimum = field.minimumNumber,
-                                                         .maximum = field.maximumNumber}});
+                form.nodes.emplace_back(EditorUiNumberNode{.base = base,
+                                                           .binding = {field.field},
+                                                           .value = placeholder,
+                                                           .minimum = field.minimumNumber,
+                                                           .maximum = field.maximumNumber});
             } else if (field.kind == EditorInspectorFieldKind::Boolean)
-                form.nodes.push_back({EditorUiBooleanNode{base, {field.field}, false}});
+                form.nodes.emplace_back(EditorUiBooleanNode{base, {field.field}, false});
             else
-                form.nodes.push_back(
-                    {EditorUiTextFieldNode{.base = base, .binding = {field.field}, .maximumBytes = field.maximumStringBytes}});
+                form.nodes.emplace_back(
+                    EditorUiTextFieldNode{.base = base, .binding = {field.field}, .maximumBytes = field.maximumStringBytes});
             return Result<EditorInspectorField>::Success(std::move(field));
         }
 

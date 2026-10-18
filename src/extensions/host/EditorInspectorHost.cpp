@@ -17,8 +17,8 @@ namespace Horo::Extensions {
         Result<void> Permission(const ExtensionAdmissionPolicy &policy, const EditorSurfaceContext &context) {
             const bool inspector = context.Surface().kind == EditorSurfaceKind::Inspector;
             const auto &capability = inspector ? EditorInspectorCapability : EditorPropertyDrawerCapability;
-            const ExtensionPermissionId permission{inspector ? "editor.inspector" : "editor.property-drawer"};
-            if (!policy.revision || !context.IsUsable() ||
+            if (const ExtensionPermissionId permission{inspector ? "editor.inspector" : "editor.property-drawer"};
+                !policy.revision || !context.IsUsable() ||
                 std::ranges::find(policy.knownPermissions, permission) == policy.knownPermissions.end() ||
                 std::ranges::find(policy.approvedPermissions, permission) == policy.approvedPermissions.end() ||
                 std::ranges::find(policy.availableCapabilities, capability) == policy.availableCapabilities.end() ||
@@ -167,7 +167,9 @@ namespace Horo::Extensions {
                 if (session)
                     session->Revoke();
             }
-        } rollback{session};
+        };
+
+        PublicationGuard rollback{session};
 
         session->publication = retirement->Acquire(session->context.Provider().moduleId, ExtensionLeaseKind::UiSurface,
                                                    session->context.Surface().id, std::move(copied));
@@ -202,7 +204,7 @@ namespace Horo::Extensions {
             const auto live = weak.lock();
             if (live && !live->revoked && live->definition->behaviorType == behaviorType &&
                 live->definition->behaviorSchemaVersion == schemaVersion && Permission(state_->policy, live->context).HasValue())
-                result.push_back({live->context, live->definition});
+                result.emplace_back(live->context, live->definition);
         }
         std::ranges::sort(result, [](const auto &left, const auto &right) {
             return left.context.Surface().id < right.context.Surface().id;

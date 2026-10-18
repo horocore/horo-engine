@@ -5,6 +5,25 @@
 #include <type_traits>
 
 namespace {
+    using namespace Horo::Extensions;
+
+    // Read-only host borrows cannot register, edit, schedule, focus, retire or publish canonical page state.
+    template <auto Method, typename... Args>
+    constexpr bool OwnerMutation = std::is_invocable_v<decltype(Method), EditorPageHost &, Args...> &&
+                                   !std::is_invocable_v<decltype(Method), const EditorPageHost &, Args...>;
+    static_assert(OwnerMutation<&EditorPageHost::Register, EditorSurfaceContextRegistration, EditorPageDefinition,
+                                std::shared_ptr<IEditorPageOperations>, std::shared_ptr<ExtensionRetirement>>);
+    static_assert(OwnerMutation<&EditorPageHost::Begin, const EditorSurfaceProviderIdentity &, std::string_view>);
+    static_assert(
+        OwnerMutation<&EditorPageHost::SetValue, const EditorSurfaceProviderIdentity &, std::string_view, std::uint64_t, EditorPageValue>);
+    static_assert(OwnerMutation<&EditorPageHost::Reset, const EditorSurfaceProviderIdentity &, std::string_view, std::uint64_t>);
+    static_assert(
+        OwnerMutation<&EditorPageHost::Apply, const EditorSurfaceProviderIdentity &, std::string_view, std::uint64_t, EditorUiActionId>);
+    static_assert(OwnerMutation<&EditorPageHost::Cancel, const EditorSurfaceProviderIdentity &, std::string_view>);
+    static_assert(
+        OwnerMutation<&EditorPageHost::Focus, const EditorSurfaceProviderIdentity &, std::string_view, std::uint64_t, EditorUiId>);
+    static_assert(OwnerMutation<&EditorPageHost::BeginShutdown>);
+
     static_assert(HORO_EXTENSION_ABI_MINOR_VERSION == 6);
     static_assert(offsetof(HoroExtensionHostApi, registerEditorPage) ==
                   offsetof(HoroExtensionHostApi, registerEditorActivity) + sizeof(HoroRegisterEditorActivityFunc));

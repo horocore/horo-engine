@@ -8,6 +8,7 @@
 #include "editor/screens/workspace/panels/inspector/InspectorContributionView.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <imgui.h>
 
 namespace Horo::Editor::Tests {
@@ -53,7 +54,7 @@ namespace Horo::Editor::Tests {
         };
 
         /** @brief Renders the real shared-control projection using current owner data and returns measured interaction bounds. */
-        Geometry Frame(InspectorContributionView &view, InspectorControllerSupport::Fixture &owner, Gui &gui,
+        Geometry Frame(InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner, const Gui &gui,
                        EditorWorkspaceViewCommandData &command, float width = 640) {
             ImGui::NewFrame();
             ImGui::SetNextWindowPos({0, 0});
@@ -75,7 +76,7 @@ namespace Horo::Editor::Tests {
         }
 
         /** @brief Sends a complete actual button gesture through the same GUI frame owner, without manufacturing an approval. */
-        void Click(ImVec2 point, InspectorContributionView &view, InspectorControllerSupport::Fixture &owner, Gui &gui,
+        void Click(ImVec2 point, InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner, const Gui &gui,
                    EditorWorkspaceViewCommandData &command) {
             auto &io = ImGui::GetIO();
             io.AddMousePosEvent(point.x, point.y);
@@ -117,17 +118,20 @@ namespace Horo::Editor::Tests {
         owner.Approve();
         REQUIRE(owner.controller->ViewModel().inspectorApprovals.size() == 1);
         Gui gui;
+        auto &io = ImGui::GetIO();
+        io.ConfigMacOSXBehaviors = GENERATE(false, true);
+        CAPTURE(io.ConfigMacOSXBehaviors);
+        const auto selectAllModifier = io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
         InspectorContributionView view{owner.provider.host, *gui.capture.Frame()};
         EditorWorkspaceViewCommandData command;
         Frame(view, owner, gui, command);
         auto geometry = Frame(view, owner, gui, command);
         Click(geometry.center, view, owner, gui, command);
-        auto &io = ImGui::GetIO();
-        io.AddKeyEvent(ImGuiMod_Ctrl, true);
+        io.AddKeyEvent(selectAllModifier, true);
         io.AddKeyEvent(ImGuiKey_A, true);
         Frame(view, owner, gui, command);
         io.AddKeyEvent(ImGuiKey_A, false);
-        io.AddKeyEvent(ImGuiMod_Ctrl, false);
+        io.AddKeyEvent(selectAllModifier, false);
         io.AddInputCharactersUTF8("-9223372036854775808");
         geometry = Frame(view, owner, gui, command);
         CHECK(command.command == EditorWorkspaceViewCommand::None);

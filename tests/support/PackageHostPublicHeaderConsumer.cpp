@@ -5,6 +5,8 @@
 
 #include <type_traits>
 
+static_assert(std::is_same_v<decltype(Horo::Packages::PackageLifecycleConfiguration::editorHosts), Horo::Extensions::ExtensionEditorHosts>);
+
 static_assert(!std::is_default_constructible_v<Horo::Packages::VerifiedPackageModule>);
 static_assert(!std::is_copy_constructible_v<Horo::Packages::PackageModuleRetirementQueue>);
 

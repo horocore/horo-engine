@@ -32,7 +32,8 @@ namespace Horo::Extensions::EditorPageDetail {
                     work->result.emplace(Result<std::vector<EditorPageFinding>>::Failure(JobCancelled().ErrorValue()));
                 else
                     work->result.emplace(provider.Invoke(work->operation, work->draft, work->action, cancel));
-            } catch (...) {
+                // A foreign provider may throw any type; publish the failure handoff so the owner can retire the job.
+            } catch (...) {  // NOSONAR(cpp:S2738): Foreign provider boundary.
                 work->result.emplace(Result<std::vector<EditorPageFinding>>::Failure(MakeError(ExtensionErrors::ContributionRejected)));
             }
             work->ready.store(true, std::memory_order_release);
@@ -79,7 +80,8 @@ namespace Horo::Extensions::EditorPageDetail {
                         session.failure = std::move(written).ErrorValue();
                         return;
                     }
-                } catch (...) {
+                    // A foreign store may already have replaced the document; preserve uncertain recovery for every exception type.
+                } catch (...) {  // NOSONAR(cpp:S2738): Foreign durable-store boundary.
                     session.state = EditorPageState::RecoveryRequired;
                     session.failure = MakeError(ExtensionErrors::ContributionRejected);
                     return;
@@ -179,28 +181,29 @@ namespace Horo::Extensions {
     void EditorPageHost::Update() {
         if (!state_->OnThread() || state_->shutdown)
             return;
-        for (const auto &weak : state_->sessions)
-            if (const auto session = weak.lock(); session && !session->revoked) {
-                if (!session->context.IsUsable() ||
-                    !state_->registry.IsAvailable(session->context.Provider(), session->context.Surface().id)) {
-                    state_->projectionDirty = true;
-                    session->Revoke();
-                    continue;
-                }
-                if (session->context.Surface().kind == EditorSurfaceKind::ModalPage) {
-                    const auto parent =
-                        EditorPageDetail::Find(*state_, session->context.Provider(), session->context.Surface().placement.target);
-                    if (!parent || (parent->state != EditorPageState::Editing && parent->state != EditorPageState::Failed))
-                        static_cast<void>(Cancel(session->context.Provider(), session->context.Surface().id));
-                }
-                EditorPageDetail::Complete(*state_, *session);
-                if (!session->job && session->cancelledDraft) {
-                    auto scheduled = EditorPageDetail::Schedule(*state_, *session, EditorPageOperation::Cancel, {});
-                    session->cancelledDraft.reset();
-                    if (scheduled.HasError())
-                        session->failure = scheduled.ErrorValue();
-                }
+        for (const auto &weak : state_->sessions) {
+            const auto session = weak.lock();
+            if (!session || session->revoked)
+                continue;
+            if (!session->context.IsUsable() || !state_->registry.IsAvailable(session->context.Provider(), session->context.Surface().id)) {
+                state_->projectionDirty = true;
+                session->Revoke();
+                continue;
             }
+            if (session->context.Surface().kind == EditorSurfaceKind::ModalPage) {
+                const auto parent =
+                    EditorPageDetail::Find(*state_, session->context.Provider(), session->context.Surface().placement.target);
+                if (!parent || (parent->state != EditorPageState::Editing && parent->state != EditorPageState::Failed))
+                    static_cast<void>(Cancel(session->context.Provider(), session->context.Surface().id));
+            }
+            EditorPageDetail::Complete(*state_, *session);
+            if (!session->job && session->cancelledDraft) {
+                auto scheduled = EditorPageDetail::Schedule(*state_, *session, EditorPageOperation::Cancel, {});
+                session->cancelledDraft.reset();
+                if (scheduled.HasError())
+                    session->failure = scheduled.ErrorValue();
+            }
+        }
         EditorPageDetail::Prepare(*state_);
     }
 }  // namespace Horo::Extensions

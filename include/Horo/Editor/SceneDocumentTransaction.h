@@ -13,6 +13,9 @@
 namespace Horo::Editor {
     class SceneDocument;
     class EditorHistory;
+    class NavigationSettingsWorkflow;
+    class NavigationSettingsReview;
+    class NavigationProjectSettingsSession;
 
     /** @brief Closed zero-mutation transaction rejection vocabulary. */
     enum class SceneTransactionFailure : std::uint8_t {
@@ -132,6 +135,11 @@ namespace Horo::Editor {
          * @return Owned authored/ownership values or lifecycle/thread/capacity error.
          */
         [[nodiscard]] Result<SceneTransactionSnapshot> Snapshot(SceneTransactionLimits limits = {}) const;
+        /** @brief Queries dirty state without copying the canonical Scene root.
+         * @return Owner-thread dirty state or the same closed/reload/thread rejection as Snapshot.
+         */
+        [[nodiscard]] Result<bool> IsDirty() const;
+
         /** @brief Atomically apply one complete replacement batch through canonical Scene/history ownership.
          * @param context Fresh exact owner fence, permission and cancellation.
          * @param changes Complete semantic replacements; no subtree or graph scans authorize deletion.
@@ -155,6 +163,28 @@ namespace Horo::Editor {
         void Shutdown() noexcept;
 
     private:
+        friend class NavigationSettingsWorkflow;
+        friend class NavigationSettingsReview;
+        friend class NavigationProjectSettingsSession;
+
+        struct Lifetime final {
+            SceneDocumentTransactions *owner{};
+        };
+
+        std::shared_ptr<Lifetime> lifetime_;
+        struct Prepared;
+        /** @brief Stages canonical root/history without publication for an owner-thread multi-document transaction. */
+        [[nodiscard]] Result<std::shared_ptr<Prepared>> Prepare(const SceneTransactionContext &context,
+                                                                std::span<const SceneObjectReplacement> changes,
+                                                                SceneTransactionLimits limits = {}, bool coordinated = false) const;
+        /** @brief Stages canonical replay for an exclusively admitted multi-document coordinator. */
+        [[nodiscard]] Result<std::shared_ptr<Prepared>> PrepareReplay(const SceneTransactionContext &context, bool redo);
+        /** @brief Computes the post-publication fence from prepared owner state without copying a root. */
+        [[nodiscard]] SceneTransactionContext PreparedContext(const Prepared &prepared) const noexcept;
+        /** @brief Rechecks the exact prepared owner fence without mutation or callbacks. */
+        [[nodiscard]] Result<void> ValidatePrepared(const Prepared &prepared) const;
+        /** @brief Performs the prevalidated no-fail root/history swap; coordinator validates every owner first. */
+        [[nodiscard]] SceneTransactionResult PublishPrepared(Prepared &prepared) noexcept;
         /** @brief Reserve root/history/input preparation before copying any semantic replacements.
          * @param changes Submitted replacements. @param limits Finite host ceilings.
          * @return Remaining semantic history preparation budget or zero-mutation capacity failure.

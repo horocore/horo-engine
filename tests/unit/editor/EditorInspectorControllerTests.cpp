@@ -9,7 +9,7 @@ namespace Horo::Editor::Tests {
         Fixture fixture;
         const auto before = fixture.controller->ViewModel().documentRevision;
         std::vector<SceneDocumentChangedEvent> events;
-        auto subscription = fixture.controller->DataBus().Subscribe<SceneDocumentChangedEvent>([&](const auto &event) {
+        auto subscription = fixture.controller->DataBus().Subscribe<SceneDocumentChangedEvent>([&events](const auto &event) {
             events.push_back(event);
         });
         EditorWorkspaceViewCommandData command;

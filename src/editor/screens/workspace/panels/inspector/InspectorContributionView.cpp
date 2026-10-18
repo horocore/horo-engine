@@ -21,7 +21,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc InspectorContributionView::Prepare */
-    bool InspectorContributionView::Prepare(Entry &entry) {
+    bool InspectorContributionView::Prepare(Entry &entry) const {
         if (!entry.contribution.context.IsUsable() || !theme_.revision)
             return false;
         const float width = ImGui::GetContentRegionAvail().x;
@@ -55,7 +55,7 @@ namespace Horo::Editor {
 
     /** @copydoc InspectorContributionView::Queue */
     void InspectorContributionView::Queue(Entry &entry, const EditorInspectorField &field, EditorInspectorScalar value,
-                                          const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command) {
+                                          const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command) const {
         if (command.command != EditorWorkspaceViewCommand::None || !entry.approved || !entry.enabled ||
             !entry.contribution.context.IsUsable() || !CanEditEditorInspectorField(*entry.contribution.definition, field))
             return;
@@ -87,8 +87,7 @@ namespace Horo::Editor {
                                                                               const EditorGuiContext &context) {
         const auto &node = entry.form.nodes[index];
         if (const auto *boolean = std::get_if<EditorUiBooleanNode>(&node.payload)) {
-            auto value = boolean->value;
-            if (Ui::ToggleControl("value", &value, context.theme.fonts))
+            if (auto value = boolean->value; Ui::ToggleControl("value", &value, context.theme.fonts))
                 return EditorInspectorScalar{value};
             return {};
         }
@@ -107,8 +106,8 @@ namespace Horo::Editor {
         }
         double number{};
         const auto &text = entry.buffers[index];
-        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), number);
-        if (parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+        if (const auto parsed = std::from_chars(text.data(), text.data() + text.size(), number);
+            parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
             return EditorInspectorScalar{number};
         entry.failure = MakeError(ExtensionErrors::EditorUiFormInvalid);
         return {};
@@ -123,8 +122,8 @@ namespace Horo::Editor {
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + entry.render->nodes[index].width);
         if (!base.label.value.empty())
             Ui::FieldLabel(Text(entry, base.label, context), context.theme.fonts);
-        const auto field = std::ranges::find(entry.contribution.definition->fields, base.id, &EditorInspectorField::node);
-        if (field != entry.contribution.definition->fields.end()) {
+        if (const auto field = std::ranges::find(entry.contribution.definition->fields, base.id, &EditorInspectorField::node);
+            field != entry.contribution.definition->fields.end()) {
             if (entry.mixed[index])
                 ImGui::TextWrapped("%s", context.localization.Get("editor", "workspace.inspector.extension_mixed").c_str());
             ImGui::BeginDisabled(!entry.enabled || !CanEditEditorInspectorField(*entry.contribution.definition, *field));
@@ -145,8 +144,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc InspectorContributionView::DrawApproval */
-    void InspectorContributionView::DrawApproval(Entry &entry, const EditorWorkspaceViewModel &model,
-                                                 EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+    void InspectorContributionView::DrawApproval(const Entry &entry, const EditorWorkspaceViewModel &model,
+                                                 EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const {
         if (!entry.contribution.context.IsUsable())
             return;
         ImGui::PushID(entry.contribution.context.Surface().id.c_str());
@@ -189,7 +188,8 @@ namespace Horo::Editor {
         const auto *epoch = reinterpret_cast<const char *>(&selectionRevision_);
         ImGui::PushID(epoch, epoch + sizeof(selectionRevision_));
         const auto origin = ImGui::GetCursorScreenPos();
-        float extra{}, bottom{};
+        float extra{};
+        float bottom{};
         for (std::size_t ordinal = 0; ordinal < entry.form.nodes.size(); ++ordinal) {
             const auto i = entry.order[ordinal];
             const auto &geometry = entry.render->nodes[i];

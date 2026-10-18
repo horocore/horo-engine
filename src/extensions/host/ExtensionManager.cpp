@@ -308,7 +308,7 @@ namespace Horo::Extensions {
         /** @brief Validates the returned module table and exact activity/drawer declarations before activation publication. */
         [[nodiscard]] Result<void> ValidateLoadedModule(HoroExtensionModuleApi &moduleApi, const ExtensionManifest &manifest,
                                                         const ExtensionModuleManifest &manifestModule,
-                                                        AssetImporterRegistrationSession &registration) {
+                                                        const AssetImporterRegistrationSession &registration) {
             if (!NormalizeModuleApi(moduleApi) || !MatchesDeclaredModule(moduleApi, manifestModule.id, manifestModule.version))
                 return Result<void>::Failure(
                     MakeError(ExtensionErrors::InvalidManifest, "Loaded module table or identity/version is invalid."));
@@ -329,7 +329,7 @@ namespace Horo::Extensions {
         }
 
         /** @brief Grants the page tail only from validated inert negotiation; old1.4 prefix clients cannot access page transport. */
-        Result<void> NegotiateActivation(Platform::DynamicLibrary &library, HoroExtensionHostApi &hostApi,
+        Result<void> NegotiateActivation(const Platform::DynamicLibrary &library, HoroExtensionHostApi &hostApi,
                                          AssetImporterRegistrationSession &registration) {
             HoroExtensionRequirements negotiated{};
             if (const auto query =
@@ -461,7 +461,7 @@ namespace Horo::Extensions {
             const ExtensionManager::NativeLibraryLoader &loader;
             const std::shared_ptr<const Security::NativeArtifactGate> &artifactGate;
             std::size_t platformDeclarations;
-            ExtensionEditorHosts editorHosts;
+            const ExtensionEditorHosts &editorHosts;
         };
 
         /** @brief Stages the exact declared native contributions without publishing or relinquishing rollback ownership. */

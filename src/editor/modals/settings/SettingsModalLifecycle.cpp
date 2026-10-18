@@ -9,16 +9,17 @@
 #include <memory>
 
 namespace Horo::Editor {
+    /** @copydoc SettingsModal::SettingsModal */
     SettingsModal::SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, const std::uintptr_t logo,
                                  Extensions::ExtensionInventory *extensionInventory,
                                  Extensions::ExtensionMarketplaceService *extensionMarketplace,
-                                 std::shared_ptr<Extensions::EditorPageHost> pageHost,
-                                 std::shared_ptr<const Extensions::EditorThemeFrame> themeFrame)
+                                 const NavigationProjectSettingsSession *navigationSettings, SettingsModalPagePresentation pages)
         : m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
-          m_extensionMarketplace(extensionMarketplace) {
-        m_pagesUnsupported = pageHost && !themeFrame;
-        if (pageHost && themeFrame)
-            m_extensionPages = std::make_shared<EditorPageView>(context, std::move(pageHost), std::move(themeFrame));
+          m_extensionMarketplace(extensionMarketplace),
+          m_navigationSettings(navigationSettings ? navigationSettings->Borrow() : NavigationProjectSettingsSessionBorrow{}) {
+        m_pagesUnsupported = pages.host && !pages.theme;
+        if (pages.host && pages.theme)
+            m_extensionPages = std::make_shared<EditorPageView>(context, std::move(pages.host), std::move(pages.theme));
     }
 
     /** @copydoc SettingsModal::SelectExtensionPage */
@@ -50,6 +51,7 @@ namespace Horo::Editor {
         m_draft.extensionPages = m_extensionPages;
         if (m_openExtensionPage)
             m_draft.activeTab = static_cast<int>(SettingsModalInternal::SettingsTab::ExtensionPages);
+        m_draft.navigationSettings = m_navigationSettings.Resolve() ? m_navigationSettings : NavigationProjectSettingsSessionBorrow{};
         m_draft.extensionInventory = m_extensionInventory;
         m_draft.extensionMarketplace = m_extensionMarketplace;
         const auto rev = m_settings.Snapshot().revision;
@@ -61,7 +63,7 @@ namespace Horo::Editor {
 
     CloseDecision SettingsModal::CanClose(const ModalCloseReason reason) {
         m_draft.dirty = CollectDraftSettings(m_draft) != m_draft.committed;
-        if (reason == ModalCloseReason::Cancelled || !m_draft.dirty)
+        if (reason == ModalCloseReason::Cancelled || (!m_draft.dirty && !m_draft.navigationProjectDraftDirty))
             return CloseDecision::Allow;
         return CloseDecision::Deny;
     }
@@ -84,6 +86,9 @@ namespace Horo::Editor {
                 EditorSettingsChangedEvent{m_settings.Snapshot().revision, SettingsChangePhase::Reverted, SettingsDomain::All});
             m_revertedPublished = true;
         }
+        m_draft.navigationSettings = {};
+        m_draft.navigationDraft.reset();
+        m_navigationSettings = {};
         m_logCtx.reset();  // pop MDC frame
     }
 

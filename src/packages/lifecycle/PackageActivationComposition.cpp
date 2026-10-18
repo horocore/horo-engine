@@ -112,10 +112,9 @@ namespace Horo::Packages::Detail {
         if (auto prepared = PrepareContent(candidates, cancellation, artifacts); prepared.HasError())
             return prepared;
         auto gate = std::make_shared<BoundArtifactGate>(configuration.artifactGate, std::move(artifacts));
-        manager_ =
-            std::make_unique<Extensions::ExtensionManager>(catalog_.get(), configuration.profile, configuration.capabilities,
-                                                           std::move(gate), configuration.libraryLoader,
-                                                           Extensions::ExtensionPlatformProviderCommit{}, configuration.editorActivityHost);
+        manager_ = std::make_unique<Extensions::ExtensionManager>(catalog_.get(), configuration.profile, configuration.capabilities,
+                                                                  std::move(gate), configuration.libraryLoader,
+                                                                  Extensions::ExtensionPlatformProviderCommit{}, configuration.editorHosts);
         retirements_.reserve(candidates.size());
         for (const auto &candidate : candidates) {
             if (cancellation.IsCancellationRequested())

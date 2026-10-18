@@ -25,6 +25,13 @@ namespace Horo::Extensions {
     class EditorPageHost;
     class EditorInspectorHost;
 
+    /** @brief Explicit editor publication authorities supplied by application composition. */
+    struct ExtensionEditorHosts final {
+        std::shared_ptr<EditorActivityHost> activities;  /**< Activity contribution authority; absent denies publication. */
+        std::shared_ptr<EditorPageHost> pages;           /**< Page contribution authority; absent denies publication. */
+        std::shared_ptr<EditorInspectorHost> inspectors; /**< Inspector contribution authority; absent denies publication. */
+    };
+
     /** @brief Represents a loaded extension instance. */
     struct LoadedExtension {
         ExtensionManifest manifest;
@@ -40,13 +47,6 @@ namespace Horo::Extensions {
     /**
      * @brief Manages loading and lifecycle of extensions.
      */
-    /** @brief Explicit upper-host editor composition; omitted authorities never advertise native transport. */
-    struct ExtensionEditorHosts final {
-        std::shared_ptr<EditorActivityHost> activities;
-        std::shared_ptr<EditorPageHost> pages;
-        std::shared_ptr<EditorInspectorHost> inspectors;
-    };
-
     class ExtensionManager {
     public:
         using NativeLibraryLoader = std::function<Result<std::unique_ptr<Platform::DynamicLibrary>>(const std::string &)>;
@@ -61,7 +61,7 @@ namespace Horo::Extensions {
          * load.
          * @param libraryLoader Explicit native loader boundary; empty uses the platform loader after security verification.
          * @param platformProviderCommit Optional host-owned commit for one staged provider-only extension.
-         * @param editorHosts Explicit editor authorities; omitted hosts reject their corresponding native publication.
+         * @param editorHosts Explicit editor authorities; absent hosts reject their corresponding ABI publication.
          */
         explicit ExtensionManager(Assets::AssetImporterCatalog *importerCatalog = nullptr,
                                   ExtensionHostProfile hostProfile = ExtensionHostProfile::Interactive,

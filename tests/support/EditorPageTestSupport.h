@@ -10,6 +10,15 @@
 #include <thread>
 
 namespace Horo::Extensions::Tests::PageSupport {
+    /** @brief Non-standard foreign callback failure used to exercise containment boundaries. */
+    struct ForeignFailure final {};
+
+    enum class StoreThrowPoint {
+        None,
+        BeforeReplacement,
+        AfterReplacement
+    };
+
     /** @brief Actual canonical configuration document authority with controllable durable outcome, not a competing value registry. */
     struct Store final : IEditorPageStore {
         std::optional<std::string> document;
@@ -17,6 +26,7 @@ namespace Horo::Extensions::Tests::PageSupport {
         unsigned writes{};
         bool failWrite{};
         bool replaceThenFail{};
+        StoreThrowPoint throwPoint{StoreThrowPoint::None};
 
         std::uint64_t ContextRevision(SettingScope) const noexcept override {
             return epoch;
@@ -30,8 +40,12 @@ namespace Horo::Extensions::Tests::PageSupport {
                            const ConfigurationSnapshot &snapshot) override {
             REQUIRE(revision == epoch);
             ++writes;
+            if (throwPoint == StoreThrowPoint::BeforeReplacement)
+                throw ForeignFailure{};
             if (!failWrite || replaceThenFail)
                 document = snapshot.ToJson();
+            if (throwPoint == StoreThrowPoint::AfterReplacement)
+                throw ForeignFailure{};
             if (failWrite)
                 return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected, "Original durable-store failure"));
             return Result<void>::Success();
@@ -47,6 +61,7 @@ namespace Horo::Extensions::Tests::PageSupport {
         std::array<std::atomic_uint, 3> calls{};
         std::vector<EditorPageFinding> findings;
         bool fail{};
+        bool throwForeign{};
 
         Result<std::vector<EditorPageFinding>> Invoke(EditorPageOperation operation, const EditorPageDraft &, const EditorUiActionId &,
                                                       const CancellationToken &cancel) override {
@@ -57,6 +72,8 @@ namespace Horo::Extensions::Tests::PageSupport {
             while (hold.load() && !cancel.IsCancellationRequested())
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             --active;
+            if (throwForeign)
+                throw ForeignFailure{};
             if (fail)
                 return Result<std::vector<EditorPageFinding>>::Failure(
                     MakeError(ExtensionErrors::ContributionRejected, "Original provider failure"));
@@ -115,7 +132,7 @@ namespace Horo::Extensions::Tests::PageSupport {
         EditorSurfaceProviderIdentity provider{"fixture.package", "fixture.module", 1};
         const std::string id = "fixture.page";
 
-        explicit Fixture(bool modal = false) {
+        explicit Fixture(bool modal = false, std::optional<EditorPageDefinition> suppliedDefinition = std::nullopt) {
             const auto capability = modal ? EditorModalPageCapability : EditorSettingsPageCapability;
             const std::vector<ExtensionPermissionId> permissions =
                 modal ? std::vector<ExtensionPermissionId>{{"editor.modal"}}
@@ -139,6 +156,7 @@ namespace Horo::Extensions::Tests::PageSupport {
                                     .requiredCapabilities = {capability},
                                     .requiredPermissions = permissions,
                                     .provider = provider},
+                        .commands = {{"fixture.action"}},
                         .state = {{"page.count"}},
                         .localization = {{"fixture.title"}, {"fixture.count"}, {"fixture.invalid"}},
                         .diagnostics = {{"fixture.validation"}}};
@@ -146,7 +164,7 @@ namespace Horo::Extensions::Tests::PageSupport {
             if (attached.HasError())
                 UNSCOPED_INFO(attached.ErrorValue().message);
             REQUIRE(attached.HasValue());
-            auto definition = Definition(modal, id);
+            auto definition = suppliedDefinition ? std::move(*suppliedDefinition) : Definition(modal, id);
             REQUIRE(retirement->BindModuleCode("fixture.module", codeOwner));
             auto registered = host.Register(std::move(attached).Value(), std::move(definition), operations, retirement);
             if (registered.HasError())

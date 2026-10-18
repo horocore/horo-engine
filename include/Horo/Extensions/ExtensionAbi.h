@@ -447,7 +447,7 @@ typedef struct HoroExtensionHostApi HoroExtensionHostApi;  // NOSONAR(cpp:S5416)
  */
 static inline int HoroExtensionHasEditorInspectorTransport(const HoroExtensionHostApi *host) {
     return host && host->structSize >= offsetof(HoroExtensionHostApi, registerEditorInspector) + sizeof(host->registerEditorInspector) &&
-           host->abiVersion == HORO_EXTENSION_ABI_VERSION && host->abiMinorVersion >= 6 && host->registerEditorInspector != 0;
+           host->abiVersion == HORO_EXTENSION_ABI_VERSION && host->abiMinorVersion >= 6 && host->registerEditorInspector;
 }
 
 struct HoroExtensionModuleApi {

@@ -1,3 +1,4 @@
+#include "EditorPageAbiConversion.h"
 #include "EditorPagePackageSupport.h"
 #include "EditorPageTestSupport.h"
 #include "Horo/Extensions/EditorActivityHost.h"
@@ -11,8 +12,8 @@
 
 namespace Horo::Extensions::Tests {
     namespace {
-        /** @brief Finds one exact native manifest-owned page from the real host projection. */
-        const EditorPageProjection &Page(const EditorPageHost &host, std::string_view id) {
+        /** @brief Copies one page snapshot so subsequent owner updates cannot invalidate its revision or surface identity. */
+        EditorPageProjection Page(const EditorPageHost &host, std::string_view id) {
             const auto found = std::ranges::find_if(host.Prepared(), [&](const auto &p) {
                 return p.surface.id == id;
             });
@@ -25,8 +26,7 @@ namespace Horo::Extensions::Tests {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
             while (std::chrono::steady_clock::now() < deadline) {
                 host.Update();
-                const auto state = Page(host, id).state;
-                if (state != EditorPageState::Validating && state != EditorPageState::Submitting)
+                if (const auto state = Page(host, id).state; state != EditorPageState::Validating && state != EditorPageState::Submitting)
                     return;
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
@@ -34,7 +34,7 @@ namespace Horo::Extensions::Tests {
         }
 
         /** @brief Proves exact integer transport and durable application while the caller retains the module/code lease. */
-        void CheckSettings(EditorPageHost &pages, PageSupport::Store &store, int64_t (*integer)(), uint32_t (*calls)(uint32_t)) {
+        void CheckSettings(EditorPageHost &pages, const PageSupport::Store &store, int64_t (*integer)(), uint32_t (*calls)(uint32_t)) {
             const auto settings = Page(pages, "fixture.settings");
             CHECK(std::get<std::int64_t>(std::get<EditorUiNumberNode>(settings.form.nodes.front().payload).value) == 9007199254740993LL);
             REQUIRE(pages.Apply(settings.surface.provider, settings.surface.id, settings.revision).HasValue());
@@ -45,7 +45,7 @@ namespace Horo::Extensions::Tests {
         }
 
         /** @brief Native C11 localized validation prevents durable publication while retaining the exact editable draft. */
-        void CheckNativeValidation(EditorPageHost &pages, PageSupport::Store &store) {
+        void CheckNativeValidation(EditorPageHost &pages, const PageSupport::Store &store) {
             const auto before = Page(pages, "fixture.settings");
             const auto writes = store.writes;
             REQUIRE(
@@ -62,7 +62,7 @@ namespace Horo::Extensions::Tests {
         }
 
         /** @brief Exercises native root/child validation, submission and parent cancellation under caller-owned module lifetime. */
-        void CheckModals(EditorPageHost &pages, PageSupport::Store &store, EditorSurfaceRegistry &registry,
+        void CheckModals(EditorPageHost &pages, const PageSupport::Store &store, const EditorSurfaceRegistry &registry,
                          HoroExtensionStatus (*open)(uint32_t), HoroExtensionStatus (*close)(uint32_t), uint32_t (*calls)(uint32_t)) {
             REQUIRE(open(1) == HORO_EXTENSION_SUCCESS);
             pages.Update();
@@ -96,7 +96,7 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 {.activities = activities, .pages = pages}};
+                                 ExtensionEditorHosts{.activities = activities, .pages = pages}};
         auto loaded = manager.LoadExtension(package.root.string());
         if (loaded.HasError())
             UNSCOPED_INFO(loaded.ErrorValue().message);
@@ -134,11 +134,11 @@ namespace Horo::Extensions::Tests {
         REQUIRE(library.HasValue());
         const auto load = reinterpret_cast<HoroExtensionLoadFunc>(library.Value()->GetSymbol("horo_extension_load"));
         REQUIRE(load);
-        HoroExtensionModuleApi module{.structSize = sizeof(module)};
+        HoroExtensionModuleApi moduleApi{.structSize = sizeof(HoroExtensionModuleApi)};
         HoroExtensionHostApi shortHost{.structSize = offsetof(HoroExtensionHostApi, registerEditorPage),
                                        .abiVersion = 1,
                                        .abiMinorVersion = 4};
-        CHECK(load(&shortHost, &module) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
+        CHECK(load(&shortHost, &moduleApi) == HORO_EXTENSION_ERROR_VERSION_MISMATCH);
         const auto report = RunExtensionAbiConformance(HORO_EDITOR_PAGE_FIXTURE);
         CHECK(report.code ==
               ExtensionAbiConformanceCode::NegotiationRejected);  // Importer-only tool does not counterfeit an interactive page host.
@@ -161,11 +161,94 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
-                                 {.activities = activities, .pages = pages}};
+                                 ExtensionEditorHosts{.activities = activities, .pages = pages}};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         pages->Update();
         CHECK(pages->Prepared().empty());
         CHECK(activities->Registry().Save().surfaces.empty());
         CHECK(store.writes == 0);
     }
+
+    namespace {
+        /** @brief Supplies an inert wire descriptor; copying must never invoke its endpoint. */
+        HoroEditorPageDescriptor WirePage() {
+            return {.structSize = sizeof(HoroEditorPageDescriptor),
+                    .schemaVersion = HORO_EDITOR_PAGE_SCHEMA_VERSION,
+                    .kind = HORO_EDITOR_PAGE_SETTINGS,
+                    .scope = HORO_EDITOR_PAGE_PROJECT,
+                    .invoke = +[](void *, const HoroEditorPageOperation *, const HoroEditorPageFindingSink *) -> HoroExtensionStatus {
+                return HORO_EXTENSION_ERROR_INVALID_ARGS;
+            }};
+        }
+    }  // namespace
+
+    TEST_CASE("Native page copy owns boolean and text defaults in every uniform domain", "[Extensions][EditorPage][ABI]") {
+        HoroEditorPageField field{.structSize = sizeof(HoroEditorPageField),
+                                  .flags = HORO_EDITOR_PAGE_FIELD_READ_ONLY | HORO_EDITOR_PAGE_FIELD_DISABLED,
+                                  .nodeId = {"node", 4},
+                                  .labelKey = {"title", 5},
+                                  .defaultValue = {.structSize = sizeof(HoroEditorPageValue),
+                                                   .kind = HORO_EDITOR_PAGE_BOOLEAN,
+                                                   .binding = {"value", 5},
+                                                   .booleanValue = 1},
+                                  .maximumStringBytes = 32};
+        auto wire = WirePage();
+        wire.fields = &field;
+        wire.fieldCount = 1;
+        const std::array scopes{HORO_EDITOR_PAGE_USER, HORO_EDITOR_PAGE_PROJECT, HORO_EDITOR_PAGE_WORKSPACE, HORO_EDITOR_PAGE_SESSION};
+        const std::array expected{SettingScope::User, SettingScope::Project, SettingScope::Workspace, SettingScope::Session};
+        for (std::size_t index = 0; index < scopes.size(); ++index) {
+            wire.scope = scopes[index];
+            auto copied = Detail::CopyPageDefinition(wire, "page", "title");
+            REQUIRE(copied.HasValue());
+            REQUIRE(copied.Value().fields.size() == 1);
+            CHECK(copied.Value().fields.front().setting.scope == expected[index]);
+            CHECK(std::get<bool>(copied.Value().fields.front().setting.defaultValue));
+            const auto &node = std::get<EditorUiBooleanNode>(copied.Value().form.nodes.front().payload);
+            CHECK(node.base.readOnly);
+            CHECK_FALSE(node.base.enabled);
+        }
+        std::string text = "owned text";
+        field.defaultValue.kind = HORO_EDITOR_PAGE_STRING;
+        field.defaultValue.stringValue = {text.data(), static_cast<uint32_t>(text.size())};
+        auto copied = Detail::CopyPageDefinition(wire, "page", "title");
+        REQUIRE(copied.HasValue());
+        text.assign(text.size(), 'x');
+        CHECK(std::get<std::string>(copied.Value().fields.front().setting.defaultValue) == "owned text");
+        CHECK(std::get<EditorUiTextFieldNode>(copied.Value().form.nodes.front().payload).value == "owned text");
+    }
+
+    TEST_CASE("Native page copy rejects malformed foreign strings before publication", "[Extensions][EditorPage][ABI]") {
+        auto wire = WirePage();
+        HoroEditorActivityMessage message{{"en-US", 5}, {"title", 5}, {"Page", 4}};
+        wire.messages = &message;
+        wire.messageCount = 1;
+        REQUIRE(Detail::CopyPageDefinition(wire, "page", "title").HasValue());
+        message.key = {"bad\0key", 7};
+        CHECK(Detail::CopyPageDefinition(wire, "page", "title").HasError());
+        wire.messageCount = 129;
+        CHECK(Detail::CopyPageDefinition(wire, "page", "title").HasError());
+
+        auto permissionWire = WirePage();
+        HoroExtensionStringView permission{"editor.settings", 15};
+        permissionWire.permissions = &permission;
+        permissionWire.permissionCount = 1;
+        HoroExtensionStringView diagnostic{"fixture.invalid", 15};
+        permissionWire.diagnosticCodes = &diagnostic;
+        permissionWire.diagnosticCodeCount = 1;
+        EditorSurfaceContextDescriptor context;
+        REQUIRE(Detail::CopyPagePermissions(permissionWire, context).HasValue());
+        REQUIRE(context.surface.requiredPermissions.size() == 1);
+        REQUIRE(context.diagnostics.size() == 1);
+        CHECK(context.surface.requiredPermissions.front().value == "editor.settings");
+        CHECK(context.diagnostics.front().value == "fixture.invalid");
+        permission = {"bad\0permission", 14};
+        CHECK(Detail::CopyPagePermissions(permissionWire, context).HasError());
+        permission = {"editor.settings", 15};
+        diagnostic = {"bad\0code", 8};
+        CHECK(Detail::CopyPagePermissions(permissionWire, context).HasError());
+        permissionWire.permissionCount = 33;
+        CHECK(Detail::CopyPagePermissions(permissionWire, context).HasError());
+    }
+
 }  // namespace Horo::Extensions::Tests

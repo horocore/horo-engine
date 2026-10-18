@@ -15,8 +15,7 @@ namespace Horo::Extensions {
 
         /** @brief Checks one exact primitive and the host-owned field binding; no placeholder becomes an authored value. */
         bool MatchesNode(const EditorInspectorField &field, const EditorUiNode &node) {
-            return std::visit([&](const auto &typed) {
-                using T = std::decay_t<decltype(typed)>;
+            return std::visit([&]<class T>(const T &typed) {
                 if constexpr (std::is_same_v<T, EditorUiBooleanNode>)
                     return field.kind == EditorInspectorFieldKind::Boolean && typed.binding.value == field.field;
                 else if constexpr (std::is_same_v<T, EditorUiTextFieldNode>)
@@ -36,18 +35,18 @@ namespace Horo::Extensions {
 
         /** @brief Rejects unsupported actions/layout/interaction rather than hiding inert controls in an admitted inspector. */
         bool SupportedNode(const EditorUiNode &node, const std::vector<EditorInspectorField> &fields) {
+            using enum EditorUiFocusPolicy;
             const auto &base = EditorUiNodeBaseOf(node);
             if (base.size != EditorUiComponentSize::Medium || base.tone != EditorUiSemanticTone::Neutral)
                 return false;
-            return std::visit([&](const auto &typed) {
-                using T = std::decay_t<decltype(typed)>;
+            return std::visit([&]<class T>(const T &typed) {
                 if constexpr (std::is_same_v<T, EditorUiContainerNode>)
                     return typed.layout == EditorUiLayoutKind::Stack || typed.layout == EditorUiLayoutKind::Group;
                 else if constexpr (std::is_same_v<T, EditorUiTextNode> || std::is_same_v<T, EditorUiLabelNode>)
-                    return base.focusPolicy == EditorUiFocusPolicy::Automatic || base.focusPolicy == EditorUiFocusPolicy::Never;
+                    return base.focusPolicy == Automatic || base.focusPolicy == Never;
                 else if constexpr (requires { typed.binding; }) {
                     const auto field = std::ranges::find(fields, base.id, &EditorInspectorField::node);
-                    return base.focusPolicy == EditorUiFocusPolicy::Automatic && field != fields.end() && MatchesNode(*field, node);
+                    return base.focusPolicy == Automatic && field != fields.end() && MatchesNode(*field, node);
                 } else
                     return false;
             }, node.payload);
@@ -55,16 +54,49 @@ namespace Horo::Extensions {
 
         /** @brief Rejects invalid constraints at schema admission even before a real owner supplies current values. */
         bool ValidLimits(const EditorInspectorField &field) {
-            if (field.kind > EditorInspectorFieldKind::String || field.maximumStringBytes > 4096)
+            using enum EditorInspectorFieldKind;
+            if (field.kind > String || field.maximumStringBytes > 4096)
                 return false;
-            if (field.kind != EditorInspectorFieldKind::Integer && (field.minimumInteger || field.maximumInteger))
+            if (field.kind != Integer && (field.minimumInteger.has_value() || field.maximumInteger.has_value()))
                 return false;
-            if (field.kind != EditorInspectorFieldKind::Number && (field.minimumNumber || field.maximumNumber))
+            if (field.kind != Number && (field.minimumNumber.has_value() || field.maximumNumber.has_value()))
                 return false;
-            return (!field.minimumNumber || std::isfinite(*field.minimumNumber)) &&
-                   (!field.maximumNumber || std::isfinite(*field.maximumNumber)) &&
-                   (!field.minimumInteger || !field.maximumInteger || *field.minimumInteger <= *field.maximumInteger) &&
-                   (!field.minimumNumber || !field.maximumNumber || *field.minimumNumber <= *field.maximumNumber);
+            return (!field.minimumNumber.has_value() || std::isfinite(*field.minimumNumber)) &&
+                   (!field.maximumNumber.has_value() || std::isfinite(*field.maximumNumber)) &&
+                   (!field.minimumInteger.has_value() || !field.maximumInteger.has_value() ||
+                    *field.minimumInteger <= *field.maximumInteger) &&
+                   (!field.minimumNumber.has_value() || !field.maximumNumber.has_value() || *field.minimumNumber <= *field.maximumNumber);
+        }
+
+        /** @brief Requires the English fallback of a displayed key while allowing an omitted optional label. */
+        bool KnownMessage(const EditorInspectorDefinition &definition, std::string_view key) {
+            return key.empty() || std::ranges::any_of(definition.messages, [key](const auto &message) {
+                return message.locale == "en-US" && message.key == key;
+            });
+        }
+
+        /** @brief Resolves localized copy while retaining explicitly technical host text. */
+        bool ValidText(const EditorInspectorDefinition &definition, const EditorUiText &text) {
+            return text.kind == EditorUiTextKind::TechnicalText || KnownMessage(definition, text.value);
+        }
+
+        /** @brief Validates every base and payload text slot without admitting undeclared localization keys. */
+        bool ValidNodeMessages(const EditorInspectorDefinition &definition, const EditorUiNode &node) {
+            if (const auto &base = EditorUiNodeBaseOf(node); !ValidText(definition, base.label) ||
+                                                             !ValidText(definition, base.description) ||
+                                                             !ValidText(definition, base.accessibleLabel))
+                return false;
+            return std::visit([&definition]<class T>(const T &typed) {
+                if constexpr (requires { typed.text; }) {
+                    if (!ValidText(definition, typed.text))
+                        return false;
+                }
+                if constexpr (requires { typed.placeholder; }) {
+                    if (!ValidText(definition, typed.placeholder))
+                        return false;
+                }
+                return true;
+            }, node.payload);
         }
 
         /** @brief Checks bounded copied catalogs and required English fallback for every displayed localization key. */
@@ -83,30 +115,11 @@ namespace Horo::Extensions {
                     if (message.locale == definition.messages[j].locale && message.key == definition.messages[j].key)
                         return false;
             }
-            const auto known = [&](std::string_view key) {
-                return key.empty() || std::ranges::any_of(definition.messages, [&](const auto &message) {
-                    return message.locale == "en-US" && message.key == key;
-                });
-            };
-            const auto text = [&](const EditorUiText &value) {
-                return value.kind == EditorUiTextKind::TechnicalText || known(value.value);
-            };
-            if (!known(surface.labelLocalizationKey) || !known(surface.tooltipLocalizationKey) || !text(definition.form.title) ||
-                !text(definition.form.description))
+            if (!KnownMessage(definition, surface.labelLocalizationKey) || !KnownMessage(definition, surface.tooltipLocalizationKey) ||
+                !ValidText(definition, definition.form.title) || !ValidText(definition, definition.form.description))
                 return false;
-            return std::ranges::all_of(definition.form.nodes, [&](const auto &node) {
-                const auto &base = EditorUiNodeBaseOf(node);
-                if (!text(base.label) || !text(base.description) || !text(base.accessibleLabel))
-                    return false;
-                return std::visit([&](const auto &typed) {
-                    if constexpr (requires { typed.text; })
-                        if (!text(typed.text))
-                            return false;
-                    if constexpr (requires { typed.placeholder; })
-                        if (!text(typed.placeholder))
-                            return false;
-                    return true;
-                }, node.payload);
+            return std::ranges::all_of(definition.form.nodes, [&definition](const auto &node) {
+                return ValidNodeMessages(definition, node);
             });
         }
     }  // namespace
@@ -135,18 +148,15 @@ namespace Horo::Extensions {
     Result<void> ValidateEditorInspectorValue(const EditorInspectorField &field, const EditorInspectorScalar &value) {
         if (!ValidLimits(field) || static_cast<std::size_t>(field.kind) != value.index())
             return Invalid();
-        if (field.kind != EditorInspectorFieldKind::Integer && (field.minimumInteger || field.maximumInteger))
-            return Invalid();
-        if (field.kind != EditorInspectorFieldKind::Number && (field.minimumNumber || field.maximumNumber))
-            return Invalid();
         if (const auto *number = std::get_if<std::int64_t>(&value)) {
-            if ((field.minimumInteger && *number < *field.minimumInteger) || (field.maximumInteger && *number > *field.maximumInteger))
+            if ((field.minimumInteger.has_value() && *number < *field.minimumInteger) ||
+                (field.maximumInteger.has_value() && *number > *field.maximumInteger))
                 return Invalid();
         }
         if (const auto *number = std::get_if<double>(&value)) {
             if (!std::isfinite(*number) ||
-                (field.minimumNumber && (!std::isfinite(*field.minimumNumber) || *number < *field.minimumNumber)) ||
-                (field.maximumNumber && (!std::isfinite(*field.maximumNumber) || *number > *field.maximumNumber)))
+                (field.minimumNumber.has_value() && (!std::isfinite(*field.minimumNumber) || *number < *field.minimumNumber)) ||
+                (field.maximumNumber.has_value() && (!std::isfinite(*field.maximumNumber) || *number > *field.maximumNumber)))
                 return Invalid();
         }
         if (const auto *text = std::get_if<std::string>(&value))
@@ -159,8 +169,8 @@ namespace Horo::Extensions {
     Result<void> ValidateEditorInspectorDefinition(const EditorSurfaceDescriptor &surface, const EditorInspectorDefinition &definition) {
         if (auto valid = ValidateEditorSurfaceDescriptor(surface); valid.HasError())
             return valid;
-        const bool drawer = surface.kind == EditorSurfaceKind::PropertyDrawer;
-        if ((surface.kind != EditorSurfaceKind::Inspector && !drawer) || surface.persistence != EditorSurfacePersistence::None ||
+        if (const bool drawer = surface.kind == EditorSurfaceKind::PropertyDrawer;
+            (surface.kind != EditorSurfaceKind::Inspector && !drawer) || surface.persistence != EditorSurfacePersistence::None ||
             surface.openByDefault || definition.behaviorType.empty() || definition.behaviorType.size() > 160 ||
             definition.behaviorType.find('\0') != std::string::npos || !IsValidUtf8ScalarSequence(definition.behaviorType) ||
             !definition.behaviorSchemaVersion || drawer != !definition.field.empty() || definition.fields.empty() ||
@@ -172,8 +182,9 @@ namespace Horo::Extensions {
         for (std::size_t i = 0; i < definition.fields.size(); ++i) {
             const auto &field = definition.fields[i];
             if (!ValidLimits(field) || field.field.empty() || field.field.size() > 96 || field.field.find('\0') != std::string::npos ||
-                !field.node.IsValid() || (field.minimumInteger && field.maximumInteger && *field.minimumInteger > *field.maximumInteger) ||
-                (field.minimumNumber && field.maximumNumber && *field.minimumNumber > *field.maximumNumber))
+                !field.node.IsValid() ||
+                (field.minimumInteger.has_value() && field.maximumInteger.has_value() && *field.minimumInteger > *field.maximumInteger) ||
+                (field.minimumNumber.has_value() && field.maximumNumber.has_value() && *field.minimumNumber > *field.maximumNumber))
                 return Invalid();
             for (std::size_t j = 0; j < i; ++j)
                 if (field.field == definition.fields[j].field || field.node == definition.fields[j].node)

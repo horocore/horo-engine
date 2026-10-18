@@ -5,6 +5,7 @@
 #include "Horo/Cinematic/CameraCutRuntime.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorEngineEventBridge.h"
+#include "Horo/Editor/NavigationProjectSettingsSession.h"
 #include "Horo/Editor/NotificationService.h"
 #include "Horo/Editor/PCGGraphDocumentService.h"
 #include "Horo/Editor/ProjectMutation.h"
@@ -142,6 +143,17 @@ namespace Horo::Editor {
         /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
         [[nodiscard]] Result<void> ShutdownGameplayModules();
 
+        /** @brief Lazily composes actual project navigation sources with this exact active Scene/history owner. */
+        [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings();
+        /** @brief Includes all navigation authoring owners in the ordinary leave guard. */
+        [[nodiscard]] bool HasDirtyNavigationDocuments() const;
+        /** @brief Saves each dirty navigation owner through actual Assets publication. */
+        [[nodiscard]] Result<void> SaveNavigationDocuments();
+        /** @brief Closes only after explicit save/discard policy. */
+        [[nodiscard]] Result<void> ShutdownNavigationDocuments(bool discard = false);
+        /** @brief Projects committed canonical Scene changes on the existing owner frame boundary. */
+        void UpdateNavigationSettingsProjection();
+
         [[nodiscard]] EditorDataBus &DataBus() noexcept {
             return m_dataBus;
         }
@@ -221,6 +233,10 @@ namespace Horo::Editor {
         void UpdatePlayFixed(std::span<const Gameplay::GameplayInputAction> input, double fixedDeltaSeconds);
 
     private:
+        /** @brief Opens/focuses the exact registered persistent definition asset route. */
+        void OpenNavigationDefinitionTab(Assets::AssetId asset);
+        /** @brief Projects constant-time dirty/focus/close state without copying Scene roots per frame. */
+        void UpdateNavigationDocumentTabs();
         Runtime::RuntimeSceneService &m_runtimeScene;
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
         Assets::AssetRegistrySnapshot m_assetRegistry;
@@ -255,6 +271,9 @@ namespace Horo::Editor {
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
         SceneDocument m_document;
         EditorHistory m_history;
+        std::unique_ptr<SceneDocumentTransactions> m_navigationScene;
+        std::unique_ptr<NavigationProjectSettingsSession> m_navigationSettings;
+        std::uint64_t m_navigationOpening{1};
         SceneDocumentCommandExecutor m_documentCommands{m_document, m_history};
         Assets::AssetId m_inspectorDocumentOwner;
         SceneDocumentTransactions m_inspectorDocument;
@@ -423,6 +442,15 @@ namespace Horo::Editor {
         void SaveScene(bool overwriteConflict = false);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);
+        /** @brief Completes default metadata and active identity only after a successful destination source save.
+         * @param snapshot Exact saved Scene. @param fingerprint Actual destination identity. @param destination Validated path.
+         */
+        void CompleteSceneSaveAs(const SceneDocumentSnapshot &snapshot, const SceneFileFingerprint &fingerprint,
+                                 const std::filesystem::path &destination);
+        /** @brief Closes a clean navigation group before replacing Scene identity. @param operation Diagnostic action.
+         * @return False if any unsaved owner prevents replacement; no owner is discarded.
+         */
+        [[nodiscard]] bool PrepareNavigationSceneReplacement(const char *operation);
         [[nodiscard]] std::optional<std::filesystem::path> ResolveSceneSaveDestination(const std::filesystem::path &absolutePath) const;
         void InitializeProjectState(const std::filesystem::path &absoluteProjectRoot);
         void InitializeWorkspaceLayout();

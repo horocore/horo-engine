@@ -191,6 +191,7 @@ namespace Horo::Editor::SceneDocumentDetail {
         std::vector<SceneObjectId> affectedObjects;
         std::size_t memoryBytes{0};
         std::vector<Prefab::PrefabInstanceId> affectedPrefabInstances;
+        bool coordinated{}; /**< Independent undo is fenced; the owning multi-document workflow replays the whole group. */
     };
 
     [[nodiscard]] inline Error MakeDocumentError(const ErrorCodeDescriptor &descriptor, std::string message) {

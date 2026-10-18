@@ -52,6 +52,13 @@ namespace Horo::Extensions {
     };
 
     namespace {
+        /** @brief Retires the entire staged publication set if any native inspector commit fails. */
+        void RevokeEditorInspectors(std::span<const std::shared_ptr<ExtensionModuleLifetime>> lifetimes) noexcept {
+            for (const auto &owner : lifetimes)
+                for (const auto &published : owner->editorInspectors)
+                    published->Revoke();
+        }
+
         /** @brief Preserves native registration failure in the enclosing module transaction. */
         HoroExtensionStatus Reject(AssetImporterRegistrationSession &load, const Error &error) {
             load.failed = true;
@@ -63,8 +70,8 @@ namespace Horo::Extensions {
         Result<void> CopyContext(AssetImporterRegistrationSession &load, const HoroEditorInspectorDescriptor &input,
                                  EditorInspectorNativeSession &session) {
             auto &surface = session.descriptor.surface;
-            const std::string_view claim = input.kind == HORO_EDITOR_INSPECTOR ? "editor.inspector" : "editor.property_drawer";
-            if (!Detail::CopyActivityText(input.surfaceId, surface.id) ||
+            if (const std::string_view claim = input.kind == HORO_EDITOR_INSPECTOR ? "editor.inspector" : "editor.property_drawer";
+                !Detail::CopyActivityText(input.surfaceId, surface.id) ||
                 !Detail::CopyActivityText(input.labelKey, surface.labelLocalizationKey, 128) ||
                 !std::ranges::any_of(load.manifest->contributions,
                                      [&](const auto &declared) {
@@ -89,7 +96,7 @@ namespace Horo::Extensions {
                 std::string permission;
                 if (!Detail::CopyActivityText(input.permissions[i], permission, 128))
                     return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
-                surface.requiredPermissions.push_back({std::move(permission)});
+                surface.requiredPermissions.emplace_back(std::move(permission));
             }
             return Result<void>::Success();
         }
@@ -111,7 +118,7 @@ namespace Horo::Extensions {
             for (const auto &message : session->definition.messages)
                 if (std::ranges::find(session->descriptor.localization, EditorSurfaceLocalizationKey{message.key}) ==
                     session->descriptor.localization.end())
-                    session->descriptor.localization.push_back({message.key});
+                    session->descriptor.localization.emplace_back(message.key);
             const auto &surface = session->descriptor.surface;
             const auto capability =
                 surface.kind == EditorSurfaceKind::Inspector ? EditorInspectorCapability : EditorPropertyDrawerCapability;
@@ -153,11 +160,12 @@ namespace Horo::Extensions {
 
     /** @copydoc ValidateEditorInspectorClaims */
     Result<void> ValidateEditorInspectorClaims(const AssetImporterRegistrationSession &load) {
-        const auto count = std::ranges::count_if(load.manifest->contributions, [&](const auto &claim) {
+        if (const auto count = std::ranges::count_if(load.manifest->contributions,
+                                                     [&](const auto &claim) {
             return claim.owningModule == load.extensionModule->id &&
                    (claim.type == "editor.inspector" || claim.type == "editor.property_drawer");
         });
-        if (static_cast<std::size_t>(count) != load.lifetime->editorInspectors.size())
+            static_cast<std::size_t>(count) != load.lifetime->editorInspectors.size())
             return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
         return Result<void>::Success();
     }
@@ -167,9 +175,7 @@ namespace Horo::Extensions {
         for (const auto &lifetime : lifetimes)
             for (const auto &session : lifetime->editorInspectors)
                 if (auto committed = session->Commit(); committed.HasError()) {
-                    for (const auto &owner : lifetimes)
-                        for (const auto &published : owner->editorInspectors)
-                            published->Revoke();
+                    RevokeEditorInspectors(lifetimes);
                     return committed;
                 }
         return Result<void>::Success();

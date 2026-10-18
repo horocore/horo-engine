@@ -18,8 +18,7 @@ namespace Horo::Editor {
                 const auto found = std::ranges::find(actual.fields, field.field, &InspectorBehaviorValue::field);
                 if (found == actual.fields.end())
                     return false;
-                return std::visit([&](const auto &value) {
-                    using T = std::decay_t<decltype(value)>;
+                return std::visit([&]<class T>(const T &value) {
                     if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, std::int64_t> || std::is_same_v<T, double> ||
                                   std::is_same_v<T, std::string>)
                         return Extensions::ValidateEditorInspectorValue(field, Extensions::EditorInspectorScalar{value}).HasValue();
@@ -67,12 +66,13 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::PublishInspectorApproval */
     Result<void> EditorWorkspaceController::PublishInspectorApproval(const InspectorExtensionEdit &request,
                                                                      const Extensions::EditorInspectorContribution &contribution) {
-        const auto duplicate = std::ranges::find_if(m_inspectorApprovals, [&](const auto &approved) {
+        if (const auto duplicate = std::ranges::find_if(m_inspectorApprovals,
+                                                        [&](const auto &approved) {
             return approved.provider == request.provider && approved.declaration == contribution.definition &&
                    approved.documentGeneration == request.documentGeneration &&
                    approved.behaviorRegistryRevision == request.behaviorRegistryRevision;
         });
-        if (duplicate != m_inspectorApprovals.end())
+            duplicate != m_inspectorApprovals.end())
             return Result<void>::Success();
         if (m_inspectorApprovalRevision == std::numeric_limits<std::uint64_t>::max()) {
             m_inspectorAdmissionClosed = true;
@@ -91,7 +91,7 @@ namespace Horo::Editor {
         auto candidate = m_inspectorApprovals;
         // The explicit action replaces overlapping presentation authority for this exact
         // type/schema. Fields outside the new declaration return to generic controls.
-        std::erase_if(candidate, [&](const auto &previous) {
+        std::erase_if(candidate, [&approved](const auto &previous) {
             return previous.behavior == approved.behavior && previous.schemaVersion == approved.schemaVersion &&
                    std::ranges::any_of(previous.fields, [&](const auto &field) {
                 return std::ranges::find(approved.fields, field) != approved.fields.end();

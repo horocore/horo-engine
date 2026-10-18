@@ -163,6 +163,24 @@ and accept zero rather than substitute an invented positive outline. Affected
 callers are the real GUI theme capture, canonical theme validator, public theme
 header consumers and page view/render tests.
 
+
+### Settings modal C++ composition with navigation
+
+`SettingsModal` now captures both the active navigation session's revocable borrow
+and the explicitly composed extension page host/theme. The sixth optional argument
+remains the navigation session pointer. The seventh argument is
+`SettingsModalPagePresentation`, pairing the shared page host and captured theme.
+Update page-enabled callers to supply the navigation argument (or `nullptr`)
+before that presentation aggregate, and rebuild GUI consumers. The constructor is fallible when it creates an owned page view;
+its allocation can throw instead of satisfying the earlier navigation-only
+`noexcept` contract. This avoids two constructor paths with different authorities.
+
+`GuiScreenHost` owns the common settings factory for menu actions, Welcome-screen
+requests, and provider-selected pages. Each path captures the current navigation
+borrow and admission diagnostics together with the actual page/theme authority.
+Modal lifecycle tests cover navigation retirement, while real host menu tests
+retain original navigation admission failures. Native page ABI 1.5 is unchanged.
+
 ## External C ABI 1.5 → 1.6 inspector declarations
 
 ABI 1.6 appends `registerEditorInspector` after the unchanged 1.5 page prefix.

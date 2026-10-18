@@ -7,11 +7,12 @@
 namespace Horo::Extensions {
     namespace {
         /** @brief Admits only owner-lane operations on a committed exact native activation. */
-        HoroExtensionStatus Open(void *context) noexcept {
+        // The C11 session callback signature carries an opaque context; the typed owner is checked below.
+        HoroExtensionStatus Open(void *context) noexcept {  // NOSONAR(cpp:S5008): C ABI context.
             if (!context)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             try {
-                auto &session = *static_cast<EditorPageNativeSession *>(context);
+                const auto &session = *static_cast<EditorPageNativeSession *>(context);
                 const auto host = session.host.lock();
                 if (!host || session.revoked || !session.committed || session.owner != std::this_thread::get_id())
                     return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
@@ -24,11 +25,12 @@ namespace Horo::Extensions {
         }
 
         /** @brief Cancels only the exact admitted native contribution, preserving uncertain persistence recovery state. */
-        HoroExtensionStatus Close(void *context) noexcept {
+        // The C11 session callback signature carries an opaque context; the typed owner is checked below.
+        HoroExtensionStatus Close(void *context) noexcept {  // NOSONAR(cpp:S5008): C ABI context.
             if (!context)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
             try {
-                auto &session = *static_cast<EditorPageNativeSession *>(context);
+                const auto &session = *static_cast<EditorPageNativeSession *>(context);
                 const auto host = session.host.lock();
                 if (!host || session.revoked || !session.committed || session.owner != std::this_thread::get_id())
                     return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
@@ -73,9 +75,17 @@ namespace Horo::Extensions {
             if (load.pageGeneration == 0)
                 return EditorPageDetail::Failure();
             surface.provider = {load.manifest->id, load.extensionModule->id, load.pageGeneration};
-            surface.kind = input.kind == HORO_EDITOR_PAGE_SETTINGS ? EditorSurfaceKind::SettingsPage
-                           : input.kind == HORO_EDITOR_PAGE_MODAL  ? EditorSurfaceKind::Modal
-                                                                   : EditorSurfaceKind::ModalPage;
+            switch (input.kind) {
+                case HORO_EDITOR_PAGE_SETTINGS:
+                    surface.kind = EditorSurfaceKind::SettingsPage;
+                    break;
+                case HORO_EDITOR_PAGE_MODAL:
+                    surface.kind = EditorSurfaceKind::Modal;
+                    break;
+                default:
+                    surface.kind = EditorSurfaceKind::ModalPage;
+                    break;
+            }
             surface.placement = {input.kind == HORO_EDITOR_PAGE_SETTINGS ? EditorSurfacePlacementKind::Settings
                                                                          : EditorSurfacePlacementKind::Modal,
                                  {},
@@ -104,12 +114,12 @@ namespace Horo::Extensions {
             if (auto valid = ValidateEditorPageDefinition(session->descriptor.surface, session->definition); valid.HasError())
                 return Result<std::shared_ptr<EditorPageNativeSession>>::Failure(valid.ErrorValue());
             for (const auto &field : session->definition.fields)
-                session->descriptor.state.push_back({field.binding.value});
+                session->descriptor.state.emplace_back(field.binding.value);
             for (const auto &message : session->definition.messages)
-                session->descriptor.localization.push_back({message.key});
+                session->descriptor.localization.emplace_back(message.key);
             for (const auto &node : session->definition.form.nodes)
                 if (const auto *action = std::get_if<EditorUiActionNode>(&node.payload))
-                    session->descriptor.commands.push_back({action->action.value});
+                    session->descriptor.commands.emplace_back(action->action.value);
             auto &keys = session->descriptor.localization;
             std::ranges::sort(keys, {}, &EditorSurfaceLocalizationKey::value);
             keys.erase(std::ranges::unique(keys).begin(), keys.end());
@@ -136,8 +146,9 @@ namespace Horo::Extensions {
     }  // namespace
 
     /** @copydoc RegisterExternalEditorPage */
-    HoroExtensionStatus RegisterExternalEditorPage(void *context, const HoroEditorPageDescriptor *input,
-                                                   HoroEditorPageSessionApi *api) noexcept {
+    // C11 registration supplies the exact loading-session context, checked before the concrete cast.
+    HoroExtensionStatus RegisterExternalEditorPage(void *context,  // NOSONAR(cpp:S5008): C ABI context.
+                                                   const HoroEditorPageDescriptor *input, HoroEditorPageSessionApi *api) noexcept {
         if (!context || !input || !api || input->structSize < sizeof(*input) || api->structSize < sizeof(*api))
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
         auto &load = *static_cast<AssetImporterRegistrationSession *>(context);
@@ -176,7 +187,8 @@ namespace Horo::Extensions {
                         return committed;
                     }
                 }
-        } catch (...) {
+            // Foreign contribution publication may throw any type; rollback must precede native teardown.
+        } catch (...) {  // NOSONAR(cpp:S2738): Foreign ABI boundary.
             Revoke(lifetimes);
             return EditorPageDetail::Failure(ExtensionErrors::ContributionRejected);
         }
@@ -185,11 +197,12 @@ namespace Horo::Extensions {
 
     /** @copydoc ValidateEditorPageClaims */
     Result<void> ValidateEditorPageClaims(const AssetImporterRegistrationSession &registration) {
-        const auto count = std::ranges::count_if(registration.manifest->contributions, [&](const auto &claim) {
+        if (const auto count = std::ranges::count_if(registration.manifest->contributions,
+                                                     [&](const auto &claim) {
             return claim.owningModule == registration.extensionModule->id &&
                    (claim.type == "editor.settings_page" || claim.type == "editor.modal" || claim.type == "editor.modal_page");
         });
-        if (static_cast<std::size_t>(count) != registration.lifetime->editorPages.size())
+            static_cast<std::size_t>(count) != registration.lifetime->editorPages.size())
             return EditorPageDetail::Failure(ExtensionErrors::ContributionRejected);
         return Result<void>::Success();
     }

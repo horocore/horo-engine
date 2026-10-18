@@ -14,15 +14,16 @@ namespace Horo::Extensions::Detail {
 
         /** @brief Maps only the four explicit uniform page domains; no process or path authority crosses the ABI. */
         SettingScope Scope(uint32_t scope) {
+            using enum SettingScope;
             switch (scope) {
                 case HORO_EDITOR_PAGE_USER:
-                    return SettingScope::User;
+                    return User;
                 case HORO_EDITOR_PAGE_PROJECT:
-                    return SettingScope::Project;
+                    return Project;
                 case HORO_EDITOR_PAGE_WORKSPACE:
-                    return SettingScope::Workspace;
+                    return Workspace;
                 default:
-                    return SettingScope::Session;
+                    return Session;
             }
         }
 
@@ -48,6 +49,19 @@ namespace Horo::Extensions::Detail {
             }
         }
 
+        /** @brief Maps the already validated ABI value kind to its canonical setting type. */
+        SettingValueType ValueType(uint32_t kind) {
+            using enum SettingValueType;
+            switch (kind) {
+                case HORO_EDITOR_PAGE_BOOLEAN:
+                    return Boolean;
+                case HORO_EDITOR_PAGE_INTEGER:
+                    return Integer;
+                default:
+                    return String;
+            }
+        }
+
         /** @brief Couples a canonical setting descriptor to one standard editable primitive, using the same binding identity. */
         Result<EditorPageField> Field(const HoroEditorPageField &input, SettingScope scope, EditorUiForm &form) {
             if (!HoroEditorPageFieldShape(&input))
@@ -63,9 +77,7 @@ namespace Horo::Extensions::Detail {
             base.label.kind = EditorUiTextKind::LocalizationKey;
             base.readOnly = (input.flags & HORO_EDITOR_PAGE_FIELD_READ_ONLY) != 0;
             base.enabled = (input.flags & HORO_EDITOR_PAGE_FIELD_DISABLED) == 0;
-            const auto type = input.defaultValue.kind == HORO_EDITOR_PAGE_BOOLEAN   ? SettingValueType::Boolean
-                              : input.defaultValue.kind == HORO_EDITOR_PAGE_INTEGER ? SettingValueType::Integer
-                                                                                    : SettingValueType::String;
+            const auto type = ValueType(input.defaultValue.kind);
             field.setting = {SettingKey{field.binding.value}, type, std::move(value).Value(), scope, ReloadPolicy::NextOperation,
                              SettingSensitivity::Public,      {}};
             field.maximumStringBytes = input.maximumStringBytes;
@@ -74,17 +86,17 @@ namespace Horo::Extensions::Detail {
             if ((input.flags & HORO_EDITOR_PAGE_INTEGER_MAXIMUM) != 0)
                 field.maximum = input.maximumInteger;
             if (type == SettingValueType::Boolean)
-                form.nodes.push_back({EditorUiBooleanNode{base, field.binding, std::get<bool>(field.setting.defaultValue)}});
+                form.nodes.emplace_back(EditorUiBooleanNode{base, field.binding, std::get<bool>(field.setting.defaultValue)});
             else if (type == SettingValueType::Integer)
-                form.nodes.push_back({EditorUiNumberNode{.base = base,
-                                                         .binding = field.binding,
-                                                         .numberKind = EditorUiNumberKind::Integer,
-                                                         .value = std::get<int64_t>(field.setting.defaultValue)}});
+                form.nodes.emplace_back(EditorUiNumberNode{.base = base,
+                                                           .binding = field.binding,
+                                                           .numberKind = EditorUiNumberKind::Integer,
+                                                           .value = std::get<int64_t>(field.setting.defaultValue)});
             else
-                form.nodes.push_back({EditorUiTextFieldNode{.base = base,
-                                                            .binding = field.binding,
-                                                            .value = std::get<std::string>(field.setting.defaultValue),
-                                                            .maximumBytes = field.maximumStringBytes}});
+                form.nodes.emplace_back(EditorUiTextFieldNode{.base = base,
+                                                              .binding = field.binding,
+                                                              .value = std::get<std::string>(field.setting.defaultValue),
+                                                              .maximumBytes = field.maximumStringBytes});
             return Result<EditorPageField>::Success(std::move(field));
         }
 
@@ -96,9 +108,9 @@ namespace Horo::Extensions::Detail {
             std::size_t total{};
             for (uint32_t i = 0; i < input.messageCount; ++i) {
                 EditorPageMessage message;
-                const auto &source = input.messages[i];
-                if (!CopyActivityText(source.locale, message.locale, 32) || !CopyActivityText(source.key, message.key, 128) ||
-                    !CopyActivityText(source.value, message.value, 4096))
+                if (const auto &source = input.messages[i]; !CopyActivityText(source.locale, message.locale, 32) ||
+                                                            !CopyActivityText(source.key, message.key, 128) ||
+                                                            !CopyActivityText(source.value, message.value, 4096))
                     return Invalid();
                 total += message.locale.size() + message.key.size() + message.value.size();
                 if (total > 65536)
@@ -147,13 +159,13 @@ namespace Horo::Extensions::Detail {
             std::string permission;
             if (!CopyActivityText(input.permissions[i], permission, 128))
                 return Invalid();
-            context.surface.requiredPermissions.push_back({std::move(permission)});
+            context.surface.requiredPermissions.emplace_back(std::move(permission));
         }
         for (uint32_t i = 0; i < input.diagnosticCodeCount; ++i) {
             std::string code;
             if (!CopyActivityText(input.diagnosticCodes[i], code, 128))
                 return Invalid();
-            context.diagnostics.push_back({std::move(code)});
+            context.diagnostics.emplace_back(std::move(code));
         }
         return Result<void>::Success();
     }

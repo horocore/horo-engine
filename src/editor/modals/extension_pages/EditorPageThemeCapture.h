@@ -19,7 +19,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Extensions::EditorThemeFrame> Frame() const noexcept;
 
     private:
-        std::shared_ptr<Extensions::EditorThemeFrame> frame_;
+        std::shared_ptr<Extensions::EditorThemeFrame> frame_{std::make_shared<Extensions::EditorThemeFrame>()};
         std::optional<Sha256Digest> signature_;
         std::array<const ImFont *, 4> fonts_{};
         std::uint64_t revision_{};

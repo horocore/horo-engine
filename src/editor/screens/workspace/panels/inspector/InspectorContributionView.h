@@ -52,7 +52,7 @@ namespace Horo::Editor {
         [[nodiscard]] bool CaptureValues(Entry &entry, const Gameplay::BehaviorDescriptor &descriptor,
                                          const Gameplay::BehaviorComponent &behavior, const EditorWorkspaceViewModel &model) const;
         /** @brief Resolves real shared tokens/width into a cached validated snapshot; failure preserves generic presentation. */
-        [[nodiscard]] bool Prepare(Entry &entry);
+        [[nodiscard]] bool Prepare(Entry &entry) const;
         /** @brief Draws one prepared field/text using only shared controls, preserving localized wrapping and exact integer text. */
         void DrawNode(Entry &entry, std::size_t index, const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
                       const EditorGuiContext &context);
@@ -62,10 +62,10 @@ namespace Horo::Editor {
                                                                                  const EditorGuiContext &context);
         /** @brief Validates a typed interaction against copied constraints, then emits a complete owner-fenced command. */
         void Queue(Entry &entry, const Extensions::EditorInspectorField &field, Extensions::EditorInspectorScalar value,
-                   const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command);
+                   const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command) const;
         /** @brief Emits explicit document-owner admission intent; unapproved declarations never replace generic controls. */
-        void DrawApproval(Entry &entry, const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
-                          const EditorGuiContext &context);
+        void DrawApproval(const Entry &entry, const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
+                          const EditorGuiContext &context) const;
         /** @brief Draws the complete admitted entry in resolved geometry order, including semantic parent labels. */
         void DrawEntry(Entry &entry, const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
                        const EditorGuiContext &context);

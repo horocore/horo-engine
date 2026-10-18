@@ -403,6 +403,7 @@ namespace Horo::Editor {
             }
         }
 
+#if defined(HORO_HAS_OPENTELEMETRY)
         [[nodiscard]] std::optional<std::string> ReadEnvironmentVariable(const char *name) {
 #if defined(_MSC_VER)
             char *value = nullptr;
@@ -416,6 +417,7 @@ namespace Horo::Editor {
             return std::nullopt;
 #endif
         }
+#endif
 
         [[nodiscard]] std::string CurrentSystemErrorMessage() {
 #if defined(_MSC_VER)

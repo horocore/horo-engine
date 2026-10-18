@@ -41,9 +41,9 @@ namespace Horo::Extensions::Tests {
         std::visit([](auto &node) {
             node.base.parent = {"root"};
         }, definition.form.nodes.front().payload);
-        definition.form.nodes.insert(definition.form.nodes.begin(),
-                                     {EditorUiContainerNode{.base = {.id = {"root"}, .focusPolicy = EditorUiFocusPolicy::Never},
-                                                            .layout = EditorUiLayoutKind::Row}});
+        definition.form.nodes.emplace(definition.form.nodes.begin(),
+                                      EditorUiContainerNode{.base = {.id = {"root"}, .focusPolicy = EditorUiFocusPolicy::Never},
+                                                            .layout = EditorUiLayoutKind::Row});
         CHECK(ValidateEditorInspectorDefinition(surface, definition).HasError());
         auto &root = std::get<EditorUiContainerNode>(definition.form.nodes.front().payload);
         root.layout = EditorUiLayoutKind::Stack;
@@ -79,7 +79,7 @@ namespace Horo::Extensions::Tests {
         CHECK(fixture.registry.Revision() != registryVersion);
         CHECK(fixture.host.Revision() == version);
         bool rejected{};
-        std::thread other{[&] {
+        std::jthread other{[&rejected, &fixture] {
             rejected = fixture.host.Contributions("game.fixture.counter", 3).HasError();
         }};
         other.join();

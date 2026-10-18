@@ -30,8 +30,7 @@ namespace Horo::Editor {
 
         /** @brief Copies exact scalar owner values without coercing integers through floating point. */
         std::optional<EditorInspectorScalar> Scalar(const Gameplay::BehaviorFieldValue &input) {
-            return std::visit([](const auto &value) -> std::optional<EditorInspectorScalar> {
-                using T = std::decay_t<decltype(value)>;
+            return std::visit([]<class T>(const T &value) -> std::optional<EditorInspectorScalar> {
                 if constexpr (std::is_same_v<T, bool> || std::is_same_v<T, std::int64_t> || std::is_same_v<T, double> ||
                               std::is_same_v<T, std::string>)
                     return EditorInspectorScalar{value};
@@ -40,40 +39,54 @@ namespace Horo::Editor {
             }, input);
         }
 
+        /** @brief Formats a finite decimal without changing the owner's round-trip precision. */
+        bool FormatDecimal(double number, std::string &buffer) {
+            std::array<char, 64> text{};
+            const auto result = std::to_chars(text.data(), text.data() + text.size(), number, std::chars_format::general,
+                                              std::numeric_limits<double>::max_digits10);
+            if (result.ec != std::errc{})
+                return false;
+            buffer.assign(text.data(), result.ptr);
+            return true;
+        }
+
+        /** @brief Installs exact numeric alternatives only when the admitted control has the same numeric kind. */
+        bool InstallNumber(EditorUiNumberNode &node, const EditorInspectorScalar &value, std::string &buffer) {
+            return std::visit([&node, &buffer]<class T>(const T &number) {
+                if constexpr (std::is_same_v<T, std::int64_t>) {
+                    if (node.numberKind != EditorUiNumberKind::Integer)
+                        return false;
+                    node.value = number;
+                    buffer = std::to_string(number);
+                } else if constexpr (std::is_same_v<T, double>) {
+                    if (node.numberKind != EditorUiNumberKind::Decimal || !FormatDecimal(number, buffer))
+                        return false;
+                    node.value = number;
+                } else
+                    return false;
+                buffer.reserve(64);
+                return true;
+            }, value);
+        }
+
         /** @brief Installs actual values in one admitted primitive, retaining constraints and exact full-width storage. */
         bool Install(EditorUiNode &node, const EditorInspectorScalar &value, std::string &buffer) {
-            return std::visit([&](auto &typed) {
-                using T = std::decay_t<decltype(typed)>;
+            return std::visit([&value, &buffer]<class T>(T &typed) {
                 if constexpr (std::is_same_v<T, EditorUiBooleanNode>) {
-                    if (!std::holds_alternative<bool>(value))
+                    const auto *boolean = std::get_if<bool>(&value);
+                    if (!boolean)
                         return false;
-                    typed.value = std::get<bool>(value);
+                    typed.value = *boolean;
                 } else if constexpr (std::is_same_v<T, EditorUiTextFieldNode>) {
-                    if (!std::holds_alternative<std::string>(value))
+                    const auto *text = std::get_if<std::string>(&value);
+                    if (!text)
                         return false;
-                    typed.value = std::get<std::string>(value);
+                    typed.value = *text;
                     buffer = typed.value;
                     buffer.reserve(typed.maximumBytes);
-                } else if constexpr (std::is_same_v<T, EditorUiNumberNode>) {
-                    if (const auto *integer = std::get_if<std::int64_t>(&value)) {
-                        if (typed.numberKind != EditorUiNumberKind::Integer)
-                            return false;
-                        typed.value = *integer;
-                        buffer = std::to_string(*integer);
-                    } else if (const auto *number = std::get_if<double>(&value)) {
-                        if (typed.numberKind != EditorUiNumberKind::Decimal)
-                            return false;
-                        typed.value = *number;
-                        std::array<char, 64> text{};
-                        const auto result = std::to_chars(text.data(), text.data() + text.size(), *number, std::chars_format::general,
-                                                          std::numeric_limits<double>::max_digits10);
-                        if (result.ec != std::errc{})
-                            return false;
-                        buffer.assign(text.data(), result.ptr);
-                    } else
-                        return false;
-                    buffer.reserve(64);
-                } else
+                } else if constexpr (std::is_same_v<T, EditorUiNumberNode>)
+                    return InstallNumber(typed, value, buffer);
+                else
                     return false;
                 return true;
             }, node.payload);

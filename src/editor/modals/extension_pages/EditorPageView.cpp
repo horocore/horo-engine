@@ -4,12 +4,34 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Extensions/ExtensionErrors.h"
+#include "Horo/Foundation/Logging/Logger.h"
 
 #include <algorithm>
 #include <imgui.h>
 
 namespace Horo::Editor {
     using namespace Extensions;
+
+    namespace {
+        /** @brief Preserves the admitted node and ancestor restrictions within the validated maximum tree depth. */
+        bool AdmitsEditing(const EditorUiNodeBase &base, const EditorPageProjection &page) {
+            bool admitted = base.enabled && !base.readOnly;
+            auto parent = base.parent;
+            for (std::size_t depth = 0; depth < 16; ++depth) {
+                if (!parent.IsValid())
+                    return admitted;
+                const auto found = std::ranges::find_if(page.form.nodes, [&](const auto &candidate) {
+                    return EditorUiNodeBaseOf(candidate).id == parent;
+                });
+                if (found == page.form.nodes.end())
+                    return false;
+                const auto &ancestor = EditorUiNodeBaseOf(*found);
+                admitted = admitted && ancestor.enabled && !ancestor.readOnly;
+                parent = ancestor.parent;
+            }
+            return admitted;
+        }
+    }  // namespace
 
     /** @copydoc EditorPageView::EditorPageView */
     EditorPageView::EditorPageView(const EditorGuiContext &context, std::shared_ptr<EditorPageHost> host,
@@ -56,6 +78,9 @@ namespace Horo::Editor {
         try {
             Accept(host_->Cancel(provider_, id_));
         } catch (...) {
+            // Cancellation is noexcept; preserve owner shutdown responsibility and report without allocating another Error.
+            Log::Logger::WriteEmergency("editor.extensions", Log::Level::Error,
+                                        "Extension page cancellation threw; owner shutdown must still drain pending work.");
         }
     }
 
@@ -64,8 +89,7 @@ namespace Horo::Editor {
         if (bufferRevision_ == page.revision)
             return;
         for (std::size_t i = 0; i < page.form.nodes.size(); ++i)
-            std::visit([&](const auto &node) {
-                using T = std::decay_t<decltype(node)>;
+            std::visit([&]<typename T>(const T &node) {
                 if constexpr (std::is_same_v<T, EditorUiNumberNode>) {
                     buffers_[i].reserve(20);
                     buffers_[i] = std::to_string(std::get<std::int64_t>(node.value));
@@ -130,20 +154,7 @@ namespace Horo::Editor {
         const auto &base = EditorUiNodeBaseOf(node);
         ImGui::PushID(base.id.value.c_str());
         const bool editable = page.state == EditorPageState::Editing || page.state == EditorPageState::Failed;
-        bool admitted = base.enabled && !base.readOnly;
-        auto parent = base.parent;
-        for (std::size_t depth = 0; parent.IsValid() && depth < 16; ++depth) {
-            const auto found = std::ranges::find_if(page.form.nodes, [&](const auto &candidate) {
-                return EditorUiNodeBaseOf(candidate).id == parent;
-            });
-            if (found == page.form.nodes.end()) {
-                admitted = false;
-                break;
-            }
-            const auto &ancestor = EditorUiNodeBaseOf(*found);
-            admitted = admitted && ancestor.enabled && !ancestor.readOnly;
-            parent = ancestor.parent;
-        }
+        const bool admitted = AdmitsEditing(base, page);
         ImGui::BeginDisabled(!admitted || !editable);
         if (page.focused == base.id && ImGui::IsWindowAppearing())
             ImGui::SetKeyboardFocusHere();
@@ -162,40 +173,63 @@ namespace Horo::Editor {
         ImGui::PopID();
     }
 
+    /** @copydoc EditorPageView::DrawBoolean */
+    void EditorPageView::DrawBoolean(const EditorUiBooleanNode &node, const EditorPageProjection &page) {
+        auto value = node.value;
+        if (Ui::ToggleControl("value", &value, context_.theme.fonts))
+            Accept(host_->SetValue(provider_, id_, page.revision, {node.binding, value}));
+    }
+
+    /** @copydoc EditorPageView::DrawInteger */
+    void EditorPageView::DrawInteger(const EditorUiNumberNode &node, const EditorPageProjection &page, std::size_t index) {
+        if (!Ui::InputTextControl("value", buffers_[index], 21, context_.theme.fonts))
+            return;
+        auto value = ParseEditorPageInteger(buffers_[index]);
+        if (value.HasError())
+            failure_ = value.ErrorValue();
+        else
+            Accept(host_->SetValue(provider_, id_, page.revision, {node.binding, value.Value()}));
+    }
+
+    /** @copydoc EditorPageView::DrawText */
+    void EditorPageView::DrawText(const EditorUiTextFieldNode &node, const EditorPageProjection &page, std::size_t index) {
+        if (Ui::InputTextControl("value", buffers_[index], node.maximumBytes + 1, context_.theme.fonts))
+            Accept(host_->SetValue(provider_, id_, page.revision, {node.binding, buffers_[index]}));
+    }
+
+    /** @copydoc EditorPageView::DrawAction */
+    void EditorPageView::DrawAction(const EditorUiActionNode &node, const EditorUiNodeBase &base, const EditorPageProjection &page) {
+        if (Ui::Button({.label = Text(base.label.value)}))
+            Accept(host_->Apply(provider_, id_, page.revision, node.action));
+    }
+
+    /** @copydoc EditorPageView::DrawMessage */
+    void EditorPageView::DrawMessage(const EditorUiText &text) const {
+        const auto *value = text.kind == EditorUiTextKind::LocalizationKey ? Text(text.value) : text.value.c_str();
+        ImGui::TextWrapped("%s", value);
+    }
+
     /** @copydoc EditorPageView::DrawValue */
     void EditorPageView::DrawValue(const EditorUiNode &node, const EditorPageProjection &page, std::size_t index) {
-        const auto &base = EditorUiNodeBaseOf(node);
-        std::visit([&](const auto &typed) {
-            using T = std::decay_t<decltype(typed)>;
-            if constexpr (std::is_same_v<T, EditorUiBooleanNode>) {
-                auto value = typed.value;
-                if (Ui::ToggleControl("value", &value, context_.theme.fonts))
-                    Accept(host_->SetValue(provider_, id_, page.revision, {typed.binding, value}));
-            } else if constexpr (std::is_same_v<T, EditorUiNumberNode>) {
-                if (Ui::InputTextControl("value", buffers_[index], 21, context_.theme.fonts)) {
-                    auto value = ParseEditorPageInteger(buffers_[index]);
-                    if (value.HasError())
-                        failure_ = value.ErrorValue();
-                    else
-                        Accept(host_->SetValue(provider_, id_, page.revision, {typed.binding, value.Value()}));
-                }
-            } else if constexpr (std::is_same_v<T, EditorUiTextFieldNode>) {
-                if (Ui::InputTextControl("value", buffers_[index], typed.maximumBytes + 1, context_.theme.fonts))
-                    Accept(host_->SetValue(provider_, id_, page.revision, {typed.binding, buffers_[index]}));
-            } else if constexpr (std::is_same_v<T, EditorUiActionNode>) {
-                if (Ui::Button({.label = Text(base.label.value)}))
-                    Accept(host_->Apply(provider_, id_, page.revision, typed.action));
-            } else if constexpr (std::is_same_v<T, EditorUiTextNode> || std::is_same_v<T, EditorUiLabelNode>) {
-                const auto *text = typed.text.kind == EditorUiTextKind::LocalizationKey ? Text(typed.text.value) : typed.text.value.c_str();
-                ImGui::TextWrapped("%s", text);
-            }
+        std::visit([&]<typename T>(const T &typed) {
+            if constexpr (std::is_same_v<T, EditorUiBooleanNode>)
+                DrawBoolean(typed, page);
+            else if constexpr (std::is_same_v<T, EditorUiNumberNode>)
+                DrawInteger(typed, page, index);
+            else if constexpr (std::is_same_v<T, EditorUiTextFieldNode>)
+                DrawText(typed, page, index);
+            else if constexpr (std::is_same_v<T, EditorUiActionNode>)
+                DrawAction(typed, EditorUiNodeBaseOf(node), page);
+            else if constexpr (std::is_same_v<T, EditorUiTextNode> || std::is_same_v<T, EditorUiLabelNode>)
+                DrawMessage(typed.text);
         }, node.payload);
     }
 
     /** @copydoc EditorPageView::DrawForm */
     void EditorPageView::DrawForm(const EditorPageProjection &page) {
         const auto origin = ImGui::GetCursorScreenPos();
-        float extra{}, bottom{};
+        float extra{};
+        float bottom{};
         for (std::size_t ordinal = 0; ordinal < page.form.nodes.size(); ++ordinal) {
             const auto i = renderOrder_[ordinal];
             const auto &geometry = render_->nodes[i];
@@ -251,30 +285,37 @@ namespace Horo::Editor {
             Cancel();
     }
 
+    /** @copydoc EditorPageView::DrawSettingsChoice */
+    bool EditorPageView::DrawSettingsChoice(const EditorPageProjection &page, const EditorPageProjection *current, const bool maySwitch) {
+        if (page.surface.kind != EditorSurfaceKind::SettingsPage && page.surface.kind != EditorSurfaceKind::Modal)
+            return true;
+        ImGui::PushID(page.surface.id.c_str());
+        if (const auto label =
+                host_->LocalizedText(page.surface.provider, page.surface.labelLocalizationKey, context_.settings.settings.languageTag);
+            Ui::Button({.label = label.data(), .enabled = maySwitch})) {
+            if (page.surface.kind == EditorSurfaceKind::Modal) {
+                ImGui::PopID();
+                Accept(host_->Begin(page.surface.provider, page.surface.id));
+                return false;
+            }
+            if (!current || current->surface.provider != page.surface.provider || current->surface.id != page.surface.id) {
+                if (current)
+                    Cancel();
+                Select(page.surface.provider, page.surface.id);
+                Accept(host_->Begin(provider_, id_));
+            }
+        }
+        ImGui::PopID();
+        return true;
+    }
+
     /** @copydoc EditorPageView::DrawSettings */
     void EditorPageView::DrawSettings() {
         const auto *current = Current();
         const bool maySwitch = !current || (!current->dirty && current->state != EditorPageState::Validating);
         for (const auto &page : host_->Prepared())
-            if (page.surface.kind == EditorSurfaceKind::SettingsPage || page.surface.kind == EditorSurfaceKind::Modal) {
-                ImGui::PushID(page.surface.id.c_str());
-                const auto label =
-                    host_->LocalizedText(page.surface.provider, page.surface.labelLocalizationKey, context_.settings.settings.languageTag);
-                if (Ui::Button({.label = label.data(), .enabled = maySwitch})) {
-                    if (page.surface.kind == EditorSurfaceKind::Modal) {
-                        ImGui::PopID();
-                        Accept(host_->Begin(page.surface.provider, page.surface.id));
-                        return;
-                    }
-                    if (!current || current->surface.provider != page.surface.provider || current->surface.id != page.surface.id) {
-                        if (current)
-                            Cancel();
-                        Select(page.surface.provider, page.surface.id);
-                        Accept(host_->Begin(provider_, id_));
-                    }
-                }
-                ImGui::PopID();
-            }
+            if (!DrawSettingsChoice(page, current, maySwitch))
+                return;
         DrawPage();
     }
 }  // namespace Horo::Editor
