@@ -11,6 +11,13 @@ set_tests_properties(HoroSaveObservabilityDependencyPolicyTest PROPERTIES LABELS
 include(Catch)
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroCiSuites.cmake")
 
+# A portable lease consumer must link without the native Platform archive or its ordering.
+add_executable(HoroPublicationLockFoundationConsumer support/PublicationLockFoundationConsumer.cpp)
+target_compile_features(HoroPublicationLockFoundationConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPublicationLockFoundationConsumer PRIVATE HoroEngine::Foundation)
+add_test(NAME HoroPublicationLockFoundationConsumer COMMAND HoroPublicationLockFoundationConsumer)
+set_tests_properties(HoroPublicationLockFoundationConsumer PROPERTIES LABELS "unit;foundation;headless;ci-windows;sonar-coverage")
+
 add_test(NAME HoroDependencyDirectionNegativeConfigureTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_ENGINE_SOURCE_DIR=${PROJECT_SOURCE_DIR}"
@@ -114,6 +121,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PhysicsInspectorPublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
@@ -213,6 +221,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
     add_executable(HoroEditorUiAutomationTests
             gui/EditorUiAutomationHarnessTests.cpp
             gui/FullEditorUiAutomationScenarios.cpp
+            gui/PhysicsInspectorUiScenarios.cpp
             gui/PackageModalUiTests.cpp
             helpers/editor_ui/EditorUiTestHarness.cpp
             helpers/editor_ui/EditorUiTestSurface.cpp
@@ -2081,6 +2090,7 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroEngine::EditorServices
     )
     add_executable(HoroEditorPresentationTests
+            unit/editor/CollisionSettingsPresentationTests.cpp
             unit/editor/SettingsModalPresentationTests.cpp
             unit/editor/NavigationDefinitionPresentationTests.cpp
             unit/editor/NavigationPolicyPresentationTests.cpp
@@ -2116,6 +2126,7 @@ if (HORO_BUILD_EDITOR_GUI)
 endif ()
 add_executable(HoroEditorLocalizationServiceTests
         unit/editor/LocalizationServiceTests.cpp
+        unit/editor/PhysicsInspectorLocalizationTests.cpp
 )
 
 target_compile_features(HoroEditorLocalizationServiceTests PRIVATE cxx_std_20)
@@ -2381,6 +2392,26 @@ target_link_libraries(HoroProjectCreationServiceTests
         PRIVATE
         HoroEngine::EditorServices
 )
+add_executable(HoroProjectCollisionSettingsTests
+        unit/editor/ProjectCollisionSettingsTests.cpp
+        unit/editor/CollisionProjectSettingsSessionTests.cpp
+        unit/editor/CollisionReferenceReviewTests.cpp
+        unit/editor/CollisionInventoryFreshnessTests.cpp
+        unit/editor/NativeAssetRegistrySourceTests.cpp
+        unit/editor/CollisionSceneParserFailureTests.cpp
+        unit/editor/CollisionStorePublicationTests.cpp
+        support/AllocationProbe.cpp)
+target_compile_features(HoroProjectCollisionSettingsTests PRIVATE cxx_std_20)
+target_include_directories(HoroProjectCollisionSettingsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroProjectCollisionSettingsTests PRIVATE Catch2::Catch2WithMain
+        HoroEngine::ProjectCollisionSettings HoroEngine::EditorServices HoroEngine::SceneSource
+        HoroEngine::PlatformProjectReadFiles nlohmann_json::nlohmann_json)
+horo_register_catch_test(HoroProjectCollisionSettingsTests LABELS "unit;project;physics;headless;ci-windows;sonar-coverage")
+add_executable(HoroCollisionSettingsPublicConsumer support/CollisionSettingsPublicConsumer.cpp)
+target_compile_features(HoroCollisionSettingsPublicConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroCollisionSettingsPublicConsumer PRIVATE HoroEngine::ProjectCollisionSettings HoroEngine::EditorServices)
+add_test(NAME HoroCollisionSettingsPublicConsumer COMMAND HoroCollisionSettingsPublicConsumer)
+set_tests_properties(HoroCollisionSettingsPublicConsumer PROPERTIES LABELS "unit;project;physics;headless;ci-windows;sonar-coverage")
 add_executable(HoroNavigationProjectSettingsTests
         unit/editor/NavigationProjectSettingsTests.cpp
         unit/editor/NavigationProjectSettingsSessionTests.cpp
@@ -2467,6 +2498,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
             unit/editor/EditorWorkspaceControllerTests.cpp
             unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
+            unit/editor/EditorWorkspaceControllerCollisionTests.cpp
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
             unit/editor/EditorWorkspaceControllerDockingTests.cpp
             unit/editor/EditorWorkspaceControllerInspectorTests.cpp
@@ -2474,6 +2506,7 @@ if (HORO_BUILD_EDITOR_GUI)
             ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewHost.cpp
             ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewDecode.cpp
             ${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorAudioPreviewPreparation.cpp
+            unit/editor/EditorWorkspaceControllerPhysicsTests.cpp
             unit/editor/EditorWorkspaceControllerAssetMutationTests.cpp
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
@@ -2490,6 +2523,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroEditorWorkspaceControllerTests PRIVATE
             "${PROJECT_SOURCE_DIR}/tests/helpers"
             "${PROJECT_SOURCE_DIR}/tests"
+            "${PROJECT_SOURCE_DIR}/tests/support"
             "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
     target_compile_features(HoroEditorWorkspaceControllerTests PRIVATE cxx_std_20)
     target_compile_definitions(HoroEditorWorkspaceControllerTests PRIVATE
@@ -2583,6 +2617,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroInspectorPanelRenderTests
             unit/editor/InspectorPanelRenderTests.cpp
+            unit/editor/PhysicsInspectorRenderTests.cpp
     )
 
     target_compile_features(HoroInspectorPanelRenderTests PRIVATE cxx_std_20)
@@ -2597,6 +2632,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroInspectorEditSessionTests
             unit/editor/InspectorEditSessionTests.cpp
             unit/editor/InspectorAudioComponentTests.cpp
+            unit/editor/PhysicsInspectorSessionTests.cpp
     )
 
     target_compile_features(HoroInspectorEditSessionTests PRIVATE cxx_std_20)
@@ -2934,6 +2970,7 @@ target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorVie
 add_executable(HoroSceneDocumentTests
         unit/editor/NavigationSettingsSceneReloadTests.cpp
         unit/editor/SceneDocumentTests.cpp
+        unit/editor/PhysicsInspectorTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/AudioListenerAuthoringTests.cpp

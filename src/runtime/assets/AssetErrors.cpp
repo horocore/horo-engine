@@ -1,5 +1,7 @@
 #include "AssetErrors.h"
 
+#include "Horo/Assets/AssetRegistrySource.h"
+
 namespace Horo::Assets::AssetErrors {
     namespace {
         const ErrorDomainId kDomain{"horo.asset"};
@@ -167,3 +169,9 @@ namespace Horo::Assets::ImportErrors {
                                                       "Pre-fractured FBX exceeds a finite import limit.",
                                                       "Reduce source complexity before import."};
 }  // namespace Horo::Assets::ImportErrors
+
+namespace Horo::Assets::AssetRegistrySourceErrors {
+    const ErrorCodeDescriptor Deadline{ErrorDomainId{"horo.asset"}, ErrorCode{"asset.registry.deadline"}, ErrorSeverity::Error,
+                                       "The complete asset inventory operation exceeded its deadline.",
+                                       "Retry with a current source and a host-approved finite inventory budget."};
+}

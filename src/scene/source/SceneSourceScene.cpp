@@ -2,6 +2,8 @@
 #include "JsonUtils.h"
 #include "SceneSourceInternal.h"
 
+#include <algorithm>
+#include <functional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -116,13 +118,15 @@ namespace Horo::SceneSource::Detail {
             SceneObjectEditorState{.visible = editor["visible"].get<bool>(), .locked = editor["locked"].get<bool>()});
     }
 
-    [[nodiscard]] Result<SceneObjectSnapshot> ParseSceneObjectSnapshot(const Json &value) {
+    [[nodiscard]] Result<SceneObjectSnapshot> ParseSceneObjectSnapshot(const Json &value, bool &unsupportedComponents) {
+        unsupportedComponents = false;
         if (!value.is_object() || !value.contains("id") || !value["id"].is_number_unsigned() || !value.contains("name") ||
             !value["name"].is_string() || !value.contains("parent") || !value.contains("transform") || !value.contains("primitiveMesh") ||
             !value.contains("components"))
             return Result<SceneObjectSnapshot>::Failure(PersistenceError(SceneInvalid, "Scene object schema is incomplete."));
         auto transform = ParseTransform(value["transform"]);
-        auto components = ParseComponents(value["components"]);
+        std::size_t recognized{};
+        auto components = ParseComponents(value["components"], recognized);
         if (transform.HasError() || components.HasError())
             return Result<SceneObjectSnapshot>::Failure(PersistenceError(SceneInvalid, "Scene object values are invalid."));
         auto parent = ParseSceneObjectParent(value);
@@ -140,6 +144,7 @@ namespace Horo::SceneSource::Detail {
             return Result<SceneObjectSnapshot>::Failure(editorState.ErrorValue());
         if (generated.HasError())
             return Result<SceneObjectSnapshot>::Failure(generated.ErrorValue());
+        unsupportedComponents = recognized != value["components"].size();
         return Result<SceneObjectSnapshot>::Success(SceneObjectSnapshot{
             .id = SceneObjectId{value["id"].get<std::uint64_t>()},
             .parent = parent.Value(),
@@ -215,10 +220,13 @@ namespace Horo::SceneSource::Detail {
             ParsedScene scene;
             scene.objects.reserve(document["objects"].size());
             for (const Json &value : document["objects"]) {
-                auto object = ParseSceneObjectSnapshot(value);
+                bool unsupported{};
+                auto object = ParseSceneObjectSnapshot(value, unsupported);
                 if (object.HasError()) {
                     return Result<ParsedScene>::Failure(object.ErrorValue());
                 }
+                if (unsupported)
+                    scene.unsupportedComponentOwners.push_back(object.Value().id);
                 scene.objects.push_back(std::move(object).Value());
             }
             if (document.contains("prefabInstances")) {
@@ -230,6 +238,9 @@ namespace Horo::SceneSource::Detail {
                     scene.prefabInstances.push_back(std::move(instance).Value());
                 }
             }
+            std::ranges::sort(scene.unsupportedComponentOwners, {}, &SceneObjectId::value);
+            const auto duplicates = std::ranges::unique(scene.unsupportedComponentOwners);
+            scene.unsupportedComponentOwners.erase(duplicates.begin(), duplicates.end());
             return Result<ParsedScene>::Success(std::move(scene));
         } catch (const Json::exception &exception) {
             return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Invalid scene JSON: " + std::string{exception.what()}));

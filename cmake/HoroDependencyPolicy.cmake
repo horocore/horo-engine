@@ -4,6 +4,7 @@ include_guard(GLOBAL)
 # update the architecture policy in the same review.
 horo_allow_target_dependencies(TARGET HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroFoundationJsonInternal)
+horo_allow_target_dependencies(TARGET HoroPublicationLockInternal)
 horo_allow_target_dependencies(TARGET HoroHostErrors DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroSecurity DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroCliHost DEPENDENCIES HoroFoundation HoroHostErrors)
@@ -202,7 +203,7 @@ horo_allow_target_dependencies(TARGET HoroRenderD3D12 DEPENDENCIES HoroRenderApi
 
 horo_allow_target_dependencies(TARGET HoroSceneSourceModel
     DEPENDENCIES HoroFoundation HoroAI HoroPrefab HoroRuntimeScene HoroPrefabOverrideModel)
-horo_allow_target_dependencies(TARGET HoroSceneSource DEPENDENCIES HoroSceneSourceModel HoroPrefabAuthoring)
+horo_allow_target_dependencies(TARGET HoroSceneSource DEPENDENCIES HoroSceneSourceModel HoroPrefabAuthoring HoroFoundationJsonInternal)
 horo_allow_target_dependencies(TARGET HoroSceneRuntimeConversion
     DEPENDENCIES HoroSceneSource HoroPrefabSceneExpansion HoroRuntimeScene HoroSceneSourceCodecInternal)
 horo_allow_target_dependencies(TARGET HoroSceneCook DEPENDENCIES HoroRuntimeScene HoroSceneSourceCodecInternal)
@@ -222,12 +223,13 @@ horo_allow_target_dependencies(TARGET HoroSdlOpenGLPresentationInternal DEPENDEN
 horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard
+    DEPENDENCIES HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
         HoroApplication
         HoroPlatform
+        HoroPlatformProjectReadFiles
         HoroRuntimeUi
         HoroEditorModel
         HoroGameplayModuleHost
@@ -359,3 +361,6 @@ horo_allow_target_dependencies(TARGET HoroCliPackageAdapters DEPENDENCIES HoroCl
 horo_allow_target_dependencies(TARGET HoroMcpPackageAdapters DEPENDENCIES HoroMcpRegistry HoroPackageApplication)
 horo_allow_target_dependencies(TARGET HoroEditorPackageAdapters DEPENDENCIES HoroEditorServices HoroPackageApplication)
 horo_allow_target_dependencies(TARGET HoroPackageProjectHost DEPENDENCIES HoroPackageApplication)
+
+horo_allow_target_dependencies(TARGET HoroProjectCollisionSettings
+    DEPENDENCIES HoroApplication HoroPhysics HoroAssets HoroFoundationJsonInternal)

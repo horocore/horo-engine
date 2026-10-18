@@ -74,7 +74,7 @@ namespace Horo::Tests {
 
         [[nodiscard]] std::filesystem::path MakeIsolatedRoot() {
             const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
-            return std::filesystem::temp_directory_path() / ("horo-full-editor-ui-" + std::to_string(nonce));
+            return std::filesystem::canonical(std::filesystem::temp_directory_path()) / ("horo-full-editor-ui-" + std::to_string(nonce));
         }
 
         [[nodiscard]] Editor::RendererAvailabilitySnapshot MakeRendererAvailability(const IEditorUiTestSurface &surface) {

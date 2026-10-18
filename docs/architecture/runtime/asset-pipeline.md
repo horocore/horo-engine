@@ -92,6 +92,28 @@ candidate; the application owner thread first writes the deterministic derived
 index and only then publishes the validated immutable registry revision. The
 worker never replaces the registry consumed by runtime/editor readers.
 
+Collision authoring freshness uses an explicit root-bound `IAssetRegistrySource`
+owned by Assets. The source supplies physical inventory and bounded sidecar bytes;
+Assets remains Foundation-only and retains the sole extension classifier, pairing
+rules, sidecar decoder and immutable candidate publisher. The upper EditorServices
+composition adapter may privately depend on `HoroPlatformProjectReadFiles` to
+implement this input through the existing native handle-relative read owner.
+Neither Assets nor EditorModel depends on that concrete Platform implementation.
+The application constructs and retains the capability; no registry operation
+selects a backend, discovers a service or constructs an ambient native owner.
+
+The dedicated inventory profile includes real empty directories and reports links
+and special files without following them. It preserves actual Assets/assets
+spelling and accepted hardlinked regular sidecars; symbolic root aliases are
+explicitly rejected by the native source. Its reducible host policy is independent
+of code-query budgets: 1,048,576 entries, 64 MiB of names and a cooperative
+30-second complete-candidate deadline passed explicitly through every sidecar read.
+Each sidecar retains the 1 MiB ceiling. Capacity, deadline and source-read failures
+cannot yield a complete candidate. The old filesystem scanner remains an ordinary
+loading adapter; its upstream standard-library directory iteration is not claimed
+safe under injected allocation failure. Host source migration and qualification
+are specified in [Project collision settings](../../guides/collision-project-settings.md).
+
 An asynchronous request captures an `AssetRecord` and registry revision at
 submission; workers never access mutable registry state. Registry replacement
 therefore cannot invalidate an in-flight read. Completion carries its source

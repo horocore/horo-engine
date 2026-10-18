@@ -4,6 +4,7 @@
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Cinematic/CameraCutRuntime.h"
 #include "Horo/Editor/AudioComponentPreview.h"
+#include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorEngineEventBridge.h"
 #include "Horo/Editor/NavigationProjectSettingsSession.h"
@@ -45,8 +46,11 @@ namespace Horo::Editor {
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
+        CollisionInventoryEvidence *collisionInventory{};
+        CollisionActivationEvidence *collisionActivation{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
+        std::shared_ptr<const Assets::IAssetRegistrySource> assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
         JobSystem *jobs{};
         SourceOpenNavigator sourceOpenNavigator{};
@@ -79,6 +83,16 @@ namespace Horo::Editor {
         void StopAudioPreview() noexcept;
         /** @brief Reconciles authoring/selection changes and copies current typed preview facts. */
         void ReconcileAudioPreview();
+        /** @brief Opens cached project collision authoring bound to this exact canonical Scene opening.
+         * @return Shared owner or typed unavailable/source failure; presentation retains weak references only. */
+        [[nodiscard]] Result<std::shared_ptr<CollisionProjectSettingsSession>> CollisionSettings();
+        /** @brief Includes collision semantics and uncertain durability in the workspace leave guard. */
+        [[nodiscard]] bool HasDirtyCollisionSettings() const noexcept;
+        /** @brief Saves the exact collision draft with complete reference review. @return Original typed outcome. */
+        [[nodiscard]] Result<void> SaveCollisionSettings() const;
+        /** @brief Revokes modal access before Scene owners retire. @param discardDirty Explicit discard decision.
+         * @return Unchanged dirty rejection or successful owner shutdown. */
+        [[nodiscard]] Result<void> ShutdownCollisionSettings(bool discardDirty = false);
 
         /** @brief Starts a camera-only authored preview using the same runtime hard-cut composition as a packaged view.
          * @param activation Owned camera-only plan and player descriptor. @param cuts Required camera bindings/end policy.
@@ -252,8 +266,13 @@ namespace Horo::Editor {
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
         Assets::AssetRegistry *m_mutableAssetRegistry{};
+        CollisionInventoryEvidence *m_collisionInventory{};
+        CollisionActivationEvidence *m_collisionActivation{};
+        Assets::AssetId m_collisionSceneOwner;
+        std::uint64_t m_collisionSceneGeneration{};
         ProjectMutationCoordinator *m_mutations{};
         DurableFileSystem *m_durableFiles{};
+        std::shared_ptr<const Assets::IAssetRegistrySource> m_assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *m_importerCatalog{};
         std::unique_ptr<Assets::AssetPreviewService> m_assetPreviews;
         SourceOpenNavigator m_sourceOpenNavigator;
@@ -274,8 +293,20 @@ namespace Horo::Editor {
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
+        /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
+        void RefreshPhysicsInspectorPort();
+        /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
+        void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Check the actual selection authority and exact owner fence before candidate preparation. */
+        [[nodiscard]] Result<SceneTransactionSnapshot> CapturePhysicsInspectorSnapshot(const EditorWorkspaceViewCommandData &command) const;
+        Assets::AssetId m_physicsDocumentOwner;
+        std::uint64_t m_physicsReplacementEpoch{};
+        const std::thread::id m_physicsOwnerThread{std::this_thread::get_id()};
         SceneDocument m_document;
         EditorHistory m_history;
+        std::optional<SceneDocumentTransactions> m_physicsTransactions;
+        std::optional<SceneDocumentTransactions> m_collisionScene;
+        std::shared_ptr<CollisionProjectSettingsSession> m_collisionSettings;
         std::unique_ptr<SceneDocumentTransactions> m_navigationScene;
         std::unique_ptr<NavigationProjectSettingsSession> m_navigationSettings;
         std::uint64_t m_navigationOpening{1};
@@ -362,6 +393,9 @@ namespace Horo::Editor {
 
         using ContentBrowserPathMoves = std::vector<std::pair<std::filesystem::path, std::filesystem::path>>;
 
+        [[nodiscard]] Result<Assets::AssetRegistryBuildReport> RebuildProjectAssetRegistry(const std::filesystem::path &root);
+        void RefreshCollisionActivation();
+        [[nodiscard]] Result<void> BindCollisionScene();
         void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
         void ScheduleContentBrowserPreviews();
         void PollContentBrowserPreviews();

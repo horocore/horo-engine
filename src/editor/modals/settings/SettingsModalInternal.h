@@ -31,6 +31,7 @@ namespace Horo::Editor::SettingsModalInternal {
         Updates,
         Diagnostics,
         Plugins,
+        Collision,
         ExtensionPages,
     };
 
@@ -82,6 +83,7 @@ namespace Horo::Editor::SettingsModalInternal {
     void DrawNavigationContent(SettingsState &st, const EditorGuiContext &ctx);
     void DrawNavigationSettings(SettingsState &state, const EditorGuiContext &context);
     void DrawContent(SettingsState &st, const EditorGuiContext &ctx);
+    void DrawCollision(SettingsState &st, const EditorGuiContext &ctx);
     void DrawUpdates(SettingsState &st, const EditorGuiContext &ctx);
     [[nodiscard]] bool DrawFooterContent(SettingsState &st, EditorSettingsService &settings, const EditorGuiContext &ctx);
 

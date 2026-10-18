@@ -10,3 +10,10 @@ static_assert(std::is_same_v<decltype(&Horo::Application::ProjectCodeQuery::Quer
                              Horo::Result<Horo::Application::CodeQueryPage> (Horo::Application::ProjectCodeQuery::*)(
                                  const Horo::Application::CodeQueryRequest &, const Horo::Application::CodeQueryContext &) const>);
 static_assert(Horo::Application::CodeQueryLimits{}.maximumPageItems == 128);
+
+static_assert(std::is_same_v<decltype(&Horo::Platform::IProjectReadFiles::Inventory),
+                             Horo::Result<Horo::Platform::ProjectInventory> (Horo::Platform::IProjectReadFiles::*)(
+                                 std::string_view, Horo::Platform::ProjectInventoryDepth, const Horo::Platform::ProjectReadContext &,
+                                 const Horo::Platform::ProjectInventoryLimits &) const>);
+static_assert(Horo::Platform::ProjectReadLimits{}.maximumEntries == 4096);
+static_assert(Horo::Platform::ProjectInventoryLimits{}.maximumEntries == (1U << 20U));

@@ -166,6 +166,7 @@ namespace Horo::Editor {
                                            context.localization.Get("editor", "workspace.inspector.audio_listener_invalid"),
                                            context.theme.fonts, 8.0F);
         }
+        DrawPhysicsInspector(object, viewModel, command, context);
         DrawBehaviors(object, viewModel, command, context);
     }
 

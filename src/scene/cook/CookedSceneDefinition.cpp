@@ -74,10 +74,11 @@ namespace Horo::SceneCook {
                 !value["id"].is_number_unsigned() || (!value["parent"].is_null() && !value["parent"].is_number_unsigned()))
                 return Result<Runtime::RuntimeEntityDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
             auto transform = ParseTransform(value["transform"]);
-            auto components = ParseComponents(value["components"]);
+            std::size_t recognizedComponents{};
+            auto components = ParseComponents(value["components"], recognizedComponents);
             if (transform.HasError() || components.HasError())
                 return Result<Runtime::RuntimeEntityDefinition>::Failure(MakeError(SceneCookErrors::Invalid));
-            if (components.Value().triggerVolume)
+            if (recognizedComponents != value["components"].size() || components.Value().triggerVolume)
                 return Result<Runtime::RuntimeEntityDefinition>::Failure(MakeError(SceneCookErrors::Unsupported));
             std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
             if (!value["primitiveMesh"].is_null()) {

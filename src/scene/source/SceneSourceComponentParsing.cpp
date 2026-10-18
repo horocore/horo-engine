@@ -314,9 +314,10 @@ namespace Horo::SceneSource::Detail {
 
     template <typename Component, typename Parser>
     [[nodiscard]] Result<void> ParseOptionalComponent(const Json &value, const std::string_view name, std::optional<Component> &destination,
-                                                      Parser &&parser) {
+                                                      Parser &&parser, std::size_t &recognized) {
         if (!value.contains(name))
             return Result<void>::Success();
+        ++recognized;
         auto parsed = std::invoke(std::forward<Parser>(parser), value[name]);
         if (parsed.HasError())
             return Result<void>::Failure(parsed.ErrorValue());
@@ -375,9 +376,11 @@ namespace Horo::SceneSource::Detail {
         return Result<Gameplay::SerializedComponent>::Success(std::move(component));
     }
 
-    [[nodiscard]] Result<void> ParseGameplayComponents(const Json &value, std::vector<Gameplay::SerializedComponent> &destination) {
+    [[nodiscard]] Result<void> ParseGameplayComponents(const Json &value, std::vector<Gameplay::SerializedComponent> &destination,
+                                                       std::size_t &recognized) {
         if (!value.contains("gameplayComponents"))
             return Result<void>::Success();
+        ++recognized;
         const Json &gameplayComponents = value["gameplayComponents"];
         if (!gameplayComponents.is_array() || gameplayComponents.size() > Gameplay::MaximumSerializedComponentsPerObject)
             return Result<void>::Failure(PersistenceError(SceneInvalid, "Gameplay component list is invalid."));
@@ -393,26 +396,29 @@ namespace Horo::SceneSource::Detail {
         return Result<void>::Success();
     }
 
-    [[nodiscard]] Result<void> ParseCollectionComponents(const Json &value, SceneObjectComponentSet &components) {
+    [[nodiscard]] Result<void> ParseCollectionComponents(const Json &value, SceneObjectComponentSet &components, std::size_t &recognized) {
         if (value.contains("colliders")) {
+            ++recognized;
             auto colliders = ParseColliders(value["colliders"]);
             if (colliders.HasError())
                 return Result<void>::Failure(colliders.ErrorValue());
             components.colliders = std::move(colliders).Value();
         }
         if (value.contains("physicsConstraints")) {
+            ++recognized;
             auto constraints = ParsePhysicsConstraints(value["physicsConstraints"]);
             if (constraints.HasError())
                 return Result<void>::Failure(constraints.ErrorValue());
             components.physicsConstraints = std::move(constraints).Value();
         }
         if (value.contains("behaviors")) {
+            ++recognized;
             auto behaviors = ParseBehaviors(value["behaviors"]);
             if (behaviors.HasError())
                 return Result<void>::Failure(behaviors.ErrorValue());
             components.behaviors = std::move(behaviors).Value();
         }
-        if (const Result<void> gameplay = ParseGameplayComponents(value, components.gameplayComponents); gameplay.HasError())
+        if (const Result<void> gameplay = ParseGameplayComponents(value, components.gameplayComponents, recognized); gameplay.HasError())
             return Result<void>::Failure(gameplay.ErrorValue());
         return Result<void>::Success();
     }
@@ -433,14 +439,15 @@ namespace Horo::SceneSource::Detail {
             {value["view"].get<std::uint32_t>(), static_cast<std::int32_t>(priority), weight, value["enabled"].get<bool>()});
     }
 
-    [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value) {
+    [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value, std::size_t &recognized) {
+        recognized = 0;
         if (!value.is_object()) {
             return Result<SceneObjectComponentSet>::Failure(PersistenceError(SceneInvalid, "Components must be an object."));
         }
         SceneObjectComponentSet components;
         const auto parse = [&]<typename Component, typename Parser>(const std::string_view name, std::optional<Component> &destination,
                                                                     Parser &&parser) -> Result<void> {
-            return ParseOptionalComponent(value, name, destination, std::forward<Parser>(parser));
+            return ParseOptionalComponent(value, name, destination, std::forward<Parser>(parser), recognized);
         };
         if (auto parsed = parse("camera", components.camera, ParseCameraComponent); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
@@ -468,7 +475,7 @@ namespace Horo::SceneSource::Detail {
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("rigidBody", components.rigidBody, ParseRigidBody); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (const Result<void> collections = ParseCollectionComponents(value, components); collections.HasError())
+        if (const Result<void> collections = ParseCollectionComponents(value, components, recognized); collections.HasError())
             return Result<SceneObjectComponentSet>::Failure(collections.ErrorValue());
         return Result<SceneObjectComponentSet>::Success(std::move(components));
     }

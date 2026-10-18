@@ -1,5 +1,6 @@
 #include "Horo/Editor/ProjectCreationService.h"
 
+#include "../physics/ProjectCollisionTemplate.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -314,6 +315,15 @@ namespace Horo::Editor {
             return std::nullopt;
         }
 
+        /** @brief Writes the explicit validated template only inside the unpublished whole-project staging directory. */
+        [[nodiscard]] bool WriteCollisionScaffolding(const std::filesystem::path &staging, const std::string &projectId) {
+            auto collision = CreateProjectCollisionTemplate(projectId);
+            if (collision.HasError())
+                return false;
+            auto source = Application::EncodeProjectCollisionSettings(collision.Value());
+            return source.HasValue() && WriteDurableFile(staging / ".horo/collision.json", source.Value());
+        }
+
         [[nodiscard]] std::optional<StagingPreparationFailure> WriteScaffolding(const std::filesystem::path &staging,
                                                                                 const ProjectCreationRequest &request,
                                                                                 const std::string &projectId) {
@@ -326,6 +336,9 @@ namespace Horo::Editor {
                 return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed,
                                                  "Unable to write project metadata into the staging directory."};
             }
+
+            if (!WriteCollisionScaffolding(staging, projectId))
+                return StagingPreparationFailure{ProjectCreationErrorCode::WriteFailed, "Unable to write project collision settings."};
 
             for (const char *directory : {"Assets/Models", "Assets/Textures", "Assets/Materials", "Assets/Shaders", "Assets/Scenes"}) {
                 std::filesystem::create_directories(staging / directory, error);

@@ -37,6 +37,9 @@ namespace Horo::Editor {
 
     bool EditorWorkspaceController::ProcessObjectComponentValueCommand(const EditorWorkspaceViewCommandData &cmd) {
         switch (cmd.command) {
+            case EditorWorkspaceViewCommand::UpdatePhysicsComponents:
+                ApplyPhysicsInspectorCommand(cmd);
+                break;
             case EditorWorkspaceViewCommand::UpdateCameraComponent:
                 if (cmd.objectPayload.has_value() && cmd.cameraPayload.has_value()) {
                     HandleDocumentCommandResult(m_documentCommands.Execute(
