@@ -100,12 +100,18 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(duplicate.HasError());
         CHECK(duplicate.ErrorValue().code.Value() == Network::NetworkErrors::NetworkModeInvalid.code.Value());
         CHECK(authority->Activate().HasError());
-        REQUIRE(authority->RunFixedTick({1, Duration::FromNanoseconds(16'666'667), {}}).HasValue());
+        const auto authorityTick = authority->RunFixedTick({1, Duration::FromNanoseconds(16'666'667), {}});
+        INFO((authorityTick.HasError() ? authorityTick.ErrorValue().code.Value() + ": " + authorityTick.ErrorValue().message
+                                       : "authority tick succeeded"));
+        REQUIRE(authorityTick.HasValue());
         authorityScene->Shutdown();
         CHECK(authorityGrant->Acquire("game.tests", 91, 91).HasError());
         CHECK(authority->RunFixedTick({2, Duration::FromNanoseconds(16'666'667), {}}).HasError());
         CHECK(clientGrant->Acquire("game.tests", 92, 92).HasValue());
-        REQUIRE(client->RunFixedTick({1, Duration::FromNanoseconds(16'666'667), {}}).HasValue());
+        const auto clientTick = client->RunFixedTick({1, Duration::FromNanoseconds(16'666'667), {}});
+        INFO((clientTick.HasError() ? clientTick.ErrorValue().code.Value() + ": " + clientTick.ErrorValue().message
+                                    : "client tick succeeded"));
+        REQUIRE(clientTick.HasValue());
         authority->Shutdown();
         client->Shutdown();
         clientScene->Shutdown();
@@ -130,7 +136,10 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(prepared.ErrorValue().code.Value() == Internal::HeadlessSceneLoadErrors::Cancelled.code.Value());
         failed->Shutdown();
         CHECK(retained->Acquire("game.tests", 101, 101).HasValue());
-        REQUIRE(physics->RunFixedTick({1, Duration::FromNanoseconds(16'666'667), {}}).HasValue());
+        const auto physicsTick = physics->RunFixedTick({1, Duration::FromNanoseconds(16'666'667), {}});
+        INFO((physicsTick.HasError() ? physicsTick.ErrorValue().code.Value() + ": " + physicsTick.ErrorValue().message
+                                     : "physics tick succeeded"));
+        REQUIRE(physicsTick.HasValue());
         physics->Shutdown();
         activeScene->Shutdown();
         CHECK(retained->Acquire("game.tests", 101, 101).HasError());

@@ -56,6 +56,25 @@ namespace Horo::Runtime {
             return Result<Matrices>::Success(std::move(matrices));
         }
 
+        /** @brief Compares representable poses using the existing finite Math tolerance at each matrix element's scale. */
+        [[nodiscard]] bool EquivalentPlacementMatrix(const Math::Mat4 &left, const Math::Mat4 &right) {
+            for (std::size_t index = 0; index < left.values.size(); ++index) {
+                const float scale = std::max({1.0F, std::abs(left.values[index]), std::abs(right.values[index])});
+                if (!Math::NearlyEqual(left.values[index], right.values[index], Math::DefaultEpsilon * scale))
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Retains exact authored scale only when it reproduces the already admitted local pose. */
+        [[nodiscard]] Math::Transform PreserveAuthoredScale(const Math::Mat4 &local, Math::Transform admitted,
+                                                            const Math::Vec3 authoredScale) {
+            auto preserved = admitted;
+            preserved.scale = authoredScale;
+            const auto rebuilt = preserved.TryToMatrix();
+            return rebuilt.HasValue() && EquivalentPlacementMatrix(local, rebuilt.Value()) ? preserved : admitted;
+        }
+
         /** @brief Rejects shear locally: the general math decomposer intentionally projects onto the closest TRS basis. */
         [[nodiscard]] Result<Math::Transform> ExactPlacementTransform(const Math::Mat4 &matrix) {
             auto transform = Math::TryDecomposeAffineTRS(matrix);
@@ -64,11 +83,8 @@ namespace Horo::Runtime {
             auto rebuilt = transform.Value().TryToMatrix();
             if (rebuilt.HasError())
                 return Result<Math::Transform>::Failure(rebuilt.ErrorValue());
-            for (std::size_t index = 0; index < matrix.values.size(); ++index) {
-                const float scale = std::max({1.0F, std::abs(matrix.values[index]), std::abs(rebuilt.Value().values[index])});
-                if (!Math::NearlyEqual(matrix.values[index], rebuilt.Value().values[index], Math::DefaultEpsilon * scale))
-                    return InvalidPlacement<Math::Transform>("Initial placement cannot represent the candidate pose without shear.");
-            }
+            if (!EquivalentPlacementMatrix(matrix, rebuilt.Value()))
+                return InvalidPlacement<Math::Transform>("Initial placement cannot represent the candidate pose without shear.");
             return transform;
         }
 
@@ -123,7 +139,7 @@ namespace Horo::Runtime {
             auto transform = ExactPlacementTransform(local);
             if (transform.HasError())
                 return Result<void>::Failure(transform.ErrorValue());
-            updates.emplace_back(index, transform.Value());
+            updates.emplace_back(index, PreserveAuthoredScale(local, transform.Value(), scene.EntityAt(index)->localTransform->scale));
         }
         // Only private preparation reaches here. No topology or entity generation changes, and existing
         // producer views stay current. Every allocation/validation precedes the no-fail value assignments.

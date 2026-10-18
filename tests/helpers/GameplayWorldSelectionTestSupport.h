@@ -10,7 +10,8 @@ namespace Horo::Application::Internal::TestSupport {
         return {.moduleId = "game.tests",
                 .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
                 .descriptorRevision = Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
-                .physicsPermission = permission};
+                .physicsPermission = permission,
+                .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>()};
     }
 
     inline GameplayWorldSelection Script(const GameplayPhysicsPermission permission = GameplayPhysicsPermission::Granted) {

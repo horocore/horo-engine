@@ -4,6 +4,7 @@
 #include "GameplayWorldSelectionTestSupport.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "PhysicsTestUtils.h"

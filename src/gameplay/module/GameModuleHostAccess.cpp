@@ -9,7 +9,7 @@
 #include <utility>
 
 namespace Horo::Gameplay {
-    LoadedGameModule::LoadedGameModule(std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
+    LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
     LoadedGameModule::~LoadedGameModule() {
         if (impl_ && impl_->runtimeUi)
@@ -173,6 +173,40 @@ namespace Horo::Gameplay {
             return Result<GameModuleReloadSnapshot>::Failure(
                 MakeError(GameplayErrors::GameplayReloadRestartRequired, "A module-generation runtime is still active."));
         return impl_->PrepareReload();
+    }
+
+    /** @copydoc LoadedGameModule::RequestRetirement */
+    void LoadedGameModule::RequestRetirement() noexcept {  // NOSONAR(cpp:S5817) Revokes generation admission and requests lifecycle
+                                                           // cancellation.
+        impl_->runtimeLeaseAdmission.store(false, std::memory_order_release);
+        if (impl_->runtimeUi)
+            impl_->runtimeUi->Revoke();
+        if (impl_->ai) {
+            impl_->ai->Revoke();
+            // Composition retirement is owner-lane; the AI helper independently rejects foreign-lane task mutation.
+            impl_->ai->RetireOwnedTasksAtSafePoint();
+        }
+        if (impl_->character)
+            impl_->character->Revoke();
+        if (impl_->navigation)
+            impl_->navigation->Revoke();
+        if (impl_->physics)
+            impl_->physics->Revoke();
+        if (impl_->projectServices)
+            impl_->projectServices->RequestCancellation();
+    }
+
+    /** @copydoc LoadedGameModule::TryRetire */
+    Result<void> LoadedGameModule::TryRetire() {  // NOSONAR(cpp:S5817) Finalizes native lifetime authority after runtime leases drain.
+        if (std::this_thread::get_id() != impl_->ownerThread)
+            return Result<void>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestartRequired, "Retirement belongs to the gameplay module owner lane."));
+        RequestRetirement();
+        if (impl_.use_count() != 1)
+            return Result<void>::Failure(
+                MakeError(GameplayErrors::GameplayReloadRestartRequired, "Runtime callback leases still own this module generation."));
+        impl_->Shutdown();
+        return Result<void>::Success();
     }
 
     /** @copydoc LoadedGameModule::RestoreReload */

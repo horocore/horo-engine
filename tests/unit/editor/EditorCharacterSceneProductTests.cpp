@@ -64,7 +64,10 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(play.SceneView()->Get(*entity).Value().localTransform->translation.y > 0.495F);
         CHECK(authored.objects.front().localTransform.translation.y == 0.495F);
         CHECK(play.Start(authored, registry, BindProjectFactory(fixture, Physics::PhysicsRuntimeMode::Canonical)).HasError());
-        REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
+        const auto firstTick = play.FixedUpdate({}, {1.0 / 60.0});
+        INFO(
+            (firstTick.HasError() ? firstTick.ErrorValue().code.Value() + ": " + firstTick.ErrorValue().message : "Editor tick succeeded"));
+        REQUIRE(firstTick.HasValue());
         play.Stop();
         CHECK_FALSE(play.SceneView());
         CHECK_FALSE(play.CollisionReceipt());

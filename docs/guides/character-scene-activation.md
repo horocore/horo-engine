@@ -312,3 +312,19 @@ equivalence with the established finite Math tolerance. Nonrepresentable shear
 is rejected before any private local transform is assigned or owner publishes.
 Mirrored and representable nonuniform rotated parents remain supported; singular
 parents fail rather than replacing authored visual scale.
+
+### Initial fixed-tick query handoff
+
+The exact activated Scene-owned Physics/Character pair retains its prepared
+Character query descriptor until Physics has produced its first real nonzero
+publication. This is only admitted while both completed-tick counters remain
+zero and the borrowed Scene/Physics identities match. It creates no Physics
+publication, revision, or synthetic fixed tick. Later ticks refresh the descriptor
+from the actual Physics publication; progressed, retired, foreign, or replaced
+pairs cannot reuse this initial handoff. Static initial support already has no
+moving-platform attachment; moving support still requires real captured evidence.
+
+Initial placement retains exact authored local visual scale when that scale
+recomposes the same already validated local pose within the established Math
+tolerance. This prevents decomposition roundoff from rewriting authored scale,
+while retaining existing shear rejection and the shared Math implementation.

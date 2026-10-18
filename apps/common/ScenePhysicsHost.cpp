@@ -189,10 +189,21 @@ namespace Horo::Application::Internal {
         const auto tick = publication.completedTick + 1;
         if (const auto processed = scope.physics.ProcessQueryBatch(); processed.HasError())
             return processed;
-        const auto revision = scope.physics.PublishedTick().publicationRevision;
-        if (const auto refreshed = scope.character.RefreshPhysicsSnapshot(scope.physics.Identity(), revision); refreshed.HasError())
-            return refreshed;
+        const auto current = scope.physics.PublishedTick();
         const auto &descriptor = scope.character.Descriptor();
+        if (current.publicationRevision != 0) {
+            if (const auto refreshed = scope.character.RefreshPhysicsSnapshot(scope.physics.Identity(), current.publicationRevision);
+                refreshed.HasError())
+                return refreshed;
+        } else if (current.completedTick != 0 || scope.character.PublishedTick().completedTick != 0 ||
+                   descriptor.sceneGeneration != scope.scene.value || descriptor.physicsWorld != scope.physics.Identity()) {
+            return Result<void>::Failure(
+                MakeError(Physics::PhysicsErrors::QuerySnapshotStale,
+                          "Only the exact unticked Scene-owned pair may use its prepared Character query context."));
+        }
+        // Initial placement already bound these exact owners. Until Physics publishes its first real tick,
+        // retain the prepared Character context; no synthetic Physics publication or tick is introduced.
+        const auto revision = descriptor.physicsSnapshotRevision;
         Character::CharacterPhysicsQueryAdapter adapter{scope.physics};
         const auto query = adapter.Context({descriptor.sceneGeneration, descriptor.identity, descriptor.physicsWorld,
                                             descriptor.collisionFilterGeneration, descriptor.originGeneration, tick, revision});

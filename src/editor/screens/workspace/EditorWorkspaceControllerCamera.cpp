@@ -44,6 +44,15 @@ namespace Horo::Editor {
 
     EditorWorkspaceController::~EditorWorkspaceController() {
         static_cast<void>(ShutdownCollisionSettings(true));
+        (void)ShutdownGameplayModules();
+    }
+
+    /** @copydoc EditorWorkspaceController::ShutdownGameplayModules */
+    Result<void> EditorWorkspaceController::ShutdownGameplayModules() {
+        m_playSession.Stop();
+        m_pendingGameplayRegistry.reset();
+        m_gameplayRegistry.reset();
+        return m_gameplayRetirements->Close();
     }
 
     /** @copydoc EditorWorkspaceController::StartCameraCutPreview */

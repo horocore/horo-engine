@@ -60,7 +60,8 @@ namespace Horo::Editor {
         Application::NetworkDebuggerService *networkDebugger{};
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
-        PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
+        PCGDocumentCatalog pcgCatalog{.revision = 1}; /**< Empty support preserves graph nodes inert until a catalog is composed. */
         EditorPlaySceneFactory playSceneFactory{}; /**< Explicit host composition; captures/pins selected native and asset authorities. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
@@ -149,6 +150,8 @@ namespace Horo::Editor {
         /** @brief Drains graph ownership after explicit save/discard/recovery policy.
          * @param discardDirty Explicit leave decision. @return Success or retryable incomplete ownership result. */
         [[nodiscard]] Result<void> ShutdownPCGDocuments(bool discardDirty = false);
+        /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
+        [[nodiscard]] Result<void> ShutdownGameplayModules();
 
         [[nodiscard]] EditorDataBus &DataBus() noexcept {
             return m_dataBus;
@@ -293,6 +296,7 @@ namespace Horo::Editor {
         std::uint64_t m_viewportSceneRevision{};
         bool m_assetPlacementPreviewActive{false};
         std::optional<SceneDocumentSnapshot> m_deferredRuntimeSnapshot;
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> m_gameplayRetirements{std::make_shared<Gameplay::GameModuleRetirementQueue>()};
         std::unique_ptr<ProjectGameplayRegistry> m_gameplayRegistry;
         std::unique_ptr<ProjectGameplayRegistry> m_pendingGameplayRegistry;
         EditorPlaySessionController m_playSession;

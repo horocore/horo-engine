@@ -138,6 +138,8 @@ namespace Horo::Application::Internal {
             Result<void> RunPhase(const Runtime::RuntimePhase phase) override {
                 if (const auto lane = CheckOwnerLane(); lane.HasError())
                     return lane;
+                if (owners_->gameplay && owners_->gameplay->moduleRetirements)
+                    (void)owners_->gameplay->moduleRetirements->Drain();
                 if (owners_->configured && request_.service == Network::NetworkModeServiceKind::Physics && gameplay_) {
                     const Runtime::FrameContext frame{.frameNumber = ++phaseFrame_, .cancellation = record_->sceneCancellation};
                     return gameplay_->OnPhase(phase, frame);
@@ -189,6 +191,8 @@ namespace Horo::Application::Internal {
                 // Scene is the only aggregate owner. The paired Physics service never closes it.
                 if (record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene && record_->scenes)
                     record_->scenes->Shutdown();
+                if (owners_->gameplay && owners_->gameplay->moduleRetirements)
+                    (void)owners_->gameplay->moduleRetirements->Drain();
                 if (replication_.has_value())
                     replication_->BeginShutdown();
                 if (physicsWorld_ != nullptr)

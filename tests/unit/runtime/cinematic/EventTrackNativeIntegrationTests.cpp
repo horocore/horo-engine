@@ -36,7 +36,8 @@ namespace Horo::Cinematic {
             auto loaded = host.Load(HORO_TEST_GAME_MODULE_PATH, {"game.tests", Gameplay::CurrentGameplayBuildFingerprint(),
                                                                  Horo::Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)});
             REQUIRE(loaded.HasValue());
-            auto gameModule = std::move(loaded).Value();
+            REQUIRE_FALSE(loaded.Value().diagnostic);
+            auto gameModule = std::move(loaded).Value().owner;
             auto binding = BindGameplayEvent(*gameModule, Binding, Schema, EventRuntimeContext::Headless, 1);
             REQUIRE(binding.HasValue());
             CHECK(BindGameplayEvent(*gameModule, Binding, Schema, EventRuntimeContext::Preview, 1).HasError());

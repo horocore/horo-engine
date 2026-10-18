@@ -32,6 +32,7 @@ namespace {
         std::optional<EditorWorkspaceViewCommandData> command;
         int characterVertices{};
         float capturedWidth{};
+        ImGuiID resetControl{};
 
         CharacterInspectorUi() {
             LocalizationError error;
@@ -68,6 +69,11 @@ namespace {
                     continue;
                 characterVertices = window->DrawList->VtxBuffer.Size;
                 capturedWidth = ImGui::GetMainViewport()->Size.x;
+                // Card actions use the actual child window, title-bar scope, and PushID(action.id).
+                // Its generated window name is not a TestEngine path segment named after CardProps::id.
+                const ImGuiID titleScope = ImHashStr("title_bar", 0, window->IDStack.back());
+                const ImGuiID actionScope = ImHashStr("reset", 0, titleScope);
+                resetControl = ImHashStr("##card_action", 0, actionScope);
             }
         }
     };
@@ -81,7 +87,8 @@ namespace {
         }, [&](ImGuiTestContext *ui) {
             ui->Yield(3);
             IM_CHECK(!fixture.command.has_value());
-            ui->ItemClick("//**/##CharacterControllerCard/**/reset/##card_action");
+            IM_CHECK(fixture.resetControl != 0);
+            ui->ItemClick(fixture.resetControl);
             ui->Yield(2);
             IM_CHECK(fixture.command.has_value());
         });

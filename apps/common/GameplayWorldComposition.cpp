@@ -123,12 +123,26 @@ namespace Horo::Application::Internal {
             runtimeUi_ = std::move(child).Value();
         }
         if (!selection.nativeArtifact.empty()) {
+            if (!selection.moduleRetirements)
+                return Result<void>::Failure(MakeError(GameplayErrors::GameplayReloadRestartRequired,
+                                                       "Native gameplay requires an explicit application retirement owner."));
+            moduleRetirements_ = selection.moduleRetirements;
+            auto admission = moduleRetirements_->Reserve();
+            if (admission.HasError())
+                return Result<void>::Failure(admission.ErrorValue());
+            retirementAdmission_.emplace(std::move(admission).Value());
             GameModuleHost loader{GameModuleHostOptions{{}, {.physics = physics_, .character = character_, .runtimeUi = runtimeUi_}}};
             auto loaded = loader.Load(selection.nativeArtifact,
                                       {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
             if (loaded.HasError())
                 return Result<void>::Failure(loaded.ErrorValue());
-            native_ = std::move(loaded).Value();
+            auto candidate = std::move(loaded).Value();
+            native_ = std::move(candidate.owner);
+            if (candidate.diagnostic) {
+                retirementAdmission_->Retain(std::move(native_));
+                retirementAdmission_.reset();
+                return Result<void>::Failure(*candidate.diagnostic);
+            }
             if (auto contributed = native_->ContributeBehaviorsTo(registry_); contributed.HasError())
                 return contributed;
         } else {
@@ -275,7 +289,11 @@ namespace Horo::Application::Internal {
         prefabs_.reset();
         scenes_ = nullptr;
         registry_ = Gameplay::BehaviorRegistry{};
-        native_.reset();
+        if (native_ && retirementAdmission_)
+            retirementAdmission_->Retain(std::move(native_));
+        retirementAdmission_.reset();
+        if (moduleRetirements_)
+            (void)moduleRetirements_->Drain();
         script_.reset();
     }
 

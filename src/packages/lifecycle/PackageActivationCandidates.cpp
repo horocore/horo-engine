@@ -9,95 +9,13 @@
 
 namespace Horo::Packages::Detail {
     namespace {
-        /** @brief Supplies the same current process tuple used by the concrete native extension manager. */
-        Extensions::ExtensionHostEnvironment Environment(const PackageLifecycleConfiguration &configuration,
-                                                         const std::span<const std::string_view> capabilities) {
-            using namespace Extensions;
-#if defined(_WIN32)
-            constexpr auto platform = ExtensionHostPlatform::Windows;
-#elif defined(__APPLE__)
-            constexpr auto platform = ExtensionHostPlatform::MacOS;
-#else
-            constexpr auto platform = ExtensionHostPlatform::Linux;
-#endif
-#if defined(__aarch64__) || defined(_M_ARM64)
-            constexpr auto architecture = ExtensionHostArchitecture::Arm64;
-#else
-            constexpr auto architecture = ExtensionHostArchitecture::X86_64;
-#endif
-#if defined(NDEBUG)
-            constexpr auto build = ExtensionBuildProfile::Release;
-#else
-            constexpr auto build = ExtensionBuildProfile::Debug;
-#endif
-            return {configuration.profile,
-                    platform,
-                    architecture,
-                    build,
-                    "0.1.0",
-                    HORO_EXTENSION_ABI_VERSION,
-                    HORO_EXTENSION_ABI_MINOR_VERSION,
-                    capabilities};
-        }
-
-        /** @brief Matches the legacy native manager's explicit platform suffix without scanning for alternatives. */
-        std::string SelectedEntry(std::string entry) {
-            if (std::filesystem::path{entry}.has_extension())
-                return entry;
-#if defined(_WIN32)
-            return entry + ".dll";
-#elif defined(__APPLE__)
-            return entry + ".dylib";
-#else
-            return entry + ".so";
-#endif
-        }
-
-        /** @brief Owns the verified contribution root and inert descriptor before host selection or trust. */
-        struct DeclaredDescriptor final {
-            std::string root;
-            Extensions::ExtensionManifest manifest;
-        };
-
-        /** @brief Reads the declared descriptor and binds its identity to the exact installed package. */
-        Result<DeclaredDescriptor> ReadDeclaredDescriptor(const PackageRestorePackage &package, const PackagePath &descriptorPath) {
-            const auto &name = descriptorPath.Value();
-            const auto slash = name.rfind('/');
-            if (slash == std::string::npos || !name.ends_with("/extension.json"))
-                return Result<DeclaredDescriptor>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
-            std::string root = name.substr(0U, slash);
-            const auto entries = package.archive->Manifest().Entries();
-            if (const auto descriptor = std::ranges::find(entries, name,
-                                                          [](const PackageFileEntry &entry) {
-                return entry.id.path.Value();
-            });
-                descriptor == entries.end() || !descriptor->contributionRoot || descriptor->contributionRoot->Value() != root ||
-                !root.starts_with("extensions/") || root.substr(11U).find('/') != std::string::npos ||
-                std::ranges::find(package.lock.contributions, root.substr(11U)) == package.lock.contributions.end())
-                return Result<DeclaredDescriptor>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
-            auto bytes = package.archive->ReadDeclaredFile(descriptorPath, Extensions::ExtensionManifestLimits{}.maximumDocumentBytes);
-            if (bytes.HasError())
-                return Result<DeclaredDescriptor>::Failure(bytes.ErrorValue());
-            const auto &content = bytes.Value();
-            std::string text(content.size(), '\0');
-            std::ranges::transform(content, text.begin(), [](const std::byte value) {
-                return std::bit_cast<char>(value);
-            });
-            auto manifest = Extensions::ParseExtensionManifest(text);
-            if (manifest.HasError())
-                return Result<DeclaredDescriptor>::Failure(manifest.ErrorValue());
-            if (manifest.Value().id != package.lock.package.Value() || manifest.Value().version != package.lock.version.ToString())
-                return Result<DeclaredDescriptor>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
-            return Result<DeclaredDescriptor>::Success({std::move(root), std::move(manifest).Value()});
-        }
-
         /** @brief Binds selected native artifacts and trust approval to one verified package descriptor. */
         Result<PackageActivationCandidate> Candidate(std::shared_ptr<const VerifiedPackageInstallRecord> install,
                                                      const std::size_t packageIndex, const EnabledPackageExtension &enabled,
                                                      const Extensions::ExtensionHostEnvironment &host,
                                                      const IPackageExtensionTrust &trust) {
             const auto &package = install->Graph()->packages[packageIndex];
-            auto descriptor = ReadDeclaredDescriptor(package, enabled.descriptor);
+            auto descriptor = ReadDeclaredPackageDescriptor(package, enabled.descriptor);
             if (descriptor.HasError())
                 return Result<PackageActivationCandidate>::Failure(descriptor.ErrorValue());
             auto declared = std::move(descriptor).Value();
@@ -115,7 +33,7 @@ namespace Horo::Packages::Detail {
             if (plan.Value().moduleIds.empty())
                 return Result<PackageActivationCandidate>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
             for (const auto &entry : plan.Value().selectedEntries) {
-                auto path = PackagePath::Parse(root + '/' + SelectedEntry(entry));
+                auto path = PackagePath::Parse(root + '/' + SelectedPackageNativeEntry(entry));
                 if (path.HasError())
                     return Result<PackageActivationCandidate>::Failure(path.ErrorValue());
                 const auto file = std::ranges::find(entries, path.Value().Value(), [](const PackageFileEntry &item) {
@@ -222,6 +140,77 @@ namespace Horo::Packages::Detail {
         }
     }  // namespace
 
+    /** @brief Matches the legacy native manager's explicit platform suffix without scanning for alternatives. */
+    std::string SelectedPackageNativeEntry(std::string entry) {
+        if (std::filesystem::path{entry}.has_extension())
+            return entry;
+#if defined(_WIN32)
+        return entry + ".dll";
+#elif defined(__APPLE__)
+        return entry + ".dylib";
+#else
+        return entry + ".so";
+#endif
+    }
+
+    /** @brief Supplies the same current process tuple used by the concrete native extension manager. */
+    Extensions::ExtensionHostEnvironment PackageHostEnvironment(const PackageLifecycleConfiguration &configuration,
+                                                                const std::span<const std::string_view> capabilities) {
+        using namespace Extensions;
+#if defined(_WIN32)
+        constexpr auto platform = ExtensionHostPlatform::Windows;
+#elif defined(__APPLE__)
+        constexpr auto platform = ExtensionHostPlatform::MacOS;
+#else
+        constexpr auto platform = ExtensionHostPlatform::Linux;
+#endif
+#if defined(__aarch64__) || defined(_M_ARM64)
+        constexpr auto architecture = ExtensionHostArchitecture::Arm64;
+#else
+        constexpr auto architecture = ExtensionHostArchitecture::X86_64;
+#endif
+#if defined(NDEBUG)
+        constexpr auto build = ExtensionBuildProfile::Release;
+#else
+        constexpr auto build = ExtensionBuildProfile::Debug;
+#endif
+        return {configuration.profile, platform, architecture, build, "0.1.0", HORO_EXTENSION_ABI_VERSION, HORO_EXTENSION_ABI_MINOR_VERSION,
+                capabilities};
+    }
+
+    /** @brief Reads the declared descriptor and binds its identity to the exact installed package. */
+    Result<DeclaredPackageDescriptor> ReadDeclaredPackageDescriptor(const PackageRestorePackage &package,
+                                                                    const PackagePath &descriptorPath) {
+        const auto &name = descriptorPath.Value();
+        const auto slash = name.rfind('/');
+        if (slash == std::string::npos || !name.ends_with("/extension.json"))
+            return Result<DeclaredPackageDescriptor>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+        std::string root = name.substr(0U, slash);
+        const auto entries = package.archive->Manifest().Entries();
+        if (const auto descriptor = std::ranges::find(entries, name,
+                                                      [](const PackageFileEntry &entry) {
+            return entry.id.path.Value();
+        });
+            descriptor == entries.end() || !descriptor->contributionRoot || descriptor->contributionRoot->Value() != root ||
+            !root.starts_with("extensions/") || root.substr(11U).find('/') != std::string::npos ||
+            std::ranges::find(package.lock.contributions, root.substr(11U)) == package.lock.contributions.end())
+            return Result<DeclaredPackageDescriptor>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+        auto bytes = package.archive->ReadDeclaredFile(descriptorPath, Extensions::ExtensionManifestLimits{}.maximumDocumentBytes);
+        if (bytes.HasError())
+            return Result<DeclaredPackageDescriptor>::Failure(bytes.ErrorValue());
+        const auto &content = bytes.Value();
+        std::string text(content.size(), '\0');
+        std::ranges::transform(content, text.begin(), [](const std::byte value) {
+            return std::bit_cast<char>(value);
+        });
+        auto manifest = Extensions::ParseExtensionManifest(text);
+        if (manifest.HasError())
+            return Result<DeclaredPackageDescriptor>::Failure(manifest.ErrorValue());
+        if (manifest.Value().id != package.lock.package.Value() || manifest.Value().version != package.lock.version.ToString())
+            return Result<DeclaredPackageDescriptor>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+        return Result<DeclaredPackageDescriptor>::Success({std::move(root), std::move(manifest).Value()});
+    }
+
     /** @copydoc PreparePackageCandidates */
     Result<std::vector<PackageActivationCandidate>> PreparePackageCandidates(std::shared_ptr<const VerifiedPackageInstallRecord> install,
                                                                              const std::span<const EnabledPackageExtension> enabled,
@@ -230,7 +219,7 @@ namespace Horo::Packages::Detail {
         std::vector<std::string_view> capabilities;
         for (const auto &capability : configuration.capabilities)
             capabilities.push_back(capability);
-        const auto host = Environment(configuration, capabilities);
+        const auto host = PackageHostEnvironment(configuration, capabilities);
         auto pending = SelectCandidates(install, enabled, host, trust);
         if (pending.HasError())
             return Result<std::vector<PackageActivationCandidate>>::Failure(pending.ErrorValue());

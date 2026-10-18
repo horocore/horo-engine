@@ -230,9 +230,18 @@ namespace Horo::Physics {
             CHECK(host.Borrow().Value().character.ActiveControllerCount() == 1);
             CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 0);
             CHECK(host.Borrow().Value().character.PublishedTick().completedTick == 0);
-            REQUIRE(host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667)).HasValue());
-            CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 1);
-            CHECK(host.Borrow().Value().character.PublishedTick().completedTick == 1);
+            const auto preparedRevision = host.Borrow().Value().character.Descriptor().physicsSnapshotRevision;
+            const auto firstTick = host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667));
+            INFO((firstTick.HasError() ? firstTick.ErrorValue().code.Value() + ": " + firstTick.ErrorValue().message
+                                       : "first tick succeeded"));
+            REQUIRE(firstTick.HasValue());
+            CHECK(host.Borrow().Value().character.Descriptor().physicsSnapshotRevision == preparedRevision);
+            const auto secondTick = host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667));
+            INFO((secondTick.HasError() ? secondTick.ErrorValue().code.Value() + ": " + secondTick.ErrorValue().message
+                                        : "second tick succeeded"));
+            REQUIRE(secondTick.HasValue());
+            CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 2);
+            CHECK(host.Borrow().Value().character.PublishedTick().completedTick == 2);
             auto retained = host.Borrow().Value().character.IssueCapability().Value();
             RequireNativeDescendantRejected(assets, source, first.RuntimeId(), retained);
             CHECK(host.Borrow().Value().scene == first.RuntimeId());
@@ -243,12 +252,18 @@ namespace Horo::Physics {
             CHECK(host.Borrow().Value().character.ActiveControllerCount() == 1);
             CHECK(retained.Validate().HasError());
             auto replacementGrant = host.Borrow().Value().character.IssueCapability().Value();
+            CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 0);
+            const auto replacementTick = host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667));
+            INFO((replacementTick.HasError() ? replacementTick.ErrorValue().code.Value() + ": " + replacementTick.ErrorValue().message
+                                             : "replacement tick succeeded"));
+            REQUIRE(replacementTick.HasValue());
             RequireForeignHostBorrowRejected(host);
             REQUIRE(assets.service.QueueUnload().HasValue());
             REQUIRE(assets.service.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, Context(assets.cancellation.Token()))
                         .HasValue());
             CHECK(host.Borrow().HasError());
             CHECK(replacementGrant.Validate().HasError());
+            CHECK(host.AdvanceFixedTick(Duration::FromNanoseconds(16'666'667)).HasError());
             assets.service.Shutdown();
             CHECK(host.Borrow().HasError());
         }

@@ -1,5 +1,6 @@
 #include "NetworkProductLaunchOptions.h"
 
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Network/NetworkErrors.h"
 
 #include <algorithm>
@@ -32,6 +33,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Validate one native artifact's absolute identity and non-zero descriptor revision. */
         Result<void> ParseNativeGameplay(const std::span<char *> arguments, GameplayWorldSelection &selection) {
+            selection.moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             selection.nativeArtifact = arguments[1];
             selection.moduleId = arguments[2];
             const std::string_view revision = arguments[3];

@@ -2,6 +2,7 @@
 
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "ScenePhysicsHost.h"
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
@@ -1128,6 +1129,7 @@ namespace Horo::Editor {
                 screenHost_->Shutdown();
                 p_->operationServices.shaderBuild.Shutdown();
                 p_->background.jobs.Shutdown(ShutdownPolicy::Cancel);
+                (void)screenHost_->GameplayRetirements()->Close();
                 try {
                     if (authorities_.packages->Close().HasError())
                         std::terminate();
@@ -1734,6 +1736,7 @@ namespace Horo::Editor {
 
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
             const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
+            auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             GuiScreenHost screenHost{guiContext,
                                      GuiScreenHostComposition{.modalHost = p.modalHost,
                                                               .settingsService = p.settings,
@@ -1750,7 +1753,8 @@ namespace Horo::Editor {
                                                                   extensionInventoryRefresh.HasValue() ? &extensionInventory : nullptr,
                                                               .extensionMarketplace =
                                                                   extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
-                                                              .nativeDialogs = &nativeDialogs}};
+                                                              .nativeDialogs = &nativeDialogs,
+                                                              .gameplayRetirements = gameplayRetirements}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);

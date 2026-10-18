@@ -6,6 +6,7 @@
 
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleHost.h"
+#include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
 #include "Horo/Gameplay/LuaBehavior.h"
@@ -39,6 +40,8 @@ namespace Horo::Application::Internal {
         GameplayPhysicsPermission physicsPermission{GameplayPhysicsPermission::Denied};
         bool enabled{true}; /**< Trusted host enablement; disabled modules never execute a callback. */
         GameplayPrefabPermission prefabPermission{GameplayPrefabPermission::Denied};
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue>
+            moduleRetirements;                                         /**< Explicit application owner, drained before final shutdown. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Explicit host grant; absent means typed unavailable. */
         GameplayCharacterPermission characterPermission{GameplayCharacterPermission::Denied};
     };
@@ -135,6 +138,8 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi_;
         std::shared_ptr<Gameplay::GameplayCharacterContext> character_;
         std::unique_ptr<Gameplay::LoadedGameModule> native_;
+        std::shared_ptr<Gameplay::GameModuleRetirementQueue> moduleRetirements_;
+        std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
         std::unique_ptr<Gameplay::LuaBehaviorProgram> script_;
         Gameplay::BehaviorRegistry registry_;
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
