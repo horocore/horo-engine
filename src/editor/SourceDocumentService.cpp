@@ -16,20 +16,22 @@ namespace Horo::Editor {
     namespace Detail {
         /** @copydoc Detail::SourcePath */
         Result<std::filesystem::path> SourcePath(const std::filesystem::path &projectRoot, const DocumentIdentity &identity,
-                                                 const std::filesystem::path &path) try {
-            if (!identity.IsValid() || identity.key.kind != DocumentKind::Source || !path.is_absolute())
+                                                 const std::filesystem::path &path) {
+            try {
+                if (!identity.IsValid() || identity.key.kind != DocumentKind::Source || !path.is_absolute())
+                    return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
+                std::error_code error;
+                const auto canonical = std::filesystem::weakly_canonical(path, error);
+                if (error || !Foundation::Paths::HasPathPrefix(projectRoot, canonical))
+                    return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
+                const auto encoded = canonical.lexically_relative(projectRoot).generic_u8string();
+                const std::string source{encoded.begin(), encoded.end()};
+                if (!IsValidUtf8ScalarSequence(source) || source.find('\0') != std::string::npos || source != identity.key.source.Value())
+                    return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
+                return Result<std::filesystem::path>::Success(canonical);
+            } catch (const std::filesystem::filesystem_error &) {
                 return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
-            std::error_code error;
-            const auto canonical = std::filesystem::weakly_canonical(path, error);
-            if (error || !Foundation::Paths::HasPathPrefix(projectRoot, canonical))
-                return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
-            const auto encoded = canonical.lexically_relative(projectRoot).generic_u8string();
-            const std::string source{encoded.begin(), encoded.end()};
-            if (!IsValidUtf8ScalarSequence(source) || source.find('\0') != std::string::npos || source != identity.key.source.Value())
-                return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
-            return Result<std::filesystem::path>::Success(canonical);
-        } catch (const std::filesystem::filesystem_error &) {
-            return Failure<std::filesystem::path>(SourceDocumentErrors::Invalid);
+            }
         }
 
         /** @brief Advances only a successfully prepared observation; exhaustion rejects without wraparound. */

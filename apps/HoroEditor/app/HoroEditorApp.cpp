@@ -403,6 +403,7 @@ namespace Horo::Editor {
             }
         }
 
+#if defined(HORO_HAS_OPENTELEMETRY)
         [[nodiscard]] std::optional<std::string> ReadEnvironmentVariable(const char *name) {
 #if defined(_MSC_VER)
             char *value = nullptr;
@@ -416,6 +417,7 @@ namespace Horo::Editor {
             return std::nullopt;
 #endif
         }
+#endif
 
         [[nodiscard]] std::string CurrentSystemErrorMessage() {
 #if defined(_MSC_VER)
@@ -1625,6 +1627,22 @@ namespace Horo::Editor {
                                                               .extensionMarketplace =
                                                                   extensionInventoryRefresh.HasValue() ? &extensionMarketplace : nullptr,
                                                               .nativeDialogs = &nativeDialogs,
+                                                              .extensionSettingsFiles = &durableFiles,
+                                                              .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
+                                                              .extensionPagePolicy =
+                                                                  {.revision = 1,
+                                                                   .knownPermissions = {{"editor.settings"},
+                                                                                        {"editor.modal"},
+                                                                                        {"configuration.user.write"},
+                                                                                        {"configuration.project.write"},
+                                                                                        {"configuration.workspace.write"}},
+                                                                   .approvedPermissions = {{"editor.settings"},
+                                                                                           {"editor.modal"},
+                                                                                           {"configuration.user.write"},
+                                                                                           {"configuration.project.write"},
+                                                                                           {"configuration.workspace.write"}},
+                                                                   .availableCapabilities = {{"horo.editor.settings"},
+                                                                                             {"horo.editor.modal"}}},
                                                               .gameplayRetirements = gameplayRetirements}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};

@@ -377,10 +377,13 @@ TEST_CASE("Cook input capture rejects malformed UTF-8 paths before reading nativ
     REQUIRE(registry.Snapshot().Records().size() == 1);
     CHECK(registry.Snapshot().Records().front().sourcePath.String() == malformed);
 #ifndef _WIN32
-    if (created) {
+    std::error_code existenceError;
+    const bool remains = std::filesystem::exists(native, existenceError);
+    CHECK(remains == created);
+    if (remains) {
         std::ifstream input{native, std::ios::binary};
         REQUIRE(input.is_open());
-        const std::vector<std::uint8_t> retained{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        const std::vector<std::uint8_t> retained(std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{});
         CHECK(retained == original);
     }
 #endif

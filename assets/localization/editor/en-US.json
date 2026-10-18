@@ -320,7 +320,7 @@
       "text": "Gameplay session admitted"
     },
     "workspace.global_dock.network.replication": {
-      "text": "Replication"
+      "text": "176 objects replicating · RPC queue: 0"
     },
     "workspace.global_dock.network.rpc": {
       "text": "RPC"
@@ -1847,7 +1847,6 @@
     "workspace.global_dock.network.footer.tick": {"text": "Tick 64 Hz"},
     "workspace.global_dock.network.footer.tracing": {"text": "0 dropped · tracing available"},
     "workspace.global_dock.network.ping": {"text": "42 ms · Bandwidth: 12.3 kb/s ↓ · 3.1 kb/s ↑"},
-    "workspace.global_dock.network.replication": {"text": "176 objects replicating · RPC queue: 0"},
     "workspace.global_dock.network.connection": {"text": "1 peer · Server-authoritative · tick 64 Hz"},
     "workspace.global_dock.localization.locale": {"text": "tr-TR · Fallback: en-US · 3 loaded"},
     "workspace.global_dock.localization.strings": {"text": "1,247 translated · 0 missing · 18 fuzzy"},
@@ -2305,6 +2304,280 @@
     },
     "workspace.packages.recovery_hint": {
       "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
+    },
+    "workspace.extensions.recovery": {"text": "Unavailable extension surfaces"},
+    "workspace.extensions.retained": {"text": "Your workspace state is retained. Restore or enable the provider to recover these surfaces. Closing provider surfaces preserves their saved presentation data."},
+    "workspace.extensions.close": {"text": "Close provider workspace surfaces"},
+    "workspace.extensions.disabled": {"text": "The provider is disabled."},
+    "workspace.extensions.incompatible": {"text": "The provider is incompatible with this host."},
+    "workspace.extensions.failed": {"text": "The provider failed activation."},
+    "workspace.extensions.missing": {"text": "The provider or contribution is unavailable."},
+    "settings.extension_pages.title": {
+      "text": "Extension pages"
+    },
+    "settings.extension_pages.apply": {
+      "text": "Apply"
+    },
+    "settings.extension_pages.reset": {
+      "text": "Reset draft"
+    },
+    "settings.extension_pages.cancel": {
+      "text": "Cancel draft"
+    },
+    "settings.navigation.open_definition": {
+      "text": "Open Navigation Definition"
+    },
+    "settings.navigation.unrepaired": {
+      "text": "No replacement; referenced deletion cannot commit"
+    },
+    "settings.navigation.save_policy_first": {
+      "text": "Save or discard the project policy draft before applying user preferences."
+    },
+    "settings.navigation.unsupported_prefab": {
+      "text": "Unsupported prefab owner; references unknown, commit blocked"
+    },
+    "settings.navigation.unsupported_instances": {
+      "text": "Scene contains prefab instances; complete reference repair unavailable"
+    },
+    "settings.navigation.profiles": {
+      "text": "Agent profiles"
+    },
+    "settings.navigation.areas": {
+      "text": "Areas"
+    },
+    "settings.navigation.filters": {
+      "text": "Query filters"
+    },
+    "settings.navigation.identity": {
+      "text": "Stable identity"
+    },
+    "settings.navigation.replacement": {
+      "text": "Replacement identity (optional)"
+    },
+    "settings.navigation.name": {
+      "text": "Profile display name"
+    },
+    "settings.navigation.source_identity": {
+      "text": "Project descriptor source identity"
+    },
+    "settings.navigation.flags": {
+      "text": "Included flags / area flags"
+    },
+    "settings.navigation.excluded": {
+      "text": "Excluded flags"
+    },
+    "settings.navigation.override_area": {
+      "text": "Cost override area identity"
+    },
+    "settings.navigation.add_override": {
+      "text": "Add cost override"
+    },
+    "settings.navigation.clear_overrides": {
+      "text": "Clear cost overrides"
+    },
+    "settings.navigation.put": {
+      "text": "Review create / update"
+    },
+    "settings.navigation.rename_identity": {
+      "text": "Review identity replacement"
+    },
+    "settings.navigation.delete": {
+      "text": "Review deletion"
+    },
+    "settings.navigation.references": {
+      "text": "Affected references — review before commit"
+    },
+    "settings.navigation.confirm": {
+      "text": "Commit reviewed changes"
+    },
+    "settings.navigation.committed": {
+      "text": "Changes committed to document history. Save source files explicitly."
+    },
+    "settings.navigation.undo": {
+      "text": "Undo complete document group"
+    },
+    "settings.navigation.redo": {
+      "text": "Redo complete document group"
+    },
+    "settings.navigation.save_documents": {
+      "text": "Save changed source documents"
+    },
+    "settings.navigation.saved": {
+      "text": "Durable source publication complete."
+    },
+    "settings.navigation.unavailable": {
+      "text": "Project navigation authoring is unavailable; no authority is inferred."
+    },
+    "settings.navigation.no_definition": {
+      "text": "No registered Navigation Definition asset is available. Import or create its canonical source asset first."
+    },
+    "settings.navigation.project_policy": {
+      "text": "Project navigation policy"
+    },
+    "settings.navigation.create_policy": {
+      "text": "Create explicit project policy draft"
+    },
+    "settings.navigation.default_provider": {
+      "text": "Explicit default provider identity"
+    },
+    "settings.navigation.bind_definition": {
+      "text": "Bind selected definition"
+    },
+    "settings.navigation.save_policy": {
+      "text": "Save project policy atomically"
+    },
+    "settings.navigation.compatibility": {
+      "text": "Target / provider compatibility"
+    },
+    "settings.navigation.compatibility_unknown": {
+      "text": "Unknown: the host has supplied no target/provider evidence. This is not a support guarantee."
+    },
+    "settings.navigation.compatible": {
+      "text": "Compatible with captured metadata"
+    },
+    "settings.navigation.incompatible": {
+      "text": "Unavailable / incompatible; no fallback"
+    },
+    "settings.navigation.local_overlay": {
+      "text": "Local developer overlays (never cooked)"
+    },
+    "settings.navigation.show_areas": {
+      "text": "Show areas"
+    },
+    "settings.navigation.show_paths": {
+      "text": "Show paths"
+    },
+    "settings.navigation.show_agents": {
+      "text": "Show agents"
+    },
+    "settings.navigation.query_kind": {
+      "text": "Query family"
+    },
+    "settings.navigation.query_quality": {
+      "text": "Query quality"
+    },
+    "settings.navigation.query_nodes": {
+      "text": "Maximum node expansions / query"
+    },
+    "settings.navigation.query_points": {
+      "text": "Maximum result points / query"
+    },
+    "settings.navigation.query_distance": {
+      "text": "Maximum search distance (m)"
+    },
+    "settings.navigation.capacity.0": {
+      "text": "Maximum agents"
+    },
+    "settings.navigation.capacity.1": {
+      "text": "Maximum active surfaces"
+    },
+    "settings.navigation.capacity.2": {
+      "text": "Maximum resident tiles"
+    },
+    "settings.navigation.capacity.3": {
+      "text": "Maximum concurrent queries"
+    },
+    "settings.navigation.capacity.4": {
+      "text": "Maximum bytes / tile"
+    },
+    "settings.navigation.capacity.5": {
+      "text": "Maximum resident bytes"
+    },
+    "settings.navigation.capacity.6": {
+      "text": "Maximum work units / fixed tick"
+    },
+    "settings.navigation.geometry.0": {
+      "text": "Radius (m)"
+    },
+    "settings.navigation.geometry.1": {
+      "text": "Height (m)"
+    },
+    "settings.navigation.geometry.2": {
+      "text": "Maximum slope (degrees)"
+    },
+    "settings.navigation.geometry.3": {
+      "text": "Step height (m)"
+    },
+    "settings.navigation.geometry.4": {
+      "text": "Cell size (m)"
+    },
+    "settings.navigation.geometry.5": {
+      "text": "Cell height (m)"
+    },
+    "settings.navigation.geometry.6": {
+      "text": "Minimum region size (m)"
+    },
+    "settings.navigation.capability.0": {
+      "text": "Require grounded queries"
+    },
+    "settings.navigation.capability.1": {
+      "text": "Require topology updates"
+    },
+    "settings.navigation.capability.2": {
+      "text": "Require dynamic tile carving"
+    },
+    "settings.navigation.capability.3": {
+      "text": "Require crowd avoidance"
+    },
+    "settings.navigation.capability.4": {
+      "text": "Require mesh building"
+    },
+    "settings.navigation.capability.5": {
+      "text": "Require runtime tile rebuild"
+    },
+    "settings.navigation.reference.0": {
+      "text": "Surface profile"
+    },
+    "settings.navigation.reference.1": {
+      "text": "Link profile"
+    },
+    "settings.navigation.reference.2": {
+      "text": "Agent profile"
+    },
+    "settings.navigation.reference.3": {
+      "text": "Agent filter"
+    },
+    "settings.navigation.reference.4": {
+      "text": "Modifier area"
+    },
+    "settings.navigation.reference.5": {
+      "text": "Filter area cost"
+    },
+    "settings.navigation.query_kind.0": {
+      "text": "Path"
+    },
+    "settings.navigation.query_kind.1": {
+      "text": "Nearest point"
+    },
+    "settings.navigation.query_kind.2": {
+      "text": "Raycast"
+    },
+    "settings.navigation.query_kind.3": {
+      "text": "Sample position"
+    },
+    "settings.navigation.query_kind.4": {
+      "text": "Polygon query"
+    },
+    "settings.navigation.query_quality.0": {
+      "text": "Low"
+    },
+    "settings.navigation.query_quality.1": {
+      "text": "Balanced"
+    },
+    "settings.navigation.query_quality.2": {
+      "text": "High"
+    },
+    "settings.nav.navigation": {
+      "text": "Navigation"
+    },
+    "settings.navigation.invalid_number": {
+      "text": "Enter a complete unsigned integer within the labelled capacity; the previous value is retained."
+    },
+    "settings.navigation.area_cost": {
+      "text": "Area traversal cost"
+    },
+    "settings.navigation.override_cost": {
+      "text": "Overridden traversal cost"
     }
   }
 }

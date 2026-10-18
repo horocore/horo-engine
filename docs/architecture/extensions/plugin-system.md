@@ -1145,6 +1145,17 @@ the external controller receives only allowlisted invalidation hints through its
 versioned session/capability contract. Extension pages follow the same interaction
 and focus rules as built-in modal content and cannot bypass the active modal scope.
 
+The native page profile is ABI1.5 (`EditorPageAbi.h`) and requires explicit
+`editor.page` host composition plus approved `editor.settings`/`editor.modal`
+permissions. Definitions remain inert; registration stages copied transport,
+transactional activation publishes the real page controller, and provider
+retirement fences admission before releasing code leases. Settings use canonical
+configuration schema/resolution and the existing durable store; uncertain writes
+retain dirty recovery state rather than publishing an unproven clean snapshot.
+Modal drafts and open/focus state are transient and never document/workspace data.
+The versioned profile and rebuild/rollback rules are specified in
+[the ABI migration guide](../../guides/extension-abi-migration.md#external-c-abi-14--15-settings-and-modal-pages).
+
 ### Activity Bar Contributions
 
 The activity bar is the vertical icon strip on the left and right edges of the
@@ -1252,6 +1263,15 @@ The host owns layout persistence, focus routing, docking, shortcut conflicts,
 workspace-state byte limits, and safe teardown. Extension surfaces persist only
 bounded presentation state under their contribution ID. State for a missing
 provider remains opaque and cannot grant capabilities when the provider returns.
+The existing surface registry also owns the bounded unavailable-surface recovery
+projection. Host availability distinguishes disabled, missing, incompatible and
+failed activation without persisting these process facts as authority. The GUI
+renders identifiable saved-open placeholders and can close their intent without
+discarding opaque bytes. Native admission and reinstallation must still establish
+real contexts and registrations. Workspace publication uses the composed durable
+filesystem's exclusive writer/private stage/tracked atomic replacement; a failed
+replacement never deletes the previous document, and uncertain postcommit
+durability retains recovery intent. See [workspace recovery migration](../../guides/extension-workspace-recovery-migration.md).
 
 GUI modules do not draw directly, bypass modal interaction exclusivity, install
 process-global shortcuts, or retain direct editor internals. The host performs

@@ -9,6 +9,7 @@
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Security/ArtifactSignature.h"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <span>
@@ -20,8 +21,16 @@ namespace Horo::Assets {
 }
 
 namespace Horo::Extensions {
+    enum class EditorSurfaceProviderStatus : std::uint8_t;
     struct ExtensionModuleLifetime;
     class EditorActivityHost;
+    class EditorPageHost;
+
+    /** @brief Explicit editor publication authorities supplied by application composition. */
+    struct ExtensionEditorHosts final {
+        std::shared_ptr<EditorActivityHost> activities; /**< Activity contribution authority; absent denies publication. */
+        std::shared_ptr<EditorPageHost> pages;          /**< Page contribution authority; absent denies publication. */
+    };
 
     /** @brief Represents a loaded extension instance. */
     struct LoadedExtension {
@@ -52,14 +61,14 @@ namespace Horo::Extensions {
          * load.
          * @param libraryLoader Explicit native loader boundary; empty uses the platform loader after security verification.
          * @param platformProviderCommit Optional host-owned commit for one staged provider-only extension.
-         * @param editorActivityHost Explicit editor surface authority; omitted hosts reject ABI editor publication.
+         * @param editorHosts Explicit editor authorities; absent hosts reject their corresponding ABI publication.
          */
         explicit ExtensionManager(Assets::AssetImporterCatalog *importerCatalog = nullptr,
                                   ExtensionHostProfile hostProfile = ExtensionHostProfile::Interactive,
                                   std::vector<std::string> hostCapabilities = {},
                                   std::shared_ptr<const Security::NativeArtifactGate> artifactGate = {},
                                   NativeLibraryLoader libraryLoader = {}, ExtensionPlatformProviderCommit platformProviderCommit = {},
-                                  std::shared_ptr<EditorActivityHost> editorActivityHost = {});
+                                  ExtensionEditorHosts editorHosts = {});
         /** @brief Withdraws publications on the owner lane; busy native closures require process restart. */
         ~ExtensionManager();
         ExtensionManager(const ExtensionManager &) = delete;
@@ -134,7 +143,7 @@ namespace Horo::Extensions {
         std::shared_ptr<const Security::NativeArtifactGate> m_artifactGate;
         NativeLibraryLoader m_libraryLoader;
         ExtensionPlatformProviderCommit m_platformProviderCommit;
-        std::shared_ptr<EditorActivityHost> m_editorActivityHost;
+        ExtensionEditorHosts m_editorHosts;
         TransparentStringMap<std::unique_ptr<LoadedExtension>> m_loadedExtensions;
         std::vector<std::string> m_activationOrder;
         std::vector<std::shared_ptr<ExtensionRetirement>> m_failedActivations;
@@ -143,6 +152,19 @@ namespace Horo::Extensions {
         [[nodiscard]] Result<void> AcquireProviderDependencies(std::span<const std::string> providers, std::string_view extensionId,
                                                                std::vector<std::shared_ptr<ExtensionModuleLifetime>> &dependencies,
                                                                std::vector<std::shared_ptr<ExtensionExecutableLease>> &leases) const;
+        /** @brief Reads the actual bounded manifest and reserves failure presentation before dependency/native admission. */
+        [[nodiscard]] Result<ExtensionManifest> ReadRecoveryManifest(const std::string &extensionDir,
+                                                                     std::span<const std::string> selectedModules) const;
+        /** @brief Narrows the explicit owning-host plan while preserving precise incompatible-provider presentation.
+         * @param manifest Admitted manifest whose contribution set is narrowed only after successful plan validation.
+         * @param selectedModules Explicit independently owned roots; empty retains complete-package admission.
+         * @return The Main owning-host module plan, or its original failure after recovery presentation.
+         */
+        [[nodiscard]] Result<ExtensionModulePlan> ResolveRecoveryPlan(ExtensionManifest &manifest,
+                                                                      std::span<const std::string> selectedModules) const;
+        /** @brief Reserves or updates bounded host recovery reasons without invoking a provider or granting activation. */
+        [[nodiscard]] Result<void> ReportEditorProviderStatus(const ExtensionManifest &manifest, EditorSurfaceProviderStatus status,
+                                                              std::span<const std::string> selectedModules = {}) const;
         void RetireRecord(const std::string &extensionId);
         void CloseForDestruction() noexcept;
     };

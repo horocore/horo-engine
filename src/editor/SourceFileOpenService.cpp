@@ -30,26 +30,30 @@ namespace Horo::Editor {
         }
 
         /** @brief Converts a native relative path to the existing UTF-8 identity before any owner publication. */
-        [[nodiscard]] Result<SourceDocumentId> SourceIdentity(const std::filesystem::path &path) try {
-            const auto text = Utf8PathText(path);
-            if (!IsValidUtf8ScalarSequence(text) || text.find('\0') != std::string::npos)
+        [[nodiscard]] Result<SourceDocumentId> SourceIdentity(const std::filesystem::path &path) {
+            try {
+                const auto text = Utf8PathText(path);
+                if (!IsValidUtf8ScalarSequence(text) || text.find('\0') != std::string::npos)
+                    return Result<SourceDocumentId>::Failure(MakeError(SourceOpenErrors::Unsafe));
+                return SourceDocumentId::Parse(text);
+            } catch (const std::filesystem::filesystem_error &) {
                 return Result<SourceDocumentId>::Failure(MakeError(SourceOpenErrors::Unsafe));
-            return SourceDocumentId::Parse(text);
-        } catch (const std::filesystem::filesystem_error &) {
-            return Result<SourceDocumentId>::Failure(MakeError(SourceOpenErrors::Unsafe));
+            }
         }
 
         /** @brief Keeps malformed native-path translation inside destination admission, before save callbacks or history. */
-        [[nodiscard]] Result<void> AdmitSaveDestination(const SourceFileOpenService &service, const std::filesystem::path &path) try {
-            if (!HasValidPathText(path))
+        [[nodiscard]] Result<void> AdmitSaveDestination(const SourceFileOpenService &service, const std::filesystem::path &path) {
+            try {
+                if (!HasValidPathText(path))
+                    return Result<void>::Failure(MakeError(SourceOpenErrors::Unsafe));
+                const auto classification = service.Classify(path);
+                using enum SourceFileKind;
+                if (classification.kind != NativeSource && classification.kind != HoroScript && classification.kind != ProjectText)
+                    return Result<void>::Failure(MakeError(SourceOpenErrors::Unsupported));
+                return Result<void>::Success();
+            } catch (const std::filesystem::filesystem_error &) {
                 return Result<void>::Failure(MakeError(SourceOpenErrors::Unsafe));
-            const auto classification = service.Classify(path);
-            using enum SourceFileKind;
-            if (classification.kind != NativeSource && classification.kind != HoroScript && classification.kind != ProjectText)
-                return Result<void>::Failure(MakeError(SourceOpenErrors::Unsupported));
-            return Result<void>::Success();
-        } catch (const std::filesystem::filesystem_error &) {
-            return Result<void>::Failure(MakeError(SourceOpenErrors::Unsafe));
+            }
         }
 
         [[nodiscard]] std::string LowercaseAscii(std::string value) {
@@ -294,43 +298,46 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SourceFileOpenService::ResolveLocation */
-    Result<SourceOpenLocation> SourceFileOpenService::ResolveLocation(const std::filesystem::path &path) const try {
-        if (!projectRootValid_ || path.empty())
-            return Result<SourceOpenLocation>::Failure(MakeError(SourceOpenErrors::InvalidRequest));
-        if (!HasValidPathText(path))
+    Result<SourceOpenLocation> SourceFileOpenService::ResolveLocation(const std::filesystem::path &path) const {
+        try {
+            if (!projectRootValid_ || path.empty())
+                return Result<SourceOpenLocation>::Failure(MakeError(SourceOpenErrors::InvalidRequest));
+            if (!HasValidPathText(path))
+                return Result<SourceOpenLocation>::Failure(MakeError(SourceOpenErrors::Unsafe));
+
+            const std::filesystem::path lexicalPath = NormalizeInputPath(path);
+            if (lexicalPath.empty())
+                return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Unsafe, lexicalPath));
+
+            const Result<std::filesystem::path> canonical =
+                ResolveCanonicalProjectPath(projectRoot_, lexicalPath, policy_.allowSymlinkedFiles);
+            if (canonical.HasError())
+                return Result<SourceOpenLocation>::Failure(canonical.ErrorValue());
+
+            std::error_code error;
+            const std::filesystem::path &canonicalPath = canonical.Value();
+            error.clear();
+            const std::filesystem::file_status status = std::filesystem::status(canonicalPath, error);
+            if (error) {
+                if (IsNoSuchFile(error))
+                    return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Missing, canonicalPath));
+                return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Unsafe, canonicalPath));
+            }
+            if (!std::filesystem::is_regular_file(status))
+                return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Unsupported, canonicalPath));
+
+            const std::filesystem::path relativePath = canonicalPath.lexically_relative(projectRoot_);
+            const auto document = SourceIdentity(relativePath);
+            if (document.HasError())
+                return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Unsafe, canonicalPath));
+
+            return Result<SourceOpenLocation>::Success(SourceOpenLocation{
+                .absolutePath = canonicalPath,
+                .document = document.Value(),
+            });
+        } catch (const std::filesystem::filesystem_error &) {
             return Result<SourceOpenLocation>::Failure(MakeError(SourceOpenErrors::Unsafe));
-
-        const std::filesystem::path lexicalPath = NormalizeInputPath(path);
-        if (lexicalPath.empty())
-            return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Unsafe, lexicalPath));
-
-        const Result<std::filesystem::path> canonical = ResolveCanonicalProjectPath(projectRoot_, lexicalPath, policy_.allowSymlinkedFiles);
-        if (canonical.HasError())
-            return Result<SourceOpenLocation>::Failure(canonical.ErrorValue());
-
-        std::error_code error;
-        const std::filesystem::path &canonicalPath = canonical.Value();
-        error.clear();
-        const std::filesystem::file_status status = std::filesystem::status(canonicalPath, error);
-        if (error) {
-            if (IsNoSuchFile(error))
-                return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Missing, canonicalPath));
-            return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Unsafe, canonicalPath));
         }
-        if (!std::filesystem::is_regular_file(status))
-            return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Unsupported, canonicalPath));
-
-        const std::filesystem::path relativePath = canonicalPath.lexically_relative(projectRoot_);
-        const auto document = SourceIdentity(relativePath);
-        if (document.HasError())
-            return Result<SourceOpenLocation>::Failure(MakePathError(SourceOpenErrors::Unsafe, canonicalPath));
-
-        return Result<SourceOpenLocation>::Success(SourceOpenLocation{
-            .absolutePath = canonicalPath,
-            .document = document.Value(),
-        });
-    } catch (const std::filesystem::filesystem_error &) {
-        return Result<SourceOpenLocation>::Failure(MakeError(SourceOpenErrors::Unsafe));
     }
 
     Result<SourceOpenResult> SourceFileOpenService::Open(const SourceOpenRequest &request) {

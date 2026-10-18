@@ -1,5 +1,8 @@
 #include "Horo/Editor/GuiScreenHost.h"
 
+#include "../modals/extension_pages/EditorPageModal.h"
+#include "../modals/extension_pages/EditorPageThemeCapture.h"
+#include "EditorPageFileStore.h"
 #include "Horo/Editor/AssetImportModal.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
@@ -9,6 +12,8 @@
 #include "Horo/Editor/SettingsModal.h"
 #include "Horo/Extensions/EditorActivityAbi.h"
 #include "Horo/Extensions/EditorActivityHost.h"
+#include "Horo/Extensions/EditorPageAbi.h"
+#include "Horo/Extensions/EditorPageHost.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionManager.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
@@ -62,6 +67,28 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.extensions", "Built-in extension activation state was rejected.");
         }
 
+        /** @brief Copies actual inventory availability into the existing surface authority after startup admission.
+         * Desired enablement changes remain restart-applied while a provider is active.
+         */
+        void PublishRecoveryReasons(const Extensions::EditorSurfaceRegistry &registry, const Extensions::ExtensionInventory &inventory) {
+            using enum Extensions::EditorSurfaceProviderStatus;
+            for (const auto &entry : inventory.Entries()) {
+                if (entry.runtimeActive)
+                    continue;
+                auto status = Missing;
+                if (!entry.enabled)
+                    status = Disabled;
+                else if (entry.hostCompatibility == Extensions::ExtensionHostCompatibilityState::Incompatible ||
+                         entry.hostCompatibility == Extensions::ExtensionHostCompatibilityState::UnsupportedInHostProfile)
+                    status = Incompatible;
+                else if (entry.activationOutcome == Extensions::ExtensionActivationOutcome::Failed)
+                    status = Failed;
+                for (const auto &providerModule : entry.modules)
+                    if (const auto recorded = registry.SetProviderStatus({entry.packageId, providerModule.id}, status); recorded.HasError())
+                        LOG_WARN("editor.extensions", "Recovery reason admission failed: %s", recorded.ErrorValue().message.c_str());
+            }
+        }
+
         /** @brief Loads eligible user extensions and publishes their typed activation outcomes. */
         void ActivateUserExtensions(Extensions::ExtensionManager &manager, Extensions::ExtensionInventory &inventory) {
             for (const auto &extension : inventory.Entries()) {
@@ -84,7 +111,7 @@ namespace Horo::Editor {
 
     /** @copydoc GuiScreenHost::GuiScreenHost */
     GuiScreenHost::GuiScreenHost(const EditorGuiContext &context, GuiScreenHostComposition composition)
-        : context_(&context), modalHost_(&composition.modalHost), inputRouter_(&composition.inputRouter),
+        : context_(context), modalHost_(&composition.modalHost), inputRouter_(&composition.inputRouter),
           settingsService_(&composition.settingsService), localization_(&composition.localization),
           engineEvents_(&composition.engineEvents), logoTexture_(composition.logoTexture),
           extensionInventory_(composition.extensionInventory), extensionMarketplace_(composition.extensionMarketplace),
@@ -93,7 +120,7 @@ namespace Horo::Editor {
         gameplayRetirements_ = composition.gameplayRetirements ? std::move(composition.gameplayRetirements)
                                                                : std::make_shared<Gameplay::GameModuleRetirementQueue>();
         RegisterApplicationServices(composition);
-        InitializeExtensions(composition.jobs, std::move(composition.extensionArtifactGate));
+        InitializeExtensions(composition);
         statusBar_ = std::make_unique<EditorStatusBar>(context, statusItemRegistry_);
         activeStatusPanelIds_.reserve(16);
         InitializeStatusItems(composition.rendererAvailability);
@@ -102,7 +129,7 @@ namespace Horo::Editor {
     /** @copydoc GuiScreenHost::RegisterApplicationServices */
     void GuiScreenHost::RegisterApplicationServices(const GuiScreenHostComposition &composition) {
         services_.Register(*this);
-        services_.RegisterConst(*context_);
+        services_.RegisterConst(context_);
         services_.Register(composition.modalHost);
         services_.Register(composition.settingsService);
         services_.Register(composition.localization);
@@ -122,18 +149,25 @@ namespace Horo::Editor {
     }
 
     /** @copydoc GuiScreenHost::InitializeExtensions */
-    void GuiScreenHost::InitializeExtensions(JobSystem &jobs, std::shared_ptr<const Security::NativeArtifactGate> artifactGate) {
+    void GuiScreenHost::InitializeExtensions(const GuiScreenHostComposition &composition) {
+        auto &jobs = composition.jobs;
+        std::vector<std::string> capabilities{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY};
         importerCatalogCandidate_ = std::make_unique<Assets::AssetImporterCatalog>();
         editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs);
         services_.Register<Extensions::EditorActivityHost>(*editorActivityHost_);
+        InitializeExtensionPages(composition, capabilities);
         extensionManager_ =
             std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get(), Extensions::ExtensionHostProfile::Interactive,
-                                                           std::vector<std::string>{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
-                                                           std::move(artifactGate), Extensions::ExtensionManager::NativeLibraryLoader{},
-                                                           Extensions::ExtensionPlatformProviderCommit{}, editorActivityHost_);
+                                                           std::move(capabilities), composition.extensionArtifactGate,
+                                                           Extensions::ExtensionManager::NativeLibraryLoader{},
+                                                           Extensions::ExtensionPlatformProviderCommit{},
+                                                           Extensions::ExtensionEditorHosts{.activities = editorActivityHost_,
+                                                                                            .pages = editorPageHost_});
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
-        if (extensionInventory_ != nullptr)
+        if (extensionInventory_ != nullptr) {
             ActivateUserExtensions(*extensionManager_, *extensionInventory_);
+            PublishRecoveryReasons(editorActivityHost_->Registry(), *extensionInventory_);
+        }
         if (auto published = importerCatalogCandidate_->Publish(); published.HasValue())
             importerCatalog_ = std::move(published).Value();
         if (!importerCatalog_) {
@@ -141,6 +175,24 @@ namespace Horo::Editor {
             importerCatalog_ = std::make_shared<const Assets::AssetImporterCatalogSnapshot>();
         }
         services_.RegisterConst<Assets::AssetImporterCatalogSnapshot>(*importerCatalog_);
+    }
+
+    /** @copydoc GuiScreenHost::InitializeExtensionPages */
+    void GuiScreenHost::InitializeExtensionPages(const GuiScreenHostComposition &composition, std::vector<std::string> &capabilities) {
+        if (composition.extensionSettingsFiles && !composition.extensionUserSettingsRoot.empty() &&
+            composition.extensionPagePolicy.revision != 0) {
+            extensionPageTheme_ = std::make_unique<EditorPageThemeCapture>();
+            if (auto captured = extensionPageTheme_->Update(context_); captured.HasError()) {
+                LOG_ERROR("editor.extensions", "Native page theme capture unavailable: %s", captured.ErrorValue().message.c_str());
+                return;
+            }
+            extensionPageStore_ =
+                std::make_unique<EditorPageFileStore>(*composition.extensionSettingsFiles, composition.extensionUserSettingsRoot);
+            editorPageHost_ = std::make_shared<Extensions::EditorPageHost>(composition.jobs, editorActivityHost_->Registry(),
+                                                                           *extensionPageStore_, composition.extensionPagePolicy);
+            services_.Register<Extensions::EditorPageHost>(*editorPageHost_);
+            capabilities.emplace_back(HORO_EDITOR_PAGE_HOST_CAPABILITY);
+        }
     }
 
     /** @copydoc GuiScreenHost::InitializeStatusItems */
@@ -225,6 +277,8 @@ namespace Horo::Editor {
             activeScreen_->OnLeave();
             activeScreen_.reset();
         }
+        if (editorPageHost_)
+            editorPageHost_->BeginShutdown();
         if (editorActivityHost_)
             editorActivityHost_->BeginShutdown();
         if (extensionManager_)
@@ -304,6 +358,13 @@ namespace Horo::Editor {
     /** @copydoc GuiScreenHost::GetActiveCreationId */
     std::optional<ProjectCreationOperationId> GuiScreenHost::GetActiveCreationId() const noexcept {
         return activeCreationId_;
+    }
+
+    /** @copydoc GuiScreenHost::SetCurrentProjectRoot */
+    void GuiScreenHost::SetCurrentProjectRoot(const std::filesystem::path &root) {
+        if (extensionPageStore_)
+            extensionPageStore_->SetProject(root);
+        currentProjectRoot_ = root;
     }
 
     /** @copydoc GuiScreenHost::CurrentProjectRoot */
@@ -421,6 +482,8 @@ namespace Horo::Editor {
 
         const GuiRouteKind prevKind = activeRoute_.kind;
         const GuiRouteRevision prevRev = activeRevision_;
+        if (extensionPageStore_ && destination.kind != GuiRouteKind::EditorWorkspace)
+            extensionPageStore_->SetProject({});
         activeRoute_ = std::move(destination);
         activeRevision_++;
         activeScreen_ = std::move(candidate);
@@ -439,11 +502,31 @@ namespace Horo::Editor {
         return screenRegistry_.CreateScreen(route, services_);
     }
 
+    /** @copydoc GuiScreenHost::UpdateExtensionPages */
+    void GuiScreenHost::UpdateExtensionPages() {
+        if (!editorPageHost_)
+            return;
+        static_cast<void>(extensionPageTheme_->Update(context_));
+        editorPageHost_->Update();
+        PumpEditorPageModals(context_, editorPageHost_, extensionPageTheme_->Frame(), *modalHost_);
+        if (modalHost_->HasOpenModal())
+            return;
+        for (const auto &page : editorPageHost_->Prepared()) {
+            if (page.surface.kind == Extensions::EditorSurfaceKind::SettingsPage && page.state == Extensions::EditorPageState::Editing) {
+                auto modal = CreateSettingsModal();
+                modal->SelectExtensionPage(page.surface.provider, page.surface.id);
+                static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
+                break;
+            }
+        }
+    }
+
     void GuiScreenHost::OnUpdate(float dt) {
-        if (!shutdown_ && context_ != nullptr && context_->updates != nullptr)
-            context_->updates->Poll();
+        if (!shutdown_ && context_.updates != nullptr)
+            context_.updates->Poll();
         if (editorActivityHost_)
             editorActivityHost_->Update();
+        UpdateExtensionPages();
         if (localization_ != nullptr) {
             static_cast<void>(
                 statusItemRegistry_.Update("horo.status.navigation",
@@ -527,6 +610,26 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc GuiScreenHost::CreateSettingsModal */
+    std::unique_ptr<SettingsModal> GuiScreenHost::CreateSettingsModal() {
+        auto navigation =
+            activeScreen_ ? activeScreen_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
+        auto modal =
+            std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
+                                            navigation.HasValue() ? navigation.Value() : nullptr,
+                                            SettingsModalPagePresentation{editorPageHost_,
+                                                                          extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr});
+        if (navigation.HasError())
+            modal->Draft().navigationStatus = navigation.ErrorValue().message;
+        return modal;
+    }
+
+    /** @copydoc GuiScreenHost::OpenEditorSettingsModal */
+    void GuiScreenHost::OpenEditorSettingsModal() {
+        if (settingsService_ && modalHost_)
+            static_cast<void>(modalHost_->OpenRoot(CreateSettingsModal()));
+    }
+
     /** @copydoc GuiScreenHost::DispatchMenuInvocation */
     void GuiScreenHost::DispatchMenuInvocation(const EditorMenuInvocation &invocation) {
         using enum EditorMenuAction;
@@ -538,9 +641,9 @@ namespace Horo::Editor {
                 static_cast<void>(Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
                 return;
             case ImportAssets:
-                if (context_ && modalHost_ && !modalHost_->HasOpenModal()) {
+                if (modalHost_ && !modalHost_->HasOpenModal()) {
                     auto modal =
-                        std::make_unique<AssetImportModal>(context_->theme.fonts, m_importJobs, importerCatalog_,
+                        std::make_unique<AssetImportModal>(context_.theme.fonts, m_importJobs, importerCatalog_,
                                                            AssetImportModalServices{.assetRegistry =
                                                                                         services_.TryGet<Assets::AssetRegistry>(),
                                                                                     .operationStore = services_.TryGet<OperationStore>(),
@@ -554,11 +657,7 @@ namespace Horo::Editor {
                 }
                 return;
             case OpenEditorSettings:
-                if (context_ && settingsService_ && modalHost_) {
-                    auto modal = std::make_unique<SettingsModal>(*context_, *settingsService_, logoTexture_, extensionInventory_,
-                                                                 extensionMarketplace_);
-                    static_cast<void>(modalHost_->OpenRoot(std::move(modal)));
-                }
+                OpenEditorSettingsModal();
                 return;
             case ExitApplication:
                 static_cast<void>(RequestCloseApplication());

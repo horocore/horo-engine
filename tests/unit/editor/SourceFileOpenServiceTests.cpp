@@ -258,7 +258,10 @@ TEST_CASE("Native Unicode source paths retain containment and malformed-path adm
         constexpr std::array<std::uint8_t, 6> original{'s', 'o', 'u', 'r', 'c', 'e'};
         const bool created = Horo::TestSupport::WriteMalformedNativeFile(project.Root() / input, original);
         RequireUnsafeNativePath(service, registry, input);
-        if (created) {
+        std::error_code existenceError;
+        const bool remains = std::filesystem::exists(project.Root() / input, existenceError);
+        CHECK(remains == created);
+        if (remains) {
             std::ifstream retained{project.Root() / input, std::ios::binary};
             std::string bytes;
             retained >> bytes;

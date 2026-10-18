@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorConfiguration.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
+#include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
@@ -17,6 +18,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
+#include "Horo/Navigation/NavigationSettingsErrors.h"
 #include "SecurityTestSupport.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "editor/update/UpdateExperienceSession.h"
@@ -28,6 +30,7 @@
 #include <chrono>
 #include <future>
 #include <memory>
+#include <optional>
 #include <thread>
 #include <type_traits>
 
@@ -45,6 +48,7 @@ namespace {
         int destructions = 0;
         GuiScreenHost *closeFromUpdate{};
         bool closeCallbackStayedAlive{};
+        std::optional<Error> navigationFailure;
     };
 
     class RecordingScreen final : public GuiScreen {
@@ -80,6 +84,12 @@ namespace {
 
         void Draw(const GuiContentRegion &) override {
             // This shutdown fixture intentionally submits no graphical controls.
+        }
+
+        [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings() override {
+            if (stats_.navigationFailure)
+                return Result<NavigationProjectSettingsSession *>::Failure(*stats_.navigationFailure);
+            return Result<NavigationProjectSettingsSession *>::Success(nullptr);
         }
 
         [[nodiscard]] LeaveDecision CanLeave(const LeaveTarget &) const override {
@@ -132,8 +142,7 @@ namespace {
     };
 
     /** @brief Uses host updates only after actual modal closure; no draw or direct session polling is involved. */
-    void CheckUpdatesAfterSettingsClose(GuiScreenHost &host, EditorModalHost &modals, EditorGuiContext &gui,
-                                        EditorSettingsService &settings, JobSystem &jobs) {
+    void CheckUpdatesAfterSettingsClose(GuiScreenHost &host, EditorModalHost &modals, EditorGuiContext &gui, JobSystem &jobs) {
         BackgroundUpdateBackend backend;
         UpdateExperienceSession session{jobs, backend};
 
@@ -156,8 +165,9 @@ namespace {
         gui.updates = &session;
         session.SetAutomaticDownload(true);
         session.SetInstallOnExit(true);
-        REQUIRE(modals.OpenRoot(std::make_unique<SettingsModal>(gui, settings, 0)).HasValue());
+        host.DispatchMenuInvocation({.action = EditorMenuAction::OpenEditorSettings});
         modals.OnUpdate(0.0F);
+        REQUIRE(modals.TopModal() != nullptr);
         REQUIRE(session.CheckNow());
         const auto startDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
         while (!backend.checkStarted && std::chrono::steady_clock::now() < startDeadline)
@@ -385,7 +395,21 @@ namespace {
         REQUIRE((invalidRoute.ErrorValue().code.Value() == "navigation.invalid_route_parameters"));
 
         SECTION("Closed settings does not stop discovery, automatic download, or install-on-exit") {
-            CheckUpdatesAfterSettingsClose(host, modals, gui, settings, jobs);
+            CheckUpdatesAfterSettingsClose(host, modals, gui, jobs);
+        }
+        SECTION("Settings opening retains the active screen's original navigation admission failure") {
+            const Error failure = MakeError(Navigation::NavigationSettingsError(Navigation::NavigationSettingsFailure::Closed));
+            stats.navigationFailure = failure;
+            host.DispatchMenuInvocation({.action = EditorMenuAction::OpenEditorSettings});
+            modals.OnUpdate(0.0F);
+            auto *const modal = dynamic_cast<SettingsModal *>(modals.TopModal());
+            REQUIRE(modal != nullptr);
+            if (modal != nullptr) {
+                CHECK(modal->Draft().navigationStatus == failure.message);
+                CHECK(modal->Draft().navigationSettings.Resolve() == nullptr);
+            }
+            REQUIRE(modals.RequestClose(ModalId{SettingsModal::kModalId}, ModalCloseReason::Cancelled).HasValue());
+            modals.OnUpdate(0.0F);
         }
         CheckRetirementCloseAndShutdown(host, stats, jobs);
     }

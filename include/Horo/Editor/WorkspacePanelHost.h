@@ -104,7 +104,12 @@ namespace Horo::Editor {
             return m_activeDocument;
         }
 
-        [[nodiscard]] bool SaveLayout(const std::filesystem::path &path, std::string *error = nullptr) const;
+        /** @brief Publishes through the host's composed filesystem; inspect the receipt on failure before claiming rollback.
+         * @param files Borrowed durable owner. @param receipt Fresh tracked replacement result.
+         * @param path Absolute destination. @param error Optional failure detail. @return Confirmed durable success.
+         */
+        [[nodiscard]] bool SaveLayout(DurableFileSystem &files, AtomicFileReplacementReceipt &receipt, const std::filesystem::path &path,
+                                      std::string *error = nullptr) const;
         [[nodiscard]] bool RestoreLayout(const std::filesystem::path &path, std::string *error = nullptr);
 
     private:

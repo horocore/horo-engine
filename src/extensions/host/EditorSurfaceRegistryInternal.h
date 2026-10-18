@@ -66,7 +66,7 @@ namespace Horo::Extensions {
         [[nodiscard]] bool IsValidProviderKey(const EditorSurfaceProviderKey &provider);
         [[nodiscard]] EditorSurfaceProviderKey ProviderKey(const EditorSurfaceProviderIdentity &provider);
         [[nodiscard]] EditorSurfaceProviderKey ProviderKey(const EditorSurfaceDescriptor &descriptor);
-        [[nodiscard]] bool IsSupportedPersistentSurface(const EditorSurfaceDescriptor &descriptor);
+        [[nodiscard]] bool IsSupportedSurface(const EditorSurfaceDescriptor &descriptor);
         [[nodiscard]] bool IsValidStatus(EditorSurfaceProviderStatus status) noexcept;
         [[nodiscard]] bool SameProvider(const EditorSurfaceProviderKey &left, const EditorSurfaceProviderKey &right) noexcept;
         [[nodiscard]] bool ValidLimits(const EditorSurfaceRegistryLimits &limits) noexcept;

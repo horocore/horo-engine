@@ -83,15 +83,15 @@ namespace Horo::Packages::Tests::Support {
     inline void ReportArchiveFailure(const Error &failure, const std::size_t archiveBytes, const PackageValidationLimits &limits,
                                      const std::vector<std::pair<std::string, std::string>> &files) {
         UNSCOPED_INFO("Package fixture archive bytes=" << archiveBytes << " file limit=" << limits.fileBytes);
-        for (const auto &[path, bytes] : files)
-            UNSCOPED_INFO("Package fixture file=" << path << " bytes=" << bytes.size());
+        for (const auto &file : files)
+            UNSCOPED_INFO("Package fixture file=" << file.first << " bytes=" << file.second.size());
         for (const Error *error = &failure; error; error = error->cause.Get())
             UNSCOPED_INFO("Package verification domain=" << error->domain.Value() << " code=" << error->code.Value()
                                                          << " detail=" << error->message);
     }
 
     inline std::shared_ptr<PackageRestoreGraph> Graph(const std::filesystem::path &library, bool declaredArtifact = true,
-                                                      bool declaredRoot = true, std::string packageId = "com.example.transaction",
+                                                      bool declaredRoot = true, const std::string &packageId = "com.example.transaction",
                                                       nlohmann::json customDescriptor = {},
                                                       std::vector<std::pair<std::string, std::string>> extraFiles = {},
                                                       const PackageValidationLimits &archiveLimits = {}) {
@@ -107,7 +107,9 @@ namespace Horo::Packages::Tests::Support {
             files.emplace_back(root + '/' + nativeName, FileBytes(library));
         files.insert(files.end(), std::make_move_iterator(extraFiles.begin()), std::make_move_iterator(extraFiles.end()));
         nlohmann::json inventory = nlohmann::json::array();
-        for (const auto &[path, bytes] : files) {
+        for (const auto &file : files) {
+            const auto &path = file.first;
+            const auto &bytes = file.second;
             auto entry = ::Horo::Tests::Packages::FileInventoryEntry(path, bytes);
             if (path.starts_with(root + '/'))
                 entry["contributionRoot"] = declaredRoot ? nlohmann::json(root) : nlohmann::json{};
@@ -116,8 +118,8 @@ namespace Horo::Packages::Tests::Support {
         const auto manifest = nlohmann::json{{"schemaVersion", 1}, {"files", inventory}}.dump();
         mz_zip_archive zip{};
         REQUIRE(mz_zip_writer_init_heap(&zip, 0, 0));
-        for (const auto &[path, bytes] : files)
-            REQUIRE(mz_zip_writer_add_mem(&zip, path.c_str(), bytes.data(), bytes.size(), MZ_BEST_COMPRESSION));
+        for (const auto &file : files)
+            REQUIRE(mz_zip_writer_add_mem(&zip, file.first.c_str(), file.second.data(), file.second.size(), MZ_BEST_COMPRESSION));
         REQUIRE(mz_zip_writer_add_mem(&zip, "files.manifest.json", manifest.data(), manifest.size(), MZ_BEST_COMPRESSION));
         const auto archiveBytes = ::Horo::Tests::Packages::FinalizeArchive(zip);
         auto verified = ValidatedPackageArchive::Verify(archiveBytes, archiveLimits);
