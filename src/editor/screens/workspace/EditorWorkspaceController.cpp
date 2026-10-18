@@ -91,8 +91,7 @@ namespace Horo::Editor {
         m_viewModel.workspacePanelHost.AttachDocumentIdentityRegistry(m_documentRegistry);
         if (!m_diagnosticSourceNavigator) {
             m_diagnosticSourceNavigator = [](const DiagnosticSourceRequest &source) {
-                const std::filesystem::path path{source.absolutePath};
-                return OpenInExternalEditor(path) || RevealInNativeFileManager(path);
+                return OpenInExternalEditor(source.absolutePath) || RevealInNativeFileManager(source.absolutePath);
             };
         }
         const std::filesystem::path absoluteProjectRoot = ResolveProjectRoot(projectRoot);

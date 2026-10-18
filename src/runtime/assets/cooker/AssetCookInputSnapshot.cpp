@@ -1,6 +1,7 @@
 #include "Horo/Assets/AssetCookInputSnapshot.h"
 
 #include "../AssetErrors.h"
+#include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
 #include <fstream>
@@ -12,7 +13,9 @@ namespace Horo::Assets {
 
         /** @brief Rejects escaping and symlinked path components before a bounded host read. */
         Result<std::filesystem::path> CheckedPath(const std::filesystem::path &root, const std::string_view relative) {
-            const std::filesystem::path path{relative};
+            if (!IsValidUtf8ScalarSequence(relative) || relative.find('\0') != std::string_view::npos)
+                return Result<std::filesystem::path>::Failure(MakeError(CookErrors::SourceReadFailed));
+            const std::filesystem::path path{std::u8string{relative.begin(), relative.end()}};
             if (path.empty() || path.is_absolute() || path != path.lexically_normal())
                 return Result<std::filesystem::path>::Failure(MakeError(CookErrors::SourceReadFailed));
             auto current = root;

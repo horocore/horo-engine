@@ -1,4 +1,5 @@
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/Utf8.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -167,8 +168,12 @@ namespace Horo::Editor {
         if (request.action == PrefabHierarchyAction::OpenSource) {
             if (const auto *record = m_assetRegistry.Find(admitted.Value()->source)) {
                 const auto &encoded = record->sourcePath.String();
-                const std::u8string utf8{encoded.begin(), encoded.end()};
-                OpenSourceFile({.path = std::filesystem::path{utf8}, .origin = SourceOpenOrigin::Command});
+                if (!IsValidUtf8ScalarSequence(encoded) || encoded.find('\0') != std::string::npos) {
+                    m_viewModel.contentBrowserOperationError = "workspace.source_open.unsafe";
+                    return true;
+                }
+                const std::filesystem::path path{std::u8string{encoded.begin(), encoded.end()}};
+                OpenSourceFile({.path = path, .origin = SourceOpenOrigin::Command});
             }
             return true;
         }

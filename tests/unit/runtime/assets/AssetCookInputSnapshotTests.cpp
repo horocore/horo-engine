@@ -1,8 +1,10 @@
+#include "../../../support/MalformedNativeFileTestSupport.h"
 #include "Horo/Assets/AssetCookInputSnapshot.h"
 #include "assets/AssetCookServiceFixture.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <iterator>
 
 namespace {
     using namespace Horo;
@@ -296,4 +298,90 @@ TEST_CASE("Selected source capture rejects missing duplicate cancelled and forei
     }
     CHECK(AssetCookInputSnapshot::CaptureSelected(project.dir.path, registry.Snapshot(), selected, {}, 4096, cancellation.Token())
               .HasError());
+}
+
+TEST_CASE("Cook input capture preserves actual Unicode source and sidecar paths", "[native][prefab-cook][paths]") {
+    TestProject project;
+    auto record = TestMeshRecord();
+    const std::filesystem::path relative{u8"assets/köprü_日本_ş.fbx"};
+    const auto encoded = relative.generic_u8string();
+    const std::string text{encoded.begin(), encoded.end()};
+    record.sourcePath = ProjectPath::Parse(text).Value();
+    record.metadataPath = ProjectPath::Parse(text + ".horo").Value();
+    const auto source = project.dir.path / relative;
+    auto oldMetadata = project.sourceFile;
+    oldMetadata += ".horo";
+    auto metadata = source;
+    metadata += ".horo";
+    std::filesystem::rename(project.sourceFile, source);
+    std::filesystem::rename(oldMetadata, metadata);
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({record}).status == AssetRegistryBuildStatus::Complete);
+    const auto publication = registry.Snapshot();
+    const std::array selected{record.id};
+    const auto captured = AssetCookInputSnapshot::CaptureSelected(project.dir.path, publication, selected, {}, 4096);
+    REQUIRE(captured.HasValue());
+    CHECK(captured.Value().Registry().Revision() == publication.Revision());
+    REQUIRE(captured.Value().Sources().size() == 1);
+    CHECK(captured.Value().Sources().front().record.sourcePath.String() == text);
+    CHECK(captured.Value().VerifyUnchanged().HasValue());
+    CHECK(AssetCookInputSnapshot::Capture(project.dir.path, publication, {}, 4096).HasValue());
+    WriteFile(source, std::vector<std::uint8_t>{7});
+    CHECK(captured.Value().VerifyUnchanged().HasError());
+    CHECK(captured.Value().Sources().front().bytes == std::vector<std::uint8_t>{1, 2, 3, 4, 5});
+}
+
+TEST_CASE("Cook input capture rejects NUL path aliases before reading an existing file", "[native][prefab-cook][paths]") {
+    TestProject project;
+    auto record = TestMeshRecord();
+    std::string path = record.sourcePath.String();
+    path.push_back('\0');
+    path += "ignored.fbx";
+    record.sourcePath = ProjectPath::Parse(path).Value();
+    record.metadataPath = ProjectPath::Parse(path + ".horo").Value();
+    const auto contents = SidecarJson(record.id.ToString(), record.type.Value());
+    WriteFile(project.sourceFile, {reinterpret_cast<const std::uint8_t *>(contents.data()), contents.size()});
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({record}).status == AssetRegistryBuildStatus::Complete);
+    const auto publication = registry.Snapshot();
+    const std::array selected{record.id};
+    const auto captured = AssetCookInputSnapshot::CaptureSelected(project.dir.path, publication, selected, {}, 4096);
+    REQUIRE(captured.HasError());
+    CHECK(captured.ErrorValue().code.Value() == "asset.cook.source_read_failed");
+    CHECK(registry.Snapshot().Revision() == publication.Revision());
+    CHECK(std::filesystem::file_size(project.sourceFile) == contents.size());
+}
+
+TEST_CASE("Cook input capture rejects malformed UTF-8 paths before reading native files", "[native][prefab-cook][paths]") {
+    TestProject project;
+    auto record = TestMeshRecord();
+    const std::string malformed = std::string{"assets/malformed"} + "\xc0\xaf" + ".fbx";
+    record.sourcePath = ProjectPath::Parse(malformed).Value();
+#ifndef _WIN32
+    // POSIX can store these bytes, but a portable ProjectPath must not select that native file.
+    const auto native = project.dir.path / std::filesystem::path{malformed};
+    const std::vector<std::uint8_t> original{9, 8, 7};
+    const bool created = Horo::TestSupport::WriteMalformedNativeFile(native, original);
+#endif
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({record}).status == AssetRegistryBuildStatus::Complete);
+    const auto publication = registry.Snapshot();
+    const std::array selected{record.id};
+    const auto captured = AssetCookInputSnapshot::CaptureSelected(project.dir.path, publication, selected, {}, 4096);
+    REQUIRE(captured.HasError());
+    CHECK(captured.ErrorValue().code.Value() == "asset.cook.source_read_failed");
+    const auto complete = AssetCookInputSnapshot::Capture(project.dir.path, publication, {}, 4096);
+    REQUIRE(complete.HasError());
+    CHECK(complete.ErrorValue().code.Value() == "asset.cook.source_read_failed");
+    CHECK(registry.Snapshot().Revision() == publication.Revision());
+    REQUIRE(registry.Snapshot().Records().size() == 1);
+    CHECK(registry.Snapshot().Records().front().sourcePath.String() == malformed);
+#ifndef _WIN32
+    if (created) {
+        std::ifstream input{native, std::ios::binary};
+        REQUIRE(input.is_open());
+        const std::vector<std::uint8_t> retained{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        CHECK(retained == original);
+    }
+#endif
 }

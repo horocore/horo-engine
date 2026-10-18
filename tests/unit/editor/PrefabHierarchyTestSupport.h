@@ -32,16 +32,20 @@ namespace Horo::Editor::PrefabHierarchyTestSupport {
         ProjectMutationCoordinator mutations{files};
         Assets::AssetRegistry registry;
         Assets::AssetId asset{PrefabAsset().Asset()};
-        Assets::AssetRecord record{ScenePrefabRecord(asset, "hierarchy")};
-        std::filesystem::path source{directory.path / record.sourcePath.String()};
+        Assets::AssetRecord record;
+        std::filesystem::path source;
         Prefab::PrefabInstanceId instance{Prefab::PrefabInstanceId::Create(1).Value()};
 
-        Project() {
+        explicit Project(const std::string &sourceName = "hierarchy")
+            : record(ScenePrefabRecord(asset, sourceName)),
+              source(directory.path /
+                     std::filesystem::path{std::u8string{record.sourcePath.String().begin(), record.sourcePath.String().end()}}) {
             std::filesystem::create_directories(directory.path / ".horo");
             std::filesystem::create_directories(source.parent_path());
             WriteSource("Source root");
-            std::ofstream(source.string() + ".horo")
-                << "{\"schemaVersion\":1,\"assetId\":\"" << asset.ToString() << "\",\"assetType\":\"core.prefab\"}";
+            auto metadata = source;
+            metadata += ".horo";
+            std::ofstream(metadata) << "{\"schemaVersion\":1,\"assetId\":\"" << asset.ToString() << "\",\"assetType\":\"core.prefab\"}";
             REQUIRE(registry.Publish({record}).status == Assets::AssetRegistryBuildStatus::Complete);
         }
 

@@ -16,9 +16,11 @@
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -202,9 +204,9 @@ namespace Horo::Editor {
         ContentBrowserTransferMode mode{ContentBrowserTransferMode::Move};
     };
 
-    /** @brief Absolute, optionally line-addressed diagnostic source requested by an output panel. */
+    /** @brief Native absolute path, optionally line-addressed diagnostic source requested by an output panel. */
     struct DiagnosticSourceRequest {
-        std::string absolutePath;
+        std::filesystem::path absolutePath;
         std::uint32_t line{};
         std::uint32_t column{};
     };

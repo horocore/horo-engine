@@ -94,3 +94,29 @@ mutable document authority. The host retains the native project path through
 controller creation, and portable source paths are converted explicitly from
 UTF-8 bytes when opening a file. No runtime descriptor, module vtable or exported
 layout changes are part of these private helper updates.
+
+## UTF-8 source navigation
+
+Native filesystem paths remain `std::filesystem::path` through capture, source
+opening, diagnostic navigation and SaveAs. Project source paths and
+`SourceDocumentId` keys carry UTF-8 text. The owning adapters validate scalar
+UTF-8 and reject embedded NUL before converting portable text through `char8_t`
+paths; malformed text never selects a native-encoding fallback. Native
+containment, symlink checks and capture budgets remain authoritative.
+
+The private `DiagnosticSourceRequest::absolutePath` now carries a native path.
+Source-open handoff forwards the admitted native path directly to the existing
+launch/reveal policy. `GlobalDockBuildOutputPane` converts the public BuildOutput
+string using its existing native decoding semantics at that adapter boundary;
+this change does not impose a new encoding contract on BuildOutput producers.
+The private workspace request, callbacks and command consumers must be rebuilt
+with the matching GUI library. No public signature, module layout, vtable or
+descriptor changes are introduced by this private type migration.
+
+The affected callers are Prefab source navigation, selected Assets capture,
+`SourceFileOpenService`, `SourceDocumentService` identity admission, SaveAs
+retargeting and the diagnostic navigator. Rebuild the affected Assets and Editor
+libraries. Existing valid UTF-8 identities retain their bytes. A previously
+misdecoded filename must be corrected and its registry refreshed rather than
+supported by a second path identity. Native editor launch is a separate platform
+qualification from the in-process path and document regressions.
