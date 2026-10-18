@@ -160,8 +160,14 @@ namespace Horo::Editor {
         CHECK_FALSE(owner.ViewModel().isDirty);
     }
 
-    TEST_CASE("Workspace prefab source opening rejects malformed path text without changing owners", "[editor][prefab][native]") {
+    TEST_CASE("Rejected malformed prefab records preserve workspace source authority", "[editor][prefab][native]") {
         Workspace workspace;
+        auto &owner = *workspace.controller;
+        const auto publication = workspace.project.registry.Snapshot();
+        const auto revision = owner.ViewModel().documentRevision;
+        const auto projection = owner.ViewModel().prefabHierarchy;
+        REQUIRE(projection != nullptr);
+        REQUIRE_FALSE(projection->entries.empty());
         std::string name = "broken";
         SECTION("malformed UTF-8") {
             name += "\xc0\xaf";
@@ -170,17 +176,21 @@ namespace Horo::Editor {
             name.push_back('\0');
         }
         const auto record = ScenePrefabRecord(workspace.project.asset, name);
-        REQUIRE(workspace.project.registry.Publish({record}).status == Assets::AssetRegistryBuildStatus::Complete);
-        auto &owner = *workspace.controller;
-        const auto revision = owner.ViewModel().documentRevision;
+        const auto rejected = workspace.project.registry.Publish({record});
+        REQUIRE(rejected.status == Assets::AssetRegistryBuildStatus::Failed);
+        REQUIRE(rejected.diagnostics.size() == 1);
+        CHECK(rejected.diagnostics.front().error.code.Value() == "asset.registry.root_invalid");
+        CHECK(rejected.publishedRevision == publication.Revision());
+        CHECK(workspace.project.registry.Snapshot().Records().data() == publication.Records().data());
         owner.RefreshAssets(workspace.project.registry.Snapshot());
         const auto &model = owner.ViewModel();
-        REQUIRE(model.prefabHierarchy != nullptr);
-        REQUIRE_FALSE(model.prefabHierarchy->entries.empty());
-        owner.ProcessCommand(Intent(model, model.prefabHierarchy->entries.front().target, PrefabHierarchyAction::OpenSource));
+        CHECK(model.prefabHierarchy == projection);
         CHECK_FALSE(workspace.navigated.has_value());
         CHECK_FALSE(workspace.navigatedIdentity.has_value());
-        CHECK(model.contentBrowserOperationError == "workspace.source_open.unsafe");
+        owner.ProcessCommand(Intent(model, projection->entries.front().target, PrefabHierarchyAction::OpenSource));
+        REQUIRE(workspace.navigated.has_value());
+        CHECK(std::filesystem::equivalent(*workspace.navigated, workspace.project.source));
+        CHECK(workspace.navigatedIdentity == workspace.project.record.sourcePath.String());
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
     }

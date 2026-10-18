@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 from enum import Enum
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -19,9 +18,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from typing import Mapping, Sequence
-from urllib.error import HTTPError
 from urllib.parse import ParseResult, urlparse
-from urllib.request import Request, urlopen
 
 try:
     from . import dev_process, local_build_cache
@@ -35,10 +32,6 @@ DEFAULT_ENV_FILE = REPOSITORY_ROOT / DEFAULT_ENV_FILE_NAME
 DEFAULT_BUILD_DIRECTORY = REPOSITORY_ROOT / "build" / "dev-editor"
 DEFAULT_CI_BUILD_DIRECTORY = REPOSITORY_ROOT / "build" / "ci"
 DEFAULT_OTLP_ENDPOINT = "http://127.0.0.1:4318"
-DEFAULT_GRAFANA_URL = "http://127.0.0.1:3000"
-GRAFANA_DASHBOARD_PATH = REPOSITORY_ROOT / "observability" / "grafana" / "dashboards" / "horo-editor.json"
-GRAFANA_DASHBOARD_UID = "horo-editor-observability"
-GRAFANA_SOURCE_TAG_PREFIX = "horo-source:"
 _ENVIRONMENT_KEY = re.compile(r"^[A-Za-z_]\w*$", re.ASCII)
 
 # Diagnostic Item String Constants (Sonar S1192)
@@ -50,7 +43,6 @@ _TOOLCHAIN_CCACHE_NAME = "ccache"
 _PYTHON_PYTEST_NAME = "pytest Module"
 _GRAPHICS_DISPLAY_NAME = "Interactive Display"
 _OBSERVABILITY_OTLP_NAME = "OTLP Collector"
-_OBSERVABILITY_GRAFANA_NAME = "Grafana Service"
 _SONAR_TOKEN_ENV_KEY = "HORO_SONAR_TOKEN"
 _SONAR_DEFAULT_COMPILE_COMMANDS = "build/ci/compile_commands.json"
 
@@ -86,8 +78,6 @@ class DeveloperSettings:
 
     otel_export_enabled: bool
     endpoint: Endpoint
-    grafana_endpoint: Endpoint | None = None
-    grafana_api_token: str | None = None
 
 
 @dataclass
@@ -277,41 +267,19 @@ def validate_endpoint(value: str) -> Endpoint:
     return Endpoint(url=value.rstrip("/"), host=parsed.hostname, port=port)
 
 
-def validate_grafana_url(value: str) -> Endpoint:
-    """Validate a loopback-only Grafana base URL used for automatic imports."""
-    if any(character.isspace() for character in value) or "?" in value or "#" in value:
-        raise ConfigurationError("HORO_GRAFANA_URL must not contain whitespace, a query, or a fragment")
-    try:
-        parsed = urlparse(value)
-        port = parsed.port
-    except ValueError as error:
-        raise ConfigurationError(f"HORO_GRAFANA_URL is invalid: {error}") from error
-
-    _validate_url_structure(parsed, "HORO_GRAFANA_URL")
-    if parsed.hostname not in {"127.0.0.1", "localhost", "::1"} or port is None:
-        raise ConfigurationError("HORO_GRAFANA_URL must use a loopback host and explicit port")
-    return Endpoint(url=value.rstrip("/"), host=parsed.hostname, port=port)
-
-
 def load_settings(path: Path = DEFAULT_ENV_FILE, environ: Mapping[str, str] | None = None) -> DeveloperSettings:
     """Resolve defaults, local configuration, then process-environment overrides."""
     process_environment = os.environ if environ is None else environ
     resolved = {
         "HORO_DEV_OTEL_EXPORT": "OFF",
         "HORO_OTEL_ENDPOINT": DEFAULT_OTLP_ENDPOINT,
-        "HORO_DEV_GRAFANA_AUTO_IMPORT": "ON",
-        "HORO_GRAFANA_URL": DEFAULT_GRAFANA_URL,
         **parse_dotenv(path),
         **process_environment,
     }
     export_enabled = parse_enabled(resolved["HORO_DEV_OTEL_EXPORT"])
-    grafana_auto_import = parse_enabled(resolved["HORO_DEV_GRAFANA_AUTO_IMPORT"], "HORO_DEV_GRAFANA_AUTO_IMPORT")
-    grafana_token = resolved.get("HORO_GRAFANA_API_TOKEN")
     return DeveloperSettings(
         otel_export_enabled=export_enabled,
         endpoint=validate_endpoint(resolved["HORO_OTEL_ENDPOINT"] if export_enabled else DEFAULT_OTLP_ENDPOINT),
-        grafana_endpoint=validate_grafana_url(resolved["HORO_GRAFANA_URL"]) if grafana_auto_import else None,
-        grafana_api_token=grafana_token.strip() if grafana_token else None,
     )
 
 
@@ -322,86 +290,6 @@ def collector_is_reachable(endpoint: Endpoint, timeout_seconds: float = 0.5) -> 
             return True
     except OSError:
         return False
-
-
-def _grafana_source_tag(path: Path) -> str:
-    """Return the stable tag used to avoid importing an unchanged dashboard."""
-    digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
-    return f"{GRAFANA_SOURCE_TAG_PREFIX}{digest}"
-
-
-def _read_json(request: Request, timeout_seconds: float) -> dict[str, object]:
-    """Execute one bounded Grafana API request and decode its JSON response."""
-    with urlopen(request, timeout=timeout_seconds) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def _grafana_headers(api_token: str | None = None) -> dict[str, str]:
-    """Return standard Grafana request headers including optional bearer token."""
-    headers = {"Content-Type": "application/json"}
-    if api_token:
-        headers["Authorization"] = f"Bearer {api_token}"
-    return headers
-
-
-def sync_grafana_dashboard(
-    endpoint: Endpoint,
-    dashboard_path: Path = GRAFANA_DASHBOARD_PATH,
-    api_token: str | None = None,
-) -> str:
-    """Import the versioned dashboard when local Grafana is available and stale."""
-    headers = _grafana_headers(api_token)
-    try:
-        _read_json(Request(f"{endpoint.url}/api/health", headers=headers), 0.5)
-    except (OSError, ValueError):
-        return "unavailable"
-
-    try:
-        source_tag = _grafana_source_tag(dashboard_path)
-    except OSError as error:
-        print(f"warning: Grafana dashboard source could not be read: {error}; continuing editor startup.", file=sys.stderr)
-        return "unavailable"
-    dashboard_exists = False
-    try:
-        remote = _read_json(Request(f"{endpoint.url}/api/dashboards/uid/{GRAFANA_DASHBOARD_UID}", headers=headers), 1.0)
-        dashboard_exists = True
-        remote_dashboard = remote.get("dashboard", {})
-        if isinstance(remote_dashboard, dict) and source_tag in remote_dashboard.get("tags", []):
-            return "current"
-    except HTTPError as error:
-        if error.code != 404:
-            print(f"warning: Grafana dashboard lookup failed with HTTP {error.code}; continuing without import.", file=sys.stderr)
-            return "unavailable"
-    except (OSError, ValueError) as error:
-        print(f"warning: Grafana dashboard lookup failed: {error}; continuing without import.", file=sys.stderr)
-        return "unavailable"
-
-    try:
-        dashboard = json.loads(dashboard_path.read_text(encoding="utf-8"))
-        tags = [tag for tag in dashboard.get("tags", []) if not tag.startswith(GRAFANA_SOURCE_TAG_PREFIX)]
-        dashboard["tags"] = [*tags, source_tag]
-        dashboard["id"] = None
-        dashboard["version"] = 0
-        body = json.dumps(
-            {
-                "dashboard": dashboard,
-                "overwrite": True,
-                "message": "Synchronize the repository HoroEditor observability dashboard",
-            }
-        ).encode("utf-8")
-        request = Request(
-            f"{endpoint.url}/api/dashboards/db",
-            data=body,
-            headers=headers,
-            method="POST",
-        )
-        result = _read_json(request, 2.0)
-        if result.get("status") != "success":
-            raise ValueError("Grafana did not confirm the dashboard import")
-        return "updated" if dashboard_exists else "imported"
-    except (OSError, ValueError) as error:
-        print(f"warning: Grafana dashboard import failed: {error}; continuing editor startup.", file=sys.stderr)
-    return "unavailable"
 
 
 def _compiler_cache_arguments(
@@ -652,11 +540,6 @@ def run_editor(settings: DeveloperSettings, editor_arguments: Sequence[str], bui
     if build_code != 0:
         return build_code
 
-    if settings.grafana_endpoint is not None:
-        grafana_status = sync_grafana_dashboard(settings.grafana_endpoint, api_token=settings.grafana_api_token)
-        print(f"Grafana dashboard: {grafana_status}", flush=True)
-    else:
-        print("Grafana dashboard: disabled", flush=True)
 
     executable = editor_executable(build_directory)
     if not executable.is_file():
@@ -918,7 +801,6 @@ def run_format(files: Sequence[str] | None = None, staged: bool = False, check: 
     return 0
 
 
-
 def _check_tool_version(
     report: DoctorReport,
     category: str,
@@ -1095,7 +977,6 @@ def check_observability_and_services(report: DoctorReport, settings: DeveloperSe
 
     if settings is None:
         report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.WARN, "Settings could not be loaded due to configuration error")
-        report.add("Observability", _OBSERVABILITY_GRAFANA_NAME, CheckStatus.WARN, "Settings could not be loaded due to configuration error")
         return
 
     if settings.otel_export_enabled:
@@ -1106,17 +987,6 @@ def check_observability_and_services(report: DoctorReport, settings: DeveloperSe
             report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.WARN, f"Unreachable at {settings.endpoint.url} (fallback to local logs)")
     else:
         report.add("Observability", _OBSERVABILITY_OTLP_NAME, CheckStatus.INFO, "OpenTelemetry export disabled (HORO_DEV_OTEL_EXPORT=OFF)")
-
-    if settings.grafana_endpoint:
-        headers = _grafana_headers(settings.grafana_api_token)
-        try:
-            with urlopen(Request(f"{settings.grafana_endpoint.url}/api/health", headers=headers), timeout=0.5):
-                report.add("Observability", _OBSERVABILITY_GRAFANA_NAME, CheckStatus.OK, f"Reachable at {settings.grafana_endpoint.url}")
-        except (OSError, ValueError):
-            report.add("Observability", _OBSERVABILITY_GRAFANA_NAME, CheckStatus.WARN, f"Unreachable at {settings.grafana_endpoint.url}")
-    else:
-        report.add("Observability", _OBSERVABILITY_GRAFANA_NAME, CheckStatus.INFO, "Grafana auto-import disabled")
-
 
 
 def _find_sonar_scanner() -> Path | None:
@@ -1134,7 +1004,6 @@ def _find_sonar_scanner() -> Path | None:
     if system_scanner := shutil.which("sonar-scanner"):
         return Path(system_scanner)
     return None
-
 
 
 def _persist_sonar_token(token: str) -> None:

@@ -21,6 +21,24 @@ namespace Horo::Platform {
                    limits.maximumDuration <= hard.maximumDuration;
         }
 
+        /** @brief Admits exact contained inventory spellings without importing the code-query device/name profile. */
+        bool SafeInventoryPath(const std::string_view path) {
+            if (path.empty() || path.size() > 4096 || path.front() == '/' || path.back() == '/' ||
+                path.find('\0') != std::string_view::npos)
+                return false;
+            std::size_t start{};
+            while (start < path.size()) {
+                const auto end = path.find('/', start);
+                if (const auto part = path.substr(start, end == std::string_view::npos ? path.size() - start : end - start);
+                    part.empty() || part == "." || part == "..")
+                    return false;
+                if (end == std::string_view::npos)
+                    break;
+                start = end + 1;
+            }
+            return true;
+        }
+
         /** @brief Applies one native call budget while preserving borrowed cancellation and authority. */
         ProjectReadContext BoundedContext(const ProjectReadContext &input, const ProjectReadLimits &limits) {
             return {input.projectIdentity, input.projectGeneration, input.cancellation,
@@ -36,14 +54,32 @@ namespace Horo::Platform {
             /** @copydoc IProjectReadFiles::Text */
             Result<ProjectReadTextSnapshot> Text(const std::string_view path, const ProjectReadContext &input,
                                                  const ProjectReadLimits &limits) const override {
-                if (auto admitted = Admit(path, false, input, limits); admitted.HasError())
-                    return Result<ProjectReadTextSnapshot>::Failure(admitted.ErrorValue());
+                return CaptureText(path, input, limits, false);
+            }
+
+            /** @copydoc IProjectReadFiles::InventoryText */
+            Result<ProjectReadTextSnapshot> InventoryText(std::string_view path, const ProjectReadContext &input) const override {
+                return CaptureText(path, input, {}, true);
+            }
+
+        private:
+            /** @brief Shares one native byte reader while preserving distinct query and inventory hardlink admission. */
+            Result<ProjectReadTextSnapshot> CaptureText(std::string_view path, const ProjectReadContext &input,
+                                                        const ProjectReadLimits &limits, bool allowRegularHardlinks) const {
                 try {
-                    const auto context = BoundedContext(input, limits);
-                    auto file = Open(path, false, context);
+                    if (input.projectIdentity != identity_ || input.projectGeneration != generation_)
+                        return Result<ProjectReadTextSnapshot>::Failure(MakeError(ProjectReadErrors::Stale));
+                    if (!(allowRegularHardlinks ? SafeInventoryPath(path) : IsSafeProjectReadPath(path)))
+                        return Result<ProjectReadTextSnapshot>::Failure(MakeError(ProjectReadErrors::UnsafePath));
+                    if (!ValidLimits(limits))
+                        return Result<ProjectReadTextSnapshot>::Failure(MakeError(ProjectReadErrors::Invalid));
+                    const auto context = allowRegularHardlinks ? input : BoundedContext(input, limits);
+                    if (auto stop = CheckProjectReadContext(context); stop.HasError())
+                        return Result<ProjectReadTextSnapshot>::Failure(stop.ErrorValue());
+                    auto file = Open(path, false, context, allowRegularHardlinks);
                     if (file.HasError())
                         return Result<ProjectReadTextSnapshot>::Failure(file.ErrorValue());
-                    auto text = Read(file.Value(), path, context, limits);
+                    auto text = Read(file.Value(), path, context, limits, allowRegularHardlinks);
                     if (text.HasError())
                         return Result<ProjectReadTextSnapshot>::Failure(text.ErrorValue());
                     const auto &bytes = *text.Value();
@@ -57,6 +93,7 @@ namespace Horo::Platform {
                 }
             }
 
+        public:
             /** @copydoc IProjectReadFiles::Files */
             Result<ProjectReadManifest> Files(const std::string_view prefix, const ProjectReadContext &input,
                                               const ProjectReadLimits &limits) const override {
@@ -87,7 +124,100 @@ namespace Horo::Platform {
                 }
             }
 
+            /** @copydoc IProjectReadFiles::Inventory */
+            Result<ProjectInventory> Inventory(const std::string_view prefix, const ProjectInventoryDepth depth,
+                                               const ProjectReadContext &input, const ProjectInventoryLimits &limits) const override {
+                const ProjectInventoryLimits hard;
+                if (input.projectIdentity != identity_ || input.projectGeneration != generation_)
+                    return Result<ProjectInventory>::Failure(MakeError(ProjectReadErrors::Stale));
+                if (!prefix.empty() && !SafeInventoryPath(prefix))
+                    return Result<ProjectInventory>::Failure(MakeError(ProjectReadErrors::UnsafePath));
+                if (limits.maximumEntries > hard.maximumEntries || limits.maximumManifestBytes > hard.maximumManifestBytes ||
+                    limits.maximumDuration.count() <= 0 || limits.maximumDuration > hard.maximumDuration ||
+                    (depth != ProjectInventoryDepth::Children && depth != ProjectInventoryDepth::Recursive))
+                    return Result<ProjectInventory>::Failure(MakeError(ProjectReadErrors::Invalid));
+                try {
+                    const ProjectReadContext context{input.projectIdentity, input.projectGeneration, input.cancellation,
+                                                     std::min(input.deadline, std::chrono::steady_clock::now() + limits.maximumDuration),
+                                                     input.authorityStopped};
+                    if (auto stopped = CheckProjectReadContext(context); stopped.HasError())
+                        return Result<ProjectInventory>::Failure(stopped.ErrorValue());
+                    auto directory = Open(prefix, true, context);
+                    if (directory.HasError())
+                        return Result<ProjectInventory>::Failure(directory.ErrorValue());
+                    ProjectInventory result;
+                    std::size_t bytes{};
+                    InventoryState state{context, limits, depth, bytes, result.entries, {}};
+                    if (auto captured = CaptureInventory(directory.Value(), prefix, state); captured.HasError())
+                        return Result<ProjectInventory>::Failure(captured.ErrorValue());
+                    std::ranges::sort(result.entries, {}, &ProjectInventoryEntry::path);
+                    if (auto stopped = CheckProjectReadContext(context); stopped.HasError())
+                        return Result<ProjectInventory>::Failure(stopped.ErrorValue());
+                    return Result<ProjectInventory>::Success(std::move(result));
+                } catch (const std::bad_alloc &) {
+                    return Result<ProjectInventory>::Failure(MakeError(ProjectReadErrors::Capacity));
+                }
+            }
+
         private:
+            /** @brief Borrows the caller's independent inventory budget throughout synchronous traversal. */
+            struct InventoryState final {
+                const ProjectReadContext &context;
+                const ProjectInventoryLimits &limits;
+                ProjectInventoryDepth depth;
+                std::size_t &bytes;
+                std::vector<ProjectInventoryEntry> &entries;
+                std::vector<std::size_t> pendingDirectories;
+            };
+
+            /** @brief Reports links/special files without opening them and queues only directory spellings. */
+            struct InventoryVisit final : Native::EntryVisitor {
+                /** @brief Borrows caller-owned traversal state only during one synchronous native Visit. */
+                InventoryVisit(InventoryState &state, std::string_view prefix) noexcept : prefix(prefix), state(state) {}
+
+                /** @copydoc Native::EntryVisitor::operator() */
+                Result<void> operator()(std::string_view) const override {
+                    return Result<void>::Failure(MakeError(ProjectReadErrors::Unavailable));
+                }
+
+                /** @copydoc Native::EntryVisitor::Classified */
+                Result<void> Classified(const std::string_view name, const ProjectInventoryKind kind) const override {
+                    const std::string path = prefix.empty() ? std::string{name} : std::string{prefix} + '/' + std::string{name};
+                    if (state.entries.size() >= state.limits.maximumEntries ||
+                        path.size() + 1 > state.limits.maximumManifestBytes - state.bytes)
+                        return Result<void>::Failure(MakeError(ProjectReadErrors::Capacity));
+                    state.bytes += path.size() + 1;
+                    state.entries.emplace_back(path, kind);
+                    if (kind != ProjectInventoryKind::Directory || state.depth != ProjectInventoryDepth::Recursive)
+                        return Result<void>::Success();
+                    state.pendingDirectories.push_back(state.entries.size() - 1);
+                    return Result<void>::Success();
+                }
+
+                std::string_view prefix;
+                InventoryState &state;
+            };
+
+            /** @brief Traverses admitted directories iteratively; depth never consumes unbounded C++ stack or native handles. */
+            Result<void> CaptureInventory(const Native::Handle &directory, const std::string_view prefix, InventoryState &state) const {
+                InventoryVisit first{state, prefix};
+                if (auto visited = Native::Visit(directory, state.context, first); visited.HasError())
+                    return visited;
+                while (!state.pendingDirectories.empty()) {
+                    const std::string path = state.entries[state.pendingDirectories.back()].path;
+                    state.pendingDirectories.pop_back();
+                    if (auto stopped = CheckProjectReadContext(state.context); stopped.HasError())
+                        return stopped;
+                    auto child = Open(path, true, state.context);
+                    if (child.HasError())
+                        return Result<void>::Failure(child.ErrorValue());
+                    InventoryVisit next{state, path};
+                    if (auto visited = Native::Visit(child.Value(), state.context, next); visited.HasError())
+                        return visited;
+                }
+                return Result<void>::Success();
+            }
+
             /** @brief Shares one finite enumeration budget across synchronous handle-relative recursion. */
             struct CaptureState final {
                 const ProjectReadContext &context;
@@ -133,7 +263,8 @@ namespace Horo::Platform {
             }
 
             /** @brief Resolves each segment only against the previous opened directory identity. */
-            Result<Native::Handle> Open(const std::string_view path, const bool directory, const ProjectReadContext &context) const {
+            Result<Native::Handle> Open(const std::string_view path, const bool directory, const ProjectReadContext &context,
+                                        bool allowRegularHardlinks = false) const {
                 auto current = Native::OpenDirectory(root_);
                 if (current.HasError())
                     return current;
@@ -145,7 +276,7 @@ namespace Horo::Platform {
                     Observe(Boundary::BeforeComponentOpen, path.substr(0, last ? path.size() : end));
                     if (auto stop = CheckProjectReadContext(context); stop.HasError())
                         return Result<Native::Handle>::Failure(stop.ErrorValue());
-                    auto child = Native::OpenChild(current.Value(), name, !last || directory);
+                    auto child = Native::OpenChild(current.Value(), name, !last || directory, last && allowRegularHardlinks);
                     if (child.HasError())
                         return child;
                     current = std::move(child);
@@ -158,11 +289,12 @@ namespace Horo::Platform {
 
             /** @brief Captures bounded bytes from an admitted regular object and fences mutation metadata around the read. */
             Result<std::shared_ptr<const std::string>> Read(const Native::Handle &file, const std::string_view path,
-                                                            const ProjectReadContext &context, const ProjectReadLimits &limits) const {
+                                                            const ProjectReadContext &context, const ProjectReadLimits &limits,
+                                                            bool allowRegularHardlinks) const {
                 auto before = Native::Info(file);
                 if (before.HasError())
                     return Result<std::shared_ptr<const std::string>>::Failure(before.ErrorValue());
-                if (!before.Value().regular || before.Value().links != 1)
+                if (!before.Value().regular || (before.Value().links != 1 && !allowRegularHardlinks))
                     return Result<std::shared_ptr<const std::string>>::Failure(MakeError(ProjectReadErrors::UnsafePath));
                 if (before.Value().length > limits.maximumFileBytes)
                     return Result<std::shared_ptr<const std::string>>::Failure(MakeError(ProjectReadErrors::Capacity));

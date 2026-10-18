@@ -11,6 +11,31 @@ namespace {
     using namespace Horo::Assets;
     using namespace Horo::Assets::ServiceTestSupport;
 
+    /** @brief Proves rejected source admission cannot redirect a selected cook or replace its pinned valid registry. */
+    void CheckRejectedSourcePreservesCookInput(const TestProject &project, AssetRegistry &registry,
+                                               const AssetRegistrySnapshot &publication, const AssetRecord &candidate) {
+        const auto rejected = registry.Publish({candidate});
+        REQUIRE(rejected.status == AssetRegistryBuildStatus::Failed);
+        REQUIRE(rejected.diagnostics.size() == 1);
+        CHECK(rejected.diagnostics.front().error.code.Value() == "asset.registry.root_invalid");
+        CHECK(rejected.publishedRevision == publication.Revision());
+        const auto retained = registry.Snapshot();
+        CHECK(retained.Revision() == publication.Revision());
+        CHECK(retained.Records().data() == publication.Records().data());
+        REQUIRE(retained.Records().size() == 1);
+        CHECK(retained.Records().front().sourcePath.String() == publication.Records().front().sourcePath.String());
+        CHECK(retained.Find(candidate.id) == nullptr);
+        const std::array selected{candidate.id};
+        const auto selectedInput = AssetCookInputSnapshot::CaptureSelected(project.dir.path, retained, selected, {}, 4096);
+        REQUIRE(selectedInput.HasError());
+        CHECK(selectedInput.ErrorValue().code.Value() == "asset.cook.source_read_failed");
+        const auto complete = AssetCookInputSnapshot::Capture(project.dir.path, retained, {}, 4096);
+        REQUIRE(complete.HasValue());
+        REQUIRE(complete.Value().Sources().size() == 1);
+        CHECK(complete.Value().Sources().front().record.id == publication.Records().front().id);
+        CHECK(complete.Value().VerifyUnchanged().HasValue());
+    }
+
     /** @brief Captures the real source and sidecar through the same validated registry used by AssetCook. */
     AssetCookInputSnapshot CaptureProject(const TestProject &project) {
         AssetRegistry registry;
@@ -331,9 +356,13 @@ TEST_CASE("Cook input capture preserves actual Unicode source and sidecar paths"
     CHECK(captured.Value().Sources().front().bytes == std::vector<std::uint8_t>{1, 2, 3, 4, 5});
 }
 
-TEST_CASE("Cook input capture rejects NUL path aliases before reading an existing file", "[native][prefab-cook][paths]") {
+TEST_CASE("Cook input cannot select NUL source aliases rejected by registry admission", "[native][prefab-cook][paths]") {
     TestProject project;
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+    const auto publication = registry.Snapshot();
     auto record = TestMeshRecord();
+    record.id = Id("00000000-0000-0000-0000-0000000000a2");
     std::string path = record.sourcePath.String();
     path.push_back('\0');
     path += "ignored.fbx";
@@ -341,41 +370,29 @@ TEST_CASE("Cook input capture rejects NUL path aliases before reading an existin
     record.metadataPath = ProjectPath::Parse(path + ".horo").Value();
     const auto contents = SidecarJson(record.id.ToString(), record.type.Value());
     WriteFile(project.sourceFile, {reinterpret_cast<const std::uint8_t *>(contents.data()), contents.size()});
-    AssetRegistry registry;
-    REQUIRE(registry.Publish({record}).status == AssetRegistryBuildStatus::Complete);
-    const auto publication = registry.Snapshot();
-    const std::array selected{record.id};
-    const auto captured = AssetCookInputSnapshot::CaptureSelected(project.dir.path, publication, selected, {}, 4096);
-    REQUIRE(captured.HasError());
-    CHECK(captured.ErrorValue().code.Value() == "asset.cook.source_read_failed");
-    CHECK(registry.Snapshot().Revision() == publication.Revision());
-    CHECK(std::filesystem::file_size(project.sourceFile) == contents.size());
+    CheckRejectedSourcePreservesCookInput(project, registry, publication, record);
+    std::ifstream input{project.sourceFile, std::ios::binary};
+    REQUIRE(input.is_open());
+    const std::string retained{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    CHECK(retained == contents);
 }
 
-TEST_CASE("Cook input capture rejects malformed UTF-8 paths before reading native files", "[native][prefab-cook][paths]") {
+TEST_CASE("Cook input cannot select malformed UTF-8 sources rejected by registry admission", "[native][prefab-cook][paths]") {
     TestProject project;
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+    const auto publication = registry.Snapshot();
     auto record = TestMeshRecord();
+    record.id = Id("00000000-0000-0000-0000-0000000000a2");
     const std::string malformed = std::string{"assets/malformed"} + "\xc0\xaf" + ".fbx";
     record.sourcePath = ProjectPath::Parse(malformed).Value();
 #ifndef _WIN32
-    // POSIX can store these bytes, but a portable ProjectPath must not select that native file.
+    // POSIX may retain these native bytes; failed portable admission must leave them untouched.
     const auto native = project.dir.path / std::filesystem::path{malformed};
     const std::vector<std::uint8_t> original{9, 8, 7};
     const bool created = Horo::TestSupport::WriteMalformedNativeFile(native, original);
 #endif
-    AssetRegistry registry;
-    REQUIRE(registry.Publish({record}).status == AssetRegistryBuildStatus::Complete);
-    const auto publication = registry.Snapshot();
-    const std::array selected{record.id};
-    const auto captured = AssetCookInputSnapshot::CaptureSelected(project.dir.path, publication, selected, {}, 4096);
-    REQUIRE(captured.HasError());
-    CHECK(captured.ErrorValue().code.Value() == "asset.cook.source_read_failed");
-    const auto complete = AssetCookInputSnapshot::Capture(project.dir.path, publication, {}, 4096);
-    REQUIRE(complete.HasError());
-    CHECK(complete.ErrorValue().code.Value() == "asset.cook.source_read_failed");
-    CHECK(registry.Snapshot().Revision() == publication.Revision());
-    REQUIRE(registry.Snapshot().Records().size() == 1);
-    CHECK(registry.Snapshot().Records().front().sourcePath.String() == malformed);
+    CheckRejectedSourcePreservesCookInput(project, registry, publication, record);
 #ifndef _WIN32
     std::error_code existenceError;
     const bool remains = std::filesystem::exists(native, existenceError);
@@ -387,4 +404,30 @@ TEST_CASE("Cook input capture rejects malformed UTF-8 paths before reading nativ
         CHECK(retained == original);
     }
 #endif
+}
+
+TEST_CASE("Cook input capture rejects malformed metadata aliases at its own read boundary", "[native][prefab-cook][paths]") {
+    TestProject project;
+    auto record = TestMeshRecord();
+    std::string metadata = record.metadataPath.String();
+    SECTION("NUL alias of an existing sidecar") {
+        metadata.push_back('\0');
+        metadata += "ignored.horo";
+    }
+    SECTION("malformed UTF-8 sidecar identity") {
+        metadata += "\xc0\xaf";
+    }
+    record.metadataPath = ProjectPath::Parse(metadata).Value();
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({record}).status == AssetRegistryBuildStatus::Complete);
+    const auto publication = registry.Snapshot();
+    const std::array selected{record.id};
+    const auto selectedInput = AssetCookInputSnapshot::CaptureSelected(project.dir.path, publication, selected, {}, 4096);
+    REQUIRE(selectedInput.HasError());
+    CHECK(selectedInput.ErrorValue().code.Value() == "asset.cook.source_read_failed");
+    const auto complete = AssetCookInputSnapshot::Capture(project.dir.path, publication, {}, 4096);
+    REQUIRE(complete.HasError());
+    CHECK(complete.ErrorValue().code.Value() == "asset.cook.source_read_failed");
+    CHECK(registry.Snapshot().Records().data() == publication.Records().data());
+    CHECK(registry.Snapshot().Revision() == publication.Revision());
 }

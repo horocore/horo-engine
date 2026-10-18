@@ -58,6 +58,11 @@ namespace Horo::Platform::ProjectReadNative {
          * @return Success or the exact bounded admission/recursion failure.
          */
         [[nodiscard]] virtual Result<void> operator()(std::string_view name) const = 0;
+
+        /** @brief Delivers no-follow classification while retaining existing query admission behavior. */
+        [[nodiscard]] virtual Result<void> Classified(std::string_view name, ProjectInventoryKind) const {
+            return (*this)(name);
+        }
     };
 
     /** @brief Normalizes the concrete invalid value without exposing native handle types. */
@@ -69,7 +74,7 @@ namespace Horo::Platform::ProjectReadNative {
     /** @brief Encodes an admitted native root component without lossy replacement. */
     [[nodiscard]] Result<std::string> ComponentName(const std::filesystem::path &part);
     /** @brief Applies the same type/link admission to every opened child and directory cursor. */
-    [[nodiscard]] Result<Handle> AdmitChild(Handle child, bool directory);
+    [[nodiscard]] Result<Handle> AdmitChild(Handle child, bool directory, bool allowRegularHardlinks = false);
 
     /** @brief Opens every root component without following links/reparse points.
      * @param path Absolute authorized root. @return Owned directory identity or typed failure.
@@ -83,7 +88,7 @@ namespace Horo::Platform::ProjectReadNative {
      * @param parent Retained parent. @param name Single validated segment. @param directory Require a directory.
      * @return Owned child identity or typed failure; special files cannot cause a blocking open.
      */
-    [[nodiscard]] Result<Handle> OpenChild(const Handle &parent, std::string_view name, bool directory);
+    [[nodiscard]] Result<Handle> OpenChild(const Handle &parent, std::string_view name, bool directory, bool allowRegularHardlinks = false);
     /** @brief Captures metadata from an opened object.
      * @param handle Owned object. @return Typed identity/mutation metadata or failure.
      */

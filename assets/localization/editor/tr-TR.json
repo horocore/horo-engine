@@ -2305,6 +2305,253 @@
     "workspace.packages.recovery_hint": {
       "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
     },
+    "workspace.physics.title": {
+      "text": "Fizik"
+    },
+    "workspace.physics.authoring_only": {
+      "text": "Yalnızca kaynak ayarları. Proje bağları ve yerel etkinleştirme derleme/çalışma zamanında doğrulanır; burada arka uç etkinleştirilmez."
+    },
+    "workspace.physics.unavailable": {
+      "text": "Düzenleme için kilitsiz nesne ve geçerli belge sahibi gerekir."
+    },
+    "workspace.physics.body": {
+      "text": "Katı cisim"
+    },
+    "workspace.physics.collider": {
+      "text": "Çarpışma şekli / algılayıcı"
+    },
+    "workspace.physics.constraint": {
+      "text": "Kısıt"
+    },
+    "workspace.physics.enabled": {
+      "text": "Etkin"
+    },
+    "workspace.physics.sensor": {
+      "text": "Algılayıcı (yalnızca örtüşme, fiziksel tepki yok)"
+    },
+    "workspace.physics.static": {
+      "text": "Sabit"
+    },
+    "workspace.physics.kinematic": {
+      "text": "Kinematik"
+    },
+    "workspace.physics.dynamic": {
+      "text": "Dinamik"
+    },
+    "workspace.physics.motion": {
+      "text": "Hareket türü"
+    },
+    "workspace.physics.mass": {
+      "text": "Kütle (kg)"
+    },
+    "workspace.physics.density": {
+      "text": "Yoğunluk (kg/m³)"
+    },
+    "workspace.physics.mass_mode": {
+      "text": "Kütle tanımı"
+    },
+    "workspace.physics.linear_velocity": {
+      "text": "Başlangıç hızı (m/sn)"
+    },
+    "workspace.physics.angular_velocity": {
+      "text": "Başlangıç açısal hızı (rad/sn)"
+    },
+    "workspace.physics.linear_damping": {
+      "text": "Doğrusal sönüm (1/sn)"
+    },
+    "workspace.physics.angular_damping": {
+      "text": "Açısal sönüm (1/sn)"
+    },
+    "workspace.physics.linear_limit": {
+      "text": "En yüksek hız (m/sn)"
+    },
+    "workspace.physics.angular_limit": {
+      "text": "En yüksek açısal hız (rad/sn)"
+    },
+    "workspace.physics.translation": {
+      "text": "Yerel öteleme (m)"
+    },
+    "workspace.physics.rotation_xyz": {
+      "text": "Dönüş kuaterniyonu XYZ"
+    },
+    "workspace.physics.rotation_w": {
+      "text": "Dönüş kuaterniyonu W"
+    },
+    "workspace.physics.body_object": {
+      "text": "Cisim nesne kimliği"
+    },
+    "workspace.physics.body_slot": {
+      "text": "Cisim yuvası kimliği"
+    },
+    "workspace.physics.profile": {
+      "text": "Çarpışma profili UUID"
+    },
+    "workspace.physics.shape": {
+      "text": "Şekil kaynağı"
+    },
+    "workspace.physics.box": {
+      "text": "Kutu"
+    },
+    "workspace.physics.sphere": {
+      "text": "Küre"
+    },
+    "workspace.physics.capsule": {
+      "text": "Kapsül"
+    },
+    "workspace.physics.plane": {
+      "text": "Sabit düzlem"
+    },
+    "workspace.physics.shape_asset": {
+      "text": "Şekil varlığı UUID"
+    },
+    "workspace.physics.shape_part": {
+      "text": "Şekil alt kaynak kimliği"
+    },
+    "workspace.physics.half_extents": {
+      "text": "Yarı boyutlar (m)"
+    },
+    "workspace.physics.radius": {
+      "text": "Yarıçap (m)"
+    },
+    "workspace.physics.cylinder_half_height": {
+      "text": "Silindir yarı yüksekliği (m)"
+    },
+    "workspace.physics.plane_normal": {
+      "text": "Düzlemin birim normali"
+    },
+    "workspace.physics.plane_distance": {
+      "text": "Düzlemin işaretli uzaklığı (m)"
+    },
+    "workspace.physics.scale": {
+      "text": "Yerel ölçek"
+    },
+    "workspace.physics.material_slot": {
+      "text": "Malzeme yuvası kimliği"
+    },
+    "workspace.physics.material_asset": {
+      "text": "Fizik malzemesi varlığı UUID"
+    },
+    "workspace.physics.remove_material": {
+      "text": "Malzeme eşlemesini kaldır"
+    },
+    "workspace.physics.add_material": {
+      "text": "Açık malzeme eşlemesi ekle"
+    },
+    "workspace.physics.first_endpoint": {
+      "text": "İlk cisim ucu"
+    },
+    "workspace.physics.second_endpoint": {
+      "text": "İkinci uç"
+    },
+    "workspace.physics.world": {
+      "text": "Dünya çerçevesi"
+    },
+    "workspace.physics.fixed": {
+      "text": "Sabit"
+    },
+    "workspace.physics.distance": {
+      "text": "Uzaklık"
+    },
+    "workspace.physics.constraint_kind": {
+      "text": "Kısıt türü"
+    },
+    "workspace.physics.minimum_distance": {
+      "text": "En düşük uzaklık (m)"
+    },
+    "workspace.physics.maximum_distance": {
+      "text": "En yüksek uzaklık (m)"
+    },
+    "workspace.physics.constraint_unsupported": {
+      "text": "Bu Sahne şeması menteşe ve kızak kısıtlarını desteklemez."
+    },
+    "workspace.physics.remove_body": {
+      "text": "Cisim kaldırmayı hazırla"
+    },
+    "workspace.physics.remove_collider": {
+      "text": "Çarpışma şeklini kaldırmayı hazırla"
+    },
+    "workspace.physics.remove_constraint": {
+      "text": "Kısıt kaldırmayı hazırla"
+    },
+    "workspace.physics.add_body": {
+      "text": "Cisim ve kutu çarpışma şekli hazırla"
+    },
+    "workspace.physics.add_collider": {
+      "text": "Çarpışma şekli / algılayıcı hazırla"
+    },
+    "workspace.physics.add_constraint": {
+      "text": "Kısıt hazırla"
+    },
+    "workspace.physics.apply": {
+      "text": "Fizik düzenlemesini uygula"
+    },
+    "workspace.physics.cancel": {
+      "text": "Hazırlanan fizik düzenlemesini at"
+    },
+    "workspace.physics.invalid_identity": {
+      "text": "Uygulamadan önce geçerli sıfır olmayan ondalık kimlikler ve kanonik proje UUID değerleri girin."
+    },
+    "workspace.physics.rejected": {
+      "text": "Fizik düzenlemesi reddedildi; belge ve geçmiş korundu."
+    },
+    "workspace.physics.component_id": {
+      "text": "Bileşen kimliği"
+    },
+    "workspace.physics.collider_slot": {
+      "text": "Çarpışma şekli yuvası kimliği"
+    },
+    "workspace.physics.constraint_slot": {
+      "text": "Kısıt yuvası kimliği"
+    },
+    "workspace.physics.generation": {
+      "text": "Kaynak nesil"
+    },
+    "workspace.physics.schema": {
+      "text": "Kaynak şema sürümü"
+    },
+    "workspace.physics.object_id": {
+      "text": "Nesne kimliği"
+    },
+    "settings.collision.title": {"text": "Proje Çarpışma Ayarları"},
+    "settings.collision.authority": {"text": "Proje ilkesi yalnızca .horo/collision.json dosyasında saklanır. Düzenleyici tercihleri derlenen çarpışma davranışını değiştirmez. İşlemeden önce başvuruları inceleyin; kaydetme yalnızca bu belgeyi yayımlar."},
+    "settings.collision.unavailable": {"text": "Çarpışma düzenleme kullanılamıyor. Geçerli çarpışma belgesi ve açık sahiplik kanıtı olan bir proje açın."},
+    "settings.collision.name": {"text": "Görünen ad"},
+    "settings.collision.description": {"text": "Açıklama"},
+    "settings.collision.new_name": {"text": "Yeni tanım adı"},
+    "settings.collision.layers": {"text": "Katmanlar"},
+    "settings.collision.profiles": {"text": "Profiller"},
+    "settings.collision.channels": {"text": "Sorgu kanalları"},
+    "settings.collision.initial_response": {"text": "Her yeni çift/kanal için ilk yanıt"},
+    "settings.collision.ignore": {"text": "Yok say"},
+    "settings.collision.overlap": {"text": "Örtüş"},
+    "settings.collision.block": {"text": "Engelle"},
+    "settings.collision.static": {"text": "Statik gövdeleri kabul et"},
+    "settings.collision.kinematic": {"text": "Kinematik gövdeleri kabul et"},
+    "settings.collision.dynamic": {"text": "Dinamik gövdeleri kabul et"},
+    "settings.collision.create": {"text": "Aday tanım oluştur"},
+    "settings.collision.remove_candidate": {"text": "Adaydan kaldır (inceleme gerekli)"},
+    "settings.collision.matrix": {"text": "Tam simetrik simülasyon matrisi"},
+    "settings.collision.layer": {"text": "Profil katmanı"},
+    "settings.collision.simulation": {"text": "Simülasyon etkin"},
+    "settings.collision.queries": {"text": "Sorgular etkin"},
+    "settings.collision.events": {"text": "Yaşam döngüsü olayları etkin"},
+    "settings.collision.default": {"text": "Açık düzenleme oluşturma işlemleri için varsayılan"},
+    "settings.collision.review": {"text": "Başvuruları ve etkinleştirmeyi incele"},
+    "settings.collision.commit": {"text": "İncelenen adayı işle"},
+    "settings.collision.undo": {"text": "Çarpışma düzenlemesini geri al"},
+    "settings.collision.redo": {"text": "Çarpışma düzenlemesini yinele"},
+    "settings.collision.reset_candidate": {"text": "Adayı oturumdan yeniden yükle"},
+    "settings.collision.save": {"text": "Çarpışma belgesini kaydet"},
+    "settings.collision.stop_play": {"text": "Simülasyon davranışını değiştirmeden önce oynatmayı durdurun. Kaydetme etkin dünyayı değiştirmez; yeniden başlatma gerekir."},
+    "settings.collision.activation.unknown": {"text": "Geçerli çalışma zamanı sahipliği bilinmiyor; anlamsal etkinleştirme doğrulanamaz."},
+    "settings.collision.activation.no_physics": {"text": "Sunucu açıkça fizik olmadan çalışmayı seçti. Bu belge yerel bir dünyada etkin değil."},
+    "settings.collision.activation.inactive": {"text": "Fizik sahibi açıkça etkin değil. Sonraki etkinleştirme bu kaydedilmiş belgenin tam kopyasını almalıdır."},
+    "settings.collision.activation.active": {"text": "Etkin kopya: belge sürümü / nesil / anlamsal parmak izi. Değişiklikler durdurmayı ve yeniden başlatmayı gerektirir."},
+    "settings.collision.impact.profile": {"text": "Profil sahibi: silmeden önce tür güvenli başvurusunu taşıyın"},
+    "settings.collision.impact.opaque": {"text": "Desteklenmeyen prefab/özel sahip: tür güvenli bir sağlayıcı çözene kadar silme engellenir"},
+    "settings.collision.impact.inventory": {"text": "Eksik veya değişmiş proje envanteri: silmeden önce kaynakları yenileyin"},
+    "settings.collision.impact.trigger": {"text": "Tetikleyici kopyası yok veya eski: silmeden önce tam derlenmiş bağı sağlayın"},
+    "settings.collision.impact.active": {"text": "Etkin nesil veya oynatma oturumu anlamsal değiştirmeyi engelliyor"},
     "workspace.extensions.recovery": {"text": "Kullanılamayan eklenti yüzeyleri"},
     "workspace.extensions.retained": {"text": "Çalışma alanı durumu korunuyor. Bu yüzeyleri geri yüklemek için sağlayıcıyı geri yükleyin veya etkinleştirin. Sağlayıcı yüzeylerini kapatmak kayıtlı sunum verilerini korur."},
     "workspace.extensions.close": {"text": "Sağlayıcının çalışma alanı yüzeylerini kapat"},

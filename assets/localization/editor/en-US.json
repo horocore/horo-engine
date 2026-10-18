@@ -2305,6 +2305,253 @@
     "workspace.packages.recovery_hint": {
       "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
     },
+    "workspace.physics.title": {
+      "text": "Physics"
+    },
+    "workspace.physics.authoring_only": {
+      "text": "Authored settings only. Project bindings and native activation are validated by cook/runtime; no backend is enabled here."
+    },
+    "workspace.physics.unavailable": {
+      "text": "Editing requires an unlocked object and a valid document owner."
+    },
+    "workspace.physics.body": {
+      "text": "Rigid body"
+    },
+    "workspace.physics.collider": {
+      "text": "Collider / sensor"
+    },
+    "workspace.physics.constraint": {
+      "text": "Constraint"
+    },
+    "workspace.physics.enabled": {
+      "text": "Enabled"
+    },
+    "workspace.physics.sensor": {
+      "text": "Sensor (overlap only, no response)"
+    },
+    "workspace.physics.static": {
+      "text": "Static"
+    },
+    "workspace.physics.kinematic": {
+      "text": "Kinematic"
+    },
+    "workspace.physics.dynamic": {
+      "text": "Dynamic"
+    },
+    "workspace.physics.motion": {
+      "text": "Motion type"
+    },
+    "workspace.physics.mass": {
+      "text": "Mass (kg)"
+    },
+    "workspace.physics.density": {
+      "text": "Density (kg/m³)"
+    },
+    "workspace.physics.mass_mode": {
+      "text": "Mass specification"
+    },
+    "workspace.physics.linear_velocity": {
+      "text": "Initial velocity (m/s)"
+    },
+    "workspace.physics.angular_velocity": {
+      "text": "Initial angular velocity (rad/s)"
+    },
+    "workspace.physics.linear_damping": {
+      "text": "Linear damping (1/s)"
+    },
+    "workspace.physics.angular_damping": {
+      "text": "Angular damping (1/s)"
+    },
+    "workspace.physics.linear_limit": {
+      "text": "Maximum speed (m/s)"
+    },
+    "workspace.physics.angular_limit": {
+      "text": "Maximum angular speed (rad/s)"
+    },
+    "workspace.physics.translation": {
+      "text": "Local translation (m)"
+    },
+    "workspace.physics.rotation_xyz": {
+      "text": "Rotation quaternion XYZ"
+    },
+    "workspace.physics.rotation_w": {
+      "text": "Rotation quaternion W"
+    },
+    "workspace.physics.body_object": {
+      "text": "Body object ID"
+    },
+    "workspace.physics.body_slot": {
+      "text": "Body slot ID"
+    },
+    "workspace.physics.profile": {
+      "text": "Collision profile UUID"
+    },
+    "workspace.physics.shape": {
+      "text": "Shape source"
+    },
+    "workspace.physics.box": {
+      "text": "Box"
+    },
+    "workspace.physics.sphere": {
+      "text": "Sphere"
+    },
+    "workspace.physics.capsule": {
+      "text": "Capsule"
+    },
+    "workspace.physics.plane": {
+      "text": "Static plane"
+    },
+    "workspace.physics.shape_asset": {
+      "text": "Shape asset UUID"
+    },
+    "workspace.physics.shape_part": {
+      "text": "Shape subresource ID"
+    },
+    "workspace.physics.half_extents": {
+      "text": "Half extents (m)"
+    },
+    "workspace.physics.radius": {
+      "text": "Radius (m)"
+    },
+    "workspace.physics.cylinder_half_height": {
+      "text": "Cylinder half height (m)"
+    },
+    "workspace.physics.plane_normal": {
+      "text": "Plane unit normal"
+    },
+    "workspace.physics.plane_distance": {
+      "text": "Plane signed distance (m)"
+    },
+    "workspace.physics.scale": {
+      "text": "Local scale"
+    },
+    "workspace.physics.material_slot": {
+      "text": "Material slot ID"
+    },
+    "workspace.physics.material_asset": {
+      "text": "Physics material asset UUID"
+    },
+    "workspace.physics.remove_material": {
+      "text": "Remove material mapping"
+    },
+    "workspace.physics.add_material": {
+      "text": "Add explicit material mapping"
+    },
+    "workspace.physics.first_endpoint": {
+      "text": "First body endpoint"
+    },
+    "workspace.physics.second_endpoint": {
+      "text": "Second endpoint"
+    },
+    "workspace.physics.world": {
+      "text": "World frame"
+    },
+    "workspace.physics.fixed": {
+      "text": "Fixed"
+    },
+    "workspace.physics.distance": {
+      "text": "Distance"
+    },
+    "workspace.physics.constraint_kind": {
+      "text": "Constraint type"
+    },
+    "workspace.physics.minimum_distance": {
+      "text": "Minimum distance (m)"
+    },
+    "workspace.physics.maximum_distance": {
+      "text": "Maximum distance (m)"
+    },
+    "workspace.physics.constraint_unsupported": {
+      "text": "Authored hinge and slider constraints are not supported by this Scene schema."
+    },
+    "workspace.physics.remove_body": {
+      "text": "Stage body removal"
+    },
+    "workspace.physics.remove_collider": {
+      "text": "Stage collider removal"
+    },
+    "workspace.physics.remove_constraint": {
+      "text": "Stage constraint removal"
+    },
+    "workspace.physics.add_body": {
+      "text": "Stage body and box collider"
+    },
+    "workspace.physics.add_collider": {
+      "text": "Stage collider / sensor"
+    },
+    "workspace.physics.add_constraint": {
+      "text": "Stage constraint"
+    },
+    "workspace.physics.apply": {
+      "text": "Apply Physics edit"
+    },
+    "workspace.physics.cancel": {
+      "text": "Discard staged Physics edit"
+    },
+    "workspace.physics.invalid_identity": {
+      "text": "Enter valid nonzero decimal IDs and canonical project UUIDs before applying."
+    },
+    "workspace.physics.rejected": {
+      "text": "Physics edit was rejected; the document and history were retained."
+    },
+    "workspace.physics.component_id": {
+      "text": "Component ID"
+    },
+    "workspace.physics.collider_slot": {
+      "text": "Collider slot ID"
+    },
+    "workspace.physics.constraint_slot": {
+      "text": "Constraint slot ID"
+    },
+    "workspace.physics.generation": {
+      "text": "Authored generation"
+    },
+    "workspace.physics.schema": {
+      "text": "Authored schema version"
+    },
+    "workspace.physics.object_id": {
+      "text": "Object ID"
+    },
+    "settings.collision.title": {"text": "Project Collision"},
+    "settings.collision.authority": {"text": "Project policy is stored only in .horo/collision.json. Editor preferences do not alter cooked collision semantics. Review references before committing; save publishes only this document."},
+    "settings.collision.unavailable": {"text": "Collision authoring is unavailable. Open a project with a valid collision document and explicit host ownership evidence."},
+    "settings.collision.name": {"text": "Display name"},
+    "settings.collision.description": {"text": "Description"},
+    "settings.collision.new_name": {"text": "New definition name"},
+    "settings.collision.layers": {"text": "Layers"},
+    "settings.collision.profiles": {"text": "Profiles"},
+    "settings.collision.channels": {"text": "Query channels"},
+    "settings.collision.initial_response": {"text": "Initial response for every new pair/channel"},
+    "settings.collision.ignore": {"text": "Ignore"},
+    "settings.collision.overlap": {"text": "Overlap"},
+    "settings.collision.block": {"text": "Block"},
+    "settings.collision.static": {"text": "Admit static bodies"},
+    "settings.collision.kinematic": {"text": "Admit kinematic bodies"},
+    "settings.collision.dynamic": {"text": "Admit dynamic bodies"},
+    "settings.collision.create": {"text": "Create candidate definition"},
+    "settings.collision.remove_candidate": {"text": "Remove from candidate (review required)"},
+    "settings.collision.matrix": {"text": "Complete symmetric simulation matrix"},
+    "settings.collision.layer": {"text": "Profile layer"},
+    "settings.collision.simulation": {"text": "Simulation enabled"},
+    "settings.collision.queries": {"text": "Queries enabled"},
+    "settings.collision.events": {"text": "Lifecycle events enabled"},
+    "settings.collision.default": {"text": "Default for explicit authoring creation"},
+    "settings.collision.review": {"text": "Review references and activation"},
+    "settings.collision.commit": {"text": "Commit reviewed candidate"},
+    "settings.collision.undo": {"text": "Undo collision edit"},
+    "settings.collision.redo": {"text": "Redo collision edit"},
+    "settings.collision.reset_candidate": {"text": "Reload candidate from session"},
+    "settings.collision.save": {"text": "Save collision document"},
+    "settings.collision.stop_play": {"text": "Stop Play before changing simulation semantics. Saving never replaces an active world; restart is required."},
+    "settings.collision.activation.unknown": {"text": "Current runtime ownership is unknown; semantic activation cannot be claimed."},
+    "settings.collision.activation.no_physics": {"text": "Host explicitly selected No Physics. This document is not active in a native world."},
+    "settings.collision.activation.inactive": {"text": "Physics owner is explicitly inactive. A future activation must capture this exact saved document."},
+    "settings.collision.activation.active": {"text": "Active capture: document revision / generation / semantic fingerprint. Changes require Stop and restart."},
+    "settings.collision.impact.profile": {"text": "Profile owner: migrate its typed reference before deletion"},
+    "settings.collision.impact.opaque": {"text": "Unsupported prefab/custom owner: deletion is blocked until a typed provider can resolve it"},
+    "settings.collision.impact.inventory": {"text": "Incomplete or changed project inventory: refresh sources before deletion"},
+    "settings.collision.impact.trigger": {"text": "Trigger capture is unavailable or stale: provide the exact cooked binding before deletion"},
+    "settings.collision.impact.active": {"text": "Active generation or Play session blocks semantic replacement"},
     "workspace.extensions.recovery": {"text": "Unavailable extension surfaces"},
     "workspace.extensions.retained": {"text": "Your workspace state is retained. Restore or enable the provider to recover these surfaces. Closing provider surfaces preserves their saved presentation data."},
     "workspace.extensions.close": {"text": "Close provider workspace surfaces"},

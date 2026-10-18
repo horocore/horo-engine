@@ -200,6 +200,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshPlayStateProjection() {
+        RefreshCollisionActivation();
         switch (m_playSession.State()) {
             case EditorPlaySessionState::Idle:
                 m_viewModel.playState = EditorPlayState::Idle;
@@ -289,6 +290,9 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshSelectionProjection() {
+        if (m_viewModel.physicsSelectionRevision != m_selection.Current().revision.value)
+            m_viewModel.physicsEditError.clear();
+        m_viewModel.physicsSelectionRevision = m_selection.Current().revision.value;
         const SelectionSnapshot &selection = m_selection.Current();
         if (selection.primary || !selection.objects.empty())
             m_viewModel.prefabSelection.reset();

@@ -98,6 +98,21 @@ write/copy/remove, same-filesystem atomic replacement, parent-directory
 synchronization according to host policy, capacity inspection, and immediate
 OS-held exclusive locking. Lock-file text is diagnostic only; ownership lives
 in the native handle and is released by RAII or process termination.
+
+The `ExclusiveFileLock` value wrapper and its public observation symbols belong
+to Foundation. Its incomplete state is implemented by Platform through the
+single staged, non-installed `HoroPublicationLockInternal` header. This keeps
+Assets publication Foundation-only: it observes the borrowed lease without
+linking a native adapter or depending on static archive order. Native acquisition,
+canonical path verification, process exclusion and resource release remain in
+Platform. The internal state adds one virtual observation and a virtual destructor
+on this tooling path, with no extra allocation and no frame work. The host keeps
+the native implementation resident until every lease has been released.
+
+This moves implementation symbols between the existing static libraries; hosts
+must relink both libraries. Public declarations, value layout and source callers
+are unchanged. The Foundation-only consumer checks empty/moved leases without
+Platform, while native lock tests retain exact-path and lifetime coverage.
 The native adapter canonicalizes host-owned parent directories before creating
 missing parents and acquiring the lock, including macOS `/var` aliases. Alias
 and canonical spellings share one exclusion key. The lock file itself must

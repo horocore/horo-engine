@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
 #include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
+#include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
 
 #include <imgui.h>
 
@@ -39,8 +40,14 @@ namespace Horo::Editor {
         void DrawComponentEditors(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
                                   EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
-                              const EditorGuiContext &context) const;
+                              const EditorGuiContext &context);
+        /** @brief Stages explicit Physics creation in the existing add-component route without document publication. */
+        void DrawAddPhysicsComponents(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
+                                      const EditorGuiContext &context);
 
+        /** @brief Draw cached portable Physics drafts and submit only explicit complete gestures to the host. */
+        void DrawPhysicsInspector(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
+                                  EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         void DrawMultiSelectionTitle(std::size_t selectedObjectCount, const EditorGuiContext &context) const;
 
         [[nodiscard]] InspectorNameEdit DrawObjectTitleWidgets(const SceneObject &object, EditorWorkspaceViewCommandData &command,
@@ -79,6 +86,8 @@ namespace Horo::Editor {
         std::shared_ptr<const PrefabHierarchyProjection> m_prefabPresentation;
         std::optional<PrefabHierarchyTarget> m_prefabPresentedTarget;
         const PrefabHierarchyEntry *m_prefabEntry{}; /**< Borrowed only while m_prefabPresentation pins this exact cache. */
+        PhysicsInspectorSession m_physicsSession;
+        bool m_physicsInputError{};
         int m_activeTab{0};
     };
 }  // namespace Horo::Editor
