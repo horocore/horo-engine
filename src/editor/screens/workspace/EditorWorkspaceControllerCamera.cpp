@@ -43,6 +43,7 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
+        static_cast<void>(ShutdownCollisionSettings(true));
         (void)ShutdownGameplayModules();
     }
 

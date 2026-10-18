@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace Horo::Extensions {
     class ExtensionInventory;
@@ -27,6 +28,13 @@ namespace Horo::Editor {
         std::shared_ptr<const Extensions::EditorThemeFrame> theme; /**< Owner theme capture; required when host is supplied. */
     };
 
+    /** @brief Explicit project openings captured as revocable borrows during modal construction. */
+    struct SettingsModalProjectOpening final {
+        const NavigationProjectSettingsSession *navigation{};     /**< Borrowed only until its revocable opening is captured. */
+        std::weak_ptr<CollisionProjectSettingsSession> collision; /**< Never extends the project or Scene owner lifetime. */
+        std::optional<Error> collisionError;                      /**< Preserves the original typed opening failure for presentation. */
+    };
+
     /** @brief Host-owned editor settings workflow and its transient settings draft. */
     class SettingsModal final : public EditorModal {
     public:
@@ -39,14 +47,14 @@ namespace Horo::Editor {
          * @param logo Presentation logo texture.
          * @param extensionInventory Optional installed-extension inventory.
          * @param extensionMarketplace Optional registry-backed extension marketplace.
-         * @param navigationSettings Optional live session borrowed only during construction to capture its revocable opening.
+         * @param projects Explicit project openings and original admission diagnostics; no owner lifetime is extended.
          * @param pages Optional explicitly composed restricted page authority and its GUI owner theme capture.
          * @throws std::bad_alloc When the supplied page authority cannot allocate its owned presentation.
          */
         SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, std::uintptr_t logo,
                       Extensions::ExtensionInventory *extensionInventory = nullptr,
-                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr,
-                      const NavigationProjectSettingsSession *navigationSettings = nullptr, SettingsModalPagePresentation pages = {});
+                      Extensions::ExtensionMarketplaceService *extensionMarketplace = nullptr, SettingsModalProjectOpening projects = {},
+                      SettingsModalPagePresentation pages = {});
 
         /** @brief Selects an already-open exact extension settings page for actual modal realization. */
         void SelectExtensionPage(const Extensions::EditorSurfaceProviderIdentity &provider, std::string id);

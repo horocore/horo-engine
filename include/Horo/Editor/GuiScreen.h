@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/GuiRoute.h"
 #include "Horo/Foundation/Diagnostics.h"
@@ -168,6 +169,13 @@ namespace Horo::Editor {
         virtual bool HandleMenuInvocation(const EditorMenuInvocation &invocation) {
             static_cast<void>(invocation);
             return false;
+        }
+
+        /** @brief Explicit active-project collision authoring route; no service lookup or schema fallback.
+         * @return Owner-thread session or typed unavailable error outside a supported project screen. */
+        [[nodiscard]] virtual Result<std::shared_ptr<CollisionProjectSettingsSession>> CollisionSettings() {
+            return Result<std::shared_ptr<CollisionProjectSettingsSession>>::Failure(
+                MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported), "Open a project to edit collision settings."));
         }
 
         /** @brief Queries whether navigation to target is permitted right now. */

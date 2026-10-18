@@ -15,6 +15,11 @@ namespace Horo::SceneSource {
     struct SceneSourceDocument final {
         std::vector<SceneObjectSnapshot> objects;
         std::vector<ScenePrefabInstance> prefabInstances;
+        /** @brief Transient sorted unique owners with component keys unhandled by this exact decoder.
+         * This evidence is not persisted or emitted by EncodeSceneSource. Reference editors must not treat successful
+         * legacy decoding as complete typed coverage when this list is nonempty. Raw source remains authoritative.
+         */
+        std::vector<SceneObjectId> unsupportedComponentOwners;
     };
 
     /** @brief Borrowed coherent authored values for canonical encoding; the caller owns their lifetime. */
@@ -26,7 +31,11 @@ namespace Horo::SceneSource {
     /**
      * @brief Decodes the existing Scene schema-1 representation without migration or activation.
      * @param contents Canonical Scene JSON, at most 16 MiB, with unique object keys and parser depths below 64.
+     * @details Completed DOM cleanup avoids child-flattening scratch growth in supported production-STL compositions.
+     * Checked-iterator MSVC Debug may allocate proxies inside noexcept standard-container constructors;
+     * allocation failure during upstream partial parser cleanup remains outside this guarantee.
      * @return Detached values or the existing typed scene-persistence error.
+     * @throws std::bad_alloc When allocation capacity is unavailable; the caller owns its allocation-failure boundary.
      * Decoding preserves existing component validation and diagnostic semantics. The project host must
      * inspect project compatibility and authorize file access first; decoding grants no trust or write authority.
      * Scene graph/document admission remains a separate operation. Unknown fields remain ignored within the same

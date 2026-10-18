@@ -544,6 +544,7 @@ horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
     Horo/Assets/AssetPreviewService.h
     Horo/Assets/AssetProvider.h
     Horo/Assets/AssetRegistry.h
+    Horo/Assets/AssetRegistrySource.h
     Horo/Assets/AssetReimport.h
     Horo/Assets/CookCatalog.h
     Horo/Assets/MeshEditorPayload.h
@@ -1198,6 +1199,9 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/ProjectCollisionSettingsStore.h
+    Horo/Editor/NativeAssetRegistrySource.h
+    Horo/Editor/CollisionProjectSettingsSession.h
     Horo/Editor/NavigationProjectSettingsSession.h
     Horo/Editor/AudioEditorDocument.h
     Horo/Editor/MixerAssetDocument.h
@@ -1346,6 +1350,10 @@ horo_configure_target_header_boundary(HoroEditorPackageAdapters PUBLIC_HEADERS H
 
 horo_configure_target_header_boundary(HoroPhysicsTriggerVolumeHost PUBLIC_HEADERS
     Horo/Application/PhysicsTriggerVolumeHost.h
+)
+
+horo_configure_target_header_boundary(HoroProjectCollisionSettings PUBLIC_HEADERS
+    Horo/Application/ProjectCollisionSettings.h
 )
 
 horo_verify_public_header_inventory()

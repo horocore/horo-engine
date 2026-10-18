@@ -200,6 +200,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::RefreshPlayStateProjection() {
+        RefreshCollisionActivation();
         switch (m_playSession.State()) {
             case EditorPlaySessionState::Idle:
                 m_viewModel.playState = EditorPlayState::Idle;

@@ -24,6 +24,17 @@ namespace Horo::Platform::ProjectReadErrors {
 }  // namespace Horo::Platform::ProjectReadErrors
 
 namespace Horo::Platform {
+    /** @copydoc IProjectReadFiles::Inventory */
+    Result<ProjectInventory> IProjectReadFiles::Inventory(std::string_view, ProjectInventoryDepth, const ProjectReadContext &,
+                                                          const ProjectInventoryLimits &) const {
+        return Result<ProjectInventory>::Failure(MakeError(ProjectReadErrors::Unavailable));
+    }
+
+    /** @copydoc IProjectReadFiles::InventoryText */
+    Result<ProjectReadTextSnapshot> IProjectReadFiles::InventoryText(std::string_view, const ProjectReadContext &) const {
+        return Result<ProjectReadTextSnapshot>::Failure(MakeError(ProjectReadErrors::Unavailable));
+    }
+
     namespace {
         /** @brief Compares portable device names using only ASCII case folding. */
         bool MatchesDevice(const std::string_view value, const std::string_view name) {

@@ -148,7 +148,6 @@ See:
 | CLI architecture             | [docs/architecture/interfaces/cli-architecture.md](./docs/architecture/interfaces/cli-architecture.md)                 |
 | MCP architecture             | [docs/architecture/interfaces/mcp-architecture.md](./docs/architecture/interfaces/mcp-architecture.md)                 |
 | Testing architecture         | [docs/architecture/delivery/testing-architecture.md](./docs/architecture/delivery/testing-architecture.md)             |
-| HoroEditor Grafana dashboard | [observability/grafana/README.md](./observability/grafana/README.md)                                                    |
 | ADRs                         | [docs/adr/README.md](./docs/adr/README.md)                                                                             |
 
 ### Topics needs to be covered

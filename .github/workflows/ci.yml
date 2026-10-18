@@ -224,7 +224,7 @@ jobs:
       - name: Build Windows Release allocation qualification
         id: mcp_release_build
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.release_build.outcome == 'success' }}
-        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests HoroNavigationProjectSettingsTests
+        run: cmake --build --preset ci-audio-release --target HoroMcpSessionTests HoroRuntimeSaveRestoreTransactionTests HoroPhysicsTests HoroSceneRuntimeConversionTests HoroRuntimeSaveSlotLifecycleTests HoroNavigationProjectSettingsTests HoroProjectCollisionSettingsTests HoroExtensionManagerTests HoroWorkspaceLayoutPersistenceTests
 
       - name: Configure navigation without Recast Detour
         if: runner.os == 'Linux'
@@ -473,6 +473,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/ci/run_scene_allocation_qualification.py --family navigation --output-junit "$root/navigation-allocation-ctest.xml"
 
+      - name: Test Windows Release Collision settings allocation qualification
+        if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $root = 'build/ci-audio-release'
+          ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/collision-allocation-discovery.json" -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci/run_scene_allocation_qualification.py --family collision --discovery "$root/collision-allocation-discovery.json" --regex-output "$root/collision-allocation-regex.txt"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $pattern = Get-Content -Raw -LiteralPath "$root/collision-allocation-regex.txt"
+          if (Test-Path -LiteralPath "$root/collision-allocation-ctest.xml") {
+            Remove-Item -LiteralPath "$root/collision-allocation-ctest.xml" -ErrorAction Stop
+          }
+          ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 --test-output-size-passed 16384 -R $pattern --output-junit "collision-allocation-ctest.xml"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/ci/run_scene_allocation_qualification.py --family collision --output-junit "$root/collision-allocation-ctest.xml"
+
       - name: Test Windows Release Character allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
         shell: pwsh
@@ -583,6 +600,9 @@ jobs:
             build/ci*/ctest.xml
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
+            build/ci-audio-release/collision-allocation-ctest.xml
+            build/ci-audio-release/collision-allocation-discovery.json
+            build/ci-audio-release/collision-allocation-regex.txt
             build/ci-audio-release/extension-allocation-ctest.xml
             build/ci-audio-release/tests/HoroWorkspaceLayoutPersistenceTests.exe
             build/ci-audio-release/tests/HoroWorkspaceLayoutPersistenceTests.pdb

@@ -7,8 +7,6 @@ import sys
 from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
-from urllib.error import URLError
-from urllib.request import Request
 
 import pytest
 
@@ -199,13 +197,6 @@ def test_endpoint_validation_accepts_supported_base_urls() -> None:
     assert dev.validate_endpoint("https://collector.example.com:443").port == 443
 
 
-def test_grafana_url_is_restricted_to_loopback() -> None:
-    assert dev.validate_grafana_url("http://127.0.0.1:3000").port == 3000
-    assert dev.validate_grafana_url("https://[::1]:3000/").host == "::1"
-    with pytest.raises(dev.ConfigurationError):
-        dev.validate_grafana_url("https://grafana.example.com:443")
-
-
 def test_telemetry_switch_controls_build_and_child_environment() -> None:
     endpoint = dev.validate_endpoint("http://127.0.0.1:4318")
     enabled = dev.DeveloperSettings(True, endpoint)
@@ -329,50 +320,6 @@ def test_cli_run_supports_all_argument_variations(monkeypatch: pytest.MonkeyPatc
 
     assert dev.main(["run", "editor"]) == 0
     assert forwarded[-1] == []
-
-
-
-def test_grafana_sync_skips_an_unchanged_dashboard(monkeypatch: pytest.MonkeyPatch) -> None:
-    endpoint = dev.validate_grafana_url("http://127.0.0.1:3000")
-    source_tag = dev._grafana_source_tag(dev.GRAFANA_DASHBOARD_PATH)
-    responses = iter([{"database": "ok"}, {"dashboard": {"tags": [source_tag]}}])
-    requests: list[object] = []
-
-    def fake_read_json(request: object, _timeout: float) -> dict[str, object]:
-        requests.append(request)
-        return next(responses)
-
-    monkeypatch.setattr(dev, "_read_json", fake_read_json)
-
-    assert dev.sync_grafana_dashboard(endpoint) == "current"
-    assert len(requests) == 2
-
-
-def test_grafana_sync_updates_a_stale_dashboard(monkeypatch: pytest.MonkeyPatch) -> None:
-    endpoint = dev.validate_grafana_url("http://127.0.0.1:3000")
-    responses = iter([{"database": "ok"}, {"dashboard": {"tags": ["old"]}}, {"status": "success"}])
-    requests: list[object] = []
-
-    def fake_read_json(request: object, _timeout: float) -> dict[str, object]:
-        requests.append(request)
-        return next(responses)
-
-    monkeypatch.setattr(dev, "_read_json", fake_read_json)
-
-    assert dev.sync_grafana_dashboard(endpoint) == "updated"
-    payload = json.loads(requests[-1].data.decode("utf-8"))
-    assert payload["overwrite"] is True
-    assert any(tag.startswith(dev.GRAFANA_SOURCE_TAG_PREFIX) for tag in payload["dashboard"]["tags"])
-
-
-def test_grafana_unavailability_never_blocks_startup(monkeypatch: pytest.MonkeyPatch) -> None:
-    endpoint = dev.validate_grafana_url("http://127.0.0.1:3000")
-
-    def unavailable(_request: object, _timeout: float) -> dict[str, object]:
-        raise URLError("offline")
-
-    monkeypatch.setattr(dev, "_read_json", unavailable)
-    assert dev.sync_grafana_dashboard(endpoint) == "unavailable"
 
 
 def test_doctor_report_aggregation_and_rendering() -> None:
@@ -771,22 +718,6 @@ def test_skip_build_rejects_missing_test_configuration(
     assert "requires a configured test directory" in capsys.readouterr().err
 
 
-def test_grafana_sync_passes_authorization_header(monkeypatch: pytest.MonkeyPatch) -> None:
-    endpoint = dev.validate_grafana_url("http://127.0.0.1:3000")
-    source_tag = dev._grafana_source_tag(dev.GRAFANA_DASHBOARD_PATH)
-    responses = iter([{"database": "ok"}, {"dashboard": {"tags": [source_tag]}}])
-    requests: list[Request] = []
-
-    def fake_read_json(request: Request, _timeout: float) -> dict[str, object]:
-        requests.append(request)
-        return next(responses)
-
-    monkeypatch.setattr(dev, "_read_json", fake_read_json)
-    status = dev.sync_grafana_dashboard(endpoint, api_token="secret_token_123")
-    assert status == "current"
-    assert requests[0].headers.get("Authorization") == "Bearer secret_token_123"
-
-
 def test_main_help_command_and_empty_arguments(capsys: pytest.CaptureFixture[str]) -> None:
     assert dev.main([]) == 0
     out_empty = capsys.readouterr().out
@@ -804,3 +735,25 @@ def test_main_help_command_and_empty_arguments(capsys: pytest.CaptureFixture[str
     assert dev.main(["help", "nonexistent"]) == 2
     err = capsys.readouterr().err
     assert "unknown command 'nonexistent'" in err
+
+
+def test_default_observability_keeps_engine_local_without_external_services(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def unexpected_network(*_args: object, **_kwargs: object) -> bool:
+        pytest.fail("Disabled export must not probe an external service")
+
+    monkeypatch.setattr(dev, "collector_is_reachable", unexpected_network)
+    monkeypatch.setattr(dev, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
+    settings = dev.load_settings(dev.DEFAULT_ENV_FILE, {})
+    report = dev.DoctorReport()
+    dev.check_observability_and_services(report, settings)
+
+    assert not settings.otel_export_enabled
+    assert "-DHORO_ENABLE_OPENTELEMETRY=OFF" in dev.configure_command(settings)
+    assert [(item.name, item.status) for item in report.items if item.category == "Observability"] == [
+        (dev._OBSERVABILITY_OTLP_NAME, dev.CheckStatus.INFO),
+    ]
+
+
+def test_example_configuration_keeps_external_export_opt_in() -> None:
+    settings = dev.load_settings(dev.REPOSITORY_ROOT / ".env.example", {})
+    assert not settings.otel_export_enabled

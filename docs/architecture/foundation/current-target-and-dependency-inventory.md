@@ -44,6 +44,16 @@ include directories do not enforce those ownership boundaries, as documented in
 
 ### Foundation, Platform, Application, And Runtime
 
+Publication lease linkage follow-up (2026-10-16): `HoroFoundation` owns the
+existing `ExclusiveFileLock` value-wrapper symbols. Foundation and Platform
+privately share exactly `PublicationLockState.h` through the non-installed
+`HoroPublicationLockInternal` interface; the interface has no link dependencies.
+Platform retains native acquisition, canonical path authority and destruction.
+Assets still depends only on Foundation. The additional Foundation-only
+`HoroPublicationLockFoundationConsumer` links and exercises the empty and moved
+lease states without Platform. Public header ownership and value layout are
+unchanged; native hosts relink both updated archives.
+
 Audio API follow-up (2026-09-04): `HoroAudioApi` (`HoroEngine::AudioApi`) is an
 always-available headless target with public Foundation and Assets dependencies.
 It owns `Audio/AudioIdentity.h`, `Audio/AudioErrors.h` and the additive
