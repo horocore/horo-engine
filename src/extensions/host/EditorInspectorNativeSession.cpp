@@ -136,10 +136,8 @@ namespace Horo::Extensions {
 
     namespace {
         /** @brief Stages copied native inspector metadata inside the owning registration transaction. */
-        HoroExtensionStatus RegisterExternalEditorInspectorImpl(void *context, const HoroEditorInspectorDescriptor *descriptor) noexcept {
-            if (!context)
-                return HORO_EXTENSION_ERROR_INVALID_ARGS;
-            auto &load = *static_cast<AssetImporterRegistrationSession *>(context);
+        HoroExtensionStatus RegisterExternalEditorInspectorImpl(AssetImporterRegistrationSession &load,
+                                                                const HoroEditorInspectorDescriptor *descriptor) noexcept {
             try {
                 if (!load.inspectorTransportNegotiated || !load.inspectorHost || !load.manifest || !load.extensionModule ||
                     !load.lifetime || !load.retirement || load.failed || load.lifetime->ownerThread != std::this_thread::get_id() ||
@@ -187,5 +185,9 @@ namespace Horo::Extensions {
 
 /** @copydoc RegisterExternalEditorInspector */
 extern "C" HoroExtensionStatus RegisterExternalEditorInspector(void *context, const HoroEditorInspectorDescriptor *descriptor) noexcept {
-    return Horo::Extensions::RegisterExternalEditorInspectorImpl(context, descriptor);
+    if (!context)
+        return HORO_EXTENSION_ERROR_INVALID_ARGS;
+    return Horo::Extensions::RegisterExternalEditorInspectorImpl(*static_cast<Horo::Extensions::AssetImporterRegistrationSession *>(
+                                                                     context),
+                                                                 descriptor);
 }
