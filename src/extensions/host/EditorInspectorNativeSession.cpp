@@ -134,30 +134,32 @@ namespace Horo::Extensions {
         }
     }  // namespace
 
-    /** @copydoc RegisterExternalEditorInspector */
-    extern "C" HoroExtensionStatus RegisterExternalEditorInspector(void *context,
-                                                                   const HoroEditorInspectorDescriptor *descriptor) noexcept {
-        if (!context)
-            return HORO_EXTENSION_ERROR_INVALID_ARGS;
-        auto &load = *static_cast<AssetImporterRegistrationSession *>(context);
-        try {
-            if (!load.inspectorTransportNegotiated || !load.inspectorHost || !load.manifest || !load.extensionModule || !load.lifetime ||
-                !load.retirement || load.failed || load.lifetime->ownerThread != std::this_thread::get_id() ||
-                load.lifetime->editorInspectors.size() >= 64 || !HoroEditorInspectorDescriptorShape(descriptor))
-                return Reject(load, MakeError(ExtensionErrors::ContributionRejected));
-            auto staged = Stage(load, *descriptor);
-            if (staged.HasError())
-                return Reject(load, staged.ErrorValue());
-            auto session = std::move(staged).Value();
-            if (!load.retirement->RegisterContribution(load.extensionModule->id, session))
-                return Reject(load, MakeError(ExtensionErrors::CapabilityRevoked));
-            load.lifetime->editorInspectors.push_back(std::move(session));
-            return HORO_EXTENSION_SUCCESS;
-        } catch (const std::exception &) {
-            load.failed = true;
-            return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+    namespace {
+        /** @brief Stages copied native inspector metadata inside the owning registration transaction. */
+        HoroExtensionStatus RegisterExternalEditorInspectorImpl(void *context, const HoroEditorInspectorDescriptor *descriptor) noexcept {
+            if (!context)
+                return HORO_EXTENSION_ERROR_INVALID_ARGS;
+            auto &load = *static_cast<AssetImporterRegistrationSession *>(context);
+            try {
+                if (!load.inspectorTransportNegotiated || !load.inspectorHost || !load.manifest || !load.extensionModule ||
+                    !load.lifetime || !load.retirement || load.failed || load.lifetime->ownerThread != std::this_thread::get_id() ||
+                    load.lifetime->editorInspectors.size() >= 64 || !HoroEditorInspectorDescriptorShape(descriptor))
+                    return Reject(load, MakeError(ExtensionErrors::ContributionRejected));
+                auto staged = Stage(load, *descriptor);
+                if (staged.HasError())
+                    return Reject(load, staged.ErrorValue());
+                auto session = std::move(staged).Value();
+                if (!load.retirement->RegisterContribution(load.extensionModule->id, session))
+                    return Reject(load, MakeError(ExtensionErrors::CapabilityRevoked));
+                load.lifetime->editorInspectors.push_back(std::move(session));
+                return HORO_EXTENSION_SUCCESS;
+            } catch (const std::exception &) {
+                load.failed = true;
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            }
         }
-    }
+
+    }  // namespace
 
     /** @copydoc ValidateEditorInspectorClaims */
     Result<void> ValidateEditorInspectorClaims(const AssetImporterRegistrationSession &load) {
@@ -182,3 +184,8 @@ namespace Horo::Extensions {
         return Result<void>::Success();
     }
 }  // namespace Horo::Extensions
+
+/** @copydoc RegisterExternalEditorInspector */
+extern "C" HoroExtensionStatus RegisterExternalEditorInspector(void *context, const HoroEditorInspectorDescriptor *descriptor) noexcept {
+    return Horo::Extensions::RegisterExternalEditorInspectorImpl(context, descriptor);
+}
