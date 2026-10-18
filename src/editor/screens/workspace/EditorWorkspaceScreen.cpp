@@ -656,8 +656,8 @@ namespace Horo::Editor {
                                                    .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
                                                    .documentSessionOwner = sessionOwner,
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-                                                   .playSceneFactory = BindPlayFactory(projectRoot),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                                   .playSceneFactory = BindPlayFactory(projectRoot),
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
