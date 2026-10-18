@@ -65,6 +65,11 @@ A stale selection, changed schema, locked object, invalid second replacement,
 revoked provider or shutdown rejects the whole edit without changing document
 bytes or history. Providers never run during shared control traversal.
 
+The shared controls include the complete 64-bit selection revision in their
+ImGui identity as bounded decimal text. Changing the selection epoch discards an
+active draft before it can submit against the replacement selection; the high
+revision bits are preserved without inspecting integer object representation.
+
 Copied presentation/selection state refreshes only on actual document, selection,
 provider, catalog or approval revisions. Theme/width changes rebuild the validated
 shared render snapshot. The owner-lane cache is bounded to16 entries; declarations
@@ -82,6 +87,12 @@ prefix; it cannot read or call the new tail. Explicit1.4 activity behavior and
 page refusal remain covered separately. Rebuild new inspector modules against the
 installed SDK containing `EditorInspectorAbi.h`; old providers need not opt into
 inspector support or raise their minimum version.
+
+The host's inspector registration callback has explicit C language linkage,
+matching the activity/page callbacks in the native host table. Its opaque context
+remains confined to this ABI boundary; registration continues to use the existing
+typed module-load transaction and its retirement owner. No ABI field, version or
+provider calling signature changes with this linkage correction.
 
 Host source callers of `ExtensionManager` now pass `ExtensionEditorHosts` instead
 of independent trailing activity/page pointers. The struct adds the inspector
