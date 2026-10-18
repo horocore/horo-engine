@@ -179,12 +179,24 @@ namespace Horo::Runtime {
                 if (const auto required = builder.RequireAsset(dependency); required.HasError())
                     return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
             }
+            if (source.triggerVolumeEvidence.size() > source.entities.size())
+                return Result<RuntimeSceneDefinition>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
+            for (const auto &evidence : source.triggerVolumeEvidence) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<RuntimeSceneDefinition>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
+                if (const auto required = builder.RequireTriggerVolume(evidence); required.HasError())
+                    return Result<RuntimeSceneDefinition>::Failure(required.ErrorValue());
+            }
             return std::move(builder).Build();
         }
 
         /** @brief Includes authoritative builder-projected dependencies in the complete retained charge and count ceiling. */
         Result<void> ChargeProjectedDependencies(StorageCharge &charge, const RuntimeSceneDefinition &definition,
                                                  const SceneCellPayloadSource &source, const SceneCellPayloadLimits limits) {
+            for (const auto &evidence : definition.TriggerVolumeEvidence())
+                if (!charge.Add(1, sizeof(TriggerVolumeMigrationEvidence)) ||
+                    !charge.Add(evidence.binding.material.expectedType.Value().size()))
+                    return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
             if (definition.AssetDependencies().size() > limits.maximumDependencies)
                 return Result<void>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
             for (const auto &dependency : definition.AssetDependencies()) {

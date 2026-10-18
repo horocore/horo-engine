@@ -1,6 +1,7 @@
 #include "AllocationProbe.h"
 #include "SceneAllocationQualification.h"
 #include "ScenePrefabExpansionTestSupport.h"
+#include "TriggerVolumeConversionTestValues.h"
 
 #include <algorithm>
 #include <array>
@@ -436,5 +437,38 @@ TEST_CASE("Owned expansion bounds and malformed admission reject before scheduli
     REQUIRE(owner.Submit(valid).HasValue());
     REQUIRE(owner.Join(TestJoin).HasValue());
     REQUIRE(owner.TakeCompleted(valid).Value());
+    REQUIRE(owner.Shutdown(TestJoin).HasValue());
+}
+
+TEST_CASE("Owned expansion rejects project trigger binding changes under unchanged authored revision", "[native][prefab][jobs][trigger]") {
+    CompletedExpansion completed;
+    completed.request.triggerBinding = Horo::Test::TriggerBinding();
+    completed.RequireRejectedAndRetired();
+}
+
+TEST_CASE("Owned expansion fences every captured trigger evidence domain", "[native][prefab][jobs][trigger]") {
+    ExpansionFixture fixture;
+    JobSystem jobs;
+    ScenePrefabExpansionOwner owner{jobs};
+    auto request = fixture.Request();
+    request.triggerBinding = Horo::Test::TriggerBinding();
+    REQUIRE(owner.Submit(request).HasValue());
+    REQUIRE(owner.Join(TestJoin).HasValue());
+    SECTION("live filter generation") {
+        ++request.triggerBinding->collisionFilterGeneration;
+    }
+    SECTION("semantic project schema") {
+        ++request.triggerBinding->binding.collisionSchemaFingerprint;
+    }
+    SECTION("immutable material bytes") {
+        request.triggerBinding->binding.materialPayloadDigest.bytes.front() ^= 1;
+    }
+    SECTION("actual source capture") {
+        request.triggerBinding->materialSourceDigest.bytes.front() ^= 1;
+    }
+    SECTION("authored material revision") {
+        ++request.triggerBinding->binding.materialSourceRevision;
+    }
+    REQUIRE(owner.TakeCompleted(request).HasError());
     REQUIRE(owner.Shutdown(TestJoin).HasValue());
 }

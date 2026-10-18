@@ -110,11 +110,30 @@ boundary, an enabled legacy value is normalized into exactly one explicit static
 body-local pose, unit scale, and the canonical Physics schema version. A disabled
 legacy value produces no Physics producers.
 
-The projection uses stable local body/collider slots and derived compatibility
-filter/material identities only; those identities are not persisted, are not
-project defaults, and never cross into native solver code. The project collision
-and material authorities own their eventual replacement. This keeps old scene
-files loadable while making the runtime handoff explicit and backend-neutral.
+The projection uses stable local body/collider slots and an explicitly captured
+project sensor profile and real cooked Physics material dependency. There are no
+engine-generated compatibility profile/material IDs or default substitutions. An
+enabled legacy value without this context fails with
+`scene_conversion.trigger_volume_project_binding_missing`; a disabled value needs
+no binding. Authored persistence remains lossless.
+
+Each migrated canonical producer pair retains scene-owned portable validation
+evidence: the selected profile, semantic collision-schema fingerprint, material
+asset/type, authored material revision and exact cooked payload digest. Canonical
+collider fields remain behavior authority; the evidence must agree with them.
+Runtime/filter activation generations stay in the operation capture and never
+enter cooked content. Workers reject changed captures even under unchanged source
+revisions. Cook/cache/cell reconstruction preserves proof in canonical object order
+and rejects duplicates or conflicting semantic authorities before publication.
+
+The Physics scene participant verifies this evidence against the installed Project
+schema and resolved immutable material payload before native world allocation.
+Missing dependencies, stale semantics and mismatched bytes fail closed; material
+lookup is mandatory. Cooked Scene format `horo.scene.runtime.v2` requires the proof
+array (empty for scenes without legacy migration). Previous cooked v1 content must
+be recooked from unchanged authored sources; readers never silently discard proof.
+The editor's explicit Null Physics composition remains omitted capability; native
+qualification uses an explicitly selected canonical headless composition.
 
 Migration never merges ambiguous sources: an enabled legacy trigger beside an
 explicit rigid body, collider, or constraint returns a stable conversion error.

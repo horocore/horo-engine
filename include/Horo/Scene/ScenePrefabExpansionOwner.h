@@ -17,6 +17,7 @@ namespace Horo::SceneSource {
         Prefab::PrefabLimitProfile limits;
         std::optional<Prefab::PrefabValueSchemaSnapshot>
             valueSchemas; /**< Owned copied metadata retained through worker completion and module reload. */
+        std::optional<TriggerVolumeConversionContext> triggerBinding; /**< Exact project sensor/material capture and live fence. */
     };
 
     /**

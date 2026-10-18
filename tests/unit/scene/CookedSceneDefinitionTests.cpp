@@ -1,6 +1,8 @@
 #include "Horo/Scene/CookedSceneDefinition.h"
+#include "TriggerVolumeConversionTestValues.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <nlohmann/json.hpp>
 
 namespace {
     using namespace Horo;
@@ -69,4 +71,65 @@ TEST_CASE("Cooked scene payload honors the same exact bounds for encoding and de
     }
     REQUIRE(EncodeCookedSceneDefinition(scene, limits).HasError());
     REQUIRE(DecodeCookedSceneDefinition(encoded.Value(), {1}, {2}, limits).HasError());
+}
+
+TEST_CASE("Trigger migration proof survives cooked bytes and rejects malformed required metadata", "[native][trigger][prefab-cook]") {
+    SceneSource::SceneObjectSnapshot object{.id = {874}, .components = {.triggerVolume = Runtime::TriggerVolumeComponent{}}};
+    const std::array objects{object};
+    const auto converted = SceneSource::ConvertSceneSourceToRuntime({objects, {}}, {1}, {2}, Test::TriggerBinding());
+    REQUIRE(converted.HasValue());
+    REQUIRE(converted.Value().AssetDependencies().size() == 1);
+    const auto encoded = EncodeCookedSceneDefinition(converted.Value());
+    REQUIRE(encoded.HasValue());
+    const auto roundtrip = DecodeCookedSceneDefinition(encoded.Value(), {1}, {2});
+    REQUIRE(roundtrip.HasValue());
+    REQUIRE(roundtrip.Value().TriggerVolumeEvidence().front() == converted.Value().TriggerVolumeEvidence().front());
+    const std::string bytes{encoded.Value().begin(), encoded.Value().end()};
+    auto document = nlohmann::json::parse(bytes);
+    SECTION("old cooked versions require recook") {
+        document["format"] = "horo.scene.runtime.v1";
+    }
+    SECTION("required evidence field cannot disappear") {
+        document.erase("triggerMigration");
+    }
+    SECTION("duplicate object proof rejects") {
+        document["triggerMigration"].push_back(document["triggerMigration"][0]);
+    }
+    SECTION("zero project fingerprint rejects") {
+        document["triggerMigration"][0]["schema"] = std::uint64_t{0};
+    }
+    SECTION("malformed material digest rejects") {
+        document["triggerMigration"][0]["payload"] = "not-a-digest";
+    }
+    SECTION("foreign material identity rejects") {
+        document["triggerMigration"][0]["material"] = "00000000-0000-0000-0000-000000000099";
+    }
+    SECTION("component disagreement rejects") {
+        document["triggerMigration"][0]["collider"] = std::uint64_t{99};
+    }
+    const std::string invalid = document.dump() + '\n';
+    REQUIRE(DecodeCookedSceneDefinition(std::span{reinterpret_cast<const std::uint8_t *>(invalid.data()), invalid.size()}, {1}, {2})
+                .HasError());
+}
+
+TEST_CASE("Trigger binding union rejects conflicting semantic authorities and duplicate producers", "[native][trigger][scene]") {
+    const auto context = Test::TriggerBinding();
+    Runtime::SceneDefinitionBuilder builder{{1}, {1}};
+    Runtime::TriggerVolumeMigrationEvidence first{{1}, {1}, {1}, context.binding};
+    REQUIRE(builder.RequireTriggerVolume(first).HasValue());
+    SECTION("duplicate producers cannot win by insertion order") {
+        REQUIRE(builder.RequireTriggerVolume(first).HasError());
+    }
+    SECTION("different project schemas cannot be combined") {
+        auto other = first;
+        other.object = {2};
+        ++other.binding.collisionSchemaFingerprint;
+        REQUIRE(builder.RequireTriggerVolume(other).HasError());
+    }
+    SECTION("same material cannot denote two payloads") {
+        auto other = first;
+        other.object = {2};
+        other.binding.materialPayloadDigest.bytes.front() ^= 1;
+        REQUIRE(builder.RequireTriggerVolume(other).HasError());
+    }
 }

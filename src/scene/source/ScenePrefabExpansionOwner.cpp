@@ -172,7 +172,7 @@ namespace Horo::SceneSource {
             return !closed && !cancellation.IsCancellationRequested() && definition && current.documentSession == request.documentSession &&
                    current.scene == request.scene && current.revision == request.revision &&
                    current.resolver.RegistryRevision() == request.resolver.RegistryRevision() &&
-                   current.limits.Policy() == request.limits.Policy() &&
+                   current.limits.Policy() == request.limits.Policy() && current.triggerBinding == request.triggerBinding &&
                    (current.valueSchemas ? current.valueSchemas->Revision() : Sha256Digest{}) ==
                        (request.valueSchemas ? request.valueSchemas->Revision() : Sha256Digest{}) &&
                    SameAuthoredDocument(current.document, request.document);
@@ -231,9 +231,11 @@ namespace Horo::SceneSource {
             }
             if (token.IsCancellationRequested())
                 return JobCancelled();
-            auto converted = ConvertScenePrefabProjectionToRuntime({request.document.objects, placements}, request.scene, request.revision,
-                                                                   projection, request.resolver, request.limits,
-                                                                   request.valueSchemas ? &*request.valueSchemas : nullptr);
+            auto converted =
+                ConvertScenePrefabProjectionToRuntime({request.document.objects, placements}, request.scene, request.revision, projection,
+                                                      {request.resolver, request.limits,
+                                                       request.valueSchemas ? &*request.valueSchemas : nullptr},
+                                                      request.triggerBinding);
             if (converted.HasError())
                 return Result<void>::Failure(converted.ErrorValue());
             if (token.IsCancellationRequested())

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <thread>
+#include <vector>
 
 namespace Horo::Physics {
     namespace {
@@ -155,3 +156,79 @@ namespace Horo::Physics {
         CHECK(asset.Id() == descriptor.id);
     }
 }  // namespace Horo::Physics
+
+namespace {
+    /** @brief Full nondefault immutable material used by valid and malformed wire regressions. */
+    Horo::Physics::PhysicsMaterialAsset CodecMaterial() {
+        using namespace Horo;
+        using namespace Horo::Physics;
+        std::array<std::uint8_t, 16> identity{};
+        identity.back() = 87;
+        const auto material = PhysicsMaterialAsset::Create({.id = PhysicsMaterialAssetId::FromAssetId(Assets::AssetId::FromBytes(identity)),
+                                                            .sourceRevision = 7,
+                                                            .friction = 0.75F,
+                                                            .restitution = 0.25F,
+                                                            .densityKilogramsPerCubicMeter = 725.0F,
+                                                            .frictionCombine = PhysicsMaterialCombineMode::Maximum,
+                                                            .restitutionCombine = PhysicsMaterialCombineMode::Multiply});
+        REQUIRE(material.HasValue());
+        return material.Value();
+    }
+}  // namespace
+
+TEST_CASE("Canonical material payload round trips every immutable descriptor field", "[physics][material][codec]") {
+    using namespace Horo;
+    using namespace Horo::Physics;
+    const auto material = CodecMaterial();
+    const auto bytes = EncodePhysicsMaterialAsset(material);
+    REQUIRE(bytes.HasValue());
+    REQUIRE(bytes.Value().size() == PhysicsMaterialPayloadSize);
+    const auto decoded = DecodePhysicsMaterialAsset(bytes.Value());
+    REQUIRE(decoded.HasValue());
+    REQUIRE(decoded.Value().Descriptor() == material.Descriptor());
+    REQUIRE(EncodePhysicsMaterialAsset(decoded.Value()).Value() == bytes.Value());
+}
+
+TEST_CASE("Canonical material payload rejects malformed and noncanonical bytes", "[physics][material][codec]") {
+    using namespace Horo;
+    using namespace Horo::Physics;
+    const auto bytes = EncodePhysicsMaterialAsset(CodecMaterial());
+    REQUIRE(bytes.HasValue());
+    auto invalid = bytes.Value();
+    SECTION("unknown format") {
+        invalid[8] = std::byte{2};
+    }
+    SECTION("unknown descriptor schema") {
+        invalid[12] = std::byte{2};
+    }
+    SECTION("zero identity") {
+        for (std::size_t i = 16; i < 32; ++i)
+            invalid[i] = std::byte{0};
+    }
+    SECTION("non-finite coefficient") {
+        invalid[42] = std::byte{0x80};
+        invalid[43] = std::byte{0x7f};
+    }
+    SECTION("NaN coefficient") {
+        invalid[40] = std::byte{1};
+        invalid[42] = std::byte{0x80};
+        invalid[43] = std::byte{0x7f};
+    }
+    SECTION("noncanonical negative zero") {
+        invalid[40] = std::byte{0};
+        invalid[41] = std::byte{0};
+        invalid[42] = std::byte{0};
+        invalid[43] = std::byte{0x80};
+    }
+    SECTION("unknown combine mode") {
+        invalid[52] = std::byte{255};
+    }
+    SECTION("reserved bytes") {
+        invalid[55] = std::byte{1};
+    }
+    REQUIRE(DecodePhysicsMaterialAsset(invalid).HasError());
+    REQUIRE(DecodePhysicsMaterialAsset(std::span{bytes.Value()}.first(PhysicsMaterialPayloadSize - 1)).HasError());
+    std::vector duplicated(bytes.Value().begin(), bytes.Value().end());
+    duplicated.insert(duplicated.end(), bytes.Value().begin(), bytes.Value().end());
+    REQUIRE(DecodePhysicsMaterialAsset(duplicated).HasError());
+}

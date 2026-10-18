@@ -16,7 +16,7 @@ namespace Horo::Runtime {
         }
 
         // The expected member sequence is independent of the production projection
-        // dispatch. It protects the version-1 encoding when components evolve.
+        // dispatch. It protects the version-2 encoding when components evolve.
         template <class T, class... Fields> void CheckFields(const T &value, const Fields &...fields) {
             CHECK(Encoded(value) == Encoded(fields...));
             const CancellationToken cancellation;

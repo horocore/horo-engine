@@ -118,6 +118,7 @@ namespace {
 
     /** @brief Supplies deliberate author-entered fixture identities to the actual shared text controls. */
     void EnterBindings(ImGuiTestContext &ui) {
+        SelectContent(ui);
         ui.ItemInputValue("**/workspace.physics.profile", "00000000-0000-0000-0000-000000000002");
         ui.ItemInputValue("**/workspace.physics.material_asset", "00000000-0000-0000-0000-000000000003");
     }
