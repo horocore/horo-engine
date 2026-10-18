@@ -87,9 +87,6 @@ namespace Horo::Editor {
         /** @brief Presents source ownership and typed navigation for a cached prefab selection without ordinary object editing. */
         void DrawPrefabSelection(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                  const EditorGuiContext &context);
-        /** @brief Emits explicit typed source/open and owning-instance navigation intents from the shared controls. */
-        void DrawPrefabOwnershipActions(const PrefabHierarchyEntry &entry, const PrefabHierarchyProjection &projection,
-                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const;
         void DrawEmptyState(EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         static void AdoptCommand(EditorWorkspaceViewCommandData &destination, EditorWorkspaceViewCommandData source);
 
