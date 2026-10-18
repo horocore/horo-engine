@@ -137,6 +137,38 @@ namespace Horo::Tests::CollisionSettings {
         CHECK(session->Preview(before->Input()).HasError());
     }
 
+    TEST_CASE("Collision session opening recovers after every one-shot allocation failure", "[collision][allocation][session]") {
+        RequireSupportedSceneAllocationInjection();
+        Project project;
+        const Editor::CollisionProjectSettingsOwners owners{project.registry, project.files, project.mutations, project.inventory,
+                                                            *project.source};
+        std::size_t allocations{};
+        auto baseline = [&] {
+            std::string projectId{"collision-project"};
+            AllocationProbe::ScopedMeasurement measure;
+            auto opened = Editor::CollisionProjectSettingsSession::Open(project.root, std::move(projectId), owners, project.activation);
+            allocations = measure.Snapshot().requests;
+            return opened;
+        }();
+        REQUIRE(baseline.HasValue());
+        REQUIRE(allocations > 0);
+        const auto opening = baseline.Value()->Snapshot().Value();
+        baseline.Value()->Close();
+        for (std::size_t position = 0; position < allocations; ++position) {
+            INFO(position);
+            std::string projectId{"collision-project"};
+            auto rejected = [&] {
+                AllocationProbe::ScopedFailure fault{position};
+                return Editor::CollisionProjectSettingsSession::Open(project.root, std::move(projectId), owners, project.activation);
+            }();
+            REQUIRE(rejected.HasError());
+            auto recovered = project.Open();
+            REQUIRE(recovered->Snapshot().HasValue());
+            CHECK(recovered->Snapshot().Value()->Schema()->SemanticFingerprint() == opening->Schema()->SemanticFingerprint());
+            CHECK_FALSE(recovered->IsDirty());
+        }
+    }
+
     TEST_CASE("Collision path admission propagates every allocation failure before owner publication", "[collision][allocation][paths]") {
         RequireSupportedSceneAllocationInjection();
         Project project;

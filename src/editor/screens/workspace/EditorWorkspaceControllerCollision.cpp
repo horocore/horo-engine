@@ -54,7 +54,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::SaveCollisionSettings */
-    Result<void> EditorWorkspaceController::SaveCollisionSettings() {
+    Result<void> EditorWorkspaceController::SaveCollisionSettings() const {
         if (!HasDirtyCollisionSettings())
             return Result<void>::Success();
         auto saved = m_collisionSettings->Save();
