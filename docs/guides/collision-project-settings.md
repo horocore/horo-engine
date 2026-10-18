@@ -40,7 +40,11 @@ automatic cross-document or opaque-payload migration.
 The app retains the real registry build status and exact published revision.
 Complete status must match the current registry; failed/degraded refresh, missing
 index/sidecars, new assets, deleted sources and stale physical bytes invalidate the
-review. Use the Content Browser refresh after source changes. A successful strict
+review. Both the native inventory and legacy read-only scanner preserve portable
+UTF-8 source and sidecar identities rather than converting through the Windows
+ANSI code page. Malformed UTF-8 and embedded NUL aliases are rejected before
+native conversion or metadata reads, and rejected publication retains the prior
+registry root. Use the Content Browser refresh after source changes. A successful strict
 Scene parse does not grant runtime trust or replace separate Scene graph admission.
 Physical-source opaque-owner evidence survives use of the active canonical Scene
 snapshot. A malformed, duplicate-key or unsupported-version source is an error,
