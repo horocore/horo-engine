@@ -43,11 +43,16 @@ namespace Horo::Editor {
     /** @brief Platform navigation capability for one validated diagnostic source location. */
     using DiagnosticSourceNavigator = std::function<bool(const DiagnosticSourceRequest &)>;
 
+    /** @brief Host-owned collision evidence borrowed for the workspace lifetime; null members mean unavailable. */
+    struct EditorWorkspaceCollisionEvidence {
+        CollisionInventoryEvidence *inventory{};
+        CollisionActivationEvidence *activation{};
+    };
+
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
-        CollisionInventoryEvidence *collisionInventory{};
-        CollisionActivationEvidence *collisionActivation{};
+        EditorWorkspaceCollisionEvidence collision{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
         std::shared_ptr<const Assets::IAssetRegistrySource> assetRegistrySource;

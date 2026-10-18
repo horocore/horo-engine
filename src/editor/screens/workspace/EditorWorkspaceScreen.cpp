@@ -621,8 +621,8 @@ namespace Horo::Editor {
                     std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                                 EditorWorkspaceDependencies{
                                                                     .mutableAssetRegistry = projectServices_.assetRegistry,
-                                                                    .collisionInventory = projectServices_.collisionInventory,
-                                                                    .collisionActivation = projectServices_.collisionActivation,
+                                                                    .collision = {.inventory = projectServices_.collisionInventory,
+                                                                                  .activation = projectServices_.collisionActivation},
                                                                     .mutations = projectServices_.mutations,
                                                                     .durableFiles = projectServices_.durableFiles,
                                                                     .assetRegistrySource = std::move(registrySource).Value(),

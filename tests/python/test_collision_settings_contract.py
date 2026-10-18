@@ -108,4 +108,4 @@ def test_collision_copy_is_localized_and_both_gui_cases_are_coverage_targets():
 def test_extended_job_budget_does_not_relax_case_timeout():
     for path in ("ci.yml", "sonar.yml"):
         workflow = (ROOT / ".github/workflows" / path).read_text(encoding="utf-8")
-        assert "    timeout-minutes: 120" in workflow
+        assert "    timeout-minutes: 180" in workflow

@@ -46,7 +46,7 @@ class PrefabHierarchyCiTests(unittest.TestCase):
     def test_job_budgets_preserve_case_timeout(self):
         for name in ("ci.yml", "sonar.yml"):
             source = (ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
-            self.assertIn("timeout-minutes: 120", source)
+            self.assertIn("timeout-minutes: 180", source)
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("--no-tests=error --timeout 90", workflow)
 
