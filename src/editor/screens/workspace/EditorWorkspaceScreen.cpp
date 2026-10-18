@@ -2,6 +2,7 @@
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorModalHost.h"
@@ -26,6 +27,7 @@
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Platform/SecureRandom.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
@@ -71,6 +73,26 @@ namespace Horo::Editor {
             ProjectMutationCoordinator *mutations{nullptr};
             DurableFileSystem *durableFiles{nullptr};
         };
+
+        /** @brief Composes the explicit project loader and retains its cooperative lease through cache publication. */
+        PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations) {
+            return [root, mutations](const Assets::AssetRegistrySnapshot &registry, const std::span<const Assets::AssetId> roots,
+                                     const Prefab::PrefabLimitProfile &limits, const CancellationToken &cancellation) {
+                if (mutations == nullptr)
+                    return Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+                auto lease = mutations->TryAcquire({root, ProjectMutationOwner::Asset, "prefab.hierarchy.capture"});
+                if (lease.HasError())
+                    return Result<PreparedPrefabHierarchySources>::Failure(lease.ErrorValue());
+                auto project = Application::LoadProjectSourceDocument(root);
+                if (project.HasError())
+                    return Result<PreparedPrefabHierarchySources>::Failure(project.ErrorValue());
+                auto sources =
+                    CapturePrefabHierarchySources(root, registry, roots, limits, project.Value().metadata.horoVersion.value, cancellation);
+                if (sources.HasError())
+                    return Result<PreparedPrefabHierarchySources>::Failure(sources.ErrorValue());
+                return Result<PreparedPrefabHierarchySources>::Success({std::move(sources).Value(), std::move(lease).Value()});
+            };
+        }
 
         struct WorkspacePublishedRevisions {
             DocumentRevision scene{};
@@ -204,7 +226,7 @@ namespace Horo::Editor {
                     return Result<void>::Failure(reserved.ErrorValue());
                 }
                 ProjectSessionActivationLease activation = std::move(reserved).Value();
-                std::string projectRoot = activation.Candidate().projectRoot.string();
+                const std::filesystem::path &projectRoot = activation.Candidate().projectRoot;
 
                 if (auto initialized = InitializeController(projectRoot); initialized.HasError())
                     return initialized;
@@ -581,7 +603,7 @@ namespace Horo::Editor {
             }
 
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
-            Result<void> InitializeController(const std::string &projectRoot) {
+            Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =
@@ -619,6 +641,7 @@ namespace Horo::Editor {
                                                                     .documentSessionOwner = sessionOwner,
                                                                     .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                                     .gameplayRetirements = host_.GameplayRetirements(),
+                                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
                                                                 });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();

@@ -44,6 +44,8 @@ namespace Horo::Editor {
 
     EditorWorkspaceController::~EditorWorkspaceController() {
         StopAudioPreview();
+        m_prefabCancellation.RequestCancellation();
+        RetirePrefabHierarchy();
         static_cast<void>(ShutdownCollisionSettings(true));
         (void)ShutdownGameplayModules();
     }

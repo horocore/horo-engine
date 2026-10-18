@@ -22,6 +22,7 @@
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -69,6 +70,7 @@ namespace Horo::Editor {
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
+        PrefabHierarchySourceCapture prefabSources;   /**< Explicit host loader; never discovered by panels. */
         PCGDocumentCatalog pcgCatalog{.revision = 1}; /**< Empty support preserves graph nodes inert until a catalog is composed. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
@@ -270,6 +272,13 @@ namespace Horo::Editor {
         std::optional<Result<bool>> m_sourceCloseOutcome;
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
+        PrefabHierarchySourceCapture m_prefabSourceCapture;
+        Assets::AssetId m_workspaceSession;
+        std::uint64_t m_prefabPublication{};
+        std::uint64_t m_prefabObservedDocumentEpoch{};
+        std::optional<PrefabHierarchySources> m_prefabSources;
+        CancellationSource m_prefabCancellation;
+
         Assets::AssetRegistry *m_mutableAssetRegistry{};
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
@@ -461,6 +470,15 @@ namespace Horo::Editor {
                                     const std::vector<std::string> &displacedPanelIds);
         void MovePanelActivitySlot(const EditorWorkspaceViewCommandData &cmd);
         void RefreshSceneProjections();
+        /** @brief Explicit source refresh; publishes a complete bounded cache or repairable typed placement failures. */
+        void RefreshPrefabHierarchy(const SceneDocumentSnapshot &document);
+        /** @brief Prepares all allocating source/row storage, then publishes one immutable owner generation.
+         * @throws std::bad_alloc before publication; the outer refresh boundary preserves the prior cache. */
+        void PrepareAndPublishPrefabHierarchy(const SceneDocumentSnapshot &document, std::uint64_t publication);
+        /** @brief Routes exact source/member gestures after owner/session/revision and protected-boundary checks. */
+        [[nodiscard]] bool ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
+        void RetirePrefabHierarchy() noexcept;
         /** @brief Atomically commits the current default-scene snapshot and updates dirty state on
          * success. */
         /** @brief Routes typed source publication/close intent through workspace-owned document services. */

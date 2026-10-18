@@ -22,6 +22,9 @@ namespace Horo::Editor {
     }
 
     void InspectorPanel::OnDetach() {
+        m_prefabEntry = nullptr;
+        m_prefabPresentedTarget.reset();
+        m_prefabPresentation.reset();
         m_nameInputContext.Reset();
         m_physicsSession.Clear();
         m_inputRouter = nullptr;
@@ -57,13 +60,22 @@ namespace Horo::Editor {
             return;
         }
 
+        if (!vm.prefabSelection) {
+            m_prefabEntry = nullptr;
+            m_prefabPresentedTarget.reset();
+            m_prefabPresentation.reset();
+        }
         std::array<SceneObjectId, 1> fallbackSelection{};
         std::span<const SceneObjectId> selectedObjects = vm.selectedObjects;
         if (selectedObjects.empty() && vm.primarySelection.has_value()) {
             fallbackSelection.front() = *vm.primarySelection;
             selectedObjects = fallbackSelection;
         }
-        if (!selectedObjects.empty() && FindSelectedObject(vm) != nullptr) {
+        if (vm.prefabSelection) {
+            AdoptCommand(cmd, m_editSession.Clear());
+            m_nameInputContext.Reset();
+            DrawPrefabSelection(vm, cmd, ctx);
+        } else if (!selectedObjects.empty() && FindSelectedObject(vm) != nullptr) {
             DrawSelection(vm, selectedObjects, cmd, ctx);
             if (selectedObjects.size() == 1) {
                 if (const auto *selected = FindSelectedObject(vm); selected != nullptr)

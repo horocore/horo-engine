@@ -16,10 +16,13 @@
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
+#include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
 
+#include <filesystem>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -98,6 +101,7 @@ namespace Horo::Editor {
         DeleteObject,
         DeleteSelectedObjects,
         SelectObject,
+        PrefabHierarchy,
         PickViewport,
         NavigateViewport,
         AlignViewportToAxis,
@@ -206,9 +210,9 @@ namespace Horo::Editor {
         ContentBrowserTransferMode mode{ContentBrowserTransferMode::Move};
     };
 
-    /** @brief Absolute, optionally line-addressed diagnostic source requested by an output panel. */
+    /** @brief Native absolute path, optionally line-addressed diagnostic source requested by an output panel. */
     struct DiagnosticSourceRequest {
-        std::string absolutePath;
+        std::filesystem::path absolutePath;
         std::uint32_t line{};
         std::uint32_t column{};
     };
@@ -242,6 +246,7 @@ namespace Horo::Editor {
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;
+        std::optional<PrefabHierarchyCommand> prefabHierarchy;
         std::optional<int> targetIndex = std::nullopt;
         std::optional<SceneObjectId> objectPayload = std::nullopt;
         std::optional<Runtime::PrimitiveId> primitivePayload = std::nullopt;
@@ -318,6 +323,10 @@ namespace Horo::Editor {
         std::uint64_t physicsSelectionRevision{};
         std::string physicsEditError;
         std::vector<SceneObject> objects;
+        std::shared_ptr<const PrefabHierarchyProjection> prefabHierarchy; /**< Owner-published bounded cache; no Draw I/O. */
+        std::optional<PrefabHierarchyTarget> prefabSelection;
+        std::optional<Error> prefabHierarchyError;
+        bool prefabHierarchyUnavailable{}; /**< Preparation failed; retained rows are inspection-only, never a fresh publication. */
         std::vector<Gameplay::BehaviorDescriptor> availableBehaviors;
         std::optional<SceneObjectId> hierarchyRevealObject;
         DocumentRevision hierarchyRevealRevision{};

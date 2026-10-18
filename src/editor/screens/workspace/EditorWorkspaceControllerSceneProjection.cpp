@@ -62,6 +62,7 @@ namespace Horo::Editor {
                                                       .hiddenByParent = editorState.hiddenByParent,
                                                       .lockedByParent = editorState.lockedByParent});
         }
+        RefreshPrefabHierarchy(documentSnapshot);
         m_viewModel.isDirty = m_document.IsDirty();
         m_viewModel.canUndo = m_history.CanUndo();
         m_viewModel.canRedo = m_history.CanRedo();

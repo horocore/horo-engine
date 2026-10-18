@@ -295,6 +295,8 @@ namespace Horo::Editor {
             m_viewModel.physicsEditError.clear();
         m_viewModel.physicsSelectionRevision = m_selection.Current().revision.value;
         const SelectionSnapshot &selection = m_selection.Current();
+        if (selection.primary || !selection.objects.empty())
+            m_viewModel.prefabSelection.reset();
         m_viewModel.primarySelection = selection.primary;
         m_viewModel.selectedObjects = selection.objects;
         m_viewModel.viewportCamera = m_viewportScene.camera;
