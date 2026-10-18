@@ -263,6 +263,47 @@ namespace {
         std::filesystem::remove_all(projectRoot, cleanupError);
     }
 
+    TEST_CASE("Native behavior creation writes source and reveals its real directory with navigation history",
+              "[unit][editor][behavior][native-creation]") {
+        const auto projectRoot = std::filesystem::temp_directory_path() /
+                                 ("horo-create-native-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        const auto scripts = projectRoot / "Assets/Scripts";
+        const auto nativeDirectory = projectRoot / "source/gameplay";
+        std::filesystem::create_directories(scripts);
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations{files};
+        Runtime::RuntimeSceneService runtimeScene;
+        CancellationSource cancellation;
+        REQUIRE(runtimeScene.Startup(cancellation.Token()).HasValue());
+        EditorWorkspaceController controller{projectRoot, runtimeScene, {}, {.mutations = &mutations, .durableFiles = &files}};
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::NavigateContentBrowser, .stringPayload = scripts.string()});
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CreateNativeBehavior;
+        command.gameplayBehaviorRequest = CreateGameplayBehaviorRequest{.destination = nativeDirectory.string(),
+                                                                        .baseName = "PlayerBehavior",
+                                                                        .kind = GameplayBehaviorKind::Native};
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        REQUIRE(std::filesystem::is_regular_file(nativeDirectory / "PlayerBehavior.cpp"));
+        REQUIRE(std::filesystem::is_regular_file(nativeDirectory / "GameModule.cpp"));
+        CHECK_FALSE(std::filesystem::exists(scripts / "PlayerBehavior.cpp"));
+        CHECK_FALSE(std::filesystem::exists(nativeDirectory / "PlayerBehavior.cpp.meta"));
+        REQUIRE(controller.ViewModel().contentBrowser.absoluteCurrentPath == std::filesystem::weakly_canonical(nativeDirectory).string());
+        REQUIRE(std::ranges::any_of(controller.ViewModel().contentBrowser.entries, [&](const auto &entry) {
+            return entry.absolutePath == std::filesystem::weakly_canonical(nativeDirectory / "PlayerBehavior.cpp").string();
+        }));
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::NavigateContentBrowserBack});
+        CHECK(controller.ViewModel().contentBrowser.absoluteCurrentPath == std::filesystem::weakly_canonical(scripts).string());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::NavigateContentBrowserForward});
+        CHECK(controller.ViewModel().contentBrowser.absoluteCurrentPath == std::filesystem::weakly_canonical(nativeDirectory).string());
+        controller.ProcessCommand(command);
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.name_exists");
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::NavigateContentBrowser, .stringPayload = projectRoot.string()});
+        CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.content_browser.operation.invalid_target");
+        std::error_code cleanupError;
+        std::filesystem::remove_all(projectRoot, cleanupError);
+    }
+
     TEST_CASE("Published Asset Registry Revisions Refresh The Content Browser Projection", "[unit][editor]") {
         const std::filesystem::path projectRoot =
             std::filesystem::temp_directory_path() /

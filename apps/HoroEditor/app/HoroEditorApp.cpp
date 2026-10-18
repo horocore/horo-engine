@@ -9,6 +9,7 @@
 #endif
 
 #include "EditorAudioPreviewHost.h"
+#include "EditorFrameAdmission.h"
 #include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
@@ -1845,6 +1846,8 @@ namespace Horo::Editor {
 #endif
                 auto begun = p_->presentation.renderFrontend.BeginFrame(
                     Render::FrameDescriptor{.frameNumber = context.frameNumber, .outputExtent = outputExtent});
+                if (begun.HasError() && IsDeferredFrameAdmission(begun.ErrorValue()))
+                    return Result<bool>::Success(false);
                 if (begun.HasError())
                     return Result<bool>::Failure(begun.ErrorValue());
                 frameState_.frame.emplace(std::move(begun).Value());

@@ -116,8 +116,11 @@ namespace {
             ui.ItemClick(runtime == GameplayRuntimeKind::Lua ? "//**/###content_browser_create_lua_behavior"
                                                              : "//**/###content_browser_create_native_behavior");
             ui.Yield();
+            ui.ItemInputValue("//**/##GameplayBehaviorFilename", "DraftBehavior");
+            ui.Yield();
+            IM_CHECK(ui.ItemExists("//**/##GameplayBehaviorFilename"));
             ui.ItemInputValue("//**/##GameplayBehaviorFilename", "NewBehavior");
-            ui.ItemClick("//**/Create");
+            ui.ItemClick("//**/Create Behavior");
         });
     }
 

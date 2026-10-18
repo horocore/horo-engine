@@ -34,6 +34,17 @@ namespace Horo::Editor {
         Revalidate();
     }
 
+    void GameplayBehaviorFilenameModalState::SetKind(const GameplayBehaviorKind kind, std::string destination) {
+        kind_ = kind;
+        destination_ = std::move(destination);
+        Revalidate();
+    }
+
+    void GameplayBehaviorFilenameModalState::SetDestination(std::string destination) {
+        destination_ = std::move(destination);
+        Revalidate();
+    }
+
     std::optional<CreateGameplayBehaviorRequest> GameplayBehaviorFilenameModalState::Confirm() const {
         if (validation_.HasError())
             return std::nullopt;
