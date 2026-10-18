@@ -2684,7 +2684,20 @@ target_include_directories(HoroSceneCook PRIVATE ${PROJECT_SOURCE_DIR}/src/found
 target_link_libraries(HoroSceneCook PUBLIC HoroEngine::RuntimeScene
         PRIVATE HoroSceneSourceCodecInternal nlohmann_json::nlohmann_json)
 
+# Non-installed exact-header contract shared by pure editor model, host services and GUI adapters.
+add_library(HoroPrefabHierarchyInternal INTERFACE)
+set(_horo_prefab_hierarchy_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_hierarchy_internal")
+file(MAKE_DIRECTORY "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab")
+foreach(header IN ITEMS PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h)
+    configure_file("editor/screens/workspace/prefab/${header}"
+        "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab/${header}" COPYONLY)
+endforeach()
+target_include_directories(HoroPrefabHierarchyInternal INTERFACE
+    "$<BUILD_INTERFACE:${_horo_prefab_hierarchy_headers}>")
+
 add_library(HoroEditorModel STATIC
+        editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
+        editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
@@ -2725,7 +2738,7 @@ target_link_libraries(HoroEditorModel
         HoroEngine::PrefabSceneExpansion
         HoroEngine::SceneModel
         HoroEngine::RuntimeScene
-        PRIVATE nlohmann_json::nlohmann_json HoroSceneSourceCodecInternal
+        PRIVATE nlohmann_json::nlohmann_json HoroSceneSourceCodecInternal HoroPrefabHierarchyInternal
 )
 
 add_library(HoroEditorViewportScene STATIC
@@ -2812,6 +2825,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
 endif ()
 
 add_library(HoroEditorServices STATIC
+        editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
         editor/physics/CollisionIdentityGeneration.cpp
@@ -2902,6 +2916,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroPrefabHierarchyInternal
         HoroEngine::ProjectCollisionSettings
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSource
@@ -3051,8 +3066,13 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_creation/ProjectCreationScreen.cpp
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
+            editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
+            editor/screens/workspace/panels/hierarchy/HierarchyPrefabRows.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyEditSession.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPanel.cpp
+            editor/screens/workspace/panels/inspector/InspectorPrefabSelection.cpp
             editor/screens/workspace/panels/inspector/InspectorEditSession.cpp
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp

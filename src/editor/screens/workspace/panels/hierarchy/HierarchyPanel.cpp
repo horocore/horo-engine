@@ -209,6 +209,10 @@ namespace Horo::Editor {
                     return SceneObjectIconPresentation("workspace.hierarchy.type.camera");
                 case TriggerVolume:
                     return SceneObjectIconPresentation("workspace.hierarchy.type.volume");
+                case PrefabInstance:
+                    return {.icon = Ui::UiIcon::Package, .tooltipKey = "workspace.hierarchy.prefab.instance", .color = Theme::Accent()};
+                case PrefabMember:
+                    return {.icon = Ui::UiIcon::AccountTree, .tooltipKey = "workspace.hierarchy.prefab.member", .color = Theme::Muted()};
                 case AudioSource:
                     return SceneObjectIconPresentation("workspace.hierarchy.type.audio");
             }
@@ -455,6 +459,7 @@ namespace Horo::Editor {
     }
 
     void HierarchyPanel::OnDetach() {
+        editSession_.Close();
         focusedWidgetContext_.Reset();
         inputRouter_ = nullptr;
         workspaceInputContext_ = nullptr;
@@ -541,7 +546,7 @@ namespace Horo::Editor {
             !editSession_.SelectedId().has_value() || !inputRouter_->ConsumeKey(*workspaceInputContext_, Input::Key::F2))
             return;
         const HierarchyNode *selectedNode = editSession_.Find(*editSession_.SelectedId());
-        if (selectedNode != nullptr && !selectedNode->effectivelyLocked)
+        if (selectedNode != nullptr && editSession_.PrefabTarget(selectedNode->id) == nullptr && !selectedNode->effectivelyLocked)
             BeginRename(*editSession_.SelectedId());
     }
 
@@ -549,6 +554,11 @@ namespace Horo::Editor {
                                             EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         if (frame.pointerInActions || !Ui::BeginContextMenu("##HierarchyContext"))
             return;
+        if (editSession_.PrefabTarget(frame.node.id) != nullptr) {
+            DrawPrefabContext(frame.node.id, workspaceEligible, command, context);
+            Ui::EndContextMenu();
+            return;
+        }
         const bool editable = workspaceEligible && !frame.node.effectivelyLocked;
         if (editable &&
             Ui::BeginContextSubmenu((context.localization.Get("editor", "workspace.create") + "###hierarchy_create_root").c_str(),
@@ -584,6 +594,8 @@ namespace Horo::Editor {
             controls.chevronPressed = workspaceEligible && ImGui::IsItemClicked(ImGuiMouseButton_Left);
             ImGui::SetCursorScreenPos(frame.geometry.nextRowCursor);
         }
+        if (editSession_.PrefabTarget(frame.node.id) != nullptr)
+            return controls;
         if (frame.geometry.layout.visibilityAction.Width() <= 0.0F)
             return controls;
 
@@ -615,6 +627,26 @@ namespace Horo::Editor {
         }
         ImGui::SetCursorScreenPos(frame.geometry.nextRowCursor);
         return controls;
+    }
+
+    /** @copydoc HierarchyPanel::DrawPrefabStatus */
+    void HierarchyPanel::DrawPrefabStatus(const RowFrame &frame, const EditorGuiContext &context) const {
+        const auto *entry = editSession_.PrefabEntry(frame.node.id);
+        if (entry == nullptr)
+            return;
+        const float iconSize = 16.0F * frame.uiScale;
+        if (entry->hasOverrides) {
+            Ui::DrawEditorIcon(&frame.drawList, Ui::UiIcon::Tag, frame.geometry.lockMin, {iconSize, iconSize}, Theme::U32(Theme::Accent()),
+                               context.theme.fonts.icon);
+            if (ImGui::IsMouseHoveringRect(frame.geometry.lockMin, frame.geometry.lockMax))
+                Ui::ShowTooltip(context.localization.Get("editor", "workspace.hierarchy.prefab.overrides").c_str(), &context.theme.fonts);
+        }
+        if (entry->failure) {
+            Ui::DrawEditorIcon(&frame.drawList, Ui::UiIcon::Error, frame.geometry.visibilityMin, {iconSize, iconSize},
+                               Theme::U32(Theme::Muted()), context.theme.fonts.icon);
+            if (ImGui::IsMouseHoveringRect(frame.geometry.visibilityMin, frame.geometry.visibilityMax))
+                Ui::ShowTooltip(entry->failure->message.c_str(), &context.theme.fonts);
+        }
     }
 
     void HierarchyPanel::DrawRowBackground(const RowFrame &frame, const bool hovered) {
@@ -672,6 +704,8 @@ namespace Horo::Editor {
     }
 
     void HierarchyPanel::DrawRowActions(const RowFrame &frame, const RowControls &controls) {
+        if (frame.node.type == HierarchyNodeType::PrefabInstance || frame.node.type == HierarchyNodeType::PrefabMember)
+            return;
         if (frame.geometry.layout.visibilityAction.Width() <= 0.0F || (!frame.selected && !controls.IsHovered(frame)))
             return;
         const float actionIconSize =
@@ -789,6 +823,8 @@ namespace Horo::Editor {
     bool HierarchyPanel::AcceptRowAssetDrop(const HierarchyNodeId nodeId, const float normalizedRowY, const ImVec2 &rowMin,
                                             const ImVec2 &rowMax, const EditorWorkspaceViewModel &viewModel,
                                             EditorWorkspaceViewCommandData &command, ImDrawList &drawList) const {
+        if (editSession_.PrefabTarget(nodeId) != nullptr)
+            return false;
         const std::optional<HierarchyNodeId> projectedParent = editSession_.ParentId(nodeId);
         const std::optional<SceneObjectId> nodeParent =
             projectedParent.has_value() ? std::optional{SceneObjectId{*projectedParent}} : std::nullopt;
@@ -823,6 +859,7 @@ namespace Horo::Editor {
         const bool rowRightClicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
         const bool pointerInActions = ImGui::IsMouseHoveringRect(geometry.actionsMin, geometry.actionsMax);
         const float normalizedRowY = std::clamp((ImGui::GetMousePos().y - geometry.rowMin.y) / geometry.layout.height, 0.0F, 1.0F);
+        DrawPrefabDragDrop(node.id, command, context);
         const bool assetDropDelivered =
             AcceptRowAssetDrop(node.id, normalizedRowY, geometry.rowMin, geometry.rowMax, viewModel, command, drawList);
         HierarchyRowGeometry frameGeometry = geometry;
@@ -848,6 +885,12 @@ namespace Horo::Editor {
                                   const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                   const EditorGuiContext &context) {
         bool pendingDelete = false;
+        if (viewModel.prefabHierarchyUnavailable) {
+            Ui::ErrorText(viewModel.prefabHierarchyError
+                              ? viewModel.prefabHierarchyError->message.c_str()
+                              : context.localization.Get("editor", "workspace.hierarchy.prefab.capacity").c_str(),
+                          context.theme.fonts);
+        }
         ImDrawList &drawList = *ImGui::GetWindowDrawList();
         const bool workspaceEligible =
             inputRouter_ != nullptr && workspaceInputContext_ != nullptr && inputRouter_->IsContextActive(*workspaceInputContext_);
@@ -861,6 +904,7 @@ namespace Horo::Editor {
             DrawRowContextMenu(frame, workspaceEligible, pendingDelete, command, context);
             const RowControls controls = DrawRowControls(frame, workspaceEligible, context);
             DrawRowPresentation(frame, controls, context);
+            DrawPrefabStatus(frame, context);
             ApplyRowInteraction(frame, controls, workspaceEligible, command);
             DrawRowLabel(frame, command);
             ImGui::SetCursorScreenPos(frame.geometry.nextRowCursor);
@@ -883,6 +927,8 @@ namespace Horo::Editor {
                                    EditorWorkspaceViewCommandData &cmd, const EditorGuiContext &ctx) {
         static_cast<void>(pos);
         editSession_.Synchronize(vm);
+        if (renamingId_.has_value() && (editSession_.PrefabTarget(*renamingId_) != nullptr || editSession_.Find(*renamingId_) == nullptr))
+            renamingId_.reset();
         const float uiScale = Theme::GetActiveTokens().sizes.uiScale;
         const float tabHeight = kTabHeight * uiScale;
         const float toolbarHeight = kToolbarHeight * uiScale;
@@ -922,6 +968,7 @@ namespace Horo::Editor {
         const ImVec2 remaining = ImGui::GetContentRegionAvail();
         const ImVec2 rootDropMin = ImGui::GetCursorScreenPos();
         ImGui::InvisibleButton("##HierarchyRootDrop", ImVec2(std::max(1.0F, remaining.x), std::max(32.0F, remaining.y)));
+        AcceptPrefabRootDrop(cmd);
         const ImVec2 rootDropMax{rootDropMin.x + std::max(1.0F, remaining.x), rootDropMin.y + std::max(32.0F, remaining.y)};
         static_cast<void>(AcceptAssetDrop({.parent = std::nullopt,
                                            .target = AssetSceneDropTarget::HierarchyRoot,

@@ -43,6 +43,8 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
+        m_prefabCancellation.RequestCancellation();
+        RetirePrefabHierarchy();
         static_cast<void>(ShutdownCollisionSettings(true));
         (void)ShutdownGameplayModules();
     }

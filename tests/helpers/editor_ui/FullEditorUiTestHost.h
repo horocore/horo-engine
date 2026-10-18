@@ -21,8 +21,8 @@ namespace Horo::Tests {
     /** @brief Owns the real HoroEditor screen, modal, project, input, and workspace composition for one scenario. */
     class FullEditorUiTestHost {
     public:
-        FullEditorUiTestHost(IEditorUiTestSurface &surface, std::string locale = "en-US",
-                             std::optional<std::string> recentProjectName = std::nullopt);
+        explicit FullEditorUiTestHost(IEditorUiTestSurface &surface, std::string locale = "en-US",
+                                      std::optional<std::string> recentProjectName = std::nullopt);
         ~FullEditorUiTestHost();
         FullEditorUiTestHost(const FullEditorUiTestHost &) = delete;
         FullEditorUiTestHost &operator=(const FullEditorUiTestHost &) = delete;

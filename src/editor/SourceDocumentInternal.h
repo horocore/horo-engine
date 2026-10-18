@@ -28,7 +28,7 @@ namespace Horo::Editor::Detail {
     /** @brief Reads a complete bounded file with cancellation and concurrent disk-change rejection. */
     [[nodiscard]] Result<std::shared_ptr<const SourceText>> LoadSourceText(const std::filesystem::path &path, std::size_t maximumBytes,
                                                                            CancellationToken cancellation);
-    /** @brief Verifies exact canonical key and project containment without granting file authority. */
+    /** @brief Verifies exact UTF-8 canonical key and native project containment without granting file authority. */
     [[nodiscard]] Result<std::filesystem::path> SourcePath(const std::filesystem::path &projectRoot, const DocumentIdentity &identity,
                                                            const std::filesystem::path &path);
     /** @brief Prepares the next immutable-root revision without changing the old publication. */

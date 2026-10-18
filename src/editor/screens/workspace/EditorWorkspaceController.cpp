@@ -73,8 +73,9 @@ namespace Horo::Editor {
           m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
-          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collisionInventory),
-          m_collisionActivation(dependencies.collisionActivation), m_collisionSceneOwner(dependencies.documentSessionOwner),
+          m_prefabSourceCapture(dependencies.prefabSources), m_workspaceSession(dependencies.documentSessionOwner),
+          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collision.inventory),
+          m_collisionActivation(dependencies.collision.activation), m_collisionSceneOwner(dependencies.documentSessionOwner),
           m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles),
           m_assetRegistrySource(dependencies.assetRegistrySource), m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
@@ -93,8 +94,7 @@ namespace Horo::Editor {
         m_viewModel.workspacePanelHost.AttachDocumentIdentityRegistry(m_documentRegistry);
         if (!m_diagnosticSourceNavigator) {
             m_diagnosticSourceNavigator = [](const DiagnosticSourceRequest &source) {
-                const std::filesystem::path path{source.absolutePath};
-                return OpenInExternalEditor(path) || RevealInNativeFileManager(path);
+                return OpenInExternalEditor(source.absolutePath) || RevealInNativeFileManager(source.absolutePath);
             };
         }
         const std::filesystem::path absoluteProjectRoot = ResolveProjectRoot(projectRoot);

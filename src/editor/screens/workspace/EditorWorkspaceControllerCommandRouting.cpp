@@ -31,9 +31,9 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
         static_cast<void>(ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
-                          ProcessPlayCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
-                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
-                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
+                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
+                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {
@@ -139,6 +139,7 @@ namespace Horo::Editor {
                     HandleDeleteSelectedObjects(cmd.objectSelection->objects);
                 break;
             case EditorWorkspaceViewCommand::SelectObject:
+                m_viewModel.prefabSelection.reset();
                 if (cmd.objectSelection.has_value() || cmd.objectPayload.has_value()) {
                     ObjectSelectionRequest request;
                     if (cmd.objectSelection.has_value()) {

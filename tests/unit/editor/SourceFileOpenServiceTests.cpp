@@ -1,5 +1,7 @@
+#include "../../support/MalformedNativeFileTestSupport.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -45,6 +47,16 @@ namespace {
     [[nodiscard]] std::string ErrorCodeText(const Horo::Error &error) {
         return std::string{error.code.Value()};
     }
+
+    /** @brief Requires typed rejection before document admission for every initialized native path. */
+    void RequireUnsafeNativePath(SourceFileOpenService &service, DocumentIdentityRegistry &registry, const std::filesystem::path &input) {
+        REQUIRE_FALSE(input.empty());
+        const auto opened = service.Open({.path = input, .origin = SourceOpenOrigin::Command});
+        REQUIRE(opened.HasError());
+        CHECK(ErrorCodeText(opened.ErrorValue()) == "editor.source_open.unsafe");
+        CHECK(registry.Size() == 0);
+    }
+
 }  // namespace
 
 TEST_CASE("Source policy classifies editable source and project text by extension", "[unit][editor][source]") {
@@ -202,16 +214,72 @@ TEST_CASE("Relative absolute and internal symlink paths focus one canonical sour
 
 TEST_CASE("Source opening preserves spaces and non-ASCII project-relative identities", "[unit][editor][source][paths]") {
     TemporaryProject project;
-    project.Write("kaynak/oyuncu/Player Move ş.cpp");
+    const std::filesystem::path relative{u8"kaynak/oyuncu/Player Move \u015f \u65e5\u672c \U0001f680.cpp"};
+    project.Write(relative);
     SourceFileOpenService service{project.Root()};
 
     const auto opened = service.Open(SourceOpenRequest{
-        .path = "kaynak/oyuncu/Player Move ş.cpp",
+        .path = relative,
         .origin = SourceOpenOrigin::Command,
     });
     REQUIRE(opened.HasValue());
-    REQUIRE(opened.Value().location.document.Value() == "kaynak/oyuncu/Player Move ş.cpp");
-    REQUIRE(opened.Value().location.absolutePath.filename() == "Player Move ş.cpp");
+    const auto encoded = relative.generic_u8string();
+    REQUIRE((opened.Value().location.document.Value() == std::string{encoded.begin(), encoded.end()}));
+    CHECK(opened.Value().location.document.Value() == "kaynak/oyuncu/Player Move \xc5\x9f \xe6\x97\xa5\xe6\x9c\xac \xf0\x9f\x9a\x80.cpp");
+    REQUIRE(opened.Value().location.absolutePath.filename() == relative.filename());
+    const auto absolute = service.Open({.path = project.Root() / relative, .origin = SourceOpenOrigin::Command});
+    REQUIRE(absolute.HasValue());
+    REQUIRE(opened.Value().document.has_value());
+    REQUIRE(absolute.Value().document.has_value());
+    CHECK(absolute.Value().document->identity == opened.Value().document->identity);
+    CHECK(absolute.Value().location.document == opened.Value().location.document);
+}
+
+TEST_CASE("Native Unicode source paths retain containment and malformed-path admission fences", "[unit][editor][source][paths]") {
+    TemporaryProject project;
+    DocumentIdentityRegistry registry;
+    SourceFileOpenService service{project.Root(), registry};
+    SECTION("Unicode traversal cannot escape") {
+        RequireUnsafeNativePath(service, registry, std::filesystem::path{u8"../outside \u015f \u65e5\u672c.cpp"});
+    }
+    SECTION("embedded NUL cannot alias an existing source") {
+        std::filesystem::path input{u8"source/gameplay/Present.cpp"};
+        project.Write(input);
+        input += std::filesystem::path::value_type{};
+        input += "ignored.cpp";
+        RequireUnsafeNativePath(service, registry, input);
+    }
+    SECTION("malformed native encoding cannot become a document identity") {
+#ifdef _WIN32
+        std::wstring text = L"source/gameplay/Bad";
+        SECTION("unpaired leading surrogate") {
+            text.push_back(static_cast<wchar_t>(0xd800));
+        }
+        SECTION("unpaired trailing surrogate") {
+            text.push_back(static_cast<wchar_t>(0xdc00));
+        }
+        SECTION("leading surrogate followed by a non-surrogate") {
+            text.push_back(static_cast<wchar_t>(0xdbff));
+            text.push_back(L'A');
+        }
+        RequireUnsafeNativePath(service, registry, std::filesystem::path{text + L".cpp"});
+#else
+        const auto input = std::filesystem::path{std::string{"source/gameplay/Bad"} + "\xc0\xaf" + ".cpp"};
+        constexpr std::array<std::uint8_t, 6> original{'s', 'o', 'u', 'r', 'c', 'e'};
+        const bool created = Horo::TestSupport::WriteMalformedNativeFile(project.Root() / input, original);
+        RequireUnsafeNativePath(service, registry, input);
+        std::error_code existenceError;
+        const bool remains = std::filesystem::exists(project.Root() / input, existenceError);
+        CHECK(remains == created);
+        if (remains) {
+            std::ifstream retained{project.Root() / input, std::ios::binary};
+            std::string bytes;
+            retained >> bytes;
+            REQUIRE(static_cast<bool>(retained));
+            CHECK(bytes == "source");
+        }
+#endif
+    }
 }
 
 TEST_CASE("Source opening rejects missing files and lexical escapes", "[unit][editor][source][security]") {

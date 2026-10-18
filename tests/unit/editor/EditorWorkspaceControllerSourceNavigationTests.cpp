@@ -46,11 +46,11 @@ namespace {
         TestWorkspaceController controller{projectRoot.string()};
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
-        command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = outsideSource.string(), .line = 1};
+        command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = outsideSource, .line = 1};
         controller.ProcessCommand(command);
         REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.global_dock.build_output.source.invalid"));
 
-        command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = (projectRoot / "source/Missing.cpp").string(), .line = 3};
+        command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = projectRoot / "source/Missing.cpp", .line = 3};
         controller.ProcessCommand(command);
         REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.source_open.missing"));
 
@@ -58,7 +58,7 @@ namespace {
         std::error_code symlinkError;
         std::filesystem::create_symlink(outsideSource, escapingLink, symlinkError);
         if (!symlinkError) {
-            command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = escapingLink.string(), .line = 4};
+            command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = escapingLink, .line = 4};
             controller.ProcessCommand(command);
             REQUIRE((controller.ViewModel().contentBrowserOperationError == "workspace.global_dock.build_output.source.invalid"));
         }
@@ -71,7 +71,7 @@ namespace {
         const std::filesystem::path projectRoot =
             std::filesystem::temp_directory_path() /
             ("horo-diagnostic-location-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        const std::filesystem::path sourcePath = projectRoot / "assets/shaders/material.glsl";
+        const std::filesystem::path sourcePath = projectRoot / std::filesystem::path{u8"assets/shaders/ışık_日本.glsl"};
         std::filesystem::create_directories(sourcePath.parent_path());
         {
             std::ofstream source(sourcePath);
@@ -85,12 +85,11 @@ namespace {
         }};
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::OpenDiagnosticSource;
-        command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = sourcePath.string(), .line = 27, .column = 9};
+        command.diagnosticSource = DiagnosticSourceRequest{.absolutePath = sourcePath, .line = 27, .column = 9};
         controller.ProcessCommand(command);
 
         REQUIRE(navigated.has_value());
-        REQUIRE((std::filesystem::weakly_canonical(std::filesystem::path{navigated->absolutePath}) ==
-                 std::filesystem::weakly_canonical(sourcePath)));
+        REQUIRE((std::filesystem::weakly_canonical(navigated->absolutePath) == std::filesystem::weakly_canonical(sourcePath)));
         REQUIRE((navigated->line == 27));
         REQUIRE((navigated->column == 9));
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());

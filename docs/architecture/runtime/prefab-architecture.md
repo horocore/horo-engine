@@ -1030,3 +1030,31 @@ appended/defaulted fields and optional schema arguments. Callers resolving prope
 explicitly supply the owned schema snapshot to conversion and retained publication;
 omitting it produces typed repairable unavailability. Transform-only overrides need
 no project schema. No SDK ABI or native capability layout changes in this delivery.
+
+## Workspace hierarchy projection and source navigation
+
+The HORO-1059 workspace adapter retains the existing ScenePrefabProjection and
+source resolver as its sole expansion authority. A root selection names the
+Scene-owned PrefabInstanceId; a member selection retains ExpandedPrefabObjectKey
+and owning source AssetId. Ordinary SceneObject IDs and presentation row aliases
+are not interchangeable. The normal PrefabSceneIdentityMap remains the only
+source-to-Scene remapping authority.
+
+Source capture is explicit host work under the cooperative Project lease, using
+selected source/sidecar reads and the original registry publication. The generic
+project query capability retains its independent 1 MiB budget. Draw consumes an
+immutable bounded cache; it neither reads source nor constructs providers.
+Failed refresh retains stale source evidence for inspection and repair. Mutation
+intents are fenced by workspace incarnation, never-reused cache publication,
+Scene replacement epoch and document revision, then delegated to the existing SceneDocument Prefab commands/history.
+Expanded members never gain ordinary reparent/delete authority through a panel.
+
+The non-installed HoroPrefabHierarchyInternal interface stages exactly the
+projection, command and source-capture headers. EditorModel owns pure projection;
+EditorServices owns host capture; Gui owns presentation and command routing.
+Named include guards preserve single definitions when target-private source and
+staged paths meet in tests. The additive Assets CaptureSelected factory does not
+replace the authoritative Asset Registry or narrow canonical Prefab source limits.
+See [Prefab hierarchy](../../guides/prefab-hierarchy.md) for migration, finite
+capture limits, lifecycle policy and the distinction between cooperative drift
+checks and an OS atomic filesystem snapshot.
