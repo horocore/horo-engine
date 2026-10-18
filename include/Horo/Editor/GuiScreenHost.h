@@ -227,7 +227,7 @@ namespace Horo::Editor {
          * @return An owned modal with admission diagnostics retained for presentation.
          */
         [[nodiscard]] std::unique_ptr<SettingsModal> CreateSettingsModal();
-        /** @brief Opens settings with both navigation and extension authorities. */
+        /** @brief Opens settings with navigation, collision and extension authorities. */
         void OpenEditorSettingsModal();
         /** @brief Registers the already-initialized host and borrowed application services without activating native packages. */
         void RegisterApplicationServices(const GuiScreenHostComposition &composition);

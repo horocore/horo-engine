@@ -41,12 +41,12 @@ namespace Horo::Platform::ProjectReadNative {
     }
 
     /** @copydoc AdmitChild */
-    Result<Handle> AdmitChild(Handle child, const bool directory) {
+    Result<Handle> AdmitChild(Handle child, const bool directory, const bool allowRegularHardlinks) {
         auto info = Info(child);
         if (info.HasError())
             return Result<Handle>::Failure(info.ErrorValue());
-        if ((!info.Value().regular && !info.Value().directory) || (info.Value().regular && info.Value().links != 1) ||
-            (directory && !info.Value().directory))
+        if ((!info.Value().regular && !info.Value().directory) ||
+            (info.Value().regular && info.Value().links != 1 && !allowRegularHardlinks) || (directory && !info.Value().directory))
             return Result<Handle>::Failure(MakeError(ProjectReadErrors::UnsafePath));
         return Result<Handle>::Success(std::move(child));
     }

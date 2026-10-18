@@ -638,9 +638,18 @@ namespace Horo::Editor {
     std::unique_ptr<SettingsModal> GuiScreenHost::CreateSettingsModal() {
         auto navigation =
             activeScreen_ ? activeScreen_->NavigationSettings() : Result<NavigationProjectSettingsSession *>::Success(nullptr);
+        auto collision = activeScreen_ ? activeScreen_->CollisionSettings()
+                                       : Result<std::shared_ptr<CollisionProjectSettingsSession>>::Failure(
+                                             MakeError(CollisionSettingsError(CollisionSettingsFailure::Unsupported)));
         auto modal =
             std::make_unique<SettingsModal>(context_, *settingsService_, logoTexture_, extensionInventory_, extensionMarketplace_,
-                                            navigation.HasValue() ? navigation.Value() : nullptr,
+                                            SettingsModalProjectOpening{
+                                                .navigation = navigation.HasValue() ? navigation.Value() : nullptr,
+                                                .collision = collision.HasValue() ? std::weak_ptr{collision.Value()}
+                                                                                  : std::weak_ptr<CollisionProjectSettingsSession>{},
+                                                .collisionError =
+                                                    collision.HasError() ? std::optional<Error>{collision.ErrorValue()} : std::nullopt,
+                                            },
                                             SettingsModalPagePresentation{editorPageHost_,
                                                                           extensionPageTheme_ ? extensionPageTheme_->Frame() : nullptr});
         if (navigation.HasError())

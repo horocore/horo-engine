@@ -96,6 +96,7 @@ namespace Horo::Editor::SettingsModalInternal {
         DrawNavItem(st, {input.c_str(), "I", Input}, ctx);
         DrawNavGroup(engine.c_str(), ctx);
         DrawNavItem(st, {rendering.c_str(), "R", Rendering}, ctx);
+        DrawNavItem(st, {ctx.localization.Get("editor", "settings.collision.title").c_str(), "C", Collision}, ctx);
         DrawNavItem(st, {audio.c_str(), "S", Audio}, ctx);
         DrawNavItem(st, {network.c_str(), "N", Network}, ctx);
         const auto navigation = ctx.localization.Get("editor", "settings.nav.navigation");
@@ -400,6 +401,9 @@ namespace Horo::Editor::SettingsModalInternal {
                 break;
             case Diagnostics:
                 DrawDiagnostics(st, ctx);
+                break;
+            case Collision:
+                DrawCollision(st, ctx);
                 break;
             case ExtensionPages:
                 if (st.extensionPages)

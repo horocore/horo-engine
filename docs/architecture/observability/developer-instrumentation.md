@@ -267,11 +267,11 @@ default, so a metric does not need to fill the exporter's record batch before
 it becomes visible. OTLP thread identifiers are exported as strings because
 they are opaque platform identities rather than signed numeric measurements.
 
-The repository includes a portable
-[HoroEditor Grafana dashboard](../../../observability/grafana/dashboards/horo-editor.json)
-for these metrics and the structured Loki log stream. It can be downloaded from
-the public repository or imported directly from the raw GitHub URL documented
-in the adjacent [Grafana README](../../../observability/grafana/README.md).
+Engine instrumentation and local metric/profiler histories do not require an
+external dashboard or collector. The developer runner and `.env.example` keep
+OTLP export disabled unless the developer explicitly opts in. The repository no
+longer installs, imports, or checks Grafana dashboards; this does not change the
+common record model, dispatcher, local persistence, or metric collection policy.
 
 ## Performance Contract And Measurement
 

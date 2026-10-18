@@ -285,7 +285,8 @@ namespace Horo::Editor {
 
     /** @copydoc FingerprintSceneObjectContent */
     Result<Sha256Digest> FingerprintSceneObjectContent(const SceneObjectSnapshot &object, const std::size_t maximumBytes) {
-        if (!maximumBytes || maximumBytes > 16 * 1024 * 1024 || EstimateSceneObjectOwnedMemoryBytes(object) > maximumBytes)
+        if (!maximumBytes || maximumBytes > MaximumSceneObjectFingerprintBytes ||
+            EstimateSceneObjectOwnedMemoryBytes(object) > maximumBytes)
             return Result<Sha256Digest>::Failure(Rejected(SceneTransactionFailure::Capacity));
         auto authored = object;
         authored.generated.reset();

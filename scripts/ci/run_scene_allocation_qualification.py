@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run exact Scene or Navigation probes unsupported by MSVC Debug iterator proxies."""
+"""Run exact Scene, Navigation or Collision probes unsupported by MSVC Debug iterator proxies."""
 
 import json
 import re
@@ -36,6 +36,18 @@ NAVIGATION_PHASES = {
     NAVIGATION_PREFIX + "Scene decoding releases completed DOM without allocating during retirement": "scene",
 }
 NAVIGATION_CASES = frozenset(NAVIGATION_PHASES)
+
+
+COLLISION_PHASES = {
+    "HoroProjectCollisionSettingsTests::Native registry inventory recovers after every one-shot allocation failure": "inventory",
+    "HoroProjectCollisionSettingsTests::Collision path admission propagates every allocation failure before owner publication": "paths",
+    "HoroProjectCollisionSettingsTests::Collision history publication exhaustively rolls back every one-shot allocation failure": "commit",
+    "HoroProjectCollisionSettingsTests::Canonical Scene decoder unwinds every single allocation failure without terminating completed DOM cleanup": "scene",
+}
+SIDECAR_CASE = ("HoroProjectCollisionSettingsTests::Canonical sidecar decoding unwinds every allocation "
+                "across valid invalid and deep compound DOMs")
+SIDECAR_PHASES = ("valid", "duplicate", "malformed", "deep")
+COLLISION_CASES = frozenset((*COLLISION_PHASES, SIDECAR_CASE))
 
 
 def verify_discovery(document, cases=CASES):
@@ -92,15 +104,35 @@ def write_regex(path, cases=CASES):
     write_case_regex(path, cases)
 
 
+def verify_collision_positions(path):
+    """Require proof of every measured failure position, including probes above Debug-sized budgets."""
+    verify_junit(path, COLLISION_CASES)
+    for case in ElementTree.parse(path).getroot().iter("testcase"):
+        sidecar = case.get("name") == SIDECAR_CASE
+        phases = SIDECAR_PHASES if sidecar else (COLLISION_PHASES[case.get("name")],)
+        prefix = "collision-sidecar-allocation" if sidecar else "collision-allocation"
+        output = "".join(case.itertext())
+        for phase in phases:
+            positions = re.findall(r"\[" + prefix + r"\] " + phase + r" measured=(\d+) completed=(\d+)", output)
+            if case.get("status") != "run" or len(positions) != 1:
+                raise ValueError("Collision allocation execution has no unique complete position proof")
+            measured, completed = map(int, positions[0])
+            if measured == 0 or completed != measured:
+                raise ValueError("Collision allocation sweep did not execute every measured position")
+
+
 def main():
     """Validate discovery before execution, or validate the resulting exact Release JUnit."""
-    args = parse_evidence_arguments(__doc__, families=("scene", "navigation"))
-    cases = NAVIGATION_CASES if args.family == "navigation" else CASES
+    args = parse_evidence_arguments(__doc__, families=("scene", "navigation", "collision"))
+    cases = {"scene": CASES, "navigation": NAVIGATION_CASES, "collision": COLLISION_CASES}[args.family]
     if args.discovery:
         verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")), cases)
         write_regex(args.regex_output, cases)
     else:
-        verify_junit(args.output_junit, cases)
+        if args.family == "collision":
+            verify_collision_positions(args.output_junit)
+        else:
+            verify_junit(args.output_junit, cases)
         print(f"{args.family} allocation qualification: {len(cases)} cases passed; zero failures, errors or skips.")
 
 

@@ -183,11 +183,11 @@ namespace Horo::Editor {
         const std::filesystem::path projectRoot = NormalizeAbsolute(m_viewModel.projectRoot);
         const auto rollback = [this, &moved, &projectRoot]() {
             const bool rollbackComplete = RollbackPathMoves(moved);
-            static_cast<void>(Assets::RebuildAssetRegistry(*m_mutableAssetRegistry, projectRoot, Assets::AssetRegistryOpenMode::Edit));
+            static_cast<void>(RebuildProjectAssetRegistry(projectRoot));
             SetContentBrowserRollbackError(rollbackComplete, "workspace.content_browser.operation.registry_failed");
             return false;
         };
-        if (auto rebuilt = Assets::RebuildAssetRegistry(*m_mutableAssetRegistry, projectRoot, Assets::AssetRegistryOpenMode::Edit);
+        if (auto rebuilt = RebuildProjectAssetRegistry(projectRoot);
             rebuilt.HasError() || rebuilt.Value().status != Assets::AssetRegistryBuildStatus::Complete) {
             return rollback();
         }
@@ -347,11 +347,11 @@ namespace Horo::Editor {
                 std::error_code error;
                 std::filesystem::remove_all(trashDirectory, error);
             }
-            static_cast<void>(Assets::RebuildAssetRegistry(*m_mutableAssetRegistry, plan.projectRoot, Assets::AssetRegistryOpenMode::Edit));
+            static_cast<void>(RebuildProjectAssetRegistry(plan.projectRoot));
             SetContentBrowserRollbackError(rollbackComplete, "workspace.content_browser.operation.registry_failed");
             return false;
         };
-        if (auto rebuilt = Assets::RebuildAssetRegistry(*m_mutableAssetRegistry, plan.projectRoot, Assets::AssetRegistryOpenMode::Edit);
+        if (auto rebuilt = RebuildProjectAssetRegistry(plan.projectRoot);
             rebuilt.HasError() || rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Failed) {
             return rollback();
         }

@@ -205,9 +205,12 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Admit(const SceneTransactionContext &context) const;
     };
 
+    /** @brief Hard canonical object fingerprint allocation ceiling; transaction-wide budgets cannot raise it. */
+    inline constexpr std::size_t MaximumSceneObjectFingerprintBytes = 16U * 1024U * 1024U;
+
     /** @brief Fingerprint canonical authored object content, excluding its separate inert ownership annotation.
      * @param object Complete typed authored value.
-     * @param maximumBytes Finite canonical preparation ceiling.
+     * @param maximumBytes Positive canonical preparation ceiling, no greater than MaximumSceneObjectFingerprintBytes.
      * @return Stable content digest or original Scene codec failure.
      */
     [[nodiscard]] Result<Sha256Digest> FingerprintSceneObjectContent(const SceneSource::SceneObjectSnapshot &object,

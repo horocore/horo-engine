@@ -3,6 +3,7 @@
 #include "Horo/Editor/ActivityBarLayout.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
+#include "Horo/Editor/PhysicsInspector.h"
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
@@ -113,6 +114,7 @@ namespace Horo::Editor {
         UpdateCameraComponent,
         UpdateLightComponent,
         UpdateTriggerVolumeComponent,
+        UpdatePhysicsComponents,
         UpdateAudioSourceComponent,
         UpdateObjectEditorState,
         AddComponentToObject,
@@ -224,6 +226,13 @@ namespace Horo::Editor {
         }
     };
 
+    /** @brief One detached Physics gesture, fenced to the exact projected owner state. */
+    struct PhysicsInspectorRequest final {
+        SceneTransactionContext context;
+        std::uint64_t selectionRevision{};
+        PhysicsInspectorValues values;
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
@@ -244,6 +253,7 @@ namespace Horo::Editor {
         std::optional<Runtime::CameraComponent> cameraPayload = std::nullopt;
         std::optional<Runtime::LightComponent> lightPayload = std::nullopt;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
+        std::optional<PhysicsInspectorRequest> physicsPayload;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
         std::optional<SceneObjectEditorState> editorStatePayload = std::nullopt;
         std::optional<ComponentType> componentTypePayload = std::nullopt;
@@ -304,6 +314,9 @@ namespace Horo::Editor {
         std::uint64_t inspectorApprovalRevision{};
         std::uint64_t selectionRevision{};
         std::vector<InspectorProviderApproval> inspectorApprovals;
+        SceneTransactionContext physicsContext;
+        std::uint64_t physicsSelectionRevision{};
+        std::string physicsEditError;
         std::vector<SceneObject> objects;
         std::vector<Gameplay::BehaviorDescriptor> availableBehaviors;
         std::optional<SceneObjectId> hierarchyRevealObject;

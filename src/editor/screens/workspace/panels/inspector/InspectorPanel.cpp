@@ -32,6 +32,7 @@ namespace Horo::Editor {
     void InspectorPanel::OnDetach() {
         m_contributions.reset();
         m_nameInputContext.Reset();
+        m_physicsSession.Clear();
         m_inputRouter = nullptr;
     }
 
@@ -78,6 +79,7 @@ namespace Horo::Editor {
                     DrawAddComponent(*selected, vm, cmd, ctx);
             }
         } else {
+            m_physicsSession.Clear();
             DrawEmptyState(cmd, ctx);
         }
 
@@ -102,6 +104,7 @@ namespace Horo::Editor {
                                            context.localization.Get("editor", "workspace.inspector.name_invalid"), context.theme.fonts,
                                            6.0F, 4.0F);
         } else {
+            m_physicsSession.Clear();
             m_nameInputContext.Reset();
             DrawMultiSelectionTitle(m_editSession.Draft().selectedObjectCount, context);
         }
@@ -119,7 +122,7 @@ namespace Horo::Editor {
     }
 
     void InspectorPanel::DrawAddComponent(const SceneObject &object, const EditorWorkspaceViewModel &viewModel,
-                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) const {
+                                          EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         const std::string addComponentLabel =
             "+  " + context.localization.Get("editor", "workspace.inspector.add_component") + "###InspectorAddComponent";
         ImGui::PushStyleColor(ImGuiCol_Border, Theme::Accent());
@@ -138,6 +141,7 @@ namespace Horo::Editor {
 
         if (Ui::BeginMenuPopup("AddComponentPopup")) {
             DrawAddComponentMenuItems(object, viewModel, command, context);
+            DrawAddPhysicsComponents(object, viewModel, context);
             Ui::EndMenuPopup();
         }
     }

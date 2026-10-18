@@ -12,11 +12,13 @@ namespace Horo::Editor {
     /** @copydoc SettingsModal::SettingsModal */
     SettingsModal::SettingsModal(const EditorGuiContext &context, EditorSettingsService &settings, const std::uintptr_t logo,
                                  Extensions::ExtensionInventory *extensionInventory,
-                                 Extensions::ExtensionMarketplaceService *extensionMarketplace,
-                                 const NavigationProjectSettingsSession *navigationSettings, SettingsModalPagePresentation pages)
+                                 Extensions::ExtensionMarketplaceService *extensionMarketplace, SettingsModalProjectOpening projects,
+                                 SettingsModalPagePresentation pages)
         : m_context(context), m_settings(settings), m_logo(logo), m_extensionInventory(extensionInventory),
           m_extensionMarketplace(extensionMarketplace),
-          m_navigationSettings(navigationSettings ? navigationSettings->Borrow() : NavigationProjectSettingsSessionBorrow{}) {
+          m_navigationSettings(projects.navigation ? projects.navigation->Borrow() : NavigationProjectSettingsSessionBorrow{}) {
+        m_draft.collision.owner = std::move(projects.collision);
+        m_draft.collision.error = std::move(projects.collisionError);
         m_pagesUnsupported = pages.host && !pages.theme;
         if (pages.host && pages.theme)
             m_extensionPages = std::make_shared<EditorPageView>(context, std::move(pages.host), std::move(pages.theme));
@@ -54,6 +56,13 @@ namespace Horo::Editor {
         m_draft.navigationSettings = m_navigationSettings.Resolve() ? m_navigationSettings : NavigationProjectSettingsSessionBorrow{};
         m_draft.extensionInventory = m_extensionInventory;
         m_draft.extensionMarketplace = m_extensionMarketplace;
+        if (const auto owner = m_draft.collision.owner.lock()) {
+            const auto snapshot = owner->Snapshot();
+            if (snapshot.HasError())
+                m_draft.collision.error = snapshot.ErrorValue();
+            else
+                m_draft.collision.input = snapshot.Value()->Input();
+        }
         const auto rev = m_settings.Snapshot().revision;
         m_logCtx =
             std::make_unique<Log::LogContext>("modal", "settings", "modal_id", std::to_string(kModalId), "revision", std::to_string(rev));
@@ -86,6 +95,7 @@ namespace Horo::Editor {
                 EditorSettingsChangedEvent{m_settings.Snapshot().revision, SettingsChangePhase::Reverted, SettingsDomain::All});
             m_revertedPublished = true;
         }
+        m_draft.collision = {};
         m_draft.navigationSettings = {};
         m_draft.navigationDraft.reset();
         m_navigationSettings = {};

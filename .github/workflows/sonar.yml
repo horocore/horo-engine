@@ -20,7 +20,7 @@ jobs:
   sonar:
     name: SonarCloud
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 180
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     env:
       CCACHE_BASEDIR: ${{ github.workspace }}
@@ -86,6 +86,7 @@ jobs:
 
       - name: Install coverage tools
         run: |
+          sudo apt-get install -y --no-install-recommends gdb
           python3 -m venv /tmp/horo-coverage
           /tmp/horo-coverage/bin/pip install --disable-pip-version-check --no-cache-dir \
             coverage==7.6.10 fastcov==1.17 pytest==8.3.4 defusedxml==0.7.1
@@ -116,7 +117,82 @@ jobs:
           key: ${{ steps.compiler.outputs.cache-primary-key }}
 
       - name: Run C++ coverage tests
+        id: cpp_coverage
         run: xvfb-run -a ctest --preset sonar
+
+      - name: Diagnose collision allocation abort after coverage failure
+        if: ${{ failure() && !cancelled() && steps.cpp_coverage.outcome == 'failure' }}
+        continue-on-error: true
+        env:
+          DEBUGINFOD_URLS: ''
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          evidence=build/sonar/collision-allocation-diagnostic
+          mkdir -p "$evidence"
+          test_name='Collision history publication exhaustively rolls back every one-shot allocation failure'
+          if ! grep -Fq "$test_name" build/sonar/Testing/Temporary/LastTestsFailed.log; then
+            echo 'The collision allocation case did not fail; diagnostic rerun not requested.' > "$evidence/status.txt"
+            exit 0
+          fi
+          git rev-parse HEAD > "$evidence/head.txt"
+          printf '%s\n' "$PR_HEAD_SHA" > "$evidence/pr-head.txt"
+          sha256sum \
+            tests/unit/editor/CollisionProjectSettingsSessionTests.cpp \
+            tests/support/AllocationProbe.cpp \
+            src/editor/physics/CollisionProjectSettingsSession.cpp \
+            src/editor/physics/CollisionProjectSettingsSessionState.h \
+            src/editor/physics/CollisionProjectSettingsCommands.cpp \
+            src/editor/physics/ProjectCollisionSettingsStore.cpp \
+            include/Horo/Foundation/Paths.h \
+            src/runtime/assets/registry/AssetRegistry.cpp > "$evidence/source-sha256.txt"
+          if ! command -v gdb; then
+            echo 'Diagnostic unavailable: gdb is missing.' > "$evidence/status.txt"
+            exit 2
+          fi
+          if ! command -v timeout; then
+            echo 'Diagnostic unavailable: timeout is missing.' > "$evidence/status.txt"
+            exit 2
+          fi
+          if [ ! -x build/sonar/tests/HoroProjectCollisionSettingsTests ]; then
+            echo 'Diagnostic unavailable: built collision test binary is missing.' > "$evidence/status.txt"
+            exit 2
+          fi
+          gdb --version > "$evidence/gdb-version.txt"
+          cat > "$evidence/commands.gdb" <<'GDB'
+          set pagination off
+          set confirm off
+          set print thread-events off
+          set debuginfod enabled off
+          catch throw
+          commands
+            silent
+            echo \n=== C++ throw: bounded stack ===\n
+            bt 16
+            continue
+          end
+          handle SIGABRT stop print nopass
+          run
+          thread apply all bt 24
+          quit
+          GDB
+          status=0
+          timeout --kill-after=5s 60s gdb --batch --quiet \
+            -x "$evidence/commands.gdb" --args build/sonar/tests/HoroProjectCollisionSettingsTests \
+            "$test_name" > "$evidence/gdb.log" 2>&1 || status=$?
+          printf 'Bounded debugger exit: %s\nOriginal C++ coverage failure remains authoritative.\n' "$status" > "$evidence/status.txt"
+          cat "$evidence/status.txt"
+          cat "$evidence/gdb.log"
+          exit "$status"
+
+      - name: Upload collision allocation diagnostic
+        if: ${{ failure() && !cancelled() && steps.cpp_coverage.outcome == 'failure' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: collision-allocation-${{ github.run_id }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: build/sonar/collision-allocation-diagnostic/
 
       - name: Run Python coverage tests
         run: |
