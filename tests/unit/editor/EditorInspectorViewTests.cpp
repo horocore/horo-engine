@@ -10,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <imgui.h>
+#include <limits>
 
 namespace Horo::Editor::Tests {
     namespace {
@@ -89,13 +90,13 @@ namespace Horo::Editor::Tests {
 
         /** @brief Sends a complete actual button gesture through the same GUI frame owner, without manufacturing an approval. */
         void Click(ImVec2 point, InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner, const Gui &gui,
-                   EditorWorkspaceViewCommandData &command) {
+                   EditorWorkspaceViewCommandData &command, const EditorWorkspaceViewModel *snapshot = nullptr) {
             auto &io = ImGui::GetIO();
             io.AddMousePosEvent(point.x, point.y);
             io.AddMouseButtonEvent(0, true);
-            Frame(view, owner, gui, command);
+            Frame(view, owner, gui, command, 640, snapshot);
             io.AddMouseButtonEvent(0, false);
-            Frame(view, owner, gui, command);
+            Frame(view, owner, gui, command, 640, snapshot);
         }
     }  // namespace
 
@@ -160,6 +161,50 @@ namespace Horo::Editor::Tests {
         command.command = EditorWorkspaceViewCommand::UndoScene;
         owner.Process(command);
         CHECK(owner.Value() == 9007199254740993LL);
+    }
+
+    TEST_CASE("Inspector selection epochs discard active drafts without truncating high revision bits",
+              "[editor][inspector][view][selection]") {
+        const auto nextEpoch = GENERATE(std::uint64_t{2}, (std::uint64_t{1} << 32) + 1, std::numeric_limits<std::uint64_t>::max());
+        CAPTURE(nextEpoch);
+        InspectorControllerSupport::Fixture owner;
+        owner.Approve();
+        Gui gui;
+        InspectorContributionView view{owner.provider.host, *gui.capture.Frame()};
+        EditorWorkspaceViewCommandData command;
+        auto model = owner.controller->ViewModel();
+        model.selectionRevision = 1;
+        Frame(view, owner, gui, command, 640, &model);
+        auto geometry = Frame(view, owner, gui, command, 640, &model);
+        Click(geometry.center, view, owner, gui, command, &model);
+        auto &io = ImGui::GetIO();
+        const auto modifier = io.ConfigMacOSXBehaviors ? ImGuiMod_Super : ImGuiMod_Ctrl;
+        io.AddKeyEvent(modifier, true);
+        io.AddKeyEvent(ImGuiKey_A, true);
+        Frame(view, owner, gui, command, 640, &model);
+        io.AddKeyEvent(ImGuiKey_A, false);
+        io.AddKeyEvent(modifier, false);
+        io.AddInputCharactersUTF8("77");
+        Frame(view, owner, gui, command, 640, &model);
+        REQUIRE(command.command == EditorWorkspaceViewCommand::None);
+        model.selectionRevision = nextEpoch;
+        geometry = Frame(view, owner, gui, command, 640, &model);
+        Click(geometry.dismiss, view, owner, gui, command, &model);
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
+        CHECK(owner.Value() == 9007199254740993LL);
+        Click(geometry.center, view, owner, gui, command, &model);
+        io.AddKeyEvent(modifier, true);
+        io.AddKeyEvent(ImGuiKey_A, true);
+        Frame(view, owner, gui, command, 640, &model);
+        io.AddKeyEvent(ImGuiKey_A, false);
+        io.AddKeyEvent(modifier, false);
+        io.AddInputCharactersUTF8("88");
+        Frame(view, owner, gui, command, 640, &model);
+        Click(geometry.dismiss, view, owner, gui, command, &model);
+        REQUIRE(command.command == EditorWorkspaceViewCommand::UpdateInspectorBehaviorField);
+        REQUIRE(command.inspectorEdit);
+        CHECK(command.inspectorEdit->selectionRevision == nextEpoch);
+        CHECK(std::get<std::int64_t>(command.inspectorEdit->value) == 88);
     }
 
     TEST_CASE("Actual inspector boolean decimal and UTF8 controls preserve exact owner values", "[editor][inspector][view][scalar]") {

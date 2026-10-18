@@ -7,8 +7,10 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <imgui.h>
+#include <limits>
 
 namespace Horo::Editor {
     using namespace Extensions;
@@ -185,8 +187,9 @@ namespace Horo::Editor {
         if (!Prepare(entry))
             return;
         ImGui::PushID(entry.contribution.context.Surface().id.c_str());
-        const auto *epoch = reinterpret_cast<const char *>(&selectionRevision_);
-        ImGui::PushID(epoch, epoch + sizeof(selectionRevision_));
+        std::array<char, std::numeric_limits<std::uint64_t>::digits10 + 1> epoch{};
+        const auto encoded = std::to_chars(epoch.data(), epoch.data() + epoch.size(), selectionRevision_);
+        ImGui::PushID(epoch.data(), encoded.ptr);
         const auto origin = ImGui::GetCursorScreenPos();
         float extra{};
         float bottom{};

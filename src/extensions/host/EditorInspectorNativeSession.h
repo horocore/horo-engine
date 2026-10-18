@@ -12,8 +12,8 @@ namespace Horo::Extensions {
         }
     };
 
-    /** @brief Copies inert native declarations into the current module load transaction; no live surface is published. */
-    HoroExtensionStatus RegisterExternalEditorInspector(void *context, const HoroEditorInspectorDescriptor *descriptor) noexcept;
+    /** @brief Copies inert native declarations through the C ABI callback into the current module load transaction. */
+    extern "C" HoroExtensionStatus RegisterExternalEditorInspector(void *context, const HoroEditorInspectorDescriptor *descriptor) noexcept;
     /** @brief Proves exact manifest-owned declarations before committing any native inspector. */
     [[nodiscard]] Result<void> ValidateEditorInspectorClaims(const AssetImporterRegistrationSession &registration);
     /** @brief Publishes every declaration under existing whole-activation rollback ownership. */

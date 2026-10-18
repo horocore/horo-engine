@@ -135,7 +135,8 @@ namespace Horo::Extensions {
     }  // namespace
 
     /** @copydoc RegisterExternalEditorInspector */
-    HoroExtensionStatus RegisterExternalEditorInspector(void *context, const HoroEditorInspectorDescriptor *descriptor) noexcept {
+    extern "C" HoroExtensionStatus RegisterExternalEditorInspector(void *context,
+                                                                   const HoroEditorInspectorDescriptor *descriptor) noexcept {
         if (!context)
             return HORO_EXTENSION_ERROR_INVALID_ARGS;
         auto &load = *static_cast<AssetImporterRegistrationSession *>(context);
