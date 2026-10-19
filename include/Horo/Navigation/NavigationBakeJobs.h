@@ -22,6 +22,13 @@
 namespace Horo::Navigation {
     struct NavigationBakeJobSnapshot;
 
+    /** @brief Closed execution contracts; validation owns neither builder work nor publication acknowledgement. */
+    enum class NavigationBakeExecutionMode : std::uint8_t {
+        BuildAndPublish,
+        ValidateOnly,
+        Count,
+    };
+
     namespace NavigationBakeJobDetail {
         struct SharedState;
     }
@@ -95,11 +102,13 @@ namespace Horo::Navigation {
         NavigationBakeJobBudget budget;
         std::vector<NavigationBakeWorkItem> work;
         CancellationToken parentCancellation;
-        std::optional<OperationId> queuedOperation; /**< Host-owned queued operation whose cancellation uses parentCancellation. */
+        std::optional<OperationId>
+            queuedOperation; /**< Host-owned queued operation with matching Cook/Validation kind; cancellation uses parentCancellation. */
         std::shared_ptr<NavigationBakePublicationReceipt>
             publicationReceipt; /**< Optional fresh receipt for exactly one final Publication item. */
         std::function<void(const NavigationBakeJobSnapshot &)>
             observe; /**< Optional non-throwing owned checkpoint consumer; invoked outside locks after store updates. */
+        NavigationBakeExecutionMode execution{NavigationBakeExecutionMode::BuildAndPublish}; /**< Required stage/publication contract. */
     };
 
     /** @brief Immutable polling projection of one accepted navigation bake. */
@@ -114,6 +123,7 @@ namespace Horo::Navigation {
         std::optional<NavigationBakeBudgetResource> limitingResource;
         std::optional<Error> terminalError; /**< Failure cause, or a postcommit diagnostic when publication already succeeded. */
         std::uint64_t revision{1};
+        NavigationBakeExecutionMode execution{NavigationBakeExecutionMode::BuildAndPublish}; /**< Original admitted operation mode. */
 
         /** @brief Reports whether no further snapshot mutation is possible. @return True for a terminal state. */
         [[nodiscard]] bool IsTerminal() const noexcept;
