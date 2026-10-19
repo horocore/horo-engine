@@ -2,6 +2,7 @@
 
 #include "GameplayBuildInputs.h"
 #include "GameplayBuildInvocation.h"
+#include "GameplayBuildLibraries.h"
 #include "Horo/Application/CompilerDiagnosticParser.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Platform.h"
@@ -646,14 +647,20 @@ namespace Horo::Application {
                                                  std::optional<std::string> &retryHash) {
             const std::filesystem::path buildRoot = session->request.projectRoot / ".horo/local/build/gameplay-debug";
             const std::filesystem::path candidateManifest = buildRoot / "candidate_gameplay_module.json";
+            if (const auto libraries =
+                    Detail::PrepareGameplayLibraries(session->request, buildRoot, *state.files, session->cancellation.Token());
+                libraries.HasError())
+                return Result<bool>::Failure(libraries.ErrorValue());
             if (Result<void> configured = RunPhase(state, session, GameplayBuildState::Configuring, "configure",
                                                    BuildConfigureArguments(session->request, buildRoot, candidateManifest),
                                                    session->request.timeouts.configure, budget);
                 configured.HasError())
                 return Result<bool>::Failure(configured.ErrorValue());
+            if (const auto consumed = Detail::ValidateGameplayLibraryConsumption(session->request, buildRoot); consumed.HasError())
+                return Result<bool>::Failure(consumed.ErrorValue());
             if (Result<void> built = RunPhase(state, session, GameplayBuildState::Building, "build",
-                                              {"--build", buildRoot.string(), "--target", "HoroGameGameplay", "--config",
-                                               session->request.environment.configuration, "--parallel"},
+                                              {"--build", Detail::GameplayLibraryPathToUtf8(buildRoot), "--target", "HoroGameGameplay",
+                                               "--config", session->request.environment.configuration, "--parallel"},
                                               session->request.timeouts.build, budget);
                 built.HasError())
                 return Result<bool>::Failure(built.ErrorValue());

@@ -1,5 +1,6 @@
 #include "GameplayBuildInputs.h"
 
+#include "GameplayBuildLibraries.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameModule.h"
@@ -159,6 +160,12 @@ namespace Horo::Application::Detail {
             const std::filesystem::path unresolved{relativeInput};
             if (unresolved.is_absolute())
                 return Result<bool>::Failure(MakeError(InvalidRequest, "Gameplay build input must be project-relative."));
+            // Imported bytes are immutable archive inputs hashed through the sealed source-library selection.
+            // Retired library cache paths in a previous configure manifest must not become project-owned source inputs.
+            if (const auto relative = unresolved.lexically_normal().generic_string();
+                relative.starts_with(".horo/local/build/gameplay-debug/imported/") ||
+                relative == ".horo/local/build/gameplay-debug/gameplay_source_libraries.json")
+                continue;
             const std::filesystem::path canonicalInput = std::filesystem::weakly_canonical(root / unresolved, error);
             if (error || !HasPathPrefix(root, canonicalInput) || !std::filesystem::is_regular_file(canonicalInput, error))
                 return Result<bool>::Failure(
@@ -231,6 +238,10 @@ namespace Horo::Application::Detail {
         if (error || !std::filesystem::is_directory(root))
             return Result<std::string>::Failure(MakeError(InvalidRequest, "Project root is unavailable."));
 
+        const auto libraryIdentity = GameplayLibraryInputIdentity(request);
+        if (libraryIdentity.HasError())
+            return Result<std::string>::Failure(libraryIdentity.ErrorValue());
+
         std::vector<std::filesystem::path> inputs;
         if (const std::filesystem::path cmakeLists = root / "CMakeLists.txt"; std::filesystem::is_regular_file(cmakeLists, error))
             inputs.push_back(cmakeLists);
@@ -248,7 +259,8 @@ namespace Horo::Application::Detail {
         Result<std::string> compilerHash = ResolveCompilerHash(request);
         if (compilerHash.HasError())
             return Result<std::string>::Failure(compilerHash.ErrorValue());
-        return HashBuildInputs(root, inputs, BuildInputHashPrefix(request, compilerHash.Value(), inputStructureHash.Value()));
+        return HashBuildInputs(root, inputs,
+                               BuildInputHashPrefix(request, compilerHash.Value(), inputStructureHash.Value()) + libraryIdentity.Value());
     }
 
     /** @copydoc ReadSuccessfulHash */

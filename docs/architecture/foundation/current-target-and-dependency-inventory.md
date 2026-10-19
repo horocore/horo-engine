@@ -109,7 +109,7 @@ consumer. Existing callers require no migration; new built-in node consumers lin
 | `HoroGameplayRuntime` (`HoroEngine::GameplayRuntime`) | Always | Owns `Gameplay/BehaviorRegistry.h` and `Gameplay/BehaviorRuntime.h` and authoritative behavior execution. | GameplayApi, RuntimeScene (public) |
 | `HoroGameplayModuleHost` (`HoroEngine::GameplayModuleHost`) | Always | Owns `Gameplay/GameModuleHost.h` and dynamic project-module loading. Native dynamic loading stays private. | GameplayRuntime (public), Platform (private) |
 | `HoroGameplayLua` (`HoroEngine::GameplayLua`) | Always | Owns `Gameplay/LuaBehavior.h` and the concrete Lua behavior adapter. Lua and JSON dependencies are private. | GameplayRuntime (public) |
-| `HoroGameplayBuild` (`HoroEngine::GameplayBuild`) | Always | Owns `Application/GameplayBuildService.h` and project gameplay build orchestration. | Foundation (public), GameplayModuleHost and Platform (private) |
+| `HoroGameplayBuild` (`HoroEngine::GameplayBuild`) | Always | Owns `Application/GameplayBuildService.h` and project gameplay build orchestration, including explicit installed source-library inputs. | Foundation (public), PackageSecurity, GameplayModuleHost, Platform and PackageContentStagingInternal (private) |
 | `HoroExtensions` (`HoroEngine::Extensions`) | Always | Owns all current `Extensions/**` headers and combines ABI, manifest, inventory, host, marketplace, and external asset-import adapter responsibilities. Third-party transport/archive/parser dependencies are private. | Foundation, Platform, Assets (public) |
 
 ### Scene And Rendering

@@ -21,6 +21,10 @@ namespace Horo {
     class IExternalProcessRunner;
 }  // namespace Horo
 
+namespace Horo::Packages {
+    class GameplaySourceLibrarySet;
+}
+
 namespace Horo::Application {
     using GameplayBuildSessionId = std::uint64_t;
 
@@ -63,6 +67,7 @@ namespace Horo::Application {
         std::filesystem::path projectRoot;
         GameplayBuildEnvironment environment;
         GameplayBuildTimeoutPolicy timeouts;
+        std::shared_ptr<const Packages::GameplaySourceLibrarySet> sourceLibraries; /**< Optional owned immutable source selections. */
     };
 
     /** @brief Owned thread-safe projection of one build session. */

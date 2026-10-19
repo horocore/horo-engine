@@ -1,5 +1,7 @@
 #include "GameplayBuildInvocation.h"
 
+#include "GameplayBuildLibraries.h"
+
 #include <format>
 
 namespace Horo::Application::Detail {
@@ -16,15 +18,18 @@ namespace Horo::Application::Detail {
                                                                    const std::filesystem::path &candidateManifest) {
         std::vector<std::string> arguments{
             "-S",
-            request.projectRoot.string(),
+            GameplayLibraryPathToUtf8(request.projectRoot),
             "-B",
-            buildRoot.string(),
-            std::format("-DHoroEngineGameplay_DIR={}", request.environment.gameplaySdkPackage.string()),
+            GameplayLibraryPathToUtf8(buildRoot),
+            std::format("-DHoroEngineGameplay_DIR={}", GameplayLibraryPathToUtf8(request.environment.gameplaySdkPackage)),
             std::format("-DCMAKE_BUILD_TYPE={}", request.environment.configuration),
-            std::format("-DHORO_GAMEPLAY_MANIFEST_OUTPUT={}", candidateManifest.string()),
+            std::format("-DHORO_GAMEPLAY_MANIFEST_OUTPUT={}", GameplayLibraryPathToUtf8(candidateManifest)),
+            std::format("-DHORO_GAMEPLAY_LIBRARY_MANIFEST={}",
+                        GameplayLibraries(request).empty() ? std::string{}
+                                                           : GameplayLibraryPathToUtf8(buildRoot / "gameplay_source_libraries.json")),
         };
         if (request.environment.cxxCompiler.has_value())
-            arguments.push_back(std::format("-DCMAKE_CXX_COMPILER={}", request.environment.cxxCompiler->string()));
+            arguments.push_back(std::format("-DCMAKE_CXX_COMPILER={}", GameplayLibraryPathToUtf8(*request.environment.cxxCompiler)));
         if (request.environment.generator.has_value()) {
             arguments.emplace_back("-G");
             arguments.push_back(*request.environment.generator);
@@ -38,7 +43,7 @@ namespace Horo::Application::Detail {
             arguments.push_back(*request.environment.generatorToolset);
         }
         if (request.environment.toolchainFile.has_value())
-            arguments.push_back(std::format("-DCMAKE_TOOLCHAIN_FILE={}", request.environment.toolchainFile->string()));
+            arguments.push_back(std::format("-DCMAKE_TOOLCHAIN_FILE={}", GameplayLibraryPathToUtf8(*request.environment.toolchainFile)));
         return arguments;
     }
 

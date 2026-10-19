@@ -250,6 +250,7 @@ horo_configure_target_header_boundary(HoroPackages PUBLIC_HEADERS
     Horo/Packages/PackageFileManifest.h
 )
 horo_configure_target_header_boundary(HoroPackageSecurity PUBLIC_HEADERS
+    Horo/Packages/GameplaySourceLibrary.h
     Horo/Packages/PackageInstall.h
     Horo/Packages/PackageInstallErrors.h
     Horo/Packages/PackageRestore.h
