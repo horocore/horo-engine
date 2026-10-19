@@ -10,14 +10,19 @@ namespace Horo::Navigation::Internal {
     namespace {
         class FingerprintBuilder final {
         public:
-            FingerprintBuilder() noexcept {
+            explicit FingerprintBuilder(bool scoped) noexcept {
                 static constexpr std::array<std::byte, 28> Domain{
                     std::byte{0x68}, std::byte{0x6f}, std::byte{0x72}, std::byte{0x6f}, std::byte{0x2e}, std::byte{0x6e}, std::byte{0x61},
                     std::byte{0x76}, std::byte{0x2e}, std::byte{0x62}, std::byte{0x61}, std::byte{0x6b}, std::byte{0x65}, std::byte{0x2e},
                     std::byte{0x69}, std::byte{0x6e}, std::byte{0x70}, std::byte{0x75}, std::byte{0x74}, std::byte{0x2e}, std::byte{0x76},
                     std::byte{0x31}, std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},    std::byte{1},
                 };
-                digest_ = ComputeSha256(std::span<const std::byte>{Domain});
+                auto domain = Domain;
+                if (scoped) {
+                    domain[21] = std::byte{0x32};
+                    domain[27] = std::byte{2};
+                }
+                digest_ = ComputeSha256(std::span<const std::byte>{domain});
             }
 
             void AddU64(const std::uint64_t value) noexcept {
@@ -102,6 +107,9 @@ namespace Horo::Navigation::Internal {
         void Add(FingerprintBuilder &builder, const std::span<const NavigationTileBuildPartition> partitions) noexcept {
             builder.AddU64(partitions.size());
             for (const auto &partition : partitions) {
+                if (partition.scope.IsSceneScoped())
+                    for (const auto byte : partition.scope.SceneBytes())
+                        builder.AddU32(byte);
                 builder.AddU64(partition.profile.Value());
                 builder.AddU64(partition.surface.Value());
                 builder.AddU64(partition.filter.Value());
@@ -132,6 +140,9 @@ namespace Horo::Navigation::Internal {
         void Add(FingerprintBuilder &builder, const std::span<const NavigationTileBuildModifier> modifiers) noexcept {
             builder.AddU64(modifiers.size());
             for (const auto &modifier : modifiers) {
+                if (modifier.scope.IsSceneScoped())
+                    for (const auto byte : modifier.scope.SceneBytes())
+                        builder.AddU32(byte);
                 builder.AddU64(modifier.profile.Value());
                 builder.AddU64(modifier.surface.Value());
                 builder.AddU64(modifier.id.Value());
@@ -150,7 +161,10 @@ namespace Horo::Navigation::Internal {
                                              const std::span<const NavigationTileBuildPartition> partitions,
                                              const std::span<const NavigationTileBuildTriangle> triangles,
                                              const std::span<const NavigationTileBuildModifier> modifiers) noexcept {
-        FingerprintBuilder builder;
+        const bool scoped = std::ranges::any_of(partitions, [](const auto &partition) {
+            return partition.scope.IsSceneScoped();
+        });
+        FingerprintBuilder builder{scoped};
         Add(builder, revisions);
         Add(builder, profiles);
         Add(builder, areas);

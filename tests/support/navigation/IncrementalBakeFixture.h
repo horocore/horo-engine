@@ -25,6 +25,9 @@ namespace Horo::Navigation::TestSupport {
                                                                    .cellSizeMeters = 0.5F,
                                                                    .cellHeightMeters = 0.2F}};
         NavigationTileBakeCompatibility compatibility{Digest(1), Digest(2), Digest(3)};
+        bool hasContribution{true};
+        std::vector<NavigationBakeScopeId> scopes{NavigationBakeScopeId{}};
+        std::vector<SurfaceId> surfaces{Id<SurfaceId>(1)};
         std::vector<Math::Vec3> vertices;
         std::vector<NavigationSourceTriangleInput> triangles;
         std::vector<NavigationBakeModifierInput> modifiers;
@@ -51,35 +54,58 @@ namespace Horo::Navigation::TestSupport {
                                                               .includedFlags = {.bits = 1}}};
         }
 
-        [[nodiscard]] std::shared_ptr<const NavigationBakeInputSnapshot> Input() const {
+        [[nodiscard]] Result<NavigationBakeInputSnapshot> TryInput() const {
             const auto areas = Areas();
             const auto filters = Filters();
             auto registry = NavigationAreaRegistry::Create(areas, filters).Value();
-            const std::array contributions{NavigationSourceContributionInput{.producer = Id<NavigationSourceProducerId>(1),
-                                                                             .contribution = Id<NavigationSourceContributionId>(1),
-                                                                             .revision = Id<NavigationSourceRevision>(1),
-                                                                             .contentDigest = Digest(10),
-                                                                             .vertices = vertices,
-                                                                             .triangles = triangles}};
+            std::vector<NavigationSourceContributionInput> contributions;
+            REQUIRE((hasContribution || surfaces.empty()));
+            if (hasContribution)
+                contributions.push_back({.producer = Id<NavigationSourceProducerId>(1),
+                                         .contribution = Id<NavigationSourceContributionId>(1),
+                                         .revision = Id<NavigationSourceRevision>(1),
+                                         .contentDigest = Digest(10),
+                                         .vertices = vertices,
+                                         .triangles = triangles});
             auto geometry = NavigationSourceGeometrySnapshot::Create(revisions.geometry, contributions).Value();
-            const std::array surfaces{NavigationBakeSurfaceInput{.surface = Id<SurfaceId>(1),
-                                                                 .profile = profile.id,
-                                                                 .filter = Id<NavigationFilterId>(1),
-                                                                 .producer = contributions[0].producer,
-                                                                 .contribution = contributions[0].contribution}};
+            std::vector<NavigationBakeSurfaceInput> bindings;
+            for (const auto scope : scopes)
+                for (const auto surface : surfaces)
+                    bindings.push_back({.surface = surface,
+                                        .profile = profile.id,
+                                        .filter = Id<NavigationFilterId>(1),
+                                        .producer = contributions[0].producer,
+                                        .contribution = contributions[0].contribution,
+                                        .scope = scope});
             auto captured =
-                NavigationBakeInputSnapshot::Create(revisions, registry, std::span{&profile, 1}, surfaces, modifiers, std::move(geometry));
+                NavigationBakeInputSnapshot::Create(revisions, registry, std::span{&profile, 1}, bindings, modifiers, std::move(geometry));
+            return captured;
+        }
+
+        [[nodiscard]] std::shared_ptr<const NavigationBakeInputSnapshot> Input() const {
+            auto captured = TryInput();
             REQUIRE(captured.HasValue());
             return std::make_shared<const NavigationBakeInputSnapshot>(std::move(captured).Value());
         }
 
         [[nodiscard]] std::vector<NavigationBakeTile> Tiles() const {
             std::vector<NavigationBakeTile> tiles;
-            for (int x = 0; x < 4; ++x)
-                tiles.push_back({.key = {.profile = profile.id, .surface = Id<SurfaceId>(1), .tile = {.x = x}},
-                                 .bounds = {{static_cast<float>(x) * 8.0F, -1, 0}, {static_cast<float>(x + 1) * 8.0F, 3, 8}},
-                                 .tileSizeMeters = 8});
+            for (const auto scope : scopes)
+                for (const auto surface : surfaces)
+                    for (int x = 0; x < 4; ++x)
+                        tiles.push_back({.key = {.profile = profile.id, .surface = surface, .tile = {.x = x}, .scope = scope},
+                                         .bounds = {{static_cast<float>(x) * 8.0F, -1, 0}, {static_cast<float>(x + 1) * 8.0F, 3, 8}},
+                                         .tileSizeMeters = 8});
             return tiles;
+        }
+
+        /** @brief Complete fixture-authored catalog, deliberately independent of surviving geometry/tile counts. */
+        [[nodiscard]] std::vector<NavigationBakeSurfaceKey> SurfaceCatalog() const {
+            std::vector<NavigationBakeSurfaceKey> catalog;
+            for (const auto scope : scopes)
+                for (const auto surface : surfaces)
+                    catalog.emplace_back(surface, scope);
+            return catalog;
         }
 
         void ExcludeBorder(const float x = 8) {
@@ -88,12 +114,27 @@ namespace Horo::Navigation::TestSupport {
                           .profile = profile.id,
                           .mode = NavigationBakeModifierMode::Exclude,
                           .area = Id<NavigationAreaId>(1),
-                          .localBounds = {{x - 0.5F, -1, -1}, {x + 0.5F, 3, 9}}}};
+                          .localBounds = {{x - 0.5F, -1, -1}, {x + 0.5F, 3, 9}},
+                          .scope = scopes.front()}};
+            revisions.scene = Id<NavigationSceneDocumentRevision>(revisions.scene.Value() + 1);
+            revisions.requestGeneration = Id<NavigationBakeRequestGeneration>(revisions.requestGeneration.Value() + 1);
+        }
+
+        /** @brief Removes the complete source/surface closure and advances its owner revisions. */
+        void RemoveSources() {
+            hasContribution = false;
+            surfaces.clear();
+            vertices.clear();
+            triangles.clear();
+            modifiers.clear();
+            revisions.geometry = Id<NavigationSourceSnapshotRevision>(revisions.geometry.Value() + 1);
             revisions.scene = Id<NavigationSceneDocumentRevision>(revisions.scene.Value() + 1);
             revisions.requestGeneration = Id<NavigationBakeRequestGeneration>(revisions.requestGeneration.Value() + 1);
         }
 
         [[nodiscard]] std::vector<NavigationSourceObservation> Observations() const {
+            if (!hasContribution)
+                return {};
             return {{.producer = Id<NavigationSourceProducerId>(1),
                      .contribution = Id<NavigationSourceContributionId>(1),
                      .revision = Id<NavigationSourceRevision>(1),

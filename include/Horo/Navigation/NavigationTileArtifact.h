@@ -83,7 +83,7 @@ namespace Horo::Navigation {
     };
 
     /**
-     * @brief Producer-captured compatibility and optional project authority persisted in HNS2.
+     * @brief Producer-captured compatibility and optional project authority persisted in HNS2 or the HNS3 empty-closure form.
      * @details Digests come from the exact bake request, never reconstructed from a tile dependency key.
      * A missing project profile identifies non-release content; required release admission rejects it.
      * The codec derives and validates the surface/profile closure from the immutable tiles.
@@ -102,15 +102,18 @@ namespace Horo::Navigation {
 
     /**
      * @brief Encodes a complete sorted tile closure into the core.navmesh cook payload.
-     * @param set Complete immutable candidate tiles and source fingerprint; captured provenance emits HNS2, absence emits legacy HNS1.
+     * @param set Complete immutable candidate tiles and source fingerprint; captured provenance emits HNS2 for nonempty closures and HNS3
+     * for a complete empty replacement; absence emits legacy HNS1 and cannot represent empty output.
      * @param maximumBytes Aggregate encoded byte ceiling.
      * @return Canonical portable payload or typed invalid/capacity failure.
      */
     [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeNavigationCookedTileSet(const NavigationCookedTileSet &set,
                                                                                   std::size_t maximumBytes);
     /**
-     * @brief Validates explicit HNS1 legacy or HNS2 provenance and every tile's actual-byte content identity.
-     * @details HNS1 never acquires inferred provenance. Unknown versions and incomplete HNS2 metadata fail closed.
+     * @brief Validates explicit HNS1 legacy, HNS2 provenance or HNS3 complete empty output and every tile's actual-byte content identity.
+     * @details HNS1 never acquires inferred provenance. Unknown versions and incomplete provenance fail closed. HNS1/HNS2 cannot encode an
+     * empty closure; HNS3 requires zero declared partitions and tiles, nonzero source/compatibility digests and exact optional policy.
+     * Older readers reject HNS3 as UnsupportedCookedVersion; nonempty HNS1/HNS2 bytes remain unchanged.
      * @param bytes Complete versioned tile-set payload from a verified asset envelope.
      * @param maximumBytes Aggregate encoded and retained decoded storage ceiling; one bounded tile is decoded before checking its retained
      * size.

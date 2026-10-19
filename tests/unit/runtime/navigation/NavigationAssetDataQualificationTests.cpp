@@ -76,7 +76,7 @@ namespace Horo::Navigation {
             const Assets::AssetDependency metadata{AssetTestSupport::Asset(), AssetTestSupport::Type()};
             const auto target = AssetTestSupport::Target();
             Probe::ScopedMeasurement window;
-            auto result = LoadNavMeshAsset(metadata, {1}, encoded, target, cache, limits);
+            auto result = LoadNavMeshAsset(metadata, {1}, encoded, target, cache, {.limits = limits});
             measurement = window.Snapshot();
             return result;
         }

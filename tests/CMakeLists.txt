@@ -1193,6 +1193,8 @@ add_executable(HoroNavigationApiTests
         unit/runtime/navigation/NavigationAreaRegistryTests.cpp
         unit/runtime/navigation/NavigationAgentProfileTests.cpp
         unit/runtime/navigation/NavigationBakeInputTests.cpp
+        unit/runtime/navigation/NavigationBakeScopeTests.cpp
+        unit/runtime/navigation/NavigationBakeEmptyInputTests.cpp
         unit/runtime/navigation/NavigationTileDependenciesTests.cpp
         unit/runtime/navigation/NavigationCapabilitiesTests.cpp
         unit/runtime/navigation/NavigationIdentityTests.cpp
@@ -1335,7 +1337,8 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
             HoroEngine::NavigationRecastDetour HoroEngine::Platform HoroEngine::AudioCook HoroEngine::UpdateDownload miniz)
     horo_register_catch_test(HoroNavigationNativeContentTests LABELS "unit;navigation;headless;content;package;native")
 
-    add_executable(HoroNavigationAssetLoadingTests unit/runtime/navigation/NavMeshAssetLoadingTests.cpp)
+    add_executable(HoroNavigationAssetLoadingTests unit/runtime/navigation/NavMeshAssetLoadingTests.cpp
+        unit/runtime/navigation/NavigationScopedAssetLoadingTests.cpp)
     target_compile_features(HoroNavigationAssetLoadingTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationAssetLoadingTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationAssetLoadingTests PRIVATE HoroEngine::NavigationAssetSceneIntegration HoroEngine::NavigationBakeService HoroEngine::NavigationRecastDetour)

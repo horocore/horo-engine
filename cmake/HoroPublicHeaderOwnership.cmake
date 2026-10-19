@@ -854,6 +854,7 @@ horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavMeshData.h
     Horo/Navigation/NavigationBakeSourceValidation.h
     Horo/Navigation/NavigationBakeInput.h
+    Horo/Navigation/NavigationBakeScopeId.h
     Horo/Navigation/NavigationAreas.h
     Horo/Navigation/NavigationAgentProfiles.h
     Horo/Navigation/NavigationBackend.h

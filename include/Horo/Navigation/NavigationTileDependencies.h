@@ -12,7 +12,13 @@ namespace Horo::Navigation {
         NavigationAgentProfileId profile;
         SurfaceId surface;
         NavMeshTileKey tile;
-        [[nodiscard]] constexpr auto operator<=>(const NavigationBakeTileKey &) const noexcept = default;
+        NavigationBakeScopeId scope;
+
+        [[nodiscard]] constexpr auto operator<=>(const NavigationBakeTileKey &other) const noexcept {
+            return std::tie(profile, scope, surface, tile) <=> std::tie(other.profile, other.scope, other.surface, other.tile);
+        }
+
+        [[nodiscard]] constexpr bool operator==(const NavigationBakeTileKey &) const noexcept = default;
     };
 
     /** @brief Complete host-resolved compatibility closure, independent of source edit revisions. */

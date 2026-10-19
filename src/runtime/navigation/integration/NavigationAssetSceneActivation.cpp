@@ -157,7 +157,7 @@ namespace Horo::Navigation {
             }
             const Assets::AssetDependency metadata{id, *resolved->type};
             auto loaded = LoadNavMeshAsset(metadata, scene.AssetRegistryRevision(), resolved->bytes, state.target, *state.cache,
-                                           state.limits.assets, expectation);
+                                           {.limits = state.limits.assets, .expectation = expectation});
             if (loaded.HasError())
                 return Result<std::size_t>::Failure(loaded.ErrorValue());
             assets.push_back(std::move(loaded).Value());

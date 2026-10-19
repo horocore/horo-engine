@@ -18,6 +18,7 @@ namespace Horo::Navigation {
         NavigationAgentProfileId profile;
         NavigationCookedTileDescriptor descriptor;
         std::vector<std::shared_ptr<const NavigationCookedTile>> tiles;
+        NavigationBakeScopeId scope;
     };
 
     /** @brief Verified release expectation copied from immutable promoted content and its authenticated manifest.
@@ -51,6 +52,7 @@ namespace Horo::Navigation {
             contentProvenance; /**< Owned decoded evidence; empty only for explicit legacy content. */
         std::vector<LoadedNavMeshPartition> partitions;
         std::vector<Assets::AssetPayloadLease> tileBytes;
+        NavigationBakeScopeId scope; /**< Exact requested coordinate space, never inferred from the first partition. */
     };
 
     /** @brief Bounds for the definition tile closure in addition to canonical tile decoder limits. */
@@ -60,21 +62,28 @@ namespace Horo::Navigation {
         std::size_t maximumDecodedBytes{64U * 1024U * 1024U};
     };
 
+    /** @brief Synchronous host-selected decode bounds, release evidence and exact coordinate-space selection. */
+    struct NavMeshAssetLoadOptions final {
+        NavMeshAssetLimits limits;                           /**< Qualified envelope and complete decoded-closure ceilings. */
+        const NavMeshAssetContentExpectation *expectation{}; /**< Borrowed release evidence; must outlive this synchronous load. */
+        NavigationBakeScopeId scope; /**< Exact Scene UUID or explicit non-Scene domain; never inferred or used as a fallback. */
+    };
+
     /** @brief Verify canonical record/envelope identity and complete canonical closure before admitting immutable tile allocations.
      * @param metadata Canonical identity/type resolved from the captured registry or prepared Scene dependency.
      * @param registryRevision Registry revision that resolved the record.
      * @param encoded Exact provider bytes containing the AssetCook envelope.
      * @param target Host-selected cook target; mismatches never fall back to another target.
      * @param cache AssetPipeline allocation owner, mutated only on its owner thread.
-     * @param limits Qualified envelope/canonical tile closure ceilings.
-     * @param expectation Optional exact release evidence; presence requires complete matching HNS2 before cache admission.
+     * @param options Explicit decode ceilings, optional exact release evidence and requested coordinate space.
+     * Presence of release evidence requires matching producer provenance before cache admission; no cross-scope fallback.
      * @return Fully prepared value or original envelope/typed navigation error; no world is published.
      * @note A failed capacity admission may warm the byte cache; it cannot mutate a navigation world. */
     [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetDependency &metadata,
                                                               Assets::AssetRegistryRevision registryRevision,
                                                               std::span<const std::uint8_t> encoded, const AssetCookTargetId &target,
-                                                              Assets::AssetPayloadCache &cache, const NavMeshAssetLimits &limits = {},
-                                                              const NavMeshAssetContentExpectation *expectation = nullptr);
+                                                              Assets::AssetPayloadCache &cache,
+                                                              const NavMeshAssetLoadOptions &options = {});
 
     /** @brief Borrow the host-selected metadata snapshot and provider for one synchronous load call.
      * @details Both referenced owners must remain alive throughout the call. This view owns no provider,
@@ -90,11 +99,11 @@ namespace Horo::Navigation {
      * @param target Expected cook target.
      * @param cache Owner-thread immutable allocation cache.
      * @param cancellation Provider I/O cancellation token.
-     * @param limits Qualified decode ceilings.
-     * @param expectation Optional exact release evidence, with no legacy fallback when present.
+     * @param options Qualified decode ceilings, optional exact release evidence and requested coordinate space.
+     * Missing scoped data reports NoNavigationData; release evidence never permits a legacy fallback.
      * @return Prepared value or original provider/typed navigation failure. */
     [[nodiscard]] Result<LoadedNavMeshAsset> LoadNavMeshAsset(const NavMeshAssetSource &source, Assets::AssetId id,
                                                               const AssetCookTargetId &target, Assets::AssetPayloadCache &cache,
-                                                              const CancellationToken &cancellation, const NavMeshAssetLimits &limits = {},
-                                                              const NavMeshAssetContentExpectation *expectation = nullptr);
+                                                              const CancellationToken &cancellation,
+                                                              const NavMeshAssetLoadOptions &options = {});
 }  // namespace Horo::Navigation

@@ -3091,3 +3091,39 @@ and cancellation/failure drain children before terminal publication. This runtim
 job layer performs only host-supplied work and selects no source/provider; the
 application source/cook fence and command adapters follow separately. No persisted
 format or existing caller migration changes in this additive job contract.
+
+### Scene-qualified bake content and explicit empty replacement
+
+NAV-003.10 qualifies each authored surface, modifier, build partition and tile key
+with `NavigationBakeScopeId`. Scene producers preserve the entire 128-bit Scene
+asset UUID. The default value denotes a definition-local non-Scene domain; it
+never selects a Scene. A capture cannot mix Scene and non-Scene domains. Matching
+surface/profile/grid values in different Scenes have different dependency keys,
+input fingerprints and canonical tile bytes, preventing cache aliasing.
+
+Scoped tiles use HNT2 and complete nonempty scoped closures use HNS4. The formats
+persist the full UUID and verify that the declared ordered partition table agrees
+with every decoded tile. A scoped closure requires producer provenance; mixed
+scoped/unscoped content, zero Scene identities and mismatched versions fail
+closed. Unscoped HNT1/HNS1/HNS2 encodings and their dependency domains remain
+unchanged. Readers predating these versions reject them; producers recook source
+rather than rewriting cached or promoted bytes in place.
+
+Complete source removal is represented by a validated empty input and HNS3
+provenance with zero partitions and tiles. It retains source/revision and project
+policy evidence. Empty legacy HNS1/HNS2 output is invalid. A source clipped to no
+triangles can retain its ownership observation; bound empty partitions still
+resolve their filters and retain explicit empty tile ownership. This permits a
+later complete replacement to remove old topology without inferring missing data
+from a failed or partial capture.
+
+`LoadNavMeshAsset` now receives `NavMeshAssetLoadOptions` for bounds, borrowed
+release expectation and exact requested scope. Callers migrate the former trailing
+`limits, expectation` arguments to `{.limits = limits, .expectation = expectation}`
+and rebuild. Scene-aware callers must also supply `.scope`; there is no first
+partition selection or cross-scope fallback. All bytes and release evidence are
+validated before selected tile bytes enter the payload cache. A nonempty closure
+without the exact requested scope returns `NoNavigationData`. Existing Scene
+activation remains explicitly definition-local until its host supplies the exact
+persistent Scene identity; this change does not infer one from runtime handles.
+The public header is owned by NavigationApi; native/provider types remain private.

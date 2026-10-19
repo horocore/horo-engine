@@ -166,7 +166,9 @@ namespace Horo::Navigation {
         /**
          * @brief Validates and owns a complete canonical source snapshot transactionally.
          * @param revision Non-zero revision of the complete capture.
-         * @param inputs Borrowed producer captures in arbitrary order.
+         * @param inputs Complete borrowed producer captures in arbitrary order; empty explicitly captures source removal.
+         * A contribution may retain both empty vertex and triangle spans after clipping, preserving its identity/freshness.
+         * One empty span with a nonempty counterpart remains invalid.
          * @param limits Positive qualified count and byte bounds.
          * @return Owned canonical snapshot or a typed invalid, unsupported, conflict, or capacity error.
          */

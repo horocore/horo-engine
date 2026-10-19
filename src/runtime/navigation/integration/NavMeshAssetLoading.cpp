@@ -41,20 +41,22 @@ namespace Horo::Navigation {
         /** @brief Resolve complete canonical partitions before admitting any reusable cache allocations. */
         [[nodiscard]] Result<void> GroupTiles(const NavigationCookedTileSet &set, LoadedNavMeshAsset &loaded,
                                               const NavMeshAssetLimits &limits) {
-            using Key = std::pair<SurfaceId, NavigationAgentProfileId>;
+            using Key = std::tuple<NavigationBakeScopeId, SurfaceId, NavigationAgentProfileId>;
             std::map<Key, std::size_t> indices;
             for (const auto &tile : set.tiles) {
+                if (tile->Key().scope != loaded.scope)
+                    continue;
                 const auto projected = ProjectNavigationCookedTileDescriptor(*tile);
                 if (projected.HasError())
                     return Result<void>::Failure(projected.ErrorValue());
                 const auto &descriptor = projected.Value();
-                const Key key{tile->Key().surface, tile->Key().profile};
+                const Key key{tile->Key().scope, tile->Key().surface, tile->Key().profile};
                 auto found = indices.find(key);
                 if (found == indices.end()) {
                     if (loaded.partitions.size() >= limits.maximumPartitions)
                         return Result<void>::Failure(MakeError(NavigationErrors::CapacityExceeded));
                     found = indices.try_emplace(key, loaded.partitions.size()).first;
-                    loaded.partitions.push_back({key.first, key.second, descriptor, {}});
+                    loaded.partitions.push_back({tile->Key().surface, tile->Key().profile, descriptor, {}, tile->Key().scope});
                 }
                 auto &partition = loaded.partitions[found->second];
                 if (!partition.tiles.empty()) {
@@ -66,6 +68,8 @@ namespace Horo::Navigation {
                 }
                 partition.tiles.push_back(tile);
             }
+            if (!set.tiles.empty() && loaded.partitions.empty())
+                return Result<void>::Failure(MakeError(NavigationErrors::NoNavigationData));
             return Result<void>::Success();
         }
     }  // namespace
@@ -74,8 +78,10 @@ namespace Horo::Navigation {
     Result<LoadedNavMeshAsset> LoadNavMeshAsset(const Assets::AssetDependency &metadata,
                                                 const Assets::AssetRegistryRevision registryRevision,
                                                 const std::span<const std::uint8_t> encoded, const AssetCookTargetId &target,
-                                                Assets::AssetPayloadCache &cache, const NavMeshAssetLimits &limits,
-                                                const NavMeshAssetContentExpectation *expectation) {
+                                                Assets::AssetPayloadCache &cache, const NavMeshAssetLoadOptions &options) {
+        const auto &limits = options.limits;
+        const auto *expectation = options.expectation;
+        const auto scope = options.scope;
         if (!ValidMetadata(metadata, registryRevision, limits))
             return Result<LoadedNavMeshAsset>::Failure(MakeError(NavigationErrors::NavMeshArtifactInvalid));
         try {
@@ -95,10 +101,16 @@ namespace Horo::Navigation {
             LoadedNavMeshAsset loaded{metadata.id, registryRevision, contentDigest, envelope.Value().sourceDigest,
                                       envelope.Value().cacheKeyDigest};
             loaded.contentProvenance = decoded.Value().provenance;
+            loaded.scope = scope;
             if (const auto grouped = GroupTiles(decoded.Value(), loaded, limits); grouped.HasError())
                 return Result<LoadedNavMeshAsset>::Failure(grouped.ErrorValue());
-            loaded.tileBytes.reserve(decoded.Value().tiles.size());
+            const auto selectedCount = std::ranges::count_if(decoded.Value().tiles, [scope](const auto &tile) {
+                return tile->Key().scope == scope;
+            });
+            loaded.tileBytes.reserve(static_cast<std::size_t>(selectedCount));
             for (const auto &tile : decoded.Value().tiles) {
+                if (tile->Key().scope != scope)
+                    continue;
                 auto pin = cache.Admit(std::as_bytes(tile->Bytes()));
                 if (pin.HasError())
                     return Result<LoadedNavMeshAsset>::Failure(pin.ErrorValue());
@@ -113,7 +125,7 @@ namespace Horo::Navigation {
     /** @copydoc LoadNavMeshAsset */
     Result<LoadedNavMeshAsset> LoadNavMeshAsset(const NavMeshAssetSource &source, const Assets::AssetId id, const AssetCookTargetId &target,
                                                 Assets::AssetPayloadCache &cache, const CancellationToken &cancellation,
-                                                const NavMeshAssetLimits &limits, const NavMeshAssetContentExpectation *expectation) {
+                                                const NavMeshAssetLoadOptions &options) {
         const auto *record = source.registry.Find(id);
         if (!record)
             return Result<LoadedNavMeshAsset>::Failure(MakeError(NavigationErrors::NoNavigationData));
@@ -121,6 +133,6 @@ namespace Horo::Navigation {
         if (bytes.HasError())
             return Result<LoadedNavMeshAsset>::Failure(bytes.ErrorValue());
         return LoadNavMeshAsset(Assets::AssetDependency{record->id, record->type}, source.registry.Revision(), bytes.Value(), target, cache,
-                                limits, expectation);
+                                options);
     }
 }  // namespace Horo::Navigation

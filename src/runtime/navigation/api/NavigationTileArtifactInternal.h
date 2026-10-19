@@ -4,6 +4,7 @@
 #include "Horo/Navigation/NavigationTileArtifact.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <stdexcept>
 
@@ -110,6 +111,16 @@ namespace Horo::Navigation::TileArtifactInternal {
         std::span<const std::uint8_t> remaining_;
         std::size_t allocationRemaining_;
     };
+
+    /** @brief Decodes a full Scene UUID, rejecting an unscoped value in a scoped wire format. */
+    [[nodiscard]] inline NavigationBakeScopeId ReadSceneScope(Reader &reader) {
+        std::array<std::uint8_t, 16> bytes{};
+        std::ranges::copy(reader.Raw(bytes.size()), bytes.begin());
+        auto scope = NavigationBakeScopeId::ForScene(bytes);
+        if (scope.HasError())
+            throw std::invalid_argument("Invalid Scene bake scope");
+        return scope.Value();
+    }
 
     /** @brief Encodes the exact validated owned project profile captured by the producer.
      * @param writer Bounded canonical payload writer. @param profile Validated project authority. */
