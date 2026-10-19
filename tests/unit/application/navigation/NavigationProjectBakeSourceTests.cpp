@@ -1,3 +1,4 @@
+#include "Horo/Application/NavigationSceneBakeGeometry.h"
 #include "navigation/NavigationProjectBakeSourceFixture.h"
 #include "navigation/NavigationSceneSourceFixture.h"
 
@@ -276,4 +277,27 @@ TEST_CASE("Headless project capture retains explicit schema3 source policy witho
     CHECK(found->document.objects.front().components.navigationSources == object.components.navigationSources);
     CHECK(found->document.unsupportedComponentOwners.empty());
     CHECK(source->VerifyCurrent().HasValue());
+}
+
+TEST_CASE("Root-bound project source feeds real Scene collider geometry and rejects later source edits",
+          "[navigation][source][automation]") {
+    SourceTest::Project project;
+    auto object = Tests::NavigationSources::Object();
+    object.components.navigationSources.front().area = Tests::NavigationSources::Id<Navigation::NavigationAreaId>(1);
+    object.components.navigationSources.front().filter = Tests::NavigationSources::Id<Navigation::NavigationFilterId>(1);
+    object.localTransform.translation = {2, 0, 0};
+    project.Write("Assets/first.horo", SceneSource::EncodeSceneSource({std::span{&object, 1}, {}}));
+    const auto source = project.Capture();
+    const auto scene = std::ranges::find(source->Scenes(), SourceTest::Asset(2), &NavigationSceneBakeSource::asset);
+    REQUIRE(scene != source->Scenes().end());
+    REQUIRE(source->Definitions().size() == 1);
+    const auto geometry = CaptureNavigationSceneColliderGeometry(*scene, source->Definitions().front());
+    REQUIRE(geometry.HasValue());
+    REQUIRE(geometry.Value().size() == 1);
+    REQUIRE(geometry.Value().front().geometry.vertices.size() == 8);
+    CHECK(geometry.Value().front().geometry.vertices.front().x == 1.5F);
+    CHECK(source->VerifyCurrent().HasValue());
+    object.localTransform.translation.x = 4;
+    project.Write("Assets/first.horo", SceneSource::EncodeSceneSource({std::span{&object, 1}, {}}));
+    CHECK(source->VerifyCurrent().HasError());
 }

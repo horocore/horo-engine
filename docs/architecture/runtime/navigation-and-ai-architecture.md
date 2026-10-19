@@ -3059,3 +3059,23 @@ capacity. Definition area/filter removal uses the existing reviewed grouped
 repair/undo/redo workflow, including exact source-field impacts. Existing Scene
 callers acquire the additive value field; no separate compatibility model or
 parallel codec is introduced.
+
+### Canonical Scene collider geometry and region selection
+
+The application geometry capture resolves complete stable object/surface graphs,
+parent/world transforms and exact static body/collider ownership before selecting
+explicit source bindings. It resolves actual definition profiles, areas and
+filters, bounds graph depth and aggregate storage, and checks cancellation.
+Canonical right-handed Y-up metres are required. Unknown components, unexpanded
+prefabs and unqualified shape artifacts fail explicitly rather than disappearing.
+
+LocalBounds scopes clip against the surface owners exact affine local box;
+ObjectSubtree uses authored ancestry. Planes require explicit finite bounds.
+Enabled include regions form a geometric union and exclusions subtract their
+exact affine boxes, preserving winding without duplicate overlap. Stable region
+intent and original geometry both participate in content identity, including
+empty selected geometry and its original footprint. Fragment/storage/work budgets
+bound both count and write passes; project callers share the work budget across
+Scenes. This synchronous tooling layer performs no I/O, cache writes, provider
+selection or runtime-world construction. Existing source/cooked formats and
+callers are unchanged; complete project bake composition follows separately.

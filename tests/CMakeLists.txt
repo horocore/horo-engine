@@ -2461,6 +2461,19 @@ target_compile_features(HoroNavigationPrimitiveGeometryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNavigationPrimitiveGeometryTests PRIVATE Catch2::Catch2WithMain HoroEngine::NavigationBakeAutomation)
 horo_register_catch_test(HoroNavigationPrimitiveGeometryTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage")
 
+add_executable(HoroNavigationSceneBakeGeometryTests unit/application/navigation/NavigationSceneBakeGeometryTests.cpp)
+target_compile_features(HoroNavigationSceneBakeGeometryTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationSceneBakeGeometryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroNavigationSceneBakeGeometryTests PRIVATE Catch2::Catch2WithMain HoroEngine::NavigationBakeAutomation)
+horo_register_catch_test(HoroNavigationSceneBakeGeometryTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage")
+
+add_executable(HoroNavigationRegionGeometryTests unit/application/navigation/NavigationRegionGeometryTests.cpp)
+target_compile_features(HoroNavigationRegionGeometryTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationRegionGeometryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroNavigationRegionGeometryTests PRIVATE Catch2::Catch2WithMain HoroEngine::NavigationBakeAutomation
+        HoroEngine::PlatformProjectReadFiles)
+horo_register_catch_test(HoroNavigationRegionGeometryTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage")
+
 add_executable(HoroNavigationProjectBakeSourceTests unit/application/navigation/NavigationProjectBakeSourceTests.cpp)
 target_compile_features(HoroNavigationProjectBakeSourceTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationProjectBakeSourceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)

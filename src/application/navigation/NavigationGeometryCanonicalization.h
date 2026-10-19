@@ -17,4 +17,15 @@ namespace Horo::Application::NavigationBakeDetail {
                                                                        Navigation::NavigationAreaId area,
                                                                        Navigation::NavigationSourceMaterialSlot material,
                                                                        CancellationToken cancellation);
+    /** @brief Clips already validated world triangles to an exact affine local box with bounded two-pass storage.
+     * @param input Owned canonical source. @param bounds Explicit local bounds. @param localToWorld Exact surface matrix.
+     * @param policy Remaining aggregate storage and faceting limits. @param area Exact area. @param material Exact slot.
+     * @param cancellation Invocation cancellation. @return Owned clipped geometry or typed failure.
+     */
+    [[nodiscard]] Result<NavigationPrimitiveGeometry> ClipGeometry(NavigationPrimitiveGeometry input, const Math::Aabb &bounds,
+                                                                   const Math::Mat4 &localToWorld,
+                                                                   const NavigationPrimitiveGeometryPolicy &policy,
+                                                                   Navigation::NavigationAreaId area,
+                                                                   Navigation::NavigationSourceMaterialSlot material,
+                                                                   CancellationToken cancellation);
 }  // namespace Horo::Application::NavigationBakeDetail
