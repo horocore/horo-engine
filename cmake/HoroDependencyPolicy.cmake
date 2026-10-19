@@ -12,6 +12,7 @@ horo_allow_target_dependencies(TARGET HoroMcpSession DEPENDENCIES HoroFoundation
 horo_allow_target_dependencies(TARGET HoroMcpRegistry DEPENDENCIES HoroMcpSession)
 horo_allow_target_dependencies(TARGET HoroMcpController DEPENDENCIES HoroMcpRegistry)
 horo_allow_target_dependencies(TARGET HoroProjectReadFilesApi DEPENDENCIES HoroFoundation)
+horo_allow_target_dependencies(TARGET HoroProjectAssetRegistrySource DEPENDENCIES HoroAssets HoroProjectReadFilesApi)
 horo_allow_target_dependencies(TARGET HoroPlatformProjectReadFiles DEPENDENCIES HoroProjectReadFilesApi)
 horo_allow_target_dependencies(TARGET HoroProjectCodeQuery DEPENDENCIES HoroProjectReadFilesApi)
 horo_allow_target_dependencies(TARGET HoroMcpProjectCodeQuery DEPENDENCIES HoroMcpRegistry HoroProjectCodeQuery)
@@ -236,6 +237,7 @@ horo_allow_target_dependencies(TARGET HoroEditorServices
         HoroApplication
         HoroPlatform
         HoroPlatformProjectReadFiles
+        HoroProjectAssetRegistrySource
         HoroRuntimeUi
         HoroEditorModel
         HoroGameplayModuleHost

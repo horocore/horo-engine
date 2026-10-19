@@ -2449,6 +2449,13 @@ target_link_libraries(HoroProjectCreationServiceTests
         PRIVATE
         HoroEngine::EditorServices
 )
+add_executable(HoroProjectAssetRegistrySourceTests unit/application/ProjectAssetRegistrySourceTests.cpp)
+target_compile_features(HoroProjectAssetRegistrySourceTests PRIVATE cxx_std_20)
+target_include_directories(HoroProjectAssetRegistrySourceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroProjectAssetRegistrySourceTests PRIVATE Catch2::Catch2WithMain
+        HoroEngine::ProjectAssetRegistrySource HoroEngine::PlatformProjectReadFiles)
+horo_register_catch_test(HoroProjectAssetRegistrySourceTests LABELS "unit;project;headless;ci-windows;sonar-coverage")
+
 add_executable(HoroProjectCollisionSettingsTests
         unit/editor/ProjectCollisionSettingsTests.cpp
         unit/editor/CollisionProjectSettingsSessionTests.cpp
