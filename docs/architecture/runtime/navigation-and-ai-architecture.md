@@ -3011,3 +3011,18 @@ These are required downstream runtime/CI tests, not tests implemented by this AD
 - [Navigation Bake UI Mock Reference](../../../mock-studio/designs.md#architecture-runtime-navigation-bake): non-normative
   static UI reference
 - [Debug Console And Overlays](./debug-console-and-overlays.md): AI debug visualization
+
+### Bounded analytic primitive capture
+
+`CaptureNavigationPrimitiveGeometry` is a tooling-only application conversion of
+Physics-owned box, sphere, capsule and explicitly bounded plane descriptors into
+owned canonical navigation triangles. The caller supplies exact area/material
+semantics and body-world placement. Scale is resolved by Physics before poses;
+rounded facets obey a declared chord-error bound. Invalid, overflowing or collapsed
+geometry, capacity exhaustion and cancellation fail without partial output.
+
+The content hash includes canonical world geometry and source area/material
+semantics. This function does not discover Scene eligibility, select providers,
+prove material asset validity or grant source/publication authority. Infinite
+planes require explicit finite world bounds. No existing persisted format changes
+in this additive geometry layer; Scene bindings follow in a dependent change.
