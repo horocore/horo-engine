@@ -126,7 +126,9 @@ namespace Horo::Runtime {
             std::array<std::size_t, static_cast<std::size_t>(BuiltinSceneComponentKind::Count)> builtinOccurrences{};
             for (std::size_t member = 0; member < entry.members.size(); ++member) {
                 const auto &identity = entry.members[member];
-                const bool exists = identity.instance != 0 && std::visit([&]<typename Type>(const Type &type) {
+                if (identity.instance == 0)
+                    return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity));
+                const bool exists = std::visit([&]<typename Type>(const Type &type) {
                     if constexpr (std::is_same_v<Type, Gameplay::BehaviorTypeId>)
                         return std::ranges::any_of(entry.info.components.behaviors, [&](const auto &component) {
                             return component.typeId == type && component.instanceId.value == identity.instance;
@@ -468,8 +470,8 @@ namespace Horo::Runtime {
                                                        const std::span<const SceneAgentIdentityProjection> facts) {
             for (std::size_t index = 0; index < facts.size(); ++index) {
                 const auto &fact = facts[index];
-                const auto entity = std::ranges::find(created, fact.entity, &RuntimeEntityView::entity);
-                if (entity == created.end() || !RequiresPrefabIdentity(*entity) || !fact.original.IsValid() || !fact.resolved.IsValid() ||
+                if (const auto entity = std::ranges::find(created, fact.entity, &RuntimeEntityView::entity);
+                    entity == created.end() || !RequiresPrefabIdentity(*entity) || !fact.original.IsValid() || !fact.resolved.IsValid() ||
                     entity->components->aiAgent->agent != fact.original)
                     return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate, "Foreign or malformed AI identity fact."));
                 for (std::size_t previous = 0; previous < index; ++previous)

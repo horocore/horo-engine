@@ -190,14 +190,14 @@ namespace Horo::AI::Detail {
             }
             candidate.identities.reserve(agents.size());
             for (auto &agent : agents) {
-                const auto entity = std::ranges::find(created, agent.owner, &Runtime::RuntimeEntityView::entity);
-                if (!IsPrefabAgent(*entity))
+                if (const auto entity = std::ranges::find(created, agent.owner, &Runtime::RuntimeEntityView::entity);
+                    !IsPrefabAgent(*entity))
                     continue;
                 if (!agent.agent.agent.IsValid() || candidate.lastAgentIdentity == std::numeric_limits<std::uint64_t>::max())
                     return Failure<void>("Prefab AI identity reservation is invalid or exhausted.");
                 const auto original = agent.agent.agent;
                 agent.agent.agent = AgentId::Create(++candidate.lastAgentIdentity).Value();
-                candidate.identities.push_back({agent.owner, original, agent.agent.agent});
+                candidate.identities.emplace_back(agent.owner, original, agent.agent.agent);
             }
             return Result<void>::Success();
         }

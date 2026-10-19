@@ -189,6 +189,26 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Reads one unique paired Scene option and advances only after successful typed validation. */
+        Result<void> ReadSceneOption(const std::span<char *> arguments, std::size_t &index, SeenSceneOptions &seen,
+                                     HeadlessProjectSceneOptions &input) {
+            const std::string_view key{arguments[index]};
+            if (arguments.size() - index < 2 || std::string_view{arguments[index + 1]}.empty())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "A Scene option is missing its value."));
+            const auto found = std::ranges::find(SceneOptionNames, key);
+            if (found == SceneOptionNames.end())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Unknown product Scene option."));
+            const auto optionIndex = static_cast<std::size_t>(found - SceneOptionNames.begin());
+            if (seen[optionIndex])
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Duplicate product Scene option."));
+            if (const auto applied = ApplySceneOption(static_cast<SceneOption>(optionIndex), arguments[index + 1], input);
+                applied.HasError())
+                return applied;
+            seen[optionIndex] = true;
+            index += 2;
+            return Result<void>::Success();
+        }
+
         /** @brief Keeps legacy gameplay suffix parsing separate from paired explicit Scene options. */
         Result<void> ParseSceneOptions(const std::span<char *> arguments, ProductLaunch &launch) {
             SeenSceneOptions seen{};
@@ -210,19 +230,8 @@ namespace Horo::Application::Internal {
                     index += 5;
                     continue;
                 }
-                if (arguments.size() - index < 2 || std::string_view{arguments[index + 1]}.empty())
-                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "A Scene option is missing its value."));
-                const auto found = std::ranges::find(SceneOptionNames, key);
-                if (found == SceneOptionNames.end())
-                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Unknown product Scene option."));
-                const auto optionIndex = static_cast<std::size_t>(found - SceneOptionNames.begin());
-                if (seen[optionIndex])
-                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Duplicate product Scene option."));
-                if (const auto applied = ApplySceneOption(static_cast<SceneOption>(optionIndex), arguments[index + 1], launch.sceneInput);
-                    applied.HasError())
+                if (auto applied = ReadSceneOption(arguments, index, seen, launch.sceneInput); applied.HasError())
                     return applied;
-                seen[optionIndex] = true;
-                index += 2;
             }
             if (auto permission = ApplyPrefabPermission(launch, prefabGrant); permission.HasError())
                 return permission;

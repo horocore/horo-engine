@@ -15,39 +15,40 @@ namespace Horo::SceneSource {
 
         /** @brief Names only actual canonical Scene codec fields; unavailable representations stay unsupported. */
         std::string_view Field(const Kind kind) noexcept {
+            using enum Kind;
             switch (kind) {
-                case Kind::Camera:
+                case Camera:
                     return "camera";
-                case Kind::Light:
+                case Light:
                     return "light";
-                case Kind::AudioSource:
+                case AudioSource:
                     return "audioSource";
-                case Kind::NavigationSurface:
+                case NavigationSurface:
                     return "navigationSurface";
-                case Kind::NavigationRegion:
+                case NavigationRegion:
                     return "navigationRegion";
-                case Kind::NavigationModifier:
+                case NavigationModifier:
                     return "navigationModifier";
-                case Kind::NavigationLink:
+                case NavigationLink:
                     return "navigationLink";
-                case Kind::NavigationAgent:
+                case NavigationAgent:
                     return "navigationAgent";
-                case Kind::AiAgent:
+                case AiAgent:
                     return "aiAgent";
-                case Kind::AiController:
+                case AiController:
                     return "aiController";
-                case Kind::CharacterController:
+                case CharacterController:
                     return "characterController";
-                case Kind::RigidBody:
+                case RigidBody:
                     return "rigidBody";
-                case Kind::Collider:
+                case Collider:
                     return "colliders";
-                case Kind::PhysicsConstraint:
+                case PhysicsConstraint:
                     return "physicsConstraints";
-                case Kind::PrimitiveMesh:
-                case Kind::AudioListener:
-                case Kind::UiCanvas:
-                case Kind::Count:
+                case PrimitiveMesh:
+                case AudioListener:
+                case UiCanvas:
+                case Count:
                     return {};
             }
             return {};
@@ -84,39 +85,40 @@ namespace Horo::SceneSource {
 
         /** @brief Moves only the decoded field, preserving all unrelated candidate components. */
         Result<void> Merge(const Kind kind, Runtime::RuntimeComponentSet &destination, SceneObjectComponentSet &&source) {
+            using enum Kind;
             switch (kind) {
-                case Kind::Camera:
+                case Camera:
                     return Adopt(destination.camera, std::move(source.camera));
-                case Kind::Light:
+                case Light:
                     return Adopt(destination.light, std::move(source.light));
-                case Kind::AudioSource:
+                case AudioSource:
                     return Adopt(destination.audioSource, std::move(source.audioSource));
-                case Kind::NavigationSurface:
+                case NavigationSurface:
                     return Adopt(destination.navigationSurface, std::move(source.navigationSurface));
-                case Kind::NavigationRegion:
+                case NavigationRegion:
                     return Adopt(destination.navigationRegion, std::move(source.navigationRegion));
-                case Kind::NavigationModifier:
+                case NavigationModifier:
                     return Adopt(destination.navigationModifier, std::move(source.navigationModifier));
-                case Kind::NavigationLink:
+                case NavigationLink:
                     return Adopt(destination.navigationLink, std::move(source.navigationLink));
-                case Kind::NavigationAgent:
+                case NavigationAgent:
                     return Adopt(destination.navigationAgent, std::move(source.navigationAgent));
-                case Kind::AiAgent:
+                case AiAgent:
                     return Adopt(destination.aiAgent, std::move(source.aiAgent));
-                case Kind::AiController:
+                case AiController:
                     return Adopt(destination.aiController, std::move(source.aiController));
-                case Kind::CharacterController:
+                case CharacterController:
                     return Adopt(destination.characterController, std::move(source.characterController));
-                case Kind::RigidBody:
+                case RigidBody:
                     return Adopt(destination.rigidBody, std::move(source.rigidBody));
-                case Kind::Collider:
+                case Collider:
                     return Append(destination.colliders, std::move(source.colliders));
-                case Kind::PhysicsConstraint:
+                case PhysicsConstraint:
                     return Append(destination.physicsConstraints, std::move(source.physicsConstraints));
-                case Kind::PrimitiveMesh:
-                case Kind::AudioListener:
-                case Kind::UiCanvas:
-                case Kind::Count:
+                case PrimitiveMesh:
+                case AudioListener:
+                case UiCanvas:
+                case Count:
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ComponentTypeUnregistered));
             }
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ComponentTypeUnregistered));
@@ -182,8 +184,7 @@ namespace Horo::SceneSource {
             auto decoded = Decode(source, *kind, field);
             if (decoded.HasError())
                 return Result<bool>::Failure(decoded.ErrorValue());
-            auto merged = Merge(*kind, destination, std::move(decoded).Value());
-            if (merged.HasError())
+            if (auto merged = Merge(*kind, destination, std::move(decoded).Value()); merged.HasError())
                 return Result<bool>::Failure(merged.ErrorValue());
             return Result<bool>::Success(true);
         } catch (const nlohmann::json::exception &) {

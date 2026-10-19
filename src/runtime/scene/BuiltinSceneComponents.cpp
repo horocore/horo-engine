@@ -43,35 +43,35 @@ namespace Horo::Runtime {
         using enum BuiltinSceneComponentKind;
         switch (kind) {
             case PrimitiveMesh:
-                return primitiveMesh ? 1U : 0U;
+                return static_cast<std::size_t>(primitiveMesh);
             case Camera:
-                return components.camera.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.camera.has_value());
             case Light:
-                return components.light.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.light.has_value());
             case AudioSource:
-                return components.audioSource.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.audioSource.has_value());
             case AudioListener:
-                return components.audioListener.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.audioListener.has_value());
             case UiCanvas:
-                return components.uiCanvas.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.uiCanvas.has_value());
             case NavigationSurface:
-                return components.navigationSurface.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.navigationSurface.has_value());
             case NavigationRegion:
-                return components.navigationRegion.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.navigationRegion.has_value());
             case NavigationModifier:
-                return components.navigationModifier.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.navigationModifier.has_value());
             case NavigationLink:
-                return components.navigationLink.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.navigationLink.has_value());
             case NavigationAgent:
-                return components.navigationAgent.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.navigationAgent.has_value());
             case AiAgent:
-                return components.aiAgent.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.aiAgent.has_value());
             case AiController:
-                return components.aiController.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.aiController.has_value());
             case CharacterController:
-                return components.characterController.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.characterController.has_value());
             case RigidBody:
-                return components.rigidBody.has_value() ? 1U : 0U;
+                return static_cast<std::size_t>(components.rigidBody.has_value());
             case Collider:
                 return components.colliders.size();
             case PhysicsConstraint:

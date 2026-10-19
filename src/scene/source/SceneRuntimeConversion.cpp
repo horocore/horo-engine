@@ -170,6 +170,7 @@ namespace Horo::SceneSource {
         /** @brief Uses the same inert codec as cooked hosts, preserving legacy source identity/disabled admission policy. */
         [[nodiscard]] Result<void> ProjectPrefabComponent(const Prefab::RawComponentPayload &payload,
                                                           Prefab::PrefabRuntimeComponentProjection &projection) {
+            using enum Runtime::BuiltinSceneComponentKind;
             auto projected = ProjectPrefabBuiltinComponent(payload, projection.components, projection.primitiveMesh);
             if (projected.HasError())
                 return Result<void>::Failure(WrapError(PrefabComponentProjectionUnsupported, projected.ErrorValue()));
@@ -177,11 +178,11 @@ namespace Horo::SceneSource {
                 return Result<void>::Failure(MakeError(PrefabComponentProjectionUnsupported));
             const auto kind = Runtime::FindBuiltinSceneComponent(payload.component.typeId.Value());
             auto &components = projection.components;
-            if (kind == Runtime::BuiltinSceneComponentKind::NavigationAgent && !components.navigationAgent->enabled)
+            if (kind == NavigationAgent && !components.navigationAgent->enabled)
                 components.navigationAgent.reset();
-            if (kind == Runtime::BuiltinSceneComponentKind::AiAgent && !components.aiAgent->enabled)
+            if (kind == AiAgent && !components.aiAgent->enabled)
                 components.aiAgent.reset();
-            if (kind == Runtime::BuiltinSceneComponentKind::AiController && !components.aiController->enabled)
+            if (kind == AiController && !components.aiController->enabled)
                 components.aiController.reset();
             return Result<void>::Success();
         }
@@ -253,7 +254,7 @@ namespace Horo::SceneSource {
         /** @brief Rewrites only typed local body endpoints through the canonical source occurrence identity map. */
         Result<void> RemapPrefabBodyReferences(const Prefab::ExpandedPrefabObjectKey &owner, Runtime::RuntimeComponentSet &components,
                                                const Prefab::PrefabSceneIdentityMap &identityMap) {
-            const auto remap = [&](Runtime::PhysicsBodyReference &reference) -> Result<void> {
+            const auto remap = [&](Runtime::PhysicsBodyReference &reference) {
                 if (reference.object.value > std::numeric_limits<std::uint32_t>::max())
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ReferenceRewriteInvalid,
                                                            "Prefab Physics endpoint exceeds the source local identity range."));
@@ -320,8 +321,7 @@ namespace Horo::SceneSource {
             std::vector<Prefab::PrefabRuntimeComponentProjection> projections;
             projections.reserve(candidate.Objects().size());
             for (const Prefab::ResolvedPrefabObject &object : candidate.Objects()) {
-                const auto sceneId = identityMap.Find(object.key);
-                if (!sceneId)
+                if (!identityMap.Find(object.key))
                     return Result<void>::Failure(MakeError(Prefab::PrefabErrors::IdentityCollision));
                 auto components = ProjectPrefabComponents(object);
                 if (components.HasError())

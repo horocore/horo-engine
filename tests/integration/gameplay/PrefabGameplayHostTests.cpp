@@ -5,9 +5,9 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 
+#include <bit>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
-#include <cstring>
 #include <thread>
 
 namespace {
@@ -42,9 +42,8 @@ namespace {
         void *symbol = escaped.image->GetSymbol("HoroTestCopyPrefabOperations");
         REQUIRE(symbol != nullptr);
         using CopyOperations = void (*)(Prefab::PrefabOperation *, Prefab::PrefabOperation *, Prefab::PrefabInstance *);
-        CopyOperations copy{};
-        static_assert(sizeof(copy) == sizeof(symbol));
-        std::memcpy(&copy, &symbol, sizeof(copy));
+        static_assert(sizeof(CopyOperations) == sizeof(symbol));
+        const auto copy = std::bit_cast<CopyOperations>(symbol);
         copy(&escaped.spawn, &escaped.despawn, &escaped.instance);
         return escaped;
     }
@@ -259,7 +258,9 @@ TEST_CASE("Owned cooked prefab composition rejects invalid asset admission befor
     Prefab::PrefabTemplateProviderLimits limits;
     GameplayWorldSelection selection{.moduleId = "game.tests", .nativeArtifact = "must-not-load"};
     const ErrorCodeDescriptor *expected = &Prefab::PrefabErrors::AdmissionRejected;
-    SECTION("missing host permission") {}
+    SECTION("missing host permission") {
+        // Keep the default denied prefab permission.
+    }
     SECTION("cancelled host scope") {
         selection.prefabPermission = GameplayPrefabPermission::Granted;
         cancellation.RequestCancellation();
@@ -281,7 +282,9 @@ TEST_CASE("Production cooked prefab composition retains opaque components from i
           "[prefab][gameplay][host][components]") {
     HostFixture host{true};
     bool owned{};
-    SECTION("borrowed provider") {}
+    SECTION("borrowed provider") {
+        // Keep the default borrowed provider ownership.
+    }
     SECTION("composition-owned provider") {
         owned = true;
     }

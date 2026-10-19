@@ -37,12 +37,13 @@ namespace Horo::Application::PrefabEditorProductTest {
             Observation &observation_;
         };
 
-        Gameplay::IBehaviorInstance *Create(void *context) {
-            return new SpawnBehavior{*static_cast<Observation *>(context)};
+        Gameplay::IBehaviorInstance *Create(
+            void *context) {  // NOSONAR(cpp:S5008) The behavior factory ABI supplies its typed observation through void*.
+            return std::make_unique<SpawnBehavior>(*static_cast<Observation *>(context)).release();
         }
 
-        void Destroy(void *, Gameplay::IBehaviorInstance *instance) noexcept {
-            delete instance;
+        void Destroy(void *, Gameplay::IBehaviorInstance *instance) noexcept {  // NOSONAR(cpp:S5008) Required behavior factory ABI.
+            const std::unique_ptr<Gameplay::IBehaviorInstance> owned{instance};
         }
 
         Gameplay::BehaviorTypeId Type() {
@@ -55,7 +56,8 @@ namespace Horo::Application::PrefabEditorProductTest {
             descriptor.typeId = Type();
             descriptor.displayName = "Editor prefab product";
             descriptor.phases.push_back({Gameplay::BehaviorPhase::Gameplay, "game.tests.editor_prefab", {}, {}, {}});
-            REQUIRE(registry.Register({std::move(descriptor), {&observation, Create, Destroy}}).HasValue());
+            const auto registered = registry.Register({std::move(descriptor), {&observation, Create, Destroy}});
+            REQUIRE(registered.HasValue());
             REQUIRE(registry.Freeze().HasValue());
             return registry;
         }
@@ -79,7 +81,7 @@ namespace Horo::Application::PrefabEditorProductTest {
         }
 
         /** @brief Writes a real project schema shared by explicit Null and canonical product compositions. */
-        void WriteCollision(PrefabCookTestSupport::HostFixture &fixture) {
+        void WriteCollision(const PrefabCookTestSupport::HostFixture &fixture) {
             using namespace PrefabCookTestSupport;
             const auto layer = Physics::CollisionLayerId::FromBytes(Id("00000000-0000-0000-0000-000000000001").Bytes());
             const auto profile = Physics::CollisionProfileId::FromBytes(Id("00000000-0000-0000-0000-000000000002").Bytes());
@@ -190,7 +192,9 @@ namespace Horo::Application::PrefabEditorProductTest {
     TEST_CASE("Actual Editor Play grants committed prefab loading and revokes retained clients on Stop",
               "[prefab][editor][product][committed]") {
         Physics::PhysicsRuntimeMode mode{Physics::PhysicsRuntimeMode::Null};
-        SECTION("explicit Null Physics") {}
+        SECTION("explicit Null Physics") {
+            // Exercise the explicitly selected default Null composition.
+        }
 #if HORO_TEST_PHYSICS_NATIVE
         SECTION("explicit canonical Physics") {
             mode = Physics::PhysicsRuntimeMode::Canonical;
@@ -209,7 +213,7 @@ namespace Horo::Application::PrefabEditorProductTest {
         REQUIRE(started.HasValue());
         components = Gameplay::ComponentRegistry{};
         REQUIRE(components.Freeze().HasValue());
-        PresentUntil(play, [&] {
+        PresentUntil(play, [&play] {
             return play.State() == Editor::EditorPlaySessionState::Playing;
         });
         const auto ticked = play.FixedUpdate({}, {1.0 / 60.0});
@@ -222,7 +226,7 @@ namespace Horo::Application::PrefabEditorProductTest {
                                                                            : Editor::EditorScenePhysicsState::Active));
         CAPTURE(observation.calls, static_cast<unsigned>(play.State()));
         REQUIRE(observation.operation);
-        PresentUntil(play, [&] {
+        PresentUntil(play, [&observation] {
             return observation.operation->State() != Prefab::PrefabSpawnState::Pending;
         });
         REQUIRE(observation.operation->State() == Prefab::PrefabSpawnState::Committed);
@@ -244,11 +248,13 @@ namespace Horo::Application::PrefabEditorProductTest {
         Observation observation;
         const auto components = Components();
         PrepareProject(fixture, observation, &components);
+        // Keep the old request pending by contract, regardless of worker completion speed.
+        observation.request.notBeforeTick = 4;
         const auto registry = Registry(observation);
         Editor::EditorPlaySceneHost *host{};
         Editor::EditorPlaySessionController play;
         REQUIRE(play.Start(Source(), registry, components, Factory(fixture, true, Physics::PhysicsRuntimeMode::Null, &host)).HasValue());
-        PresentUntil(play, [&] {
+        PresentUntil(play, [&play] {
             return play.State() == Editor::EditorPlaySessionState::Playing;
         });
         REQUIRE(host);
@@ -275,12 +281,19 @@ namespace Horo::Application::PrefabEditorProductTest {
         REQUIRE(next.HasValue());
         for (int frame = 0; frame < 3; ++frame) {
             play.PresentationUpdate({0});
-            CHECK(next.Value().State() == Prefab::PrefabSpawnState::Pending);
+            if (play.LastError())
+                UNSCOPED_INFO("Play: " << play.LastError()->code.Value() << ": " << play.LastError()->message);
+            if (const auto *error = next.Value().Failure())
+                UNSCOPED_INFO(error->code.Value() << ": " << error->message);
+            REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+            REQUIRE(next.Value().State() == Prefab::PrefabSpawnState::Pending);
         }
         REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
-        PresentUntil(play, [&] {
+        PresentUntil(play, [&next] {
             return next.Value().State() != Prefab::PrefabSpawnState::Pending;
         });
+        if (const auto *error = next.Value().Failure())
+            UNSCOPED_INFO(error->code.Value() << ": " << error->message);
         CHECK(next.Value().State() == Prefab::PrefabSpawnState::Committed);
         play.Stop();
         CHECK(reloaded.Value()->CurrentTick().HasError());
@@ -289,7 +302,9 @@ namespace Horo::Application::PrefabEditorProductTest {
     TEST_CASE("Actual Editor Play denies prefab capability independently of committed file presence",
               "[prefab][editor][product][permission]") {
         Physics::PhysicsRuntimeMode mode{Physics::PhysicsRuntimeMode::Null};
-        SECTION("explicit Null Physics") {}
+        SECTION("explicit Null Physics") {
+            // Exercise the explicitly selected default Null composition.
+        }
 #if HORO_TEST_PHYSICS_NATIVE
         SECTION("explicit canonical Physics") {
             mode = Physics::PhysicsRuntimeMode::Canonical;
@@ -305,7 +320,7 @@ namespace Horo::Application::PrefabEditorProductTest {
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);
         REQUIRE(started.HasValue());
-        PresentUntil(play, [&] {
+        PresentUntil(play, [&play] {
             return play.State() == Editor::EditorPlaySessionState::Playing;
         });
         const auto ticked = play.FixedUpdate({}, {1.0 / 60.0});
@@ -333,13 +348,13 @@ namespace Horo::Application::PrefabEditorProductTest {
         REQUIRE(missingComponents.Freeze().HasValue());
         Editor::EditorPlaySessionController play;
         REQUIRE(play.Start(Source(), registry, missingComponents, Factory(fixture, true, Physics::PhysicsRuntimeMode::Null)).HasValue());
-        PresentUntil(play, [&] {
+        PresentUntil(play, [&play] {
             return play.State() == Editor::EditorPlaySessionState::Playing;
         });
         const auto revision = play.SceneView()->StructuralRevision();
         REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
         REQUIRE(observation.operation);
-        PresentUntil(play, [&] {
+        PresentUntil(play, [&observation] {
             return observation.operation->State() != Prefab::PrefabSpawnState::Pending;
         });
         CHECK(observation.operation->State() == Prefab::PrefabSpawnState::Failed);

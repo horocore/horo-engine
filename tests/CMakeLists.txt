@@ -4394,15 +4394,24 @@ target_include_directories(HoroPackageApplicationTests PRIVATE ${PROJECT_SOURCE_
     "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 horo_register_catch_test(HoroPackageApplicationTests LABELS "packages;application;cli;mcp;editor;headless")
 
+# Package lifecycle needs a real SDK owner and callback, not every gameplay integration.
+horo_add_gameplay_module(HoroPackageGameModule
+    MODULE_ID game.tests
+    NO_MANIFEST
+    INPUT_MANIFEST_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroPackageGameModule.inputs.txt"
+    SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/PackageGameModule.cpp
+)
+get_property(HORO_PACKAGE_GAME_MODULE_REVISION_FILE TARGET HoroPackageGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
+
 add_executable(HoroPackageLifecycleTests unit/packages/PackageLifecycleTests.cpp unit/packages/PackageHybridLifecycleTests.cpp
     unit/packages/PackageGameplayLifecycleTests.cpp unit/packages/PackageEditorPageLifecycleTests.cpp)
 target_link_libraries(HoroPackageLifecycleTests PRIVATE HoroEngine::PackageLifecycle HoroEngine::PackageGameplayHost HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 target_include_directories(HoroPackageLifecycleTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests/helpers)
-add_dependencies(HoroPackageLifecycleTests HoroTestGameModule HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6 HoroEditorActivityFixture HoroEditorPageFixture)
+add_dependencies(HoroPackageLifecycleTests HoroPackageGameModule HoroExtensionAbiFixture0 HoroExtensionAbiFixture4 HoroExtensionAbiFixture6 HoroEditorActivityFixture HoroEditorPageFixture)
 target_compile_definitions(HoroPackageLifecycleTests PRIVATE
     HORO_EDITOR_PAGE_FIXTURE="$<TARGET_FILE:HoroEditorPageFixture>"
-    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
-    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroPackageGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_PACKAGE_GAME_MODULE_REVISION_FILE}"
         HORO_EDITOR_ACTIVITY_FIXTURE="$<TARGET_FILE:HoroEditorActivityFixture>"
     HORO_PACKAGE_NATIVE_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture4>"
     HORO_PACKAGE_EMPTY_FIXTURE="$<TARGET_FILE:HoroExtensionAbiFixture0>"
@@ -4441,8 +4450,8 @@ foreach(abi_hostile_fixture_mode RANGE 0 7)
 endforeach()
 add_dependencies(HoroPackageLifecycleTests HoroExtensionAbiHostileFixture6)
 target_compile_definitions(HoroPackageLifecycleTests PRIVATE
-    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
-    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
+    HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroPackageGameModule>"
+    HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_PACKAGE_GAME_MODULE_REVISION_FILE}"
     HORO_PACKAGE_TEARDOWN_FAILING_FIXTURE="$<TARGET_FILE:HoroExtensionAbiHostileFixture6>")
 add_test(NAME HoroExtensionAbiConformanceCliSupported
     COMMAND "$<TARGET_FILE:horo-extension-conformance>" --json "$<TARGET_FILE:HoroExtensionAbiFixture1>")

@@ -7,6 +7,8 @@
 
 namespace Horo::Application::PrefabAtomicTest {
 #if HORO_TEST_PHYSICS_NATIVE
+    using enum Fault;
+
     namespace {
         /** @brief Verifies the Scene's actual remapped values equal the published AI owner's records. */
         void RequireAllOwners(Fixture &fixture, std::size_t count, std::uint32_t bodies) {
@@ -28,10 +30,10 @@ namespace Horo::Application::PrefabAtomicTest {
 
         std::string_view FailureCode(Fault fault) {
             switch (fault) {
-                case Fault::Material:
-                case Fault::MaterialIdentity:
+                case Material:
+                case MaterialIdentity:
                     return Physics::PhysicsErrors::MaterialDescriptorInvalid.code.Value();
-                case Fault::AiDescriptor:
+                case AiDescriptor:
                     return AI::AIErrors::ControllerDescriptorMissing.code.Value();
                 default:
                     return Gameplay::GameplayErrors::BehaviorNotRegistered.code.Value();
@@ -44,7 +46,9 @@ namespace Horo::Application::PrefabAtomicTest {
             SECTION("AI registered before derived owners") {
                 aiFirst = true;
             }
-            SECTION("AI registered after derived owners") {}
+            SECTION("AI registered after derived owners") {
+                // Keep the default registration order with AI last.
+            }
             Fixture fixture{aiFirst};
             RequireAllOwners(fixture, 1, 0);
             const auto resident = fixture.ai.Snapshot().Value().Agents().front().handle;
@@ -65,16 +69,16 @@ namespace Horo::Application::PrefabAtomicTest {
                   "[prefab][integration][atomic][rollback]") {
             Fault fault{};
             SECTION("verified envelope with malformed native material") {
-                fault = Fault::Material;
+                fault = Material;
             }
             SECTION("valid material payload with a different asset identity") {
-                fault = Fault::MaterialIdentity;
+                fault = MaterialIdentity;
             }
             SECTION("missing actual AI activation descriptor") {
-                fault = Fault::AiDescriptor;
+                fault = AiDescriptor;
             }
             SECTION("unregistered native Gameplay behavior") {
-                fault = Fault::GameplayDescriptor;
+                fault = GameplayDescriptor;
             }
             INFO("Injected owner failure: " << static_cast<unsigned>(fault));
             Fixture fixture{false, fault};
@@ -181,13 +185,15 @@ namespace Horo::Application::PrefabAtomicTest {
 
         TEST_CASE("Scene rejects duplicate foreign and incomplete facts from a real detached AI reservation",
                   "[prefab][integration][atomic][identity][authority]") {
-            Fault fault{Fault::DuplicateFacts};
-            SECTION("duplicate fact") {}
+            Fault fault{DuplicateFacts};
+            SECTION("duplicate fact") {
+                // Keep the default duplicate-fact fault.
+            }
             SECTION("foreign Scene owner") {
-                fault = Fault::ForeignFacts;
+                fault = ForeignFacts;
             }
             SECTION("incomplete reservation") {
-                fault = Fault::MissingFacts;
+                fault = MissingFacts;
             }
             Fixture fixture{false, fault};
             const auto revision = fixture.scenes.ActiveScene()->StructuralRevision();
@@ -201,7 +207,7 @@ namespace Horo::Application::PrefabAtomicTest {
 
         TEST_CASE("Duplicate identity producer registration is rejected before the actual prefab transaction",
                   "[prefab][integration][atomic][identity][authority]") {
-            Fixture fixture{false, Fault::DuplicateProducer};
+            Fixture fixture{false, DuplicateProducer};
             fixture.Tick(1);
             fixture.Reach(3);
             RequireAllOwners(fixture, 3, 1);
@@ -209,7 +215,7 @@ namespace Horo::Application::PrefabAtomicTest {
 
         TEST_CASE("Enabled structural Navigation rejects the complete prefab before any owner publishes",
                   "[prefab][integration][atomic][navigation]") {
-            Fixture fixture{false, Fault::Navigation};
+            Fixture fixture{false, Navigation};
             const auto revision = fixture.scenes.ActiveScene()->StructuralRevision();
             fixture.Tick(1);
             const auto operation = fixture.AwaitRejection();
@@ -221,7 +227,7 @@ namespace Horo::Application::PrefabAtomicTest {
 
         TEST_CASE("Disabled typed Navigation remains intact when the real supported prefab owners publish",
                   "[prefab][integration][atomic][navigation]") {
-            Fixture fixture{false, Fault::DisabledNavigation};
+            Fixture fixture{false, DisabledNavigation};
             fixture.Tick(1);
             fixture.Reach(3);
             RequireAllOwners(fixture, 3, 1);
@@ -240,10 +246,12 @@ namespace Horo::Application::PrefabAtomicTest {
 
         TEST_CASE("Malformed prefab originals and unresolved Physics source endpoints never enter any owner",
                   "[prefab][integration][atomic][validation]") {
-            Fault fault{Fault::DuplicateAgent};
-            SECTION("same-template duplicate original agent identity") {}
+            Fault fault{DuplicateAgent};
+            SECTION("same-template duplicate original agent identity") {
+                // Keep the default duplicate agent identity fault.
+            }
             SECTION("body reference outside the exact source occurrence") {
-                fault = Fault::BodyEndpoint;
+                fault = BodyEndpoint;
             }
             Fixture fixture{false, fault};
             fixture.Tick(1);

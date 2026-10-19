@@ -329,7 +329,7 @@ namespace Horo::Prefab::Detail {
                 if (source.sourceAsset != target.sourceAsset || target.sourceObject.SourceObject().value != reference.object.value ||
                     !std::ranges::equal(source.sourceObject.NestedInstanceScope(), target.sourceObject.NestedInstanceScope()))
                     continue;
-                if (found)
+                if (found.has_value())
                     return Result<Runtime::RuntimeGroupEntitySlot>::Failure(MakeError(PrefabErrors::CorruptedPayload));
                 found = index;
             }

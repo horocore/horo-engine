@@ -251,8 +251,8 @@ namespace Horo::Application::Internal {
                 if (auto added = record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(input.aiControllers));
                     added.HasError())
                     return added;
-                auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary);
-                if (prepared.HasError())
+                if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary);
+                    prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 if (owners_->gameplay && owners_->gameplay->prefabPermission == GameplayPrefabPermission::Granted) {
                     auto limits = Prefab::PrefabLimitProfile::Create({});

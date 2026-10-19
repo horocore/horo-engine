@@ -22,7 +22,7 @@ namespace Horo::Prefab {
         }
         SECTION("foreign owner lane") {
             bool rejected{};
-            std::thread reader{[&] {
+            std::jthread reader{[&fixture, &rejected] {
                 rejected = fixture.context->CurrentTick().HasError();
             }};
             reader.join();

@@ -4,17 +4,11 @@
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 #include "PackageLifecycleTestSupport.h"
 
-#include <algorithm>
 #include <cstdint>
-#include <future>
+#include <thread>
 using namespace Horo::Packages::Tests::Support;
 
 namespace {
-    /** @brief SDK debug information varies by compiler and grows with the exported API; bound this test image to 256MiB. */
-    PackageValidationLimits GameplayFixtureArchiveLimits() {
-        return {.fileBytes = 256ULL * 1024 * 1024};
-    }
-
     std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false) {
         const auto entry = "module" + std::filesystem::path{HORO_TEST_GAME_MODULE_PATH}.extension().string();
         nlohmann::json descriptor{{"id", "fixture.gameplay"},
@@ -37,8 +31,7 @@ namespace {
             descriptor["contributions"] = {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", "fixture.backend"}}};
             files.emplace_back("extensions/native/" + backend, FileBytes(HORO_PACKAGE_NATIVE_FIXTURE));
         }
-        return Graph(HORO_TEST_GAME_MODULE_PATH, true, true, "fixture.gameplay", std::move(descriptor), std::move(files),
-                     GameplayFixtureArchiveLimits());
+        return Graph(HORO_TEST_GAME_MODULE_PATH, true, true, "fixture.gameplay", std::move(descriptor), std::move(files));
     }
 
     struct GameplayFixture final {
@@ -99,8 +92,8 @@ namespace {
         Result<void> Activate() {
             std::vector<EnabledPackageModule> selected;
             if (withBackend)
-                selected.push_back(
-                    {enabled.package, enabled.descriptor, "fixture.backend", Extensions::ExtensionModuleRole::BackendCapability});
+                selected.emplace_back(enabled.package, enabled.descriptor, "fixture.backend",
+                                      Extensions::ExtensionModuleRole::BackendCapability);
             selected.push_back(enabled);
             return base.service->ActivateModules(selected, PackageActivationBoundary::Quiescent, base.cancellation.Token());
         }
@@ -111,23 +104,24 @@ TEST_CASE("Package runtime role invokes actual SDK owner and retains native call
     GameplayFixture fixture;
     REQUIRE(fixture.Activate().HasValue());
     const auto generation = fixture.base.service->Active()->generation;
-    auto module = fixture.gameplay->Acquire(fixture.enabled.package, "game.tests", generation);
-    REQUIRE(module);
-    CHECK(module->Components().IsFrozen());
-    CHECK(module->ActiveServices().size() == 1);
-    auto acquired = module->Events().Acquire(90, 1, 91, 1, module->Cancellation());
+    auto loaded = fixture.gameplay->Acquire(fixture.enabled.package, "game.tests", generation);
+    REQUIRE(loaded);
+    CHECK(loaded->Components().IsFrozen());
+    CHECK(loaded->ActiveServices().size() == 1);
+    auto acquired = loaded->Events().Acquire(90, 1, 91, 1, loaded->Cancellation());
     REQUIRE(acquired.HasValue());
     auto callback = std::move(acquired).Value();
-    const auto artifact = module->LoadedArtifactPath();
+    const auto artifact = loaded->LoadedArtifactPath();
     fixture.base.service->Shutdown();
     CHECK_FALSE(fixture.gameplay->Acquire(fixture.enabled.package, "game.tests", generation));
     CHECK(fixture.retirement->Drain() == 1);
     CHECK(std::filesystem::exists(artifact));
-    module.reset();
+    loaded.reset();
     CHECK(fixture.retirement->Close().HasError());
-    std::async(std::launch::async, [owned = std::move(callback)]() mutable {
+    std::jthread releaseCallback{[owned = std::move(callback)]() mutable {
         owned.reset();
-    }).get();
+    }};
+    releaseCallback.join();
     CHECK(fixture.retirement->Close().HasValue());
     CHECK_FALSE(std::filesystem::exists(artifact));
 }
@@ -175,13 +169,13 @@ TEST_CASE("Actual gameplay generations drain before repeated update and uninstal
         const auto generation = fixture.base.service->Active()->generation;
         CHECK(generation > previousGeneration);
         previousGeneration = generation;
-        auto module = fixture.gameplay->Acquire(fixture.enabled.package, "game.tests", generation);
-        REQUIRE(module);
+        auto loaded = fixture.gameplay->Acquire(fixture.enabled.package, "game.tests", generation);
+        REQUIRE(loaded);
         REQUIRE(
             fixture.base.service->ActivateModules({}, PackageActivationBoundary::Quiescent, fixture.base.cancellation.Token()).HasValue());
         CHECK_FALSE(fixture.gameplay->Acquire(fixture.enabled.package, "game.tests", generation));
         CHECK(fixture.retirement->Close().HasError());
-        module.reset();
+        loaded.reset();
         REQUIRE(fixture.retirement->Close().HasValue());
     }
     auto removed = std::make_shared<PackageRestoreGraph>(*fixture.base.install.ActiveGraph());
@@ -205,42 +199,4 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
     });
     REQUIRE(runtime != active->modules.end());
     CHECK(runtime->diagnostic.has_value());
-}
-
-TEST_CASE("Gameplay fixture file policy remains bounded without changing production archive limits", "[packages][gameplay][hybrid]") {
-    const PackageValidationLimits production;
-    const auto fixture = GameplayFixtureArchiveLimits();
-    REQUIRE(production.fileBytes == 64ULL * 1024 * 1024);
-    REQUIRE(fixture.fileBytes == 256ULL * 1024 * 1024);
-    REQUIRE(fixture.archiveBytes == production.archiveBytes);
-    REQUIRE(fixture.expandedBytes == production.expandedBytes);
-    REQUIRE(fixture.manifestBytes == production.manifestBytes);
-    REQUIRE(fixture.entries == production.entries);
-
-    // Scale the same file-ceiling boundary down to an actual tiny archive, avoiding another full SDK fixture allocation.
-    const auto bytes = ::Horo::Tests::Packages::ValidPackageArchiveBytes();
-    mz_zip_archive zip{};
-    REQUIRE(mz_zip_reader_init_mem(&zip, bytes.data(), bytes.size(), 0));
-    std::uint64_t maximumEntryBytes = 0;
-    for (mz_uint index = 0; index < mz_zip_reader_get_num_files(&zip); ++index) {
-        mz_zip_archive_file_stat stat{};
-        REQUIRE(mz_zip_reader_file_stat(&zip, index, &stat));
-        maximumEntryBytes = std::max<std::uint64_t>(maximumEntryBytes, stat.m_uncomp_size);
-    }
-    REQUIRE(mz_zip_reader_end(&zip));
-    REQUIRE(maximumEntryBytes > 1);
-    REQUIRE(maximumEntryBytes < 1'024);
-    auto defaultPolicy = production;
-    defaultPolicy.fileBytes = maximumEntryBytes - 1;
-    const auto rejected = ValidatedPackageArchive::Verify(bytes, defaultPolicy);
-    REQUIRE(rejected.HasError());
-    REQUIRE(rejected.ErrorValue().code.Value() == "packages.validation.limit");
-    auto explicitPolicy = defaultPolicy;
-    explicitPolicy.fileBytes = maximumEntryBytes;
-    const auto admitted = ValidatedPackageArchive::Verify(bytes, explicitPolicy);
-    REQUIRE(admitted.HasValue());
-    REQUIRE(explicitPolicy.archiveBytes == defaultPolicy.archiveBytes);
-    REQUIRE(explicitPolicy.expandedBytes == defaultPolicy.expandedBytes);
-    const auto path = Parse<PackagePath>("assets/data.bin");
-    REQUIRE(admitted.Value().ReadDeclaredFile(path, explicitPolicy.fileBytes).HasValue());
 }

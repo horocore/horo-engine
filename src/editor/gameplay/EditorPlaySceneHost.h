@@ -89,7 +89,9 @@ namespace Horo::Editor {
         }
 
         /** @brief Revokes module-owned pending prefab work before behavior reload; resident Scene groups keep their leases. */
-        virtual void QuiesceGameplay() noexcept {}
+        virtual void QuiesceGameplay() noexcept {
+            // Hosts without a prefab grant have no module-owned work to revoke.
+        }
 
         /** @brief Borrows actual capture/publication facts without allocating or inferring a backend.
          * @return Owner-lane receipt or unknown for hosts which supply no verified Physics evidence.

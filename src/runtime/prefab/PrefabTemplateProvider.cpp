@@ -61,8 +61,8 @@ namespace Horo::Prefab {
                                             : std::span<const Runtime::RuntimeGroupReference>{options.references[entity]};
                 std::size_t index{};
                 while (reference < data.references.size() && data.references[reference].owner.entity.value == entity) {
-                    const auto &source = data.references[reference++];
-                    if (index >= references.size() || references[index].ownerMember != source.owner.member ||
+                    if (const auto &source = data.references[reference++];
+                        index >= references.size() || references[index].ownerMember != source.owner.member ||
                         references[index].property != source.property.Value() || !MatchesCookedReference(data, source, references[index]))
                         return Result<void>::Failure(MakeError(PrefabErrors::ReferenceRewriteInvalid));
                     ++index;

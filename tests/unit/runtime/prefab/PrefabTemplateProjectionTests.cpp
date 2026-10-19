@@ -55,7 +55,9 @@ namespace Horo::Prefab {
 
     TEST_CASE("Runtime provider accepts fresh behavior IDs and complete portable reference classes", "[prefab][provider][projection]") {
         ProjectionFixture projection;
-        SECTION("unbound optional interface") {}
+        SECTION("unbound optional interface") {
+            // Keep the optional interface unbound as admitted by the cooked declaration.
+        }
         SECTION("bound optional interface retains its declared component constraint") {
             projection.options.references[0][4].target =
                 Runtime::RuntimeGroupExternalReference{projection.external, projection.components[1].gameplayComponents[0].typeId};

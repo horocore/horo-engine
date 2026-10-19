@@ -6,7 +6,7 @@
 namespace Horo::Application::PrefabCookTestSupport {
     namespace {
         /** @brief Pins actual canonical envelopes from the same complete publication as the decoded Scene resources. */
-        std::unique_ptr<Internal::CommittedSceneAssets> Capture(HostFixture &fixture) {
+        std::unique_ptr<Internal::CommittedSceneAssets> Capture(const HostFixture &fixture) {
             auto captured =
                 Internal::CommittedSceneAssets::Capture({fixture.cooked.path, fixture.request.assets.target}, fixture.registry.Snapshot());
             REQUIRE(captured.HasValue());

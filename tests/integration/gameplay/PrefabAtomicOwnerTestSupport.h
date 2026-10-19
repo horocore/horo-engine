@@ -17,10 +17,10 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -31,7 +31,13 @@
 #include <vector>
 
 namespace Horo::Application::PrefabAtomicTest {
-    using namespace Internal;
+    using Internal::CommittedSceneAssets;
+    using Internal::GameplayPhysicsPermission;
+    using Internal::GameplayPrefabPermission;
+    using Internal::GameplayWorldComposition;
+    using Internal::GameplayWorldSelection;
+    using Internal::MakeGameplayStructuralParticipant;
+    using Internal::ScenePhysicsHost;
     using Kind = Runtime::BuiltinSceneComponentKind;
 
     inline Gameplay::BehaviorTypeId BehaviorType(std::string_view name) {
@@ -92,14 +98,15 @@ namespace Horo::Application::PrefabAtomicTest {
     class InvalidIdentityCandidate final : public Runtime::SceneStructuralCandidate {
     public:
         InvalidIdentityCandidate(std::unique_ptr<Runtime::SceneStructuralCandidate> owner, Fault fault) : owner_(std::move(owner)) {
+            using enum Fault;
             const auto original = owner_->AgentIdentities();
             facts_.assign(original.begin(), original.end());
             REQUIRE_FALSE(facts_.empty());
-            if (fault == Fault::DuplicateFacts)
+            if (fault == DuplicateFacts)
                 facts_.push_back(facts_.front());
-            else if (fault == Fault::ForeignFacts)
+            else if (fault == ForeignFacts)
                 ++facts_.front().entity.runtime.value;
-            else if (fault == Fault::MissingFacts)
+            else if (fault == MissingFacts)
                 facts_.pop_back();
         }
 
@@ -259,8 +266,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 REQUIRE(loaded.HasValue());
                 auto decoded = Assets::DecodeCookedArtifact(loaded.Value());
                 REQUIRE(decoded.HasValue());
-                entries.push_back(
-                    {id, decoded.Value().type, id.ToString() + ".cooked", ComputeSha256(std::as_bytes(std::span(loaded.Value())))});
+                entries.emplace_back(id, decoded.Value().type, id.ToString() + ".cooked",
+                                     ComputeSha256(std::as_bytes(std::span(loaded.Value()))));
                 envelopes.push_back(std::move(loaded).Value());
             }
             REQUIRE(Assets::OutputTestSupport::PublishFixture(committedRoot.path, target, entries, envelopes).HasValue());
@@ -280,40 +287,40 @@ namespace Horo::Application::PrefabAtomicTest {
             root.provenance = {asset, {}, ComputeSha256(std::as_bytes(std::span("source", 6)))};
             root.members.emplace_back(Gameplay::BehaviorComponent{{5}, BehaviorType("game.tests.dynamic_mover")});
             SceneSource::SceneObjectComponentSet values{.aiAgent = controller.agent.agent, .aiController = controller.agent.controller};
-            root.members.push_back(Builtin(values, Kind::AiAgent, "aiAgent", 101));
-            root.members.push_back(Builtin(values, Kind::AiController, "aiController", 102));
+            root.members.emplace_back(Builtin(values, Kind::AiAgent, "aiAgent", 101));
+            root.members.emplace_back(Builtin(values, Kind::AiController, "aiController", 102));
             return root;
         }
 
         Prefab::CookedPrefabEntity Child(const Prefab::CookedPrefabEntity &root, Fault fault) const {
+            using enum Fault;
             auto child = root;
             child.parent = Prefab::CookedPrefabEntitySlot{0};
             child.provenance.sourceObject = Prefab::PrefabObjectAddress::Create({}, {7}).Value();
             std::get<Gameplay::BehaviorComponent>(child.members[0]).instanceId.value = 6;
             auto agent = controller.agent.agent;
-            agent.agent = AI::TestSupport::MakeIdentity<AI::AgentId>(fault == Fault::DuplicateAgent ? 1 : 2);
+            agent.agent = AI::TestSupport::MakeIdentity<AI::AgentId>(fault == DuplicateAgent ? 1 : 2);
             SceneSource::SceneObjectComponentSet values{.aiAgent = agent,
                                                         .rigidBody = Runtime::RigidBodyComponent{.id = {200}, .body = {1}},
-                                                        .colliders = {Physics::Collider(201, 1, fault == Fault::BodyEndpoint ? 99 : 7, 1,
-                                                                                        material,
+                                                        .colliders = {Physics::Collider(201, 1, fault == BodyEndpoint ? 99 : 7, 1, material,
                                                                                         Runtime::PhysicsAnalyticCollider{
                                                                                             Runtime::PhysicsBoxCollider{}})}};
             child.members[1] = Builtin(values, Kind::AiAgent, "aiAgent", 101);
-            if (fault == Fault::AiDescriptor) {
+            if (fault == AiDescriptor) {
                 values.aiController = controller.agent.controller;
                 values.aiController->controller = AI::TestSupport::MakeIdentity<AI::ControllerTypeId>(99);
                 child.members[2] = Builtin(values, Kind::AiController, "aiController", 102);
             }
-            if (fault == Fault::GameplayDescriptor)
+            if (fault == GameplayDescriptor)
                 std::get<Gameplay::BehaviorComponent>(child.members[0]).typeId = BehaviorType("game.tests.missing");
-            child.members.push_back(Builtin(values, Kind::RigidBody, "rigidBody", 201));
-            child.members.push_back(Builtin(values, Kind::Collider, "colliders", 202, true));
-            if (fault == Fault::Navigation || fault == Fault::DisabledNavigation) {
+            child.members.emplace_back(Builtin(values, Kind::RigidBody, "rigidBody", 201));
+            child.members.emplace_back(Builtin(values, Kind::Collider, "colliders", 202, true));
+            if (fault == Navigation || fault == DisabledNavigation) {
                 values.navigationAgent =
                     Runtime::NavigationAgentComponent{.profile = Navigation::NavigationAgentProfileId::Create(7).Value(),
                                                       .filter = Navigation::NavigationFilterId::Create(9).Value(),
-                                                      .enabled = fault == Fault::Navigation};
-                child.members.push_back(Builtin(values, Kind::NavigationAgent, "navigationAgent", 203));
+                                                      .enabled = fault == Navigation};
+                child.members.emplace_back(Builtin(values, Kind::NavigationAgent, "navigationAgent", 203));
             }
             return child;
         }
@@ -333,8 +340,9 @@ namespace Horo::Application::PrefabAtomicTest {
         }
 
         std::unique_ptr<Runtime::SceneStructuralParticipant> AiOwner(std::span<const AI::AiControllerDescriptor> descriptors, Fault fault) {
+            using enum Fault;
             auto owner = ai.MakeStructuralParticipant(descriptors);
-            if (fault == Fault::DuplicateFacts || fault == Fault::ForeignFacts || fault == Fault::MissingFacts)
+            if (fault == DuplicateFacts || fault == ForeignFacts || fault == MissingFacts)
                 return std::make_unique<InvalidIdentityParticipant>(std::move(owner), fault);
             return owner;
         }
@@ -398,10 +406,9 @@ namespace Horo::Application::PrefabAtomicTest {
 
         std::size_t Count() const {
             std::size_t count{};
-            const auto scene = scenes.ActiveScene();
-            if (scene)
+            if (const auto scene = scenes.ActiveScene(); scene)
                 for (std::size_t index = 0; index < scene->SlotCount(); ++index)
-                    count += scene->EntityAt(index).has_value();
+                    count += static_cast<std::size_t>(scene->EntityAt(index).has_value());
             return count;
         }
 
@@ -424,9 +431,9 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(symbol != nullptr);
             using Copy = void (*)(Prefab::PrefabOperation *, Prefab::PrefabOperation *, Prefab::PrefabInstance *);
             static_assert(sizeof(Copy) == sizeof(symbol));
-            Copy copy{};
-            std::memcpy(&copy, &symbol, sizeof(copy));
-            Prefab::PrefabOperation spawn, despawn;
+            const auto copy = std::bit_cast<Copy>(symbol);
+            Prefab::PrefabOperation spawn;
+            Prefab::PrefabOperation despawn;
             Prefab::PrefabInstance instance;
             copy(&spawn, &despawn, &instance);
             return spawn;
@@ -436,8 +443,7 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (std::chrono::steady_clock::now() < deadline) {
                 Pump();
-                auto operation = SpawnOperation();
-                if (operation.Failure()) {
+                if (auto operation = SpawnOperation(); operation.Failure()) {
                     REQUIRE(operation.State() == Prefab::PrefabSpawnState::Failed);
                     return operation;
                 }
