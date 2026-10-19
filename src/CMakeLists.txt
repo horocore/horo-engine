@@ -909,6 +909,7 @@ add_library(HoroRuntimeScene STATIC
         runtime/scene/BuiltinSceneComponents.cpp
         runtime/scene/AudioSceneExtraction.cpp
         runtime/scene/NavigationSceneComponents.cpp
+        runtime/scene/NavigationSceneSources.cpp
         runtime/scene/PersistentEntityIdentity.cpp
         runtime/scene/SaveableComponentState.cpp
         runtime/scene/RestoreReferenceGraph.cpp

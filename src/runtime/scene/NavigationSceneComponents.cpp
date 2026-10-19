@@ -157,6 +157,35 @@ namespace Horo::Runtime {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Checks explicit local collider ownership and one unambiguous bake filter for each Scene surface. */
+        Result<void> ValidateSources(const std::span<const NavigationSceneComponentView> components, const NavigationSurfaceMap &surfaces) {
+            std::size_t count{};
+            for (const auto &view : components) {
+                if (view.sources.size() > Navigation::NavigationSourceGeometryLimits::MaximumContributions - count)
+                    return Failure(Navigation::NavigationErrors::SceneComponentInvalid,
+                                   "Navigation sources exceed the qualified complete-capture limit.");
+                count += view.sources.size();
+            }
+            if (count == 0)
+                return Result<void>::Success();
+            std::unordered_map<std::uint64_t, Navigation::NavigationFilterId> filters;
+            filters.reserve(count);
+            for (const auto &view : components) {
+                if (auto valid = ValidateNavigationSourceBindings(view.sources, view.colliders); valid.HasError())
+                    return valid;
+                for (const auto &source : view.sources) {
+                    if (!surfaces.contains(source.surface.Value()))
+                        return Failure(Navigation::NavigationErrors::SceneSurfaceMissing,
+                                       "Navigation sources must reference an exact surface in the same Scene.");
+                    if (const auto [filter, inserted] = filters.try_emplace(source.surface.Value(), source.filter);
+                        !inserted && filter->second != source.filter)
+                        return Failure(Navigation::NavigationErrors::SceneComponentConflict,
+                                       "Navigation source bindings on one surface must use the same authored bake filter.");
+                }
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ValidateNavigationSurfaceComponent */
@@ -265,6 +294,8 @@ namespace Horo::Runtime {
         surfaces.reserve(components.size());
         if (Result<void> valid = ValidateSurfaces(components, surfaces); valid.HasError())
             return valid;
-        return ValidateReferences(components, surfaces);
+        if (auto valid = ValidateReferences(components, surfaces); valid.HasError())
+            return valid;
+        return ValidateSources(components, surfaces);
     }
 }  // namespace Horo::Runtime

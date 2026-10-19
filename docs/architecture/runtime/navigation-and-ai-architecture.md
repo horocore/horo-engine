@@ -3026,3 +3026,18 @@ semantics. This function does not discover Scene eligibility, select providers,
 prove material asset validity or grant source/publication authority. Infinite
 planes require explicit finite world bounds. No existing persisted format changes
 in this additive geometry layer; Scene bindings follow in a dependent change.
+
+### Explicit local collider source policy
+
+`NavigationSourceComponent` binds an exact object-local collider slot to one Scene
+surface and explicit area/filter identities. Runtime validation rejects missing
+or duplicate local collider bindings, invalid schema/generation, absent Scene
+surfaces, mixed filters on one surface, and per-object/whole-capture overflow.
+Disabled bindings retain their identity and reference invariants.
+
+The extended borrowed `NavigationSceneComponentView` defaults to empty sources;
+existing callers retain their behavior. Callers supplying bindings must also
+supply their exact same-object collider inventory. This contract does not prove
+static geometry eligibility or resolve definition semantics, and does not add
+runtime discovery. Persisted Scene/editor adoption follows separately; this
+Runtime-only layer changes no persisted schema.

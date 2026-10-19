@@ -2,7 +2,7 @@
 
 /**
  * @file NavigationSceneComponents.h
- * @brief Typed authored navigation surface, region, modifier-volume, link, and agent Scene components.
+ * @brief Typed authored navigation surface, source, region, modifier-volume, link, and agent Scene components.
  */
 
 #include "Horo/Assets/AssetId.h"
@@ -12,6 +12,8 @@
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationIdentity.h"
 #include "Horo/Navigation/NavigationLinkTypes.h"
+#include "Horo/Navigation/NavigationSourceGeometry.h"
+#include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +25,8 @@
 namespace Horo::Runtime {
     /** @brief Maximum grounded profiles selected by one authored navigation surface. */
     inline constexpr std::size_t MaximumNavigationSurfaceProfiles = 64;
+    /** @brief Hard bound on explicit collider-to-surface bindings authored by one Scene object. */
+    inline constexpr std::size_t MaximumNavigationSourcesPerObject = 64;
 
     /** @brief Closed authored scope choices for one navigation surface. */
     enum class NavigationBakeScope : std::uint8_t {
@@ -68,6 +72,24 @@ namespace Horo::Runtime {
         bool enabled{true};
 
         [[nodiscard]] bool operator==(const NavigationSurfaceComponent &) const noexcept = default;
+    };
+
+    /** @brief Explicit navigation inclusion and semantic policy for one collider on the containing Scene object.
+     * @details The durable local binding key is (collider, surface); no new asset, generated geometry or runtime
+     * identity is authored. Provenance also includes the owning Scene/object and collider component identity.
+     * Area and filter must resolve in the surface definition. Sources targeting the same surface use one filter.
+     * Geometry admission separately requires an enabled non-sensor collider and exact static-body/source evidence.
+     */
+    struct NavigationSourceComponent final {
+        PhysicsColliderSlotId collider;
+        Navigation::SurfaceId surface;
+        Navigation::NavigationAreaId area;
+        Navigation::NavigationFilterId filter;
+        std::uint32_t schemaVersion{1};
+        std::uint64_t generation{1};
+        bool enabled{true};
+
+        [[nodiscard]] constexpr bool operator==(const NavigationSourceComponent &) const noexcept = default;
     };
 
     /** @brief Stable authored bounded region that includes or excludes sources for one exact surface. */
@@ -173,12 +195,25 @@ namespace Horo::Runtime {
 
     /** @brief Borrowed Scene-object projection used to validate navigation components without copying payload storage. */
     struct NavigationSceneComponentView final {
-        const NavigationSurfaceComponent *surface{};   /**< Optional surface owned by the immutable source snapshot. */
-        const NavigationRegionComponent *region{};     /**< Optional region owned by the immutable source snapshot. */
-        const NavigationModifierComponent *modifier{}; /**< Optional modifier owned by the immutable source snapshot. */
-        const NavigationLinkComponent *link{};         /**< Optional grounded link owned by the immutable source snapshot. */
-        const NavigationAgentComponent *agent{};       /**< Optional agent intent owned by the immutable source snapshot. */
+        const NavigationSurfaceComponent *surface{};        /**< Optional surface owned by the immutable source snapshot. */
+        const NavigationRegionComponent *region{};          /**< Optional region owned by the immutable source snapshot. */
+        const NavigationModifierComponent *modifier{};      /**< Optional modifier owned by the immutable source snapshot. */
+        const NavigationLinkComponent *link{};              /**< Optional grounded link owned by the immutable source snapshot. */
+        const NavigationAgentComponent *agent{};            /**< Optional agent intent owned by the immutable source snapshot. */
+        std::span<const NavigationSourceComponent> sources; /**< Explicit bindings owned by this Scene object. */
+        std::span<const ColliderComponent> colliders;       /**< Same object's exact collider slots; no Physics world is borrowed. */
     };
+
+    /** @brief Validates one source binding without resolving its definition or collider.
+     * @param component Authored source policy. @return Success or SceneComponentInvalid for missing identity/schema/generation.
+     */
+    [[nodiscard]] Result<void> ValidateNavigationSourceComponent(const NavigationSourceComponent &component);
+    /** @brief Validates bounded unique local bindings against exactly one collider slot on their containing object.
+     * @param sources Authored inclusion policies. @param colliders Same object's authored collider inventory.
+     * @return Success or typed invalid/conflict; surface/definition/static-geometry admission remains separate.
+     */
+    [[nodiscard]] Result<void> ValidateNavigationSourceBindings(std::span<const NavigationSourceComponent> sources,
+                                                                std::span<const ColliderComponent> colliders);
 
     /** @brief Validates one surface payload independently of Scene-wide identity references.
      * @param component Authored component value.
@@ -229,7 +264,8 @@ namespace Horo::Runtime {
     /**
      * @brief Validates unique identities and references through borrowed component projections without payload copies.
      * @param components Views whose pointers remain valid for the duration of this call.
-     * @return Success, or a typed invalid, conflict, or missing-surface diagnostic.
+     * @return Success, or a typed invalid, conflict, or missing-surface diagnostic. Source bindings are bounded,
+     * locally unique, reference an exact local collider and Scene surface, and agree on each surface's filter.
      */
     [[nodiscard]] Result<void> ValidateNavigationSceneComponentViews(std::span<const NavigationSceneComponentView> components);
 }  // namespace Horo::Runtime

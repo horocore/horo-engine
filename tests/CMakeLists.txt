@@ -4067,6 +4067,7 @@ target_link_libraries(HoroRuntimeSaveTestCompositionsTests PRIVATE HoroEngine::R
 add_executable(HoroRuntimeSceneTests
         unit/runtime/scene/AudioSceneExtractionTests.cpp
         unit/runtime/scene/NavigationSceneComponentsTests.cpp
+        unit/runtime/scene/NavigationSceneSourcesTests.cpp
         unit/runtime/scene/NavigationSceneActivationTests.cpp
         unit/runtime/scene/SceneInitialPlacementTests.cpp
         unit/runtime/scene/NavigationSceneLinkCaptureTests.cpp
