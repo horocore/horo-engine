@@ -286,6 +286,7 @@ target_compile_features(HoroPackages PUBLIC cxx_std_20)
 target_link_libraries(HoroPackages PUBLIC HoroEngine::Foundation PRIVATE utf8proc nlohmann_json::nlohmann_json miniz)
 
 add_library(HoroPackageSecurity STATIC
+        packages/restore/GameplaySourceLibrary.cpp
         packages/restore/PackageInstall.cpp
         packages/restore/PackageInstallErrors.cpp
         packages/restore/PackageRestore.cpp
@@ -1050,6 +1051,8 @@ if(BUILD_TESTING)
 endif()
 
 add_library(HoroGameplayBuild STATIC
+        application/gameplay/GameplayBuildLibraries.cpp
+        application/gameplay/GameplayBuildLibraryStaging.cpp
         application/gameplay/CompilerDiagnosticParser.cpp
         application/gameplay/GameplayBuildInputs.cpp
         application/gameplay/GameplayBuildInvocation.cpp
@@ -1060,7 +1063,7 @@ target_compile_features(HoroGameplayBuild PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayBuild PUBLIC ${PROJECT_SOURCE_DIR}/include)
 target_link_libraries(HoroGameplayBuild
         PUBLIC HoroEngine::Foundation
-        PRIVATE HoroEngine::Platform HoroEngine::GameplayModuleHost nlohmann_json::nlohmann_json)
+        PRIVATE HoroEngine::PackageSecurity HoroEngine::Platform HoroEngine::GameplayModuleHost HoroPackageContentStagingInternal nlohmann_json::nlohmann_json)
 add_library(HoroEngine::GameplayLua ALIAS HoroGameplayLua)
 target_compile_features(HoroGameplayLua PUBLIC cxx_std_20)
 target_include_directories(HoroGameplayLua PUBLIC ${PROJECT_SOURCE_DIR}/include)

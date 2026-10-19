@@ -21,6 +21,55 @@ long-term extension C ABI.
 - Native code hot reload is optional development behavior and never a shipping requirement.
 - A project has one primary native gameplay module in the initial contract; additional gameplay modules, mods, or script packages are future extension points.
 
+Imported source libraries do not create another project module. The application
+selects a `Packages::GameplaySourceLibrary` from a sealed installed graph after
+explicit approval of that exact artifact for native compilation. It supplies the
+selections in an immutable `GameplaySourceLibrarySet`, retained through
+`GameplayBuildRequest::sourceLibraries`. The build checks the actual
+portable request and canonical lock before child admission and again around
+publication; retained bytes cannot substitute a different package/version or
+dependency graph. Restore/install is availability evidence, never compilation
+approval.
+
+The SDK's primary `horo_add_gameplay_module` call consumes the application's data-only
+library manifest, compiles the selected C++ sources into the primary module, and
+includes their annotations in the same generated descriptor bundle. Source file
+order and import fingerprints are canonical. The configured input manifest must
+contain every imported source before the compiler may run. Each preparation has a
+fresh receipt, so a stale configure/source list cannot certify a later build.
+No package CMake,
+configure hook or executable is run to import source libraries. `NO_MANIFEST`
+auxiliary targets do not automatically consume project imports.
+
+Source libraries use the current project's C++20 SDK/toolchain and ordinary C++
+namespaces. Authors own globally unique behavior/component IDs and qualified
+symbols; conflicting registrations or duplicate external definitions fail through
+the existing generator, registries and linker. A contribution's root is its
+private include root, so public includes should use a unique library prefix under
+that root. Selected sources must be `.cpp`, `.cc` or `.cxx`; prebuilt binaries are
+not accepted as sources or linked through this path. Native prebuilt gameplay
+packages continue through explicit `PackageLifecycleService` selection and
+`GameplayPackageModuleHost`, with exact platform/SDK fingerprint, independent trust,
+capability admission and retirement ownership.
+
+Imported source bytes live under the project's private build cache, keyed by their
+archive and source-selection fingerprint. Reuse checks the complete inventory and
+all file hashes; unknown, redirected, missing or changed files fail before configure.
+The original project sources and authored scene data are never overwritten.
+Selection retains immutable archives through builds and cache cleanup. Cancelling
+preparation removes its unpublished candidate; existing cache entries and the last
+successful module publication survive failure. Limits are 64 libraries, 4096 files
+and 64 MiB per request, additionally 256 files/64 MiB per contribution.
+
+This additive host API changes `GameplayBuildRequest`'s C++ layout. Host callers
+must rebuild against the same headers and explicitly restore/install/select any
+source libraries before building; callers without imports retain their existing
+request behavior. Gameplay module ABI exports are unchanged. Header ownership is
+`HoroPackageSecurity` for source selection and `HoroGameplayBuild` for application
+orchestration. The request forward-declares its optional immutable owner, so hosts
+without imports need no package headers. The build privately depends on
+PackageSecurity and the non-installed package staging interface.
+
 ## Document Map
 
 - [Current Gameplay Module Contract Audit](./gameplay-module-contract-audit.md):

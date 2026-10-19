@@ -197,6 +197,7 @@ add_test(NAME HoroModelProviderContractTests
 set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 60)
 
 add_executable(HoroPackageValidationTests
+    unit/packages/GameplaySourceLibraryTests.cpp
     unit/packages/PackageInstallTests.cpp
     unit/packages/PackageDependencyResolverTests.cpp
     unit/packages/PackageLockfileTests.cpp
@@ -3013,9 +3014,15 @@ target_link_libraries(HoroPlatformServicesCompositionTests PRIVATE HoroEngine::P
 add_test(NAME HoroPlatformServicesCompositionTests COMMAND HoroPlatformServicesCompositionTests)
 set_tests_properties(HoroPlatformServicesCompositionTests PROPERTIES LABELS "unit;platform-services;headless")
 add_executable(HoroGameplayBuildServiceTests
+        unit/application/GameplayLibraryBuildTests.cpp
         unit/application/CompilerDiagnosticParserTests.cpp
         unit/application/GameplayBuildServiceTests.cpp
 )
+add_executable(HoroGameplayBuildOpaquePackageConsumer support/GameplayBuildPublicHeaderConsumer.cpp)
+target_compile_features(HoroGameplayBuildOpaquePackageConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayBuildOpaquePackageConsumer PRIVATE HoroEngine::GameplayBuild)
+add_test(NAME HoroGameplayBuildOpaquePackageConsumer COMMAND HoroGameplayBuildOpaquePackageConsumer)
+set_tests_properties(HoroGameplayBuildOpaquePackageConsumer PROPERTIES LABELS "unit;gameplay;headless;sonar-coverage")
 target_compile_features(HoroGameplayBuildServiceTests PRIVATE cxx_std_20)
 target_compile_definitions(HoroGameplayBuildServiceTests PRIVATE
         HORO_GAMEPLAY_SDK_PACKAGE_DIR="${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
@@ -3025,7 +3032,10 @@ target_compile_definitions(HoroGameplayBuildServiceTests PRIVATE
 target_link_libraries(HoroGameplayBuildServiceTests
         PRIVATE
         HoroEngine::GameplayBuild
+        HoroEngine::PackageSecurity
+        HoroEngine::GameplayModuleHost
         HoroEngine::Platform
+        nlohmann_json::nlohmann_json miniz
 )
 add_executable(HoroEditorViewportSceneTests
         unit/editor/EditorViewportSceneTests.cpp
