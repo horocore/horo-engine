@@ -91,8 +91,8 @@ namespace Horo::Assets {
     class AssetCookCache final {
     public:
         /**
-         * @brief Constructs a cache rooted at the given directory.
-         * @param root Cache root directory. Created if it does not exist.
+         * @brief Constructs a cache view without accessing or creating directories.
+         * @param root Cache root directory. Store creates missing directories when writing an entry.
          * @param limits Size bounds applied to loaded and stored entries.
          */
         explicit AssetCookCache(std::filesystem::path root, const AssetCookLimits &limits = {});
@@ -112,7 +112,7 @@ namespace Horo::Assets {
          * @param artifact Full encoded artifact envelope bytes.
          * @param cancellation Cancellation token for cooperative abort.
          * @return Result<void> indicating success or a typed store error.
-         * @details Writes to a temporary sibling file, then atomically renames.
+         * @details Creates missing directories, writes to a temporary sibling file, then atomically renames.
          *          If the key path already exists, verifies existing bytes are
          *          identical before discarding the temp file.
          */
