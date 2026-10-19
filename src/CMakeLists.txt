@@ -2684,6 +2684,7 @@ add_library(HoroSceneSource STATIC
         scene/source/SceneSourceCharacterParsing.cpp
         scene/source/SceneSourceComponentParsing.cpp
         scene/source/SceneSourceNavigationParsing.cpp
+        scene/source/SceneSourceNavigationSourceParsing.cpp
         scene/source/SceneSourcePhysicsParsing.cpp
         scene/source/SceneSourceScene.cpp
         scene/source/SceneSourceGenerated.cpp

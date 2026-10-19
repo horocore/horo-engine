@@ -184,6 +184,18 @@ namespace Horo::SceneSource::Detail {
 
     /** @brief Appends optional navigation authoring payloads without increasing the core component serializer's branching. */
     void AppendNavigationComponents(WireJson &value, const SceneObjectComponentSet &components) {
+        if (!components.navigationSources.empty()) {
+            auto &sources = value["navigationSources"];
+            sources = WireJson::array();
+            for (const auto &source : components.navigationSources)
+                sources.push_back({{"collider", source.collider.value},
+                                   {"surface", source.surface.Value()},
+                                   {"area", source.area.Value()},
+                                   {"filter", source.filter.Value()},
+                                   {"schemaVersion", source.schemaVersion},
+                                   {"generation", source.generation},
+                                   {"enabled", source.enabled}});
+        }
         if (components.navigationSurface)
             AppendNavigationSurface(value, *components.navigationSurface);
         if (components.navigationRegion)

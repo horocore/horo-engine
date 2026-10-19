@@ -24,7 +24,7 @@ namespace Horo::Editor::SceneDocumentDetail {
                                          : 0U;
         const std::size_t linkProfiles =
             components.navigationLink ? components.navigationLink->profiles.size() * sizeof(Navigation::NavigationAgentProfileId) : 0U;
-        return surfaceProfiles + linkProfiles;
+        return surfaceProfiles + linkProfiles + components.navigationSources.size() * sizeof(Runtime::NavigationSourceComponent);
     }
 
     [[nodiscard]] inline std::size_t EstimateSerializedComponentMemoryBytes(

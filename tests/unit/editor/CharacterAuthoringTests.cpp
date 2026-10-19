@@ -18,7 +18,8 @@ namespace Horo::Editor {
                 REQUIRE(commands.Execute(AddSceneObjectComponentCommand{object, ComponentType::CharacterController}).HasValue());
             }
 
-            const Runtime::CharacterControllerComponent &Character() const {
+            /** @brief Copies Character state before the temporary object snapshot is released. */
+            Runtime::CharacterControllerComponent Character() const {
                 return *document.Objects().front().components.characterController;
             }
         };

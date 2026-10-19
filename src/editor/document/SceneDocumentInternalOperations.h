@@ -201,7 +201,9 @@ namespace Horo::Editor::SceneDocumentDetail {
             remaining.push_back({.surface = object.components.navigationSurface ? &*object.components.navigationSurface : nullptr,
                                  .region = object.components.navigationRegion ? &*object.components.navigationRegion : nullptr,
                                  .modifier = object.components.navigationModifier ? &*object.components.navigationModifier : nullptr,
-                                 .link = object.components.navigationLink ? &*object.components.navigationLink : nullptr});
+                                 .link = object.components.navigationLink ? &*object.components.navigationLink : nullptr,
+                                 .sources = object.components.navigationSources,
+                                 .colliders = object.components.colliders});
         }
         return Runtime::ValidateNavigationSceneComponentViews(remaining);
     }

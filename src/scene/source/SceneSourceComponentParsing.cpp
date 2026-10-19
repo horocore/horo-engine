@@ -397,6 +397,13 @@ namespace Horo::SceneSource::Detail {
     }
 
     [[nodiscard]] Result<void> ParseCollectionComponents(const Json &value, SceneObjectComponentSet &components, std::size_t &recognized) {
+        if (value.contains("navigationSources")) {
+            ++recognized;
+            auto sources = ParseNavigationSources(value["navigationSources"]);
+            if (sources.HasError())
+                return Result<void>::Failure(sources.ErrorValue());
+            components.navigationSources = std::move(sources).Value();
+        }
         if (value.contains("colliders")) {
             ++recognized;
             auto colliders = ParseColliders(value["colliders"]);

@@ -1,4 +1,5 @@
 #include "navigation/NavigationProjectBakeSourceFixture.h"
+#include "navigation/NavigationSceneSourceFixture.h"
 
 #include <algorithm>
 
@@ -258,4 +259,21 @@ TEST_CASE("Operation cancellation during actual source reads is observed without
     REQUIRE_FALSE(files->Deadlines().empty());
     for (const auto deadline : files->Deadlines())
         CHECK(deadline <= context.deadline);
+}
+
+TEST_CASE("Headless project capture retains explicit schema3 source policy without classifying it as unknown data",
+          "[navigation][source][automation]") {
+    SourceTest::Project project;
+    auto object = Tests::NavigationSources::Object();
+    object.components.navigationSources.front().area = Tests::NavigationSources::Id<Navigation::NavigationAreaId>(1);
+    object.components.navigationSources.front().filter = Tests::NavigationSources::Id<Navigation::NavigationFilterId>(1);
+    const std::array objects{object};
+    project.Write("Assets/first.horo", SceneSource::EncodeSceneSource({objects, {}}));
+    const auto source = project.Capture();
+    const auto found = std::ranges::find(source->Scenes(), SourceTest::Asset(2), &NavigationSceneBakeSource::asset);
+    REQUIRE(found != source->Scenes().end());
+    REQUIRE(found->document.objects.size() == 1);
+    CHECK(found->document.objects.front().components.navigationSources == object.components.navigationSources);
+    CHECK(found->document.unsupportedComponentOwners.empty());
+    CHECK(source->VerifyCurrent().HasValue());
 }

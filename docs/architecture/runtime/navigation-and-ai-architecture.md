@@ -3041,3 +3041,21 @@ supply their exact same-object collider inventory. This contract does not prove
 static geometry eligibility or resolve definition semantics, and does not add
 runtime discovery. Persisted Scene/editor adoption follows separately; this
 Runtime-only layer changes no persisted schema.
+
+### Persisted explicit collider sources and editor adoption
+
+Scene schema3 retains explicit `navigationSources` without generated geometry or
+provider bytes. Scenes without these bindings keep schema1 (or schema2 for
+Character); older schemas cannot carry the new field and unsupported future
+schemas fail closed. Existing source is read without migration or inferred source
+intent. Only writing the new feature raises the envelope. Readers supporting only
+schema1/2 must reject schema3 rather than drop the authored policy.
+
+The canonical Scene decoder owns strict field/type/count/duplicate validation.
+Editor transaction admission resolves local collider and Scene surface references
+before history publication. Duplication remaps only the duplicated surface;
+collider/area/filter identity is retained. Source bytes count toward history
+capacity. Definition area/filter removal uses the existing reviewed grouped
+repair/undo/redo workflow, including exact source-field impacts. Existing Scene
+callers acquire the additive value field; no separate compatibility model or
+parallel codec is introduced.
