@@ -325,8 +325,8 @@ namespace Horo::Prefab::Detail {
             const auto &source = data.entities[owner].provenance;
             std::optional<std::size_t> found;
             for (std::size_t index = 0; index < data.entities.size(); ++index) {
-                const auto &target = data.entities[index].provenance;
-                if (source.sourceAsset != target.sourceAsset || target.sourceObject.SourceObject().value != reference.object.value ||
+                if (const auto &target = data.entities[index].provenance;
+                    source.sourceAsset != target.sourceAsset || target.sourceObject.SourceObject().value != reference.object.value ||
                     !std::ranges::equal(source.sourceObject.NestedInstanceScope(), target.sourceObject.NestedInstanceScope()))
                     continue;
                 if (found.has_value())
@@ -340,37 +340,44 @@ namespace Horo::Prefab::Detail {
             return Result<Runtime::RuntimeGroupEntitySlot>::Success({*found});
         }
 
+        /** @brief Resolves and appends one typed endpoint, preserving the exact source-body validation error. */
+        static Result<void> AppendPhysicsReference(const CookedPrefabData &data, Projection &projection, const std::size_t entity,
+                                                   const Runtime::GroupPhysicsReferenceKind kind, const std::size_t component,
+                                                   const Runtime::PhysicsBodyReference &reference) {
+            auto target = ResolveBody(data, projection, entity, reference);
+            if (target.HasError())
+                return Result<void>::Failure(target.ErrorValue());
+            projection.physicsReferences[entity].emplace_back(kind, component, target.Value(), reference.body);
+            return Result<void>::Success();
+        }
+
         /** @brief Builds complete typed endpoint fixups before Scene reserves any entity or native owner. */
         static Result<void> ProjectPhysicsReferences(const CookedPrefabData &data, Projection &projection) {
             projection.physicsReferences.resize(data.entities.size());
             for (std::size_t index = 0; index < projection.components.size(); ++index) {
-                const auto append = [&](const Runtime::GroupPhysicsReferenceKind kind, const std::size_t component,
-                                        const Runtime::PhysicsBodyReference &reference) -> Result<void> {
-                    auto target = ResolveBody(data, projection, index, reference);
-                    if (target.HasError())
-                        return Result<void>::Failure(target.ErrorValue());
-                    projection.physicsReferences[index].push_back({kind, component, target.Value(), reference.body});
-                    return Result<void>::Success();
-                };
                 const auto &components = projection.components[index];
                 for (std::size_t collider = 0; collider < components.colliders.size(); ++collider) {
                     const auto &value = components.colliders[collider];
                     if (!value.enabled)
                         continue;
-                    if (auto valid = append(Runtime::GroupPhysicsReferenceKind::ColliderBody, collider, value.body); valid.HasError())
+                    if (auto valid = AppendPhysicsReference(data, projection, index, Runtime::GroupPhysicsReferenceKind::ColliderBody,
+                                                            collider, value.body);
+                        valid.HasError())
                         return valid;
                 }
                 for (std::size_t constraint = 0; constraint < components.physicsConstraints.size(); ++constraint) {
                     const auto &value = components.physicsConstraints[constraint];
                     if (!value.enabled)
                         continue;
-                    if (auto valid = append(Runtime::GroupPhysicsReferenceKind::ConstraintFirst, constraint, value.first.body);
+                    if (auto valid = AppendPhysicsReference(data, projection, index, Runtime::GroupPhysicsReferenceKind::ConstraintFirst,
+                                                            constraint, value.first.body);
                         valid.HasError())
                         return valid;
                     const auto *second = std::get_if<Runtime::PhysicsConstraintBodyEndpoint>(&value.second);
                     if (!second)
                         continue;
-                    if (auto valid = append(Runtime::GroupPhysicsReferenceKind::ConstraintSecond, constraint, second->body);
+                    if (auto valid = AppendPhysicsReference(data, projection, index, Runtime::GroupPhysicsReferenceKind::ConstraintSecond,
+                                                            constraint, second->body);
                         valid.HasError())
                         return valid;
                 }

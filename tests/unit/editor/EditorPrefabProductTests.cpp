@@ -177,6 +177,16 @@ namespace Horo::Application::PrefabEditorProductTest {
             };
         }
 
+        /** @brief Checks that presentation preserves both the active Play session and the pending fixed-tick deadline. */
+        void RequirePendingPrefab(const Editor::EditorPlaySessionController &play, const Prefab::PrefabOperation &operation) {
+            if (play.LastError())
+                UNSCOPED_INFO("Play: " << play.LastError()->code.Value() << ": " << play.LastError()->message);
+            if (const auto *error = operation.Failure())
+                UNSCOPED_INFO(error->code.Value() << ": " << error->message);
+            REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+            REQUIRE(operation.State() == Prefab::PrefabSpawnState::Pending);
+        }
+
         template <typename Complete> void PresentUntil(Editor::EditorPlaySessionController &play, const Complete &complete) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (!complete() && play.State() != Editor::EditorPlaySessionState::Failed && std::chrono::steady_clock::now() < deadline) {
@@ -281,12 +291,7 @@ namespace Horo::Application::PrefabEditorProductTest {
         REQUIRE(next.HasValue());
         for (int frame = 0; frame < 3; ++frame) {
             play.PresentationUpdate({0});
-            if (play.LastError())
-                UNSCOPED_INFO("Play: " << play.LastError()->code.Value() << ": " << play.LastError()->message);
-            if (const auto *error = next.Value().Failure())
-                UNSCOPED_INFO(error->code.Value() << ": " << error->message);
-            REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
-            REQUIRE(next.Value().State() == Prefab::PrefabSpawnState::Pending);
+            RequirePendingPrefab(play, next.Value());
         }
         REQUIRE(play.FixedUpdate({}, {1.0 / 60.0}).HasValue());
         PresentUntil(play, [&next] {
