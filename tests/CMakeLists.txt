@@ -2456,6 +2456,13 @@ target_link_libraries(HoroProjectAssetRegistrySourceTests PRIVATE Catch2::Catch2
         HoroEngine::ProjectAssetRegistrySource HoroEngine::PlatformProjectReadFiles)
 horo_register_catch_test(HoroProjectAssetRegistrySourceTests LABELS "unit;project;headless;ci-windows;sonar-coverage")
 
+add_executable(HoroNavigationProjectBakeSourceTests unit/application/navigation/NavigationProjectBakeSourceTests.cpp)
+target_compile_features(HoroNavigationProjectBakeSourceTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationProjectBakeSourceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroNavigationProjectBakeSourceTests PRIVATE Catch2::Catch2WithMain
+        HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles)
+horo_register_catch_test(HoroNavigationProjectBakeSourceTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage")
+
 add_executable(HoroProjectCollisionSettingsTests
         unit/editor/ProjectCollisionSettingsTests.cpp
         unit/editor/CollisionProjectSettingsSessionTests.cpp

@@ -437,3 +437,12 @@ before relinquishing automatically retired metadata. Existing callers retain
 results after shutdown; no migration is required. Ownership and dependency edges
 remain unchanged. RenderApi and RenderFrontend public-header consumers and the
 integration consumer validate this additive contract.
+
+### Navigation project source capture
+
+`HoroNavigationBakeAutomation` owns the application source-capture contract and
+links ProjectSettings, SceneSource, Assets, ProjectReadFilesApi, NavigationApi and
+Physics, with private ProjectAssetRegistrySource composition. NavigationApi owns
+the neutral source-validation interface. The target has no editor, renderer or
+concrete provider dependency; hosts retain root authority explicitly. No existing
+caller or persisted format requires migration in this additive source layer.

@@ -852,6 +852,7 @@ horo_configure_target_header_boundary(HoroCinematicScriptBridge PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroNavigationApi PUBLIC_HEADERS
     Horo/Navigation/NavigationSettingsErrors.h
     Horo/Navigation/NavMeshData.h
+    Horo/Navigation/NavigationBakeSourceValidation.h
     Horo/Navigation/NavigationBakeInput.h
     Horo/Navigation/NavigationAreas.h
     Horo/Navigation/NavigationAgentProfiles.h
@@ -888,6 +889,9 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroProjectAssetRegistrySource PUBLIC_HEADERS
     Horo/Application/ProjectAssetRegistrySource.h
+)
+horo_configure_target_header_boundary(HoroNavigationBakeAutomation PUBLIC_HEADERS
+    Horo/Application/NavigationProjectBakeSource.h
 )
 horo_configure_target_header_boundary(HoroNavigationBakeService PUBLIC_HEADERS
     Horo/Application/NavigationBakeService.h
