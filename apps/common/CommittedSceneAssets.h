@@ -31,6 +31,8 @@ namespace Horo::Application::Internal {
                                                                                    const Assets::AssetRegistrySnapshot &registry);
         /** @brief Borrows the real payload provider; this owner must outlive every AssetLoadService request. */
         [[nodiscard]] const Assets::IAssetProvider &Provider() const noexcept;
+        /** @brief Borrows exact original verified envelopes for prefab loading; lifetime matches Provider(). */
+        [[nodiscard]] const Assets::IAssetProvider &ArtifactProvider() const noexcept;
         /** @brief Finds exact retained verified envelope metadata. @param id Stable project identity.
          * @return Borrowed artifact or absence; no fallback to source or another generation.
          */
@@ -43,5 +45,6 @@ namespace Horo::Application::Internal {
     private:
         std::vector<Assets::AssetCookArtifact> artifacts_;
         Assets::MemoryAssetProvider provider_;
+        Assets::MemoryAssetProvider artifactProvider_;
     };
 }  // namespace Horo::Application::Internal

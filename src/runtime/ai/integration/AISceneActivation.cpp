@@ -230,6 +230,7 @@ namespace Horo::AI {
                 state->agents.reserve(agents.size());
                 state->agentsByOwner.reserve(agents.size());
                 for (const AiSceneAgentDescriptor &input : agents) {
+                    state->lastAgentIdentity = std::max(state->lastAgentIdentity, input.agent.agent.Value());
                     std::optional<AgentRuntimeState> prepared;
                     const std::size_t slotIndex = state->agents.size();
                     if (const Result<void> ready = PrepareAgentRuntimeState(binding, input, descriptors, availableCapabilities,

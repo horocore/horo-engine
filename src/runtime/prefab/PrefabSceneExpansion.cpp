@@ -130,7 +130,7 @@ namespace Horo::Prefab {
         /** @brief Maps one already bounded object and composes only its outer placement root. */
         [[nodiscard]] Result<Runtime::RuntimeEntityDefinition> ProjectEntity(const ResolvedPrefabObject &object,
                                                                              const PrefabSceneIdentityMap &identities,
-                                                                             const Runtime::RuntimeComponentSet &components,
+                                                                             const PrefabRuntimeComponentProjection &projection,
                                                                              const PrefabRuntimePlacement &placement,
                                                                              const std::size_t index) {
             using EntityResult = Result<Runtime::RuntimeEntityDefinition>;
@@ -158,29 +158,33 @@ namespace Horo::Prefab {
             Runtime::RuntimeEntityDefinition entity{.object = {identity->value},
                                                     .parent = parent,
                                                     .localTransform = transform,
-                                                    .components = components};
+                                                    .primitiveMesh = projection.primitiveMesh,
+                                                    .components = projection.components};
             if (auto valid = Runtime::ValidateRuntimeEntityDefinition(entity); valid.HasError())
                 return EntityResult::Failure(valid.ErrorValue());
             return EntityResult::Success(std::move(entity));
         }
 
         /** @brief Checks count ceilings before iterating or copying dynamic component payloads. */
-        [[nodiscard]] Result<void> ValidateCounts(const ResolvedPrefabObject &object, const Runtime::RuntimeComponentSet &components,
+        [[nodiscard]] Result<void> ValidateCounts(const ResolvedPrefabObject &object, const PrefabRuntimeComponentProjection &projection,
                                                   const PrefabLimitProfile &limits) {
             if (const auto maximum = limits.Policy().maximumComponentsPerObject;
-                object.object.components.size() + object.object.behaviors.size() > maximum || ComponentCount(components) > maximum)
+                object.object.components.size() + object.object.behaviors.size() > maximum ||
+                ComponentCount(projection.components) + (projection.primitiveMesh ? 1U : 0U) > maximum)
                 return Result<void>::Failure(MakeError(PrefabErrors::ComponentCountExceeded));
             return Result<void>::Success();
         }
 
         /** @brief Rechecks per-object work, component and complete hierarchy admission. */
-        [[nodiscard]] Result<std::size_t> ValidateObject(const ResolvedPrefabObject &object, const Runtime::RuntimeComponentSet &typed,
+        [[nodiscard]] Result<std::size_t> ValidateObject(const ResolvedPrefabObject &object,
+                                                         const PrefabRuntimeComponentProjection &projection,
                                                          const std::span<const ResolvedPrefabObject> preceding,
                                                          const std::span<const std::size_t> depths, const PrefabLimitProfile &limits,
                                                          PrefabExpansionBudget &budget) {
-            if (auto count = ValidateCounts(object, typed, limits); count.HasError())
+            if (auto count = ValidateCounts(object, projection, limits); count.HasError())
                 return Result<std::size_t>::Failure(count.ErrorValue());
-            if (auto charge = budget.Consume(ComponentCount(typed)); charge.HasError())
+            if (auto charge = budget.Consume(ComponentCount(projection.components) + (projection.primitiveMesh ? 1U : 0U));
+                charge.HasError())
                 return Result<std::size_t>::Failure(charge.ErrorValue());
             auto depth = ObjectDepth(object, preceding, depths);
             if (depth.HasError())
@@ -257,12 +261,12 @@ namespace Horo::Prefab {
             if (projection.HasError())
                 return Output::Failure(projection.ErrorValue());
             const auto &typed = projection.Value()->components;
-            auto depth = ValidateObject(object, typed, objects.first(index), depths, limits, budget);
+            auto depth = ValidateObject(object, *projection.Value(), objects.first(index), depths, limits, budget);
             if (depth.HasError())
                 return Output::Failure(depth.ErrorValue());
             if (auto charge = ChargeComponents(typed, payloadBytes, limits.Policy().maximumExpandedPayloadBytes, budget); charge.HasError())
                 return Output::Failure(charge.ErrorValue());
-            auto entity = ProjectEntity(object, identities, typed, placement, index);
+            auto entity = ProjectEntity(object, identities, *projection.Value(), placement, index);
             if (entity.HasError())
                 return Output::Failure(entity.ErrorValue());
             entities.push_back(std::move(entity).Value());

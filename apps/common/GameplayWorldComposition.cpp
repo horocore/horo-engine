@@ -4,6 +4,9 @@
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
+#include "Horo/Scene/PrefabComponentProjection.h"
+
+#include <new>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -65,6 +68,13 @@ namespace Horo::Application::Internal {
             GameplayWorldComposition *const &active_;
         };
     }  // namespace
+
+    /** @copydoc GameplayWorldComposition::BuiltinProjector::Project */
+    Result<bool> GameplayWorldComposition::BuiltinProjector::Project(const Prefab::RawComponentPayload &source,
+                                                                     Runtime::RuntimeComponentSet &destination,
+                                                                     std::optional<Runtime::PrimitiveMeshDescriptor> &primitiveMesh) const {
+        return SceneSource::ProjectPrefabBuiltinComponent(source, destination, primitiveMesh);
+    }
 
     /** @copydoc GameplayWorldComposition::Create */
     Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::Create(Runtime::RuntimeScene &scene,
@@ -208,7 +218,9 @@ namespace Horo::Application::Internal {
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(selectedCharacter.ErrorValue());
         composition->character_ = std::move(selectedCharacter).Value();
         if (selection.prefabPermission == GameplayPrefabPermission::Granted) {
-            composition->prefabs_ = std::make_unique<Prefab::PrefabSpawnService>(*templates, scenes, components);
+            composition->prefabs_ =
+                std::make_unique<Prefab::PrefabSpawnService>(*templates, scenes, components ? components : &composition->prefabComponents_,
+                                                             &composition->builtinProjector_);
             auto admitted = composition->prefabs_->Acquire({selection.moduleId, active->RuntimeId(), true, true});
             if (admitted.HasError())
                 return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(admitted.ErrorValue());
@@ -216,15 +228,51 @@ namespace Horo::Application::Internal {
         }
         if (auto registered = composition->RegisterModule(selection); registered.HasError())
             return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(registered.ErrorValue());
-        auto runtime = Gameplay::BehaviorRuntime::Create(scenes, composition->registry_, {},
-                                                         {.physics = composition->physics_,
-                                                          .character = composition->CharacterContext(),
-                                                          .runtimeUi = composition->runtimeUi_},
-                                                         composition->prefabContext_);
-        if (runtime.HasError())
-            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(runtime.ErrorValue());
-        composition->behaviors_ = std::move(runtime).Value();
+        if (auto activated = composition->ActivateServiceRunner(scenes, components); activated.HasError())
+            return Result<std::unique_ptr<GameplayWorldComposition>>::Failure(activated.ErrorValue());
         return Result<std::unique_ptr<GameplayWorldComposition>>::Success(std::move(composition));
+    }
+
+    /** @copydoc GameplayWorldComposition::ActivateServiceRunner */
+    Result<void> GameplayWorldComposition::ActivateServiceRunner(Runtime::RuntimeSceneService &scenes,
+                                                                 const Gameplay::ComponentRegistry *components) {
+        if (!components && prefabs_) {
+            if (native_)
+                prefabComponents_ = native_->Components();
+            else if (auto frozen = prefabComponents_.Freeze(); frozen.HasError())
+                return Result<void>::Failure(frozen.ErrorValue());
+        }
+        auto runtime = Gameplay::BehaviorRuntime::Create(scenes, registry_, {},
+                                                         {.physics = physics_, .character = CharacterContext(), .runtimeUi = runtimeUi_},
+                                                         prefabContext_);
+        if (runtime.HasError())
+            return Result<void>::Failure(runtime.ErrorValue());
+        behaviors_ = std::move(runtime).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc GameplayWorldComposition::Create */
+    Result<std::unique_ptr<GameplayWorldComposition>> GameplayWorldComposition::Create(
+        Runtime::RuntimeSceneService &scenes, const GameplayPrefabServices &assets, Physics::PhysicsWorld *world,
+        const std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
+        Character::CharacterWorld *character) {
+        using Return = Result<std::unique_ptr<GameplayWorldComposition>>;
+        if (selection.prefabPermission != GameplayPrefabPermission::Granted)
+            return Return::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected,
+                                             "Composition-owned prefab loading requires an explicit host permission."));
+        try {
+            auto templates =
+                std::make_unique<Prefab::PrefabTemplateProvider>(assets.registry, assets.loads, scenes, assets.profile, assets.limits);
+            if (auto started = templates->Startup(assets.cancellation); started.HasError())
+                return Return::Failure(started.ErrorValue());
+            auto composition = Create(scenes, *templates, world, sceneGeneration, selection, components, character);
+            if (composition.HasError())
+                return composition;
+            composition.Value()->ownedTemplates_ = std::move(templates);
+            return composition;
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(Prefab::PrefabErrors::ComponentAllocationFailed));
+        }
     }
 
     GameplayWorldComposition::~GameplayWorldComposition() {
@@ -287,6 +335,9 @@ namespace Horo::Application::Internal {
         behaviors_.reset();
         prefabContext_.reset();
         prefabs_.reset();
+        if (ownedTemplates_)
+            ownedTemplates_->Shutdown();
+        ownedTemplates_.reset();
         scenes_ = nullptr;
         registry_ = Gameplay::BehaviorRegistry{};
         if (native_ && retirementAdmission_)

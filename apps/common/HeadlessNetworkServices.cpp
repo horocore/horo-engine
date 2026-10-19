@@ -24,7 +24,9 @@ namespace Horo::Application::Internal {
             GameplayWorldComposition *activeGameplay{};
             CancellationToken sceneCancellation;
             ScenePhysicsHost native;
+            std::unique_ptr<AI::AiSceneRuntime> ai;
             std::unique_ptr<Runtime::RuntimeSceneService> scenes;
+            std::unique_ptr<Prefab::PrefabTemplateProvider> templates; /**< Retired before Scene, borrowing its real loader. */
         };
 
         struct WorldOwners final {
@@ -155,8 +157,7 @@ namespace Horo::Application::Internal {
                 if (owners_->configured)
                     return RunConfiguredTick(context);
                 if (gameplay_) {
-                    if (auto advanced = gameplay_->FixedUpdate({static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
-                        advanced.HasError())
+                    if (auto advanced = gameplay_->FixedTick(context); advanced.HasError())
                         return advanced;
                 }
                 // Gameplay submits against the previous completed publication. Execute queued
@@ -189,8 +190,14 @@ namespace Horo::Application::Internal {
                     gameplay_->Shutdown();
                 gameplay_.reset();
                 // Scene is the only aggregate owner. The paired Physics service never closes it.
-                if (record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene && record_->scenes)
-                    record_->scenes->Shutdown();
+                if (record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene) {
+                    if (record_->templates)
+                        record_->templates->Shutdown();
+                    if (record_->scenes)
+                        record_->scenes->Shutdown();
+                    if (record_->ai)
+                        record_->ai->BeginShutdown();
+                }
                 if (owners_->gameplay && owners_->gameplay->moduleRetirements)
                     (void)owners_->gameplay->moduleRetirements->Drain();
                 if (replication_.has_value())
@@ -233,8 +240,29 @@ namespace Horo::Application::Internal {
                 if (auto added = record_->scenes->AddStructuralParticipant(MakeGameplayStructuralParticipant(record_->activeGameplay));
                     added.HasError())
                     return added;
-                auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary);
-                return prepared.HasError() ? Result<void>::Failure(prepared.ErrorValue()) : Result<void>::Success();
+                auto ai = AI::AiSceneRuntime::Create(input.aiSettings);
+                if (ai.HasError())
+                    return Result<void>::Failure(ai.ErrorValue());
+                record_->ai = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
+                if (auto added = record_->scenes->AddActivationParticipant(
+                        std::make_unique<AI::AiSceneActivationParticipant>(*record_->ai, input.aiControllers));
+                    added.HasError())
+                    return added;
+                if (auto added = record_->scenes->AddStructuralParticipant(record_->ai->MakeStructuralParticipant(input.aiControllers));
+                    added.HasError())
+                    return added;
+                if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary);
+                    prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+                if (owners_->gameplay && owners_->gameplay->prefabPermission == GameplayPrefabPermission::Granted) {
+                    auto limits = Prefab::PrefabLimitProfile::Create({});
+                    if (limits.HasError())
+                        return Result<void>::Failure(limits.ErrorValue());
+                    record_->templates = std::make_unique<Prefab::PrefabTemplateProvider>(input.registry, *input.prefabLoads,
+                                                                                          *record_->scenes, std::move(limits).Value());
+                    return record_->templates->Startup(boundary.cancellation);
+                }
+                return Result<void>::Success();
             }
 
             /** @brief Admits gameplay from the already published private aggregate, without reactivating either native owner. */
@@ -244,8 +272,12 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(scope.ErrorValue());
                 if (!owners_->gameplay)
                     return Result<void>::Success();
-                auto gameplay = GameplayWorldComposition::Create(*record_->scenes, &scope.Value().physics, request_.scene.value,
-                                                                 *owners_->gameplay, &scope.Value().character);
+                auto gameplay =
+                    record_->templates
+                        ? GameplayWorldComposition::Create(*record_->scenes, *record_->templates, &scope.Value().physics,
+                                                           request_.scene.value, *owners_->gameplay, nullptr, &scope.Value().character)
+                        : GameplayWorldComposition::Create(*record_->scenes, &scope.Value().physics, request_.scene.value,
+                                                           *owners_->gameplay, &scope.Value().character);
                 if (gameplay.HasError())
                     return Result<void>::Failure(gameplay.ErrorValue());
                 gameplay_ = std::move(gameplay).Value();
@@ -259,9 +291,7 @@ namespace Horo::Application::Internal {
                 if (!configuredActivated_)
                     return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
                 if (gameplay_) {
-                    if (const auto advanced =
-                            gameplay_->FixedUpdate({static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
-                        advanced.HasError())
+                    if (const auto advanced = gameplay_->FixedTick(context); advanced.HasError())
                         return advanced;
                 }
                 auto advanced = record_->native.AdvanceFixedTick(context.fixedDelta);
@@ -411,6 +441,9 @@ namespace Horo::Application::Internal {
         if (!definition || input.load.deadline == std::chrono::steady_clock::time_point{} ||
             input.load.deadline == std::chrono::steady_clock::time_point::max())
             return Result<Network::NetworkModeFactories>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+        if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)
+            return Result<Network::NetworkModeFactories>::Failure(
+                MakeError(Network::NetworkErrors::NetworkModeInvalid, "Prefab grant requires an explicit committed artifact loader."));
         auto runtime = Physics::PhysicsRuntime::Create(input.mode);
         if (runtime.HasError())
             return Result<Network::NetworkModeFactories>::Failure(runtime.ErrorValue());

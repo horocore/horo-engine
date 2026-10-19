@@ -174,10 +174,13 @@ public:
     }
 
     void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
-        ++tick_;
         const auto capability = context.PrefabContext();
         if (!capability)
             return;
+        const auto current = capability->CurrentTick();
+        if (current.HasError())
+            throw NativePrefabOperationFailure("Typed prefab owner clock is unavailable.");
+        const std::uint64_t tick = current.Value() == 0 ? 1 : current.Value();
         if (!requested_) {
             Prefab::PrefabSpawnRequest request;
             for (const auto &field : context.Fields()) {
@@ -187,7 +190,7 @@ public:
                     request.source.artifactDigest = ParseSha256(std::get<std::string>(field.value)).Value();
             }
             request.source.target = AssetCookTargetId::Parse("linux-x64").Value();
-            request.notBeforeTick = tick_;
+            request.notBeforeTick = tick;
             auto operation = capability->Spawn(request);
             if (operation.HasError())
                 throw NativePrefabOperationFailure("Typed prefab spawn admission failed.");
@@ -196,7 +199,7 @@ public:
             requested_ = true;
         } else if (!retired_ && operation_.State() == Prefab::PrefabSpawnState::Committed) {
             retainedInstance = operation_.Spawned().Value();
-            auto operation = capability->Despawn(retainedInstance, tick_);
+            auto operation = capability->Despawn(retainedInstance, tick);
             if (operation.HasError())
                 throw NativePrefabOperationFailure("Typed prefab despawn admission failed.");
             retirement_ = std::move(operation).Value();
@@ -208,7 +211,6 @@ public:
 private:
     Prefab::PrefabOperation operation_;
     Prefab::PrefabOperation retirement_;
-    std::uint64_t tick_{};
     bool requested_{};
     bool retired_{};
 };

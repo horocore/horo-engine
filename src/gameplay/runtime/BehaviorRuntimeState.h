@@ -216,7 +216,7 @@ namespace Horo::Gameplay {
 
         /** @brief Derives a callback capability once per attachment, preserving inherited immutable lineage. */
         [[nodiscard]] Result<void> InitializePrefabContext(Instance &instance) const {
-            if (!prefabs || !instance.component.typeId.Value().starts_with(prefabs->Binding().moduleId + "."))
+            if (!prefabs || !prefabs->Binding().AdmitsBehavior(instance.component.typeId))
                 return Result<void>::Success();
             auto context = prefabs->ForEntity(instance.entity);
             if (context.HasError())

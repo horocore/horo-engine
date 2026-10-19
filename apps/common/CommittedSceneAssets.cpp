@@ -27,12 +27,13 @@ namespace Horo::Application::Internal {
         auto contents = Assets::ReadCookGenerationContents(generation.Value(), MaximumCommittedBytes);
         if (contents.HasError())
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(contents.ErrorValue());
+        auto published = std::move(contents).Value();
         auto result = std::make_unique<CommittedSceneAssets>();
-        result->artifacts_.reserve(contents.Value().entries.size());
-        for (std::size_t index = 0; index < contents.Value().entries.size(); ++index) {
-            const auto &entry = contents.Value().entries[index];
+        result->artifacts_.reserve(published.entries.size());
+        for (std::size_t index = 0; index < published.entries.size(); ++index) {
+            const auto &entry = published.entries[index];
             const auto *record = registry.Find(entry.assetId);
-            auto artifact = Assets::DecodeCookedArtifact(contents.Value().artifacts[index]);
+            auto artifact = Assets::DecodeCookedArtifact(published.artifacts[index]);
             if (artifact.HasError())
                 return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(artifact.ErrorValue());
             if (!record || record->type != entry.assetType || artifact.Value().id != entry.assetId ||
@@ -41,6 +42,9 @@ namespace Horo::Application::Internal {
             // Keep the actual verified metadata and bytes. This provider is populated only from
             // committed envelopes, never from synthetic material or Scene artifacts.
             result->provider_.Insert(entry.assetId, artifact.Value().payload);
+            // Transfer the original verified envelope, including its framing and whole-artifact digest input.
+            // The decoded payload provider retains its established Scene/material loading semantics.
+            result->artifactProvider_.Insert(entry.assetId, std::move(published.artifacts[index]));
             result->artifacts_.push_back(std::move(artifact).Value());
         }
         return Result<std::unique_ptr<CommittedSceneAssets>>::Success(std::move(result));
@@ -49,6 +53,11 @@ namespace Horo::Application::Internal {
     /** @copydoc CommittedSceneAssets::Provider */
     const Assets::IAssetProvider &CommittedSceneAssets::Provider() const noexcept {
         return provider_;
+    }
+
+    /** @copydoc CommittedSceneAssets::ArtifactProvider */
+    const Assets::IAssetProvider &CommittedSceneAssets::ArtifactProvider() const noexcept {
+        return artifactProvider_;
     }
 
     /** @copydoc CommittedSceneAssets::Find */

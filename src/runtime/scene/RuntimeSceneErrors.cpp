@@ -9,6 +9,14 @@ namespace Horo::Runtime::SceneErrors {
                                        .remediationHint =
                                            "Replace the whole Scene candidate, or use the explicit Character movement/teleport authority."};
 
+    const ErrorCodeDescriptor
+        NavigationStructuralUnsupported{.domain = ErrorDomainId{"horo.scene"},
+                                        .code = ErrorCode{"scene.navigation.structural_unsupported"},
+                                        .defaultSeverity = ErrorSeverity::Error,
+                                        .summary = "Enabled Navigation structural realization has no composed owner contract.",
+                                        .remediationHint = "Prepare Navigation through its complete Scene load/reload participant; no "
+                                                           "partial prefab group is published."};
+
     namespace {
         const ErrorDomainId kDomain{"horo.scene"};
         constexpr auto kError = ErrorSeverity::Error;

@@ -9,8 +9,9 @@
 namespace Horo::Prefab {
     /** @brief Complete inert schema-adapter output for one exact resolved object. */
     struct PrefabRuntimeComponentProjection final {
-        ExpandedPrefabObjectKey object;          /**< Stable source key, never an ordinal or name. */
-        Runtime::RuntimeComponentSet components; /**< Owned typed payload; no provider callbacks or source paths. */
+        ExpandedPrefabObjectKey object;                                /**< Stable source key, never an ordinal or name. */
+        Runtime::RuntimeComponentSet components;                       /**< Owned typed payload; no provider callbacks or source paths. */
+        std::optional<Runtime::PrimitiveMeshDescriptor> primitiveMesh; /**< Owned canonical geometry, never a native resource. */
     };
 
     /** @brief Placement facts captured with the containing immutable scene snapshot. */

@@ -113,6 +113,7 @@ namespace Horo::Prefab {
         std::vector<std::vector<Runtime::RuntimeGroupMemberIdentity>> members; /**< Complete occurrence metadata in dense entity order. */
         std::vector<std::vector<Runtime::RuntimeGroupReference>> references;   /**< Typed reference interfaces per entity. */
         std::vector<Assets::AssetId> spawnLineage; /**< Inherited creation lineage, bounded to 16 unique assets. */
+        std::vector<std::optional<Runtime::PrimitiveMeshDescriptor>> primitiveMeshes; /**< Optional dense typed geometry projection. */
     };
 
     /**
@@ -172,6 +173,9 @@ namespace Horo::Prefab {
          * checks at commit and retains real artifact allocations until the last group entity is destroyed.
          * @details The caller owns component schema projection and typed reference/binding initialization. This method
          * preserves cooked topology/transforms and never fabricates a missing projection or runs behavior hooks.
+         * Member occurrences and reference interfaces must retain cooked order and schema/target identity. Behavior
+         * instance identities may be freshly allocated; raw component occurrence identities remain cook-owned.
+         * Omitted or substituted interfaces are rejected before any Scene command is queued.
          * Public gameplay requests/placement/initialization parameter validation remain owned by PFB-004.3.
          */
         [[nodiscard]] Result<std::vector<Runtime::DeferredEntity>> QueuePreparedGroup(const PrefabTemplateLease &lease,

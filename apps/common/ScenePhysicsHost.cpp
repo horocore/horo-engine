@@ -182,6 +182,11 @@ namespace Horo::Application::Internal {
         if (borrowed.HasError())
             return Result<void>::Failure(borrowed.ErrorValue());
         auto &scope = borrowed.Value();
+        if (delta <= Duration{})
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid, "A host fixed quantum must be positive."));
+        // Explicit Null composition omits both simulation stages; it must not publish synthetic native ticks.
+        if (scope.physics.State() == Physics::PhysicsWorldState::ActiveNull)
+            return Result<void>::Success();
         const auto publication = scope.physics.PublishedTick();
         if (publication.completedTick == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::GenerationExhausted));

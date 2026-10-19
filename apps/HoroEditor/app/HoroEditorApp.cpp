@@ -274,6 +274,7 @@ namespace Horo::Editor {
             std::string cookedRoot;
             std::string cookTarget;
             bool cookOptionsValid{true};
+            std::optional<bool> prefabGranted{false};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             bool qualifySurfaceLifecycle = false;
 #endif
@@ -580,6 +581,7 @@ namespace Horo::Editor {
         Renderer,
         Project,
         Physics,
+        Prefab,
         CookedRoot,
         CookTarget,
         FrameRateLimit,
@@ -599,6 +601,14 @@ namespace Horo::Editor {
                 return true;
             case Physics:
                 opts.physicsMode = Application::Internal::ParseScenePhysicsHostMode(value);
+                return true;
+            case Prefab:
+                if (value == "grant")
+                    opts.prefabGranted = true;
+                else if (value == "deny")
+                    opts.prefabGranted = false;
+                else
+                    opts.prefabGranted.reset();
                 return true;
             case CookedRoot:
                 opts.cookedRoot = value;
@@ -647,6 +657,8 @@ namespace Horo::Editor {
             opts.physicsMode = Application::Internal::ParseScenePhysicsHostMode(argument.substr(std::string_view{"--physics="}.size()));
         else if (argument == "--physics")
             pending = Physics;
+        else if (argument == "--prefab")
+            pending = Prefab;
         else if (argument == "--cooked-root")
             pending = CookedRoot;
         else if (argument == "--cook-target")
@@ -670,6 +682,8 @@ namespace Horo::Editor {
             opts.frameRateLimit = 1001;
         if (pending == Physics)
             opts.physicsMode.reset();
+        if (pending == Prefab)
+            opts.prefabGranted.reset();
         if (pending == CookedRoot || pending == CookTarget || opts.cookedRoot.empty() != opts.cookTarget.empty())
             opts.cookOptionsValid = false;
         return opts;
@@ -726,6 +740,7 @@ namespace Horo::Editor {
                                                request.projectRoot,
                                                "--physics",
                                                std::string{Application::Internal::ScenePhysicsHostModeName(options.physicsMode.value())}};
+            arguments.insert(arguments.end(), {"--prefab", options.prefabGranted.value() ? "grant" : "deny"});
             if (!options.cookedRoot.empty()) {
                 arguments.insert(arguments.end(), {"--cooked-root", options.cookedRoot, "--cook-target", options.cookTarget});
             }
@@ -1631,7 +1646,8 @@ namespace Horo::Editor {
 
         /** @brief Captures explicit cooked selection and Physics mode before constructing Scene owners. */
         [[nodiscard]] Result<Application::Internal::EditorProjectScenePolicy> CaptureEditorScenePolicy(const EditorGuiOptions &options) {
-            Application::Internal::EditorProjectScenePolicy scenePolicy{.physicsMode = options.physicsMode.value()};
+            Application::Internal::EditorProjectScenePolicy scenePolicy{.physicsMode = options.physicsMode.value(),
+                                                                        .prefabGranted = options.prefabGranted.value()};
             if (!options.cookedRoot.empty()) {
                 auto target = Assets::AssetCookTargetId::Parse(options.cookTarget);
                 if (target.HasError()) {
@@ -1961,7 +1977,7 @@ namespace Horo::Editor {
 
     /** @brief Validates explicit application Physics selection before project/native frontend creation. */
     [[nodiscard]] static bool ValidateEditorPhysicsOptions(const EditorGuiOptions &options) {
-        if (!options.physicsMode || !options.cookOptionsValid ||
+        if (!options.physicsMode || !options.prefabGranted.has_value() || !options.cookOptionsValid ||
             (*options.physicsMode == Physics::PhysicsRuntimeMode::Canonical && options.projectRoot.empty())) {
             const auto error =
                 MakeError(Physics::PhysicsErrors::DescriptorInvalid,

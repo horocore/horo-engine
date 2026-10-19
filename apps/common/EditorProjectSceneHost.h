@@ -5,6 +5,7 @@
  */
 #include "CommittedSceneAssets.h"
 #include "EditorPlaySceneHost.h"
+#include "Horo/AI/AISceneActivation.h"
 #include "ScenePhysicsHost.h"
 
 #include <optional>
@@ -14,6 +15,8 @@ namespace Horo::Application::Internal {
     struct EditorProjectScenePolicy final {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
         std::optional<SceneCookSelection> cooked;
+        bool prefabGranted{}; /**< Independent explicit host permission; committed file presence never grants access. */
+        std::vector<AI::AiControllerDescriptor> aiControllers; /**< Owned inert catalog copied with the app policy. */
     };
 
     /** @brief Keeps captured resources alive while RuntimeHost owns and schedules the sole preview Scene service.

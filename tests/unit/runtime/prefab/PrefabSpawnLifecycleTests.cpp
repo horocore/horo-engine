@@ -1,8 +1,50 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PrefabSpawnTestSupport.h"
 
+#include <thread>
+
 namespace Horo::Prefab {
     using namespace SpawnTest;
+
+    TEST_CASE("Prefab capabilities expose the host clock and reject revoked retired or foreign-lane reads", "[prefab][spawn][clock]") {
+        Fixture fixture;
+        REQUIRE(fixture.context->CurrentTick().HasValue());
+        CHECK(fixture.context->CurrentTick().Value() == 0);
+        REQUIRE(fixture.service->Advance(17).HasValue());
+        CHECK(fixture.context->CurrentTick().Value() == 17);
+        SECTION("revoked scope") {
+            fixture.context->Revoke();
+            CHECK(fixture.context->CurrentTick().HasError());
+        }
+        SECTION("retired service") {
+            fixture.service.reset();
+            CHECK(fixture.context->CurrentTick().HasError());
+        }
+        SECTION("foreign owner lane") {
+            bool rejected{};
+            std::jthread reader{[&fixture, &rejected] {
+                rejected = fixture.context->CurrentTick().HasError();
+            }};
+            reader.join();
+            CHECK(rejected);
+        }
+    }
+
+    TEST_CASE("Noexcept prefab shutdown retains a typed cancellation failure after every borrowed owner retires",
+              "[prefab][spawn][cancel]") {
+        Fixture fixture;
+        auto accepted = fixture.context->Spawn(fixture.Request());
+        REQUIRE(accepted.HasValue());
+        const auto operation = std::move(accepted).Value();
+        REQUIRE(operation.State() == PrefabSpawnState::Pending);
+        fixture.service.reset();
+        fixture.templates.Shutdown();
+        fixture.scenes.Shutdown();
+        CHECK(operation.State() == PrefabSpawnState::Cancelled);
+        REQUIRE(operation.Failure() != nullptr);
+        CHECK(operation.Failure()->code.Value() == PrefabErrors::Cancelled.code.Value());
+        CHECK(operation.Spawned().HasError());
+    }
 
     TEST_CASE("Queued prefab cancellation and module revocation preserve the original Scene", "[prefab][spawn][lifecycle]") {
         Fixture fixture;
@@ -144,6 +186,37 @@ namespace Horo::Prefab {
         CHECK(operation.Value().State() == PrefabSpawnState::Failed);
         CHECK(fixture.Count() == 1);
         CHECK(fixture.trace.creates == 1);
+    }
+
+    TEST_CASE("Explicit prefab registry principals replace module prefix authority without broadening it", "[prefab][spawn][capability]") {
+        GameplayPrefabBinding binding{"game.editor", {1}, true, true};
+        const auto editor = Gameplay::BehaviorTypeId::Parse("game.editor.other").Value();
+        CHECK_FALSE(binding.AdmitsBehavior(Type()));
+        CHECK(binding.AdmitsBehavior(editor));
+        binding.behaviorAllowlist.emplace();
+        CHECK_FALSE(binding.AdmitsBehavior(editor));
+        CHECK_FALSE(binding.AdmitsBehavior(Type()));
+        binding.behaviorAllowlist->push_back(Type());
+        CHECK(binding.AdmitsBehavior(Type()));
+        CHECK_FALSE(binding.AdmitsBehavior(editor));
+        CHECK_FALSE(binding.AdmitsBehavior(Gameplay::BehaviorTypeId::Parse("game.test.prefab_child").Value()));
+        Fixture fixture;
+        auto context = fixture.service->Acquire(
+            {"editor.play", fixture.scenes.ActiveScene()->RuntimeId(), true, true, std::vector<Gameplay::BehaviorTypeId>{Type()}});
+        REQUIRE(context.HasValue());
+        fixture.runner->Shutdown();
+        auto runner = Gameplay::BehaviorRuntime::Create(fixture.scenes, fixture.behaviors, {}, {}, context.Value());
+        REQUIRE(runner.HasValue());
+        fixture.runner = std::move(runner).Value();
+        fixture.activeRunner = fixture.runner.get();
+        REQUIRE(fixture.runner->FixedUpdate({}, {1.0 / 60.0}).HasValue());
+        const auto child = fixture.trace.retained;
+        REQUIRE(child);
+        REQUIRE(child->Binding().behaviorAllowlist);
+        CHECK(child->Binding().AdmitsBehavior(Type()));
+        CHECK_FALSE(child->Binding().AdmitsBehavior(editor));
+        context.Value()->Revoke();
+        CHECK(child->CurrentTick().HasError());
     }
 
     TEST_CASE("Prefab capability grants fail closed for permission foreign scopes and non-owner lanes", "[prefab][spawn][capability]") {

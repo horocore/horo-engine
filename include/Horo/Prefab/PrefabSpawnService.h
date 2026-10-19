@@ -7,10 +7,32 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Prefab/PrefabTemplateProvider.h"
 
+#include <algorithm>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace Horo::Prefab {
     class PrefabSpawnService;
+
+    /** @brief Explicit host-owned inert codec for built-in cooked members.
+     * @details Borrowed only synchronously on the Scene owner lane during bounded preparation.
+     * The host outlives the spawn service; neither a queued transaction nor a template lease retains
+     * this interface. Implementations decode typed values, never resolve source files or select backends.
+     */
+    class PrefabComponentProjector {
+    public:
+        virtual ~PrefabComponentProjector() = default;
+        /** @brief Projects one complete member through the canonical component codec.
+         * @param source Immutable cooked occurrence and its portable payload.
+         * @param destination Candidate entity components; unchanged on unsupported type or failure.
+         * @param primitiveMesh Candidate primitive geometry; unchanged on unsupported type or failure.
+         * @return True for one projected built-in, false for an unrecognized custom type, or typed malformed/unsupported failure.
+         * @throws std::bad_alloc When bounded candidate storage cannot be allocated; no Scene state is published.
+         */
+        [[nodiscard]] virtual Result<bool> Project(const RawComponentPayload &source, Runtime::RuntimeComponentSet &destination,
+                                                   std::optional<Runtime::PrimitiveMeshDescriptor> &primitiveMesh) const = 0;
+    };
 
     namespace Detail {
         struct PrefabSpawnState;
@@ -83,6 +105,20 @@ namespace Horo::Prefab {
         Runtime::SceneRuntimeId scene;
         bool enabled{};
         bool permissionGranted{};
+        std::optional<std::vector<Gameplay::BehaviorTypeId>> behaviorAllowlist{};
+
+        /**< Explicit registry-owned principals. Absent uses the module prefix; present empty authorizes no behavior. */
+
+        /** @brief Checks exact host-supplied registry principals, or the default module namespace.
+         * @param type Frozen registered behavior identity.
+         * @return Whether this binding authorizes that behavior to receive a derived capability.
+         */
+        [[nodiscard]] bool AdmitsBehavior(const Gameplay::BehaviorTypeId &type) const noexcept {
+            if (behaviorAllowlist)
+                return std::ranges::find(*behaviorAllowlist, type) != behaviorAllowlist->end();
+            const auto &name = type.Value();
+            return !moduleId.empty() && name.size() > moduleId.size() && name.starts_with(moduleId) && name[moduleId.size()] == '.';
+        }
     };
 }  // namespace Horo::Prefab
 
@@ -129,6 +165,12 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] Result<Prefab::PrefabOperation> Despawn(const Prefab::PrefabInstance &instance, std::uint64_t notBeforeTick,
                                                               const CancellationToken &cancellation = {}) const;
+        /** @brief Reads the admitted Scene owner's current fixed tick without mutating or discovering services.
+         * @return Exact owner tick (zero before simulation), or typed revoked/wrong-lane/unavailable-Scene failure.
+         * @details Owner-lane only. Callers schedule against this clock rather than a module-local callback counter;
+         * use tick one for requests submitted before the first simulation tick. The query performs no allocation on success.
+         */
+        [[nodiscard]] Result<std::uint64_t> CurrentTick() const;
         /** @brief Permanently closes this module grant before unload, failure or play stop. */
         void Revoke() const noexcept;
         /** @brief Borrows immutable explicit routing. @return Exact host grant. */
@@ -171,9 +213,10 @@ namespace Horo::Prefab {
          * @param provider Verified runtime template authority, outliving this service.
          * @param scenes Scene transaction authority, outliving this service.
          * @param components Frozen metadata authority for opaque custom components; null rejects those members.
+         * @param projector Explicit borrowed built-in codec, outliving this service; null admits no built-in projection.
          */
         PrefabSpawnService(PrefabTemplateProvider &provider, Runtime::RuntimeSceneService &scenes,
-                           const Gameplay::ComponentRegistry *components = nullptr);
+                           const Gameplay::ComponentRegistry *components = nullptr, const PrefabComponentProjector *projector = nullptr);
         ~PrefabSpawnService() override;
         PrefabSpawnService(const PrefabSpawnService &) = delete;
         PrefabSpawnService &operator=(const PrefabSpawnService &) = delete;

@@ -130,6 +130,7 @@ namespace Horo::Editor {
         Application::NetworkDebuggerService *debugger_{};
         std::uint64_t diagnosticGeneration_{};
         EditorPlaySessionState state_{EditorPlaySessionState::Idle};
+        Gameplay::ComponentRegistry prefabComponents_; /**< Owned inert schema snapshot, fixed for the complete Scene epoch. */
         std::unique_ptr<EditorPlaySceneHost> sceneHost_;
         const Gameplay::BehaviorRegistry *pendingRegistry_{}; /**< Frozen module owner remains alive while Starting. */
         CancellationSource preparationCancellation_;

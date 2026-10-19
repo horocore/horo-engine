@@ -2,6 +2,8 @@
 
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Prefab/PrefabSpawnService.h"
+#include "Horo/Scene/PrefabComponentProjection.h"
 #include "ScenePhysicsHost.h"
 
 #include <cmath>
@@ -19,6 +21,15 @@ namespace Horo::Application::Internal {
                                 false,
                                 false,
                                 {}};
+
+        /** @brief Application-owned inert adapter over the one canonical typed component projection. */
+        class EditorPrefabProjector final : public Prefab::PrefabComponentProjector {
+        public:
+            Result<bool> Project(const Prefab::RawComponentPayload &source, Runtime::RuntimeComponentSet &destination,
+                                 std::optional<Runtime::PrimitiveMeshDescriptor> &primitiveMesh) const override {
+                return SceneSource::ProjectPrefabBuiltinComponent(source, destination, primitiveMesh);
+            }
+        };
 
         /** @brief Pins every borrowed provider, request group and native authority behind one Scene service. */
         class ProjectPlaySceneHost final : public Editor::EditorPlaySceneHost {
@@ -57,7 +68,27 @@ namespace Horo::Application::Internal {
                 auto structural = native_.MakeStructuralParticipant();
                 if (structural.HasError())
                     return Result<void>::Failure(structural.ErrorValue());
-                return scenes_->AddStructuralParticipant(std::move(structural).Value());
+                if (auto added = scenes_->AddStructuralParticipant(std::move(structural).Value()); added.HasError())
+                    return added;
+                auto ai = AI::AiSceneRuntime::Create();
+                if (ai.HasError())
+                    return Result<void>::Failure(ai.ErrorValue());
+                ai_ = std::make_unique<AI::AiSceneRuntime>(std::move(ai).Value());
+                controllers_ = policy.aiControllers;
+                if (auto added = scenes_->AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_));
+                    added.HasError())
+                    return added;
+                if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_)); added.HasError())
+                    return added;
+                if (policy.prefabGranted) {
+                    auto limits = Prefab::PrefabLimitProfile::Create({});
+                    if (limits.HasError())
+                        return Result<void>::Failure(limits.ErrorValue());
+                    templates_ =
+                        std::make_unique<Prefab::PrefabTemplateProvider>(registry_, *prefabLoads_, *scenes_, std::move(limits).Value());
+                    return templates_->Startup({});
+                }
+                return Result<void>::Success();
             }
 
             /** @brief Transfers the preview service to its actual RuntimeHost scheduler; resources remain pinned here. */
@@ -71,6 +102,60 @@ namespace Horo::Application::Internal {
 
             Runtime::RuntimeSceneService &Scenes() noexcept override {
                 return *scenes_;
+            }
+
+            Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(
+                const Gameplay::BehaviorRegistry &registry, const Gameplay::ComponentRegistry &components) override {
+                if (!templates_)
+                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(nullptr);
+                if (prefabContext_)
+                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(prefabContext_);
+                const auto active = scenes_->ActiveScene();
+                if (!active || !registry.IsFrozen() || !components.IsFrozen())
+                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Failure(MakeError(InvalidProjectScene));
+                prefabs_ = std::make_unique<Prefab::PrefabSpawnService>(*templates_, *scenes_, &components, &projector_);
+                if (const auto advanced = prefabs_->Advance(tick_); advanced.HasError()) {
+                    prefabs_.reset();
+                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Failure(advanced.ErrorValue());
+                }
+                Prefab::GameplayPrefabBinding binding{"editor.play", active->RuntimeId(), true, true,
+                                                      std::vector<Gameplay::BehaviorTypeId>{}};
+                binding.behaviorAllowlist->reserve(registry.Registrations().size());
+                for (const auto &registration : registry.Registrations())
+                    binding.behaviorAllowlist->push_back(registration.descriptor.typeId);
+                auto acquired = prefabs_->Acquire(std::move(binding));
+                if (acquired.HasError()) {
+                    prefabs_.reset();
+                    return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Failure(acquired.ErrorValue());
+                }
+                prefabContext_ = std::move(acquired).Value();
+                return Result<std::shared_ptr<Gameplay::GameplayPrefabContext>>::Success(prefabContext_);
+            }
+
+            Result<void> CommitSceneChanges(const Runtime::FrameContext &frame) override {
+                const auto phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
+                if (prefabs_)
+                    if (auto prepared = prefabs_->OnPhase(phase, frame); prepared.HasError())
+                        return prepared;
+                if (auto committed = scenes_->OnPhase(phase, frame); committed.HasError())
+                    return committed;
+                return prefabs_ ? prefabs_->Advance(tick_) : Result<void>::Success();
+            }
+
+            Result<void> BeginFixedUpdate(const Gameplay::FixedDeltaTime delta) override {
+                if (!prefabs_)
+                    return Result<void>::Success();
+                if (tick_ == std::numeric_limits<std::uint64_t>::max() || !std::isfinite(delta.seconds) || delta.seconds <= 0 ||
+                    delta.seconds >= static_cast<double>(std::numeric_limits<std::int64_t>::max()) / 1'000'000'000.0)
+                    return Result<void>::Failure(MakeError(InvalidProjectScene));
+                return prefabs_->OnFixedUpdate({++tick_, Duration::FromNanoseconds(std::llround(delta.seconds * 1'000'000'000.0)), {}});
+            }
+
+            void QuiesceGameplay() noexcept override {
+                if (prefabs_)
+                    prefabs_->Shutdown();
+                prefabContext_.reset();
+                prefabs_.reset();
             }
 
             std::optional<Editor::EditorSceneCollisionReceipt> CollisionReceipt() const noexcept override {
@@ -98,8 +183,15 @@ namespace Horo::Application::Internal {
             }
 
             void Shutdown() noexcept override {
+                QuiesceGameplay();
+                if (templates_)
+                    templates_->Shutdown();
                 if (scenes_)
                     scenes_->Shutdown();
+                if (ai_)
+                    ai_->BeginShutdown();
+                if (prefabLoads_)
+                    prefabLoads_->Shutdown();
                 if (loads_)
                     loads_->Shutdown();
                 if (physics_)
@@ -119,7 +211,7 @@ namespace Horo::Application::Internal {
                         return Result<void>::Failure(report.diagnostics.empty() ? MakeError(InvalidProjectScene)
                                                                                 : report.diagnostics.front().error);
                 }
-                if (definition && !definition->AssetDependencies().empty() && !policy.cooked)
+                if ((policy.prefabGranted || (definition && !definition->AssetDependencies().empty())) && !policy.cooked)
                     return Result<void>::Failure(
                         MakeError(InvalidProjectScene,
                                   "This Play Scene requires committed assets: supply --cooked-root and --cook-target."));
@@ -130,6 +222,8 @@ namespace Horo::Application::Internal {
                     assets_ = std::move(captured).Value();
                 }
                 loads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_ ? assets_->Provider() : emptyProvider_);
+                if (policy.prefabGranted)
+                    prefabLoads_ = std::make_unique<Assets::AssetLoadService>(jobs, assets_->ArtifactProvider());
                 return Result<void>::Success();
             }
 
@@ -166,12 +260,20 @@ namespace Horo::Application::Internal {
             std::unique_ptr<CommittedSceneAssets> assets_;
             Assets::MemoryAssetProvider emptyProvider_;
             std::unique_ptr<Assets::AssetLoadService> loads_;
+            std::unique_ptr<Assets::AssetLoadService> prefabLoads_;
             std::shared_ptr<const ProjectCollisionSettings> collision_;
             std::unique_ptr<Physics::PhysicsRuntime> physics_;
             Physics::PhysicsSceneActivationAuthority authority_;
             std::uint64_t capturedFilterGeneration_{};
             ScenePhysicsHost native_;
+            std::vector<AI::AiControllerDescriptor> controllers_;
+            std::unique_ptr<AI::AiSceneRuntime> ai_;
             std::unique_ptr<Runtime::RuntimeSceneService> scenes_;
+            EditorPrefabProjector projector_;
+            std::unique_ptr<Prefab::PrefabTemplateProvider> templates_;
+            std::unique_ptr<Prefab::PrefabSpawnService> prefabs_;
+            std::shared_ptr<Gameplay::GameplayPrefabContext> prefabContext_;
+            std::uint64_t tick_{};
             Runtime::SceneRuntimeId identity_;
         };
     }  // namespace

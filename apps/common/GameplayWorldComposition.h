@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Gameplay/BehaviorRuntime.h"
+#include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
@@ -46,6 +47,18 @@ namespace Horo::Application::Internal {
         GameplayCharacterPermission characterPermission{GameplayCharacterPermission::Denied};
     };
 
+    /** @brief Explicit asset authorities and bounds for a composition-owned cooked prefab provider.
+     * @details Registry, loader and the Scene service borrow the same host-owned asset authorities. They outlive the
+     * composition. This value performs no registration, loading, backend selection or lifecycle work.
+     */
+    struct GameplayPrefabServices final {
+        Assets::AssetRegistry &registry;
+        Assets::AssetLoadService &loads;
+        Prefab::PrefabLimitProfile profile;
+        Prefab::PrefabTemplateProviderLimits limits{};
+        CancellationToken cancellation;
+    };
+
     /** @brief Owner-thread gameplay lifetime borrowing an explicit world and Scene.
      * Revoke runs before behavior/module stop and before the owning host retires world/Scene storage.
      * The Physics holder itself retains neither borrowed object. Scripts and native callbacks use
@@ -79,6 +92,21 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> Create(
             Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider &templates, Physics::PhysicsWorld *world,
+            std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components = nullptr,
+            Character::CharacterWorld *character = nullptr);
+        /** @brief Owns the cooked provider until module retirement and releases its pins before host asset teardown.
+         * @param scenes Active host Scene service, outliving this composition.
+         * @param assets Explicit matching asset authorities, immutable policy and provider resource limits.
+         * @param world Explicit optional Physics world; no backend is selected.
+         * @param sceneGeneration Exact non-zero host activation epoch.
+         * @param selection Selected module/script with an explicit Granted prefab permission.
+         * @param components Optional frozen custom component registry, outliving this composition.
+         * @param character Explicit paired active Character world, or no available consumer.
+         * @return Active provider/Gameplay owner or typed failure without retaining module or provider ownership.
+         * @pre The host registered MakeGameplayStructuralParticipant against its active slot before Scene startup.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> Create(
+            Runtime::RuntimeSceneService &scenes, const GameplayPrefabServices &assets, Physics::PhysicsWorld *world,
             std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components = nullptr,
             Character::CharacterWorld *character = nullptr);
         /** @brief Activates gameplay against the real Scene service when this host selects no runtime prefab provider.
@@ -125,6 +153,21 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant();
 
     private:
+        /** @brief Captures native component metadata before activating any service-backed behavior callbacks.
+         * @param scenes Published Scene authority, outliving this composition.
+         * @param components Explicit optional frozen project metadata; otherwise the loaded module supplies the owned snapshot.
+         * @return Activated runner or original component/runtime admission failure.
+         */
+        [[nodiscard]] Result<void> ActivateServiceRunner(Runtime::RuntimeSceneService &scenes,
+                                                         const Gameplay::ComponentRegistry *components);
+
+        /** @brief Host-owned inert adapter; runtime Prefab code never depends on the Scene source codec. */
+        class BuiltinProjector final : public Prefab::PrefabComponentProjector {
+        public:
+            [[nodiscard]] Result<bool> Project(const Prefab::RawComponentPayload &source, Runtime::RuntimeComponentSet &destination,
+                                               std::optional<Runtime::PrimitiveMeshDescriptor> &primitiveMesh) const override;
+        };
+
         /** @brief Shares exact Scene-service construction; nullable templates express the host's explicit provider selection. */
         [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> CreateServiceBacked(
             Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
@@ -143,6 +186,9 @@ namespace Horo::Application::Internal {
         std::unique_ptr<Gameplay::LuaBehaviorProgram> script_;
         Gameplay::BehaviorRegistry registry_;
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
+        std::unique_ptr<Prefab::PrefabTemplateProvider> ownedTemplates_;
+        BuiltinProjector builtinProjector_;            /**< Outlives spawn shutdown and every synchronous projection using it. */
+        Gameplay::ComponentRegistry prefabComponents_; /**< Owned inert metadata, frozen before behavior activation; outlives spawn. */
         std::unique_ptr<Prefab::PrefabSpawnService> prefabs_;
         std::shared_ptr<Gameplay::GameplayPrefabContext> prefabContext_;
         Runtime::RuntimeSceneService *scenes_{};
