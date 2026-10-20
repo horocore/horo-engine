@@ -4796,6 +4796,7 @@ if (HORO_BUILD_RENDER_OPENGL)
                 HoroEngine::EditorViewportOpenGL
                 HoroEngine::RenderFrontend
                 HoroThirdParty::Glad
+                HoroThirdParty::ImGuiOpenGL
         )
 
         if (HORO_ENABLE_GPU_SMOKE_TESTS)
