@@ -4,6 +4,7 @@
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
+#include "Horo/Editor/NavigationInspector.h"
 #include "Horo/Editor/PhysicsInspector.h"
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceFileOpenService.h"
@@ -123,6 +124,7 @@ namespace Horo::Editor {
         UpdateLightComponent,
         UpdateTriggerVolumeComponent,
         UpdatePhysicsComponents,
+        UpdateNavigationComponents,
         UpdateAudioSourceComponent,
         UpdateCharacterComponent,
         StartAudioComponentPreview,
@@ -245,6 +247,17 @@ namespace Horo::Editor {
         PhysicsInspectorValues values;
     };
 
+    /** @brief Detached complete navigation gesture; host proves exact owner, descriptors, sources and selection before publication. */
+    struct NavigationInspectorRequest final {
+        SceneTransactionContext context;
+        std::uint64_t selectionRevision{};
+        std::vector<SceneObjectId> objects;
+        std::optional<PrefabHierarchyTarget> prefab;
+        std::shared_ptr<const PrefabHierarchyProjection> publication;
+        std::vector<NavigationDefinitionSnapshot> definitions;
+        std::vector<NavigationInspectorEdit> edits;
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
@@ -268,6 +281,7 @@ namespace Horo::Editor {
         std::optional<Runtime::LightComponent> lightPayload = std::nullopt;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
         std::optional<PhysicsInspectorRequest> physicsPayload;
+        std::optional<NavigationInspectorRequest> navigationPayload;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
         std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
         std::optional<Runtime::AudioListenerComponent> audioListenerPayload;
@@ -335,6 +349,8 @@ namespace Horo::Editor {
         std::uint64_t selectionRevision{};
         std::vector<InspectorProviderApproval> inspectorApprovals;
         SceneTransactionContext physicsContext;
+        std::vector<NavigationDefinitionSnapshot> navigationDefinitions;
+        std::string navigationEditError;
         std::uint64_t physicsSelectionRevision{};
         std::string physicsEditError;
         std::vector<SceneObject> objects;

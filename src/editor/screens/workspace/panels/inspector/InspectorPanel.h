@@ -1,7 +1,7 @@
 #pragma once
-
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
+#include "NavigationInspectorSession.h"
 #include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
 #include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
 
@@ -97,6 +97,9 @@ namespace Horo::Editor {
         std::shared_ptr<const PrefabHierarchyProjection> m_prefabPresentation;
         std::optional<PrefabHierarchyTarget> m_prefabPresentedTarget;
         const PrefabHierarchyEntry *m_prefabEntry{}; /**< Borrowed only while m_prefabPresentation pins this exact cache. */
+        /** @brief Render shared typed navigation controls for the complete selected set or exact Prefab member. */
+        void DrawNavigation(const EditorWorkspaceViewModel &view, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+        NavigationInspectorSession m_navigationSession;
         PhysicsInspectorSession m_physicsSession;
         bool m_physicsInputError{};
         int m_activeTab{0};

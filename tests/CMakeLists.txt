@@ -122,7 +122,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
 target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp)
-target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PhysicsInspectorPublicContract.cpp)
+target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/NavigationInspectorPublicContract.cpp support/PhysicsInspectorPublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
@@ -2231,6 +2231,7 @@ if (HORO_BUILD_EDITOR_GUI)
 endif ()
 add_executable(HoroEditorLocalizationServiceTests
         unit/editor/LocalizationServiceTests.cpp
+        unit/editor/NavigationInspectorLocalizationTests.cpp
         unit/editor/PhysicsInspectorLocalizationTests.cpp
 )
 
@@ -2771,6 +2772,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroInspectorPanelRenderTests
             unit/editor/InspectorPanelRenderTests.cpp
+            unit/editor/NavigationInspectorRenderTests.cpp
             unit/editor/PhysicsInspectorRenderTests.cpp
     )
 
@@ -2787,6 +2789,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/InspectorEditSessionTests.cpp
             unit/editor/InspectorCharacterEditSessionTests.cpp
             unit/editor/InspectorAudioComponentTests.cpp
+            unit/editor/NavigationInspectorSessionTests.cpp
             unit/editor/PhysicsInspectorSessionTests.cpp
     )
 
@@ -3157,6 +3160,8 @@ add_executable(HoroSceneDocumentTests
         unit/editor/NavigationSettingsSceneReloadTests.cpp
         unit/editor/SceneDocumentTests.cpp
         unit/editor/CharacterAuthoringTests.cpp
+        unit/editor/NavigationPrefabInspectorTests.cpp
+        unit/editor/NavigationInspectorTests.cpp
         unit/editor/PhysicsInspectorTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp

@@ -168,6 +168,32 @@ namespace Horo::SceneSource {
         }
     }  // namespace
 
+    /** @copydoc EncodePrefabNavigationComponent */
+    Result<Prefab::RawComponentPayload> EncodePrefabNavigationComponent(const Kind kind, const Prefab::PrefabComponentInstanceId instance,
+                                                                        const SceneObjectComponentSet &components) {
+        using Return = Result<Prefab::RawComponentPayload>;
+        if (kind < Kind::NavigationSurface || kind > Kind::NavigationAgent || instance.Value() == 0)
+            return Return::Failure(MakeError(Prefab::PrefabErrors::ComponentTypeUnregistered));
+        const auto encoded = Detail::ComponentsJson(components);
+        const auto field = std::string(Field(kind));
+        if (!encoded.contains(field))
+            return Return::Failure(MakeError(Prefab::PrefabErrors::CorruptedPayload));
+        const auto schema = std::ranges::find(Runtime::BuiltinSceneComponentSchemas(), kind, &Runtime::BuiltinSceneComponentSchema::kind);
+        const auto type = Gameplay::ComponentTypeId::Parse(schema->typeId);
+        if (type.HasError())
+            return Return::Failure(type.ErrorValue());
+        Prefab::RawComponentPayload result{instance, {.typeId = type.Value()}};
+        const auto bytes = encoded.at(field).dump();
+        result.component.payload.reserve(bytes.size());
+        for (const auto byte : bytes)
+            result.component.payload.push_back(static_cast<std::byte>(byte));
+        Runtime::RuntimeComponentSet checked;
+        std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
+        if (auto valid = ProjectPrefabBuiltinComponent(result, checked, primitive); valid.HasError())
+            return Return::Failure(valid.ErrorValue());
+        return Return::Success(std::move(result));
+    }
+
     /** @copydoc ProjectPrefabBuiltinComponent */
     Result<bool> ProjectPrefabBuiltinComponent(const Prefab::RawComponentPayload &source, Runtime::RuntimeComponentSet &destination,
                                                std::optional<Runtime::PrimitiveMeshDescriptor> &primitiveMesh) {

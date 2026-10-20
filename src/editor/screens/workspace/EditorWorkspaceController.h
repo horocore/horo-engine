@@ -296,6 +296,11 @@ namespace Horo::Editor {
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;
+        std::optional<Prefab::PrefabValueSchemaSnapshot> m_navigationPrefabSchemas;
+        /** @brief Explicitly compose inert built-in navigation topology metadata once for source and edit resolution. */
+        [[nodiscard]] Result<void> EnsureNavigationPrefabSchemas(const Prefab::PrefabLimitProfile &limits);
+        /** @brief Prepare and commit one exact Prefab-member gesture with canonical runtime graph validation. */
+        void ApplyPrefabNavigationInspector(const NavigationInspectorRequest &request);
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
@@ -330,6 +335,10 @@ namespace Horo::Editor {
         /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
         void RefreshPhysicsInspectorPort();
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
+        /** @brief Admit one atomic navigation gesture through existing document/history owners. */
+        void ApplyNavigationInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Capture descriptor publications outside Draw without inventing defaults in degraded projects. */
+        void RefreshNavigationInspectorDefinitions();
         void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Check the actual selection authority and exact owner fence before candidate preparation. */
         [[nodiscard]] Result<SceneTransactionSnapshot> CapturePhysicsInspectorSnapshot(const EditorWorkspaceViewCommandData &command) const;
