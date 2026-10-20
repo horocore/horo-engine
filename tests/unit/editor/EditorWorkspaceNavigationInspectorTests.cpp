@@ -17,6 +17,7 @@ namespace {
         Runtime::RuntimeSceneService runtime;
         std::unique_ptr<EditorWorkspaceController> controller;
         std::size_t captures{};
+        bool changeAfterCapture{};
 
         explicit Workspace(bool prefab = false) {
             std::filesystem::create_directories(project.root / ".horo");
@@ -36,6 +37,8 @@ namespace {
                                                              SceneDocumentTestSupport::ScenePrefabVersion(), cancellation);
                 if (sources.HasError())
                     return Result<PreparedPrefabHierarchySources>::Failure(sources.ErrorValue());
+                if (changeAfterCapture)
+                    ChangeSource();
                 return Result<PreparedPrefabHierarchySources>::Success({std::move(sources).Value(), std::move(lease).Value()});
             };
             controller = std::make_unique<EditorWorkspaceController>(project.root, runtime, project.registry.Snapshot(), dependencies);
@@ -220,6 +223,9 @@ TEST_CASE("Navigation Prefab Inspector rejects source changes and forged compone
     const auto before = owner.ViewModel().documentRevision;
     SECTION("source bytes changed") {
         workspace.ChangeSource();
+    }
+    SECTION("source changed after native capture") {
+        workspace.changeAfterCapture = true;
     }
     SECTION("foreign component schema") {
         std::get<Runtime::NavigationAgentComponent>(command.navigationPayload->edits[0].value).schemaVersion = 99;

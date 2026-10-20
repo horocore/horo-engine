@@ -390,6 +390,8 @@ namespace Horo::Editor {
         if (auto valid = ValidatePrefabCandidate(m_document.Snapshot(), command.Value(), std::move(overrides).Value(), context);
             valid.HasError())
             return Return::Failure(valid.ErrorValue());
+        if (auto current = fresh.sources.inputs.VerifyUnchanged(request.context.cancellation); current.HasError())
+            return Return::Failure(current.ErrorValue());
         SceneDocumentPrefabValueCommands executor{m_document, m_history};
         auto committed = executor.Execute(command.Value(), fresh.sources.resolver, &*m_navigationPrefabSchemas, limits.Value(),
                                           request.context.cancellation);

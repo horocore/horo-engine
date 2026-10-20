@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 
 namespace Horo::Editor {
     namespace {
@@ -112,7 +113,9 @@ namespace Horo::Editor {
                     continue;
                 const auto found = std::ranges::find(selected, profile.id);
                 bool checked = found != selected.end();
-                ImGui::PushID(static_cast<int>(profile.id.Value()));
+                std::array<char, 20> identity{};
+                const auto encoded = std::to_chars(identity.data(), identity.data() + identity.size(), profile.id.Value());
+                ImGui::PushID(identity.data(), encoded.ptr);
                 if (Ui::CheckboxControl(profile.displayName.c_str(), &checked, ctx.theme.fonts)) {
                     if (checked)
                         selected.push_back(profile.id);
