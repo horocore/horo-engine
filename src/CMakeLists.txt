@@ -2982,6 +2982,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceFileOpenService.cpp
         editor/SourceDocumentService.cpp
         editor/SourceDocumentChanges.cpp
+        editor/SourceEditingCommands.cpp
         editor/SourceDocumentSave.cpp
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp

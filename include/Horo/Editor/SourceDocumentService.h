@@ -66,6 +66,8 @@ namespace Horo::Editor {
         std::size_t maximumDocumentBytes{8 * 1024 * 1024};
         std::size_t maximumResidentBytes{64 * 1024 * 1024}; /**< Owner text/base bytes, including replacement overlap. */
         std::size_t maximumDocuments{64};
+        std::size_t maximumHistoryBytes{2 * 1024 * 1024}; /**< Per document; oversized edits clear history. */
+        std::size_t maximumHistoryEntries{256};
     };
 
     namespace Detail {
@@ -111,12 +113,53 @@ namespace Horo::Editor {
         std::shared_ptr<const Detail::SourceDocumentRoot> root_;
     };
 
+    /** @brief Host-issued editor-view identity, scoped to a project session; zero denotes a non-view edit. */
+    struct SourceEditingViewId final {
+        std::uint64_t value{};
+        auto operator<=>(const SourceEditingViewId &) const = default;
+    };
+
+    /** @brief View-local caret/anchor byte offsets and logical scroll position captured around a semantic edit. */
+    struct SourceEditingView final {
+        std::size_t anchor{};
+        std::size_t caret{};
+        float scrollLines{};
+        SourceEditingViewId viewId{}; /**< History metadata only; never a canonical document selection. */
+        auto operator<=>(const SourceEditingView &) const = default;
+    };
+
+    /** @brief Why history cannot reach an earlier document state; the host presents this limitation. */
+    enum class SourceHistoryBoundary {
+        None,
+        Evicted,
+        OversizedEdit
+    };
+
+    /** @brief Bounded history availability for one exact admitted document. */
+    struct SourceHistoryState final {
+        std::size_t undoEntries{};
+        std::size_t redoEntries{};
+        std::size_t retainedBytes{};
+        SourceHistoryBoundary boundary{SourceHistoryBoundary::None};
+    };
+
     /** @brief Revision-fenced semantic byte-range edit; offsets may not split a UTF-8 scalar or BOM. */
     struct SourceTextEdit final {
         std::uint64_t expectedRevision{};
         std::size_t offset{};
         std::size_t eraseBytes{};
         std::string_view insert; /**< Synchronously borrowed, copied before publication; never retained. */
+        std::optional<SourceEditingView> beforeView{};
+        std::optional<SourceEditingView> afterView{};
+    };
+
+    /** @brief One history publication plus originating view metadata.
+     * @details Only the matching originating view restores this position. Other views retain and clamp their own
+     * selection/scroll against the new text. The service never stores live view state or dispatches to widgets.
+     */
+    struct SourceHistoryResult final {
+        SourceDocumentSnapshot snapshot;
+        SourceEditingView view;
     };
 
     /** @brief Revision-fenced save intent; explicit overwrite consent is tied to exact observed disk bytes. */
@@ -178,6 +221,19 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceDocumentSnapshot> Edit(DocumentInstanceId instance, const SourceTextEdit &edit,
                                                           CancellationToken cancellation = {});
+        /** @brief Queries bounded history without I/O. @param instance Exact admitted session.
+         * @return Availability or lifecycle/thread failure. */
+        [[nodiscard]] Result<SourceHistoryState> History(DocumentInstanceId instance) const;
+        /** @brief Undoes one semantic edit without restoring obsolete save or disk observation metadata.
+         * @param instance Exact session. @param expectedRevision Current publication. @param cancellation Cooperative observer.
+         * @return New monotonic snapshot and originating view; unavailable/stale/cancelled calls preserve history. */
+        [[nodiscard]] Result<SourceHistoryResult> Undo(DocumentInstanceId instance, std::uint64_t expectedRevision,
+                                                       CancellationToken cancellation = {});
+        /** @brief Redoes one undone edit. New edits discard redo; successful reload discards both directions.
+         * @param instance Exact session. @param expectedRevision Current publication. @param cancellation Cooperative observer.
+         * @return New snapshot and view, or failure preserving text and history. */
+        [[nodiscard]] Result<SourceHistoryResult> Redo(DocumentInstanceId instance, std::uint64_t expectedRevision,
+                                                       CancellationToken cancellation = {});
         /** @brief Explicitly checks disk without replacing local text or its base. @param instance Exact session.
          * @param cancellation Cooperative observer. @return Snapshot or typed disk error; error disposition is queryable afterward.
          */
@@ -212,6 +268,9 @@ namespace Horo::Editor {
 
     private:
         friend class SourceFileOpenService;
+        /** @brief Prepares a history replay completely before changing its cursor or publishing. */
+        [[nodiscard]] Result<SourceHistoryResult> ReplayHistory(DocumentInstanceId instance, std::uint64_t expectedRevision, bool redo,
+                                                                CancellationToken cancellation);
         /** @brief Saves to a host-validated replacement identity without postcommit identity allocation. */
         [[nodiscard]] Result<SourceSaveResult> SaveTo(const SourceSaveRequest &request, DurableFileSystem &files, DocumentIdentity identity,
                                                       std::filesystem::path path, CancellationToken cancellation);

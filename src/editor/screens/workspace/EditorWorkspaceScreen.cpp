@@ -387,12 +387,40 @@ namespace Horo::Editor {
                 append(viewModel.activeDocumentPanelId);
             }
 
+            /** @brief Routes active source menu mutations before the scene fallback. */
+            bool HandleSourceMenuAction(const EditorMenuAction action) {
+                if (controller_ &&
+                    (action == EditorMenuAction::SaveScene || action == EditorMenuAction::Undo || action == EditorMenuAction::Redo)) {
+                    const auto &model = controller_->ViewModel();
+                    for (const auto &source : model.sourceDocuments) {
+                        if (source.Identity().instance != model.workspacePanelHost.ActiveDocument())
+                            continue;
+                        EditorWorkspaceViewCommandData command;
+                        if (action == EditorMenuAction::SaveScene) {
+                            command.command = EditorWorkspaceViewCommand::SaveSourceDocument;
+                            command.sourceSave = SourceSaveRequest{source.Identity().instance, source.Revision(), {}};
+                        } else {
+                            command.command = EditorWorkspaceViewCommand::SourceDocumentInteraction;
+                            command.sourceInteraction =
+                                SourceHistoryRequest{source.Identity().instance, source.Revision(),
+                                                     action == EditorMenuAction::Undo ? SourceHistoryDirection::Undo
+                                                                                      : SourceHistoryDirection::Redo};
+                        }
+                        controller_->ProcessCommand(command);
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             bool HandleMenuInvocation(const EditorMenuInvocation &invocation) override {
                 EditorMenuAction action = invocation.action;
                 if (action == EditorMenuAction::ManagePackages) {
                     OpenPackagesModal();
                     return true;
                 }
+                if (HandleSourceMenuAction(action))
+                    return true;
                 if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
                     action = EditorMenuAction::SaveSceneAs;
                 if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
@@ -957,12 +985,25 @@ namespace Horo::Editor {
                 const auto pressed = [this](const char *id) {
                     return input_.router.ReadAction(input_.context, Input::ActionId{id}).pressed;
                 };
+                if (pressed(kActionSave)) {
+                    command.command = EditorWorkspaceViewCommand::SaveScene;
+                    const auto &model = controller_->ViewModel();
+                    for (const auto &source : model.sourceDocuments) {
+                        if (source.Identity().instance == model.workspacePanelHost.ActiveDocument()) {
+                            command.command = EditorWorkspaceViewCommand::SaveSourceDocument;
+                            command.sourceSave = SourceSaveRequest{source.Identity().instance, source.Revision(), {}};
+                            break;
+                        }
+                    }
+                    return;
+                }
+                // Text owners route their own edit shortcuts; application save remains available above.
+                if (ImGui::GetIO().WantTextInput)
+                    return;
                 if (pressed(kActionRedo)) {
                     command.command = EditorWorkspaceViewCommand::RedoScene;
                 } else if (pressed(kActionUndo)) {
                     command.command = EditorWorkspaceViewCommand::UndoScene;
-                } else if (pressed(kActionSave)) {
-                    command.command = EditorWorkspaceViewCommand::SaveScene;
                 } else if (pressed(kActionToolSelect)) {
                     command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
                     command.transformToolPayload = EditorTransformTool::Select;

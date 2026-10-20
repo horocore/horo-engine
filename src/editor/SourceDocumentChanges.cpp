@@ -1,5 +1,7 @@
 #include "SourceDocumentInternal.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <new>
 
@@ -85,6 +87,58 @@ namespace Horo::Editor {
         return Detail::LoadSourceText(path.Value(), limits.maximumDocumentBytes, cancellation);
     }
 
+    /** @copydoc SourceDocumentService::Storage::PrepareHistory */
+    Result<SourceDocumentService::Storage::HistoryEntry> SourceDocumentService::Storage::PrepareHistory(
+        Record &record, const SourceTextEdit &edit, const Detail::SourceText &after) const {
+        const auto &before = record.root->text->bytes;
+        HistoryEntry entry{edit.offset, before.substr(edit.offset, edit.eraseBytes), std::string(edit.insert),
+                           edit.beforeView.value_or(SourceEditingView{edit.offset, edit.offset, 0}),
+                           edit.afterView.value_or(
+                               SourceEditingView{edit.offset + edit.insert.size(), edit.offset + edit.insert.size(), 0})};
+        const auto validView = [](const SourceEditingView &view, const std::string_view bytes) {
+            return IsBoundary(bytes, view.anchor) && IsBoundary(bytes, view.caret) && std::isfinite(view.scrollLines);
+        };
+        if (!validView(entry.before, before) || !validView(entry.after, after.bytes) || entry.before.viewId != entry.after.viewId)
+            return Failure<HistoryEntry>(SourceDocumentErrors::Invalid);
+        if (limits.maximumHistoryEntries != 0 && entry.Bytes() <= limits.maximumHistoryBytes)
+            record.history.reserve(record.historyPosition + 1);
+        return Result<HistoryEntry>::Success(std::move(entry));
+    }
+
+    /** @copydoc SourceDocumentService::Storage::CommitHistory */
+    void SourceDocumentService::Storage::CommitHistory(Record &record, HistoryEntry entry) const noexcept {
+        const bool retain = limits.maximumHistoryEntries != 0 && entry.Bytes() <= limits.maximumHistoryBytes;
+        while (record.history.size() > record.historyPosition) {
+            record.historyBytes -= record.history.back().Bytes();
+            record.history.pop_back();
+        }
+        while (!record.history.empty() && (!retain || record.history.size() >= limits.maximumHistoryEntries ||
+                                           entry.Bytes() > limits.maximumHistoryBytes - record.historyBytes)) {
+            record.historyBytes -= record.history.front().Bytes();
+            record.history.erase(record.history.begin());
+            record.historyBoundary = SourceHistoryBoundary::Evicted;
+        }
+        if (!retain)
+            record.historyBoundary = SourceHistoryBoundary::OversizedEdit;
+        if (retain) {
+            record.historyBytes += entry.Bytes();
+            record.history.push_back(std::move(entry));
+        }
+        record.historyPosition = record.history.size();
+    }
+
+    /** @copydoc SourceDocumentService::Storage::Record::Step */
+    std::optional<SourceDocumentService::Storage::HistoryStep> SourceDocumentService::Storage::Record::Step(const bool redo) const {
+        if (redo ? historyPosition == history.size() : historyPosition == 0)
+            return {};
+        if (redo) {
+            const auto &entry = history[historyPosition];
+            return HistoryStep{{root->revision, entry.offset, entry.removed.size(), entry.inserted}, entry.after, historyPosition + 1};
+        }
+        const auto &entry = history[historyPosition - 1];
+        return HistoryStep{{root->revision, entry.offset, entry.inserted.size(), entry.removed}, entry.before, historyPosition - 1};
+    }
+
     /** @copydoc SourceDocumentService::Edit */
     Result<SourceDocumentSnapshot> SourceDocumentService::Edit(const DocumentInstanceId instance, const SourceTextEdit &edit,
                                                                const CancellationToken cancellation) {
@@ -105,6 +159,12 @@ namespace Horo::Editor {
             root.Value()->text = text.Value()->bytes == record.root->base->bytes ? record.root->base : std::move(text).Value();
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);
+            auto entry = storage_->PrepareHistory(record, edit, *root.Value()->text);
+            if (entry.HasError())
+                return Result<SourceDocumentSnapshot>::Failure(entry.ErrorValue());
+            if (cancellation.IsCancellationRequested())
+                return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);
+            storage_->CommitHistory(record, std::move(entry).Value());
             record.root = std::move(root).Value();
             return Result<SourceDocumentSnapshot>::Success(SourceDocumentSnapshot{record.root});
         } catch (const std::bad_alloc &) {
@@ -156,8 +216,15 @@ namespace Horo::Editor {
             auto loaded = storage_->ReadRecord(record, cancellation);
             if (loaded.HasError())
                 return Result<SourceDocumentSnapshot>::Failure(loaded.ErrorValue());
-            if (MatchesCurrentDisk(*record.root, *loaded.Value()))
+            if (cancellation.IsCancellationRequested())
+                return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);
+            if (MatchesCurrentDisk(*record.root, *loaded.Value())) {
+                record.history.clear();
+                record.historyPosition = 0;
+                record.historyBytes = 0;
+                record.historyBoundary = SourceHistoryBoundary::None;
                 return current;
+            }
             auto next = Detail::NextRoot(*record.root);
             if (next.HasError())
                 return Result<SourceDocumentSnapshot>::Failure(next.ErrorValue());
@@ -168,10 +235,68 @@ namespace Horo::Editor {
             next.Value()->external = SourceExternalState::InSync;
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);
+            record.history.clear();
+            record.historyPosition = 0;
+            record.historyBytes = 0;
+            record.historyBoundary = SourceHistoryBoundary::None;
             record.root = std::move(next).Value();
             return Result<SourceDocumentSnapshot>::Success(SourceDocumentSnapshot{record.root});
         } catch (const std::bad_alloc &) {
             return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::TooLarge);
         }
+    }
+
+    /** @copydoc SourceDocumentService::History */
+    Result<SourceHistoryState> SourceDocumentService::History(const DocumentInstanceId instance) const {
+        if (const auto current = Snapshot(instance); current.HasError())
+            return Result<SourceHistoryState>::Failure(current.ErrorValue());
+        const auto &record = *storage_->Find(instance);
+        return Result<SourceHistoryState>::Success(
+            {record.historyPosition, record.history.size() - record.historyPosition, record.historyBytes, record.historyBoundary});
+    }
+
+    /** @copydoc SourceDocumentService::ReplayHistory */
+    Result<SourceHistoryResult> SourceDocumentService::ReplayHistory(const DocumentInstanceId instance,
+                                                                     const std::uint64_t expectedRevision, const bool redo,
+                                                                     const CancellationToken cancellation) {
+        try {
+            const auto current = Snapshot(instance);
+            if (current.HasError())
+                return Result<SourceHistoryResult>::Failure(current.ErrorValue());
+            auto &record = *storage_->Find(instance);
+            if (expectedRevision != record.root->revision)
+                return Failure<SourceHistoryResult>(SourceDocumentErrors::Stale);
+            if (cancellation.IsCancellationRequested())
+                return Failure<SourceHistoryResult>(SourceDocumentErrors::Cancelled);
+            const auto step = record.Step(redo);
+            if (!step)
+                return Failure<SourceHistoryResult>(SourceDocumentErrors::Invalid);
+            auto text = storage_->PrepareEdit(record, step->patch, cancellation);
+            if (text.HasError())
+                return Result<SourceHistoryResult>::Failure(text.ErrorValue());
+            auto next = Detail::NextRoot(*record.root);
+            if (next.HasError())
+                return Result<SourceHistoryResult>::Failure(next.ErrorValue());
+            next.Value()->text = text.Value()->bytes == record.root->base->bytes ? record.root->base : std::move(text).Value();
+            if (cancellation.IsCancellationRequested())
+                return Failure<SourceHistoryResult>(SourceDocumentErrors::Cancelled);
+            record.historyPosition = step->position;
+            record.root = std::move(next).Value();
+            return Result<SourceHistoryResult>::Success({SourceDocumentSnapshot{record.root}, step->view});
+        } catch (const std::bad_alloc &) {
+            return Failure<SourceHistoryResult>(SourceDocumentErrors::TooLarge);
+        }
+    }
+
+    /** @copydoc SourceDocumentService::Undo */
+    Result<SourceHistoryResult> SourceDocumentService::Undo(const DocumentInstanceId instance, const std::uint64_t expectedRevision,
+                                                            const CancellationToken cancellation) {
+        return ReplayHistory(instance, expectedRevision, false, cancellation);
+    }
+
+    /** @copydoc SourceDocumentService::Redo */
+    Result<SourceHistoryResult> SourceDocumentService::Redo(const DocumentInstanceId instance, const std::uint64_t expectedRevision,
+                                                            const CancellationToken cancellation) {
+        return ReplayHistory(instance, expectedRevision, true, cancellation);
     }
 }  // namespace Horo::Editor

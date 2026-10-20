@@ -1248,3 +1248,39 @@ how to ask the user and display each error without writing files itself. Save As
 retargets the workspace registry through `SourceFileOpenService`, preserving instance
 identity. No widget teardown, presentation detach or implicit watcher event authorizes
 save, overwrite, or dirty discard.
+
+### Source editing history and view restoration (HORO-223)
+
+`SourceDocumentService` is the sole text history authority. A successful semantic
+`Edit` stores a bounded owning UTF-8 byte delta, not a widget snapshot or an old
+disk publication. Undo and redo publish a fresh monotonic revision while retaining
+the current saved base, durability and external observation. Save and inspection
+preserve history. Successful explicit reload, close and shutdown release it.
+Rejected, cancelled, no-op and allocation-failed operations preserve both directions;
+a successful new edit invalidates redo.
+
+The default per-document history cap is 256 entries and 2 MiB of retained inserted
+and removed bytes. Oldest entries are evicted first. An edit larger than the byte
+cap remains editable but clears that document's history. `SourceHistoryState`
+reports `Evicted` or `OversizedEdit`; the GUI must display the localized limitation
+and must not imply unlimited undo. Hosts can reduce either bound, including zero.
+These retained delta bytes have their own finite limit, separate from the text/base
+replacement-overlap reservation. Detached snapshots remain independently owned.
+
+`SourceEditingView` is history metadata, never canonical live document selection.
+The host issues a project-session-scoped `SourceEditingViewId` for each view and
+includes matching before/after IDs with a semantic edit. Undo/redo returns the
+originating view metadata. Only that exact live view restores its recorded caret
+and logical scroll position; other views preserve their independent presentation
+state and clamp invalid positions to valid UTF-8/newline boundaries. A destroyed
+view is not resurrected by replay. The GUI clears view registries on project exit.
+An edit originating outside a view uses ID zero.
+
+`SourceEditingCommands` plans Horo-owned, revision-fenced atomic replacements,
+line indentation, literal case-sensitive find/replace and scalar-column line
+navigation. It preserves exact BOM/newline bytes, excludes the BOM from editable
+selections, and rejects split scalars or CRLF cursors. The new public header belongs
+to `HoroEditorServices`; its staged consumer coverage extends the existing source
+consumer target. Existing `SourceTextEdit` callers migrate incrementally through
+optional view metadata; they already participate in the same document history.
+The private widget retains no competing undo authority and performs no save I/O.

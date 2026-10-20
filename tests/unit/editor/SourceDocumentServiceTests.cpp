@@ -1,4 +1,5 @@
 #include "../../support/AllocationProbe.h"
+#include "Horo/Editor/SourceEditingCommands.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 
 #include <array>
@@ -330,4 +331,202 @@ TEST_CASE("Source owner survives presentation lease detachment and cancellation 
     ErrorIs(cancelled, SourceDocumentErrors::Cancelled);
     ErrorIs(owner.Snapshot(project.Identity("large.cpp", 2).instance), SourceDocumentErrors::Stale);
     CHECK(owner.Snapshot(identity.instance).Value().Revision() == 1);
+}
+
+TEST_CASE("Source history is document scoped and restores view without reverting disk observations", "[unit][editor][source][history]") {
+    SourceProject project;
+    project.Put("base");
+    project.Put("other", "other.cpp");
+    SourceDocumentService owner(project.directory);
+    const auto a = project.Identity().instance;
+    const auto b = project.Identity("other.cpp", 2).instance;
+    REQUIRE(owner.Open(project.Identity(), project.directory / "code.cpp").HasValue());
+    REQUIRE(owner.Open(project.Identity("other.cpp", 2), project.directory / "other.cpp").HasValue());
+    const SourceEditingView before{1, 3, 12};
+    const SourceEditingView after{3, 3, 14};
+    REQUIRE(owner.Edit(a, {1, 1, 2, "XX", before, after}).HasValue());
+    REQUIRE(owner.Edit(b, {1, 0, 5, "second"}).HasValue());
+    project.Put("external");
+    REQUIRE(owner.InspectDisk(a).HasValue());
+    const auto undone = owner.Undo(a, 3);
+    REQUIRE(undone.HasValue());
+    CHECK(undone.Value().snapshot.Text() == "base");
+    CHECK(undone.Value().snapshot.Revision() == 4);
+    CHECK(undone.Value().snapshot.ExternalState() == SourceExternalState::Changed);
+    CHECK(undone.Value().view == before);
+    CHECK_FALSE(undone.Value().snapshot.Dirty());
+    CHECK(owner.Snapshot(b).Value().Text() == "second");
+    const auto redone = owner.Redo(a, 4);
+    REQUIRE(redone.HasValue());
+    CHECK(redone.Value().snapshot.Text() == "bXXe");
+    CHECK(redone.Value().view == after);
+    REQUIRE(owner.Undo(a, 5).HasValue());
+    REQUIRE(owner.Edit(a, {6, 0, 1, "B"}).HasValue());
+    CHECK(owner.History(a).Value().redoEntries == 0);
+    ErrorIs(owner.Redo(a, 7), SourceDocumentErrors::Invalid);
+    REQUIRE(owner.Close(a).HasValue());
+    REQUIRE(owner.Open(project.Identity(), project.directory / "code.cpp").HasValue());
+    CHECK(owner.History(a).Value().undoEntries == 0);
+    CHECK(owner.History(b).Value().undoEntries == 1);
+}
+
+TEST_CASE("Source history evicts oldest deltas at entry and byte bounds", "[unit][editor][source][history]") {
+    SourceProject project;
+    project.Put("abc");
+    SourceDocumentService owner(project.directory, {.maximumHistoryBytes = 4, .maximumHistoryEntries = 2});
+    const auto id = project.Identity().instance;
+    REQUIRE(owner.Open(project.Identity(), project.directory / "code.cpp").HasValue());
+    REQUIRE(owner.Edit(id, {1, 0, 1, "A"}).HasValue());
+    REQUIRE(owner.Edit(id, {2, 1, 1, "B"}).HasValue());
+    REQUIRE(owner.Edit(id, {3, 2, 1, "C"}).HasValue());
+    CHECK(owner.History(id).Value().retainedBytes == 4);
+    CHECK(owner.History(id).Value().boundary == SourceHistoryBoundary::Evicted);
+    REQUIRE(owner.Undo(id, 4).HasValue());
+    REQUIRE(owner.Undo(id, 5).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == "Abc");
+    ErrorIs(owner.Undo(id, 6), SourceDocumentErrors::Invalid);
+    REQUIRE(owner.Edit(id, {6, 0, 3, "longer"}).HasValue());
+    CHECK(owner.History(id).Value().undoEntries == 0);
+    CHECK(owner.History(id).Value().redoEntries == 0);
+    CHECK(owner.History(id).Value().boundary == SourceHistoryBoundary::OversizedEdit);
+    REQUIRE(owner.Edit(id, {7, 0, 1, "L"}).HasValue());
+    CHECK(owner.History(id).Value().undoEntries == 1);
+    project.Put("reload");
+    REQUIRE(owner.Reload(id, 8).HasValue());
+    CHECK(owner.History(id).Value().undoEntries == 0);
+}
+
+TEST_CASE("Rejected cancelled and allocation failed history operations are atomic", "[unit][editor][source][history]") {
+    SourceProject project;
+    project.Put("a\xc3\xa9\r\n");
+    SourceDocumentService owner(project.directory);
+    const auto id = project.Identity().instance;
+    REQUIRE(owner.Open(project.Identity(), project.directory / "code.cpp").HasValue());
+    REQUIRE(owner.Edit(id, {1, 0, 1, "b"}).HasValue());
+    ErrorIs(owner.Edit(id, {2, 0, 1, "c", SourceEditingView{2, 2, 0}, {}}), SourceDocumentErrors::Invalid);
+    ErrorIs(owner.Undo(id, 1), SourceDocumentErrors::Stale);
+    CancellationSource cancellation;
+    cancellation.RequestCancellation();
+    ErrorIs(owner.Undo(id, 2, cancellation.Token()), SourceDocumentErrors::Cancelled);
+    Result<SourceHistoryResult> failed = Result<SourceHistoryResult>::Success({});
+    {
+        Tests::AllocationProbe::ScopedFailure inject;
+        failed = owner.Undo(id, 2);
+    }
+    ErrorIs(failed, SourceDocumentErrors::TooLarge);
+    CHECK(owner.History(id).Value().undoEntries == 1);
+    CHECK(owner.Snapshot(id).Value().Revision() == 2);
+    CHECK(owner.Snapshot(id).Value().Text() == "b\xc3\xa9\r\n");
+    REQUIRE(owner.Undo(id, 2).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == "a\xc3\xa9\r\n");
+    REQUIRE(owner.Redo(id, 3).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == "b\xc3\xa9\r\n");
+}
+
+TEST_CASE("Source edit plans preserve BOM CRLF and scalar selection boundaries", "[unit][editor][source][editing]") {
+    SourceProject project;
+    project.Put("\xef\xbb\xbf  one\r\n\t\xc3\xa9 two\r\nlast");
+    SourceDocumentService owner(project.directory);
+    const auto id = project.Identity().instance;
+    REQUIRE(owner.Open(project.Identity(), project.directory / "code.cpp").HasValue());
+    const auto snapshot = owner.Snapshot(id).Value();
+    const auto second = NavigateSourceLine(snapshot, 2, 3);
+    REQUIRE(second);
+    CHECK(second->caret == 13);
+    const auto indent = PlanSourceIndentation(snapshot, {3, 10, 5}, 4, false);
+    REQUIRE(indent.HasValue());
+    const auto indented = owner.Edit(id, indent.Value().Edit());
+    REQUIRE(indented.HasValue());
+    CHECK(indented.Value().Text() == "\xef\xbb\xbf      one\r\n\t\xc3\xa9 two\r\nlast");
+    CHECK(indent.Value().after == SourceEditingView{7, 14, 5});
+    REQUIRE(owner.Undo(id, 2).HasValue());
+    const auto outdent = PlanSourceIndentation(owner.Snapshot(id).Value(), {3, 19, 5}, 4, true);
+    REQUIRE(outdent.HasValue());
+    REQUIRE(owner.Edit(id, outdent.Value().Edit()).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == "\xef\xbb\xbfone\r\n\xc3\xa9 two\r\nlast");
+    ErrorIs(PlanSourceReplacement(snapshot, {0, 0, 0}, "x"), SourceDocumentErrors::Invalid);
+    ErrorIs(PlanSourceReplacement(snapshot, {9, 9, 0}, "x"), SourceDocumentErrors::Invalid);
+}
+
+TEST_CASE("Source literal search wrap replace and navigation are bounded and undoable", "[unit][editor][source][editing]") {
+    SourceProject project;
+    project.Put("\xef\xbb\xbf"
+                "cat \xc3\xa9 cat\nlast");
+    SourceDocumentService owner(project.directory);
+    const auto id = project.Identity().instance;
+    const auto snapshot = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+    const auto first = FindSourceText(snapshot, {3, 3, 4}, "cat", SourceSearchDirection::Forward, true);
+    REQUIRE(first);
+    CHECK(first->anchor == 3);
+    const auto second = FindSourceText(snapshot, *first, "cat", SourceSearchDirection::Forward, true);
+    REQUIRE(second);
+    CHECK(second->anchor == 10);
+    CHECK(FindSourceText(snapshot, *second, "cat", SourceSearchDirection::Forward, true) == first);
+    CHECK(FindSourceText(snapshot, *first, "cat", SourceSearchDirection::Backward, true) == second);
+    CHECK_FALSE(FindSourceText(snapshot, *first, "", SourceSearchDirection::Forward, true));
+    CHECK_FALSE(FindSourceText(snapshot, *second, "cat", SourceSearchDirection::Forward, false));
+    const auto replace = PlanSourceReplaceAll(snapshot, *second, "cat", "dog");
+    REQUIRE(replace.HasValue());
+    REQUIRE(owner.Edit(id, replace.Value().Edit()).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == "\xef\xbb\xbf"
+                                               "dog \xc3\xa9 dog\nlast");
+    REQUIRE(owner.Undo(id, 2).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == snapshot.Text());
+    CHECK(NavigateSourceLine(snapshot, 1, 6)->caret == 9);
+    CHECK(NavigateSourceLine(snapshot, 100, 100)->caret == snapshot.Text().size());
+    const std::string large(4 * 1024 * 1024, 'x');
+    ErrorIs(PlanSourceReplaceAll(snapshot, *first, "cat", large), SourceDocumentErrors::TooLarge);
+}
+
+TEST_CASE("History returns originating view identity without owning either live view", "[unit][editor][source][history]") {
+    SourceProject project;
+    project.Put("abcdef");
+    SourceDocumentService owner(project.directory);
+    const auto id = project.Identity().instance;
+    REQUIRE(owner.Open(project.Identity(), project.directory / "code.cpp").HasValue());
+    const SourceEditingView first{1, 3, 7, SourceEditingViewId{41}};
+    const SourceEditingView second{4, 4, 19, SourceEditingViewId{42}};
+    auto firstAfter = first;
+    firstAfter.anchor = firstAfter.caret = 2;
+    REQUIRE(owner.Edit(id, {1, 1, 2, "X", first, firstAfter}).HasValue());
+    auto secondAfter = second;
+    secondAfter.anchor = secondAfter.caret = 5;
+    REQUIRE(owner.Edit(id, {2, 4, 0, "Y", second, secondAfter}).HasValue());
+    const auto undoSecond = owner.Undo(id, 3);
+    REQUIRE(undoSecond.HasValue());
+    CHECK(undoSecond.Value().view == second);
+    CHECK(undoSecond.Value().view.viewId != first.viewId);
+    const auto undoFirst = owner.Undo(id, 4);
+    REQUIRE(undoFirst.HasValue());
+    CHECK(undoFirst.Value().view == first);
+    CHECK(owner.Snapshot(id).Value().Text() == "abcdef");
+    const auto redoFirst = owner.Redo(id, 5);
+    REQUIRE(redoFirst.HasValue());
+    CHECK(redoFirst.Value().view == firstAfter);
+    ErrorIs(owner.Edit(id, {6, 0, 1, "z", first, second}), SourceDocumentErrors::Invalid);
+    CHECK(owner.History(id).Value().redoEntries == 1);
+}
+
+TEST_CASE("Source multiline clipboard and newline plans form single undo entries", "[unit][editor][source][editing]") {
+    SourceProject project;
+    project.Put("  value\r\nnext\r\n");
+    SourceDocumentService owner(project.directory);
+    const auto id = project.Identity().instance;
+    const auto snapshot = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+    const auto newline = PlanSourceNewline(snapshot, {7, 7, -2, SourceEditingViewId{11}});
+    REQUIRE(newline.HasValue());
+    CHECK(newline.Value().insert == "\r\n  ");
+    CHECK(newline.Value().after.viewId == SourceEditingViewId{11});
+    REQUIRE(owner.Edit(id, newline.Value().Edit()).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == "  value\r\n  \r\nnext\r\n");
+    const auto undo = owner.Undo(id, 2);
+    REQUIRE(undo.HasValue());
+    CHECK(undo.Value().snapshot.Text() == snapshot.Text());
+    const auto paste = PlanSourceReplacement(undo.Value().snapshot, {2, 7, 0}, "世界\nsecond");
+    REQUIRE(paste.HasValue());
+    REQUIRE(owner.Edit(id, paste.Value().Edit()).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == "  世界\nsecond\r\nnext\r\n");
+    CHECK(owner.History(id).Value().undoEntries == 1);
+    REQUIRE(owner.Undo(id, 4).HasValue());
+    CHECK(owner.Snapshot(id).Value().Text() == snapshot.Text());
 }
