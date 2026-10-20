@@ -2314,6 +2314,12 @@ target_compile_features(HoroPrefabOverrideModel INTERFACE cxx_std_20)
 target_link_libraries(HoroPrefabOverrideModel INTERFACE HoroEngine::Prefab HoroEngine::Application)
 
 add_library(HoroPrefabAuthoring STATIC
+        runtime/prefab/PrefabComponentOverrideResolution.cpp
+        runtime/prefab/PrefabComponentEdits.cpp
+        runtime/prefab/PrefabComponentOverrideCodec.cpp
+        runtime/prefab/PrefabComponentOverrideValidation.cpp
+        runtime/prefab/PrefabOverrideRecordOrdering.cpp
+        runtime/prefab/PrefabComponentSchemas.cpp
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabExpansionCache.cpp

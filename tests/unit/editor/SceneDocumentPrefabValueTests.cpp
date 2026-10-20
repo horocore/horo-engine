@@ -36,6 +36,78 @@ namespace Horo::Editor {
             CHECK(decoded.Value().prefabInstances[0].valueOverrides == retained);
         }
 
+        /** @brief Prove the same topology survives persistence and canonical native component conversion. */
+        void CheckComponentProjection(const SceneDocument &document, const Prefab::PrefabSourceResolverSnapshot &sources,
+                                      const Prefab::PrefabValueSchemaSnapshot &schemas,
+                                      const std::optional<Prefab::PrefabValueOverrideSet> &retained) {
+            const auto bytes = SceneSource::EncodeSceneSource({document.Objects(), document.PrefabInstances()});
+            const auto decoded = SceneSource::DecodeSceneSource(bytes);
+            REQUIRE(decoded.HasValue());
+            CHECK(decoded.Value().prefabInstances[0].valueOverrides == retained);
+            const auto converted = ConvertSceneDocumentToRuntime(document.Snapshot(), {20}, sources, Limits(), &schemas);
+            REQUIRE(converted.HasValue());
+            REQUIRE(converted.Value().Entities()[0].components.navigationAgent);
+        }
+
+        /** @brief A changed immediate source cannot publish runtime components from retained removal intent. */
+        void CheckComponentSourceChange(const SceneDocument &document, const Prefab::PrefabValueSchemaSnapshot &schemas) {
+            const auto changed = Sources(3.0, 2);
+            const auto broken = BuildScenePrefabProjection(document.Snapshot(), changed, Limits(), &schemas);
+            REQUIRE(broken.HasValue());
+            CHECK_FALSE(broken.Value().instances[0].expanded);
+            CHECK(ConvertSceneDocumentToRuntime(document.Snapshot(), {20}, changed, Limits(), &schemas).HasError());
+        }
+
+        TEST_CASE("Prefab component replacement shares canonical document history persistence and runtime admission",
+                  "[unit][editor][prefab][topology][history]") {
+            SceneDocument document;
+            EditorHistory history;
+            SceneDocumentCommandExecutor commands{document, history};
+            SceneDocumentPrefabValueCommands values{document, history};
+            const auto created =
+                commands.Execute(CreateScenePrefabInstanceCommand{Prefab::PrefabAssetReference::Create(Asset()).Value(), {}, {}});
+            REQUIRE(created.HasValue());
+            const auto instance = *created.Value().prefabInstance;
+            const auto sources = Sources();
+            const auto source = sources.Resolve(Asset(), instance, Limits()).Value();
+            Gameplay::ComponentDescriptor descriptor{Type(), 1, "Navigation", "Runtime", {}, {}};
+            const auto schemas = Prefab::PrefabValueSchemaSnapshot::Create({}, Limits(), {{descriptor, 1, true, true, {}, {}, {}}}).Value();
+            const Prefab::PrefabComponentOverrideTarget old{Prefab::ValueTestSupport::Object(), Type(),
+                                                            Prefab::PrefabComponentInstanceId::Create(1).Value()};
+            auto replacement = source.Objects()[0].object.components[0];
+            replacement.instance = Prefab::PrefabComponentInstanceId::Create(2).Value();
+            EditScenePrefabComponentCommand command{instance,
+                                                    document.Revision(),
+                                                    source.Revision(),
+                                                    schemas.Revision(),
+                                                    Prefab::PrefabReplaceComponentEdit{old, replacement},
+                                                    document.ReplacementEpoch()};
+            REQUIRE(values.Execute(command, sources, &schemas, Limits()).HasValue());
+            const auto retained = document.PrefabInstances()[0].valueOverrides;
+            REQUIRE(retained);
+            CHECK(retained->componentRecords.size() == 2);
+            CheckComponentProjection(document, sources, schemas, retained);
+            REQUIRE(commands.Undo().HasValue());
+            CHECK_FALSE(document.PrefabInstances()[0].valueOverrides);
+            REQUIRE(commands.Redo().HasValue());
+            CHECK(document.PrefabInstances()[0].valueOverrides == retained);
+            CHECK(values.Execute(command, sources, &schemas, Limits()).HasError());
+            command.expectedRevision = document.Revision();
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            CHECK(values.Execute(command, sources, &schemas, Limits(), cancelled.Token()).HasError());
+            CHECK(document.PrefabInstances()[0].valueOverrides == retained);
+            command.edit = Prefab::PrefabRevertComponentOverridesEdit{{old, {old.object, Type(), replacement.instance}}};
+            REQUIRE(values.Execute(command, sources, &schemas, Limits()).HasValue());
+            CHECK_FALSE(document.PrefabInstances()[0].valueOverrides);
+            REQUIRE(commands.Undo().HasValue());
+            CHECK(document.PrefabInstances()[0].valueOverrides == retained);
+            CheckComponentSourceChange(document, schemas);
+            REQUIRE(document.LoadSaved({}, {document.PrefabInstances().begin(), document.PrefabInstances().end()}).HasValue());
+            command.expectedRevision = document.Revision();
+            CHECK(values.Execute(command, sources, &schemas, Limits()).HasError());
+        }
+
         TEST_CASE("Prefab value edit and history epochs reject canonical reload with repeated revisions",
                   "[unit][editor][prefab][lifecycle]") {
             SceneDocument document;

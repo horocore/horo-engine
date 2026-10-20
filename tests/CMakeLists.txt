@@ -1793,6 +1793,9 @@ add_test(NAME HoroPrefabTemplateProviderPublicHeaderConsumer COMMAND HoroPrefabT
 set_tests_properties(HoroPrefabTemplateProviderPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless")
 
 add_executable(HoroPrefabTests
+        unit/runtime/prefab/PrefabComponentResolutionTests.cpp
+        unit/runtime/prefab/PrefabComponentCodecTests.cpp
+        unit/runtime/prefab/PrefabComponentSchemaTests.cpp
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDiagnosticsTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
