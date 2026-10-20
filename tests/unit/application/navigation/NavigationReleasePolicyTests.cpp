@@ -118,6 +118,7 @@ namespace Horo::Application {
 
     TEST_CASE("Exact canonical extension ceiling admits16384 bytes and rejects16385 without JSON padding",
               "[unit][navigation][content][release][bounds]") {
+        using enum Release::DistributionProductKind;
         Directory directory;
         const auto baseline = Prepare(directory.root / "baseline", Target());
         REQUIRE(baseline.extension.canonicalJson.size() < 16384);
@@ -126,44 +127,41 @@ namespace Horo::Application {
         const auto exactTarget = Target("headless-" + std::string(exactLength - 9, 'a'));
         const auto exact = Prepare(directory.root / "exact", exactTarget);
         REQUIRE(exact.extension.canonicalJson.size() == 16384);
-        auto package = Produce(directory.root / "package", exact, Release::DistributionProductKind::GameRuntime);
-        const auto proof = Verify(package, exactTarget, Release::DistributionProductKind::GameRuntime);
-        REQUIRE(AdmitNavigationReleaseContent(package.archive, package.manifest, proof, "assets.horo", exactTarget,
-                                              Release::DistributionProductKind::GameRuntime)
-                    .HasValue());
+        auto package = Produce(directory.root / "package", exact, GameRuntime);
+        const auto proof = Verify(package, exactTarget, GameRuntime);
+        REQUIRE(
+            AdmitNavigationReleaseContent(package.archive, package.manifest, proof, "assets.horo", exactTarget, GameRuntime).HasValue());
         const auto oversizeTarget = Target(exactTarget.Value() + 'a');
         const auto set = Navigation::TestSupport::EmptyContent();
         const auto generation = Publish(directory.root / "oversize", oversizeTarget, Asset(),
                                         Navigation::TestSupport::ContentEnvelope(set, Asset(), oversizeTarget));
-        Navigation::TestSupport::RequireError(PrepareNavigationReleaseContent(generation,
-                                                                              Plan(Asset(), Release::DistributionProductKind::GameRuntime),
-                                                                              Release::DistributionProductKind::GameRuntime),
+        Navigation::TestSupport::RequireError(PrepareNavigationReleaseContent(generation, Plan(Asset(), GameRuntime), GameRuntime),
                                               Navigation::NavigationErrors::CapacityExceeded);
         REQUIRE_FALSE(std::filesystem::exists(directory.root / "oversize-output"));
     }
 
     TEST_CASE("Runtime release admission requires exact generic verification proof and unmodified archive evidence",
               "[unit][navigation][content][release][proof]") {
+        using enum Release::DistributionProductKind;
         Directory directory;
         const auto prepared = Prepare(directory.root / "cook", Target());
-        auto package = Produce(directory.root / "package", prepared, Release::DistributionProductKind::GameRuntime);
-        const auto proof = Verify(package, Target(), Release::DistributionProductKind::GameRuntime);
+        auto package = Produce(directory.root / "package", prepared, GameRuntime);
+        const auto proof = Verify(package, Target(), GameRuntime);
         auto changed = package.manifest.Data();
         changed.build.value += "_changed";
         auto altered = Release::ReleaseArtifactManifest::Create(std::move(changed));
         REQUIRE(altered.HasValue());
         Navigation::TestSupport::RequireError(AdmitNavigationReleaseContent(package.archive, altered.Value(), proof, "assets.horo",
-                                                                            Target(), Release::DistributionProductKind::GameRuntime),
+                                                                            Target(), GameRuntime),
                                               Navigation::NavigationErrors::StaleSnapshot);
         auto corrupt = package.archive;
         REQUIRE_FALSE(corrupt.empty());
-        corrupt.back() ^= 1;
+        std::as_writable_bytes(std::span{corrupt}).back() ^= std::byte{1};
         Navigation::TestSupport::RequireError(AdmitNavigationReleaseContent(corrupt, package.manifest, proof, "assets.horo", Target(),
-                                                                            Release::DistributionProductKind::GameRuntime),
+                                                                            GameRuntime),
                                               Navigation::NavigationErrors::NavMeshArtifactCorrupt);
-        REQUIRE_FALSE(AdmitNavigationReleaseContent(package.archive, package.manifest, proof, "wrong.horo", Target(),
-                                                    Release::DistributionProductKind::GameRuntime)
-                          .HasValue());
+        REQUIRE_FALSE(
+            AdmitNavigationReleaseContent(package.archive, package.manifest, proof, "wrong.horo", Target(), GameRuntime).HasValue());
     }
 
     TEST_CASE("Declared signing failure in the genuine generic verifier cannot issue a runtime candidate proof",
@@ -179,7 +177,7 @@ namespace Horo::Application {
         Write(package.stage / "manifest.json", {reinterpret_cast<const std::uint8_t *>(json.data()), json.size()});
         RejectingSignature signature;
         NavigationReleaseContentSmokeProbe smoke{"assets.horo", Target(), Release::DistributionProductKind::GameRuntime};
-        Release::IReleaseCandidateSmokeProbe *probes[]{&smoke};
+        std::array<Release::IReleaseCandidateSmokeProbe *, 1> probes{&smoke};
         const std::array required{Release::ReleaseCandidateSmokeKind::RuntimeAssets};
         auto verified = Release::VerifyReleaseCandidate(package.stage, signedClaim.Value(), required, &signature, probes);
         REQUIRE(verified.HasError());
@@ -210,7 +208,7 @@ namespace Horo::Application {
         prepared.extension.canonicalJson = evidence.dump();
         auto package = Produce(directory.root / "package", prepared, Release::DistributionProductKind::GameRuntime);
         NavigationReleaseContentSmokeProbe smoke{"assets.horo", Target(), Release::DistributionProductKind::GameRuntime};
-        Release::IReleaseCandidateSmokeProbe *probes[]{&smoke};
+        std::array<Release::IReleaseCandidateSmokeProbe *, 1> probes{&smoke};
         const std::array required{Release::ReleaseCandidateSmokeKind::RuntimeAssets};
         const auto verified = Release::VerifyReleaseCandidate(package.stage, package.manifest, required, nullptr, probes);
         Navigation::TestSupport::RequireError(verified, *expected);
@@ -226,7 +224,7 @@ namespace Horo::Application {
         REQUIRE(envelope.HasValue());
         auto artifact = std::move(envelope).Value();
         REQUIRE(artifact.payload.size() >= 4);
-        artifact.payload[3] = '3';
+        artifact.payload[3] = 0xFF;  // Reserved non-ASCII version, independent of supported numbered aggregate formats.
         artifact.payloadDigest = ComputeSha256(std::as_bytes(std::span{artifact.payload}));
         artifact.cacheKeyDigest = artifact.payloadDigest;
         const auto skewed = Assets::EncodeCookedArtifact(artifact);
@@ -242,7 +240,7 @@ namespace Horo::Application {
         prepared.extension.canonicalJson = evidence.dump();
         auto package = Produce(directory.root / "package", prepared, Release::DistributionProductKind::GameRuntime);
         NavigationReleaseContentSmokeProbe smoke{"assets.horo", Target(), Release::DistributionProductKind::GameRuntime};
-        Release::IReleaseCandidateSmokeProbe *probes[]{&smoke};
+        std::array<Release::IReleaseCandidateSmokeProbe *, 1> probes{&smoke};
         const std::array required{Release::ReleaseCandidateSmokeKind::RuntimeAssets};
         const auto verified = Release::VerifyReleaseCandidate(package.stage, package.manifest, required, nullptr, probes);
         Navigation::TestSupport::RequireError(verified, Navigation::NavigationErrors::UnsupportedCookedVersion);
