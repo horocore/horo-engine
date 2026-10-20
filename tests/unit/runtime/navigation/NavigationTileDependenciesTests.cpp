@@ -155,12 +155,14 @@ namespace Horo::Navigation {
             CHECK(DecodeNavigationCookedTileSet(std::span{encoded.Value()}.first(size), 16384).HasError());
         auto malformed = encoded.Value();
         malformed[3] = '3';
+        RequireError(DecodeNavigationCookedTileSet(malformed, 16384), NavigationErrors::NavMeshArtifactCorrupt);
+        malformed[3] = '5';
         RequireError(DecodeNavigationCookedTileSet(malformed, 16384), NavigationErrors::UnsupportedCookedVersion);
         malformed = encoded.Value();
         // Fixed HNS2 prefix: magic, source digest, three compatibility digests, no-policy marker, count, profile/surface pair.
         constexpr std::size_t ClosureProfileOffset = 4 + 32 + 96 + 1 + 4;
         REQUIRE(malformed.size() > ClosureProfileOffset + 16);
-        malformed[ClosureProfileOffset] ^= 1;
+        std::as_writable_bytes(std::span{malformed})[ClosureProfileOffset] ^= std::byte{1};
         RequireError(DecodeNavigationCookedTileSet(malformed, 16384), NavigationErrors::NavMeshArtifactCorrupt);
         set.provenance->compatibility.schemas = {};
         RequireError(EncodeNavigationCookedTileSet(set, 16384), NavigationErrors::BakeInputInvalid);
@@ -172,4 +174,33 @@ namespace Horo::Navigation {
         REQUIRE(decodedLegacy.HasValue());
         CHECK_FALSE(decodedLegacy.Value().provenance.has_value());
     }
+
+    TEST_CASE("HNS3 represents only a complete empty closure with exact producer authority", "[unit][navigation][content][empty]") {
+        IncrementalBakeFixture fixture;
+        fixture.RemoveSources();
+        const auto input = fixture.Input();
+        NavigationCookedTileSet set{input->Fingerprint(), {}, NavigationCookedContentProvenance{fixture.compatibility, std::nullopt}};
+        const auto encoded = EncodeNavigationCookedTileSet(set, 4096);
+        REQUIRE(encoded.HasValue());
+        REQUIRE(encoded.Value()[3] == '3');
+        const auto decoded = DecodeNavigationCookedTileSet(encoded.Value(), 4096);
+        REQUIRE(decoded.HasValue());
+        CHECK(decoded.Value().tiles.empty());
+        CHECK(decoded.Value().inputFingerprint == input->Fingerprint());
+        REQUIRE(decoded.Value().provenance);
+        CHECK(decoded.Value().provenance->compatibility == fixture.compatibility);
+        for (std::size_t size = 0; size < encoded.Value().size(); ++size)
+            CHECK(DecodeNavigationCookedTileSet(std::span{encoded.Value()}.first(size), 4096).HasError());
+        for (const auto version : {'1', '2', '4'}) {
+            auto malformed = encoded.Value();
+            malformed[3] = static_cast<std::uint8_t>(version);
+            CHECK(DecodeNavigationCookedTileSet(malformed, 4096).HasError());
+        }
+        auto trailing = encoded.Value();
+        trailing.push_back(0);
+        CHECK(DecodeNavigationCookedTileSet(trailing, 4096).HasError());
+        set.provenance.reset();
+        CHECK(EncodeNavigationCookedTileSet(set, 4096).HasError());
+    }
+
 }  // namespace Horo::Navigation

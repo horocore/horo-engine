@@ -6,7 +6,8 @@
 namespace Horo::Navigation {
     namespace {
         using namespace TileArtifactInternal;
-        constexpr std::uint32_t TileMagic = 0x31544e48;  // HNT1
+        constexpr std::uint32_t TileMagic = 0x31544e48;        // HNT1
+        constexpr std::uint32_t ScopedTileMagic = 0x32544e48;  // HNT2
 
         /** @brief Rejects reserved identities before they enter an owned artifact. */
         template <typename T> [[nodiscard]] T ReadIdentity(Reader &reader) {
@@ -18,7 +19,9 @@ namespace Horo::Navigation {
 
         /** @brief Emits the exact tile/profile grid and resolved profile geometry. */
         void EncodeDescriptor(Writer &writer, const NavigationPreparedTile &input) {
-            writer.Integer(TileMagic);
+            writer.Integer(input.tile.key.scope.IsSceneScoped() ? ScopedTileMagic : TileMagic);
+            if (input.tile.key.scope.IsSceneScoped())
+                writer.Raw(input.tile.key.scope.SceneBytes());
             writer.Integer(input.tile.key.profile.Value(), 8);
             writer.Integer(input.tile.key.surface.Value(), 8);
             writer.Integer(static_cast<std::uint32_t>(input.tile.key.tile.x));
@@ -37,9 +40,12 @@ namespace Horo::Navigation {
 
         /** @brief Parses fixed metadata before reading any table count. */
         [[nodiscard]] NavigationPreparedTile DecodeDescriptor(Reader &reader) {
-            if (reader.Integer() != TileMagic)
+            const auto magic = reader.Integer();
+            if (magic != TileMagic && magic != ScopedTileMagic)
                 throw std::invalid_argument("Unsupported navigation tile format");
             NavigationPreparedTile input;
+            if (magic == ScopedTileMagic)
+                input.tile.key.scope = ReadSceneScope(reader);
             input.tile.key.profile = ReadIdentity<NavigationAgentProfileId>(reader);
             input.tile.key.surface = ReadIdentity<SurfaceId>(reader);
             input.tile.key.tile.x = std::bit_cast<std::int32_t>(static_cast<std::uint32_t>(reader.Integer()));

@@ -13,6 +13,11 @@ namespace Horo::Navigation {
         /** @brief Fixed-width canonical SHA-256 chain; no native padding, paths or operation identities enter keys. */
         class TileKeyWriter final {
         public:
+            explicit TileKeyWriter(bool scoped) noexcept {
+                const std::string_view domain = scoped ? "horo.navigation.tile-dependencies.v2" : "horo.navigation.tile-dependencies.v1";
+                digest_ = ComputeSha256(std::as_bytes(std::span{domain.data(), domain.size()}));
+            }
+
             void Integer(const std::uint64_t value) noexcept {
                 std::array<std::byte, 8> bytes{};
                 for (std::size_t index = 0; index < bytes.size(); ++index)
@@ -46,8 +51,7 @@ namespace Horo::Navigation {
                 digest_ = ComputeSha256(std::span{bytes}.first(32 + value.size()));
             }
 
-            static constexpr std::string_view Domain = "horo.navigation.tile-dependencies.v1";
-            Sha256Digest digest_ = ComputeSha256(std::as_bytes(std::span{Domain.data(), Domain.size()}));
+            Sha256Digest digest_{};
         };
 
         /** @brief Rejects absent compatibility evidence rather than treating it as a valid cache namespace. */
@@ -194,11 +198,16 @@ namespace Horo::Navigation {
         [[nodiscard]] Sha256Digest DependencyKey(const NavigationPreparedTile &result, const NavigationBakeInputSnapshot &input,
                                                  const NavigationTileBuildPartition &partition,
                                                  const NavigationTileBakeCompatibility &compatibility) noexcept {
-            TileKeyWriter writer;
+            TileKeyWriter writer{result.tile.key.scope.IsSceneScoped()};
             writer.Digest(compatibility.provider);
             writer.Digest(compatibility.schemas);
             writer.Digest(compatibility.settings);
             const auto &tile = result.tile;
+            if (tile.key.scope.IsSceneScoped()) {
+                writer.Integer(2);  // Explicit scoped dependency format; unscoped v1 keys remain unchanged.
+                for (const auto byte : tile.key.scope.SceneBytes())
+                    writer.Integer(byte);
+            }
             writer.Integer(tile.key.profile.Value());
             writer.Integer(tile.key.surface.Value());
             writer.Integer(partition.filter.Value());
@@ -232,7 +241,7 @@ namespace Horo::Navigation {
             !Present(compatibility.provider) || !Present(compatibility.schemas) || !Present(compatibility.settings))
             return Result<NavigationPreparedTile>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
         const auto partition = std::ranges::find_if(input.Partitions(), [&tile](const auto &value) {
-            return value.surface == tile.key.surface && value.profile == tile.key.profile;
+            return value.scope == tile.key.scope && value.surface == tile.key.surface && value.profile == tile.key.profile;
         });
         const auto profile = std::ranges::find(input.Profiles(), tile.key.profile, &NavigationResolvedBakeProfile::id);
         if (partition == input.Partitions().end() || profile == input.Profiles().end())

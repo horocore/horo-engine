@@ -8,8 +8,8 @@ namespace Horo::Navigation {
         try {
             TileArtifactInternal::Reader reader(tile.Bytes());
             // Version, identities, grid address and bounds have already passed the canonical tile factory.
-            static_cast<void>(reader.Raw(sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t) + 2 * sizeof(std::int32_t) +
-                                         sizeof(std::uint16_t) + 6 * sizeof(float)));
+            static_cast<void>(reader.Raw((tile.Key().scope.IsSceneScoped() ? 16 : 0) + sizeof(std::uint32_t) + 2 * sizeof(std::uint64_t) +
+                                         2 * sizeof(std::int32_t) + sizeof(std::uint16_t) + 6 * sizeof(float)));
             NavigationCookedTileDescriptor descriptor;
             descriptor.tileSizeMeters = reader.Float();
             descriptor.geometry = {reader.Float(), reader.Float(), reader.Float(), reader.Float(),

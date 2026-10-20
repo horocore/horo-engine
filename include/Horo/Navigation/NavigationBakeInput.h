@@ -9,6 +9,7 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Navigation/NavigationAgentProfiles.h"
 #include "Horo/Navigation/NavigationAreas.h"
+#include "Horo/Navigation/NavigationBakeScopeId.h"
 #include "Horo/Navigation/NavigationProjectProfiles.h"
 #include "Horo/Navigation/NavigationSourceGeometry.h"
 
@@ -77,6 +78,7 @@ namespace Horo::Navigation {
         NavigationFilterId filter;
         NavigationSourceProducerId producer;
         NavigationSourceContributionId contribution;
+        NavigationBakeScopeId scope;
     };
 
     /** @brief One local modifier volume normalized to canonical space during capture. */
@@ -88,6 +90,7 @@ namespace Horo::Navigation {
         NavigationAreaId area;
         Math::Aabb localBounds;
         Math::Transform localToCanonicalMeters;
+        NavigationBakeScopeId scope;
     };
 
     /** @brief Hard-bounded tile-input capture policy; callers may lower but not exceed qualified maxima. */
@@ -142,6 +145,7 @@ namespace Horo::Navigation {
         NavigationBakeModifierMode mode{NavigationBakeModifierMode::AssignArea};
         NavigationAreaId area;
         Math::Aabb canonicalBounds;
+        NavigationBakeScopeId scope;
     };
 
     /** @brief Contiguous canonical tile-builder ranges for one stable surface/profile pair. */
@@ -153,6 +157,7 @@ namespace Horo::Navigation {
         std::uint32_t triangleCount{};
         std::uint32_t firstModifier{};
         std::uint32_t modifierCount{};
+        NavigationBakeScopeId scope;
     };
 
     /**
@@ -174,7 +179,10 @@ namespace Horo::Navigation {
          * @param revisions Exact non-zero capture and request revisions.
          * @param areas Immutable area/filter registry used for exact resolution.
          * @param profiles Complete available grounded profile descriptors in arbitrary order.
-         * @param surfaces Surface/profile/source bindings in arbitrary order.
+         * @param surfaces Complete surface/profile/source bindings in arbitrary order; empty requires no geometry triangles
+         * and no modifiers, explicitly representing empty definition coverage. Empty contribution records remain owned
+         * and publication still requires their complete freshness observations.
+         * Bound contributions with no traversable triangles retain valid empty partitions and exact filter resolution.
          * @param modifiers Modifier volumes in arbitrary order.
          * @param geometry Unique immutable source snapshot; moved only after all validation succeeds.
          * @param limits Positive qualified count, work and byte bounds.

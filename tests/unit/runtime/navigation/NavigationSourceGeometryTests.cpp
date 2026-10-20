@@ -154,12 +154,12 @@ namespace Horo::Navigation {
         RequireError(NavigationSourceGeometrySnapshot::Create(revision, std::span{&input, 1}), NavigationErrors::SourceGeometryInvalid);
     }
 
-    TEST_CASE("Source snapshot rejects empty duplicate and over-capacity captures transactionally", "[unit][navigation][source_geometry]") {
+    TEST_CASE("Source snapshot rejects invalid revisions duplicate and over-capacity captures transactionally",
+              "[unit][navigation][source_geometry]") {
         OwnedContribution owned;
         const auto input = owned.View();
         const auto revision = Id<NavigationSourceSnapshotRevision>(1);
         RequireError(NavigationSourceGeometrySnapshot::Create({}, std::span{&input, 1}), NavigationErrors::SourceGeometryInvalid);
-        RequireError(NavigationSourceGeometrySnapshot::Create(revision, {}), NavigationErrors::SourceGeometryInvalid);
         const std::array duplicates{input, input};
         RequireError(NavigationSourceGeometrySnapshot::Create(revision, duplicates), NavigationErrors::DescriptorConflict);
 
@@ -224,4 +224,27 @@ namespace Horo::Navigation {
         RequireError(snapshot.ValidateCurrent(snapshotRevision, observations), NavigationErrors::SourceGeometryInvalid);
         RequireError(snapshot.ValidateCurrent({}, observations), NavigationErrors::SourceGeometryInvalid);
     }
+
+    TEST_CASE("Empty source closure and clipped empty contributions retain exact freshness", "[unit][navigation][source_geometry]") {
+        const auto revision = Id<NavigationSourceSnapshotRevision>(1);
+        auto empty = NavigationSourceGeometrySnapshot::Create(revision, {});
+        REQUIRE(empty.HasValue());
+        CHECK(empty.Value().Contributions().empty());
+        CHECK(empty.Value().ValidateCurrent(revision, {}).HasValue());
+        NavigationSourceContributionInput source{.producer = Id<NavigationSourceProducerId>(1),
+                                                 .contribution = Id<NavigationSourceContributionId>(1),
+                                                 .revision = Id<NavigationSourceRevision>(1),
+                                                 .contentDigest = Digest(42)};
+        auto clipped = NavigationSourceGeometrySnapshot::Create(revision, std::span{&source, 1});
+        REQUIRE(clipped.HasValue());
+        REQUIRE(clipped.Value().Contributions().size() == 1);
+        CHECK(clipped.Value().Vertices().empty());
+        CHECK(clipped.Value().Triangles().empty());
+        const std::array observations{
+            NavigationSourceObservation{source.kind, source.producer, source.contribution, source.revision, source.contentDigest}};
+        CHECK(clipped.Value().ValidateCurrent(revision, observations).HasValue());
+        CHECK(clipped.Value().ValidateCurrent(revision, {}).HasError());
+        CHECK(empty.Value().ValidateCurrent(revision, observations).HasError());
+    }
+
 }  // namespace Horo::Navigation

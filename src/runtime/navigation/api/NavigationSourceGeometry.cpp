@@ -115,8 +115,8 @@ namespace Horo::Navigation {
         [[nodiscard]] Result<void> ValidateInputMetadata(const NavigationSourceContributionInput &input) {
             if (!IsKnownProducer(input.kind))
                 return SourceFailure<void>(NavigationErrors::SourceGeometryUnsupported, input, "producer kind is unsupported");
-            if (!input.producer.IsValid() || !input.contribution.IsValid() || !input.revision.IsValid() || input.vertices.empty() ||
-                input.triangles.empty() || !IsKnownCoordinateSystem(input.coordinates.system) ||
+            if (!input.producer.IsValid() || !input.contribution.IsValid() || !input.revision.IsValid() ||
+                (input.vertices.empty() != input.triangles.empty()) || !IsKnownCoordinateSystem(input.coordinates.system) ||
                 !std::isfinite(input.coordinates.metersPerUnit) || input.coordinates.metersPerUnit <= 0.0F ||
                 !HasPositiveScale(input.localToCanonicalMeters) || input.localToCanonicalMeters.TryToMatrix().HasError())
                 return SourceFailure<void>(NavigationErrors::SourceGeometryInvalid, input,
@@ -233,7 +233,7 @@ namespace Horo::Navigation {
         [[nodiscard]] Result<void> ValidateCreateRequest(const NavigationSourceSnapshotRevision revision,
                                                          const std::span<const NavigationSourceContributionInput> inputs,
                                                          const NavigationSourceGeometryLimits &limits) {
-            if (!revision.IsValid() || !IsValidLimits(limits) || inputs.empty())
+            if (!revision.IsValid() || !IsValidLimits(limits))
                 return Failure<void>(NavigationErrors::SourceGeometryInvalid);
             if (inputs.size() > limits.maxContributions)
                 return Failure<void>(NavigationErrors::SourceGeometryCapacityExceeded);
