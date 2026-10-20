@@ -181,6 +181,32 @@ namespace Horo::Editor {
         /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
         [[nodiscard]] Result<void> ShutdownGameplayModules();
 
+        /** @brief Exposes the one editor authoring residency owner for explicit load/unload/pin commands.
+         * @return Owner-thread capability; source bytes must be authorized and read by the host outside draw paths. */
+        [[nodiscard]] PartitionedWorldWorkspace &WorldDocuments() noexcept {
+            return m_worldDocuments;
+        }
+
+        /** @brief Queries immutable partitioned document state. @return Owner-thread capability. */
+        [[nodiscard]] const PartitionedWorldWorkspace &WorldDocuments() const noexcept {
+            return m_worldDocuments;
+        }
+
+        /** @brief Routes page-aware selection through the actual editor selection adapter.
+         * @param objects Loaded page-scoped addresses. @param primary Optional member. @param expected Exact publication.
+         * @return Typed committed world lease or rejection. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SelectWorldObjects(
+            std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
+            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected) {
+            return m_selection.SetWorldObjects(m_worldDocuments, objects, primary, expected);
+        }
+
+        /** @brief Includes dirty loaded page content in the ordinary workspace leave guard. @return Whether unsaved content is owned. */
+        [[nodiscard]] bool HasDirtyWorldDocuments() const {
+            const auto snapshot = m_worldDocuments.Snapshot();
+            return snapshot.HasValue() && snapshot.Value()->dirty;
+        }
+
         /** @brief Lazily composes actual project navigation sources with this exact active Scene/history owner. */
         [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings();
         /** @brief Includes all navigation authoring owners in the ordinary leave guard. */
@@ -330,6 +356,7 @@ namespace Horo::Editor {
         Assets::AssetId m_physicsDocumentOwner;
         std::uint64_t m_physicsReplacementEpoch{};
         const std::thread::id m_physicsOwnerThread{std::this_thread::get_id()};
+        PartitionedWorldWorkspace m_worldDocuments;
         SceneDocument m_document;
         EditorHistory m_history;
         std::optional<SceneDocumentTransactions> m_physicsTransactions;

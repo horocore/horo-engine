@@ -4,16 +4,21 @@
  * @brief Editor-owned partitioned-world metadata and independent authoring working set.
  */
 
+#include "Horo/Scene/SceneSourceModel.h"
 #include "Horo/WorldStreaming/WorldAuthoringContract.h"
 #include "Horo/WorldStreaming/WorldSpatialObjectDescriptor.h"
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <stop_token>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 namespace Horo::Editor {
+    class SceneDocument;
+
     /** @brief Stable failures owned by the Editor document boundary. */
     namespace WorldDocumentErrors {
         /** @brief Malformed source metadata, owner identity or resource ceilings. */
@@ -92,6 +97,31 @@ namespace Horo::Editor {
         std::size_t maximumObjects{65536};
         std::size_t maximumLayerNameBytes{65536};
         std::uint32_t maximumOpenPages{64};
+        std::size_t maximumPageSourceBytes{16 * 1024 * 1024};     /**< Canonical source input ceiling per loaded page. */
+        std::size_t maximumResidentSourceBytes{64 * 1024 * 1024}; /**< Aggregate admitted source bytes, excluding historical readers. */
+    };
+
+    /** @brief Read lease over one actual immutable SceneDocument, never a second editable source authority. */
+    class WorldPageContentLease final {
+    public:
+        /** @brief Returns admitted authored objects. @return Owner-independent view retained by this lease. */
+        [[nodiscard]] std::span<const SceneSource::SceneObjectSnapshot> Objects() const noexcept;
+        /** @brief Returns admitted prefab placements. @return Owner-independent view retained by this lease. */
+        [[nodiscard]] std::span<const SceneSource::ScenePrefabInstance> PrefabInstances() const noexcept;
+        /** @brief Queries actual document dirty state. @return Whether content requires explicit save/discard. */
+        [[nodiscard]] bool IsDirty() const noexcept;
+
+    private:
+        friend class PartitionedWorldWorkspace;
+        std::shared_ptr<const SceneDocument> document_;
+    };
+
+    /** @brief One loaded page charged to the editor owner, independently of runtime residency. */
+    struct WorldLoadedPage final {
+        WorldStreaming::WorldAuthoringPageDescriptor head;
+        WorldPageContentLease content;
+        std::size_t sourceBytes{}; /**< Admission charge; not a measurement of allocator memory. */
+        bool pinned{};             /**< Explicit owner-local pin; does not bypass capacity. */
     };
 
     /** @brief Immutable read lease; retained leases survive replacement, close and workspace destruction. */
@@ -99,6 +129,9 @@ namespace Horo::Editor {
         WorldDocumentFence fence;
         PartitionedWorldDocument document;
         std::vector<Assets::AssetId> openPages; /**< Transient authoring working set, never runtime residency. */
+        std::vector<WorldLoadedPage> loadedPages;
+        std::vector<WorldStreaming::WorldAuthoringObjectAddress> selectedObjects;
+        std::optional<WorldStreaming::WorldAuthoringObjectAddress> primarySelection;
         bool dirty{}; /**< Authored metadata changed since explicit Open/Replace; never an assertion of disk durability. */
     };
 
@@ -114,9 +147,9 @@ namespace Horo::Editor {
     /**
      * @brief Single-threaded Editor authority for source metadata and open authoring pages.
      * All calls belong to the constructing thread. Readers use immutable leases only.
-     * Caller storage is copied before publication; no callback, I/O, runtime activation or implicit save occurs.
+     * Caller storage is copied before publication; no callback, file I/O, runtime activation or implicit save occurs.
      * Owner IDs are host-issued and never reused across workspace instances. Allocation exceptions preserve state.
-     * This is bounded tooling metadata, not a frame-hot payload owner. Retained historical leases are budgeted by consumers.
+     * Metadata and admitted Scene payloads are bounded tooling state, never frame-hot work. Historical leases are budgeted by consumers.
      * @note Version one fixes spatial pages and revision-checked publication per WorldAuthoringContract; no alternate policy is implied.
      * @throws std::bad_alloc If preparation allocation fails; no publication or generation is consumed.
      */
@@ -139,18 +172,56 @@ namespace Horo::Editor {
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Snapshot() const;
         /** @brief Commits a complete typed source-metadata transaction without replacing its incarnation.
          * Unchanged pages retain their exact immutable head and objects; changed pages require the next non-wrapping revision.
-         * Removed pages are removed from the working set atomically. No mutable storage escapes.
+         * Loaded pages must remain unchanged; use CommitLoadedPage for their metadata/content successor.
+         * Removed unloaded pages leave the working set atomically. No mutable storage escapes.
          * @param document Complete proposed metadata, including settings/layers/pages/objects. @param expected Exact current fence.
          * @param cancellation Operation cancellation fence. @return Committed dirty snapshot, unchanged lease for no-op, or typed
          * rejection. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Commit(const PartitionedWorldDocument &document, WorldDocumentFence expected,
                                                                    std::stop_token cancellation = {});
-        /** @brief Atomically changes the transient set without touching source pages or dirty state.
+        /** @brief Atomically changes metadata admission without touching payloads, source pages or dirty state.
+         * Loaded pages cannot be removed here; use UnloadPage after resolving dirty/selection/pin dependencies.
          * @param pages Distinct admitted page assets; order is preserved. @param expected Exact current owner fence.
          * @param cancellation Operation cancellation fence. @return New immutable snapshot, unchanged lease for a no-op, or typed
          * rejection. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetWorkingSet(std::span<const Assets::AssetId> pages,
                                                                           WorldDocumentFence expected, std::stop_token cancellation = {});
+        /** @brief Loads exact canonical Scene source into an actual document after bounded validation, outside draw paths.
+         * The host authorizes/reads source bytes; this operation performs no file or runtime I/O. Unknown components are rejected.
+         * @param page Exact current authored page head. @param source Canonical source, copied before publication.
+         * @param expected Current owner fence. @param cancellation Cancellation fence.
+         * @return New lease or typed rejection preserving every existing payload, selection, pin and dirty value. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> LoadPage(WorldStreaming::WorldAuthoringPageDescriptor page,
+                                                                     std::string_view source, WorldDocumentFence expected,
+                                                                     std::stop_token cancellation = {});
+        /** @brief Publishes edited page metadata and actual Scene content together; creates a dirty immutable successor.
+         * Selected objects cannot disappear; clear their selection explicitly first. Metadata-only Commit cannot change loaded pages.
+         * @param page Exact successor metadata. @param source Canonical complete edited source.
+         * @param expected Current owner fence. @param cancellation Cancellation fence.
+         * @return Atomic successor or typed rejection; old leases remain valid. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> CommitLoadedPage(const PartitionedWorldPage &page, std::string_view source,
+                                                                             WorldDocumentFence expected,
+                                                                             std::stop_token cancellation = {});
+        /** @brief Releases one clean, unselected, unpinned payload and its open-page slot, retaining source metadata.
+         * Dirty payloads require document-level explicit discard or a future durable save, never silent eviction.
+         * @param page Admitted page asset. @param expected Current fence. @param cancellation Cancellation fence.
+         * @return Atomic release or typed dirty/conflict/lifecycle rejection. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> UnloadPage(Assets::AssetId page, WorldDocumentFence expected,
+                                                                       std::stop_token cancellation = {});
+        /** @brief Changes an explicit editor pin on a loaded page without changing content or runtime demands.
+         * @param page Loaded page asset. @param pinned Requested pin. @param expected Current fence.
+         * @param cancellation Cancellation fence. @return Successor, unchanged lease for no-op, or typed rejection. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetPagePinned(Assets::AssetId page, bool pinned, WorldDocumentFence expected,
+                                                                          std::stop_token cancellation = {});
+        /** @brief Replaces page-aware selection atomically; selected pages are unload dependencies, not runtime pins.
+         * @param objects Distinct existing loaded object addresses, in presentation order.
+         * @param primary Optional member of objects. @param expected Current fence. @param cancellation Cancellation fence.
+         * @return Successor, unchanged no-op lease, or typed rejection without losing dependent selection. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetSelection(
+            std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
+            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected,
+            std::stop_token cancellation = {});
+
         /** @brief Replaces a document explicitly, issuing a fresh generation and an empty working set.
          * @param document Complete new source metadata. @param expected Exact current fence.
          * @param disposition Explicit permission to discard dirty metadata. @param cancellation Operation cancellation fence.
@@ -176,6 +247,13 @@ namespace Horo::Editor {
         /** @brief Publishes one fully prepared successor after a final cancellation check. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Publish(std::shared_ptr<PartitionedWorldSnapshot> candidate,
                                                                     std::stop_token cancellation);
+        /** @brief Prepares a real SceneDocument payload and checks exact metadata/content membership and finite admission charges. */
+        [[nodiscard]] Result<WorldLoadedPage> PreparePage(const PartitionedWorldPage &page, std::string_view source, bool dirty,
+                                                          std::stop_token cancellation) const;
+        /** @brief Checks replacement-aware page/object/source-byte charges before decoding or copying payloads. */
+        [[nodiscard]] Result<void> CheckPageCapacity(Assets::AssetId page, std::size_t objects, std::size_t bytes) const;
+        /** @brief Prepares coherent loaded-page metadata with successor and dependent-selection validation. */
+        [[nodiscard]] Result<PartitionedWorldDocument> PreparePageEdit(const PartitionedWorldPage &page) const;
         Assets::AssetId owner_;
         WorldDocumentLimits limits_;
         const std::thread::id thread_{std::this_thread::get_id()};

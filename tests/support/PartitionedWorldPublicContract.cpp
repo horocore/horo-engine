@@ -21,3 +21,13 @@ static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>(
                              Horo::Result<PartitionedWorldSnapshotLease>>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentRevision, Horo::WorldStreaming::WorldAuthoringRevision>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentGeneration, Horo::WorldStreaming::StreamingGeneration>);
+
+static_assert(std::is_same_v<decltype(std::declval<Horo::Editor::WorldPageContentLease>().Objects()),
+                             std::span<const Horo::SceneSource::SceneObjectSnapshot>>);
+static_assert(std::is_copy_constructible_v<Horo::Editor::WorldPageContentLease>);
+static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().LoadPage(
+                                 Horo::WorldStreaming::WorldAuthoringPageDescriptor{}, std::string_view{}, WorldDocumentFence{})),
+                             Horo::Result<PartitionedWorldSnapshotLease>>);
+static_assert(
+    std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().UnloadPage(Horo::Assets::AssetId{}, WorldDocumentFence{})),
+                   Horo::Result<PartitionedWorldSnapshotLease>>);
