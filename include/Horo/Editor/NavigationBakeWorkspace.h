@@ -3,6 +3,7 @@
  * @brief Explicit project bake capabilities; surfaces never own workers or publication.
  */
 #include "Horo/Application/NavigationBakeApplication.h"
+#include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Navigation/NavigationAgentProfiles.h"
 
 namespace Horo::Editor {
@@ -24,6 +25,7 @@ namespace Horo::Editor {
     /** @brief One host-owned view; missing catalog denotes asynchronous preparation. */
     struct NavigationBakeWorkspaceSnapshot final {
         std::uint64_t opening{};
+        std::shared_ptr<const NavigationViewportSnapshot> overlays; /**< Owned saved/cooked evidence; never provider memory. */
         std::shared_ptr<const NavigationBakeCatalog> catalog;
         std::optional<Application::NavigationBakeCommandSnapshot> operation;
         std::optional<Error> diagnostic;
@@ -38,6 +40,8 @@ namespace Horo::Editor {
      */
     struct NavigationBakeWorkspaceAccess final {
         std::function<Result<void>(const std::filesystem::path &)> prepare;
+        std::function<std::shared_ptr<const NavigationViewportSnapshot>(const std::filesystem::path &)>
+            overlays; /**< Memory-only geometry query; no operation or provider leases. */
         std::function<Result<void>(const std::filesystem::path &)> reload;
         std::function<Result<NavigationBakeWorkspaceSnapshot>(const std::filesystem::path &)> query;
         std::function<Result<NavigationBakeOperationIdentity>(const std::filesystem::path &, Application::NavigationBakeCommandRequest)>

@@ -6,6 +6,7 @@
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/panels/viewport/ViewportOverlay.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
+#include "editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -490,4 +491,27 @@ TEST_CASE("Viewport grid control follows shading control", "[unit][editor][viewp
     io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
     REQUIRE(draw().toggleGrid);
     ImGui::DestroyContext();
+}
+
+TEST_CASE("Navigation overlay clips crossing triangles and segments before perspective division", "[editor][viewport][navigation]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    for (const auto depth : {Math::ClipDepthRange::NegativeOneToOne, Math::ClipDepthRange::ZeroToOne}) {
+        NavigationOverlayPrimitive primitive{.points = {{{-4, 0, 0.5F}, {4, 0, 0.5F}, {0, 4, 0.5F}}}, .triangle = true};
+        const auto triangle = ProjectNavigationOverlay(primitive, Math::Mat4::Identity(), {20, 30}, {640, 480}, depth);
+        REQUIRE(triangle.count >= 3);
+        CHECK(triangle.count <= triangle.points.size());
+        for (std::size_t i = 0; i < triangle.count; ++i) {
+            CHECK(triangle.points[i].x >= 20);
+            CHECK(triangle.points[i].x <= 660);
+            CHECK(triangle.points[i].y >= 30);
+            CHECK(triangle.points[i].y <= 510);
+        }
+        primitive.triangle = false;
+        primitive.points = {{{0, 0, -2}, {0.5F, 0, 0.5F}, {}}};
+        CHECK(ProjectNavigationOverlay(primitive, Math::Mat4::Identity(), {}, {640, 480}, depth).count == 2);
+        primitive.points[1].z = -3;
+        CHECK(ProjectNavigationOverlay(primitive, Math::Mat4::Identity(), {}, {640, 480}, depth).count == 0);
+        CHECK(ProjectNavigationOverlay(primitive, Math::Mat4::Identity(), {}, {0, 480}, depth).count == 0);
+    }
 }

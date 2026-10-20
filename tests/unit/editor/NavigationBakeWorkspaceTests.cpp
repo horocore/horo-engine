@@ -141,6 +141,15 @@ namespace Horo::Editor {
         const auto published = Finished(host, access, root);
         REQUIRE(published.operation->state == OperationState::Succeeded);
         REQUIRE(published.operation->publication);
+        REQUIRE(published.overlays);
+        CHECK(access.overlays(root) == published.overlays);
+        REQUIRE(published.overlays->Scenes().size() == 2);
+        for (const auto &scene : published.overlays->Scenes()) {
+            CHECK(std::ranges::any_of(scene.primitives, [](const auto &primitive) {
+                return primitive.kind == NavigationOverlayKind::Walkable && primitive.triangle &&
+                       primitive.validity == NavigationOverlayValidity::Cooked && primitive.tile.has_value();
+            }));
+        }
         const auto selected = access.start(root, {.surfaces = std::vector{ready.catalog->surfaces.front()}});
         REQUIRE(selected.HasValue());
         const auto replaced = Finished(host, access, root);

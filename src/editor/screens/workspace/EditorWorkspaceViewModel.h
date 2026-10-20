@@ -322,6 +322,7 @@ namespace Horo::Editor {
         std::optional<Error> audioPreviewFailure;
         std::vector<NavigationDefinitionEditorTab> navigationDocuments;
         std::string projectRoot;
+        std::filesystem::path navigationScenePath; /**< Exact project-relative Scene namespace for saved navigation overlays. */
         Assets::AssetRegistryRevision assetRegistryRevision{};
         ContentBrowserDirectory contentBrowser;
         std::string contentBrowserOperationError;

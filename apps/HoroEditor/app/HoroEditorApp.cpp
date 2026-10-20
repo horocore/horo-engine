@@ -1792,6 +1792,7 @@ namespace Horo::Editor {
                 return packages->Retire(root);
             }});
             EditorNavigationBakeHost navigationBakes{p.operationServices.operationStore};
+            const auto navigationOverlayAccess = navigationBakes.Access();
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakes.Access(), p.modalHost);
@@ -1858,6 +1859,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
             screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
+            screenHost.Services().RegisterConst<NavigationBakeWorkspaceAccess>(navigationOverlayAccess);
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
             screenHost.Services().RegisterConst<EditorPreviewCollisionReceiptSource>(previewCollisionReceipt);

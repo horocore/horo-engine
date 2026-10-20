@@ -2955,6 +2955,7 @@ target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_IN
 target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
 
 add_library(HoroEditorServices STATIC
+        editor/navigation/NavigationViewportSnapshot.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
@@ -3227,6 +3228,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
+            editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.cpp
