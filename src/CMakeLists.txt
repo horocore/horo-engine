@@ -1900,6 +1900,11 @@ add_library(HoroEngine::NavigationSceneIntegration ALIAS HoroNavigationSceneInte
 target_compile_features(HoroNavigationSceneIntegration PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationSceneIntegration PUBLIC HoroEngine::NavigationRuntime HoroEngine::RuntimeScene)
 
+add_library(HoroProjectAssetRegistrySource STATIC application/assets/ProjectAssetRegistrySource.cpp)
+add_library(HoroEngine::ProjectAssetRegistrySource ALIAS HoroProjectAssetRegistrySource)
+target_compile_features(HoroProjectAssetRegistrySource PUBLIC cxx_std_20)
+target_link_libraries(HoroProjectAssetRegistrySource PUBLIC HoroEngine::Assets HoroEngine::ProjectReadFilesApi)
+
 add_library(HoroNavigationBakeService STATIC
         application/navigation/NavigationBakeService.cpp
         application/navigation/NavigationBakeCook.cpp
@@ -2978,6 +2983,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::ProjectMigrations
         PRIVATE
         HoroEditorPlaySceneHostInternal
+        HoroEngine::ProjectAssetRegistrySource
         HoroEngine::PlatformProjectReadFiles
         HoroSceneSourceCodecInternal
         nlohmann_json::nlohmann_json

@@ -886,6 +886,9 @@ horo_configure_target_header_boundary(HoroNavigationRuntime PUBLIC_HEADERS
     Horo/Navigation/NavigationRuntimeQueues.h
     Horo/Navigation/NavigationWorldLifecycle.h
 )
+horo_configure_target_header_boundary(HoroProjectAssetRegistrySource PUBLIC_HEADERS
+    Horo/Application/ProjectAssetRegistrySource.h
+)
 horo_configure_target_header_boundary(HoroNavigationBakeService PUBLIC_HEADERS
     Horo/Application/NavigationBakeService.h
     Horo/Application/NavigationBakeDiagnostics.h

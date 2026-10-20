@@ -102,6 +102,15 @@ Neither Assets nor EditorModel depends on that concrete Platform implementation.
 The application constructs and retains the capability; no registry operation
 selects a backend, discovers a service or constructs an ambient native owner.
 
+`HoroProjectAssetRegistrySource` owns the shared Application adapter from a
+retained `IProjectReadFiles` capability to this canonical registry source. Editor
+composition supplies its native capability to the same adapter used by headless
+hosts; there is one inventory and sidecar-read implementation. Construction is
+inert. Capture and sidecar reads retain the original project identity, generation,
+cancellation, authority revocation and absolute deadline. They create no derived
+index and grant no project trust or execution authority. Existing editor callers
+keep their factory signature; no source-format migration is needed.
+
 The dedicated inventory profile includes real empty directories and reports links
 and special files without following them. It preserves actual Assets/assets
 spelling and accepted hardlinked regular sidecars; symbolic root aliases are

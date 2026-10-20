@@ -44,6 +44,14 @@ include directories do not enforce those ownership boundaries, as documented in
 
 ### Foundation, Platform, Application, And Runtime
 
+`HoroProjectAssetRegistrySource` (`HoroEngine::ProjectAssetRegistrySource`) owns
+`Application/ProjectAssetRegistrySource.h` and the inert retained-root inventory
+adapter. Its public dependencies are Assets and ProjectReadFilesApi. EditorServices
+privately delegates to this owner while continuing to compose the native read
+capability. Assets and EditorModel acquire no native backend dependency. The
+ownership registry generates a public consumer for the new header. Existing
+editor factory callers and persisted source formats remain unchanged.
+
 Publication lease linkage follow-up (2026-10-16): `HoroFoundation` owns the
 existing `ExclusiveFileLock` value-wrapper symbols. Foundation and Platform
 privately share exactly `PublicationLockState.h` through the non-installed
