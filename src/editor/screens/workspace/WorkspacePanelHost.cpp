@@ -269,8 +269,8 @@ namespace Horo::Editor {
 
     /** @copydoc WorkspacePanelHost::MoveDocument */
     Result<void> WorkspacePanelHost::MoveDocument(const DocumentInstanceId instance, const std::optional<DocumentInstanceId> before) {
-        const auto source = FindDocumentTab(m_documentTabs, instance);
-        if (source == m_documentTabs.end() || (before && FindDocumentTab(m_documentTabs, *before) == m_documentTabs.end()))
+        if (const auto source = FindDocumentTab(m_documentTabs, instance);
+            source == m_documentTabs.end() || (before && FindDocumentTab(m_documentTabs, *before) == m_documentTabs.end()))
             return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DocumentUnknown));
         if (before == instance)
             return Result<void>::Success();
@@ -308,7 +308,7 @@ namespace Horo::Editor {
             const auto key = SerializeDocumentOpenKey(current->key);
             if (key.HasError())
                 continue;
-            tabs.push_back({*current, tab.dirty});
+            tabs.emplace_back(*current, tab.dirty);
             persisted.push_back(key.Value());
         }
         if (m_activeDocument && FindDocumentTab(tabs, *m_activeDocument) == tabs.end()) {
