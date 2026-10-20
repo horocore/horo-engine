@@ -83,16 +83,17 @@ namespace Horo::Editor {
             auto config = Application::Internal::ComposeNativeNavigationBake(root, definition, compatibility, closed);
             if (config.HasError())
                 return Return::Failure(config.ErrorValue());
+            auto composed = std::move(config).Value();
             auto initialOverlays = overlays.Value();
-            const auto publication = ResolveNavigationBakePublication(config.Value().service);
+            const auto publication = ResolveNavigationBakePublication(composed.service);
             if (publication.HasValue()) {
                 auto cooked = NavigationViewportSnapshot::WithCooked(*overlays.Value(), publication.Value()->tiles);
                 if (cooked.HasValue())
                     initialOverlays = std::move(cooked).Value();
             }
             auto mailbox = std::make_shared<OverlayMailbox>(overlays.Value());
-            auto capture = std::move(config.Value().captureSource);
-            config.Value().captureSource = [capture = std::move(capture), mailbox, definition](const NavigationBakeInvocation &invocation) {
+            auto capture = std::move(composed.captureSource);
+            composed.captureSource = [capture = std::move(capture), mailbox, definition](const NavigationBakeInvocation &invocation) {
                 auto source = capture(invocation);
                 if (source.HasValue()) {
                     auto snapshot = NavigationViewportSnapshot::Capture(source.Value()->Scenes(), definition);
@@ -101,7 +102,7 @@ namespace Horo::Editor {
                     mailbox->store(nullptr);
                 return source;
             };
-            return Return::Success({std::move(config).Value(), std::move(catalog).Value(), std::move(overlays).Value(), std::move(mailbox),
+            return Return::Success({std::move(composed), std::move(catalog).Value(), std::move(overlays).Value(), std::move(mailbox),
                                     std::move(initialOverlays)});
         }
     }  // namespace
