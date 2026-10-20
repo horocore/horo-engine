@@ -168,7 +168,8 @@ namespace Horo::Assets {
         /** @brief Projects owned domain findings and one asset failure without parsing human text. */
         void PublishAssetFailure(const AssetCookRequest &request, const AssetRecord &record, const CookOperationScope &operation,
                                  const std::string_view stage, const Error &error) {
-            const bool cancelled = IsJobCancelled(error) || error.code.Value() == CookErrors::Cancelled.code.Value();
+            const bool cancelled = IsJobCancelled(error) || error.code.Value() == CookErrors::Cancelled.code.Value() ||
+                                   ErrorChainContains(error, FileStorageErrors::Cancelled.domain, FileStorageErrors::Cancelled.code);
             for (const Diagnostic &finding : error.diagnostics) {
                 operation.Publish(BuildOutputRecord{
                     .timestampUtc = std::chrono::system_clock::now(),
@@ -351,8 +352,9 @@ namespace Horo::Assets {
 
         /** @brief Requires an explicit bounded publication composition before cooking can perform any writes. */
         [[nodiscard]] bool HasValidCookComposition(const AssetCookRequest &request, const bool hasCatalog) noexcept {
-            return hasCatalog && request.publicationFiles && request.newPublicationOperationId && !request.cookedRoot.empty() &&
-                   request.cookedRoot.is_absolute() && request.limits.maximumAssets > 0U && request.limits.maximumArtifactBytes > 0U;
+            return hasCatalog && request.cacheFiles && request.publicationFiles && request.newPublicationOperationId &&
+                   !request.cookedRoot.empty() && request.cookedRoot.is_absolute() && request.limits.maximumAssets > 0U &&
+                   request.limits.maximumArtifactBytes > 0U;
         }
 
         /** @brief Admits the optional authoritative cook row only after its output identity was allocated. */
@@ -381,7 +383,7 @@ namespace Horo::Assets {
             if (prepared.HasError())
                 return prepared;
             auto slots = std::move(prepared).Value();
-            const AssetCookCache cache{request.cacheRoot, request.limits};
+            const AssetCookCache cache{*request.cacheFiles, request.limits};
             auto hits = ResolveCacheHits(request, catalog, cache, slots, cancellation, operation);
             if (hits.HasError())
                 return Result<std::vector<CookSlot>>::Failure(hits.ErrorValue());
@@ -457,7 +459,7 @@ namespace Horo::Assets {
                 return slot.record.id;
             });
             const auto hits = static_cast<std::size_t>(std::ranges::count(slots, true, &CookSlot::cacheHit));
-            return PublishCookedSlots(request, AssetCookCache{request.cacheRoot, request.limits}, slots, hits, cancellation, operation);
+            return PublishCookedSlots(request, AssetCookCache{*request.cacheFiles, request.limits}, slots, hits, cancellation, operation);
         }
 
         /** @brief Executes the admitted immutable registry closure and preserves typed stage outcomes until publication. */
@@ -471,7 +473,7 @@ namespace Horo::Assets {
                 operation.RecordOutcome(false);
                 return Result<AssetCookReport>::Failure(Error{CookErrors::TooLarge.code});
             }
-            AssetCookCache cache(request.cacheRoot, request.limits);
+            AssetCookCache cache(*request.cacheFiles, request.limits);
             auto slotsResult = PrepareCookSlots(request, catalog, records, operation);
             if (slotsResult.HasError()) {
                 operation.RecordError(slotsResult.ErrorValue());

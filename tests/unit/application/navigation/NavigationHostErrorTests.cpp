@@ -2,6 +2,7 @@
 #include "CliHostInterrupts.h"
 #include "Horo/Assets/AssetErrorDomain.h"
 #include "Horo/Cli/CliErrors.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Mcp/McpErrors.h"
@@ -108,6 +109,24 @@ namespace Horo::Application::Internal {
                                           .summary = "Unregistered test failure."};
         CHECK_FALSE(translator.Translate(MakeError(unknown)).has_value());
         CHECK_FALSE(translator.Translate(WrapError(Navigation::NavigationErrors::BakeInputInvalid, MakeError(unknown))).has_value());
+    }
+
+    TEST_CASE("Native host translates all immutable storage failures with exact identities", "[navigation][cli][errors]") {
+        using enum Hosts::ExitCategory;
+        const auto translator = Translator();
+        const std::array cases{std::pair{&FileStorageErrors::InvalidPath, Invariant},
+                               std::pair{&FileStorageErrors::UnsafeObject, Permission},
+                               std::pair{&FileStorageErrors::Capacity, Operation},
+                               std::pair{&FileStorageErrors::Cancelled, Cancelled},
+                               std::pair{&FileStorageErrors::Conflict, Operation},
+                               std::pair{&FileStorageErrors::IoFailed, Operation}};
+        for (const auto &[descriptor, category] : cases) {
+            const auto result = translator.Translate(MakeError(*descriptor));
+            REQUIRE(result);
+            CHECK(result->Category() == category);
+            CHECK(result->Failure().domain.Value() == descriptor->domain.Value());
+            CHECK(result->Failure().code.Value() == descriptor->code.Value());
+        }
     }
 
 #if !defined(_WIN32)

@@ -11,6 +11,7 @@
 #include "Horo/Assets/CookCatalog.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "NativeCacheFiles.h"
 #include "ProjectAssetImportCommitter.h"
 #include "assets/AssetCookPublicationFixture.h"
 
@@ -202,7 +203,7 @@ TEST_CASE("Full pipeline: create project, import, cook, load", "[native][integra
 
             AssetCookRequest cookRequest{
                 .sourceRoot = kFixtureProject,
-                .cacheRoot = cacheDir.path,
+                .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
                 .cookedRoot = cookedDir.path,
                 .registry = snapshot,
                 .target = Target("headless-null"),

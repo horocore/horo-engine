@@ -1,5 +1,6 @@
 #include "Horo/Application/NavigationBakeService.h"
 #include "Horo/Application/NavigationContentIntegration.h"
+#include "NativeCacheFiles.h"
 #include "PublicationOperationId.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
 #include "navigation/NavigationContentPolicyFixture.h"
@@ -67,7 +68,7 @@ namespace Horo::Application {
             NavigationBakeServiceConfig config{.definition = Navigation::AssetTestSupport::Asset(),
                                                .artifactType = Navigation::AssetTestSupport::Type(),
                                                .target = PackageTarget(),
-                                               .cacheRoot = root / "cache",
+                                               .cacheFiles = Horo::TestSupport::NativeCacheFiles(root / "cache"),
                                                .targetRoot = root / "cook",
                                                .builder = builder,
                                                .files = std::make_shared<NativeDurableFileSystem>(),

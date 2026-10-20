@@ -16,8 +16,7 @@ namespace Horo::Application {
 
         /** @brief Rejects unusable storage paths before admission or staging. */
         [[nodiscard]] bool ValidStorageConfig(const NavigationBakeServiceConfig &config) {
-            return !config.cacheRoot.empty() && config.cacheRoot.is_absolute() && !config.targetRoot.empty() &&
-                   config.targetRoot.is_absolute();
+            return config.cacheFiles != nullptr && !config.targetRoot.empty() && config.targetRoot.is_absolute();
         }
 
         /** @brief Enforces both portable artifact ceilings and the caller's cook limit. */

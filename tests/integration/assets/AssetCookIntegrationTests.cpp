@@ -7,6 +7,7 @@
 #include "Horo/Assets/CookCatalog.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "NativeCacheFiles.h"
 #include "assets/AssetCookPublicationFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -96,7 +97,7 @@ TEST_CASE("End-to-end headless cook pipeline: source to provider", "[native][int
 
     AssetCookRequest request{
         .sourceRoot = kFixtureProject,
-        .cacheRoot = cacheDir.path,
+        .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
         .cookedRoot = cookedDir.path,
         .registry = snapshot,
         .target = Target("headless-null"),
@@ -166,7 +167,7 @@ TEST_CASE("End-to-end cache hit on second run", "[native][integration][assets][c
     {
         AssetCookRequest request{
             .sourceRoot = kFixtureProject,
-            .cacheRoot = cacheDir.path,
+            .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
             .cookedRoot = cookedDir1.path,
             .registry = snapshot,
             .target = Target("headless-null"),
@@ -183,7 +184,7 @@ TEST_CASE("End-to-end cache hit on second run", "[native][integration][assets][c
     {
         AssetCookRequest request{
             .sourceRoot = kFixtureProject,
-            .cacheRoot = cacheDir.path,
+            .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
             .cookedRoot = cookedDir2.path,
             .registry = snapshot,
             .target = Target("headless-null"),

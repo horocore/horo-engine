@@ -2,6 +2,7 @@
 
 #include "Horo/Application/NavigationBakeService.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "NativeCacheFiles.h"
 #include "NativePublicationFiles.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavigationPublicationEntropy.h"
@@ -196,7 +197,7 @@ namespace Horo::Application::TestSupport {
               config{.definition = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000001").Value(),
                      .artifactType = Assets::AssetTypeId::Parse("core.navmesh").Value(),
                      .target = AssetCookTargetId::Parse("headless-null").Value(),
-                     .cacheRoot = root / "cache",
+                     .cacheFiles = Horo::TestSupport::NativeCacheFiles(root / "cache"),
                      .targetRoot = root / "cooked",
                      .builder = CreateRecastDetourNavigationMeshBuilder().Value(),
                      .files = files,

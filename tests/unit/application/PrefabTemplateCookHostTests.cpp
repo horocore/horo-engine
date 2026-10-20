@@ -1,4 +1,5 @@
 #include "Horo/Prefab/PrefabTemplateProvider.h"
+#include "NativeCacheFiles.h"
 #include "PrefabSceneCookHostFixture.h"
 
 #include <algorithm>
@@ -282,9 +283,10 @@ TEST_CASE("Dynamic cache admission rejects corrupt and valid but different HPFB 
     const auto envelope = EncodeCookedArtifact(poisoned);
     REQUIRE(envelope.HasValue());
     TempDir poisonedCache;
-    AssetCookCache cache{poisonedCache.path};
+    const auto poisonedFiles = Horo::TestSupport::NativeCacheFiles(poisonedCache.path);
+    AssetCookCache cache{*poisonedFiles};
     REQUIRE(cache.Store({poisoned.cacheKeyDigest}, envelope.Value(), {}).HasValue());
-    fixture.request.assets.cacheRoot = poisonedCache.path;
+    fixture.request.assets.cacheFiles = poisonedFiles;
     REQUIRE(fixture.Cook().HasError());
     fixture.AssertRetained(first.Value().generation);
 }

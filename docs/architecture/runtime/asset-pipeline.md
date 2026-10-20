@@ -1635,6 +1635,22 @@ requires the separate versioned extension described there.
 <cache-root>/<first-two-digest-hex>/<remaining-digest-hex>.cooked
 ```
 
+`AssetCookCache` borrows a host-composed `ImmutableFileStorage`; the owner must
+outlive the cache view and every synchronous call. `AssetCookRequest` and
+`NavigationBakeServiceConfig` retain a required shared storage authority instead
+of accepting `cacheRoot`. Missing authorities fail admission even for empty
+registries. Callers migrate by composing `CreateNativeImmutableFileStorage` at
+the host boundary and passing that owner; the CLI grants only its fixed derived
+navigation cache namespace under the retained project identity. Model targets do
+not select native storage and no path constructor or ambient fallback remains.
+
+This API migration preserves the key preimage, digest-relative layout and encoded
+bytes. The cache view enforces byte limits; the cook service continues to verify
+envelopes, full keys and domain payloads. Storage errors and causes propagate
+without retrying through another filesystem, and storage cancellation remains a
+cancelled operation. The migration covers immutable cache I/O only; generation
+staging, selection and inventory containment remain separate publication work.
+
 Writers stage a unique sibling file and publish without overwriting an existing
 key. If another writer wins, the host decodes and verifies the existing envelope,
 including a constant-time byte comparison of its full cache-key digest with the

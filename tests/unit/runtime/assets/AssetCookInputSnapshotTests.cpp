@@ -1,5 +1,6 @@
 #include "../../../support/MalformedNativeFileTestSupport.h"
 #include "Horo/Assets/AssetCookInputSnapshot.h"
+#include "NativeCacheFiles.h"
 #include "assets/AssetCookServiceFixture.h"
 
 #include <array>
@@ -58,7 +59,7 @@ namespace {
         JobSystem jobs;
         AssetRegistry registry;
         AssetCookRequest request{.sourceRoot = project.dir.path,
-                                 .cacheRoot = cache.path,
+                                 .cacheFiles = Horo::TestSupport::NativeCacheFiles(cache.path),
                                  .cookedRoot = cooked.path,
                                  .target = Target("headless-null")};
 

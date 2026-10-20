@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Audio/AudioCooker.h"
+#include "NativeCacheFiles.h"
 #include "assets/AssetCookPublicationFixture.h"
 #include "navigation/NavigationReleaseFixture.h"
 
@@ -39,7 +40,7 @@ namespace Horo::Application::ContentTestSupport {
         JobSystem jobs{JobSystemConfig{2, 16}};
         Assets::AssetCookService service{jobs, std::move(snapshot).Value()};
         Assets::AssetCookRequest request{.sourceRoot = root / "source",
-                                         .cacheRoot = root / "cache",
+                                         .cacheFiles = Horo::TestSupport::NativeCacheFiles(root / "cache"),
                                          .cookedRoot = root / "cooked",
                                          .registry = registry.Snapshot(),
                                          .target = target};

@@ -3,6 +3,7 @@
 #include "Horo/Audio/AudioCooker.h"
 #include "Horo/Audio/AudioErrors.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "NativeCacheFiles.h"
 #include "assets/AssetCookPublicationFixture.h"
 
 #include <algorithm>
@@ -495,7 +496,7 @@ namespace Horo::Audio {
         const auto target = Target("linux-desktop");
         Assets::AssetCookRequest request{
             .sourceRoot = root.path,
-            .cacheRoot = root.path / "cache",
+            .cacheFiles = Horo::TestSupport::NativeCacheFiles(root.path / "cache"),
             .cookedRoot = root.path / "cooked",
             .registry = registry.Snapshot(),
             .target = target,

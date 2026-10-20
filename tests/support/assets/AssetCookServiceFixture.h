@@ -6,6 +6,7 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Sha256.h"
+#include "NativeCacheFiles.h"
 #include "NativePublicationFiles.h"
 #include "assets/AssetCookPublicationFixture.h"
 #include "assets/AssetCookTestValues.h"
@@ -215,7 +216,7 @@ namespace Horo::Assets::ServiceTestSupport {
         JobSystem jobs;
         AssetCookService service{jobs, Catalog()};
         AssetCookRequest request{.sourceRoot = source.path,
-                                 .cacheRoot = cache.path,
+                                 .cacheFiles = Horo::TestSupport::NativeCacheFiles(cache.path),
                                  .cookedRoot = cooked.path,
                                  .registry = AssetRegistry{}.Snapshot(),
                                  .target = Target("headless-null")};

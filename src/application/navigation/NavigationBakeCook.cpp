@@ -64,14 +64,21 @@ namespace Horo::Application::NavigationBakeDetail {
             return difference == std::byte{};
         }
 
+        /** @brief Adds navigation cancellation context while retaining the storage failure as its cause. */
+        [[nodiscard]] Error CacheFailure(const Error &error) {
+            return ErrorChainContains(error, FileStorageErrors::Cancelled.domain, FileStorageErrors::Cancelled.code)
+                       ? WrapError(NavigationErrors::BakeInputCancelled, error)
+                       : error;
+        }
+
         /** @brief Reads and validates cache identity, portable bytes and descriptor against the exact prepared work. */
         [[nodiscard]] Result<std::shared_ptr<const NavigationCookedTile>> CachedTile(const NavigationBakeServiceConfig &config,
                                                                                      const NavigationPreparedTile &prepared,
                                                                                      const CancellationToken &cancel) {
-            Assets::AssetCookCache cache(config.cacheRoot, config.cookLimits);
+            Assets::AssetCookCache cache(*config.cacheFiles, config.cookLimits);
             auto loaded = cache.Load(CacheKey(config, prepared.dependencyKey), cancel);
             if (loaded.HasError())
-                return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(loaded.ErrorValue());
+                return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(CacheFailure(loaded.ErrorValue()));
             if (!loaded.Value())
                 return Result<std::shared_ptr<const NavigationCookedTile>>::Success(nullptr);
             auto envelope = Assets::DecodeCookedArtifact(*loaded.Value(), config.cookLimits);
@@ -166,9 +173,9 @@ namespace Horo::Application::NavigationBakeDetail {
             auto envelope = TileEnvelope(config, *tile.Value());
             if (envelope.HasError())
                 return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(envelope.ErrorValue());
-            Assets::AssetCookCache cache(config.cacheRoot, config.cookLimits);
+            Assets::AssetCookCache cache(*config.cacheFiles, config.cookLimits);
             if (const auto stored = cache.Store(CacheKey(config, prepared.dependencyKey), envelope.Value(), cancel); stored.HasError())
-                return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(stored.ErrorValue());
+                return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(CacheFailure(stored.ErrorValue()));
             return tile;
         }
 

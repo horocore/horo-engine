@@ -63,7 +63,7 @@ namespace Horo::Application {
         auto service = NavigationBakeService::Create(config, operations, jobs).Value();
         CHECK_FALSE(Execute(captured.Value(), *service, config, operations, Nav::NavigationBakeExecutionMode::ValidateOnly));
         CHECK(builder->builds.load() == 0);
-        CHECK_FALSE(std::filesystem::exists(config.cacheRoot));
+        CHECK_FALSE(std::filesystem::exists((project.source.directory.Path() / ".horo/cache/navigation")));
         CHECK_FALSE(std::filesystem::exists(config.targetRoot));
         const auto first = Execute(captured.Value(), *service, config, operations);
         REQUIRE(first);

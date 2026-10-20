@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NativeCacheFiles.h"
+
 /** @file NavigationProjectBakeNativeFixture.h
  * @brief Explicit native service composition shared by project-input and final-adoption regressions.
  */
@@ -58,7 +60,7 @@ namespace Horo::Application::NavigationInputNativeTestSupport {
         return {.definition = Asset(1),
                 .artifactType = Assets::AssetTypeId::Parse(Assets::NavMeshAssetTypeName).Value(),
                 .target = AssetCookTargetId::Parse("headless-null").Value(),
-                .cacheRoot = root / ".horo/cache/navigation",
+                .cacheFiles = Horo::TestSupport::NativeCacheFiles(root / ".horo/cache/navigation"),
                 .targetRoot = root / ".horo/cooked/navigation",
                 .builder = std::move(builder),
                 .files = std::make_shared<NativeDurableFileSystem>(),

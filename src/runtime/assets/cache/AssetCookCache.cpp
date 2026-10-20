@@ -8,10 +8,6 @@
 #include "Horo/Foundation/Sha256.h"
 
 #include <algorithm>
-#include <chrono>
-#include <cstring>
-#include <filesystem>
-#include <fstream>
 #include <limits>
 #include <optional>
 #include <span>
@@ -154,112 +150,35 @@ namespace Horo::Assets {
     // ---------------------------------------------------------------------------
 
     /** @copydoc AssetCookCache::AssetCookCache */
-    AssetCookCache::AssetCookCache(std::filesystem::path root, const AssetCookLimits &limits) : root_(std::move(root)), limits_(limits) {}
+    AssetCookCache::AssetCookCache(const ImmutableFileStorage &files, const AssetCookLimits &limits) noexcept
+        : files_(files), limits_(limits) {}
 
-    std::filesystem::path AssetCookCache::PathForKey(const Sha256Digest &digest) const {
+    /** @copydoc AssetCookCache::PathForKey */
+    std::string AssetCookCache::PathForKey(const Sha256Digest &digest) const {
         const auto hex = FormatHex(digest);
-        // <root>/<first-two-hex>/<remaining-hex>.cooked
-        return root_ / hex.substr(0, 2) / (hex.substr(2) + ".cooked");
+        return hex.substr(0, 2) + "/" + hex.substr(2) + ".cooked";
     }
 
+    /** @copydoc AssetCookCache::Load */
     Result<std::optional<std::vector<std::uint8_t>>> AssetCookCache::Load(const AssetCookCacheKey &key,
                                                                           const CancellationToken &cancellation) const {
         if (cancellation.IsCancellationRequested())
-            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(Error{CookErrors::Cancelled.code});
-
-        const auto path = PathForKey(key.digest);
-
-        if (!std::filesystem::exists(path))
-            return Result<std::optional<std::vector<std::uint8_t>>>::Success(std::nullopt);
-
-        if (std::filesystem::is_symlink(path))
-            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        std::error_code ec;
-        const auto fileSize = std::filesystem::file_size(path, ec);
-        if (ec)
-            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        if (fileSize > limits_.maximumArtifactBytes)
-            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(Error{CookErrors::TooLarge.code});
-
-        std::ifstream file(path, std::ios::binary);
-        if (!file)
-            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        std::vector<std::uint8_t> bytes(fileSize);
-        file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(fileSize));
-
-        if (!file || file.gcount() != static_cast<std::streamsize>(fileSize)) {
-            // Truncated or partial read
-            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(Error{CookErrors::MalformedArtifact.code});
-        }
-
-        return Result<std::optional<std::vector<std::uint8_t>>>::Success(std::move(bytes));
+            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(MakeError(CookErrors::Cancelled));
+        if (limits_.maximumArtifactBytes == 0)
+            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(MakeError(CookErrors::TooLarge));
+        auto loaded = files_.Load(PathForKey(key.digest), limits_.maximumArtifactBytes, cancellation);
+        if (loaded.HasValue() && loaded.Value() && loaded.Value()->size() > limits_.maximumArtifactBytes)
+            return Result<std::optional<std::vector<std::uint8_t>>>::Failure(MakeError(CookErrors::TooLarge));
+        return loaded;
     }
 
-    [[nodiscard]] Result<void> VerifyExistingArtifact(const std::filesystem::path &targetPath, std::span<const std::uint8_t> artifact) {
-        if (std::filesystem::is_symlink(targetPath))
-            return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        std::error_code ec;
-        const auto existingSize = std::filesystem::file_size(targetPath, ec);
-        if (ec || existingSize != static_cast<std::uint64_t>(artifact.size()))
-            return Result<void>::Failure(Error{CookErrors::DuplicateCooker.code});
-
-        std::ifstream existing(targetPath, std::ios::binary);
-        if (!existing)
-            return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        std::vector<std::uint8_t> existingBytes(existingSize);
-        existing.read(reinterpret_cast<char *>(existingBytes.data()), static_cast<std::streamsize>(existingSize));
-
-        if (!existing || existing.gcount() != static_cast<std::streamsize>(existingSize))
-            return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        if (existingBytes.size() == artifact.size() && std::memcmp(existingBytes.data(), artifact.data(), artifact.size()) == 0) {
-            return Result<void>::Success();
-        }
-        return Result<void>::Failure(Error{CookErrors::DuplicateCooker.code});
-    }
-
-    Result<void> AssetCookCache::Store(const AssetCookCacheKey &key, std::span<const std::uint8_t> artifact,
+    /** @copydoc AssetCookCache::Store */
+    Result<void> AssetCookCache::Store(const AssetCookCacheKey &key, const std::span<const std::uint8_t> artifact,
                                        const CancellationToken &cancellation) const {
         if (cancellation.IsCancellationRequested())
-            return Result<void>::Failure(Error{CookErrors::Cancelled.code});
-
-        if (artifact.size() > limits_.maximumArtifactBytes)
-            return Result<void>::Failure(Error{CookErrors::TooLarge.code});
-
-        const auto targetPath = PathForKey(key.digest);
-        if (std::filesystem::exists(targetPath))
-            return VerifyExistingArtifact(targetPath, artifact);
-
-        std::filesystem::create_directories(targetPath.parent_path());
-        const auto tempPath = std::filesystem::path(
-            std::format("{}.tmp.{}", targetPath.string(), std::chrono::steady_clock::now().time_since_epoch().count()));
-
-        {
-            std::ofstream temp(tempPath, std::ios::binary | std::ios::trunc);
-            if (!temp)
-                return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-            temp.write(reinterpret_cast<const char *>(artifact.data()), static_cast<std::streamsize>(artifact.size()));
-            if (!temp) {
-                std::filesystem::remove(tempPath);
-                return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
-            }
-        }
-
-        std::error_code renameEc;
-        std::filesystem::rename(tempPath, targetPath, renameEc);
-        if (renameEc) {
-            std::filesystem::remove(tempPath);
-            if (std::filesystem::exists(targetPath) && VerifyExistingArtifact(targetPath, artifact).HasValue())
-                return Result<void>::Success();
-            return Result<void>::Failure(Error{CookErrors::MalformedArtifact.code});
-        }
-
-        return Result<void>::Success();
+            return Result<void>::Failure(MakeError(CookErrors::Cancelled));
+        if (limits_.maximumArtifactBytes == 0 || artifact.size() > limits_.maximumArtifactBytes)
+            return Result<void>::Failure(MakeError(CookErrors::TooLarge));
+        return files_.Store(PathForKey(key.digest), artifact, cancellation);
     }
 }  // namespace Horo::Assets

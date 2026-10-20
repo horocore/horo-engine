@@ -1,4 +1,5 @@
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "NativeCacheFiles.h"
 #include "PublicationOperationId.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavigationBakeDiagnosticsFixture.h"
@@ -40,7 +41,7 @@ namespace Horo::Application {
             return {.definition = Asset(),
                     .artifactType = Assets::AssetTypeId::Parse("core.navmesh").Value(),
                     .target = AssetCookTargetId::Parse("headless-null").Value(),
-                    .cacheRoot = directory.root / "cache",
+                    .cacheFiles = Horo::TestSupport::NativeCacheFiles(directory.root / "cache"),
                     .targetRoot = directory.root / "cooked",
                     .builder = builder,
                     .files = std::make_shared<NativeDurableFileSystem>(),

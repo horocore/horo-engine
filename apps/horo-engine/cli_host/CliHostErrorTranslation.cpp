@@ -5,6 +5,7 @@
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Foundation/Diagnostics/DiagnosticBundle.h"
 #include "Horo/Foundation/FoundationErrorDomains.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Foundation/ModuleDescriptor.h"
 #include "Horo/Mcp/McpErrors.h"
 #include "Horo/Navigation/NavigationErrors.h"
@@ -246,6 +247,10 @@ namespace Horo::Application::Internal {
                               {"job.wait_forbidden", Invariant},
                               {"job.wait_capacity_deadlock", Invariant}}) &&
                    AddDomain(modules, mappings, "horo.foundation", SceneMathErrorDomain(), Validation) &&
+                   AddDomain(modules, mappings, "horo.foundation", ImmutableFileStorageErrorDomain(), Operation,
+                             {{"file_storage.invalid_path", Invariant},
+                              {"file_storage.unsafe_object", Permission},
+                              {"file_storage.cancelled", Cancelled}}) &&
                    AddDomain(modules, mappings, "horo.platform", Platform::ProjectReadErrorDomain(), Validation,
                              {{"project_read.unsafe_path", Permission},
                               {"project_read.read_failed", Operation},

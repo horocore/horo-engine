@@ -8,13 +8,14 @@
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Sha256.h"
 
 #include <cstdint>
-#include <filesystem>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -83,25 +84,25 @@ namespace Horo::Assets {
     /**
      * @brief Immutable content-addressed cooked artifact cache.
      * @details Keys map to the full encoded artifact envelope bytes. Entries are
-     *          never overwritten with different bytes. Lookup includes constant-time
-     *          digest comparison and full envelope verification.
+     *          never overwritten with different bytes. The owning cook service verifies
+     *          envelope, complete key and domain identities before admitting a hit.
      *
      *          Layout: <root>/<first-two-hex>/<remaining-hex>.cooked
      */
     class AssetCookCache final {
     public:
         /**
-         * @brief Constructs a cache view without accessing or creating directories.
-         * @param root Cache root directory. Store creates missing directories when writing an entry.
+         * @brief Constructs a borrowed view of explicit host-owned immutable storage without I/O.
+         * @param files Storage authority that outlives this view and every synchronous call.
          * @param limits Size bounds applied to loaded and stored entries.
          */
-        explicit AssetCookCache(std::filesystem::path root, const AssetCookLimits &limits = {});
+        explicit AssetCookCache(const ImmutableFileStorage &files, const AssetCookLimits &limits = {}) noexcept;
 
         /**
-         * @brief Loads and verifies a cached artifact envelope.
+         * @brief Loads bounded encoded bytes through the supplied authority.
          * @param key Cache key to look up.
          * @param cancellation Cancellation token for cooperative abort.
-         * @return Verified artifact envelope bytes, nullopt on miss, or typed error on corruption.
+         * @return Complete bytes, nullopt on miss, or the original storage failure. The caller verifies the envelope and requested key.
          */
         [[nodiscard]] Result<std::optional<std::vector<std::uint8_t>>> Load(const AssetCookCacheKey &key,
                                                                             const CancellationToken &cancellation) const;
@@ -112,18 +113,17 @@ namespace Horo::Assets {
          * @param artifact Full encoded artifact envelope bytes.
          * @param cancellation Cancellation token for cooperative abort.
          * @return Result<void> indicating success or a typed store error.
-         * @details Creates missing directories, writes to a temporary sibling file, then atomically renames.
-         *          If the key path already exists, verifies existing bytes are
-         *          identical before discarding the temp file.
+         * @details Delegates immutable no-replace publication to the same supplied authority. Provider failures
+         * retain their exact identity; no native path discovery or filesystem fallback is permitted.
          */
         [[nodiscard]] Result<void> Store(const AssetCookCacheKey &key, std::span<const std::uint8_t> artifact,
                                          const CancellationToken &cancellation) const;
 
     private:
         /** @brief Builds the filesystem path for a cache key. */
-        [[nodiscard]] std::filesystem::path PathForKey(const Sha256Digest &digest) const;
+        [[nodiscard]] std::string PathForKey(const Sha256Digest &digest) const;
 
-        std::filesystem::path root_;
+        const ImmutableFileStorage &files_;
         AssetCookLimits limits_;
     };
 

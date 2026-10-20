@@ -2,6 +2,7 @@
 
 #include "Horo/Application/NavigationBakeService.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "NativeCacheFiles.h"
 #include "PublicationOperationId.h"
 #include "navigation/IncrementalBakeFixture.h"
 #include "navigation/NavMeshAssetTestFixtures.h"
@@ -24,7 +25,7 @@ namespace Horo::Navigation::AssetTestSupport {
         Application::NavigationBakeServiceConfig config{.definition = Asset(),
                                                         .artifactType = Type(),
                                                         .target = Target(),
-                                                        .cacheRoot = canonicalRoot / "tile-cache",
+                                                        .cacheFiles = Horo::TestSupport::NativeCacheFiles(canonicalRoot / "tile-cache"),
                                                         .targetRoot = canonicalRoot / "cook-output",
                                                         .builder = CreateRecastDetourNavigationMeshBuilder().Value(),
                                                         .files = std::make_shared<NativeDurableFileSystem>(),
