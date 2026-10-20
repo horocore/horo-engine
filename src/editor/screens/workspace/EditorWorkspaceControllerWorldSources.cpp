@@ -4,6 +4,29 @@
 #include <limits>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Executes an existing source/history intent without manufacturing a missing value or identity. */
+        Result<PartitionedWorldSnapshotLease> ExecuteExistingSource(PartitionedWorldWorkspace &owner,
+                                                                    const WorldSourceToolCommand &request) {
+            switch (request.action) {
+                case WorldSourceToolAction::Edit:
+                    if (request.edit.value)
+                        return owner.EditSource(request.edit);
+                    return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
+                case WorldSourceToolAction::Remove: {
+                    auto edit = request.edit;
+                    edit.value.reset();
+                    return owner.EditSource(edit);
+                }
+                case WorldSourceToolAction::Undo:
+                case WorldSourceToolAction::Redo:
+                    return owner.ReplaySources(request.edit.expected, request.action == WorldSourceToolAction::Redo);
+                default:
+                    return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Unsupported));
+            }
+        }
+    }  // namespace
+
     /** @copydoc EditorWorkspaceController::DetachWorldSourceOwner */
     void EditorWorkspaceController::DetachWorldSourceOwner() noexcept {
         m_partitionedWorld = nullptr;
@@ -11,17 +34,31 @@ namespace Horo::Editor {
         m_viewModel.worldSourceError.reset();
     }
 
-    /** @copydoc EditorWorkspaceController::SetWorldViewportBinding */
+    /** @copydoc EditorWorkspaceController::SetWorldViewportBinding(const WorldViewportBinding &) */
     Result<void> EditorWorkspaceController::SetWorldViewportBinding(const WorldViewportBinding &binding) {
-        if (!m_partitionedWorld || !binding.snapshot || binding.viewRevision == 0)
+        if (!m_partitionedWorld)
             return Result<void>::Failure(MakeError(WorldDocumentErrors::Lifecycle));
-        const auto current = m_partitionedWorld->Snapshot();
+        return SetWorldViewportBinding(*m_partitionedWorld, binding);
+    }
+
+    /** @copydoc EditorWorkspaceController::SetWorldViewportBinding(PartitionedWorldWorkspace &, const WorldViewportBinding &) */
+    Result<void> EditorWorkspaceController::SetWorldViewportBinding(PartitionedWorldWorkspace &canonicalOwner,
+                                                                    const WorldViewportBinding &binding) {
+        if (m_partitionedWorld && m_partitionedWorld != &canonicalOwner)
+            return Result<void>::Failure(MakeError(WorldDocumentErrors::Conflict));
+        if (!binding.snapshot || binding.viewRevision == 0)
+            return Result<void>::Failure(MakeError(WorldDocumentErrors::Lifecycle));
+        const auto current = canonicalOwner.Snapshot();
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
         const auto &previous = m_viewModel.worldViewport;
+        const bool replaced =
+            previous.viewRevision != 0 && (!previous.snapshot || previous.snapshot->fence.owner != binding.snapshot->fence.owner ||
+                                           previous.snapshot->fence.generation != binding.snapshot->fence.generation);
         if (binding.snapshot != current.Value() || binding.viewRevision < previous.viewRevision ||
-            (binding.viewRevision == previous.viewRevision && binding.globalOrigin != previous.globalOrigin))
+            (binding.viewRevision == previous.viewRevision && (binding.globalOrigin != previous.globalOrigin || replaced)))
             return Result<void>::Failure(MakeError(WorldDocumentErrors::Stale));
+        m_partitionedWorld = &canonicalOwner;
         m_viewModel.worldViewport = binding;
         RefreshWorldSourceProjection();
         return Result<void>::Success();
@@ -38,6 +75,12 @@ namespace Horo::Editor {
             m_viewModel.worldViewport.snapshot.reset();
             return;
         }
+        const auto previous = m_viewModel.worldViewport.snapshot;
+        if (!previous || previous->fence.owner != snapshot.Value()->fence.owner ||
+            previous->fence.generation != snapshot.Value()->fence.generation) {
+            m_viewModel.worldViewport.snapshot.reset();
+            return;
+        }
         m_viewModel.worldViewport.snapshot = snapshot.Value();
         for (const auto &source : snapshot.Value()->document.sources) {
             if (source.id.Value() == std::numeric_limits<std::uint64_t>::max())
@@ -51,7 +94,8 @@ namespace Horo::Editor {
     bool EditorWorkspaceController::ProcessWorldSourceCommand(const EditorWorkspaceViewCommandData &command) {
         if (command.command != EditorWorkspaceViewCommand::WorldSourceTool)
             return false;
-        if (!m_partitionedWorld || !command.worldSource || m_viewModel.playState != EditorPlayState::Idle) {
+        if (!m_partitionedWorld || !m_viewModel.worldViewport.snapshot || !command.worldSource ||
+            m_viewModel.playState != EditorPlayState::Idle) {
             m_viewModel.worldSourceError = MakeError(WorldDocumentErrors::Lifecycle);
             return true;
         }
@@ -63,27 +107,18 @@ namespace Horo::Editor {
         }
         Result<PartitionedWorldSnapshotLease> result =
             Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
-        switch (request.action) {
-            case WorldSourceToolAction::Create:
-                if (request.edit.value && m_nextWorldSourceId != 0) {
-                    request.edit.source = WorldStreaming::StreamingSourceId::Create(m_nextWorldSourceId).Value();
-                    request.edit.value->id = request.edit.source;
-                    result = m_partitionedWorld->EditSource(request.edit);
-                    if (result.HasValue())
-                        m_nextWorldSourceId =
-                            m_nextWorldSourceId == std::numeric_limits<std::uint64_t>::max() ? 0 : m_nextWorldSourceId + 1;
-                }
-                break;
-            case WorldSourceToolAction::Edit:
-            case WorldSourceToolAction::Remove:
-                if (request.action == WorldSourceToolAction::Remove)
-                    request.edit.value.reset();
+        if (request.action == WorldSourceToolAction::Create) {
+            if (m_nextWorldSourceId == 0) {
+                result = Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Exhausted));
+            } else if (request.edit.value) {
+                request.edit.source = WorldStreaming::StreamingSourceId::Create(m_nextWorldSourceId).Value();
+                request.edit.value->id = request.edit.source;
                 result = m_partitionedWorld->EditSource(request.edit);
-                break;
-            case WorldSourceToolAction::Undo:
-            case WorldSourceToolAction::Redo:
-                result = m_partitionedWorld->ReplaySources(request.edit.expected, request.action == WorldSourceToolAction::Redo);
-                break;
+                if (result.HasValue())
+                    m_nextWorldSourceId = m_nextWorldSourceId == std::numeric_limits<std::uint64_t>::max() ? 0 : m_nextWorldSourceId + 1;
+            }
+        } else {
+            result = ExecuteExistingSource(*m_partitionedWorld, request);
         }
         m_viewModel.worldSourceError = result.HasError() ? std::optional<Error>{result.ErrorValue()} : std::nullopt;
         RefreshWorldSourceProjection();

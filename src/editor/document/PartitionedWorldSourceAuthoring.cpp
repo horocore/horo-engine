@@ -11,6 +11,12 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc PartitionedWorldWorkspace::ClearSourceHistory */
+    void PartitionedWorldWorkspace::ClearSourceHistory() noexcept {
+        sourceHistory_.clear();
+        sourceHistoryCursor_ = 0;
+    }
+
     /** @copydoc PartitionedWorldWorkspace::EditSource */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::EditSource(const WorldSourceEdit &edit,
                                                                                 const std::stop_token cancellation) {

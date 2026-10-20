@@ -205,8 +205,8 @@ namespace {
         REQUIRE(result.HasValue());
         CHECK(result.Value().id == source.id);
         CHECK(result.Value().revision == source.revision);
-        CHECK(WorldSourceGizmoPoints(result.Value()).Value()[handle] == moved);
-        ErrorIs(MoveWorldSourceGizmo(source, points.Value().size(), moved), "world_document.invalid");
+        CHECK(WorldSourceGizmoPoints(result.Value()).Value().Points()[handle] == moved);
+        ErrorIs(MoveWorldSourceGizmo(source, points.Value().Points().size(), moved), "world_document.invalid");
     }
 
     TEST_CASE("Large global origin projection and drag preserve millimeters without signed overflow", "[editor][world_document][gizmo]") {
@@ -222,7 +222,7 @@ namespace {
             CHECK(WorldSourceViewportGlobal(origin, local.Value()).Value() == point);
             auto source = Source();
             source.shape = WS::StreamingSourceSphere{origin, 1};
-            CHECK(WorldSourceGizmoPoints(source).Value()[1].Millimeters()[0] == originMm[0] + 1);
+            CHECK(WorldSourceGizmoPoints(source).Value().Points()[1].Millimeters()[0] == originMm[0] + 1);
         }
         ErrorIs(WorldSourceViewportPoint(Point::FromMillimeters(high, 0, 0), Point::FromMillimeters(low, 0, 0)),
                 "world_document.unsupported");
@@ -246,4 +246,32 @@ namespace {
         ErrorIs(*result, "world_document.wrong_thread");
         CHECK(workspace.Snapshot().Value() == root);
     }
+
+    TEST_CASE("Source history preserves the combined canonical page working set and object selection", "[editor][world_document][source]") {
+        auto document = Document();
+        const auto layer = WS::StreamingLayerId::Create(0).Value();
+        const auto revision = WS::WorldAuthoringRevision::Create(1).Value();
+        document.layers.push_back({.id = layer, .name = "World"});
+        document.pages.push_back(
+            {.head = {.partition = document.settings.partition, .sourceAsset = Owner(), .revision = revision},
+             .objects = {{.descriptor = {.address = {Owner(), 1}, .revision = revision, .sourceAsset = Owner()}, .layer = layer}}});
+        PartitionedWorldWorkspace workspace{Owner()};
+        auto root = workspace.Open(document).Value();
+        const std::array pages{Owner()};
+        root = workspace.SetWorkingSet(pages, root->fence).Value();
+        const std::array objects{WS::WorldAuthoringObjectAddress{Owner(), 1}};
+        root = workspace.SetSelection(objects, objects[0], root->fence).Value();
+        const auto value = Source();
+        root = workspace.EditSource({root->fence, value.id, value}).Value();
+        CHECK(root->selectedObjects.size() == 1);
+        CHECK(root->primary == objects[0]);
+        CHECK(root->openPages == std::vector<Assets::AssetId>{Owner()});
+        root = workspace.ReplaySources(root->fence, false).Value();
+        CHECK(root->document.sources.empty());
+        CHECK(root->document.pages == document.pages);
+        CHECK(root->selectedObjects.size() == 1);
+        CHECK(root->primary == objects[0]);
+        CHECK(root->openPages == std::vector<Assets::AssetId>{Owner()});
+    }
+
 }  // namespace

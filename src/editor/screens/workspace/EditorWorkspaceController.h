@@ -102,6 +102,11 @@ namespace Horo::Editor {
          * @param binding Current root, exact global origin and monotonic view incarnation.
          * @return Typed rejection for stale roots/views; no hidden replacement or ownership transfer. */
         [[nodiscard]] Result<void> SetWorldViewportBinding(const WorldViewportBinding &binding);
+        /** @brief Explicitly binds the canonical owner of the host's active world view; no new document authority is allocated.
+         * @param canonicalOwner Borrowed owner; detach before its destruction. Switching owners requires explicit detach first.
+         * @param binding Current immutable root/origin and monotonic active-view revision.
+         * @return Typed stale/conflict/lifecycle rejection without changing the previous binding. */
+        [[nodiscard]] Result<void> SetWorldViewportBinding(PartitionedWorldWorkspace &canonicalOwner, const WorldViewportBinding &binding);
         /** @brief Host must call before destroying the borrowed world owner; retained reader leases remain immutable and valid. */
         void DetachWorldSourceOwner() noexcept;
         /** @brief Starts captured audio through the injected host, never through a widget/backend bypass.
@@ -189,6 +194,37 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ShutdownPCGDocuments(bool discardDirty = false);
         /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
         [[nodiscard]] Result<void> ShutdownGameplayModules();
+
+        /** @brief Exposes the one editor authoring residency owner for explicit load/unload/pin commands.
+         * @return Owner-thread capability; source bytes must be authorized and read by the host outside draw paths. */
+        [[nodiscard]] PartitionedWorldWorkspace &WorldDocuments() noexcept {
+            return m_worldDocuments;
+        }
+
+        /** @brief Queries immutable partitioned document state. @return Owner-thread capability. */
+        [[nodiscard]] const PartitionedWorldWorkspace &WorldDocuments() const noexcept {
+            return m_worldDocuments;
+        }
+
+        /** @brief Routes page-aware selection through the actual editor selection adapter.
+         * @param objects Authored page-scoped addresses. @param primary Optional member. @param expected Exact publication.
+         * @return Typed committed world lease or rejection. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SelectWorldObjects(
+            std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
+            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected) {
+            return m_selection.SetWorldObjects(m_worldDocuments, objects, primary, expected);
+        }
+
+        /** @brief Executes one world-layer intent against the canonical residency/selection owner.
+         * @param intent Captured typed action and exact document fence. @return Complete immutable result or typed atomic rejection.
+         */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ApplyWorldLayerIntent(const WorldLayerOutlinerIntent &intent);
+
+        /** @brief Includes dirty loaded page content in the ordinary workspace leave guard. @return Whether unsaved content is owned. */
+        [[nodiscard]] bool HasDirtyWorldDocuments() const {
+            const auto snapshot = m_worldDocuments.Snapshot();
+            return snapshot.HasValue() && snapshot.Value()->dirty;
+        }
 
         /** @brief Lazily composes actual project navigation sources with this exact active Scene/history owner. */
         [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings();
@@ -343,6 +379,7 @@ namespace Horo::Editor {
         Assets::AssetId m_physicsDocumentOwner;
         std::uint64_t m_physicsReplacementEpoch{};
         const std::thread::id m_physicsOwnerThread{std::this_thread::get_id()};
+        PartitionedWorldWorkspace m_worldDocuments;
         SceneDocument m_document;
         EditorHistory m_history;
         std::optional<SceneDocumentTransactions> m_physicsTransactions;

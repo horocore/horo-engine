@@ -2643,6 +2643,8 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
             unit/editor/EditorWorkspaceControllerTests.cpp
             unit/editor/WorldSourceControllerTests.cpp
+            unit/editor/EditorWorkspaceWorldResidencyTests.cpp
+            unit/editor/WorldLayerWorkspaceControllerTests.cpp
             unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
             unit/editor/EditorWorkspaceControllerCollisionTests.cpp
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
@@ -2847,9 +2849,11 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorUiComponentsRenderTests.cpp
             unit/editor/ActivityButtonIdentityTests.cpp
             unit/editor/SequenceTimelineRenderTests.cpp
+            unit/editor/WorldLayerOutlinerRenderTests.cpp
     )
 
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
+    target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_link_libraries(HoroEditorUiComponentsRenderTests
             PRIVATE
             HoroEngine::Gui
@@ -3149,8 +3153,12 @@ add_executable(HoroEditorViewportSceneTests
 
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
-add_executable(HoroPartitionedWorldWorkspaceTests unit/editor/PartitionedWorldWorkspaceTests.cpp
-    unit/editor/WorldSourceAuthoringTests.cpp)
+add_executable(HoroPartitionedWorldWorkspaceTests
+        unit/editor/PartitionedWorldWorkspaceTests.cpp
+        unit/editor/WorldSourceAuthoringTests.cpp
+        unit/editor/PartitionedWorldResidencyTests.cpp
+        unit/editor/PartitionedWorldObjectInspectionTests.cpp
+        unit/editor/WorldLayerCommandsTests.cpp)
 target_link_libraries(HoroPartitionedWorldWorkspaceTests PRIVATE HoroEngine::EditorModel)
 horo_register_catch_test(HoroPartitionedWorldWorkspaceTests LABELS "unit;headless;world_document")
 

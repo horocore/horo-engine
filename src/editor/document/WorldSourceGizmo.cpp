@@ -40,6 +40,26 @@ namespace Horo::Editor {
             }
             return delta;
         }
+
+        /** @brief Moves a frustum anchor or its signed plane distance without admitting unbounded deltas. */
+        Result<void> MoveFrustum(WS::StreamingSourceFrustum &shape, std::size_t handle, Point position) {
+            if (handle == 0) {
+                shape.anchor = position;
+                return Result<void>::Success();
+            }
+            auto &plane = shape.planes[handle - 1];
+            const auto delta = Difference(position, shape.anchor);
+            if (std::ranges::any_of(delta, [](long double value) {
+                return std::abs(value) > WS::StreamingSourceRangeLimits::MaximumExtentMillimeters;
+            }))
+                return Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            const long double distance =
+                -(delta[0] * plane.inwardNormal.x + delta[1] * plane.inwardNormal.y + delta[2] * plane.inwardNormal.z);
+            if (!std::isfinite(distance) || distance < 0 || distance > shape.maximumExtentMillimeters)
+                return Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            plane.distanceMillimeters = static_cast<float>(distance);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc WorldSourceViewportPoint */
@@ -63,24 +83,25 @@ namespace Horo::Editor {
     }
 
     /** @copydoc WorldSourceGizmoPoints */
-    Result<std::vector<Math::WorldCoordinate64>> WorldSourceGizmoPoints(const PartitionedWorldSource &source) {
-        using Points = std::vector<Point>;
+    Result<WorldSourceGizmoPointSet> WorldSourceGizmoPoints(const PartitionedWorldSource &source) {
+        using Points = WorldSourceGizmoPointSet;
         if (const auto valid = WS::ValidateStreamingSourceShape(source.shape); valid.HasError())
             return Result<Points>::Failure(valid.ErrorValue());
         return std::visit([](const auto &shape) -> Result<Points> {
             using T = std::decay_t<decltype(shape)>;
             Points points;
             if constexpr (std::is_same_v<T, WS::StreamingSourceBox>) {
-                points = {shape.minimum, shape.maximum};
+                points.points_[points.count_++] = shape.minimum;
+                points.points_[points.count_++] = shape.maximum;
             } else if constexpr (std::is_same_v<T, WS::StreamingSourceFrustum>) {
-                points.push_back(shape.anchor);
+                points.points_[points.count_++] = shape.anchor;
                 for (const auto &plane : shape.planes) {
                     const auto point =
                         Offset(shape.anchor, -plane.inwardNormal.x * plane.distanceMillimeters,
                                -plane.inwardNormal.y * plane.distanceMillimeters, -plane.inwardNormal.z * plane.distanceMillimeters);
                     if (point.HasError())
                         return Result<Points>::Failure(point.ErrorValue());
-                    points.push_back(point.Value());
+                    points.points_[points.count_++] = point.Value();
                 }
             } else {
                 Point origin;
@@ -88,16 +109,17 @@ namespace Horo::Editor {
                 if constexpr (std::is_same_v<T, WS::StreamingSourceSphere>) {
                     origin = shape.center;
                     extent = shape.radiusMillimeters;
-                    points.push_back(origin);
+                    points.points_[points.count_++] = origin;
                 } else {
                     origin = shape.points[0];
                     extent = shape.halfExtentMillimeters;
-                    points.assign(shape.points.begin(), shape.points.begin() + shape.pointCount);
+                    for (std::size_t index = 0; index < shape.pointCount; ++index)
+                        points.points_[points.count_++] = shape.points[index];
                 }
                 const auto point = Offset(origin, extent, 0, 0);
                 if (point.HasError())
                     return Result<Points>::Failure(point.ErrorValue());
-                points.push_back(point.Value());
+                points.points_[points.count_++] = point.Value();
             }
             return Result<Points>::Success(std::move(points));
         }, source.shape);
@@ -108,7 +130,7 @@ namespace Horo::Editor {
         const auto points = WorldSourceGizmoPoints(source);
         if (points.HasError())
             return Result<PartitionedWorldSource>::Failure(points.ErrorValue());
-        if (handle >= points.Value().size())
+        if (handle >= points.Value().Points().size())
             return Result<PartitionedWorldSource>::Failure(MakeError(WorldDocumentErrors::Invalid));
         auto candidate = source;
         const auto changed = std::visit([&](auto &shape) -> Result<void> {
@@ -116,21 +138,8 @@ namespace Horo::Editor {
             if constexpr (std::is_same_v<T, WS::StreamingSourceBox>) {
                 (handle == 0 ? shape.minimum : shape.maximum) = position;
             } else if constexpr (std::is_same_v<T, WS::StreamingSourceFrustum>) {
-                if (handle == 0) {
-                    shape.anchor = position;
-                } else {
-                    auto &plane = shape.planes[handle - 1];
-                    const auto delta = Difference(position, shape.anchor);
-                    if (std::ranges::any_of(delta, [](long double value) {
-                        return std::abs(value) > WS::StreamingSourceRangeLimits::MaximumExtentMillimeters;
-                    }))
-                        return Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
-                    const long double distance =
-                        -(delta[0] * plane.inwardNormal.x + delta[1] * plane.inwardNormal.y + delta[2] * plane.inwardNormal.z);
-                    if (!std::isfinite(distance) || distance < 0 || distance > shape.maximumExtentMillimeters)
-                        return Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
-                    plane.distanceMillimeters = static_cast<float>(distance);
-                }
+                if (const auto moved = MoveFrustum(shape, handle, position); moved.HasError())
+                    return moved;
             } else {
                 Point origin;
                 bool extentHandle{};

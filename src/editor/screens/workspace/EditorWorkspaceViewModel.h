@@ -18,6 +18,7 @@
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
+#include "editor/screens/workspace/WorldLayerOutliner.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
 
 #include <filesystem>
@@ -89,6 +90,8 @@ namespace Horo::Editor {
     enum class EditorWorkspaceViewCommand {
         None,
         WorldSourceTool,
+        WorldLayerAuthoring,
+        OpenCreateWorldLayer,
         FocusSequenceDocument,
         CloseSequenceDocument,
         UpdateSequenceTimeline,
@@ -263,6 +266,7 @@ namespace Horo::Editor {
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<WorldSourceToolCommand> worldSource;
+        std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
@@ -334,6 +338,7 @@ namespace Horo::Editor {
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
         WorldViewportBinding worldViewport;
         std::optional<Error> worldSourceError;
+        std::optional<Error> worldLayerFailure; /**< Canonical layer failure; presentation resolves localized copy. */
         bool audioPreviewAvailable{};
         std::optional<AudioComponentPreviewSnapshot> audioPreview;
         std::optional<Error> audioPreviewFailure;

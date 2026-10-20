@@ -15,6 +15,19 @@ namespace Horo::Editor {
         namespace WS = WorldStreaming;
         using Point = Math::WorldCoordinate64;
 
+        /** @brief Rejects distant points with exact unsigned differences before constructing any per-frame error value. */
+        bool FitsViewportWindow(Point point, Point origin) {
+            const auto p = point.Millimeters();
+            const auto o = origin.Millimeters();
+            for (std::size_t axis = 0; axis < p.size(); ++axis) {
+                const auto distance = p[axis] >= o[axis] ? static_cast<std::uint64_t>(p[axis]) - static_cast<std::uint64_t>(o[axis])
+                                                         : static_cast<std::uint64_t>(o[axis]) - static_cast<std::uint64_t>(p[axis]);
+                if (distance > 8'000'000)
+                    return false;
+            }
+            return true;
+        }
+
         /** @brief Intersects the current pointer ray with the immutable camera-facing gesture plane. */
         std::optional<Math::Vec3> PointerPoint(ImVec2 origin, ImVec2 size, const EditorViewportCamera &camera, Math::ClipDepthRange depth,
                                                Math::Vec3 normal, Math::Vec3 planePoint) {
@@ -100,9 +113,50 @@ namespace Horo::Editor {
     void WorldSourceViewportTool::Cancel() {
         draft_.reset();
         dragged_.reset();
+        previewError_.reset();
         fence_ = {};
         origin_ = {};
         viewRevision_ = 0;
+    }
+
+    /** @copydoc WorldSourceViewportTool::DrawSourceProperties */
+    void WorldSourceViewportTool::DrawSourceProperties(const EditorGuiContext &context) {
+        const auto label = [&](const char *key) -> const char * {
+            return context.localization.Get("editor", key).c_str();
+        };
+        float priority = draft_->priority.Value();
+        static_cast<void>(
+            Ui::DrawFloatPropRow(label("workspace.world_sources.priority"), "##source_priority", priority, context.theme.fonts));
+        const auto value = WS::StreamingSourcePriority::Create(priority);
+        draft_->priority = value.HasValue() ? value.Value() : WS::StreamingSourcePriority{};
+        int target = static_cast<int>(draft_->target);
+        const std::array<const char *, 3> targets{label("workspace.world_sources.unloaded"), label("workspace.world_sources.loaded"),
+                                                  label("workspace.world_sources.activated")};
+        if (Ui::DrawComboPropRow(label("workspace.world_sources.target"), "##source_target", target, targets, context.theme.fonts))
+            draft_->target = static_cast<WS::StreamingDesiredResidency>(target);
+        int intent = static_cast<int>(draft_->intent);
+        const std::array<const char *, 4> intents{label("workspace.world_sources.camera"), label("workspace.world_sources.gameplay"),
+                                                  label("workspace.world_sources.network"), label("workspace.world_sources.preload")};
+        if (Ui::DrawComboPropRow(label("workspace.world_sources.intent"), "##source_intent", intent, intents, context.theme.fonts))
+            draft_->intent = static_cast<WS::StreamingSourceIntent>(intent);
+        static_cast<void>(
+            Ui::DrawColor3PropRow(label("workspace.world_sources.color"), "##source_color", draft_->debugColor, context.theme.fonts));
+    }
+
+    /** @copydoc WorldSourceViewportTool::DrawSourceList */
+    void WorldSourceViewportTool::DrawSourceList(const EditorWorkspaceViewModel &view) {
+        const auto fence = view.worldViewport.snapshot->fence;
+        for (const auto &source : view.worldViewport.snapshot->document.sources) {
+            const std::string name = std::to_string(source.id.Value());
+            if (Ui::Button({.label = name.c_str(), .variant = Ui::ButtonVariant::Secondary})) {
+                draft_ = source;
+                previewError_.reset();
+                fence_ = fence;
+                origin_ = view.worldViewport.globalOrigin;
+                viewRevision_ = view.worldViewport.viewRevision;
+                dragged_.reset();
+            }
+        }
     }
 
     /** @copydoc WorldSourceViewportTool::DrawPopup */
@@ -125,36 +179,13 @@ namespace Horo::Editor {
                 const auto source = DefaultSource(shape, view.worldViewport.globalOrigin);
                 if (source.HasValue())
                     Emit(command, WorldSourceToolAction::Create, fence, view.worldViewport, source.Value());
+                else
+                    previewError_ = source.ErrorValue();
             }
         }
-        for (const auto &source : view.worldViewport.snapshot->document.sources) {
-            const std::string name = std::to_string(source.id.Value());
-            if (Ui::Button({.label = name.c_str(), .variant = Ui::ButtonVariant::Secondary})) {
-                draft_ = source;
-                fence_ = fence;
-                origin_ = view.worldViewport.globalOrigin;
-                viewRevision_ = view.worldViewport.viewRevision;
-                dragged_.reset();
-            }
-        }
+        DrawSourceList(view);
         if (draft_) {
-            float priority = draft_->priority.Value();
-            static_cast<void>(
-                Ui::DrawFloatPropRow(label("workspace.world_sources.priority"), "##source_priority", priority, context.theme.fonts));
-            if (const auto value = WS::StreamingSourcePriority::Create(priority); value.HasValue())
-                draft_->priority = value.Value();
-            int target = static_cast<int>(draft_->target);
-            const std::array<const char *, 3> targets{label("workspace.world_sources.unloaded"), label("workspace.world_sources.loaded"),
-                                                      label("workspace.world_sources.activated")};
-            if (Ui::DrawComboPropRow(label("workspace.world_sources.target"), "##source_target", target, targets, context.theme.fonts))
-                draft_->target = static_cast<WS::StreamingDesiredResidency>(target);
-            int intent = static_cast<int>(draft_->intent);
-            const std::array<const char *, 4> intents{label("workspace.world_sources.camera"), label("workspace.world_sources.gameplay"),
-                                                      label("workspace.world_sources.network"), label("workspace.world_sources.preload")};
-            if (Ui::DrawComboPropRow(label("workspace.world_sources.intent"), "##source_intent", intent, intents, context.theme.fonts))
-                draft_->intent = static_cast<WS::StreamingSourceIntent>(intent);
-            static_cast<void>(
-                Ui::DrawColor3PropRow(label("workspace.world_sources.color"), "##source_color", draft_->debugColor, context.theme.fonts));
+            DrawSourceProperties(context);
             if (Ui::Button({.label = label("workspace.world_sources.apply")}))
                 Emit(command, WorldSourceToolAction::Edit, fence_, view.worldViewport, draft_);
             if (Ui::Button({.label = label("workspace.world_sources.remove"), .variant = Ui::ButtonVariant::Secondary}))
@@ -167,8 +198,9 @@ namespace Horo::Editor {
         if (Ui::Button({.label = label("workspace.world_sources.redo"), .variant = Ui::ButtonVariant::Secondary}))
             Emit(command, WorldSourceToolAction::Redo, fence, view.worldViewport);
         ImGui::EndDisabled();
-        if (view.worldSourceError)
-            ImGui::TextWrapped("%s: %s", label("workspace.world_sources.rejected"), view.worldSourceError->code.Value().c_str());
+        const auto &error = previewError_ ? previewError_ : view.worldSourceError;
+        if (error)
+            ImGui::TextWrapped("%s: %s", label("workspace.world_sources.rejected"), error->code.Value().c_str());
     }
 
     /** @copydoc WorldSourceViewportTool::Draw */
@@ -198,6 +230,96 @@ namespace Horo::Editor {
         return popup || toolbarHovered || handles;
     }
 
+    /** @copydoc WorldSourceViewportTool::BeginDrag */
+    void WorldSourceViewportTool::BeginDrag(const Frame &frame, const PartitionedWorldSource &source, std::size_t handle, Point global,
+                                            Math::Vec3 local) {
+        const auto normal = Math::TryNormalize(frame.view.viewportCamera.target - frame.view.viewportCamera.position);
+        if (normal.HasError())
+            return;
+        const auto intersection = PointerPoint(frame.origin, frame.size, frame.view.viewportCamera, frame.depth, normal.Value(), local);
+        if (!intersection)
+            return;
+        draft_ = source;
+        fence_ = frame.view.worldViewport.snapshot->fence;
+        origin_ = frame.view.worldViewport.globalOrigin;
+        viewRevision_ = frame.view.worldViewport.viewRevision;
+        dragged_ = handle;
+        previewError_.reset();
+        dragStart_ = global;
+        dragPlanePoint_ = local;
+        dragNormal_ = normal.Value();
+        dragIntersection_ = *intersection;
+    }
+
+    /** @copydoc WorldSourceViewportTool::DrawSourceHandles */
+    void WorldSourceViewportTool::DrawSourceHandles(const Frame &frame, const PartitionedWorldSource &authored) {
+        const auto &source = draft_ && draft_->id == authored.id ? *draft_ : authored;
+        const auto points = WorldSourceGizmoPoints(source);
+        if (points.HasError())
+            return;
+        const auto color = ImGui::ColorConvertFloat4ToU32({source.debugColor[0], source.debugColor[1], source.debugColor[2], 1});
+        std::optional<ImVec2> previous;
+        for (std::size_t handle = 0; handle < points.Value().Points().size(); ++handle) {
+            if (!FitsViewportWindow(points.Value().Points()[handle], frame.view.worldViewport.globalOrigin))
+                continue;
+            const auto local = WorldSourceViewportPoint(points.Value().Points()[handle], frame.view.worldViewport.globalOrigin);
+            if (local.HasError())
+                continue;
+            const auto projected =
+                ProjectEditorViewportPoint(frame.view.viewportCamera, local.Value(), frame.size.x / frame.size.y, frame.depth);
+            if (projected.HasError() || !projected.Value())
+                continue;
+            const auto normalized = projected.Value()->viewportPosition;
+            const ImVec2 pixel{frame.origin.x + normalized.x * frame.size.x, frame.origin.y + normalized.y * frame.size.y};
+            if (previous)
+                frame.draw.AddLine(*previous, pixel, color);
+            previous = pixel;
+            const ImVec2 mouse = ImGui::GetMousePos();
+            const float dx = mouse.x - pixel.x;
+            const float dy = mouse.y - pixel.y;
+            const bool hovered = dx * dx + dy * dy <= 64;
+            frame.draw.AddCircleFilled(pixel, hovered ? 6 : 4, color);
+            if (frame.eligible && hovered && !dragged_ && (!draft_ || draft_->id == authored.id) &&
+                ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                BeginDrag(frame, authored, handle, points.Value().Points()[handle], local.Value());
+        }
+    }
+
+    /** @copydoc WorldSourceViewportTool::UpdateDrag */
+    bool WorldSourceViewportTool::UpdateDrag(const Frame &frame, EditorWorkspaceViewCommandData &command) {
+        if (!dragged_ || !draft_)
+            return false;
+        if (!frame.eligible) {
+            Cancel();
+            return true;
+        }
+        const auto pointer = PointerPoint(frame.origin, frame.size, frame.view.viewportCamera, frame.depth, dragNormal_, dragPlanePoint_);
+        if (pointer) {
+            const auto position = WorldSourceViewportGlobal(dragStart_, *pointer - dragIntersection_);
+            if (position.HasValue()) {
+                const auto value = MoveWorldSourceGizmo(*draft_, *dragged_, position.Value());
+                previewError_ = value.HasError() ? std::optional<Error>{value.ErrorValue()} : std::nullopt;
+                if (value.HasValue())
+                    draft_ = value.Value();
+            } else {
+                previewError_ = position.ErrorValue();
+            }
+        } else {
+            previewError_ = MakeError(WorldDocumentErrors::Invalid);
+        }
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+            if (!previewError_) {
+                Emit(command, WorldSourceToolAction::Edit, fence_, frame.view.worldViewport, draft_);
+                dragged_.reset();
+            } else {
+                const auto error = previewError_;
+                Cancel();
+                previewError_ = error;
+            }
+        }
+        return true;
+    }
+
     /** @copydoc WorldSourceViewportTool::DrawHandles */
     bool WorldSourceViewportTool::DrawHandles(ImDrawList &draw, ImVec2 origin, ImVec2 size, const EditorWorkspaceViewModel &view,
                                               EditorWorkspaceViewCommandData &command, Math::ClipDepthRange depth, bool eligible) {
@@ -206,70 +328,11 @@ namespace Horo::Editor {
             Cancel();
             return hadDrag;
         }
+        const Frame frame{draw, origin, size, view, depth, eligible};
         draw.PushClipRect(origin, {origin.x + size.x, origin.y + size.y}, true);
-        for (const auto &authored : view.worldViewport.snapshot->document.sources) {
-            const auto &source = draft_ && draft_->id == authored.id ? *draft_ : authored;
-            const auto points = WorldSourceGizmoPoints(source);
-            if (points.HasError())
-                continue;
-            const auto color = ImGui::ColorConvertFloat4ToU32({source.debugColor[0], source.debugColor[1], source.debugColor[2], 1});
-            std::optional<ImVec2> previous;
-            for (std::size_t handle = 0; handle < points.Value().size(); ++handle) {
-                const auto local = WorldSourceViewportPoint(points.Value()[handle], view.worldViewport.globalOrigin);
-                if (local.HasError())
-                    continue;
-                const auto projected = ProjectEditorViewportPoint(view.viewportCamera, local.Value(), size.x / size.y, depth);
-                if (projected.HasError() || !projected.Value())
-                    continue;
-                const auto normalized = projected.Value()->viewportPosition;
-                const ImVec2 pixel{origin.x + normalized.x * size.x, origin.y + normalized.y * size.y};
-                if (previous)
-                    draw.AddLine(*previous, pixel, color);
-                previous = pixel;
-                const ImVec2 mouse = ImGui::GetMousePos();
-                const float dx = mouse.x - pixel.x;
-                const float dy = mouse.y - pixel.y;
-                const bool hovered = dx * dx + dy * dy <= 64;
-                draw.AddCircleFilled(pixel, hovered ? 6 : 4, color);
-                if (eligible && hovered && !dragged_ && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                    const auto normal = Math::TryNormalize(view.viewportCamera.target - view.viewportCamera.position);
-                    if (normal.HasError())
-                        continue;
-                    const auto intersection = PointerPoint(origin, size, view.viewportCamera, depth, normal.Value(), local.Value());
-                    if (!intersection)
-                        continue;
-                    draft_ = authored;
-                    fence_ = view.worldViewport.snapshot->fence;
-                    origin_ = view.worldViewport.globalOrigin;
-                    viewRevision_ = view.worldViewport.viewRevision;
-                    dragged_ = handle;
-                    dragStart_ = points.Value()[handle];
-                    dragPlanePoint_ = local.Value();
-                    dragNormal_ = normal.Value();
-                    dragIntersection_ = *intersection;
-                }
-            }
-        }
+        for (const auto &source : view.worldViewport.snapshot->document.sources)
+            DrawSourceHandles(frame, source);
         draw.PopClipRect();
-        if (!dragged_ || !draft_)
-            return false;
-        if (!eligible) {
-            Cancel();
-            return true;
-        }
-        const auto pointer = PointerPoint(origin, size, view.viewportCamera, depth, dragNormal_, dragPlanePoint_);
-        if (pointer) {
-            const auto position = WorldSourceViewportGlobal(dragStart_, *pointer - dragIntersection_);
-            if (position.HasValue()) {
-                const auto value = MoveWorldSourceGizmo(*draft_, *dragged_, position.Value());
-                if (value.HasValue())
-                    draft_ = value.Value();
-            }
-        }
-        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-            Emit(command, WorldSourceToolAction::Edit, fence_, view.worldViewport, draft_);
-            dragged_.reset();
-        }
-        return true;
+        return UpdateDrag(frame, command);
     }
 }  // namespace Horo::Editor

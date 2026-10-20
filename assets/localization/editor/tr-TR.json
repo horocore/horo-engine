@@ -3048,6 +3048,27 @@
     },
     "settings.navigation.override_cost": {
       "text": "Geçersiz kılınan geçiş maliyeti"
-    }
+    },
+    "workspace.world_layers.title": {"text": "Katmanlar"},
+    "workspace.world_layers.create": {"text": "Katman oluştur"},
+    "workspace.world_layers.undo": {"text": "Katman komutunu geri al"},
+    "workspace.world_layers.redo": {"text": "Katman komutunu yinele"},
+    "workspace.world_layers.filter": {"text": "Katmanları filtrele"},
+    "workspace.world_layers.all_owners": {"text": "Tüm sahipler"},
+    "workspace.world_layers.streaming": {"text": "Dünya akışı"},
+    "workspace.world_layers.gameplay": {"text": "Oynanış betiği"},
+    "workspace.world_layers.network": {"text": "Ağ çoğaltması"},
+    "workspace.world_layers.current": {"text": "Geçerli düzenleme katmanı"},
+    "workspace.world_layers.set_current": {"text": "Geçerli katman yap"},
+    "workspace.world_layers.clear_current": {"text": "Geçerli katmanı temizle"},
+    "workspace.world_layers.move_up": {"text": "Yukarı taşı"},
+    "workspace.world_layers.move_down": {"text": "Aşağı taşı"},
+    "workspace.world_layers.empty": {"text": "Bu filtreyle eşleşen katman yok."},
+    "workspace.world_layers.current_hidden": {"text": "Geçerli düzenleme katmanı filtre tarafından gizlendi."},
+    "workspace.world_layers.name": {"text": "Katman adı"},
+    "workspace.world_layers.name_hint": {"text": "Boş olmayan bir katman adı girin."},
+    "workspace.world_layers.cancel": {"text": "İptal"},
+    "workspace.world_layers.stale": {"text": "Dünya değişti veya kapatıldı. İptal edip bu iletişim kutusunu yeniden açın."},
+    "workspace.world_layers.rejected": {"text": "Katman oluşturma reddedildi. Adı ve belge sınırlarını kontrol edin."}
   }
 }

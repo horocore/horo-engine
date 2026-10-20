@@ -80,4 +80,34 @@ namespace {
         CHECK(controller.ViewModel().worldSourceError->code.Value() == "world_document.lifecycle");
         CHECK(root->document.sources.empty());
     }
+
+    TEST_CASE("Actual controller world owner binding rejects implicit replacement and malformed edits",
+              "[editor][world_document][viewport]") {
+        Runtime::RuntimeSceneService runtime;
+        EditorWorkspaceController controller{"test-project", runtime, {}, {.documentSessionOwner = Owner()}};
+        auto &canonical = controller.WorldDocuments();
+        auto root = canonical.Open(Document()).Value();
+        const WorldViewportBinding binding{root, {}, 1};
+        REQUIRE(controller.SetWorldViewportBinding(canonical, binding).HasValue());
+        controller.ProcessCommand(Create(binding));
+        REQUIRE(controller.HasDirtyWorldDocuments());
+        root = canonical.Snapshot().Value();
+        auto malformed = Create({root, {}, 1});
+        malformed.worldSource->action = WorldSourceToolAction::Edit;
+        malformed.worldSource->edit.source = root->document.sources[0].id;
+        malformed.worldSource->edit.value.reset();
+        controller.ProcessCommand(malformed);
+        CHECK(controller.ViewModel().worldSourceError->code.Value() == "world_document.invalid");
+        CHECK(canonical.Snapshot().Value() == root);
+        const auto replacement = canonical.Replace(Document(), root->fence, WorldDocumentDisposition::Discard).Value();
+        controller.RefreshWorldSourceProjection();
+        CHECK_FALSE(controller.ViewModel().worldViewport.snapshot);
+        CHECK(controller.SetWorldViewportBinding(canonical, {replacement, {}, 1}).HasError());
+        controller.ProcessCommand(Create({replacement, {}, 1}));
+        CHECK(controller.ViewModel().worldSourceError->code.Value() == "world_document.lifecycle");
+        REQUIRE(controller.SetWorldViewportBinding(canonical, {replacement, {}, 2}).HasValue());
+        controller.ProcessCommand(Create({replacement, {}, 2}));
+        CHECK(canonical.Snapshot().Value()->document.sources.size() == 1);
+    }
+
 }  // namespace
