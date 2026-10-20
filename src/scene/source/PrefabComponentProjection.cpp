@@ -176,7 +176,7 @@ namespace Horo::SceneSource {
             return Return::Failure(MakeError(Prefab::PrefabErrors::ComponentTypeUnregistered));
         auto encoded = Detail::ComponentsJson(components);
         const auto field = std::string(Field(kind));
-        const auto &fields = encoded.get_ref<const Detail::WireJson::object_t &>();
+        const auto &fields = encoded.get_ref<Detail::WireJson::object_t &>();
         const auto selected = std::ranges::find(fields, field, &Detail::WireJson::object_t::value_type::first);
         if (selected == fields.end())
             return Return::Failure(MakeError(Prefab::PrefabErrors::CorruptedPayload));
