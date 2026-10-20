@@ -25,6 +25,9 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {
             CancelAssetPlacementPreview();
         }
+        if (cmd.command != EditorWorkspaceViewCommand::None && cmd.command != EditorWorkspaceViewCommand::EditPCGGraph)
+            for (auto &document : m_viewModel.pcgDocuments)
+                CancelPCGCanvasGesture(document.canvas);
         DispatchWorkspaceCommand(cmd);
         RefreshSourceDocumentProjection();
     }
@@ -32,10 +35,10 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
         static_cast<void>(ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
-                          ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
-                          ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
-                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
-                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+                          ProcessSourceDocumentCommand(cmd) || ProcessPCGDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
+                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
+                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
+                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

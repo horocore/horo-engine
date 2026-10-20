@@ -84,6 +84,7 @@ namespace Horo::Editor {
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
         PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        std::vector<PCGPaletteEntry> pcgPalette;           /**< Host-owned recipes matching pcgCatalog; copied into workspace. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -634,6 +635,8 @@ namespace Horo::Editor {
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
         /** @brief Admits a sequence source into the persistent workspace document host. */
         void OpenEmbeddedPCGSource(const SourceOpenResult &result);
+        /** @brief Routes exact-frame canvas intents through canonical document commands. */
+        bool ProcessPCGDocumentCommand(const EditorWorkspaceViewCommandData &command);
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
         void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);

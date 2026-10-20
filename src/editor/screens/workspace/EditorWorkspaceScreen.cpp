@@ -662,6 +662,10 @@ namespace Horo::Editor {
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
+                auto pcgComposition = CreatePCGEditorCatalog();
+                if (pcgComposition.HasError())
+                    return Result<void>::Failure(pcgComposition.ErrorValue());
+                auto pcgCatalog = std::move(pcgComposition).Value();
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -687,6 +691,8 @@ namespace Horo::Editor {
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                                   .pcgCatalog = std::move(pcgCatalog.document),
+                                                   .pcgPalette = std::move(pcgCatalog.palette),
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
