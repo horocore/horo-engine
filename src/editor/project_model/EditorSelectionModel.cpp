@@ -50,6 +50,17 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorSelectionModel::SetWorldObjects */
+    Result<PartitionedWorldSnapshotLease> EditorSelectionModel::SetWorldObjects(
+        PartitionedWorldWorkspace &world, const std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
+        const std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, const WorldDocumentFence expected,
+        const std::stop_token cancellation) {
+        auto result = world.SetSelection(objects, primary, expected, cancellation);
+        if (result.HasValue() && result.Value()->fence != expected)
+            events_->Publish(WorldSelectionChangedEvent{result.Value()->fence});
+        return result;
+    }
+
     /** @copydoc EditorSelectionModel::Reconcile */
     void EditorSelectionModel::Reconcile() {
         const std::size_t previousSize = current_.objects.size();

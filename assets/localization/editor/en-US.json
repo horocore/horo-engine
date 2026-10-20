@@ -2976,6 +2976,27 @@
     },
     "settings.navigation.override_cost": {
       "text": "Overridden traversal cost"
-    }
+    },
+    "workspace.world_layers.title": {"text": "Layers"},
+    "workspace.world_layers.create": {"text": "Create layer"},
+    "workspace.world_layers.undo": {"text": "Undo layer command"},
+    "workspace.world_layers.redo": {"text": "Redo layer command"},
+    "workspace.world_layers.filter": {"text": "Filter layers"},
+    "workspace.world_layers.all_owners": {"text": "All owners"},
+    "workspace.world_layers.streaming": {"text": "World streaming"},
+    "workspace.world_layers.gameplay": {"text": "Gameplay script"},
+    "workspace.world_layers.network": {"text": "Network replication"},
+    "workspace.world_layers.current": {"text": "Current authoring layer"},
+    "workspace.world_layers.set_current": {"text": "Make current"},
+    "workspace.world_layers.clear_current": {"text": "Clear current layer"},
+    "workspace.world_layers.move_up": {"text": "Move up"},
+    "workspace.world_layers.move_down": {"text": "Move down"},
+    "workspace.world_layers.empty": {"text": "No layers match this filter."},
+    "workspace.world_layers.current_hidden": {"text": "The current authoring layer is hidden by the filter."},
+    "workspace.world_layers.name": {"text": "Layer name"},
+    "workspace.world_layers.name_hint": {"text": "Enter a non-empty layer name."},
+    "workspace.world_layers.cancel": {"text": "Cancel"},
+    "workspace.world_layers.stale": {"text": "The world changed or closed. Cancel and reopen this dialog."},
+    "workspace.world_layers.rejected": {"text": "Layer creation was rejected. Check the name and document limits."}
   }
 }

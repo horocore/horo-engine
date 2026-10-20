@@ -6,6 +6,7 @@
  */
 
 #include "Horo/Editor/EditorDataBus.h"
+#include "Horo/Editor/PartitionedWorldWorkspace.h"
 #include "Horo/Foundation/Result.h"
 #include "editor/document/SceneDocument.h"
 
@@ -42,6 +43,12 @@ namespace Horo::Editor {
         SelectionChangeKind kind{SelectionChangeKind::ObjectsChanged};
     };
 
+    /** @brief Post-commit notification for the page-aware document selection authority. */
+    struct WorldSelectionChangedEvent final {
+        static constexpr auto HoroEventTypeName = "WorldSelectionChangedEvent";
+        WorldDocumentFence fence;
+    };
+
     /** @brief Owns and validates editor-session scene-object selection. */
     class EditorSelectionModel final {
     public:
@@ -62,6 +69,15 @@ namespace Horo::Editor {
          * @return Success, or a typed validation error without changing selection.
          */
         [[nodiscard]] Result<void> SetObjects(const std::vector<SceneObjectId> &objects, std::optional<SceneObjectId> primary);
+
+        /** @brief Routes partitioned selection to its page/payload owner; does not duplicate page-scoped state in this adapter.
+         * @param world Actual workspace document authority. @param objects Distinct authored page-scoped addresses.
+         * @param primary Optional selected member. @param expected Exact world publication. @param cancellation Cancellation fence.
+         * @return Atomic document/selection lease or typed failure; notification follows successful changed publication only. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetWorldObjects(
+            PartitionedWorldWorkspace &world, std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
+            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected,
+            std::stop_token cancellation = {});
 
         /** @brief Removes identities no longer present in the authoritative document. */
         void Reconcile();

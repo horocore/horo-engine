@@ -112,6 +112,25 @@ namespace Horo::Editor {
         return published;
     }
 
+    /** @copydoc PartitionedWorldWorkspace::CreateLayer */
+    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::CreateLayer(std::string name, const WorldDocumentFence expected,
+                                                                                 const std::stop_token cancellation) {
+        if (const auto valid = CheckFence(expected); valid.HasError())
+            return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
+        if (cancellation.stop_requested())
+            return Reject<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Cancelled);
+        // At most maximumLayers + 1 candidates are needed to find a free ID in this bounded document.
+        const auto &layers = snapshot_->document.layers;
+        for (std::size_t value = 0; value <= layers.size(); ++value) {
+            const auto id = WS::StreamingLayerId::Create(static_cast<std::uint16_t>(value)).Value();
+            if (std::ranges::none_of(layers, [&](const auto &layer) {
+                return layer.id == id;
+            }))
+                return ExecuteLayerCommand(CreateWorldLayer{{.id = id, .name = std::move(name)}, layers.size()}, expected, cancellation);
+        }
+        return Reject<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Capacity);
+    }
+
     /** @copydoc PartitionedWorldWorkspace::ReplayLayerCommand */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::ReplayLayerCommand(const bool redo, const WorldDocumentFence expected,
                                                                                         const std::stop_token cancellation) {
