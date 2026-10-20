@@ -1921,6 +1921,7 @@ target_link_libraries(HoroNavigationBakeService PUBLIC HoroEngine::NavigationRun
         PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroNavigationBakeAutomation STATIC
+        application/navigation/NavigationBakeApplication.cpp
         application/navigation/NavigationProjectBakeInput.cpp
         application/navigation/NavigationProjectBakeTileLayout.cpp
         application/navigation/NavigationProjectBakeSource.cpp
@@ -1936,6 +1937,7 @@ add_library(HoroEngine::NavigationBakeAutomation ALIAS HoroNavigationBakeAutomat
 target_compile_features(HoroNavigationBakeAutomation PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationBakeAutomation PUBLIC HoroEngine::ProjectSettings HoroEngine::SceneSource
         HoroEngine::Assets HoroEngine::ProjectReadFilesApi HoroEngine::NavigationApi HoroEngine::Physics
+        HoroEngine::NavigationBakeService
         PRIVATE HoroEngine::ProjectAssetRegistrySource)
 
 add_library(HoroXRApi STATIC

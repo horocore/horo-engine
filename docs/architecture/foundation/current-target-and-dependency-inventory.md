@@ -446,3 +446,14 @@ Physics, with private ProjectAssetRegistrySource composition. NavigationApi owns
 the neutral source-validation interface. The target has no editor, renderer or
 concrete provider dependency; hosts retain root authority explicitly. No existing
 caller or persisted format requires migration in this additive source layer.
+
+### Navigation shared command orchestration
+
+`HoroNavigationBakeAutomation` additionally owns `NavigationBakeApplication` and
+publicly depends on `HoroNavigationBakeService` for its typed configuration,
+operation and publication contract. This forward application edge is declared in
+`HoroDependencyPolicy.cmake`; BakeService has no dependency on Automation.
+Source capture uses the scheduler I/O lane before owner-lane service admission.
+Hosts inject concrete builders and retain source authority; no editor, CLI, MCP
+or concrete-provider dependency is added to Automation. Its public-header
+consumer validates the new additive API and transitive declared contracts.

@@ -1335,6 +1335,13 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_link_libraries(HoroNavigationSceneAgentLifecycleTests PRIVATE
             HoroEngine::NavigationSceneIntegration HoroEngine::NavigationRecastDetour HoroEngine::NavigationCrowdDetour)
     horo_register_catch_test(HoroNavigationSceneAgentLifecycleTests LABELS "unit;navigation;headless;scene;lifecycle;provider")
+    add_executable(HoroNavigationBakeApplicationTests unit/application/navigation/NavigationBakeApplicationTests.cpp)
+    target_compile_features(HoroNavigationBakeApplicationTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationBakeApplicationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationBakeApplicationTests PRIVATE Catch2::Catch2WithMain
+            HoroEngine::NavigationBakeAutomation HoroEngine::NavigationRecastDetour HoroEngine::PlatformProjectReadFiles)
+    horo_register_catch_test(HoroNavigationBakeApplicationTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage;native")
+
     add_executable(HoroNavigationProjectBakeInputNativeTests unit/application/navigation/NavigationProjectBakeInputNativeTests.cpp
         unit/application/navigation/NavigationProjectBakeSourceFenceTests.cpp)
     target_compile_features(HoroNavigationProjectBakeInputNativeTests PRIVATE cxx_std_20)
