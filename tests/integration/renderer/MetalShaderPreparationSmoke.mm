@@ -73,6 +73,16 @@ namespace Horo::Render::Detail {
                     CHECK(code == MetalBackendErrors::NotInitialized.code.Value());
                 }
                 const auto admitted = runtime->Initialize({}, {});
+                if (admitted.HasError() && admitted.ErrorValue().code.Value() == MetalBackendErrors::UnsupportedDeviceFamily.code.Value()) {
+                    REQUIRE(bridge.Device() == nullptr);
+                    REQUIRE(bridge.CommandQueue() == nullptr);
+                    REQUIRE(bridge.CurrentCommandBuffer() == nullptr);
+                    REQUIRE(port.Layer() == nullptr);
+                    for (const auto &code : PreparationFailureCodes(*runtime)) {
+                        REQUIRE(code == MetalBackendErrors::NotInitialized.code.Value());
+                    }
+                    SKIP("Native runtime lifecycle requires the Apple7 arm64 or Mac2 x86_64 baseline; " << admitted.ErrorValue().message);
+                }
                 INFO((admitted.HasError() ? admitted.ErrorValue().code.Value() + ": " + admitted.ErrorValue().message
                                           : "Native preparation runtime initialized."));
                 REQUIRE(admitted.HasValue());
