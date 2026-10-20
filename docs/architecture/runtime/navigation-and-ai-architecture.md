@@ -3127,3 +3127,34 @@ without the exact requested scope returns `NoNavigationData`. Existing Scene
 activation remains explicitly definition-local until its host supplies the exact
 persistent Scene identity; this change does not infer one from runtime handles.
 The public header is owned by NavigationApi; native/provider types remain private.
+
+### Validation-only and selected-surface bake service
+
+Every `NavigationBakeRequest` carries the complete authored scope-qualified surface
+catalog, including disabled or currently empty surfaces, plus the complete captured
+input/tile/source closure. Callers migrate by supplying `authoredSurfaces` from the
+same authored capture. The service never infers the catalog from surviving geometry.
+A present rebuild selection must be bounded, nonempty, unique and contained in that
+catalog. Selection controls builder admission, not capture or replacement coverage.
+
+The worker verifies all unselected current output before invoking any selected
+builder. Retained or durable prior publication cannot lose an unselected tile;
+verified cache reuse must match the current dependency identity. Missing, stale or
+removed unselected output reports `BakeSelectionIncomplete` without publication.
+An empty selected surface may remove its old topology; a complete empty replacement
+publishes HNS3 and never silently retains old tiles.
+
+`ValidateOnly` uses the existing structured job Validation operation and capture/
+validation stages. It verifies the same layout, source authority and unselected
+content without tile builds, cache writes, durable publication or a success receipt
+for a previous generation. BuildAndPublish remains the default execution mode.
+Mode, exact immutable source-validation owner, authored catalog and selection all
+participate in request joining. Diagnostics retain validation semantics and full
+Scene-qualified tile ownership in the explicitly versioned persisted record.
+
+File-backed hosts supply an owned `INavigationBakeSourceValidation`; in-memory
+callers remain protected by their explicit source authority. Workers verify that
+capture before gathering, at validate-only completion and under the final source
+publication lease before selector adoption. The service performs no filesystem
+source discovery during host admission or owner-thread polling. Cancellation,
+revocation and source changes preserve the last valid published generation.

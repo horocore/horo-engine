@@ -36,10 +36,12 @@ namespace Horo::Navigation::AssetTestSupport {
         auto created = Application::NavigationBakeService::Create(config, operations, bakeJobs);
         REQUIRE(created.HasValue());
         auto bake = std::move(created).Value();
-        REQUIRE(
-            bake->Submit(
-                    {.input = input.Input(), .compatibility = input.compatibility, .tiles = input.Tiles(), .sources = input.Observations()})
-                .HasValue());
+        REQUIRE(bake->Submit({.input = input.Input(),
+                              .compatibility = input.compatibility,
+                              .tiles = input.Tiles(),
+                              .sources = input.Observations(),
+                              .authoredSurfaces = input.SurfaceCatalog()})
+                    .HasValue());
         for (std::size_t iteration = 0; iteration < 5000 && !bake->Published(); ++iteration) {
             bake->Pump();
             std::this_thread::sleep_for(std::chrono::milliseconds{1});

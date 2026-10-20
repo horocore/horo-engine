@@ -24,16 +24,17 @@ namespace Horo::Application::NavigationBakeDetail {
                                                   .stage = std::string{Stage(snapshot.stage)},
                                                   .progress = static_cast<float>(snapshot.Progress())};
             using enum Navigation::NavigationBakeJobState;
+            const bool validation = snapshot.execution == Navigation::NavigationBakeExecutionMode::ValidateOnly;
             switch (snapshot.state) {
                 case Queued:
                 case Running:
                     record.event = NavigationBakeDiagnosticEvent::Progress;
-                    record.message = "Navigation bake in progress";
+                    record.message = validation ? "Navigation bake validation in progress" : "Navigation bake in progress";
                     break;
                 case Succeeded:
                     record.event = NavigationBakeDiagnosticEvent::Succeeded;
                     record.result = BuildOutputResult::Succeeded;
-                    record.message = "Navigation bake completed";
+                    record.message = validation ? "Navigation bake validation completed" : "Navigation bake completed";
                     break;
                 case Failed:
                     record.event = NavigationBakeDiagnosticEvent::StageFailed;

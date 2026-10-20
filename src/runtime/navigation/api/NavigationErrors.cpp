@@ -295,6 +295,15 @@ namespace Horo::Navigation::NavigationErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor BakeSelectionIncomplete{
+        .domain = NavigationDomain,
+        .code = ErrorCode{"navigation.bake.selection_incomplete"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "An unselected navigation surface has no current verified cooked output.",
+        .remediationHint = "Run a full-project bake or select every surface whose inputs have changed.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor BakeInputCapacityExceeded{
         .domain = NavigationDomain,
         .code = ErrorCode{"navigation.bake_input.capacity_exceeded"},

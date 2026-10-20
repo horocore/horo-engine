@@ -60,7 +60,8 @@ namespace Horo::Application {
                     .compatibility = fixture.compatibility,
                     .tiles = fixture.Tiles(),
                     .sources = fixture.Observations(),
-                    .diagnosticSources = {Source(fixture)}};
+                    .diagnosticSources = {Source(fixture)},
+                    .authoredSurfaces = fixture.SurfaceCatalog()};
         }
 
         [[nodiscard]] OperationRecord AwaitTerminal(NavigationBakeService &service, const OperationStore &operations,

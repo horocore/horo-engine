@@ -27,11 +27,44 @@ namespace Horo::Application {
                    config.maximumCandidateBytes <= NavMeshArtifactLimits::MaximumOwnedBytes;
         }
 
+        /** @brief Preserves empty authored surfaces without accepting tiles outside the complete catalog. */
+        bool ValidAuthoredSurfaces(const NavigationBakeRequest &request) {
+            const auto &catalog = request.authoredSurfaces;
+            return std::ranges::adjacent_find(catalog) == catalog.end() && std::ranges::all_of(catalog, [](const auto key) {
+                return key.surface.IsValid();
+            }) && std::ranges::all_of(request.tiles, [&catalog](const auto &tile) {
+                return std::ranges::binary_search(catalog, NavigationBakeSurfaceKey{tile.key.surface, tile.key.scope});
+            });
+        }
+
+        /** @brief Requires a bounded exact selection while retaining the complete definition input and tile closure. */
+        [[nodiscard]] bool ValidRebuildSelection(const NavigationBakeRequest &request) {
+            if (!request.rebuildSurfaces)
+                return true;
+            const auto &surfaces = *request.rebuildSurfaces;
+            return !surfaces.empty() && surfaces.size() <= request.authoredSurfaces.size() &&
+                   std::ranges::adjacent_find(surfaces) == surfaces.end() && std::ranges::all_of(surfaces, [&request](const auto surface) {
+                return std::ranges::binary_search(request.authoredSurfaces, surface);
+            });
+        }
+
+        /** @brief Requires complete semantic compatibility even when no tile preparation will run. */
+        bool ValidCompatibility(const NavigationTileBakeCompatibility &compatibility) noexcept {
+            const auto present = [](const Sha256Digest &digest) {
+                return std::ranges::any_of(digest.bytes, [](const auto byte) {
+                    return byte != 0;
+                });
+            };
+            return present(compatibility.provider) && present(compatibility.schemas) && present(compatibility.settings);
+        }
+
         /** @brief Validates complete sorted tile coverage and immutable capture freshness before admission. */
         [[nodiscard]] Result<void> ValidateRequest(const NavigationBakeRequest &request, const std::size_t maximumTiles) {
-            if (!request.input || request.tiles.empty() || request.tiles.size() > maximumTiles ||
+            if (!request.input || (request.tiles.empty() != request.input->Partitions().empty()) || request.tiles.size() > maximumTiles ||
+                !ValidCompatibility(request.compatibility) || request.execution >= NavigationBakeExecutionMode::Count ||
                 !std::ranges::is_sorted(request.tiles, {}, &NavigationBakeTile::key) ||
-                std::ranges::adjacent_find(request.tiles, {}, &NavigationBakeTile::key) != request.tiles.end())
+                std::ranges::adjacent_find(request.tiles, {}, &NavigationBakeTile::key) != request.tiles.end() ||
+                !ValidAuthoredSurfaces(request) || !ValidRebuildSelection(request))
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
             if (request.projectProfile && request.projectProfile->Revision() != request.input->Revisions().projectProfile)
                 return Result<void>::Failure(MakeError(NavigationErrors::StaleSnapshot));
@@ -44,7 +77,8 @@ namespace Horo::Application {
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
             if (!std::ranges::all_of(request.input->Partitions(), [&request](const auto &partition) {
                 return std::ranges::any_of(request.tiles, [&partition](const auto &tile) {
-                    return tile.key.surface == partition.surface && tile.key.profile == partition.profile;
+                    return tile.key.scope == partition.scope && tile.key.surface == partition.surface &&
+                           tile.key.profile == partition.profile;
                 });
             }))
                 return Result<void>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
@@ -64,7 +98,9 @@ namespace Horo::Application {
         [[nodiscard]] bool IdenticalRequest(const std::shared_ptr<Attempt> &existing, const NavigationBakeRequest &request) {
             if (!existing || existing->cancellation->Token().IsCancellationRequested() ||
                 existing->request.input->Fingerprint() != request.input->Fingerprint() ||
-                existing->request.compatibility != request.compatibility ||
+                existing->request.compatibility != request.compatibility || existing->request.rebuildSurfaces != request.rebuildSurfaces ||
+                existing->request.sourceValidation != request.sourceValidation || existing->request.execution != request.execution ||
+                existing->request.authoredSurfaces != request.authoredSurfaces ||
                 !SameProjectProfile(existing->request.projectProfile, request.projectProfile) ||
                 existing->request.sources != request.sources || existing->request.diagnosticSources != request.diagnosticSources ||
                 existing->request.tiles.size() != request.tiles.size())
@@ -127,8 +163,12 @@ namespace Horo::Application {
 
     /** @copydoc NavigationBakeService::Submit */
     Result<OperationId> NavigationBakeService::Submit(NavigationBakeRequest request) {
-        if (closed_ || nextGeneration_ >= Adopted)
+        if (closed_ || nextGeneration_ >= Adopted || request.authoredSurfaces.size() > NavigationBakeInputLimits::MaximumSurfaceBindings ||
+            (request.rebuildSurfaces && request.rebuildSurfaces->size() > NavigationBakeInputLimits::MaximumSurfaceBindings))
             return Result<OperationId>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        std::ranges::sort(request.authoredSurfaces);
+        if (request.rebuildSurfaces)
+            std::ranges::sort(*request.rebuildSurfaces);
         if (const auto valid = ValidateRequest(request, state_->config.maximumTiles); valid.HasError())
             return Result<OperationId>::Failure(valid.ErrorValue());
         // Admission never waits on a background pointer adoption. Keep this guard until desired-generation mutation.
@@ -143,8 +183,9 @@ namespace Horo::Application {
         auto attempt = std::make_shared<Attempt>();
         attempt->request = std::move(request);
         attempt->cancellation = std::make_shared<CancellationSource>(attempt->request.cancellation);
-        const auto id = operations_.Begin({.kind = OperationKind::Cook,
-                                           .title = "Incremental navigation bake",
+        const bool validation = attempt->request.execution == NavigationBakeExecutionMode::ValidateOnly;
+        const auto id = operations_.Begin({.kind = validation ? OperationKind::Validation : OperationKind::Cook,
+                                           .title = validation ? "Validate navigation bake" : "Incremental navigation bake",
                                            .phase = "queued",
                                            .progress = 0.0F,
                                            .cancellable = true,

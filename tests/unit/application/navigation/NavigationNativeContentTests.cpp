@@ -9,7 +9,7 @@
 
 #include <atomic>
 #include <cstdlib>
-#include <iomanip>
+#include <format>
 #include <thread>
 
 namespace Horo::Application {
@@ -23,14 +23,18 @@ namespace Horo::Application {
 
             Result<Navigation::NavigationTileBuildResult> BuildTile(const Navigation::NavigationTileBuildRequest &request,
                                                                     const CancellationToken &cancellation) const override {
-                calls.fetch_add(1);
+                calls_.fetch_add(1);
                 return native_->BuildTile(request, cancellation);
             }
 
-            mutable std::atomic<std::size_t> calls{};
+            /** @brief Reports native builder invocations. @return Atomically observed call count. */
+            [[nodiscard]] std::size_t Calls() const noexcept {
+                return calls_.load();
+            }
 
         private:
             std::unique_ptr<Navigation::INavigationMeshBuilder> native_;
+            mutable std::atomic<std::size_t> calls_{};
         };
 
         [[nodiscard]] AssetCookTargetId PackageTarget() {
@@ -79,7 +83,8 @@ namespace Horo::Application {
                                                     .compatibility = input.compatibility,
                                                     .tiles = input.Tiles(),
                                                     .sources = input.Observations(),
-                                                    .projectProfile = Policy()});
+                                                    .projectProfile = Policy(),
+                                                    .authoredSurfaces = input.SurfaceCatalog()});
             INFO((submitted.HasError() ? submitted.ErrorValue().code.Value() : std::string_view{}));
             REQUIRE(submitted.HasValue());
             for (std::size_t iteration = 0; iteration < 5000 && !service->Published(); ++iteration) {
@@ -87,7 +92,7 @@ namespace Horo::Application {
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
             REQUIRE(service->Published());
-            REQUIRE(builder->calls.load() > 0);
+            REQUIRE(builder->Calls() > 0);
             return service->Published()->generation;
         }
 
@@ -127,7 +132,7 @@ namespace Horo::Application {
             for (std::size_t index = 0; index < bytes.size(); ++index) {
                 if (index % 16 == 0)
                     output << "    ";
-                output << "0x" << std::hex << std::setfill('0') << std::setw(2) << static_cast<unsigned int>(bytes[index]) << ",";
+                output << std::format("0x{:02x},", static_cast<unsigned int>(bytes[index]));
                 output << (index % 16 == 15 ? "\n" : " ");
             }
             output << "\n};\n}\n";
@@ -139,10 +144,11 @@ namespace Horo::Application {
         void RequireNativeActivation(const AdmittedNavigationReleaseContent &content) {
             using namespace Navigation::AssetTestSupport;
             SceneHarness harness{content, PackageTarget(), Asset(), NativeFactory};
-            auto *navigation = harness.navigation;
-            auto definition = Definition(1, 1, {}, true, Navigation::TestSupport::Id<Navigation::SurfaceId>(1),
-                                         Navigation::TestSupport::Id<Navigation::NavigationAgentProfileId>(1));
-            REQUIRE_FALSE(harness.Activate(std::move(definition)).has_value());
+            const auto *navigation = harness.navigation;
+            REQUIRE_FALSE(harness
+                              .Activate(Definition(1, 1, {}, true, Navigation::TestSupport::Id<Navigation::SurfaceId>(1),
+                                                   Navigation::TestSupport::Id<Navigation::NavigationAgentProfileId>(1)))
+                              .has_value());
             const auto lease = navigation->Acquire();
             REQUIRE(lease.HasValue());
             const auto path = lease.Value().Backend().FindPath(PathRequest(lease.Value()), lease.Value().Cancellation());
@@ -168,7 +174,7 @@ namespace Horo::Application {
         Directory directory;
         const auto builder = Builder();
         const auto generation = Bake(directory.root, builder);
-        const auto built = builder->calls.load();
+        const auto built = builder->Calls();
         const auto audio = CookSharedAudio(directory.root / "audio", PackageTarget());
         const auto mixed = PublishMixed(directory.root / "mixed", generation, audio);
         CapturePortableFixture(generation);
@@ -202,7 +208,7 @@ namespace Horo::Application {
             REQUIRE(admitted.HasValue());
             RequireSharedAudio(admitted.Value().provider, PackageTarget());
             RequireNativeActivation(admitted.Value());
-            REQUIRE(builder->calls.load() == built);
+            REQUIRE(builder->Calls() == built);
         }
     }
 }  // namespace Horo::Application
