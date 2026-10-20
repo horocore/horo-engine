@@ -83,6 +83,10 @@ namespace {
             return Step(state_, kind == D3D12QueueKind::Direct ? "direct" : kind == D3D12QueueKind::Compute ? "compute" : "copy");
         }
 
+        Result<void> InitializeResources(const D3D12ResourceLimits &) override {
+            return Step(state_, "resources");
+        }
+
         void Release() noexcept override {
             state_.calls.emplace_back("release");
             state_.liveObjects = 0;
@@ -102,7 +106,8 @@ TEST_CASE("D3D12 startup owns exact device queues and closes admission", "[rende
     REQUIRE(result.HasValue());
     CHECK(result.Value() == state.adapters.front().id);
     CHECK(state.debug);
-    CHECK(state.calls == std::vector<std::string>{"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy"});
+    CHECK(state.calls ==
+          std::vector<std::string>{"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy", "resources"});
     CHECK(session.Initialize(host, {}).HasError());
     REQUIRE(session.Shutdown().HasValue());
     CHECK(state.liveObjects == 0);
@@ -111,7 +116,7 @@ TEST_CASE("D3D12 startup owns exact device queues and closes admission", "[rende
 }
 
 TEST_CASE("D3D12 failed stages preserve native causes and release partial state", "[renderer][d3d12]") {
-    for (const std::string stage : {"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy"}) {
+    for (const std::string stage : {"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy", "resources"}) {
         INFO(stage);
         State state;
         state.failure = stage;
@@ -209,8 +214,8 @@ TEST_CASE("D3D12 default order qualifies required features but exact selection n
         auto result = session.Initialize(host, {});
         REQUIRE(result.HasValue());
         CHECK(result.Value() == state.adapters.back().id);
-        CHECK(state.calls ==
-              std::vector<std::string>{"verify", "open", "enumerate", "driver", "unsupported-device", "driver", "device", "direct"});
+        CHECK(state.calls == std::vector<std::string>{"verify", "open", "enumerate", "driver", "unsupported-device", "driver", "device",
+                                                      "direct", "resources"});
     }
     SECTION("explicit baseline rejection is preserved") {
         auto result = session.Initialize(host, {.adapter = state.adapters.front().id});
@@ -222,7 +227,7 @@ TEST_CASE("D3D12 default order qualifies required features but exact selection n
 }
 
 TEST_CASE("D3D12 cancellation rolls back each synchronous acquisition boundary", "[renderer][d3d12]") {
-    for (const std::string stage : {"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy"}) {
+    for (const std::string stage : {"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy", "resources"}) {
         INFO(stage);
         State state;
         state.cancelAfter = stage;
@@ -267,3 +272,21 @@ TEST_CASE("D3D12 production runtime reports unsupported hosts without native acq
     CHECK(result.ErrorValue().code.Value() == "render.d3d12.unsupported_host");
 }
 #endif
+
+TEST_CASE("D3D12 resource startup preserves acquisition errors and cancellation", "[renderer][d3d12]") {
+    State state;
+    Host host{state};
+    D3D12Initialization session{std::make_unique<Runtime>(state)};
+    REQUIRE(session.Resources().HasError());
+    state.failure = "resources";
+    auto result = session.Initialize(host, {});
+    REQUIRE(result.HasError());
+    REQUIRE(result.ErrorValue().code.Value() == "test.injected");
+    REQUIRE(state.liveObjects == 0);
+    state.failure.clear();
+    state.cancelAfter = "resources";
+    result = session.Initialize(host, {.cancellation = state.cancellation.Token()});
+    REQUIRE(result.HasError());
+    REQUIRE(result.ErrorValue().code.Value() == "render.d3d12.cancelled");
+    REQUIRE(state.liveObjects == 0);
+}

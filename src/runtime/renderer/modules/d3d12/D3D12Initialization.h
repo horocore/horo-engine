@@ -4,6 +4,7 @@
  * @brief Private, native-free D3D12 device initialization and host admission seam.
  */
 
+#include "D3D12Resources.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
 
@@ -30,6 +31,7 @@ namespace Horo::Render {
         bool enableCopyQueue{false};
         bool allowSoftwareForTests{false};
         CancellationToken cancellation;
+        D3D12ResourceLimits resourceLimits;
     };
 
     /**
@@ -78,6 +80,17 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<void> CreateDevice(const RenderAdapterId &adapter) = 0;
         /** @brief Creates one explicitly requested queue; failure retains the native cause. */
         [[nodiscard]] virtual Result<void> CreateQueue(D3D12QueueKind kind) = 0;
+
+        /** @brief Initializes the resource service after direct queue creation. Default test runtimes own no service. */
+        [[nodiscard]] virtual Result<void> InitializeResources(const D3D12ResourceLimits &) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Borrows the session resource service; null before native initialization or in a startup-only test runtime. */
+        [[nodiscard]] virtual ID3D12Resources *Resources() noexcept {
+            return nullptr;
+        }
+
         /** @brief Releases every acquired native object, including partial device/queue state. */
         virtual void Release() noexcept = 0;
     };
@@ -103,7 +116,13 @@ namespace Horo::Render {
          * @return Selected adapter, or a typed startup error.
          */
         [[nodiscard]] Result<RenderAdapterId> Initialize(ID3D12HostAdmission &host, const D3D12InitializationRequest &request);
-        /** @brief Releases native state and closes admission. @return Wrong-thread error or success. */
+        /** @brief Borrows the initialized session's canonical resource implementation.
+         * @return Owner-thread service, or typed lifecycle/unsupported error. Lifetime ends at successful Shutdown.
+         */
+        [[nodiscard]] Result<ID3D12Resources *> Resources();
+        /** @brief Closes admission and polls transfer retirement without blocking.
+         * @return Wrong-thread, drain-pending or native error; success releases native state. Retry pending shutdown on the owner thread.
+         */
         [[nodiscard]] Result<void> Shutdown();
 
     private:

@@ -5426,3 +5426,15 @@ foreach(_horo_cache_consumer IN ITEMS
         target_include_directories(${_horo_cache_consumer} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
     endif()
 endforeach()
+
+add_executable(HoroD3D12ResourceTests
+        unit/runtime/renderer/D3D12ResourceTests.cpp
+)
+target_compile_features(HoroD3D12ResourceTests PRIVATE cxx_std_20)
+target_include_directories(HoroD3D12ResourceTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(HoroD3D12ResourceTests PRIVATE
+        Catch2::Catch2WithMain HoroEngine::RenderD3D12 HoroEngine::RenderApi)
+if (WIN32)
+    target_link_libraries(HoroD3D12ResourceTests PRIVATE d3d12 dxgi)
+endif ()
+horo_register_catch_test(HoroD3D12ResourceTests LABELS "native;renderer;d3d12;resources;qualification")

@@ -2712,6 +2712,12 @@ endif ()
 add_library(HoroRenderD3D12 STATIC
         runtime/renderer/modules/d3d12/D3D12Initialization.cpp
         runtime/renderer/modules/d3d12/D3D12NativeInitialization.cpp
+        runtime/renderer/modules/d3d12/D3D12NativeResources.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceMemory.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceLifecycle.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceTransfers.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceViews.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceConversions.cpp
 )
 add_library(HoroEngine::RenderD3D12 ALIAS HoroRenderD3D12)
 target_compile_features(HoroRenderD3D12 PRIVATE cxx_std_20)
