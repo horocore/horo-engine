@@ -1,6 +1,7 @@
 #include "Horo/Platform/NativeImmutableFileStorage.h"
 
 #include "ImmutableFileNative.h"
+#include "RootedProjectOwnersInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -237,6 +238,19 @@ namespace Horo::Platform {
         };
     }  // namespace
 
+    /** @copydoc RootedProjectOwnersInternal::Cache */
+    Result<std::shared_ptr<const ImmutableFileStorage>> RootedProjectOwnersInternal::Cache(ProjectReadNative::Handle root,
+                                                                                           const std::string_view relativeNamespace) {
+        using Return = Result<std::shared_ptr<const ImmutableFileStorage>>;
+        if (!root.IsValid() || !IsSafeProjectReadPath(relativeNamespace))
+            return Return::Failure(MakeError(FileStorageErrors::InvalidPath));
+        try {
+            return Return::Success(std::make_shared<NativeStorage>(std::move(root), std::string{relativeNamespace}));
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(FileStorageErrors::Capacity));
+        }
+    }
+
     /** @copydoc CreateNativeImmutableFileStorage */
     Result<std::shared_ptr<const ImmutableFileStorage>> CreateNativeImmutableFileStorage(const std::filesystem::path &authorizedRoot,
                                                                                          const std::string_view relativeNamespace) {
@@ -246,8 +260,7 @@ namespace Horo::Platform {
             auto root = Native::OpenRoot(authorizedRoot);
             if (root.HasError())
                 return Result<std::shared_ptr<const ImmutableFileStorage>>::Failure(StorageReadError(root.ErrorValue()));
-            return Result<std::shared_ptr<const ImmutableFileStorage>>::Success(
-                std::make_shared<NativeStorage>(std::move(root).Value(), std::string{relativeNamespace}));
+            return RootedProjectOwnersInternal::Cache(std::move(root).Value(), relativeNamespace);
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<const ImmutableFileStorage>>::Failure(MakeError(FileStorageErrors::Capacity));
         }

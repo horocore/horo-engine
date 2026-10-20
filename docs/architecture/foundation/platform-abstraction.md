@@ -494,3 +494,40 @@ existing host-protected-parent precondition; they do not grant project trust or
 provide a root-identity capability. The next migration must route cook selector,
 manifest, artifact and recovery inventory access through these operations and
 compose the root-bound publication implementation. Parent HORO-1253 remains open.
+
+## Shared native project I/O composition
+
+`HoroPlatformProjectIo` provides `CreateNativeProjectIoOwners` for hosts that need
+source capture, immutable cache entries and durable publication for the same
+project. The factory admits one existing directory once, then derives all three
+owners through independent retained directory handles. It never calls the three
+pathname factories in sequence. Replacing the root spelling between or after
+construction cannot redirect one of the owners to another project directory.
+Construction creates no output. Each returned owner retains an independent
+lifetime; callers drain work before releasing the corresponding capability.
+
+The source identity/generation is explicit. Cache and publication namespaces are
+host-selected, lexically disjoint derived-data namespaces; hosts must also keep
+them distinct under the storage's case and Unicode alias rules. No namespace is
+an authored-source write grant. The shared factory rejects invalid roots,
+identities, zero generations, portable-path violations and lexical namespace
+overlap before I/O. Existing isolated pathname factories remain available for
+hosts that require only one capability.
+
+Native handles cross only the staged, non-installed
+`HoroRootedProjectOwnersInternal` builder contract. Each existing concrete target
+still owns its implementation. The composition peer links those concrete targets
+privately and exposes only Foundation and project-read API types. Its new public
+header is owned solely by `HoroPlatformProjectIo` and has consumer coverage.
+Consumers must relink the affected native targets; persisted formats do not
+change.
+
+The navigation CLI and its MCP binding now compose this owner set and inject the
+publication owner into the existing bake service. They no longer perform an
+ambient output-path check followed by an unrestricted durable writer. Source
+capture still decodes `.horo/project.json` through the retained read authority and
+matches the host's inspected compatibility identity/version/contract before bake
+work is admitted. Generation, revocation, cancellation, deadlines, publication
+writer exclusion, source-freshness fences and MCP mutation approval remain owned
+by their existing application and host boundaries. The platform bundle itself
+grants no trust or permission to execute package code.
