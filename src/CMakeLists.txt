@@ -14,6 +14,7 @@ add_library(HoroFoundation STATIC
         foundation/modules/ModuleHostRegistration.cpp
         foundation/error/ErrorCode.cpp
         foundation/error/ErrorCodeRegistry.cpp
+        foundation/error/FoundationErrorDomains.cpp
         foundation/error/ValidationResult.cpp
         foundation/diagnostics/DiagnosticBundle.cpp
         foundation/diagnostics/DiagnosticBundleErrors.cpp
