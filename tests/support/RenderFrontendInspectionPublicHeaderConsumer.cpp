@@ -13,6 +13,7 @@ static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrameScope::CaptureIn
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrontend::GraphInspectionSnapshot), Read>);
 static_assert(!std::is_copy_constructible_v<Horo::Render::RenderGraphInspectionSnapshot>);
 
-using ComposeGui = Horo::Result<void> (Horo::Render::RenderFrameScope::*)(Horo::Render::IGuiPassExecutor &, std::stop_token);
+using ComposeGui = Horo::Result<void> (Horo::Render::RenderFrameScope::*)(Horo::Render::IGuiPassExecutor &,
+                                                                          const Horo::CancellationToken &);
 static_assert(std::is_same_v<decltype(&Horo::Render::RenderFrameScope::ComposeGui), ComposeGui>);
 static_assert(std::has_virtual_destructor_v<Horo::Render::IGuiPassExecutor>);

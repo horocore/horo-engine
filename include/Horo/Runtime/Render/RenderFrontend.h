@@ -164,7 +164,7 @@ namespace Horo::Render {
          * @details Cancellation, encoder failure and exceptions abort the frame. Invalid stage calls
          * leave it recoverable. No allocation or GPU wait is introduced by the composition stage.
          */
-        [[nodiscard]] Result<void> ComposeGui(IGuiPassExecutor &executor, std::stop_token cancellation = {});
+        [[nodiscard]] Result<void> ComposeGui(IGuiPassExecutor &executor, const CancellationToken &cancellation = {});
 
         /** @brief Consumes one bounded prepared material pass, retaining exact generations until native completion.
          * @param pass Ready target/meshes and immutable material leases, borrowed only during this call.

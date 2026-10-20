@@ -311,7 +311,9 @@ Present backend frame
 The host routes GUI encoding through `RenderFrameScope::ComposeGui` and a
 synchronously borrowed `IGuiPassExecutor`. The scope requires successful pass
 execution, admits composition once, and aborts before presentation on cooperative
-cancellation, typed encoder failure or exception. The executor owns its draw-data
+cancellation, typed encoder failure or exception. HoroEditor supplies its existing
+engine cancellation token at this stage without allocating a second cancellation
+source. The executor owns its draw-data
 and image leases through presentation or cancellation; it cannot present or
 select another backend. The stage shares the frame's render-thread affinity.
 This extends the established frame contract because calling the editor adapter

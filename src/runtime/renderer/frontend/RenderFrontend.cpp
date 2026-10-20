@@ -276,20 +276,19 @@ namespace Horo::Render {
     }
 
     /** @copydoc RenderFrameScope::ComposeGui */
-    Result<void> RenderFrameScope::ComposeGui(IGuiPassExecutor &executor, const std::stop_token cancellation) {
+    Result<void> RenderFrameScope::ComposeGui(IGuiPassExecutor &executor, const CancellationToken &cancellation) {
         if (backend_ == nullptr)
             return Result<void>::Failure(MakeError(FrontendErrors::FrameNotActive));
         if (!executed_)
             return Result<void>::Failure(MakeError(FrontendErrors::FrameNotExecuted));
         if (guiComposed_)
             return Result<void>::Failure(MakeError(FrontendErrors::GuiAlreadyComposed));
-        if (cancellation.stop_requested()) {
+        if (cancellation.IsCancellationRequested()) {
             Abort();
             return Result<void>::Failure(MakeError(FrontendErrors::GuiCancelled));
         }
         try {
-            const auto encoded = executor.RenderDrawData();
-            if (encoded.HasError()) {
+            if (const auto encoded = executor.RenderDrawData(); encoded.HasError()) {
                 Abort();
                 return encoded;
             }

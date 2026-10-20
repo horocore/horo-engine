@@ -338,7 +338,7 @@ namespace {
         lifecycleState = {};
         auto frontend = CreateTrackingFrontend();
         TrackingGuiExecutor gui;
-        std::stop_source cancellation;
+        CancellationSource cancellation;
         SECTION("typed encoder failure") {
             gui.fails = true;
         }
@@ -346,19 +346,19 @@ namespace {
             gui.throws = true;
         }
         SECTION("cancelled before encoding") {
-            cancellation.request_stop();
+            cancellation.RequestCancellation();
         }
         auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {64, 64}});
         REQUIRE(begun.HasValue());
         auto frame = std::move(begun).Value();
         const std::array passes{RenderPassDescriptor{.id = RenderPassId{1}, .primaryOutput = PrimaryOutputAttachment{}}};
         REQUIRE(frame.Execute(passes).HasValue());
-        const auto composed = frame.ComposeGui(gui, cancellation.get_token());
+        const auto composed = frame.ComposeGui(gui, cancellation.Token());
         REQUIRE(composed.HasError());
         CHECK(composed.ErrorValue().code.Value() == (gui.fails    ? "test.gui.encoding"
                                                      : gui.throws ? "render.frontend.frame_exception"
                                                                   : "render.frontend.gui_cancelled"));
-        CHECK(gui.calls == (cancellation.stop_requested() ? 0 : 1));
+        CHECK(gui.calls == (cancellation.Token().IsCancellationRequested() ? 0 : 1));
         CHECK(frame.Present().HasError());
         CHECK(lifecycleState.abortCount == 1);
         CHECK(lifecycleState.presentCount == 0);
