@@ -73,47 +73,25 @@ virtual environment.
 
 ## Git Hooks
 
-The repository provides optional Git hooks in `scripts/hooks/`:
+Optional local Git hooks may invoke `python3 scripts/dev.py hook pre-commit` and
+`python3 scripts/dev.py hook pre-push` from the repository root. These commands
+run staged formatting and CI-parity checks respectively; they never install or
+modify your hooks. Keep any existing personal hooks unchanged.
 
-```bash
-# Enable the hooks
-ln -s ../../scripts/hooks/pre-commit .git/hooks/pre-commit
-ln -s ../../scripts/hooks/pre-push .git/hooks/pre-push
-```
-
-The pre-commit hook runs `scripts/dev.py format --staged` before each commit.
-The pre-push hook runs `scripts/dev.py check` before each push.
-
-Hooks are optional but recommended. CI runs the same checks, so skipping them
-only defers failure to the remote.
+The former `scripts/open-pr.sh` command is now `python3 scripts/dev.py open-pr
+<title> <body-file> <base> <head> <milestone> [project]`. It mutates GitHub only
+when explicitly invoked.
 
 ## One-Liner Setup
 
-The repository provides a setup script that installs toolchain dependencies and
-configures the default debug preset.
+`python3 scripts/dev.py setup` configures and smoke-builds `HoroFoundation`
+using the installed native toolchain. It does not install system packages.
+Use `--dir`, `--target`, `--jobs` and `--no-cache` to select an isolated build;
+`python3 scripts/dev.py doctor` diagnoses missing prerequisites. Install approved
+native dependencies through the platform's setup guidance before invoking it.
 
-```bash
-# macOS / Linux
-python3 scripts/dev.py setup
-
-# Windows (PowerShell)
-python scripts/dev.py setup
-```
-
-`setup` performs the following:
-
-1. Detects the host platform and compiler.
-2. Installs or verifies ccache/sccache.
-3. Verifies Python entry points and dependency-state smoke fixtures.
-4. Configures CMake with the `debug` preset, compiler cache launcher,
-   `HORO_ENGINE_BUILD_TESTS=ON`, and the local default
-   `HORO_ENGINE_ENABLE_PCH=ON`.
-5. Prints the effective compiler, generator, test, PCH, and cache-launcher
-   configuration.
-6. Runs a smoke build of the foundation target.
-7. Runs the smallest passing test target to verify the environment.
-
-If `setup` completes successfully, the environment is ready for development.
+Successful `setup` verifies the selected smoke-build target, not the full editor
+or every supported platform configuration.
 Local setup intentionally validates the normal PCH-enabled developer path.
 Compiler-cache CI uses `HORO_ENGINE_ENABLE_PCH=OFF`; reproduce that
 configuration locally with:

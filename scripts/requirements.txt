@@ -1,1 +1,3 @@
 pytest==8.4.2
+# Native Windows process/socket discovery. Linux uses /proc and pidfds.
+psutil==7.2.2; sys_platform == "win32"

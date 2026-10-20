@@ -390,14 +390,14 @@ def test_load_pr_maps_project_membership_and_empty_fields(options, raw_pr):
     ],
 )
 def test_invalid_cli_input_fails_before_credentials(monkeypatch, args):
-    monkeypatch.setattr(sys, "argv", ["pr_annotations.py", *args])
+    monkeypatch.setattr(sys, "argv", ['dev.py', *args])
     with pytest.raises(SystemExit) as failure:
         annotations.parse_args()
     assert failure.value.code == 2
 
 
 def test_valid_cli_input_keeps_read_only_defaults(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["pr_annotations.py", "20", "--repo", "Org/repo"])
+    monkeypatch.setattr(sys, "argv", ['dev.py', "20", "--repo", "Org/repo"])
     args = annotations.parse_args()
     assert args.prs == [20]
     assert args.repo == "Org/repo"
@@ -439,8 +439,8 @@ def test_option_loading_resolves_project_number_once(monkeypatch, project):
         {"content": {"node_id": "ISSUE_node", "number": 2}},
         {"content": None},
     ]
-    monkeypatch.setattr(annotations, "github_token", lambda: "fixture-token")
-    monkeypatch.setattr(annotations, "GitHub", Mock(return_value=api))
+    monkeypatch.setattr(annotations, 'github_token', lambda: "fixture-token")
+    monkeypatch.setattr(annotations, 'GitHub', Mock(return_value=api))
     args = arguments(project)
     if project == "0":
         with pytest.raises(annotations.AnnotationError, match="must be positive"):
@@ -466,21 +466,21 @@ def test_main_aggregates_all_worker_results(monkeypatch, options, all_prs, resul
     args = argparse.Namespace(
         prs=list(range(len(results))), all=all_prs, state="open", limit=None, workers=2
     )
-    monkeypatch.setattr(annotations, "parse_args", lambda: args)
-    monkeypatch.setattr(annotations, "load_options", lambda _: options)
-    monkeypatch.setattr(annotations, "list_pr_numbers", lambda *_: args.prs)
+    monkeypatch.setattr(annotations, 'parse_args', lambda *argv: args)
+    monkeypatch.setattr(annotations, 'load_options', lambda _: options)
+    monkeypatch.setattr(annotations, 'list_pr_numbers', lambda *_: args.prs)
     process = Mock(side_effect=lambda number, _: results[number])
-    monkeypatch.setattr(annotations, "process_pr", process)
-    assert annotations.main() == expected
+    monkeypatch.setattr(annotations, 'process_pr', process)
+    assert annotations.pr_main() == expected
     assert process.call_count == len(results)
 
 
 def test_main_fails_on_setup_error(monkeypatch, capsys):
-    monkeypatch.setattr(annotations, "parse_args", arguments)
+    monkeypatch.setattr(annotations, 'parse_args', arguments)
     monkeypatch.setattr(
         annotations,
-        "load_options",
+        'load_options',
         Mock(side_effect=annotations.AnnotationError("setup failed")),
     )
-    assert annotations.main() == 1
+    assert annotations.pr_main() == 1
     assert "ERROR: setup failed" in capsys.readouterr().err

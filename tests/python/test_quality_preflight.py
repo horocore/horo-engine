@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import analyze
+
 import concurrent.futures
 import json
 import shutil
@@ -13,19 +15,19 @@ from types import SimpleNamespace
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-import quality_preflight as preflight
-import quality_support as support
-import quality_tools as tools
-import sonar_preflight as sonar
-import sonar_sessions as sessions
-from sonar_ide_analysis import AnalysisError
+import analyze as preflight
+import analyze as support
+import analyze as tools
+import analyze as sonar
+import analyze as sessions
+from analyze import AnalysisError as AnalysisError
 
 
 def git(root: Path, *args: str) -> str:
     executable = shutil.which("git")
     assert executable is not None
     # Arguments name only disposable fixture repositories; shell execution is disabled.
-    process = support.run([executable, "-C", str(root), *args], root, 30)
+    process = support.quality_run([executable, "-C", str(root), *args], root, 30)
     assert process.returncode == 0, process.stderr
     return process.stdout.strip()
 
@@ -138,8 +140,9 @@ def test_ownership_rejects_pid_reuse_and_substring_profile():
 
 
 def test_terminate_never_signals_stale_or_unrelated_process(monkeypatch):
-    monkeypatch.setattr(sessions, "processes", lambda: {123: {"started": "new", "argv": ["code"]}})
-    monkeypatch.setattr(sessions.os, "pidfd_open", lambda _: pytest.fail("must not signal unowned process"))
+    monkeypatch.setattr(sessions, 'session_processes', lambda: {123: {"started": "new", "argv": ["code"]}})
+    import analyze as quality_platform
+    monkeypatch.setattr(quality_platform, 'terminate_processes', lambda *_: pytest.fail("must not signal unowned process"))
     assert not sessions.terminate({"pid": 123, "started": "old", "profile": "/cache/profile"})
 
 
@@ -179,24 +182,24 @@ def test_pool_releases_lease_after_failure(tmp_path: Path):
 
 
 def test_cpp_evidence_rejects_empty_issue_list_without_sensor():
-    source = Path("/repo/source.cpp")
+    source = Path("/repo/source.cpp").resolve()
     with pytest.raises(AnalysisError, match="No positive"):
         sonar.verify_evidence(source.as_uri() + " Analysis detected 0 issues 0 compilation units analyzed", [source])
 
 
 @pytest.mark.parametrize("suffix", ["[Error - invalid compile commands", "Failed to analyze files"])
 def test_cpp_evidence_rejects_sensor_errors(suffix: str):
-    source = Path("/repo/source.cpp")
+    source = Path("/repo/source.cpp").resolve()
     with pytest.raises(AnalysisError, match="analysis errors"):
         sonar.verify_evidence(f"{source.as_uri()} 456 cpp] 1 compilation units analyzed Analysis detected {suffix}", [source])
 
 
 def test_cpp_evidence_requires_every_submitted_file():
-    source = Path("/repo/source.cpp")
+    source = Path("/repo/source.cpp").resolve()
     log = f"{source.as_uri()} activeRules: [456 cpp] 1 compilation units analyzed Analysis detected 0 issues"
     assert sonar.verify_evidence(log, [source])["compilationUnits"] == 1
     with pytest.raises(AnalysisError, match="all submitted"):
-        sonar.verify_evidence(log, [source, Path("/repo/header.hpp")])
+        sonar.verify_evidence(log, [source, Path("/repo/header.hpp").resolve()])
 
 
 def test_header_context_follows_transitive_literal_includes(tmp_path: Path):
@@ -248,7 +251,7 @@ def test_cpd_rejects_partial_or_unexpected_xml(xml: str, tmp_path: Path):
 
 def test_codacy_zero_exit_with_missing_tool_is_incomplete(tmp_path: Path, monkeypatch):
     payload = {"issues": [], "errors": [], "toolResults": [], "capability": {"unavailable": [{"toolId": "Lizard"}]}}
-    monkeypatch.setattr(tools, "json_command", lambda *_: (payload, 0))
+    monkeypatch.setattr(tools, 'json_command', lambda *_: (payload, 0))
     result = tools.codacy_check(tmp_path, tmp_path, [Path("a.cpp")], {"tools": [{"toolId": "Lizard"}]},
                                 {"Lizard": {"languages": ["CPP"]}}, 2)
     assert result["status"] == "incomplete"
@@ -258,7 +261,7 @@ def test_codacy_zero_exit_with_missing_tool_is_incomplete(tmp_path: Path, monkey
 def test_codacy_routes_cpp_alias_to_semgrep(tmp_path: Path, monkeypatch):
     calls = []
     payload = {"issues": [], "errors": [], "toolResults": [{"toolId": "Semgrep", "status": "success", "filesAnalyzed": 1}]}
-    monkeypatch.setattr(tools, "json_command", lambda argv, *_: (calls.append(argv) or payload, 0))
+    monkeypatch.setattr(tools, 'json_command', lambda argv, *_: (calls.append(argv) or payload, 0))
     result = tools.codacy_check(tmp_path, tmp_path, [Path("a.cpp")], {"tools": [{"toolId": "Semgrep"}]},
                                 {"Semgrep": {"languages": ["C++"]}}, 2)
     assert result["status"] == "clean"
@@ -266,7 +269,7 @@ def test_codacy_routes_cpp_alias_to_semgrep(tmp_path: Path, monkeypatch):
 
 
 def test_secrets_does_not_store_sensitive_scanner_output(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(tools, "run", lambda *_: SimpleNamespace(returncode=1, stdout="secret-value", stderr=""))
+    monkeypatch.setattr(tools, 'quality_run', lambda *_: SimpleNamespace(returncode=51, stdout="secret-value", stderr=""))
     result = tools.secrets(tmp_path, [Path("a.cpp")], 2)
     assert result["status"] == "issues_found"
     assert "secret-value" not in json.dumps(result)
@@ -283,16 +286,16 @@ def test_guarded_provider_failure_keeps_forbidden_distinct():
 @pytest.mark.parametrize("offline", [False, True])
 def test_doctor_checks_configuration_without_sonar_analysis(tmp_path: Path, monkeypatch, offline):
     calls = []
-    monkeypatch.setattr(preflight, "tool_versions", lambda *_: {})
-    monkeypatch.setattr(tools, "codacy_info", lambda *_: {"status": "complete"})
-    monkeypatch.setattr(preflight, "cloud_drift",
+    monkeypatch.setattr(preflight, 'tool_versions', lambda *_: {})
+    monkeypatch.setattr(tools, 'codacy_info', lambda *_: {"status": "complete"})
+    monkeypatch.setattr(preflight, 'cloud_drift',
                         lambda *_: calls.append("cloud") or {"status": "matched"})
 
     def unexpected_analysis(*_):
         raise AssertionError("doctor must not select files or run Sonar analysis")
 
-    monkeypatch.setattr(tools, "repository_files", unexpected_analysis)
-    monkeypatch.setattr(tools, "json_command", unexpected_analysis)
+    monkeypatch.setattr(tools, 'repository_files', unexpected_analysis)
+    monkeypatch.setattr(tools, 'json_command', unexpected_analysis)
     args = preflight.arguments(["doctor", "--worktree", str(tmp_path)] + (["--offline"] if offline else []))
     report = preflight.doctor(tmp_path, tmp_path / "cache", args)
     assert "vortex" not in report
@@ -316,15 +319,15 @@ def test_input_changes_force_incomplete_even_if_providers_clean(repository: Path
     def analyzer(*_):
         (repository / "old name.cpp").write_text("int modified;\n")
         return {"status": "clean", "issues": []}
-    monkeypatch.setattr(preflight, "codacy_stage", analyzer)
-    result = preflight.check(repository, tmp_path / "cache", args)
+    monkeypatch.setattr(preflight, 'codacy_stage', analyzer)
+    result = preflight.preflight_check(repository, tmp_path / "cache", args)
     assert result["stale"]
     assert result["exitCode"] == 2
 
 
 def test_owned_command_timeout_cleans_up(tmp_path: Path):
     with pytest.raises(AnalysisError, match="timed out"):
-        support.run([sys.executable, "-c", "import time; time.sleep(5)"], tmp_path, 0.05)
+        support.quality_run([sys.executable, "-c", "import time; time.sleep(5)"], tmp_path, 0.05)
 
 
 def test_log_rotation_keeps_only_current_request(tmp_path: Path):
@@ -344,7 +347,7 @@ def test_log_rotation_keeps_only_current_request(tmp_path: Path):
 
 
 def test_indexing_retry_does_not_hide_completed_sensor_error():
-    source = Path("/repo/source.cpp")
+    source = Path("/repo/source.cpp").resolve()
     retry = "[Error - Failed to analyze files\nNo files were found to be indexed by SonarQube for IDE\n"
     success = f"Analyzing list of 1 files: {source.as_uri()} 456 cpp] 1 compilation units analyzed Analysis detected"
     assert sonar.verify_evidence(retry + success, [source])["completion"]
@@ -354,8 +357,8 @@ def test_indexing_retry_does_not_hide_completed_sensor_error():
 
 def test_live_unverified_session_is_not_evicted(tmp_path: Path, monkeypatch):
     record = {"pid": 99, "started": "123"}
-    monkeypatch.setattr(sessions, "terminate", lambda _: False)
-    monkeypatch.setattr(sessions, "processes", lambda: {99: {"started": "123"}})
+    monkeypatch.setattr(sessions, 'terminate', lambda _: False)
+    monkeypatch.setattr(sessions, 'session_processes', lambda: {99: {"started": "123"}})
     with pytest.raises(AnalysisError, match="slot remains reserved"):
         sessions.retire(record)
     pool = sessions.SessionPool(tmp_path, tmp_path / "root")
@@ -393,7 +396,7 @@ def test_cancelled_session_queue_releases_registry(tmp_path: Path):
 
 
 def test_worktree_branch_warning_preserves_sensor_proof():
-    source = Path("/repo/source.cpp")
+    source = Path("/repo/source.cpp").resolve()
     log = (f"[Error - Couldn't access repository for path /repo\nAnalyzing list of files {source.as_uri()} "
            "activeRules: [456 cpp] 1 compilation units analyzed Analysis detected 0 issues")
     assert sonar.verify_evidence(log, [source])["branchMatching"] == "unavailable"
@@ -426,6 +429,7 @@ def test_partial_codacy_file_execution_is_incomplete():
 
 
 def test_private_profile_preserves_user_settings_and_credentials(tmp_path: Path):
+    import base64
     import sqlite3
 
     source = tmp_path / "user"
@@ -440,10 +444,19 @@ def test_private_profile_preserves_user_settings_and_credentials(tmp_path: Path)
     database.parent.mkdir()
     sonar_key = 'secret://{"extensionId":"sonarsource.sonarlint-vscode","key":"connection"}'
     other_key = 'secret://{"extensionId":"unrelated","key":"connection"}'
+    # Synthetic ciphertext envelopes, never actual credentials or plaintext storage.
+    prefix = b"v10" if sys.platform == "win32" else b"v11"
+    encrypted = json.dumps({"type": "Buffer", "data": list(prefix + bytes(range(32)))})
+    local_state = source / "Local State"
+    if sys.platform == "win32":
+        wrapped = base64.b64encode(b"DPAPI" + bytes(range(100))).decode("ascii")
+        source_state = {"os_crypt": {"encrypted_key": wrapped}, "unrelated": "do-not-copy"}
+        support.write_json(local_state, source_state)
+        state_before = local_state.read_bytes()
     with sqlite3.connect(database) as connection:
         connection.execute("CREATE TABLE ItemTable (key TEXT, value BLOB)")
         connection.executemany("INSERT INTO ItemTable VALUES (?,?)",
-                               [(sonar_key, "encrypted-fixture"), (other_key, "private-fixture"),
+                               [(sonar_key, encrypted), (other_key, "private-fixture"),
                                 ("content.trust.model.key", '{"uriTrustInfo": []}')])
     before = database.read_bytes()
     extensions = tmp_path / "extensions/sonarsource.sonarlint-vscode-fixture"
@@ -453,9 +466,14 @@ def test_private_profile_preserves_user_settings_and_credentials(tmp_path: Path)
     sessions.seed_profile(profile, source, extensions.parent)
     assert support.read_json(settings) == original and database.read_bytes() == before
     copied = support.read_json(profile / "User/settings.json")
-    assert copied["security.workspace.trust.enabled"] is False
+    assert copied["security.workspace.trust.enabled"] is True
     assert "workspace.trust.enabled" not in copied
     assert "token" not in copied["sonarlint.connectedMode.connections.sonarcloud"][0]
     assert "editor.fontSize" not in copied and "-Duser.home=" in copied["sonarlint.ls.vmargs"]
     with sqlite3.connect(profile / "User/globalStorage/state.vscdb") as connection:
-        assert connection.execute("SELECT key FROM ItemTable").fetchall() == [(sonar_key,)]
+        assert connection.execute("SELECT key, value FROM ItemTable").fetchall() == [(sonar_key, encrypted)]
+    if sys.platform == "win32":
+        assert local_state.read_bytes() == state_before
+        assert support.read_json(profile / "Local State") == {"os_crypt": {"encrypted_key": wrapped}}
+    else:
+        assert not (profile / "Local State").exists()

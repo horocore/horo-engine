@@ -99,7 +99,7 @@ set_tests_properties(HoroExtensionSdkReconfigureTest PROPERTIES
 add_test(NAME HoroExtensionScaffoldsTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_EXTENSION_SDK_PACKAGE_DIR=${HORO_EXTENSION_SDK_PACKAGE_DIR}"
-        "-DHORO_EXTENSION_SCAFFOLDER=${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-scaffold-extension.py"
+        "-DHORO_EXTENSION_SCAFFOLDER=${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/project.py"
         "-DHORO_EXTENSION_ACTIVATION_TEST=$<TARGET_FILE:HoroPackagedExtensionActivation>"
         "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/extension-scaffolds"
         "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
@@ -5330,7 +5330,7 @@ add_test(NAME HoroSceneAllocationJunitPathContract
     COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/scene_junit_path_contract"
         "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
         "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
-        "-DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_scene_allocation_qualification.py"
+        "-DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/dev.py"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SceneAllocationJunitPathContract.cmake")
 set_tests_properties(HoroSceneAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
 
@@ -5338,7 +5338,7 @@ add_test(NAME HoroCharacterAllocationJunitPathContract
     COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/character_junit_path_contract"
         "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
         -DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}
-        -DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_character_allocation_qualification.py
+        -DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/dev.py
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CharacterAllocationJunitPathContract.cmake")
 set_tests_properties(HoroCharacterAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
 

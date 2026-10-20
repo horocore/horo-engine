@@ -37,7 +37,7 @@ jobs:
         run: python -m pip install --no-cache-dir --no-deps cmake==3.31.6
       - name: Build, validate, test, package and verify
         run: >-
-          python .horo/ci/bootstrap.py
+          python .horo/ci/project.py extension-bootstrap
           --lock .horo/extension-ci.lock.json
           --platform ${{ matrix.platform }}
           --project .

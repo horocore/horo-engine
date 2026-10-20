@@ -1,17 +1,19 @@
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
 
 SPEC = importlib.util.spec_from_file_location(
-    "ci_cache_identity", Path(__file__).resolve().parents[2] / "scripts" / "ci_cache_identity.py"
+    "ci_cache_identity", Path(__file__).resolve().parents[2] / "scripts" / 'dev.py'
 )
 assert SPEC is not None
 assert SPEC.loader is not None
 cache = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = cache
 SPEC.loader.exec_module(cache)
 
 
@@ -49,7 +51,7 @@ def test_new_dependency_helper_and_capability_defaults_invalidate(source_root: P
 def test_dependency_fingerprint_normalizes_windows_line_endings(source_root: Path) -> None:
     initial = cache.dependency_fingerprint(source_root)
     path = source_root / "cmake/Dependencies.cmake"
-    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+    path.write_bytes(path.read_bytes().replace(b"\n", bytes((13, 10))))
     assert cache.dependency_fingerprint(source_root) == initial
 
 
@@ -88,7 +90,7 @@ def identity_arguments(output: Path, cmake_version: str = "cmake version 3.31.6"
 def test_main_appends_validated_outputs_with_spaces_and_unicode(tmp_path: Path) -> None:
     output = tmp_path / "cache çıktısı.txt"
     output.write_text("existing=value\n", encoding="utf-8")
-    cache.main(identity_arguments(output))
+    cache.ci_cache_main(identity_arguments(output))
     assert output.read_text(encoding="utf-8").splitlines() == [
         "existing=value", "compiler=gcc-13.3.0", "c-compiler=gcc-13.3.0", "cmake=3.31",
         f"dependencies={cache.dependency_fingerprint(Path(__file__).resolve().parents[2])}",
@@ -99,7 +101,7 @@ def test_invalid_cmake_version_does_not_write_outputs(tmp_path: Path) -> None:
     output = tmp_path / "outputs.txt"
     arguments = identity_arguments(output, "broken")
     with pytest.raises(ValueError, match="Cannot identify CMake"):
-        cache.main(arguments)
+        cache.ci_cache_main(arguments)
     assert not output.exists()
 
 
@@ -108,11 +110,11 @@ def test_invalid_compiler_version_does_not_write_partial_outputs(tmp_path: Path)
     arguments = identity_arguments(output)
     arguments[arguments.index("--cxx-version") + 1] = "broken"
     with pytest.raises(ValueError, match="Cannot identify compiler"):
-        cache.main(arguments)
+        cache.ci_cache_main(arguments)
     assert not output.exists()
 
 
 def test_missing_output_parent_reports_failure(tmp_path: Path) -> None:
     arguments = identity_arguments(tmp_path / "missing" / "outputs.txt")
     with pytest.raises(FileNotFoundError):
-        cache.main(arguments)
+        cache.ci_cache_main(arguments)

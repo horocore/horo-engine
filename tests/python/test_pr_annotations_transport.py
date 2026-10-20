@@ -41,7 +41,7 @@ def transport(monkeypatch):
     connection = Mock()
     connection.getresponse.return_value = response
     factory = Mock(return_value=connection)
-    monkeypatch.setattr(annotations.http.client, "HTTPSConnection", factory)
+    monkeypatch.setattr(annotations.http.client, 'HTTPSConnection', factory)
     return factory, connection, response
 
 
@@ -74,7 +74,7 @@ def test_http_errors_do_not_follow_redirects_or_expose_tokens(transport, status)
 @pytest.mark.parametrize("body, message", [(b"not-json", "JSON response"), (b"x" * 9, "exceeds")])
 def test_bad_or_oversized_response_is_rejected(monkeypatch, transport, body, message):
     _, connection, response = transport
-    monkeypatch.setattr(annotations, "MAX_RESPONSE_BYTES", 8)
+    monkeypatch.setattr(annotations, 'MAX_RESPONSE_BYTES', 8)
     response.read.return_value = body
     api = annotations.GitHub("token")
     with pytest.raises(annotations.AnnotationError, match=message):
@@ -153,14 +153,14 @@ def test_environment_credentials_have_precedence(monkeypatch, no_environment_tok
 
 @pytest.mark.parametrize("token", ["", "line\nbreak", "with space", "ö", "x\x7f"])
 def test_malformed_credentials_are_rejected(monkeypatch, no_environment_token, token):
-    monkeypatch.setattr(annotations, "cli_token", AsyncMock(return_value=token))
+    monkeypatch.setattr(annotations, 'cli_token', AsyncMock(return_value=token))
     with pytest.raises(annotations.AnnotationError, match="malformed"):
         annotations.github_token()
 
 
 @pytest.mark.parametrize("error", [OSError("missing gh"), UnicodeError("bad encoding")])
 def test_credential_lookup_failure_is_safe(monkeypatch, no_environment_token, error):
-    monkeypatch.setattr(annotations, "cli_token", AsyncMock(side_effect=error))
+    monkeypatch.setattr(annotations, 'cli_token', AsyncMock(side_effect=error))
     with pytest.raises(annotations.AnnotationError, match="cannot read GitHub CLI credentials"):
         annotations.github_token()
 
@@ -172,7 +172,7 @@ def test_cli_credential_arguments_are_fixed(monkeypatch, returncode):
         communicate=AsyncMock(return_value=(b"fixture-token\n", None)),
     )
     spawn = AsyncMock(return_value=process)
-    monkeypatch.setattr(annotations.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(annotations.asyncio, 'create_subprocess_exec', spawn)
     credential_lookup = annotations.cli_token()
     if returncode:
         with pytest.raises(annotations.AnnotationError, match="authenticate gh"):
@@ -193,7 +193,7 @@ def test_cli_credential_arguments_are_fixed(monkeypatch, returncode):
 def test_cli_timeout_kills_and_reaps_process(monkeypatch):
     process = Mock(returncode=0, communicate=AsyncMock(side_effect=[TimeoutError(), (b"", None)]))
     monkeypatch.setattr(
-        annotations.asyncio, "create_subprocess_exec", AsyncMock(return_value=process)
+        annotations.asyncio, 'create_subprocess_exec', AsyncMock(return_value=process)
     )
     credential_lookup = annotations.cli_token()
     with pytest.raises(annotations.AnnotationError, match="timed out"):

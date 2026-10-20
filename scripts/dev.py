@@ -1,30 +1,2240 @@
-#!/usr/bin/env python3
-"""Developer runner, formatting, and toolchain health check for Horo Engine."""
+"""Build, setup, cache, process ownership, CI qualification and release tools."""
 
 from __future__ import annotations
 
-import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
+from copy import deepcopy
+from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path, PurePosixPath
+from typing import Any, Callable, Iterator, Mapping, Sequence
+from urllib.parse import ParseResult, quote, urlencode, urlparse
+import argparse
+import asyncio
+import calendar
+import contextlib
+import datetime
+import errno
+import hashlib
+import http.client
 import json
 import os
-from pathlib import Path
 import platform
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
-from dataclasses import dataclass, field
-from typing import Mapping, Sequence
-from urllib.parse import ParseResult, urlparse
+import tarfile
+import time
+import uuid
+import zipfile
 
-try:
-    from . import dev_process, local_build_cache
-except ImportError:
-    import dev_process
-    import local_build_cache
+
+# Error
+
+class HoroError(Exception):
+    """An application error with the same owned payload exposed by other hosts."""
+
+    def __init__(self, payload: dict[str, Any], exit_code: int) -> None:
+        self.payload = deepcopy(payload)
+        self.exit_code = exit_code
+        self.domain = self.payload["domain"]
+        self.code = self.payload["code"]
+        self.severity = self.payload["severity"]
+        self.message = self.payload["message"]
+        self.diagnostics = self.payload["diagnostics"]
+        self.metadata = self.payload["metadata"]
+        self.cause = self.payload["cause"]
+        super().__init__(self.message)
+
+
+class HoroUsageError(HoroError):
+    """CLI request syntax or option failure (exit 2)."""
+
+
+class HoroValidationError(HoroError):
+    """Application input validation failure (exit 3)."""
+
+
+class HoroCapabilityError(HoroError):
+    """Required capability unavailable (exit 4)."""
+
+
+class HoroOperationError(HoroError):
+    """Application operation failure (exit 5)."""
+
+
+class HoroPermissionError(HoroError):
+    """Security or permission refusal (exit 6)."""
+
+
+class HoroCancelledError(HoroError):
+    """Cooperative cancellation (exit 7)."""
+
+
+class HoroTimeoutError(HoroError):
+    """Declared deadline elapsed (exit 8)."""
+
+
+class HoroInvariantError(HoroError):
+    """Reported in-process invariant failure (exit 10)."""
+
+
+_EXCEPTIONS: dict[int, type[HoroError]] = {
+    2: HoroUsageError,
+    3: HoroValidationError,
+    4: HoroCapabilityError,
+    5: HoroOperationError,
+    6: HoroPermissionError,
+    7: HoroCancelledError,
+    8: HoroTimeoutError,
+    10: HoroInvariantError,
+}
+_SEVERITIES = {"info", "warning", "error", "fatal"}
+
+
+def _is_integer(value: Any) -> bool:
+    """Accept integer schema values while rejecting JSON booleans."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _validate_payload(payload: Any, depth: int = 0) -> None:
+    """Reject malformed or unbounded envelopes without inventing a business error."""
+    if depth >= 16 or not isinstance(payload, dict):
+        raise ValueError("Invalid Horo error payload")
+    if set(payload) != {"domain", "code", "severity", "message", "diagnostics", "metadata", "cause"}:
+        raise ValueError("Invalid Horo error fields")
+    for key in ("domain", "code", "severity", "message"):
+        value = payload[key]
+        if not isinstance(value, str) or len(value.encode("utf-8")) > 4096:
+            raise ValueError("Invalid Horo error text")
+    if not payload["domain"] or not payload["code"] or payload["severity"] not in _SEVERITIES:
+        raise ValueError("Invalid Horo error identity or severity")
+    diagnostics = payload["diagnostics"]
+    if not isinstance(diagnostics, list) or len(diagnostics) > 64 or payload["metadata"] != {}:
+        raise ValueError("Invalid Horo error details")
+    for diagnostic in diagnostics:
+        _validate_diagnostic(diagnostic)
+    if payload["cause"] is not None:
+        _validate_payload(payload["cause"], depth + 1)
+
+
+def _validate_diagnostic(diagnostic: Any) -> None:
+    """Validate the canonical diagnostic vocabulary and location representation."""
+    if not isinstance(diagnostic, dict) or set(diagnostic) != {"code", "severity", "message", "location", "path"}:
+        raise ValueError("Invalid Horo diagnostic")
+    for key in ("code", "severity", "message", "path"):
+        value = diagnostic[key]
+        if not isinstance(value, str) or len(value.encode("utf-8")) > 4096:
+            raise ValueError("Invalid Horo diagnostic text")
+    if not diagnostic["code"] or diagnostic["severity"] not in {"note", "warning", "error", "fatal"}:
+        raise ValueError("Invalid Horo diagnostic identity or severity")
+    location = diagnostic["location"]
+    if not isinstance(location, dict) or set(location) != {"source", "line", "column"}:
+        raise ValueError("Invalid Horo diagnostic location")
+    if not isinstance(location["source"], str) or len(location["source"].encode("utf-8")) > 4096:
+        raise ValueError("Invalid Horo diagnostic source")
+    if any(not _is_integer(location[key]) or not 0 <= location[key] <= 0xFFFFFFFF for key in ("line", "column")):
+        raise ValueError("Invalid Horo diagnostic coordinates")
+
+
+def raise_application_error(envelope: dict[str, Any]) -> None:
+    """Raise a typed exception only at the Python edge of a translated C++ failure.
+
+    Malformed protocol/schema input raises ``ValueError``; it is never classified
+    as a new application error. Host failure exit 1 and OS signals are excluded.
+    """
+    if not isinstance(envelope, dict) or set(envelope) != {"schemaVersion", "exitCode", "error"}:
+        raise ValueError("Invalid Horo application-error envelope")
+    if not _is_integer(envelope["schemaVersion"]) or envelope["schemaVersion"] != 1:
+        raise ValueError("Unsupported Horo application-error schema")
+    exit_code = envelope["exitCode"]
+    if not _is_integer(exit_code) or exit_code not in _EXCEPTIONS:
+        raise ValueError("Invalid Horo application-error exit category")
+    _validate_payload(envelope["error"])
+    raise _EXCEPTIONS[exit_code](envelope["error"], exit_code)
+
+
+# Process
+
+# Required stdlib for explicit, shell-free owned process execution.
+  # nosec B404
+
+
+
+
+class CleanupError(OSError):
+
+    """Owned descendants were not proven terminal; callers must retain safety protection."""
+
+
+@dataclass(frozen=True)
+class _Identity:
+    pid: int
+    parent: int
+    group: int
+    state: str
+    birth: str
+
+
+def validated_command(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None) -> list[str]:
+    """Validate authorized argv and resolve its executable; this is not command authorization."""
+    if isinstance(command, (str, bytes)) or not command or any(not isinstance(item, str) or "\0" in item for item in command):
+        raise ValueError("A command must be a nonempty sequence of NUL-free strings")
+    executable = command[0]
+    if not executable:
+        raise ValueError("A command executable must not be empty")
+    resolved = _executable_path(executable, cwd.resolve(), env)
+    if resolved is None:
+        raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), executable)
+    # Preserve the selected executable path: resolving a venv Python symlink changes its environment.
+    return [os.path.abspath(resolved), *command[1:]]
+
+
+def _executable_path(executable: str, directory: Path, env: Mapping[str, str] | None) -> str | None:
+    """Resolve executable lookup from the child's working directory and PATH."""
+    if Path(executable).is_absolute() or any(separator in executable for separator in ("/", "\\")):
+        candidate = Path(executable)
+        candidate = candidate if candidate.is_absolute() else directory / candidate
+        resolved = shutil.which(str(candidate))
+    else:
+        paths = [str(Path(item) if Path(item).is_absolute() else directory / item)
+                 for item in os.get_exec_path(env)]
+        resolved = shutil.which(executable, path=os.pathsep.join(paths))
+    return resolved
+
+
+def _snapshot() -> dict[int, _Identity]:
+    """Capture PID birth and ancestry together; command names never establish ownership."""
+    # Fixed OS inventory binary and argv; process names cannot supply executable or options.
+    result = subprocess.run(["/bin/ps", "-axo", "pid=,ppid=,pgid=,stat=,lstart="],  # nosec B603
+                            capture_output=True, text=True, check=False, shell=False)
+    if result.returncode:
+        raise OSError(f"Cannot verify developer process ownership: {result.stderr.strip()}")
+    records = {}
+    for line in result.stdout.splitlines():
+        fields = line.split(None, 4)
+        if len(fields) != 5:
+            raise OSError("Malformed process ownership inventory")
+        pid, parent, group = map(int, fields[:3])
+        records[pid] = _Identity(pid, parent, group, fields[3], fields[4].strip())
+    return records
+
+
+def _discover(root: int, known: dict[int, _Identity], table: dict[int, _Identity]) -> None:
+    """A dedicated launch group discovers orphans; verified ancestry discovers other children."""
+    original = known.get(root)
+    current = table.get(root)
+    group_owned = not (original and current and original.birth != current.birth)
+    pending = list(table.values())
+    while pending:
+        additions = []
+        for record in pending:
+            parent = known.get(record.parent)
+            live_parent = table.get(record.parent)
+            verified_parent = parent and live_parent and parent.birth == live_parent.birth
+            if (record.group == root and group_owned) or verified_parent:
+                known[record.pid] = record
+                additions.append(record)
+        if not additions:
+            return
+        pending = [record for record in pending if record not in additions]
+
+
+def _live(known: dict[int, _Identity], table: dict[int, _Identity]) -> list[_Identity]:
+    return [record for pid, record in known.items() if pid in table
+            and table[pid].birth == record.birth and not table[pid].state.startswith(("Z", "X"))]
+
+
+def _depth(record: _Identity, known: dict[int, _Identity]) -> int:
+    parents = set()
+    while record.parent in known and record.parent not in parents:
+        parents.add(record.parent)
+        record = known[record.parent]
+    return len(parents)
+
+
+def _signal(record: _Identity, number: int) -> None:
+    """Recheck exact PID/birth before signaling; never target a bare process group."""
+    current = _snapshot().get(record.pid)
+    if current is None or current.birth != record.birth or current.state.startswith(("Z", "X")):
+        return
+    try:
+        if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
+            descriptor = os.pidfd_open(record.pid)
+            try:
+                # Revalidate after opening to bind the same process, even across PID reuse.
+                latest = _snapshot().get(record.pid)
+                if latest and latest.birth == record.birth:
+                    signal.pidfd_send_signal(descriptor, number)
+            finally:
+                os.close(descriptor)
+        else:
+            os.kill(record.pid, number)
+    except ProcessLookupError:
+        pass
+
+
+def _cleanup(process: subprocess.Popen, known: dict[int, _Identity]) -> None:
+    """Stop children before their parent, then verify termination and reap the owned root."""
+    last_error = None
+    for number, grace in ((signal.SIGINT, 0.4), (signal.SIGTERM, 0.6), (signal.SIGKILL, 2.0)):
+        table = _snapshot()
+        _discover(process.pid, known, table)
+        for record in sorted(_live(known, table), key=lambda item: _depth(item, known), reverse=True):
+            try:
+                _signal(record, number)
+            except OSError as error:
+                last_error = error
+        deadline = time.monotonic() + grace
+        while True:
+            process.poll()
+            table = _snapshot()
+            _discover(process.pid, known, table)
+            if not _live(known, table):
+                process.wait(timeout=1)
+                return
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.05)
+    raise CleanupError("Developer subprocess cleanup could not verify all owned descendants terminated") from last_error
+
+
+def _windows_run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None) -> int:
+    """Preserve ordinary Windows execution; interrupted tree cleanup is unqualified."""
+    # Caller-authorized executable and argv are validated by run; no command shell parses arguments.
+    # S8705: this local developer runner accepts operator-selected tool arguments, not agent-tool input.
+    # Sonar properties use single -DKEY=VALUE entries; extra scanner flags are explicit CLI options.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    with subprocess.Popen(command, cwd=cwd, env=env, shell=False,  # NOSONAR  # nosec B603
+                          creationflags=subprocess.CREATE_NEW_PROCESS_GROUP) as process:
+        try:
+            return process.wait()
+        except KeyboardInterrupt as error:
+            try:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
+            except (KeyboardInterrupt, SystemExit) as cleanup_error:
+                raise cleanup_error from CleanupError("Windows interrupted process cleanup was not confirmed")
+            except Exception as cleanup_error:
+                raise CleanupError("Windows interrupted process cleanup was not confirmed") from cleanup_error
+            raise CleanupError("Windows interruption cleanup cannot verify descendant termination") from error
+
+
+def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None) -> int:
+    """Run argv without a shell; return 130 only after verified POSIX tree cleanup."""
+    command = validated_command(command, cwd, env)
+    if os.name == "nt":
+        return _windows_run(command, cwd, env)
+    # Caller-authorized absolute executable and validated argv; a shell never interprets arguments.
+    # S8705: this local developer runner accepts operator-selected tool arguments, not agent-tool input.
+    # Sonar properties use single -DKEY=VALUE entries; extra scanner flags are explicit CLI options.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
+    process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=True, shell=False)  # NOSONAR  # nosec B603
+    known: dict[int, _Identity] = {}
+    try:
+        while True:
+            table = _snapshot()
+            _discover(process.pid, known, table)
+            try:
+                code = process.wait(timeout=0.5)
+                _cleanup(process, known)
+                return code
+            except subprocess.TimeoutExpired:
+                continue
+    except KeyboardInterrupt:
+        try:
+            _cleanup(process, known)
+        except (KeyboardInterrupt, SystemExit) as error:
+            raise error from CleanupError("Interrupted developer subprocess cleanup was not confirmed")
+        except Exception as error:
+            raise CleanupError("Interrupted developer subprocess cleanup was not confirmed") from error
+        return 130
+    except CleanupError:
+        raise
+    except BaseException:
+        # Inventory/launch errors also must not silently release an active owned root.
+        try:
+            _cleanup(process, known)
+        except (KeyboardInterrupt, SystemExit) as error:
+            raise error from CleanupError("Developer subprocess cleanup after failure was not confirmed")
+        except Exception as error:
+            raise CleanupError("Developer subprocess cleanup after failure was not confirmed") from error
+        raise
+
+
+# Cache
+
+# Git metadata/worktree operations use explicit argv without a shell.
+  # nosec B404
+
+
+
+
+
+_GENERATION = re.compile(r"gen-[0-9a-f]{32}")
+_COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
+_OWNER = "horo-local-build-cache-v1"
+_CLEANUP_MARKER = "cleanup-unverified.json"
+_READONLY_CONFIG = "readonly.conf"
+_GENERATION_MARKER = "generation.json"
+_MAX_SIZE = re.compile(r"[1-9]\d*(?:[KMGT]i?B?|[kmgt])?", re.ASCII)
+
+
+class CacheError(RuntimeError):
+
+    """A local cache operation could not complete safely."""
+
+
+@dataclass(frozen=True)
+class CacheBinding:
+
+    """Compiler launcher and private environment for one leased generation."""
+
+    launcher: str
+    env: dict[str, str]
+    generation: str
+    main_commit: str
+
+
+def _git(repo: Path, *arguments: str) -> str:
+    executable = shutil.which("git")
+    if executable is None:
+        raise CacheError("Git is required for local build cache ownership")
+    command = [os.path.abspath(executable), "-c", "core.fsmonitor=false", "-C", str(repo), *arguments]
+    # The local operator owns PATH and the checkout; executable discovery preserves that tool choice.
+    # Private callers supply fixed Git subcommands and pinned refs; paths remain separate argv entries.
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    result = subprocess.run(command, check=False, capture_output=True, text=True, shell=False)  # nosec B603
+    if result.returncode:
+        raise CacheError(f"git {' '.join(arguments[:2])} failed: {result.stderr.strip()}")
+    return result.stdout.strip()
+
+
+def cache_directory(repo: Path) -> Path:
+    """Share checkpoints across linked worktrees, separately for each host platform."""
+    common = Path(_git(repo, "rev-parse", "--git-common-dir"))
+    common = (common if common.is_absolute() else repo / common).resolve()
+    identity = hashlib.sha256(os.fsencode(common)).hexdigest()[:24]
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME", str(Path.home() / ".cache")))
+    return base / "horo-build" / identity / f"{sys.platform}-{platform.machine()}"
+
+
+def _safe_root(root: Path, repo: Path) -> None:
+    """Never manage storage through symlinks or inside any source checkout."""
+    if any(path.is_symlink() for path in (root, *root.parents)):
+        raise CacheError("Local build cache path must not contain symlinks")
+    resolved = root.resolve()
+    sources = [Path(item[len("worktree "):]).resolve()
+               for item in _git(repo, "worktree", "list", "--porcelain", "-z").split("\0")
+               if item.startswith("worktree ")]
+    common = Path(_git(repo, "rev-parse", "--git-common-dir"))
+    common = (common if common.is_absolute() else repo / common).resolve()
+    if any(resolved.is_relative_to(source) for source in sources) or resolved.is_relative_to(common):
+        raise CacheError("Local build cache must be outside source and Git directories")
+    if root.exists() and not root.is_dir():
+        raise CacheError("Local build cache root is not a directory")
+
+
+def _atomic_json(path: Path, value: dict[str, object]) -> None:
+    temporary = path.with_name(f".{path.name}-{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("x", encoding="utf-8") as stream:
+            json.dump(value, stream, indent=2)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _read_json(path: Path) -> dict[str, object] | None:
+    if path.is_symlink():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+class _FileLock:
+
+    """OS-owned byte/file locks release automatically on crash; Windows supports readers."""
+
+    def __init__(self, path: Path, *, shared: bool = False, blocking: bool = True):
+        self.path, self.shared, self.blocking = path, shared, blocking
+        self.stream = None
+        self.overlapped = None
+
+    def __enter__(self) -> "_FileLock":
+        if self.path.is_symlink():
+            raise CacheError(f"Cache lock must not be a symlink: {self.path}")
+        self.stream = self.path.open("a+b")
+        try:
+            if os.name == "nt":
+                self._windows_lock()
+            else:
+                import fcntl
+                flags = fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX
+                if not self.blocking:
+                    flags |= fcntl.LOCK_NB
+                fcntl.flock(self.stream.fileno(), flags)
+        except BaseException:
+            self.stream.close()
+            self.stream = None
+            raise
+        return self
+
+    def _windows_lock(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        class Overlapped(ctypes.Structure):
+            _fields_ = [("Internal", ctypes.c_size_t), ("InternalHigh", ctypes.c_size_t),
+                        ("Offset", wintypes.DWORD), ("OffsetHigh", wintypes.DWORD),
+                        ("hEvent", wintypes.HANDLE)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        lock = kernel.LockFileEx
+        lock.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                         wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(Overlapped)]
+        lock.restype = wintypes.BOOL
+        self.overlapped = Overlapped()
+        flags = 0 if self.shared else 2
+        # Poll nonblocking requests so Python can handle cancellation while waiting.
+        while not lock(msvcrt.get_osfhandle(self.stream.fileno()), flags | 1, 0, 1, 0,
+                       ctypes.byref(self.overlapped)):
+            error = ctypes.get_last_error()
+            if error not in (32, 33):
+                raise ctypes.WinError(error)
+            if not self.blocking:
+                raise BlockingIOError(error, "Cache generation is in use")
+            time.sleep(0.1)
+
+    def __exit__(self, *_: object) -> None:
+        if self.stream is None:
+            return
+        try:
+            if os.name == "nt":
+                import ctypes
+                from ctypes import wintypes
+                import msvcrt
+                unlock = ctypes.WinDLL("kernel32", use_last_error=True).UnlockFileEx
+                unlock.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.DWORD,
+                                   wintypes.DWORD, ctypes.c_void_p]
+                unlock.restype = wintypes.BOOL
+                if not unlock(msvcrt.get_osfhandle(self.stream.fileno()), 0, 1, 0,
+                              ctypes.byref(self.overlapped)):
+                    raise ctypes.WinError(ctypes.get_last_error())
+            else:
+                import fcntl
+                fcntl.flock(self.stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            self.stream.close()
+            self.stream = None
+
+
+def _initialize(root: Path, repo: Path) -> None:
+    _safe_root(root, repo)
+    root.mkdir(parents=True, exist_ok=True)
+    for name in ("generations", "leases"):
+        directory = root / name
+        if directory.is_symlink():
+            raise CacheError(f"Cache directory must not be a symlink: {directory}")
+        directory.mkdir(exist_ok=True)
+
+
+@contextlib.contextmanager
+def heavy_build_lock(repo: Path) -> Iterator[None]:
+    """Serialize dev.py configure/compilation across all repository worktrees."""
+    root = cache_directory(repo)
+    _initialize(root, repo)
+    with _FileLock(root / "heavy-build.lock"):
+        if (root / _CLEANUP_MARKER).exists():
+            raise CacheError(f"An earlier build has unverified descendants; inspect {root / _CLEANUP_MARKER} before further builds")
+        yield
+
+
+def record_cleanup_failure(repo: Path) -> None:
+    """Preserve generations and block new builds until orphan ownership is audited."""
+    root = cache_directory(repo)
+    _initialize(root, repo)
+    _atomic_json(root / _CLEANUP_MARKER, {"schema": 1, "reason": "subprocess descendant termination was not confirmed"})
+
+
+def _ready(root: Path) -> tuple[Path, dict[str, object]] | None:
+    pointer = _read_json(root / "ready.json")
+    if not pointer or pointer.get("schema") != 1:
+        return None
+    name, commit = pointer.get("generation"), pointer.get("main_commit")
+    if not isinstance(name, str) or not _GENERATION.fullmatch(name):
+        return None
+    if not isinstance(commit, str) or not _COMMIT.fullmatch(commit):
+        return None
+    directory = root / "generations" / name
+    if any(path.is_symlink() for path in (root / "generations", directory, directory / "compiler",
+                                         directory / _READONLY_CONFIG)):
+        return None
+    marker = _read_json(directory / _GENERATION_MARKER)
+    if not marker or marker.get("schema") != 1 or marker.get("owner") != _OWNER or marker.get("state") != "ready":
+        return None
+    if marker.get("main_commit") != commit or marker.get("generation") != name:
+        return None
+    if not (directory / "compiler").is_dir() or not (directory / _READONLY_CONFIG).is_file():
+        return None
+    if not _valid_readonly_config(directory, marker):
+        return None
+    return directory, pointer
+
+
+def _valid_readonly_config(directory: Path, marker: dict[str, object]) -> bool:
+    """Admit only the exact manager-generated read-only compiler configuration."""
+    size = marker.get("max_size")
+    if not isinstance(size, str) or not _MAX_SIZE.fullmatch(size):
+        return False
+    try:
+        return (directory / _READONLY_CONFIG).read_text(encoding="utf-8") == _config(size, readonly=True)
+    except (OSError, UnicodeError):
+        return False
+
+
+def _binding(directory: Path, commit: str, source: Path, launcher: str,
+             environ: Mapping[str, str] | None, *, readonly: bool) -> CacheBinding:
+    environment = {key: value for key, value in (os.environ if environ is None else environ).items()
+                   if not key.upper().startswith("CCACHE_")}
+    environment.update({"CCACHE_DIR": str(directory / "compiler"),
+                        "CCACHE_CONFIGPATH": str(directory / (_READONLY_CONFIG if readonly else "writer.conf")),
+                        "CCACHE_BASEDIR": str(source.resolve())})
+    return CacheBinding(launcher, environment, directory.name, commit)
+
+
+@contextlib.contextmanager
+def automatic_cache(repo: Path, env: Mapping[str, str] | None = None) -> Iterator[CacheBinding | None]:
+    """Discover a completed checkpoint without creating storage on a miss."""
+    root = cache_directory(repo)
+    launcher = shutil.which("ccache")
+    stack = contextlib.ExitStack()
+    binding = None
+    try:
+        _safe_root(root, repo)
+        candidate = _ready(root) if launcher else None
+        if candidate and not (root / "leases").is_symlink() and (root / "leases").is_dir():
+            directory, pointer = candidate
+            stack.enter_context(_FileLock(root / "leases" / f"{directory.name}.lock", shared=True))
+            # GC may have retired this generation between discovery and lock acquisition.
+            current = _ready(root)
+            if current is not None and current[0] == directory:
+                binding = _binding(directory, str(pointer["main_commit"]), repo, launcher, env, readonly=True)
+    except (CacheError, OSError):
+        stack.close()
+    with stack:
+        yield binding
+
+
+def status(repo: Path) -> dict[str, object]:
+    """Report readiness without creating directories or changing cache metadata."""
+    root = cache_directory(repo)
+    try:
+        _safe_root(root, repo)
+        ready = _ready(root)
+    except (CacheError, OSError):
+        ready = None
+    result: dict[str, object] = {"root": str(root), "ready": ready is not None,
+                                 "launcher_available": shutil.which("ccache") is not None,
+                                 "cleanup_blocked": (root / _CLEANUP_MARKER).exists()}
+    if ready:
+        result.update(ready[1])
+    return result
+
+
+def _config(max_size: str, *, readonly: bool) -> str:
+    # ccache accepts multiline remote_storage values; an empty value must be last.
+    return (f"compiler_check = content\nsloppiness =\nmax_size = {max_size}\n"
+            f"read_only = {'true' if readonly else 'false'}\nremote_storage =\n")
+
+
+def _write_configs(directory: Path, max_size: str) -> None:
+    for name, readonly in (("writer.conf", False), (_READONLY_CONFIG, True)):
+        (directory / name).write_text(_config(max_size, readonly=readonly), encoding="utf-8")
+
+
+def _seed(source: Path, destination: Path) -> None:
+    """Copy compiler entries without aliases or links to the previous generation."""
+    if any(path.is_symlink() for path in source.rglob("*")):
+        raise CacheError("Previous compiler generation contains symlinks; refusing to copy")
+    shutil.copytree(source, destination, dirs_exist_ok=True, copy_function=shutil.copy2)
+
+
+def _retirement_candidate(directory: Path) -> bool:
+    """Keep unknown generations and partial producer worktrees recoverable."""
+    marker = _read_json(directory / _GENERATION_MARKER)
+    if not marker or marker.get("schema") != 1 or marker.get("owner") != _OWNER or marker.get("state") != "ready":
+        return False
+    if marker.get("generation") != directory.name:
+        return False
+    return not (directory / "source").exists() and not (directory / "source").is_symlink()
+
+
+def _retire(root: Path, active: str) -> None:
+    """Delete only ready manager-owned generations whose readers have all released."""
+    if any(path.is_symlink() for path in (root, *root.parents, root / "generations", root / "leases")):
+        raise CacheError("Refusing retirement through a symlinked cache directory")
+    if (root / _CLEANUP_MARKER).exists():
+        return
+    for directory in (root / "generations").iterdir():
+        if directory.name == active or not _GENERATION.fullmatch(directory.name) or directory.is_symlink():
+            continue
+        if not _retirement_candidate(directory):
+            continue
+        try:
+            with _FileLock(root / "leases" / f"{directory.name}.lock", blocking=False):
+                if (root / _CLEANUP_MARKER).exists():
+                    return
+                if directory.resolve().parent != (root / "generations").resolve():
+                    raise CacheError("Refusing generation retirement outside managed storage")
+                shutil.rmtree(directory)
+        except OSError:
+            continue
+
+
+def _new_candidate(root: Path, commit: str, max_size: str) -> tuple[Path, dict[str, object]]:
+    """Create an unpublished, manager-owned generation before seeding or checkout creation."""
+    name = f"gen-{uuid.uuid4().hex}"
+    directory = root / "generations" / name
+    directory.mkdir()
+    (root / "leases" / f"{name}.lock").touch()
+    marker: dict[str, object] = {"schema": 1, "owner": _OWNER, "generation": name,
+                                 "main_commit": commit, "max_size": max_size, "state": "preparing"}
+    _atomic_json(directory / _GENERATION_MARKER, marker)
+    (directory / "compiler").mkdir()
+    return directory, marker
+
+
+def prepare_cache(repo: Path, build_callback: Callable[[Path, Path, CacheBinding], int],
+                  max_size: str = "4G", main_ref: str = "origin/main",
+                  env: Mapping[str, str] | None = None) -> int:
+    """Build pinned clean main, then atomically publish; any failure preserves ready A."""
+    if main_ref not in ("origin/main", "refs/remotes/origin/main"):
+        raise CacheError("Only origin/main may produce local compiler checkpoints")
+    if not _MAX_SIZE.fullmatch(max_size):
+        raise CacheError("Cache max size must be a positive size such as 4G")
+    launcher = shutil.which("ccache")
+    if launcher is None:
+        raise CacheError("ccache is required for cache prepare; install ccache and retry")
+    root = cache_directory(repo)
+    _initialize(root, repo)
+    with _FileLock(root / "writer.lock"):
+        if (root / _CLEANUP_MARKER).exists():
+            raise CacheError("An earlier build has unverified descendants; checkpoint preparation is blocked")
+        commit = _git(repo, "rev-parse", "--verify", f"{main_ref}^{{commit}}")
+        if not _COMMIT.fullmatch(commit):
+            raise CacheError("Cannot identify pinned origin/main commit")
+        directory, marker = _new_candidate(root, commit, max_size)
+        name = directory.name
+        compiler = directory / "compiler"
+        previous = _ready(root)
+        if previous:
+            with _FileLock(root / "leases" / f"{previous[0].name}.lock", shared=True):
+                _seed(previous[0] / "compiler", compiler)
+        _write_configs(directory, max_size)
+        source = directory / "source"
+        build = source / "build" / "dev-cache"
+        _git(repo, "worktree", "add", "--detach", str(source), commit)
+        if _git(source, "rev-parse", "HEAD") != commit or _git(source, "status", "--porcelain"):
+            raise CacheError("Cache producer checkout must remain clean at pinned main")
+        binding = _binding(directory, commit, source, launcher, env, readonly=False)
+        code = build_callback(source, build, binding)
+        if code:
+            marker["state"] = "failed"
+            _atomic_json(directory / _GENERATION_MARKER, marker)
+            return code
+        if _git(source, "rev-parse", "HEAD") != commit or _git(source, "status", "--porcelain"):
+            marker["state"] = "failed"
+            _atomic_json(directory / _GENERATION_MARKER, marker)
+            raise CacheError("Cache producer modified pinned main; checkpoint was not published")
+        _preserve_producer_recipe(build, directory)
+        _git(repo, "worktree", "remove", str(source))
+        marker["state"] = "ready"
+        _atomic_json(directory / _GENERATION_MARKER, marker)
+        _atomic_json(root / "ready.json", {"schema": 1, "generation": name, "main_commit": commit})
+        _retire(root, name)
+        return 0
+
+
+def _preserve_producer_recipe(build: Path, generation: Path) -> None:
+    """Retain diagnostic compiler recipes without retaining the disposable producer."""
+    compile_commands = build / "compile_commands.json"
+    if compile_commands.is_file():
+        shutil.copy2(compile_commands, generation / "producer-compile-commands.json")
+
+
+# Ci Cache
+
+def dependency_fingerprint(root: Path) -> str:
+    """Hash declarations and capability defaults, including file names and CRLF normalization."""
+    paths = {
+        root / "CMakeLists.txt",
+        root / "cmake" / "Dependencies.cmake",
+        *root.glob("cmake/Horo*Dependency.cmake"),
+        *root.glob("cmake/Horo*DependencyPolicy.cmake"),
+        root / "cmake" / "HoroGnsProtobufConfig.cmake",
+    }
+    digest = hashlib.sha256(b"horo-ci-dependencies-v1\0")
+    for path in sorted(paths):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0")
+        digest.update(path.read_bytes().replace(bytes((13, 10)), b"\n") + b"\0")
+    return digest.hexdigest()
+
+
+def compiler_identity(compiler: str, text: str) -> str:
+    """Validate version output from the composite action's fixed tool probes."""
+    if compiler == "cl":
+        match = re.search(r"Compiler Version (\d+(?:\.\d+)+)", text)
+        family = "msvc"
+    elif compiler in {"clang", "clang++"}:
+        match = re.search(r"clang version (\d+(?:\.\d+)+)", text)
+        family = "appleclang" if "Apple clang" in text else "clang"
+    elif compiler in {"gcc", "g++"}:
+        match = re.fullmatch(r"(\d+(?:\.\d+)+)", text.strip())
+        family = "gcc"
+    else:
+        raise ValueError(f"Unsupported CI compiler {compiler}")
+    if match is None:
+        raise ValueError(f"Cannot identify compiler {compiler}")
+    return f"{family}-{match.group(1)}"
+
+
+def ci_cache_main(argv: list[str] | None = None) -> None:
+    """Write validated toolchain and dependency identities to GitHub step outputs."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--github-output", type=Path, required=True)
+    parser.add_argument("--cc", required=True)
+    parser.add_argument("--cxx", required=True)
+    parser.add_argument("--cc-version", required=True)
+    parser.add_argument("--cxx-version", required=True)
+    parser.add_argument("--cmake-version", required=True)
+    args = parser.parse_args(argv)
+    root = Path(__file__).resolve().parents[1]
+    match = re.search(r"cmake version (\d+\.\d+)\.", args.cmake_version)
+    if match is None:
+        raise ValueError("Cannot identify CMake version")
+    identities = {
+        "compiler": compiler_identity(args.cxx, args.cxx_version),
+        "c-compiler": compiler_identity(args.cc, args.cc_version),
+        "cmake": match.group(1),
+        "dependencies": dependency_fingerprint(root),
+    }
+    with args.github_output.open("a", encoding="utf-8") as output:
+        for key, value in identities.items():
+            print(f"{key}={value}", file=output)
+    print(f"Compiler: {identities['compiler']}; C compiler: {identities['c-compiler']}; CMake: {identities['cmake']}")
+
+
+# Notes
+
+#!/usr/bin/env python3
+
+
+
+
+
+
+
+
+
+
+MAX_SOURCE_BYTES = 262144
+MAX_SNAPSHOT_BYTES = 32768
+MAX_ITEM_BYTES = 2048
+MAX_ITEMS = 64
+CATEGORIES = ("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
+HEADER = re.compile(r"^## \[([^\]]+)\](?: [—-] (\d{4}-\d{2}-\d{2}))?$", re.MULTILINE)
+
+
+class NotesError(ValueError):
+    """Actionable release-notes validation failure."""
+
+
+def parse_version_core(core: str, text: str) -> tuple[int, int, int]:
+    components = core.split(".")
+    if len(components) != 3:
+        raise NotesError(f"invalid semantic version '{text}'")
+    for part in components:
+        if not part.isascii() or not part.isdecimal() or (len(part) > 1 and part[0] == "0"):
+            raise NotesError(f"invalid semantic version '{text}'")
+    values = tuple(map(int, components))
+    if any(value > 0xffffffff for value in values):
+        raise NotesError(f"semantic version core overflows 32 bits: '{text}'")
+    return values
+
+
+def validate_identifiers(identifiers: str, numeric_leading_zero: bool, text: str) -> None:
+    for part in identifiers.split("."):
+        if not part or not part.isascii() or not all(char.isalnum() or char == "-" for char in part):
+            raise NotesError(f"invalid semantic version '{text}'")
+        if numeric_leading_zero and part.isdecimal() and len(part) > 1 and part[0] == "0":
+            raise NotesError(f"noncanonical prerelease version '{text}'")
+
+
+def version_parts(text: str) -> tuple:
+    if not text or len(text) > 128:
+        raise NotesError(f"invalid semantic version '{text[:128]}'")
+    core_and_prerelease, separator, build = text.partition("+")
+    core, prerelease_separator, prerelease = core_and_prerelease.partition("-")
+    if (separator and not build) or (prerelease_separator and not prerelease):
+        raise NotesError(f"invalid semantic version '{text}'")
+    values = parse_version_core(core, text)
+    if prerelease_separator:
+        validate_identifiers(prerelease, True, text)
+    if separator:
+        validate_identifiers(build, False, text)
+    return values + (prerelease, build)
+
+
+def unsafe_markdown(item: str) -> bool:
+    return (any(ord(char) < 32 or ord(char) == 127 for char in item)
+            or "<" in item or ">" in item or re.search(r"!\[|\]\((?!https://)", item) is not None
+            or item.count("`") % 2 != 0 or item.count("[") != item.count("]")
+            or item.count("(") != item.count(")"))
+
+
+def validate_item(item: str, version: str) -> str:
+    if not item or len(item.encode("utf-8")) > MAX_ITEM_BYTES:
+        raise NotesError(f"{version}: missing or oversized note item")
+    if unsafe_markdown(item):
+        raise NotesError(f"{version}: unsafe or malformed Markdown item")
+    return item
+
+
+def validate_date(version: str, date: str | None) -> None:
+    try:
+        if not date:
+            raise ValueError()
+        datetime.date.fromisoformat(date)
+    except ValueError as error:
+        raise NotesError(f"{version}: missing or invalid ISO release date") from error
+
+
+def start_category(line: str, version: str, sections: list[dict]) -> dict:
+    category = line[4:]
+    if category not in CATEGORIES or any(part["category"] == category for part in sections):
+        raise NotesError(f"{version}: unknown or repeated category '{category}'")
+    section = {"category": category, "items": []}
+    sections.append(section)
+    return section
+
+
+def parse_sections(version: str, lines: str) -> list[dict]:
+    sections = []
+    current = None
+    count = 0
+    for raw in lines.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith("### "):
+            current = start_category(line, version, sections)
+        elif line.startswith("- ") and current is not None:
+            count += 1
+            if count > MAX_ITEMS:
+                raise NotesError(f"{version}: too many note items")
+            current["items"].append(validate_item(line[2:].strip(), version))
+        else:
+            raise NotesError(f"{version}: expected category heading or bullet near '{line[:64]}'")
+    if not sections or any(not part["items"] for part in sections):
+        raise NotesError(f"{version}: every category must have bullets")
+    return sections
+
+
+def parse_entry(version: str, date: str | None, lines: str) -> dict:
+    version_parts(version)
+    validate_date(version, date)
+    return {"version": version, "date": date, "sections": parse_sections(version, lines)}
+
+
+def release_headings(text: str) -> list[re.Match]:
+    for line in text.splitlines():
+        if line.startswith("## ") and HEADER.fullmatch(line) is None:
+            raise NotesError(f"malformed release heading: {line[:80]}")
+    headings = list(HEADER.finditer(text))
+    if not headings:
+        raise NotesError("CHANGELOG.md has no version headings")
+    return headings
+
+
+def parse_changelog(text: str) -> list[dict]:
+    """Parse bounded released entries; Unreleased is never candidate content."""
+    if len(text.encode("utf-8")) > MAX_SOURCE_BYTES:
+        raise NotesError(f"CHANGELOG.md exceeds {MAX_SOURCE_BYTES} bytes")
+    headings = release_headings(text)
+    entries = []
+    seen = set()
+    for index, heading in enumerate(headings):
+        version, date = heading.groups()
+        if version == "Unreleased":
+            if date:
+                raise NotesError("[Unreleased] must not have a date")
+            continue
+        if version in seen:
+            raise NotesError(f"duplicate release notes for {version}")
+        seen.add(version)
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+        entries.append(parse_entry(version, date, text[heading.end():end]))
+    return entries
+
+
+def select_version(entries: list[dict], version: str) -> dict:
+    version_parts(version)
+    for entry in entries:
+        if entry["version"] == version:
+            return entry
+    raise NotesError(f"missing release notes for exact candidate version {version}")
+
+
+def select_range(entries: list[dict], lower: str, upper: str) -> list[dict]:
+    """Select released notes in (lower, upper], excluding Unreleased."""
+    def precedence(version: str) -> tuple:
+        major, minor, patch, prerelease, _build = version_parts(version)
+        identifiers = tuple((0, int(part)) if part.isdigit() else (1, part)
+                            for part in prerelease.split(".")) if prerelease else ()
+        return major, minor, patch, bool(not prerelease), identifiers
+
+    low, high = precedence(lower), precedence(upper)
+    if low >= high:
+        raise NotesError("release notes range must advance")
+    return [entry for entry in entries if low < precedence(entry["version"]) <= high]
+
+
+def render_markdown(entry: dict) -> str:
+    lines = [f'## [{entry["version"]}] — {entry["date"]}']
+    for section in entry["sections"]:
+        lines += ["", f'### {section["category"]}']
+        lines += [f"- {item}" for item in section["items"]]
+    return "\n".join(lines) + "\n"
+
+
+def snapshot_bytes(snapshot: dict) -> bytes:
+    return (json.dumps(snapshot, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def make_snapshot(entry: dict, product: str, locale: str = "en-US") -> dict:
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,63}", product):
+        raise NotesError("product identity must be a bounded lowercase slug")
+    if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", locale):
+        raise NotesError("locale must be a language-region tag such as en-US")
+    snapshot = {"schemaVersion": 1, "product": product, "version": entry["version"],
+                "locale": locale, "date": entry["date"], "sections": entry["sections"],
+                "markdown": render_markdown(entry)}
+    if len(snapshot_bytes(snapshot)) > MAX_SNAPSHOT_BYTES:
+        raise NotesError(f'{entry["version"]}: snapshot exceeds {MAX_SNAPSHOT_BYTES} bytes')
+    return snapshot
+
+
+def render_header(snapshot: dict) -> str:
+    """Produce Welcome cards from exactly the frozen candidate snapshot."""
+    items = [item for section in snapshot["sections"] for item in section["items"]][:2]
+    items += [""] * (2 - len(items))
+    title = f'v{snapshot["version"]} — {calendar.month_name[int(snapshot["date"][5:7])]} {snapshot["date"][:4]}'
+    cards = [f'    {{"Release Notes", {json.dumps(title, ensure_ascii=False)}, '
+             f'{json.dumps(item[:120], ensure_ascii=False)}}}' for item in items]
+    return "\n".join((
+        "// Generated from the reviewed release-notes snapshot. Do not edit.",
+        "#pragma once", "", "namespace Horo::Generated {",
+        "struct WhatsNewEntry { const char* tag; const char* title; const char* body; };",
+        "inline constexpr int kWhatsNewCount = 2;",
+        "inline constexpr WhatsNewEntry kWhatsNewEntries[2] = {",
+        ",\n".join(cards), "};", "} // namespace Horo::Generated", ""
+    ))
+
+
+def generated_outputs() -> tuple[Path, Path]:
+    """Keep generated output names fixed beneath the invocation's build directory."""
+    directory = Path.cwd() / "generated"
+    if directory.is_symlink():
+        raise NotesError("generated output directory must not be a symlink")
+    directory.mkdir(exist_ok=True)
+    if not directory.is_dir():
+        raise NotesError("generated output directory is not a directory")
+    snapshot = directory / "ReleaseNotesSnapshot.json"
+    header = directory / "GeneratedBuildInfo.h"
+    if snapshot.is_symlink() or header.is_symlink():
+        raise NotesError("generated output must not be a symlink")
+    return snapshot, header
+
+
+def notes_main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", type=Path, required=True)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--product", required=True)
+    args = parser.parse_args(argv)
+    try:
+        if not args.source.is_file() or args.source.stat().st_size > MAX_SOURCE_BYTES:
+            raise NotesError("CHANGELOG.md is missing or oversized")
+        entry = select_version(parse_changelog(args.source.read_text(encoding="utf-8")), args.version)
+        snapshot = make_snapshot(entry, args.product)
+        snapshot_path, header_path = generated_outputs()
+        snapshot_path.write_bytes(snapshot_bytes(snapshot))
+        header_path.write_text(render_header(snapshot), encoding="utf-8")
+    except (OSError, UnicodeError, NotesError) as error:
+        print(f"[release-notes] {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+# Archive
+
+#!/usr/bin/env python3
+
+
+
+
+
+
+
+
+
+
+
+def notes_member(name: str) -> bool:
+    """Accept only a root or single package-directory notes file."""
+    if not name or "\\" in name or name.startswith("/"):
+        raise NotesError(f"unsafe package member path: {name}")
+    parts = PurePosixPath(name).parts
+    if any(part in (".", "..") for part in name.split("/")) or any(not part for part in name.split("/")):
+        raise NotesError(f"unsafe package member path: {name}")
+    return parts[-1] == "release-notes.json" and len(parts) in (1, 2)
+
+
+def verify_tar(snapshot: bytes, archive: Path) -> None:
+    # Read-only tar stream: extractfile returns bytes and never materializes member paths.
+    with tarfile.open(archive, "r:gz") as package:
+        members = [member for member in package.getmembers()
+                   if notes_member(member.name.rstrip("/"))]
+        if len(members) != 1 or not members[0].isfile() or members[0].size != len(snapshot):
+            raise NotesError("package must contain exactly one matching release-notes.json")
+        content = package.extractfile(members[0])
+        if content is None or content.read(MAX_SNAPSHOT_BYTES + 1) != snapshot:
+            raise NotesError("packaged release notes differ from the reviewed snapshot")
+
+
+def verify_zip(snapshot: bytes, archive: Path) -> None:
+    with zipfile.ZipFile(archive) as package:
+        members = [member for member in package.infolist()
+                   if notes_member(member.filename.rstrip("/"))]
+        if len(members) != 1 or members[0].is_dir() or members[0].file_size != len(snapshot):
+            raise NotesError("package must contain exactly one matching release-notes.json")
+        with package.open(members[0]) as content:
+            if content.read(MAX_SNAPSHOT_BYTES + 1) != snapshot:
+                raise NotesError("packaged release notes differ from the reviewed snapshot")
+
+
+def verify_archive(snapshot: bytes, archive: Path) -> None:
+    if not snapshot or len(snapshot) > MAX_SNAPSHOT_BYTES:
+        raise NotesError("reviewed notes snapshot is missing or oversized")
+    if archive.name.endswith(".tar.gz"):
+        verify_tar(snapshot, archive)
+    elif archive.suffix == ".zip":
+        verify_zip(snapshot, archive)
+    else:
+        raise NotesError(f"unsupported release archive format: {archive.name}")
+
+
+def archive_main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--snapshot", type=Path, required=True)
+    parser.add_argument("--archive", type=Path, required=True)
+    args = parser.parse_args(argv)
+    try:
+        verify_archive(args.snapshot.read_bytes(), args.archive)
+    except (OSError, ValueError, tarfile.TarError, zipfile.BadZipFile) as error:
+        print(f"[release-notes] {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+# Release
+
+#!/usr/bin/env python3
+
+
+
+
+
+
+
+
+
+
+
+
+
+def verify(snapshot_bytes: bytes, tag: str, cmake_text: str, release_body: str) -> None:
+    if not tag.startswith("v"):
+        raise NotesError("release tag must use v<exact-semver>")
+    version = tag[1:]
+    version_parts(version)
+    declared = [line.removeprefix('set(HORO_ENGINE_VERSION "').removesuffix('")')
+                for line in cmake_text.splitlines()
+                if line.startswith('set(HORO_ENGINE_VERSION "') and line.endswith('")')]
+    if declared != [version]:
+        raise NotesError(f"release tag {tag} does not match HORO_ENGINE_VERSION")
+    if not snapshot_bytes or len(snapshot_bytes) > MAX_SNAPSHOT_BYTES:
+        raise NotesError("reviewed notes snapshot is missing or oversized")
+    try:
+        snapshot = json.loads(snapshot_bytes)
+    except ValueError as error:
+        raise NotesError("reviewed notes snapshot is malformed") from error
+    if not isinstance(snapshot, dict):
+        raise NotesError("reviewed notes snapshot must be an object")
+    if (snapshot.get("schemaVersion") != 1 or snapshot.get("product") != "horo-editor"
+        or snapshot.get("version") != version or snapshot.get("locale") != "en-US"):
+        raise NotesError("reviewed notes snapshot product or exact version differs from release tag")
+    if release_body.replace((chr(13) + chr(10)), "\n") != snapshot.get("markdown", ""):
+        raise NotesError("GitHub Release body must equal the reviewed snapshot Markdown")
+
+
+def release_body(tag: str) -> str:
+    if not tag.startswith("v"):
+        raise NotesError("release tag must use v<exact-semver>")
+    version_parts(tag[1:])
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    token = os.environ.get("GH_TOKEN", "")
+    parts = repository.split("/")
+    if (len(parts) != 2 or not all(part not in (".", "..") and all(char.isascii() and
+        (char.isalnum() or char in "._-") for char in part) for part in parts) or not token):
+        raise NotesError("GITHUB_REPOSITORY and GH_TOKEN are required for release verification")
+    path = f"/repos/{repository}/releases/tags/{quote(tag, safe='')}"
+    connection = http.client.HTTPSConnection("api.github.com", timeout=30)
+    try:
+        connection.request("GET", path, headers={"Accept": "application/vnd.github+json",
+                                                 "Authorization": f"Bearer {token}",
+                                                 "User-Agent": "horo-release-notes-verifier"})
+        response = connection.getresponse()
+        if response.status != 200:
+            raise NotesError(f"GitHub Release lookup failed with HTTP {response.status}")
+        body = response.read(131073)
+        if len(body) > 131072:
+            raise NotesError("GitHub Release response exceeds 128 KiB")
+        data = json.loads(body)
+    except (OSError, http.client.HTTPException, ValueError) as error:
+        raise NotesError(f"cannot read GitHub Release for {tag}: {error}") from error
+    finally:
+        connection.close()
+    if not isinstance(data, dict) or not isinstance(data.get("body"), str):
+        raise NotesError(f"GitHub Release for {tag} has no reviewed body")
+    return data["body"]
+
+
+def release_main(argv=None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--snapshot", type=Path, required=True)
+    parser.add_argument("--cmake", type=Path, default=Path("CMakeLists.txt"))
+    parser.add_argument("--tag", required=True)
+    args = parser.parse_args(argv)
+    try:
+        verify(args.snapshot.read_bytes(), args.tag, args.cmake.read_text(encoding="utf-8"), release_body(args.tag))
+    except (OSError, NotesError) as error:
+        print(f"[release-notes] {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+# Pr
+
+#!/usr/bin/env python3
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
+JIRA_KEY = re.compile(r"(?<![A-Z0-9])([A-Z][A-Z0-9]+-\d+)(?![A-Z0-9])")
+CLOSING_REF = re.compile(
+    r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:horocore/horo-engine)?#(\d+)\b",
+    re.IGNORECASE,
+)
+ISSUE_REF = re.compile(r"(?<!\w)#(\d+)\b")
+
+
+class AnnotationError(Exception):
+    """A PR cannot be checked safely or a GitHub operation failed."""
+
+
+async def cli_token() -> str:
+    """Read CLI credentials with fixed arguments; no PR or user data enters argv."""
+    process = await asyncio.create_subprocess_exec(
+        "gh",
+        "auth",
+        "token",
+        "--hostname",
+        "github.com",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    try:
+        output, _ = await asyncio.wait_for(process.communicate(), timeout=30)
+    except TimeoutError:
+        process.kill()
+        await process.communicate()
+        raise AnnotationError("GitHub CLI credential lookup timed out") from None
+    if process.returncode:
+        raise AnnotationError("authenticate gh for github.com or set GH_TOKEN")
+    return output.decode("utf-8").strip()
+
+
+def github_token() -> str:
+    """Resolve credentials once before workers start; never print token output."""
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if not token:
+        try:
+            token = asyncio.run(cli_token())
+        except (OSError, UnicodeError) as error:
+            raise AnnotationError("cannot read GitHub CLI credentials; set GH_TOKEN") from error
+    if (
+        not token
+        or not token.isascii()
+        or any(not 33 <= ord(character) < 127 for character in token)
+    ):
+        raise AnnotationError("GitHub credentials are empty or malformed")
+    return token
+
+
+def repository(value: str) -> str:
+    """Accept only OWNER/REPO, never options, URLs, traversal or query fragments."""
+    if REPOSITORY.fullmatch(value) is None:
+        raise argparse.ArgumentTypeError("--repo must be an ASCII OWNER/REPO name")
+    return value
+
+
+class GitHub:
+    """Fixed-host, bounded JSON transport; each worker owns its connection."""
+
+    def __init__(self, token: str) -> None:
+        """Retain credentials for this transport's fixed GitHub host."""
+        self.token = token
+
+    def request(self, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+        connection = http.client.HTTPSConnection("api.github.com", timeout=30)
+        try:
+            connection.request(
+                method,
+                path,
+                body=json.dumps(payload) if payload is not None else None,
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {self.token}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "horo-pr-annotations",
+                },
+            )
+            response = connection.getresponse()
+            if not 200 <= response.status < 300:
+                raise AnnotationError(f"GitHub request failed with HTTP {response.status}")
+            body = response.read(MAX_RESPONSE_BYTES + 1)
+            if len(body) > MAX_RESPONSE_BYTES:
+                raise AnnotationError("GitHub response exceeds 16 MiB")
+            return json.loads(body) if body else None
+        except (OSError, http.client.HTTPException, ValueError) as error:
+            raise AnnotationError("cannot read GitHub JSON response") from error
+        finally:
+            connection.close()
+
+    def graphql(self, query: str, variables: dict[str, Any]) -> Any:
+        result = self.request("POST", "/graphql", {"query": query, "variables": variables})
+        if (
+            not isinstance(result, dict)
+            or result.get("errors")
+            or not isinstance(result.get("data"), dict)
+        ):
+            raise AnnotationError("GitHub GraphQL request failed")
+        return result["data"]
+
+    def pages(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        for page in range(1, 1001):
+            batch = self.request(
+                "GET",
+                path + "?" + urlencode({**(params or {}), "per_page": 100, "page": page}),
+            )
+            if not isinstance(batch, list):
+                raise AnnotationError("GitHub paginated response must be an array")
+            items.extend(batch)
+            if len(batch) < 100:
+                return items
+        raise AnnotationError("GitHub pagination exceeds 1000 pages")
+
+
+@dataclass
+class CheckOptions:
+    """Explicit shared check policy; transport creates a connection per request."""
+
+    api: GitHub
+    repo: str
+    default_branch: str
+    issue_override: int | None = None
+    project: str | None = None
+    project_number: int | None = None
+    project_pr_numbers: set[int] = field(default_factory=set)
+    include_development: bool = True
+    fix: bool = False
+
+
+def jira_key(pr: dict[str, Any]) -> str | None:
+    text = " ".join((pr.get("headRefName") or "", pr.get("title") or "", pr.get("body") or ""))
+    match = JIRA_KEY.search(text)
+    return match.group(1) if match else None
+
+
+def referenced_numbers(text: str, pattern: re.Pattern[str], excluded: int) -> set[int]:
+    """Collect distinct references while excluding the PR's own number."""
+    return {int(number) for number in pattern.findall(text)} - {excluded}
+
+
+def issue_number(pr: dict[str, Any]) -> int | None:
+    title_links = referenced_numbers(pr.get("title") or "", ISSUE_REF, pr["number"])
+    if len(title_links) == 1:
+        return next(iter(title_links))
+    linked = {item["number"] for item in pr.get("closingIssuesReferences") or []}
+    linked.update(referenced_numbers(pr.get("body") or "", CLOSING_REF, pr["number"]))
+    if not linked:
+        linked = title_links
+    linked.discard(pr["number"])
+    if len(linked) > 1:
+        raise AnnotationError(f"multiple development issues: {sorted(linked)}")
+    return next(iter(linked)) if linked else None
+
+
+def search_jira_issue(pr: dict[str, Any], options: CheckOptions) -> int:
+    """Resolve one exact Jira key without accepting partial or ambiguous searches."""
+    key = jira_key(pr)
+    if key is None:
+        raise AnnotationError("no linked issue or Jira key in branch name")
+    matches = options.api.request(
+        "GET",
+        "/search/issues?"
+        + urlencode({"q": f"repo:{options.repo} is:issue {key}", "per_page": 100}),
+    )
+    if matches.get("incomplete_results") or matches["total_count"] > len(matches["items"]):
+        raise AnnotationError("Jira issue search is incomplete; pass --issue NUMBER")
+    matches = [
+        item
+        for item in matches["items"]
+        if key in JIRA_KEY.findall(f"{item['title']} {item.get('body') or ''}")
+    ]
+    if len(matches) != 1:
+        raise AnnotationError(
+            f"Jira key {key} matched {len(matches)} GitHub issues; pass --issue NUMBER"
+        )
+    return matches[0]["number"]
+
+
+def resolve_issue(pr: dict[str, Any], options: CheckOptions) -> dict[str, Any]:
+    number = options.issue_override or issue_number(pr)
+    if number is None:
+        number = search_jira_issue(pr, options)
+    result = options.api.request("GET", f"/repos/{options.repo}/issues/{number}")
+    if "pull_request" in result:
+        raise AnnotationError("development reference points to a pull request, not an issue")
+    return {
+        "id": result["node_id"],
+        "number": result["number"],
+        "title": result["title"],
+        "body": result.get("body") or "",
+        "milestone": result.get("milestone"),
+        "labels": result.get("labels") or [],
+        "assignees": result.get("assignees") or [],
+        "projectItems": [],
+    }
+
+
+def names(items: list[dict[str, Any]] | None, field: str) -> set[str]:
+    return {item[field] for item in items or []}
+
+
+def closing_reference_page(data: dict[str, Any]) -> dict[str, Any]:
+    """Require GitHub to return a closing-reference connection for the PR."""
+    node = data.get("node")
+    if not node or not node.get("closingIssuesReferences"):
+        raise AnnotationError("GitHub did not return PR closing references")
+    return node["closingIssuesReferences"]
+
+
+def has_development_link(
+    pr: dict[str, Any], issue_number_value: int, options: CheckOptions
+) -> bool:
+    if pr.get("baseRefName") == options.default_branch and issue_number_value in referenced_numbers(
+        pr.get("body") or "", CLOSING_REF, pr["number"]
+    ):
+        return True
+    cursor = None
+    seen_cursors: set[str] = set()
+    for _ in range(1000):
+        data = options.api.graphql(
+            "query($id:ID!,$after:String){ node(id:$id){ ... on PullRequest { "
+            "closingIssuesReferences(first:100,after:$after){ nodes{number} pageInfo{hasNextPage endCursor} } } } }",
+            {"id": pr["id"], "after": cursor},
+        )
+        result = closing_reference_page(data)
+        if issue_number_value in {item["number"] for item in result["nodes"]}:
+            return True
+        if not result["pageInfo"]["hasNextPage"]:
+            return False
+        next_cursor = result["pageInfo"]["endCursor"]
+        if not next_cursor or next_cursor in seen_cursors:
+            raise AnnotationError("GitHub closing-reference pagination did not advance")
+        seen_cursors.add(next_cursor)
+        cursor = next_cursor
+    raise AnnotationError("GitHub closing-reference pagination exceeds 1000 pages")
+
+
+def milestone_changes(
+    pr: dict[str, Any], issue: dict[str, Any], default_branch: str
+) -> tuple[list[str], list[tuple[str, str]]]:
+    if issue.get("number") is None:
+        if pr.get("baseRefName") == default_branch and CLOSING_REF.findall(pr.get("body") or ""):
+            return [
+                "multiple issues referenced; milestone is ambiguous; closing references are present"
+            ], []
+        return ["no unambiguous issue; milestone and Development skipped"], []
+    expected = issue.get("milestone")
+    if expected is None:
+        return ["issue has no milestone; milestone skipped"], []
+    if (pr.get("milestone") or {}).get("number") != expected["number"]:
+        return [], [("milestone", expected["title"])]
+    return [], []
+
+
+def changes(
+    pr: dict[str, Any],
+    issue: dict[str, Any],
+    options: CheckOptions,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    notes, fixes = milestone_changes(pr, issue, options.default_branch)
+    issue_number_value = issue.get("number")
+    for label in sorted(names(issue.get("labels"), "name") - names(pr.get("labels"), "name")):
+        fixes.append(("label", label))
+    current_projects = names(pr.get("projectItems"), "title")
+    expected_projects = names(issue.get("projectItems"), "title")
+    if options.project:
+        expected_projects.add(options.project)
+    for project_name in sorted(expected_projects - current_projects):
+        fixes.append(("project", project_name))
+    issue_assignees = names(issue.get("assignees"), "login")
+    expected_assignees = issue_assignees or {pr["author"]["login"]}
+    for assignee in sorted(expected_assignees - names(pr.get("assignees"), "login")):
+        fixes.append(("assignee", assignee))
+    if (
+        issue_number_value is not None
+        and options.include_development
+        and not has_development_link(pr, issue_number_value, options)
+    ):
+        fixes.append(("development", str(issue_number_value)))
+    return notes, fixes
+
+
+def apply_fix(
+    number: int,
+    kind: str,
+    value: str,
+    pr: dict[str, Any],
+    issue: dict[str, Any],
+    options: CheckOptions,
+) -> None:
+    if kind == "development":
+        options.api.graphql(
+            "mutation($issue:ID!,$prs:[ID!]!){ addCloseIssueReferences(input:{issueId:$issue,pullRequestIds:$prs}){issue{id}} }",
+            {"issue": issue["id"], "prs": [pr["id"]]},
+        )
+        return
+    if kind == "milestone":
+        options.api.request(
+            "PATCH",
+            f"/repos/{options.repo}/issues/{number}",
+            {"milestone": issue["milestone"]["number"]},
+        )
+    elif kind == "label":
+        options.api.request(
+            "POST", f"/repos/{options.repo}/issues/{number}/labels", {"labels": [value]}
+        )
+    elif kind == "assignee":
+        options.api.request(
+            "POST",
+            f"/repos/{options.repo}/issues/{number}/assignees",
+            {"assignees": [value]},
+        )
+    elif kind == "project":
+        if options.project_number is None:
+            raise AnnotationError("adding an item requires --project NUMBER")
+        owner = options.repo.split("/", 1)[0]
+        options.api.request(
+            "POST",
+            f"/orgs/{owner}/projectsV2/{options.project_number}/items",
+            {"type": "PullRequest", "id": pr["databaseId"]},
+        )
+    else:
+        raise AnnotationError(f"unknown annotation kind: {kind}")
+
+
+def load_pr(number: int, options: CheckOptions) -> dict[str, Any]:
+    raw_pr = options.api.request("GET", f"/repos/{options.repo}/pulls/{number}")
+    return {
+        "id": raw_pr["node_id"],
+        "databaseId": raw_pr["id"],
+        "number": raw_pr["number"],
+        "title": raw_pr["title"],
+        "body": raw_pr.get("body") or "",
+        "headRefName": raw_pr["head"]["ref"],
+        "baseRefName": raw_pr["base"]["ref"],
+        "author": {"login": raw_pr["user"]["login"]},
+        "assignees": raw_pr.get("assignees") or [],
+        "closingIssuesReferences": [],
+        "milestone": raw_pr.get("milestone"),
+        "labels": raw_pr.get("labels") or [],
+        "projectItems": (
+            [{"title": options.project}]
+            if number in options.project_pr_numbers and options.project
+            else []
+        ),
+        "url": raw_pr["html_url"],
+    }
+
+
+def report_changes(
+    number: int,
+    pr: dict[str, Any],
+    issue: dict[str, Any],
+    fixes: list[tuple[str, str]],
+    options: CheckOptions,
+) -> bool:
+    """Report missing fields or apply them in order, stopping at the first failed write."""
+    action = "fix" if options.fix else "missing"
+    for kind, value in fixes:
+        print(f"  {action}: {kind} {value}", flush=True)
+        if options.fix:
+            try:
+                apply_fix(number, kind, value, pr, issue, options)
+            except AnnotationError as error:
+                print(f"  ERROR: {kind}: {error}", file=sys.stderr, flush=True)
+                return False
+    return True
+
+
+def report_notes(notes: list[str]) -> None:
+    """Report skipped annotation decisions before any attempted writes."""
+    for note in notes:
+        print(f"  note: {note}", flush=True)
+
+
+def check_pr(number: int, options: CheckOptions) -> bool:
+    pr = load_pr(number, options)
+    try:
+        issue = resolve_issue(pr, options)
+        issue_label = f"issue #{issue['number']}"
+    except AnnotationError as error:
+        issue = {
+            "id": "",
+            "number": None,
+            "title": "",
+            "body": "",
+            "milestone": None,
+            "labels": [],
+            "assignees": [],
+            "projectItems": [],
+        }
+        issue_label = "no unambiguous issue"
+        print(f"PR #{number}: note: {error}", flush=True)
+    notes, fixes = changes(pr, issue, options)
+    print(f"PR #{number} -> {issue_label} ({jira_key(pr) or 'no Jira key'})", flush=True)
+    report_notes(notes)
+    if options.fix and issue["number"] is None:
+        return False
+    if not report_changes(number, pr, issue, fixes, options):
+        return False
+    if not fixes and issue["number"] is not None:
+        print("  OK", flush=True)
+    return issue["number"] is not None and (not fixes or options.fix)
+
+
+def list_pr_numbers(options: CheckOptions, state: str, limit: int | None) -> list[int]:
+    api_state = state
+    if state == "merged":
+        api_state = "closed"
+    pulls = options.api.pages(f"/repos/{options.repo}/pulls", {"state": api_state})
+    if state in {"merged", "closed"}:
+        pulls = [pr for pr in pulls if bool(pr.get("merged_at")) == (state == "merged")]
+    numbers = [pr["number"] for pr in pulls]
+    return numbers[:limit] if limit is not None else numbers
+
+
+def validate_selection(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Require one selection mode and a single PR for an explicit issue override."""
+    if args.all == bool(args.prs) or (args.issue and len(args.prs) != 1):
+        parser.error("provide PR numbers or --all; --issue requires exactly one PR")
+
+
+def validate_arguments(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Reject ambiguous selections and invalid execution bounds before API access."""
+    validate_selection(parser, args)
+    if args.limit is not None and args.limit < 1:
+        parser.error("--limit must be positive")
+    if not 1 <= args.workers <= 16:
+        parser.error("--workers must be between 1 and 16")
+    if args.issue is not None and args.issue < 1:
+        parser.error("--issue must be positive")
+    if any(number < 1 for number in args.prs):
+        parser.error("PR numbers must be positive")
+
+
+def parse_args(argv=None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("prs", nargs="*", type=int, metavar="PR", help="PR numbers")
+    parser.add_argument(
+        "--repo", type=repository, default="horocore/horo-engine", help="OWNER/REPO"
+    )
+    parser.add_argument("--project", help="also require this GitHub project number or title")
+    parser.add_argument(
+        "--issue",
+        type=int,
+        help="issue number for one PR if automatic lookup is ambiguous",
+    )
+    parser.add_argument("--all", action="store_true", help="check every PR, including merged PRs")
+    parser.add_argument("--state", choices=("open", "closed", "merged", "all"), default="all")
+    parser.add_argument(
+        "--limit", type=int, help="optional maximum number of PRs to process with --all"
+    )
+    parser.add_argument("--workers", type=int, default=8, help="parallel PR checks (default: 8)")
+    parser.add_argument("--fix", action="store_true", help="write missing/incorrect annotations")
+    parser.add_argument(
+        "--skip-development",
+        action="store_true",
+        help="skip Development links when GitHub GraphQL is unavailable",
+    )
+    args = parser.parse_args(argv)
+    validate_arguments(parser, args)
+    return args
+
+
+def load_options(args: argparse.Namespace) -> CheckOptions:
+    api = GitHub(github_token())
+    default_branch = api.request("GET", f"/repos/{args.repo}")["default_branch"]
+    options = CheckOptions(
+        api,
+        args.repo,
+        default_branch,
+        issue_override=args.issue,
+        project=args.project,
+        include_development=not args.skip_development,
+        fix=args.fix,
+    )
+    if options.project and options.project.isdecimal():
+        options.project_number = int(options.project)
+        if options.project_number < 1:
+            raise AnnotationError("--project number must be positive")
+        owner = options.repo.split("/", 1)[0]
+        path = f"/orgs/{owner}/projectsV2/{options.project_number}"
+        options.project = api.request("GET", path)["title"]
+        options.project_pr_numbers = {
+            item["content"]["number"]
+            for item in api.pages(path + "/items")
+            if (item.get("content") or {}).get("node_id", "").startswith("PR_")
+        }
+    return options
+
+
+def process_pr(number: int, options: CheckOptions) -> bool:
+    try:
+        return check_pr(number, options)
+    except AnnotationError as error:
+        print(f"PR #{number}: ERROR: {error}", file=sys.stderr)
+        return False
+
+
+def pr_main(argv=None) -> int:
+    args = parse_args(argv)
+    try:
+        options = load_options(args)
+        prs = args.prs
+        if args.all:
+            prs = list_pr_numbers(options, args.state, args.limit)
+        success = True
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = [executor.submit(process_pr, number, options) for number in prs]
+            for future in as_completed(futures):
+                success = future.result() and success
+        return 0 if success else 1
+    except (AnnotationError, json.JSONDecodeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+
+
+# Evidence
+
+EVIDENCE_WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
+
+
+def evidence_workspace_path(value):
+    """Reject traversal and resolved symlink escapes for both input and output evidence."""
+    candidate = Path(value).resolve()
+    try:
+        candidate.relative_to(Path.cwd().resolve())
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(EVIDENCE_WORKSPACE_EVIDENCE_ERROR) from error
+    return candidate
+
+
+def parse_evidence_arguments(description, *, argv=None, families=()):
+    """Preserve the common discovery/JUnit CLI and require an explicit discovery output."""
+    parser = argparse.ArgumentParser(description=description)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--discovery", type=evidence_workspace_path)
+    mode.add_argument("--output-junit", type=evidence_workspace_path)
+    parser.add_argument("--regex-output", type=evidence_workspace_path)
+    if families:
+        parser.add_argument("--family", choices=families, default=families[0])
+    arguments = parser.parse_args(argv)
+    if arguments.discovery is not None and arguments.regex_output is None:
+        parser.error("--discovery requires --regex-output")
+    return arguments
+
+
+def write_case_regex(path, cases):
+    """Recheck the actual sink, including direct callers and paths changed since argument parsing."""
+    destination = Path(path).resolve()
+    if not destination.is_relative_to(Path.cwd().resolve()):
+        raise ValueError(EVIDENCE_WORKSPACE_EVIDENCE_ERROR)
+    # CTest uses POSIX extended syntax, without Python noncapturing groups.
+    pattern = "^(" + "|".join(re.escape(name) for name in sorted(cases)) + ")$"
+    destination.write_text(pattern, encoding="utf-8")
+
+
+# Scene
+
+#!/usr/bin/env python3
+
+
+
+
+
+
+
+
+
+
+# Resolve the trusted sibling identically for direct CLI and file-spec loading.
+
+
+
+
+SCENE_WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
+
+SCENE_PREFIX = "HoroSceneRuntimeConversionTests::"
+SCENE_CASES = frozenset(SCENE_PREFIX + name for name in (
+    "Expansion allocation failure never evicts the prior exact immutable candidate",
+    "Scene encoding admission reports each allocation failure without accepting invalid authored bytes",
+    "Canonical serialization survives every production allocation failure",
+    "Canonical moves retire every wire alternative without allocation - OrderedWireValue",
+    "Canonical moves retire every wire alternative without allocation - SortedWireValue",
+    "Resolver admission computes actual immutable evidence transactionally under every allocation failure",
+    "Recursive canonical copies preserve source and destination at every allocation failure - OrderedWireValue",
+    "Recursive canonical copies preserve source and destination at every allocation failure - SortedWireValue",
+    "Cache pressure after validated worker completion does not discard complete Scene output",
+    "Cancellation during completion memoization cannot publish a validated definition",
+))
+NAVIGATION_PREFIX = "HoroNavigationProjectSettingsTests::"
+NAVIGATION_PHASES = {
+    NAVIGATION_PREFIX + "Every navigation commit allocation failure precedes all owner publication": "commit",
+    NAVIGATION_PREFIX + "Every navigation grouped replay allocation failure preserves all owner histories": "replay",
+    NAVIGATION_PREFIX + "Scene decoding releases completed DOM without allocating during retirement": "scene",
+}
+NAVIGATION_CASES = frozenset(NAVIGATION_PHASES)
+
+
+COLLISION_PHASES = {
+    "HoroProjectCollisionSettingsTests::Native registry inventory recovers after every one-shot allocation failure": "inventory",
+    "HoroProjectCollisionSettingsTests::Collision path admission propagates every allocation failure before owner publication": "paths",
+    "HoroProjectCollisionSettingsTests::Collision history publication exhaustively rolls back every one-shot allocation failure": "commit",
+    "HoroProjectCollisionSettingsTests::Canonical Scene decoder unwinds every single allocation failure without terminating completed DOM cleanup": "scene",
+}
+SIDECAR_CASE = ("HoroProjectCollisionSettingsTests::Canonical sidecar decoding unwinds every allocation "
+                "across valid invalid and deep compound DOMs")
+SIDECAR_PHASES = ("valid", "duplicate", "malformed", "deep")
+COLLISION_CASES = frozenset((*COLLISION_PHASES, SIDECAR_CASE))
+
+
+def scene_verify_discovery(document, cases=SCENE_CASES):
+    """Require every exact case and refuse a disabled replacement for executable evidence."""
+    tests = document.get("tests", [])
+    families = {name.split(" - ", 1)[0] for name in cases}
+    selected = [test for test in tests if any(
+        test.get("name") == family or test.get("name", "").startswith(family + " - ")
+        for family in families
+    )]
+    names = [test["name"] for test in selected]
+    if len(names) != len(cases) or set(names) != cases:
+        raise ValueError(f"Scene allocation discovery differs: missing={sorted(cases - set(names))}")
+    for test in selected:
+        if any(prop.get("name") == "DISABLED" and prop.get("value") for prop in test.get("properties", [])):
+            raise ValueError(f"Scene allocation test is disabled: {test['name']}")
+
+def scene_verify_junit(path, cases=SCENE_CASES):
+    """Count actual cases rather than assertions and reject every skipped or failed execution."""
+    from defusedxml import ElementTree
+    from defusedxml.common import DefusedXmlException
+    path = Path(path).resolve()
+    if not path.is_relative_to(Path.cwd().resolve()):
+        raise ValueError(SCENE_WORKSPACE_EVIDENCE_ERROR)
+    root = ElementTree.parse(path).getroot()
+    executed = list(root.iter("testcase"))
+    names = [case.get("name") for case in executed]
+    if len(executed) != len(cases) or set(names) != cases:
+        raise ValueError(f"Scene allocation execution differs: expected {len(cases)}, got {len(executed)}")
+    for case in executed:
+        failed = any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))
+        if failed or case.get("status") in ("notrun", "disabled"):
+            raise ValueError(f"Scene allocation test did not pass: {case.get('name')}")
+    if cases == NAVIGATION_CASES:
+        verify_navigation_positions(executed)
+    for suite in root.iter("testsuite"):
+        for field in ("failures", "errors", "skipped", "disabled"):
+            if int(suite.get(field, "0")):
+                raise ValueError(f"Scene allocation suite has nonzero {field}")
+
+
+def verify_navigation_positions(executed):
+    """Require completed evidence for every measured allocation, without a platform-specific upper bound."""
+    for case in executed:
+        if case.get("status") != "run":
+            raise ValueError(f"Navigation allocation case did not execute: {case.get('name')}")
+        phase = NAVIGATION_PHASES[case.get("name")]
+        pattern = rf"\[navigation-allocation\] {phase} measured=(\d+) completed=(\d+)"
+        markers = re.findall(pattern, "".join(case.itertext()))
+        if len(markers) != 1 or int(markers[0][0]) == 0 or markers[0][0] != markers[0][1]:
+            raise ValueError(f"Navigation fault positions incomplete: {phase}")
+
+
+def scene_write_regex(path, cases=SCENE_CASES):
+    """Write only resolved workspace evidence, including for direct non-CLI callers."""
+    write_case_regex(path, cases)
+
+
+def verify_collision_positions(path):
+    """Require proof of every measured failure position, including probes above Debug-sized budgets."""
+    from defusedxml import ElementTree
+    from defusedxml.common import DefusedXmlException
+    scene_verify_junit(path, COLLISION_CASES)
+    for case in ElementTree.parse(path).getroot().iter("testcase"):
+        sidecar = case.get("name") == SIDECAR_CASE
+        phases = SIDECAR_PHASES if sidecar else (COLLISION_PHASES[case.get("name")],)
+        prefix = "collision-sidecar-allocation" if sidecar else "collision-allocation"
+        output = "".join(case.itertext())
+        for phase in phases:
+            positions = re.findall(r"\[" + prefix + r"\] " + phase + r" measured=(\d+) completed=(\d+)", output)
+            if case.get("status") != "run" or len(positions) != 1:
+                raise ValueError("Collision allocation execution has no unique complete position proof")
+            measured, completed = map(int, positions[0])
+            if measured == 0 or completed != measured:
+                raise ValueError("Collision allocation sweep did not execute every measured position")
+
+
+def scene_main(argv=None):
+    """Validate discovery before execution, or validate the resulting exact Release JUnit."""
+    args = parse_evidence_arguments(__doc__, argv=argv, families=("scene", "navigation", "collision"))
+    cases = {"scene": SCENE_CASES, "navigation": NAVIGATION_CASES, "collision": COLLISION_CASES}[args.family]
+    if args.discovery:
+        scene_verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")), cases)
+        scene_write_regex(args.regex_output, cases)
+    else:
+        if args.family == "collision":
+            verify_collision_positions(args.output_junit)
+        else:
+            scene_verify_junit(args.output_junit, cases)
+        print(f"{args.family} allocation qualification: {len(cases)} cases passed; zero failures, errors or skips.")
+
+
+# Character
+
+#!/usr/bin/env python3
+
+
+
+
+
+
+
+
+
+# Resolve the trusted sibling identically for direct CLI and file-spec loading.
+
+
+
+
+CHARACTER_WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
+CHARACTER_PREFIX = "HoroPhysicsTests::"
+CHARACTER_CASES = frozenset({CHARACTER_PREFIX + "Character preparation allocation failures roll back every retained storage stage"})
+
+
+def character_verify_discovery(document):
+    """Require every exact case and refuse a disabled replacement for executable evidence."""
+    tests = document.get("tests", [])
+    families = {name.split(" - ", 1)[0] for name in CHARACTER_CASES}
+    selected = [test for test in tests if any(
+        test.get("name") == family or test.get("name", "").startswith(family + " - ")
+        for family in families
+    )]
+    names = [test["name"] for test in selected]
+    if len(names) != len(CHARACTER_CASES) or set(names) != CHARACTER_CASES:
+        raise ValueError(f"Character allocation discovery differs: missing={sorted(CHARACTER_CASES - set(names))}")
+    for test in selected:
+        if any(prop.get("name") == "DISABLED" and prop.get("value") for prop in test.get("properties", [])):
+            raise ValueError(f"Character allocation test is disabled: {test['name']}")
+
+
+def character_verify_junit(path):
+    """Count actual cases rather than assertions and reject every skipped or failed execution."""
+    from defusedxml import ElementTree as element_tree
+    from defusedxml.common import DefusedXmlException
+    path = Path(path).resolve()
+    if not path.is_relative_to(Path.cwd().resolve()):
+        raise ValueError(CHARACTER_WORKSPACE_EVIDENCE_ERROR)
+    root = element_tree.parse(path).getroot()
+    cases = list(root.iter("testcase"))
+    names = [case.get("name") for case in cases]
+    if len(cases) != len(CHARACTER_CASES) or set(names) != CHARACTER_CASES:
+        raise ValueError(f"Character allocation execution differs: expected {len(CHARACTER_CASES)}, got {len(cases)}")
+    for case in cases:
+        failed = any(case.find(tag) is not None for tag in ("failure", "error", "skipped"))
+        if failed or case.get("status") in ("notrun", "disabled"):
+            raise ValueError(f"Character allocation test did not pass: {case.get('name')}")
+    for suite in root.iter("testsuite"):
+        for field in ("failures", "errors", "skipped", "disabled"):
+            if int(suite.get(field, "0")):
+                raise ValueError(f"Character allocation suite has nonzero {field}")
+
+
+def character_write_regex(path):
+    """Write only resolved workspace evidence, including for direct non-CLI callers."""
+    write_case_regex(path, CHARACTER_CASES)
+
+
+def character_main(argv=None):
+    """Validate discovery before execution, or validate the resulting exact Release JUnit."""
+    args = parse_evidence_arguments(__doc__, argv=argv)
+    if args.discovery:
+        character_verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")))
+        character_write_regex(args.regex_output)
+    else:
+        character_verify_junit(args.output_junit)
+        print(f"Character allocation qualification: {len(CHARACTER_CASES)} cases passed; zero failures, errors or skips.")
+
+
+# Extension
+
+#!/usr/bin/env python3
+
+
+
+
+
+
+
+
+
+
+# Resolve the trusted sibling identically for direct CLI and file-spec loading.
+
+
+
+
+EXTENSION_PREFIX = "HoroExtensionManagerAllocationTests::"
+WORKSPACE_CASE = "HoroWorkspaceLayoutPersistenceTests::Split parsing releases every owned allocation when any allocation fails"
+EXTENSION_CASES = {
+    WORKSPACE_CASE:
+        ("workspace-allocation", 1),
+    EXTENSION_PREFIX + "Every recovery admission allocation failure precedes native callbacks and preserves independent status":
+        ("recovery-admission-allocation", 1),
+    EXTENSION_PREFIX + "Completed manifest DOM retirement preserves every allocation failure on valid and rejected schemas":
+        ("manifest-allocation", 3),
+}
+
+
+def extension_verify_discovery(document):
+    """Require all exact enabled executable cases before CTest filtering."""
+    selected = [test for test in document.get("tests", [])
+                if test.get("name", "").startswith(EXTENSION_PREFIX) or test.get("name") == WORKSPACE_CASE]
+    if len(selected) != len(EXTENSION_CASES) or {test["name"] for test in selected} != set(EXTENSION_CASES):
+        raise ValueError("Extension allocation discovery must contain all exact cases")
+    for test in selected:
+        if any(prop.get("name") == "DISABLED" and prop.get("value") for prop in test.get("properties", [])):
+            raise ValueError(f"Extension allocation case is disabled: {test['name']}")
+
+
+def verify_case(case):
+    """Validate one actual successful case and every required nonzero completed sweep."""
+    if any(case.find(tag) is not None for tag in ("failure", "error", "skipped")) or case.get("status") in ("notrun", "disabled"):
+        raise ValueError(f"Extension allocation case did not pass: {case.get('name')}")
+    marker, expected = EXTENSION_CASES[case.get("name")]
+    output = "".join(case.itertext())
+    if marker == "workspace-allocation":
+        measured = re.findall(r"\[workspace-allocation\] measured=(\d+)", output)
+        completed = re.findall(r"\[workspace-allocation\] completed=(\d+)", output)
+        if len(measured) != expected or len(completed) != expected:
+            raise ValueError("Workspace allocation full-sweep evidence is missing or duplicated")
+        counts = list(zip(measured, completed))
+    else:
+        counts = re.findall(r"\[" + re.escape(marker) + r"\] measured=(\d+) completed=(\d+)", output)
+    if len(counts) != expected or any(int(measured) == 0 or measured != completed for measured, completed in counts):
+        raise ValueError(f"Extension allocation full-sweep evidence differs: {case.get('name')}")
+
+
+def extension_verify_junit(path):
+    """Reject absent execution, failed/skipped cases, or incomplete/nonmeasured sweeps."""
+    from defusedxml import ElementTree as element_tree
+    from defusedxml.common import DefusedXmlException
+    root = element_tree.parse(path).getroot()
+    cases = list(root.iter("testcase"))
+    if len(cases) != len(EXTENSION_CASES) or {case.get("name") for case in cases} != set(EXTENSION_CASES):
+        raise ValueError("Extension allocation execution must contain all exact cases")
+    for case in cases:
+        verify_case(case)
+    for suite in root.iter("testsuite"):
+        if any(int(suite.get(field, "0")) for field in ("failures", "errors", "skipped", "disabled")):
+            raise ValueError("Extension allocation suite contains failures, errors or skips")
+
+
+def extension_main(argv=None):
+    """Verify discovery before execution, or validate the exact Release JUnit afterward."""
+    args = parse_evidence_arguments(__doc__, argv=argv)
+    if args.discovery:
+        extension_verify_discovery(json.loads(args.discovery.read_text(encoding="utf-8-sig")))
+        write_case_regex(args.regex_output, EXTENSION_CASES)
+    else:
+        extension_verify_junit(args.output_junit)
+        print("Extension allocation qualification: three cases and all five nonzero measured sweeps completed; zero failures, errors or skips.")
+
+
+# Save
+
+SAVE_CASES = {
+    "Lifecycle allocation failure after visibility preserves publication knowledge": "lifecycle",
+    "Retention allocation failure after selection preserves publication and binding ownership": "retention",
+}
+SAVE_PREFIX = "HoroRuntimeSaveSlotLifecycleTests::"
+
+
+def verify_report(path: Path) -> None:
+    """Reject missing, skipped, failed or incompletely exercised allocation cases."""
+    import defusedxml.ElementTree as etree
+    report = path.resolve()
+    if not report.is_relative_to(Path.cwd().resolve()):
+        raise ValueError("Qualification report must be inside the current workspace")
+    data = report.read_bytes()
+    root = etree.fromstring(data, forbid_dtd=True)
+    if root.tag != "testsuite" or any(root.get(key) != value for key, value in
+                                     (("tests", "2"), ("failures", "0"), ("skipped", "0"))):
+        raise ValueError("Qualification suite must report two tests with zero failures and skips")
+    if root.get("errors", "0") != "0" or root.get("disabled", "0") != "0":
+        raise ValueError("Qualification suite contains errors or disabled cases")
+    cases = list(root.iter("testcase"))
+    expected = {SAVE_PREFIX + name for name in SAVE_CASES}
+    if len(cases) != 2 or {case.get("name") for case in cases} != expected:
+        raise ValueError("Qualification requires exactly the two named Save allocation cases")
+    for case in cases:
+        if case.get("status") != "run" or any(case.find(tag) is not None for tag in ("skipped", "failure", "error")):
+            raise ValueError(f"Qualification case did not pass: {case.get('name')}")
+        phase = SAVE_CASES[case.get("name", "").removeprefix(SAVE_PREFIX)]
+        output = "".join(case.itertext())
+        require_variants(output, phase)
+
+
+def require_variants(output: str, phase: str) -> None:
+    """Require both generator paths through recovery and completed fixture cleanup."""
+    markers = []
+    for variant in ("success", "failure"):
+        markers.extend((f"{phase}-sync-{variant}", f"{phase}-failure-reset",
+                        f"{phase}-reopen-returned", f"{phase}-reconcile-returned",
+                        f"{phase}-fixture-cleanup-next", "fixture-scope-exited"))
+    cursor = 0
+    for marker in markers:
+        literal = f"[save-allocation] {marker}"
+        position = output.find(literal, cursor)
+        if position < 0:
+            raise ValueError(f"Incomplete {phase} variant evidence: {marker}")
+        cursor = position + len(literal)
+
+
+def save_workspace_path(value: str) -> Path:
+    """Keep CLI report reads inside the caller's explicit workspace, including symlink resolution."""
+    root = Path.cwd().resolve()
+    candidate = Path(value).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Qualification report must be inside the current workspace") from error
+    return candidate
+
+
+def save_main(argv=None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("report", type=save_workspace_path)
+    args = parser.parse_args(argv)
+    verify_report(args.report)
+    print("Save allocation qualification: 2 passed cases, both variants completed, zero skips")
+
+
+# Dev
+
+#!/usr/bin/env python3
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ENV_FILE_NAME = ".env.local"
@@ -414,25 +2624,25 @@ def execute_subprocess(command: Sequence[str], cwd: Path = REPOSITORY_ROOT, env:
     """Run a subprocess with clear error reporting and interrupt handling."""
     try:
         # Arguments are passed directly as an argv sequence; no command shell parses caller-provided values.
-        return dev_process.run(command, cwd=cwd, env=env)
+        return run(command, cwd=cwd, env=env)
     except FileNotFoundError as error:
         print(f"error: command not found: {error.filename or command[0]}", file=sys.stderr)
         return 127
-    except dev_process.CleanupError as error:
-        local_build_cache.record_cleanup_failure(REPOSITORY_ROOT)
+    except CleanupError as error:
+        record_cleanup_failure(REPOSITORY_ROOT)
         print(f"error: subprocess cleanup was not confirmed; further builds are blocked: {error}", file=sys.stderr)
         return 126
     except OSError as error:
         print(f"error: failed to execute '{command[0]}': {error}", file=sys.stderr)
         return 126
     except KeyboardInterrupt as error:
-        if isinstance(error.__cause__, dev_process.CleanupError):
-            local_build_cache.record_cleanup_failure(REPOSITORY_ROOT)
+        if isinstance(error.__cause__, CleanupError):
+            record_cleanup_failure(REPOSITORY_ROOT)
             print("error: interrupted cleanup was not confirmed; further builds are blocked", file=sys.stderr)
         return 130
     except SystemExit as error:
-        if isinstance(error.__cause__, dev_process.CleanupError):
-            local_build_cache.record_cleanup_failure(REPOSITORY_ROOT)
+        if isinstance(error.__cause__, CleanupError):
+            record_cleanup_failure(REPOSITORY_ROOT)
             print("error: exiting cleanup was not confirmed; further builds are blocked", file=sys.stderr)
         raise
 
@@ -497,12 +2707,12 @@ def _configure_and_build(command: Sequence[str], build_directory: Path, target: 
                          jobs: int = 2, clean: bool = False) -> int:
     """Lease a completed main checkpoint for the complete configure/build lifecycle."""
     try:
-        with local_build_cache.heavy_build_lock(REPOSITORY_ROOT):
+        with heavy_build_lock(REPOSITORY_ROOT):
             if clean and build_directory.exists():
                 print(f"Cleaning build directory {build_directory}...", flush=True)
                 shutil.rmtree(build_directory)
             automatic = use_cache and sys.platform != "win32" and not _uses_explicit_cache(command, compiler_launcher)
-            context = local_build_cache.automatic_cache(REPOSITORY_ROOT) if automatic else nullcontext(None)
+            context = automatic_cache(REPOSITORY_ROOT) if automatic else nullcontext(None)
             with context as binding:
                 arguments, environment = list(command), None
                 if binding:
@@ -514,7 +2724,7 @@ def _configure_and_build(command: Sequence[str], build_directory: Path, target: 
                 if code:
                     return code
                 return execute_subprocess(build_command(build_directory, target, jobs=jobs), env=environment)
-    except (local_build_cache.CacheError, OSError, ValueError) as error:
+    except (CacheError, OSError, ValueError) as error:
         print(f"error: local build setup failed: {error}", file=sys.stderr)
         return 2
 
@@ -1190,7 +3400,7 @@ def run_cache_prepare(parsed: argparse.Namespace) -> int:
         if code:
             return code
 
-    def build_main(source: Path, directory: Path, binding: local_build_cache.CacheBinding) -> int:
+    def build_main(source: Path, directory: Path, binding: CacheBinding) -> int:
         arguments = configure_command(
             build_directory=directory, build_type=parsed.type,
             testing=not parsed.no_testing, compiler_launcher=binding.launcher,
@@ -1201,18 +3411,18 @@ def run_cache_prepare(parsed: argparse.Namespace) -> int:
         if parsed.fetchcontent_base_dir:
             arguments.append(f"-DFETCHCONTENT_BASE_DIR={parsed.fetchcontent_base_dir.resolve()}")
         arguments = _cache_configure_arguments(arguments, directory, source)
-        with local_build_cache.heavy_build_lock(REPOSITORY_ROOT):
+        with heavy_build_lock(REPOSITORY_ROOT):
             code = execute_subprocess(arguments, cwd=source, env=binding.env)
             if code:
                 return code
             return execute_subprocess(build_command(directory, parsed.target, jobs=parsed.jobs), cwd=source, env=binding.env)
 
     try:
-        code = local_build_cache.prepare_cache(REPOSITORY_ROOT, build_main, max_size=parsed.max_size)
+        code = prepare_cache(REPOSITORY_ROOT, build_main, max_size=parsed.max_size)
         if code == 0:
-            print(json.dumps(local_build_cache.status(REPOSITORY_ROOT), indent=2))
+            print(json.dumps(status(REPOSITORY_ROOT), indent=2))
         return code
-    except (local_build_cache.CacheError, OSError, ValueError) as error:
+    except (CacheError, OSError, ValueError) as error:
         print(f"error: cache preparation failed: {error}", file=sys.stderr)
         return 2
 
@@ -1262,6 +3472,10 @@ def create_argument_parser() -> argparse.ArgumentParser:
     prepare.add_argument("--fetchcontent-base-dir", type=Path, default=None)
     prepare.add_argument("--cmake-arg", action="append", default=[], help="extra configure argument; use --cmake-arg=-DNAME=value")
     prepare.add_argument("-j", "--jobs", type=_positive_jobs, default=2)
+
+    for name in TOOL_COMMANDS:
+        commands.add_parser(name, add_help=False, help="delivery and CI operation (use command --help)")
+    commands.add_parser("hook", add_help=False, help="run optional pre-commit or pre-push checks")
 
     # run command
     run = commands.add_parser("run", help="configure, build, and run a supported target")
@@ -1433,9 +3647,9 @@ def _handle_cache(parsed: argparse.Namespace) -> int:
     if parsed.cache_command == "prepare":
         return run_cache_prepare(parsed)
     try:
-        print(json.dumps(local_build_cache.status(REPOSITORY_ROOT), indent=2))
+        print(json.dumps(status(REPOSITORY_ROOT), indent=2))
         return 0
-    except local_build_cache.CacheError as error:
+    except CacheError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
@@ -1522,12 +3736,72 @@ def _dispatch_command(parsed: argparse.Namespace, unparsed: Sequence[str], parse
     return _handle_run(parsed, settings, unparsed)
 
 
-def main(arguments: Sequence[str] | None = None) -> int:
+def developer_main(arguments: Sequence[str] | None = None) -> int:
     """Run the developer command-line interface."""
     _configure_terminal_environment()
     parser = create_argument_parser()
     parsed, unparsed = parser.parse_known_args(arguments)
     return _dispatch_command(parsed, unparsed, parser)
+
+
+def run_hook(name: str) -> int:
+    """Run optional hook checks; never install or edit the operator's Git hooks."""
+    if name == "pre-commit":
+        return main(["format", "--staged"])
+    if name == "pre-push":
+        return main(["check"])
+    raise ValueError("Unknown Git hook")
+
+
+def setup_main(argv=None) -> int:
+    """Configure and smoke-build with an existing native toolchain; never install globally."""
+    parser = argparse.ArgumentParser(description="Initialize a build with the installed native toolchain")
+    parser.add_argument("-B", "--dir", type=Path, default=DEFAULT_BUILD_DIRECTORY)
+    parser.add_argument("--target", default="HoroFoundation")
+    parser.add_argument("-j", "--jobs", type=_positive_jobs, default=2)
+    parser.add_argument("--no-cache", action="store_true")
+    args = parser.parse_args(argv)
+    return run_build(target=args.target, build_directory=args.dir, jobs=args.jobs, use_cache=not args.no_cache)
+
+
+def open_pr_main(argv=None) -> int:
+    """Create a PR only on explicit invocation, preserving the former shell contract."""
+    parser = argparse.ArgumentParser(description="Create a pull request from a reviewed body file")
+    parser.add_argument("title")
+    parser.add_argument("body_file", type=Path)
+    parser.add_argument("base")
+    parser.add_argument("head")
+    parser.add_argument("milestone")
+    parser.add_argument("project", nargs="?")
+    args = parser.parse_args(argv)
+    if not args.body_file.is_file():
+        parser.error("body_file must be an existing reviewed file")
+    command = ["gh", "pr", "create", "--title", args.title, "--body-file", str(args.body_file),
+               "--base", args.base, "--head", args.head, "--assignee", "@me", "--milestone", args.milestone]
+    if args.project:
+        command.extend(["--project", args.project])
+    return execute_subprocess(command)
+
+
+TOOL_COMMANDS = {"setup": setup_main, "open-pr": open_pr_main, 'ci-cache-identity': ci_cache_main, 'release-notes': notes_main, 'verify-release-archive': archive_main, 'verify-release-notes': release_main, 'pr-annotations': pr_main, 'qualify-scene': scene_main, 'qualify-character': character_main, 'qualify-extension': extension_main, 'qualify-save': save_main}
+
+
+def main(argv=None) -> int:
+    """Dispatch developer and delivery operations without spawning another script."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if len(argv) == 2 and argv[0] == "help" and argv[1] in TOOL_COMMANDS:
+        return TOOL_COMMANDS[argv[1]](["--help"]) or 0
+    if argv and argv[0] in TOOL_COMMANDS:
+        try:
+            return TOOL_COMMANDS[argv[0]](argv[1:]) or 0
+        except (ValueError, OSError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
+    if argv and argv[0] == "hook":
+        parser = argparse.ArgumentParser(description="Run optional Git hook checks")
+        parser.add_argument("name", choices=("pre-commit", "pre-push"))
+        return run_hook(parser.parse_args(argv[1:]).name)
+    return developer_main(argv)
 
 
 if __name__ == "__main__":

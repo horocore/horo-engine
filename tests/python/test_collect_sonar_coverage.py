@@ -12,8 +12,9 @@ pytest.importorskip("defusedxml.ElementTree")
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 try:
-    SPEC = importlib.util.spec_from_file_location("collect_sonar_coverage", SCRIPTS / "collect_sonar_coverage.py")
+    SPEC = importlib.util.spec_from_file_location("collect_sonar_coverage", SCRIPTS / 'analyze.py')
     collector = importlib.util.module_from_spec(SPEC)
+    sys.modules[SPEC.name] = collector
     SPEC.loader.exec_module(collector)
 finally:
     sys.path.pop(0)
@@ -82,7 +83,7 @@ def test_publication_retains_merged_counters_and_zero_hit_lines(tmp_path: Path) 
     (stage / "fastcov-coverage.json").write_text(json.dumps(data))
     assert collector.publish(root, build, stage) == {"lines": 2, "covered": 1, "excludedNoncode": 0}
     assert json.loads((build / "fastcov-coverage.json").read_text()) == data
-    document = collector.converter.element_tree.parse(build / "coverage.xml")
+    document = collector.element_tree.parse(build / "coverage.xml")
     assert [line.attrib for line in document.findall("file/lineToCover")] == [
         {"lineNumber": "1", "covered": "true"}, {"lineNumber": "2", "covered": "false"}]
 
@@ -147,10 +148,10 @@ def test_publication_io_failure_is_terminal_not_a_transactional_pair(tmp_path: P
             raise OSError("publication I/O failure")
         replace(candidate, output)
 
-    monkeypatch.setattr(collector.os, "replace", fail_xml)
+    monkeypatch.setattr(collector.os, 'replace', fail_xml)
     monkeypatch.setattr(sys, "argv", ["collector", "publish", "--root", str(root), "--build-directory", str(build), "--stage", str(stage)])
     with pytest.raises(SystemExit) as error:
-        collector.main()
+        collector.collector_main()
     assert error.value.code == 2
     assert json.loads(json_output.read_text())["sources"]
     assert xml_output.read_bytes() == b"previous XML"
@@ -158,11 +159,89 @@ def test_publication_io_failure_is_terminal_not_a_transactional_pair(tmp_path: P
     assert "!cancelled() && steps.coverage.outcome == 'success'" in workflow
 
 
+def coverage_authority_errors(source: str) -> list[str]:
+    """Follow global references, including callback aliases, from the data API.
+
+    Symbol tables distinguish local names such as ``output`` from unrelated
+    global analysis functions. Merely importing a tool elsewhere in the unified
+    CLI is harmless; making it reachable from the coverage API is not.
+    """
+    import symtable
+
+    tree = ast.parse(source)
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    tables = {table.get_name(): table for table in symtable.symtable(source, "coverage", "exec").get_children()}
+    imports = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            imports.update({alias.asname or alias.name.split(".")[0]: alias.name for alias in node.names})
+        elif isinstance(node, ast.ImportFrom):
+            imports.update({alias.asname or alias.name: f"{node.module}.{alias.name}" for alias in node.names})
+    allowed_imports = {"argparse", "json", "os", "re", "pathlib.Path",
+                       "xml.etree.ElementTree", "defusedxml.ElementTree"}
+    allowed_globals = {"BATCH_FILES", "__doc__", "Path", "ValueError", "OSError", "KeyError", "TypeError",
+                       "any", "bool", "bytes", "dict", "int", "isinstance", "len", "list", "print",
+                       "range", "set", "sorted", "str", "tuple"}
+    allowed_os = {"os.fsencode", "os.replace", "os.path", "os.path.realpath", "os.sep"}
+    pending = ["collector_main", "plan", "publish"]
+    visited = set()
+    errors = []
+    while pending:
+        name = pending.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        if name not in functions:
+            errors.append(f"Missing coverage function: {name}")
+            continue
+        node, table = functions[name], tables[name]
+        global_names = {symbol.get_name() for symbol in table.get_symbols()
+                        if symbol.is_global() and symbol.is_referenced()}
+        for reference in global_names:
+            if reference in functions:
+                pending.append(reference)
+            elif reference in imports:
+                if imports[reference] not in allowed_imports:
+                    errors.append(f"{name} reaches import {imports[reference]}")
+            elif reference not in allowed_globals:
+                errors.append(f"{name} reaches unapproved global {reference}")
+        for child in ast.walk(node):
+            if isinstance(child, ast.Import):
+                for alias in child.names:
+                    if alias.name not in allowed_imports:
+                        errors.append(f"{name} imports {alias.name}")
+            elif isinstance(child, ast.ImportFrom):
+                for alias in child.names:
+                    imported = f"{child.module}.{alias.name}"
+                    if imported not in allowed_imports:
+                        errors.append(f"{name} imports {imported}")
+            elif isinstance(child, ast.Attribute):
+                attribute = ast.unparse(child)
+                if attribute.startswith("os.") and attribute not in allowed_os:
+                    errors.append(f"{name} reaches {attribute}")
+    return errors
+
+
+@pytest.mark.parametrize("injected", [
+    "subprocess.run(['gcov'])",
+    "shutil.which('gcov')",
+    "runner = os.system; runner('gcov')",
+    "run(['gcov'], root)",
+    "__import__('subprocess').run(['gcov'])",
+    "coverage_hidden_launcher()",
+])
+def test_coverage_authority_guard_rejects_reachable_execution(injected: str) -> None:
+    source = (SCRIPTS / 'analyze.py').read_text()
+    marker = "    _, build, stage = area(root, build, stage)"
+    assert source.count(marker) == 1
+    source = source.replace(marker, f"    {injected}\n{marker}")
+    source += "\ndef coverage_hidden_launcher():\n    import subprocess as process\n    process.run(['gcov'])\n"
+    assert coverage_authority_errors(source)
+
+
 def test_python_api_has_no_tool_selection_or_process_launch_authority() -> None:
-    source = (SCRIPTS / "collect_sonar_coverage.py").read_text()
-    imports = [alias.name for node in ast.walk(ast.parse(source)) if isinstance(node, ast.Import) for alias in node.names]
-    assert set(imports) == {"argparse", "json", "os", "fastcov_sonar_coverage"}
-    assert "--fastcov" not in source
+    source = (SCRIPTS / 'analyze.py').read_text()
+    assert coverage_authority_errors(source) == []
     host = (SCRIPTS.parent / ".github/scripts/collect_sonar_coverage.sh").read_text()
     assert 'mapfile -d' in host
     assert '--gcda-files "${inputs[@]}"' in host

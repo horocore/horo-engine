@@ -279,14 +279,18 @@ the PR. This rule does not grant commit, push or PR creation permission.
 After modifying C/C++ files, run the worktree-aware local preflight:
 
 ```bash
-python3 scripts/quality_preflight.py check --base <PR-target-ref>
+python3 scripts/analyze.py check --base <PR-target-ref>
 ```
 
 Use `--dirty` for only staged, unstaged and untracked edits. The base scope also
 includes uncommitted edits. The managed Sonar IDE bridge is the supported local
 C/C++ path. Vortex analysis and entitlement probes are outside this workflow.
-It requires Linux, a display, VS Code,
-SonarQube for IDE and connected-mode authentication. The helper owns isolated
+It supports native Windows and Linux with an interactive desktop, VS Code,
+SonarQube for IDE and connected-mode authentication. OS-specific adapters retain
+process-creation identity, verified loopback listener ownership, safe termination
+and cross-process leases; Windows discovery requires the documented psutil dependency.
+Workspace Trust must remain enabled; authenticate/trust the managed window when
+required rather than weakening security settings. The helper owns isolated
 profiles, verifies listener process identity and C++ sensor execution, and keeps
 new analysis builds/reports outside the source tree (a verified existing
 worktree build may be reused). Do not use unverified explicit ports,

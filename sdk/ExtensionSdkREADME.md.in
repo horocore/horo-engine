@@ -21,7 +21,7 @@ target_link_libraries(my_extension PRIVATE HoroEngine::ExtensionSdk)
 Create a portable starter project with:
 
 ```text
-python bin/horo-scaffold-extension.py --shape backend --id com.example.tools --name "Example Tools" --output example-tools
+python bin/project.py extension --shape backend --id com.example.tools --name "Example Tools" --output example-tools
 ```
 
 Supported shapes are `gui`, `backend`, `script`, and `hybrid`. Generated
@@ -52,7 +52,7 @@ versions, uses read-only permissions, and never receives signing credentials.
 The SDK CI runner parses bounded CTest JUnit input with DTD and entity declarations
 disabled; it has no extra Python package dependency.
 
-The SDK's `bin/horo-extension-author-ci.py` then configures and builds the
+The SDK's `bin/project.py extension-ci` then configures and builds the
 project, runs all CTest tests, installs the package root, validates
 `extension.json`, checks every native module's ABI, packs a canonical
 `.horopkg`, and verifies archive integrity. It publishes the package, JUnit

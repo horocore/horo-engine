@@ -4,12 +4,12 @@ set(HORO_GENERATED_DIR "${CMAKE_BINARY_DIR}/generated" CACHE INTERNAL "")
 set(HORO_RELEASE_NOTES_SNAPSHOT "${HORO_GENERATED_DIR}/ReleaseNotesSnapshot.json" CACHE INTERNAL "")
 set(_HORO_CHANGELOG "${PROJECT_SOURCE_DIR}/CHANGELOG.md")
 set(_HORO_NOTES_HEADER "${HORO_GENERATED_DIR}/GeneratedBuildInfo.h")
-set(_HORO_NOTES_SCRIPT "${PROJECT_SOURCE_DIR}/scripts/parse_changelog.py")
+set(_HORO_NOTES_SCRIPT "${PROJECT_SOURCE_DIR}/scripts/dev.py")
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(_HORO_NOTES_COMMAND
-    "${Python3_EXECUTABLE}" "${_HORO_NOTES_SCRIPT}"
+    "${Python3_EXECUTABLE}" "${_HORO_NOTES_SCRIPT}" release-notes
     --source "${_HORO_CHANGELOG}"
     --version "${HORO_ENGINE_VERSION}"
     --product horo-editor

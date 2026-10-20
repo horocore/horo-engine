@@ -17,7 +17,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$python" "$workspace/scripts/collect_sonar_coverage.py" plan \
+"$python" "$workspace/scripts/analyze.py" coverage plan \
   --root "$workspace" --build-directory "$build_dir" --stage "$stage"
 mapfile -d '' -t manifests < "$stage/batches.manifest"
 includes=(
@@ -48,7 +48,7 @@ done
 # Execution authority stays in the existing CI host. The data helper receives
 # neither an executable argument nor a process-launch capability.
 "$fastcov" --jobs 2 --add-tracefile "${reports[@]}" --output "$stage/fastcov-coverage.json"
-"$python" "$workspace/scripts/collect_sonar_coverage.py" publish \
+"$python" "$workspace/scripts/analyze.py" coverage publish \
   --root "$workspace" --build-directory "$build_dir" --stage "$stage"
 
 elapsed=$((SECONDS - started))

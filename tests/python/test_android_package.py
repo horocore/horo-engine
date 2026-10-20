@@ -1,4 +1,6 @@
 """Android assembly admission regressions; no SDK, build, network or target execution."""
+
+import project
 import argparse
 import copy
 import hashlib
@@ -15,13 +17,13 @@ import zipfile
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-import android_package
-import android_contract
-import android_preflight
-from android_contract import AndroidError, bounded_bytes, canonical_json, input_path, load_contract, relative_name
-from android_elf import inspect_elf, native_closure
-from android_package import canonical_apk, inspect_package, stage_native, verify_manifest, include_generated_assets
-from android_preflight import require_revision, extract_game_activity
+import project as android_package
+import project as android_contract
+import project as android_preflight
+from project import AndroidError as AndroidError, bounded_bytes as bounded_bytes, canonical_json as canonical_json, input_path as input_path, load_contract as load_contract, relative_name as relative_name
+from project import inspect_elf as inspect_elf, native_closure as native_closure
+from project import canonical_apk as canonical_apk, inspect_package as inspect_package, stage_native as stage_native, verify_manifest as verify_manifest, include_generated_assets as include_generated_assets
+from project import require_revision as require_revision, extract_game_activity as extract_game_activity
 
 
 def elf(machine=183, api=29, alignment=16384, needed=b"libc.so", rpath=False):
@@ -297,7 +299,7 @@ class AndroidAssemblyTests(unittest.TestCase):
                       "signing":{"keystore":"external.p12", "alias":"qualification"}}
         with patch.object(android_package, "load_contract", return_value=(tools,self.profile)), \
              patch.object(android_package, "tools_preflight", return_value=capability), \
-             patch.object(android_package, "run", side_effect=self.command), \
+             patch.object(android_package, "android_run", side_effect=self.command), \
              patch.object(android_package, "version_output", side_effect=lambda argv: self.badging() if "badging" in argv else "abc123"):
             android_package.assemble(arguments)
             inspection = json.loads((arguments.output / "inspection.json").read_text())
@@ -380,7 +382,7 @@ class AndroidAssemblyTests(unittest.TestCase):
                 output = Path(argv[argv.index("--build")+1])
                 output.mkdir(parents=True)
                 (output / "libhoro-package-qualification.so").write_bytes(elf())
-        with patch.dict(os.environ,{},clear=False), patch.object(android_package,"run",side_effect=build):
+        with patch.dict(os.environ,{},clear=False), patch.object(android_package,"android_run",side_effect=build):
             native = android_package.build_native(arguments,self.profile,self.root / "activity",workspace)
             self.assertTrue((native / "arm64-v8a/libc++_shared.so").is_file())
             self.assertIn("android-debug",commands[0])
@@ -401,7 +403,7 @@ class AndroidAssemblyTests(unittest.TestCase):
         tools = self.prepare(arguments)
         stage = self.root / "java-input-stage"
         stage.mkdir()
-        android_package.write_project(stage, tools, self.profile, ["arm64-v8a"], arguments.game_activity)
+        android_package.apk_write_project(stage, tools, self.profile, ["arm64-v8a"], arguments.game_activity)
         activity = stage / "java/org/horocore/platform/HoroInputActivity.java"
         input_source = android_package.ROOT / "apps/android-input/java/org/horocore/platform/HoroInputActivity.java"
         self.assertEqual(activity.read_bytes(), input_source.read_bytes())

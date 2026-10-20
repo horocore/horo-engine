@@ -12,7 +12,7 @@ foreach(shape IN ITEMS gui backend script hybrid)
     set(source_dir "${HORO_TEST_BINARY_DIR}/${shape}")
     set(build_dir "${HORO_TEST_BINARY_DIR}/${shape}-build")
     execute_process(
-        COMMAND "${PYTHON_EXECUTABLE}" "${HORO_EXTENSION_SCAFFOLDER}"
+        COMMAND "${PYTHON_EXECUTABLE}" "${HORO_EXTENSION_SCAFFOLDER}" extension
             --shape "${shape}"
             --id "com.horo.fixture.${shape}"
             --name "${shape} fixture"

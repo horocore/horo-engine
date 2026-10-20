@@ -30,10 +30,10 @@ def test_cleanup_cancellation_blocks_later_builds_and_preserves_exit(
     recorded: list[Path] = []
 
     def interrupted(*_, **__):
-        raise cancellation from dev.dev_process.CleanupError("cleanup unconfirmed")
+        raise cancellation from dev.CleanupError("cleanup unconfirmed")
 
-    monkeypatch.setattr(dev.dev_process, "run", interrupted)
-    monkeypatch.setattr(dev.local_build_cache, "record_cleanup_failure", recorded.append)
+    monkeypatch.setattr(dev, 'run', interrupted)
+    monkeypatch.setattr(dev, 'record_cleanup_failure', recorded.append)
     if isinstance(cancellation, SystemExit):
         with pytest.raises(SystemExit) as caught:
             dev.execute_subprocess([sys.executable])
@@ -54,14 +54,14 @@ def test_sonar_property_values_stay_single_arguments_and_extra_flags_are_explici
     property_value = "fixture value -Dother=value"
     pr_key = "3410 -Dother=value"
     extra = ["-X", "-Dsonar.verbose=true"]
-    monkeypatch.setattr(dev, "_resolve_sonar_token", lambda *_: property_value)
-    monkeypatch.setattr(dev, "_find_sonar_scanner", lambda: scanner)
+    monkeypatch.setattr(dev, '_resolve_sonar_token', lambda *_: property_value)
+    monkeypatch.setattr(dev, '_find_sonar_scanner', lambda: scanner)
 
     def capture(command, **_):
         commands.append(list(command))
         return 0
 
-    monkeypatch.setattr(dev, "execute_subprocess", capture)
+    monkeypatch.setattr(dev, 'execute_subprocess', capture)
     assert dev.run_sonar(token=property_value, pr_key=pr_key,
                          compile_commands=compile_commands, extra_sonar_args=extra) == 0
     assert commands == [[str(scanner), f"-Dsonar.token={property_value}",
@@ -72,8 +72,8 @@ def test_sonar_property_values_stay_single_arguments_and_extra_flags_are_explici
 @pytest.fixture(autouse=True)
 def isolated_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ordinary runner unit tests neither create host caches nor wait for real builds."""
-    monkeypatch.setattr(dev.local_build_cache, "heavy_build_lock", lambda _: nullcontext())
-    monkeypatch.setattr(dev.local_build_cache, "automatic_cache", lambda _: nullcontext(None))
+    monkeypatch.setattr(dev, 'heavy_build_lock', lambda _: nullcontext())
+    monkeypatch.setattr(dev, 'automatic_cache', lambda _: nullcontext(None))
 
 
 def write_env(path: Path, text: str) -> Path:
@@ -90,7 +90,7 @@ def subprocess_calls(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
         calls.append(list(cmd))
         return 0
 
-    monkeypatch.setattr(dev, "execute_subprocess", capture)
+    monkeypatch.setattr(dev, 'execute_subprocess', capture)
     return calls
 
 
@@ -151,7 +151,7 @@ def test_process_environment_overrides_local_configuration(tmp_path: Path) -> No
 def test_persist_sonar_token_writes_only_configured_local_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     env_file = tmp_path / LOCAL_ENV_FILENAME
     env_file.write_text("EXISTING=value\nHORO_SONAR_TOKEN=old\n", encoding="utf-8")
-    monkeypatch.setattr(dev, "DEFAULT_ENV_FILE", env_file)
+    monkeypatch.setattr(dev, 'DEFAULT_ENV_FILE', env_file)
 
     dev._persist_sonar_token("replacement")
 
@@ -236,10 +236,10 @@ def test_run_editor_configures_builds_and_forwards_arguments_without_a_shell(
         return_code = 7 if arguments[0] == str(executable) else 0
         return return_code
 
-    monkeypatch.setattr(dev, "DEFAULT_BUILD_DIRECTORY", tmp_path)
-    monkeypatch.setattr(dev, "editor_executable", lambda *args, **kwargs: executable)
-    monkeypatch.setattr(dev.dev_process, "run", fake_run)
-    monkeypatch.setattr(dev, "collector_is_reachable", lambda endpoint: False)
+    monkeypatch.setattr(dev, 'DEFAULT_BUILD_DIRECTORY', tmp_path)
+    monkeypatch.setattr(dev, 'editor_executable', lambda *args, **kwargs: executable)
+    monkeypatch.setattr(dev, 'run', fake_run)
+    monkeypatch.setattr(dev, 'collector_is_reachable', lambda endpoint: False)
     settings = dev.DeveloperSettings(True, dev.validate_endpoint("http://127.0.0.1:4318"))
 
     result = dev.run_editor(settings, ["--project", "path with spaces", "--verbose"])
@@ -261,7 +261,7 @@ def test_configure_failure_prevents_build_and_launch(monkeypatch: pytest.MonkeyP
         calls.append(arguments)
         return 9
 
-    monkeypatch.setattr(dev.dev_process, "run", fake_run)
+    monkeypatch.setattr(dev, 'run', fake_run)
     settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
     assert dev.run_editor(settings, []) == 9
@@ -272,7 +272,7 @@ def test_missing_cmake_returns_command_not_found_exit_code(monkeypatch: pytest.M
     def missing_command(*_args: object, **_kwargs: object) -> None:
         raise FileNotFoundError("cmake")
 
-    monkeypatch.setattr(dev.dev_process, "run", missing_command)
+    monkeypatch.setattr(dev, 'run', missing_command)
     settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
     assert dev.run_editor(settings, []) == 127
@@ -290,9 +290,9 @@ def test_keyboard_interrupt_returns_conventional_exit_code(monkeypatch: pytest.M
             raise KeyboardInterrupt
         return 0
 
-    monkeypatch.setattr(dev, "DEFAULT_BUILD_DIRECTORY", tmp_path)
-    monkeypatch.setattr(dev, "editor_executable", lambda *args, **kwargs: executable)
-    monkeypatch.setattr(dev.dev_process, "run", fake_run)
+    monkeypatch.setattr(dev, 'DEFAULT_BUILD_DIRECTORY', tmp_path)
+    monkeypatch.setattr(dev, 'editor_executable', lambda *args, **kwargs: executable)
+    monkeypatch.setattr(dev, 'run', fake_run)
     settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
 
     assert dev.run_editor(settings, []) == 130
@@ -301,13 +301,13 @@ def test_keyboard_interrupt_returns_conventional_exit_code(monkeypatch: pytest.M
 def test_cli_run_supports_all_argument_variations(monkeypatch: pytest.MonkeyPatch) -> None:
     forwarded: list[list[str]] = []
     settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
-    monkeypatch.setattr(dev, "load_settings", lambda: settings)
+    monkeypatch.setattr(dev, 'load_settings', lambda: settings)
 
     def fake_run_editor(_: object, arguments: list[str]) -> int:
         forwarded.append(arguments)
         return 0
 
-    monkeypatch.setattr(dev, "run_editor", fake_run_editor)
+    monkeypatch.setattr(dev, 'run_editor', fake_run_editor)
 
     assert dev.main(["run", "editor", "--", "--project", "foo"]) == 0
     assert forwarded[-1] == ["--project", "foo"]
@@ -385,7 +385,7 @@ def test_main_build_command_invokes_cmake_build(subprocess_calls: list[list[str]
 def test_main_cache_lease_covers_configure_and_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     events: list[str] = []
     environment = {"CCACHE_CONFIGPATH": "ready.conf"}
-    binding = dev.local_build_cache.CacheBinding("/tools/ccache", environment, "gen-ready", "a" * 40)
+    binding = dev.CacheBinding("/tools/ccache", environment, "gen-ready", "a" * 40)
 
     @contextmanager
     def lease(_: Path):
@@ -402,8 +402,8 @@ def test_main_cache_lease_covers_configure_and_build(monkeypatch: pytest.MonkeyP
             assert "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON" in command
         return 0
 
-    monkeypatch.setattr(dev.local_build_cache, "automatic_cache", lease)
-    monkeypatch.setattr(dev, "execute_subprocess", execute)
+    monkeypatch.setattr(dev, 'automatic_cache', lease)
+    monkeypatch.setattr(dev, 'execute_subprocess', execute)
     for key in list(dev.os.environ):
         if key.startswith(("CCACHE_", "SCCACHE_")):
             monkeypatch.delenv(key)
@@ -418,13 +418,13 @@ def test_main_cache_releases_after_failed_configure(monkeypatch: pytest.MonkeyPa
     def lease(_: Path):
         try:
             events.append("acquire")
-            yield dev.local_build_cache.CacheBinding("ccache", {}, "ready", "a" * 40)
+            yield dev.CacheBinding("ccache", {}, "ready", "a" * 40)
         finally:
             events.append("release")
 
-    monkeypatch.setattr(dev.local_build_cache, "automatic_cache", lease)
-    monkeypatch.setattr(dev, "_uses_explicit_cache", lambda *_: False)
-    monkeypatch.setattr(dev, "execute_subprocess", lambda *_args, **_kwargs: 7)
+    monkeypatch.setattr(dev, 'automatic_cache', lease)
+    monkeypatch.setattr(dev, '_uses_explicit_cache', lambda *_: False)
+    monkeypatch.setattr(dev, 'execute_subprocess', lambda *_args, **_kwargs: 7)
     assert dev.run_build(build_directory=tmp_path) == 7
     assert events == ["acquire", "release"]
 
@@ -443,7 +443,7 @@ def test_explicit_cache_configuration_bypasses_discovery(
     def unexpected(_: Path):
         pytest.fail("explicit cache configuration must not discover a managed cache")
 
-    monkeypatch.setattr(dev.local_build_cache, "automatic_cache", unexpected)
+    monkeypatch.setattr(dev, 'automatic_cache', unexpected)
     assert dev.main(["build", "-B", str(tmp_path), *arguments]) == 0
     assert len(subprocess_calls) == 2
 
@@ -453,7 +453,7 @@ def test_cache_prepare_compiles_isolated_main_with_matching_build_settings(
 ) -> None:
     source, build = tmp_path / "main source", tmp_path / "main source" / "build" / "dev-cache"
     calls: list[tuple[list[str], object, object]] = []
-    binding = dev.local_build_cache.CacheBinding("ccache", {"CACHE": "main"}, "candidate", "b" * 40)
+    binding = dev.CacheBinding("ccache", {"CACHE": "main"}, "candidate", "b" * 40)
 
     def prepare(repo: Path, callback, **kwargs: object) -> int:
         assert repo == dev.REPOSITORY_ROOT
@@ -463,9 +463,9 @@ def test_cache_prepare_compiles_isolated_main_with_matching_build_settings(
         calls.append((list(command), kwargs.get("cwd"), kwargs.get("env")))
         return 0
 
-    monkeypatch.setattr(dev.local_build_cache, "prepare_cache", prepare)
-    monkeypatch.setattr(dev.local_build_cache, "status", lambda _: {"ready": True})
-    monkeypatch.setattr(dev, "execute_subprocess", execute)
+    monkeypatch.setattr(dev, 'prepare_cache', prepare)
+    monkeypatch.setattr(dev, 'status', lambda _: {"ready": True})
+    monkeypatch.setattr(dev, 'execute_subprocess', execute)
     assert dev.main(["cache", "prepare", "--offline", "--target", "HoroCore", "-j", "1"]) == 0
     assert len(calls) == 2
     assert calls[0][0][2] == str(source)
@@ -475,7 +475,7 @@ def test_cache_prepare_compiles_isolated_main_with_matching_build_settings(
 
 
 def test_debug_cache_normalization_preserves_flags_and_handles_spaces(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(dev.sys, "platform", "linux")
+    monkeypatch.setattr(dev.sys, 'platform', "linux")
     build = tmp_path / "build with spaces"
     build.mkdir()
     (build / "CMakeCache.txt").write_text("CMAKE_CXX_FLAGS:STRING=-Wall -Wextra\n")
@@ -503,10 +503,10 @@ def test_unconfirmed_process_cleanup_records_build_block(monkeypatch: pytest.Mon
     recorded: list[Path] = []
 
     def fail(*_args: object, **_kwargs: object) -> int:
-        raise dev.dev_process.CleanupError("unconfirmed descendants")
+        raise dev.CleanupError("unconfirmed descendants")
 
-    monkeypatch.setattr(dev.dev_process, "run", fail)
-    monkeypatch.setattr(dev.local_build_cache, "record_cleanup_failure", recorded.append)
+    monkeypatch.setattr(dev, 'run', fail)
+    monkeypatch.setattr(dev, 'record_cleanup_failure', recorded.append)
     assert dev.execute_subprocess(["fixture"]) == 126
     assert recorded == [dev.REPOSITORY_ROOT]
 
@@ -579,7 +579,7 @@ def test_is_formattable_filters_cpp_extensions_and_ignores_vendor() -> None:
 
 def test_format_exclusions_apply_inside_the_repository(monkeypatch, tmp_path) -> None:
     root = tmp_path / "build" / "checkout"
-    monkeypatch.setattr(dev, "REPOSITORY_ROOT", root)
+    monkeypatch.setattr(dev, 'REPOSITORY_ROOT', root)
     assert dev._is_formattable(root / "src" / "main.cpp") is True
     assert dev._is_formattable(root / "build" / "generated.cpp") is False
     assert dev._is_formattable(root / "vendor" / "external.cpp") is False
@@ -592,7 +592,7 @@ def test_main_format_command_invokes_clang_format(
     test_cpp = tmp_path / "Test.cpp"
     test_cpp.write_text("int main() { return 0; }\n", encoding="utf-8")
 
-    monkeypatch.setattr(dev.shutil, "which", lambda cmd: "/usr/bin/clang-format" if cmd == "clang-format" else None)
+    monkeypatch.setattr(dev.shutil, 'which', lambda cmd: "/usr/bin/clang-format" if cmd == "clang-format" else None)
 
     exit_code = dev.main(["format", str(test_cpp)])
     assert exit_code == 0
@@ -620,9 +620,9 @@ def test_staged_format_refuses_to_stage_unstaged_worktree_changes(
     source.write_text("int value = 2;\n", encoding="utf-8")
 
     format_calls: list[list[str]] = []
-    monkeypatch.setattr(dev, "REPOSITORY_ROOT", tmp_path)
-    monkeypatch.setattr(dev, "_find_clang_format", lambda: "/usr/bin/clang-format")
-    monkeypatch.setattr(dev, "_apply_format_chunk", lambda _binary, chunk, _check: format_calls.append(chunk) or 0)
+    monkeypatch.setattr(dev, 'REPOSITORY_ROOT', tmp_path)
+    monkeypatch.setattr(dev, '_find_clang_format', lambda: "/usr/bin/clang-format")
+    monkeypatch.setattr(dev, '_apply_format_chunk', lambda _binary, chunk, _check: format_calls.append(chunk) or 0)
 
     assert dev.run_format(staged=True) == 1
     assert format_calls == []
@@ -634,7 +634,7 @@ def test_staged_format_refuses_to_stage_unstaged_worktree_changes(
 
 def test_doctor_runs_gracefully_with_broken_env_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     broken_env = write_env(tmp_path / LOCAL_ENV_FILENAME, "INVALID-ENV-LINE\n")
-    monkeypatch.setattr(dev, "DEFAULT_ENV_FILE", broken_env)
+    monkeypatch.setattr(dev, 'DEFAULT_ENV_FILE', broken_env)
 
     exit_code = dev.main(["doctor", "--json"])
     assert exit_code == 1
@@ -699,7 +699,7 @@ def test_skip_build_preserves_ctest_filters_junit_and_failure(
         calls.append(list(command))
         return 8
 
-    monkeypatch.setattr(dev, "execute_subprocess", fail_ctest)
+    monkeypatch.setattr(dev, 'execute_subprocess', fail_ctest)
     assert dev.main([
         "test", "--skip-build", "-B", str(tmp_path), "-R", "Audio", "-E", "Slow", "--junit", str(junit)
     ]) == 8
@@ -741,8 +741,8 @@ def test_default_observability_keeps_engine_local_without_external_services(monk
     def unexpected_network(*_args: object, **_kwargs: object) -> bool:
         pytest.fail("Disabled export must not probe an external service")
 
-    monkeypatch.setattr(dev, "collector_is_reachable", unexpected_network)
-    monkeypatch.setattr(dev, "DEFAULT_ENV_FILE", tmp_path / "missing.env")
+    monkeypatch.setattr(dev, 'collector_is_reachable', unexpected_network)
+    monkeypatch.setattr(dev, 'DEFAULT_ENV_FILE', tmp_path / "missing.env")
     settings = dev.load_settings(dev.DEFAULT_ENV_FILE, {})
     report = dev.DoctorReport()
     dev.check_observability_and_services(report, settings)
