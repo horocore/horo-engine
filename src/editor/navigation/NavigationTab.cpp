@@ -76,18 +76,22 @@ namespace Horo::Editor {
         for (const auto &profile : catalog.profiles)
             Ui::Hint(std::format("{} / {}", profile.id.Value(), profile.displayName).c_str(), fonts);
         Ui::Hint(Text(context, "profiles_hint").c_str(), fonts);
-        (void)Ui::CheckboxControl(Text(context, "selected_only").c_str(), &selectedOnly_, fonts);
+        (void)Ui::CheckboxControl(Text(context, "selection_mode").c_str(), &selectedOnly_, fonts);
+        Ui::Hint(Text(context, "selected_only").c_str(), fonts);
         if (selectedOnly_) {
             for (const auto &surface : catalog.surfaces) {
                 bool selected = std::ranges::find(selected_, surface) != selected_.end();
                 const auto label =
                     std::format("{} / {}", Assets::AssetId::FromBytes(surface.scope.SceneBytes()).ToString(), surface.surface.Value());
-                if (Ui::CheckboxControl(label.c_str(), &selected, fonts)) {
+                ImGui::PushID(label.c_str());
+                Ui::Hint(label.c_str(), fonts);
+                if (Ui::CheckboxControl(Text(context, "surface_selected").c_str(), &selected, fonts)) {
                     if (selected)
                         selected_.push_back(surface);
                     else
                         std::erase(selected_, surface);
                 }
+                ImGui::PopID();
             }
             if (selected_.empty())
                 Ui::Hint(Text(context, "selection_required").c_str(), fonts);

@@ -2990,6 +2990,8 @@
       "text": "Overridden traversal cost"
     },
     "workspace.navigation_bake.reload": {"text": "Reload saved project choices"},
+    "workspace.navigation_bake.selection_mode": {"text": "Use selection"},
+    "workspace.navigation_bake.surface_selected": {"text": "Selected"},
     "workspace.navigation_bake.title": {"text": "Navigation"},
     "workspace.navigation_bake.cancel_title": {"text": "Cancel navigation bake?"},
     "workspace.navigation_bake.cancel_hint": {"text": "Closing this dialog keeps the bake running. Confirm cancellation explicitly to stop uncommitted work. Published output is retained."},

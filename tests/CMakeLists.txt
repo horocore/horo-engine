@@ -2817,6 +2817,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockPanelRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
             unit/editor/PlayTopologyModalTests.cpp
+            unit/editor/NavigationBakeRenderTests.cpp
     )
 
     target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform)

@@ -2990,6 +2990,8 @@
       "text": "Geçersiz kılınan geçiş maliyeti"
     },
     "workspace.navigation_bake.reload": {"text": "Kaydedilmiş proje seçeneklerini yenile"},
+    "workspace.navigation_bake.selection_mode": {"text": "Seçimi kullan"},
+    "workspace.navigation_bake.surface_selected": {"text": "Seçili"},
     "workspace.navigation_bake.title": {"text": "Gezinme"},
     "workspace.navigation_bake.cancel_title": {"text": "Gezinme üretimi iptal edilsin mi?"},
     "workspace.navigation_bake.cancel_hint": {"text": "Bu iletişim kutusunu kapatmak üretimi sürdürür. Henüz yayımlanmamış işi durdurmak için iptali açıkça onaylayın. Yayımlanmış çıktı korunur."},
