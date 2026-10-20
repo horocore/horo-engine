@@ -1,17 +1,131 @@
 #include "../../unit/runtime/renderer/RenderMemoryTestSupport.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
+#include "runtime/renderer/modules/metal/MetalBackendInternal.h"
 #include "runtime/renderer/modules/metal/MetalPreparedMaterialState.h"
 #include "runtime/renderer/modules/metal/MetalRenderBackendErrors.h"
 #include "runtime/renderer/modules/metal/MetalResourceRuntime.h"
 
 #import <Metal/Metal.h>
+#import <QuartzCore/CAMetalLayer.h>
+#include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <exception>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <thread>
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Owns a real native layer without acquiring drawables or creating a host window. */
+        class PreparationLayerPort final : public IMetalPresentationPort {
+        public:
+            Result<void> CreateSurface() override {
+                layer_ = [CAMetalLayer layer];
+                return layer_ != nil ? Result<void>::Success()
+                                     : Result<void>::Failure(MakeError(MetalBackendErrors::ResourceCreationFailed));
+            }
+
+            void *Layer() const noexcept override {
+                return (__bridge void *)layer_;
+            }
+
+            void DestroySurface() noexcept override {
+                layer_ = nil;
+            }
+
+        private:
+            __strong CAMetalLayer *layer_{nil};
+        };
+
+        /** @brief Preserves typed failures without asserting from a worker thread. */
+        template <typename T> std::string PreparationFailureCode(const Result<T> &result) {
+            return result.HasError() ? result.ErrorValue().code.Value() : "unexpected.success";
+        }
+
+        /** @brief Exercises every preparation admission without submitting frame work. */
+        std::array<std::string, 9> PreparationFailureCodes(IMetalRuntime &runtime) {
+            constexpr std::array<std::uint8_t, 4> bytes{};
+            return {PreparationFailureCode(runtime.QueryPipelineDeviceIdentity()),
+                    PreparationFailureCode(runtime.QueryShaderModuleMemoryCost({}, bytes.size())),
+                    PreparationFailureCode(runtime.QueryGraphicsPipelineMemoryCost({}, 11, 13)),
+                    PreparationFailureCode(runtime.QuerySamplerMemoryCost({})),
+                    PreparationFailureCode(runtime.CreateShaderModule({}, bytes, {})),
+                    PreparationFailureCode(runtime.CreateGraphicsPipeline({}, 17, 19, {})),
+                    PreparationFailureCode(runtime.CreateSampler({}, {})),
+                    PreparationFailureCode(runtime.QueryMaterialParameterBufferSize(23, {}, ShaderBindingId{1})),
+                    PreparationFailureCode(runtime.RealizeResolved({}, 29, {}))};
+        }
+
+        /** @brief Keeps runtime destruction ahead of its borrowed bridge and native surface port. */
+        struct NativeAdmissionFixture final {
+            PreparationLayerPort port;
+            MetalEditorGraphicsBridge bridge;
+            std::unique_ptr<IMetalRuntime> runtime;
+
+            void Initialize() {
+                auto created = CreateMetalRuntime(port, bridge);
+                REQUIRE(created.HasValue());
+                runtime = std::move(created).Value();
+                CHECK(port.Layer() == nullptr);
+                CHECK(bridge.Device() == nullptr);
+                for (const auto &code : PreparationFailureCodes(*runtime)) {
+                    CHECK(code == MetalBackendErrors::NotInitialized.code.Value());
+                }
+                const auto admitted = runtime->Initialize({}, {});
+                INFO((admitted.HasError() ? admitted.ErrorValue().code.Value() + ": " + admitted.ErrorValue().message
+                                          : "Native preparation runtime initialized."));
+                REQUIRE(admitted.HasValue());
+                REQUIRE(bridge.Device() != nullptr);
+                REQUIRE(bridge.CommandQueue() != nullptr);
+                CHECK(bridge.CurrentCommandBuffer() == nullptr);
+                const auto identity = runtime->QueryPipelineDeviceIdentity();
+                REQUIRE(identity.HasValue());
+                CHECK(identity.Value().backend == RenderBackendId{"metal"});
+            }
+
+            void CheckForeignThreadAdmission() {
+                std::array<std::string, 9> codes;
+                std::exception_ptr unexpected;
+                std::jthread worker([&] {
+                    try {
+                        codes = PreparationFailureCodes(*runtime);
+                    } catch (...) {
+                        unexpected = std::current_exception();
+                    }
+                });
+                worker.join();
+                if (unexpected) {
+                    std::rethrow_exception(unexpected);
+                }
+                for (const auto &code : codes) {
+                    CHECK(code == MetalBackendErrors::WrongThread.code.Value());
+                }
+            }
+
+            void CheckOwnerSamplerDelegation() {
+                const auto identity = runtime->QueryPipelineDeviceIdentity();
+                REQUIRE(identity.HasValue());
+                const auto cost = runtime->QuerySamplerMemoryCost({});
+                REQUIRE(cost.HasValue());
+                const auto sampler = runtime->CreateSampler({}, TestSupport::PlacementFor(cost.Value(), 1));
+                REQUIRE(sampler.HasValue());
+                runtime->DestroySampler(sampler.Value());
+                CHECK(bridge.CurrentCommandBuffer() == nullptr);
+            }
+
+            void CheckOwnerShutdown() {
+                runtime->Shutdown();
+                CHECK(bridge.Device() == nullptr);
+                CHECK(bridge.CommandQueue() == nullptr);
+                CHECK(bridge.CurrentCommandBuffer() == nullptr);
+                CHECK(port.Layer() == nullptr);
+                for (const auto &code : PreparationFailureCodes(*runtime)) {
+                    CHECK(code == MetalBackendErrors::NotInitialized.code.Value());
+                }
+            }
+        };
+
         /** @brief Keeps each native preparation and rejection phase explicit without sharing mutable global state. */
         struct NativePreparationFixture final {
             __strong id<MTLDevice> device{nil};
@@ -298,6 +412,14 @@ namespace Horo::Render::Detail {
             }
         };
     }  // namespace
+
+    TEST_CASE("Metal native preparation preserves owner and shutdown admission", "[gpu][metal]") {
+        NativeAdmissionFixture fixture;
+        fixture.Initialize();
+        fixture.CheckForeignThreadAdmission();
+        fixture.CheckOwnerSamplerDelegation();
+        fixture.CheckOwnerShutdown();
+    }
 
     TEST_CASE("Metal offline shader preparation verifies native ABI and exact material lifetime", "[gpu][metal]") {
         NativePreparationFixture fixture;
