@@ -3,6 +3,10 @@ on:
   pull_request:
     paths:
       - 'src/runtime/renderer/modules/vulkan/**'
+      - 'include/Horo/Runtime/Render/RenderShaderResources.h'
+      - 'src/runtime/renderer/api/RenderShaderResources.cpp'
+      - 'tests/unit/runtime/renderer/RenderShaderResourceDescriptorTests.cpp'
+      - 'tests/support/MaterialBindingPublicHeaderConsumer.cpp'
       - 'tests/unit/runtime/renderer/Vulkan*'
       - 'tests/integration/renderer/VulkanPreparation.*'
       - 'src/CMakeLists.txt'
@@ -25,10 +29,18 @@ jobs:
         include:
           - os: ubuntu-24.04
             preset: ci-linux-debug
+            cc: gcc
+            cxx: g++
+            launcher: ccache
           - os: windows-2022
             preset: ci-windows-debug
+            cc: cl
+            cxx: cl
+            launcher: sccache
     env:
-      HORO_COMPILER_LAUNCHER: ''
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      HORO_COMPILER_LAUNCHER: ${{ matrix.launcher }}
     defaults:
       run:
         shell: bash
@@ -38,6 +50,12 @@ jobs:
       - name: Install native Vulkan smoke dependencies
         if: runner.os == 'Linux'
         run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 glslang-tools
+      - name: Restore compatible main dependency and compiler caches
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-tests-v1
+          mode: Debug
+          max-size: 2G
       - name: Configure focused headless Vulkan composition
         run: >-
           cmake --preset "${{ matrix.preset }}"
@@ -45,9 +63,9 @@ jobs:
           -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
           -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
       - name: Build native Vulkan contracts
-        run: cmake --build build/ci --target HoroRenderVulkanTests --parallel 2
+        run: cmake --build build/ci --target HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingPublicHeaderConsumer --parallel 2
       - name: Run Vulkan native-call and lifecycle regressions
-        run: ctest --test-dir build/ci -R '^HoroRenderVulkanTests' --output-on-failure
+        run: ctest --test-dir build/ci -R '^(HoroRenderVulkanTests|HoroPipelineCacheTests|HoroShaderPermutationTests|HoroMaterialBindingPublicHeaderConsumer)$' --output-on-failure
       - name: Cook final SPIR-V and qualify real Linux native device preparation
         if: runner.os == 'Linux'
         run: |

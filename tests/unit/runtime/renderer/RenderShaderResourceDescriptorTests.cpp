@@ -57,3 +57,43 @@ TEST_CASE("Graphics pipeline state rejects unknown enums and incompatible output
     }
     Horo::Tests::RequireError(ComputeRenderGraphicsPipelineStateDigest(state), RenderShaderResourceErrors::InvalidPipeline);
 }
+
+TEST_CASE("Pipeline specialization identity preserves old keys and includes typed runtime values", "[render][pipeline][specialization]") {
+    const RenderGraphicsPipelineState state;
+    CHECK(ComputeRenderGraphicsPipelineDescriptorDigest(state, {}).Value() == ComputeRenderGraphicsPipelineStateDigest(state).Value());
+    std::array values{ShaderSpecializationValue{{7}, ShaderValueType::Uint32, 13}};
+    const auto original = ComputeRenderGraphicsPipelineDescriptorDigest(state, values);
+    REQUIRE(original.HasValue());
+    SECTION("value changes") {
+        values[0].valueBits = 14;
+    }
+    SECTION("ID changes") {
+        values[0].id = {8};
+    }
+    SECTION("type changes") {
+        values[0].type = ShaderValueType::Int32;
+    }
+    CHECK(ComputeRenderGraphicsPipelineDescriptorDigest(state, values).Value() != original.Value());
+}
+
+TEST_CASE("Pipeline specialization rejects noncanonical and invalid scalar inputs", "[render][pipeline][specialization]") {
+    std::vector<ShaderSpecializationValue> values{{{7}, ShaderValueType::Uint32, 13}};
+    SECTION("duplicate IDs") {
+        values.push_back(values.front());
+    }
+    SECTION("unknown type") {
+        values[0].type = static_cast<ShaderValueType>(255);
+    }
+    SECTION("invalid boolean") {
+        values[0].type = ShaderValueType::Bool32;
+        values[0].valueBits = 2;
+    }
+    SECTION("nonfinite float") {
+        values[0].type = ShaderValueType::Float32;
+        values[0].valueBits = 0x7f800000;
+    }
+    SECTION("unbounded inputs") {
+        values.resize(65);
+    }
+    Horo::Tests::RequireError(ComputeRenderGraphicsPipelineDescriptorDigest({}, values), RenderShaderResourceErrors::InvalidPipeline);
+}

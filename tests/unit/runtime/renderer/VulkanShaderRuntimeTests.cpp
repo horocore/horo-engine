@@ -88,7 +88,9 @@ namespace {
             const std::array<std::uint32_t, 10>
                 words{0x07230203, 0x00010600, 0, 2, 0, (5U << 16) | 15U, stage == ShaderStage::Vertex ? 0U : 4U, 1, 0x6e69616d, 0};
             std::vector<std::uint8_t> bytes(sizeof(words));
-            std::memcpy(bytes.data(), words.data(), bytes.size());
+            std::ranges::transform(std::as_bytes(std::span{words}), bytes.begin(), [](std::byte value) {
+                return std::to_integer<std::uint8_t>(value);
+            });
             return bytes;
         }
 
@@ -159,7 +161,7 @@ TEST_CASE("Vulkan realizes shaders pipeline specialization cache and immutable m
     CHECK(native->pipeline != VK_NULL_HANDLE);
     CHECK(native->sets.size() == 1);
     CHECK(f.state.updates == 1);
-    table.Value().reset();
+    std::move(table).Value().reset();
     CHECK(f.state.destroyedPools == 1);
     f.runtime.DestroyGraphicsPipeline(pipeline.Value());
     CHECK(f.state.destroyedPipelines == 1);
@@ -168,6 +170,33 @@ TEST_CASE("Vulkan realizes shaders pipeline specialization cache and immutable m
     f.runtime.Shutdown();
     CHECK(f.state.destroyedShaders == 2);
     CHECK(f.runtime.QueryPipelineDeviceIdentity().HasError());
+}
+
+TEST_CASE("Vulkan pipeline specialization overrides reach the declared native SpecId", "[vulkan][pipeline][specialization]") {
+    Fixture f;
+    f.Prepare();
+    f.descriptor.specializationValues = {{{7}, ShaderValueType::Uint32, 13}};
+    f.descriptor.compatibility.pipelineDescriptorDigest =
+        ComputeRenderGraphicsPipelineDescriptorDigest(f.descriptor.state, f.descriptor.specializationValues).Value();
+    REQUIRE(f.Pipeline().HasValue());
+    CHECK(f.state.specialization == 13);
+    f.descriptor.specializationValues[0].id = {8};
+    f.descriptor.compatibility.pipelineDescriptorDigest =
+        ComputeRenderGraphicsPipelineDescriptorDigest(f.descriptor.state, f.descriptor.specializationValues).Value();
+    CHECK(f.runtime.QueryGraphicsPipelineMemoryCost(f.descriptor, f.vertex, f.fragment).HasError());
+    CHECK(f.state.pipelines == 1);
+}
+
+TEST_CASE("Vulkan depth writes without testing use an always-pass native depth test", "[vulkan][pipeline][depth]") {
+    Fixture f;
+    f.Prepare();
+    f.descriptor.state.depthTest = false;
+    f.descriptor.state.depthWrite = true;
+    f.descriptor.compatibility.pipelineDescriptorDigest = ComputeRenderGraphicsPipelineStateDigest(f.descriptor.state).Value();
+    REQUIRE(f.Pipeline().HasValue());
+    CHECK(f.state.depthTestEnabled);
+    CHECK(f.state.depthWriteEnabled);
+    CHECK(f.state.depthCompare == VK_COMPARE_OP_ALWAYS);
 }
 
 TEST_CASE("Vulkan shader admission rejects malformed artifacts before native creation", "[vulkan][shader][failure]") {
@@ -334,7 +363,7 @@ namespace {
             RenderBackendConfig config;
             config.requirePresentation = false;
             const auto initialized = backend->Initialize(config);
-            INFO(initialized.HasError() ? initialized.ErrorValue().message : "Vulkan native device initialized");
+            INFO((initialized.HasError() ? initialized.ErrorValue().message : "Vulkan native device initialized"));
             REQUIRE(initialized.HasValue());
         }
 
@@ -343,7 +372,7 @@ namespace {
             auto cost = backend->QueryShaderModuleMemoryCost(d, bytes.size());
             REQUIRE(cost.HasValue());
             auto result = backend->CreateShaderModule(d, bytes, TestSupport::PlacementFor(cost.Value(), 1));
-            INFO(result.HasError() ? result.ErrorValue().message : "Native shader created");
+            INFO((result.HasError() ? result.ErrorValue().message : "Native shader created"));
             REQUIRE(result.HasValue());
             return result.Value();
         }
@@ -378,11 +407,14 @@ namespace {
                                       .shaderArtifactKey = metadata.artifact,
                                       .shaderInterface = metadata.reflection.interfaceCompatibility,
                                       .pipelineDescriptorDigest = ComputeRenderGraphicsPipelineStateDigest(pipeline.state).Value()};
+            pipeline.specializationValues = {{{7}, ShaderValueType::Uint32, 13}};
+            pipeline.compatibility.pipelineDescriptorDigest =
+                ComputeRenderGraphicsPipelineDescriptorDigest(pipeline.state, pipeline.specializationValues).Value();
             const auto cost = backend->QueryGraphicsPipelineMemoryCost(pipeline, vertex, fragment);
             REQUIRE(cost.HasValue());
             const auto createdPipeline =
                 backend->CreateGraphicsPipeline(pipeline, vertex, fragment, TestSupport::PlacementFor(cost.Value(), 2));
-            INFO(createdPipeline.HasError() ? createdPipeline.ErrorValue().message : "Native graphics pipeline created");
+            INFO((createdPipeline.HasError() ? createdPipeline.ErrorValue().message : "Native graphics pipeline created"));
             REQUIRE(createdPipeline.HasValue());
             native = createdPipeline.Value();
         }
@@ -399,9 +431,9 @@ namespace {
             const auto material = metadata.Material();
             const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, buffer.Value(), 0, 16}};
             auto table = backend->RealizeResolved(material, native, resources);
-            INFO(table.HasError() ? table.ErrorValue().message : "Native descriptors updated");
+            INFO((table.HasError() ? table.ErrorValue().message : "Native descriptors updated"));
             REQUIRE(table.HasValue());
-            table.Value().reset();
+            std::move(table).Value().reset();
             backend->DestroyBuffer(buffer.Value());
             backend->DestroyGraphicsPipeline(native);
             backend->DestroyShaderModule(vertex);

@@ -254,7 +254,9 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
         try {
             std::vector<std::uint32_t> words(code.size() / 4);
-            std::memcpy(words.data(), code.data(), code.size());
+            std::ranges::transform(code, std::as_writable_bytes(std::span{words}).begin(), [](std::uint8_t value) {
+                return static_cast<std::byte>(value);
+            });
             if (!HasEntry(words, descriptor))
                 return Result<std::uint64_t>::Failure(
                     MakeError(VulkanBackendErrors::ResourceRequestInvalid,

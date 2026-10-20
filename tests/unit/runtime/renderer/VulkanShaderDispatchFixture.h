@@ -30,6 +30,8 @@ namespace {
             allocationResult{VK_SUCCESS};
         std::string_view missing;
         std::uint32_t specialization{};
+        bool depthTestEnabled{}, depthWriteEnabled{};
+        VkCompareOp depthCompare{};
     };
 
     Driver *driver{};
@@ -90,6 +92,9 @@ namespace {
         REQUIRE(spec->mapEntryCount == 1);
         CHECK(spec->pMapEntries[0].constantID == 7);
         driver->specialization = *static_cast<const std::uint32_t *>(spec->pData);
+        driver->depthTestEnabled = info->pDepthStencilState->depthTestEnable;
+        driver->depthWriteEnabled = info->pDepthStencilState->depthWriteEnable;
+        driver->depthCompare = info->pDepthStencilState->depthCompareOp;
         ++driver->pipelines;
         *out = Handle<VkPipeline>(50);
         return driver->pipelineResult;

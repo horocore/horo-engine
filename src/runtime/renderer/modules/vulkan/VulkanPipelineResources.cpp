@@ -55,10 +55,7 @@ namespace Horo::Render::Detail {
                                                            .lineWidth = 1};
                 samples = VkPipelineMultisampleStateCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
                                                                .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
-                depth = VkPipelineDepthStencilStateCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-                                                              .depthTestEnable = state.depthTest,
-                                                              .depthWriteEnable = state.depthWrite,
-                                                              .depthCompareOp = Compare(state.depthCompare)};
+                ConfigureDepth(state);
                 attachment = VkPipelineColorBlendAttachmentState{.blendEnable = state.blend != RenderBlendMode::Disabled,
                                                                  .srcColorBlendFactor = state.blend == RenderBlendMode::Alpha
                                                                                             ? VK_BLEND_FACTOR_SRC_ALPHA
@@ -81,6 +78,15 @@ namespace Horo::Render::Detail {
                 dynamic = VkPipelineDynamicStateCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
                                                            .dynamicStateCount = 2,
                                                            .pDynamicStates = dynamicStates.data()};
+            }
+
+            /** @brief Vulkan depth writes require a native enabled test, even for the logical no-comparison path. */
+            void ConfigureDepth(const RenderGraphicsPipelineState &state) {
+                depth = VkPipelineDepthStencilStateCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+                                                              .depthTestEnable = state.depthTest || state.depthWrite,
+                                                              .depthWriteEnable = state.depthWrite,
+                                                              .depthCompareOp =
+                                                                  state.depthTest ? Compare(state.depthCompare) : VK_COMPARE_OP_ALWAYS};
             }
 
             void ConfigureAttachments(const RenderGraphicsPipelineState &state) {
@@ -149,7 +155,7 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
-    /** @brief Supplies canonical manifest specialization defaults only to their declared visible stages. */
+    /** @brief Supplies typed runtime overrides or manifest defaults only to their declared visible stages. */
     void VulkanShaderRuntime::Impl::ConfigureStages(const RenderGraphicsPipelineDescriptor &descriptor, std::uint64_t vertex,
                                                     std::uint64_t fragment, StageState &output) const {
         const std::array shaderIds{vertex, fragment};
@@ -160,7 +166,9 @@ namespace Horo::Render::Detail {
                     continue;
                 output.entries[stage].push_back(
                     {.constantID = input.id.value, .offset = static_cast<std::uint32_t>(output.data[stage].size() * 4), .size = 4});
-                output.data[stage].push_back(input.defaultValueBits);
+                const auto overrideValue = std::ranges::find(descriptor.specializationValues, input.id, &ShaderSpecializationValue::id);
+                output.data[stage].push_back(overrideValue == descriptor.specializationValues.end() ? input.defaultValueBits
+                                                                                                    : overrideValue->valueBits);
             }
             output.specialization[stage] = {.mapEntryCount = static_cast<std::uint32_t>(output.entries[stage].size()),
                                             .pMapEntries = output.entries[stage].data(),

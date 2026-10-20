@@ -2,7 +2,8 @@
 
 HORO-327 implements the existing `IRenderResourceBackend` shader/pipeline/sampler
 and `IMaterialBindingBackend` preparation calls for the selected Vulkan device.
-No public header, target ownership or consumer migration changes are required.
+The additive public descriptor migration below connects existing typed permutation
+values to immutable native pipeline creation. Header target ownership is unchanged.
 Frontend cooked-artifact admission and exact generation pins remain authoritative.
 Native types stay in the Vulkan target. OpenGL, Metal and Null remain independent.
 
@@ -18,10 +19,10 @@ then creates shader modules. Final-artifact reflection produces direct descripto
 set layouts and a pipeline layout. The established MeshVertex triangle ABI,
 attachment/depth/raster/blend state and dynamic viewport/scissor become a real
 Vulkan graphics pipeline using dynamic rendering. Manifest specialization IDs
-map directly to SPIR-V SpecId decorations; canonical manifest default bits are
-supplied per visible stage. The established public pipeline descriptor has no
-runtime-specialization override field; it consumes manifest defaults. Callers
-select a cooked artifact/manifest through the existing permutation authority.
+map directly to SPIR-V SpecId decorations. Canonical typed runtime overrides from
+permutation resolution are supplied per visible stage; omitted IDs use manifest
+default bits. No cooked artifact is mutated and no second permutation authority
+is introduced.
 
 One device-local native pipeline cache accelerates subsequent creation and is
 destroyed before the device. Cache admission checks adapter/module/driver identity,
@@ -53,3 +54,31 @@ sets. It does not submit frame work and requires no display. The hosted workflow
 fails if its explicitly requested Vulkan device is unavailable. The ordinary suite
 skips this smoke unless both fixture paths are supplied. macOS is not a supported
 Vulkan product platform and supplies no native Vulkan qualification evidence.
+
+## Public descriptor migration
+
+Reason: `ResolvedShaderPermutation` already carries typed runtime specialization
+values, but the pipeline descriptor did not transport them. A backend could only
+repeat compiler defaults. `RenderGraphicsPipelineDescriptor::specializationValues`
+adds a bounded, increasing-ID override list using the existing
+`ShaderSpecializationValue` type. Values must name declared manifest inputs with
+matching scalar types; duplicate/unknown IDs, nonfinite floats and invalid booleans
+fail admission before native work. The descriptor and resource generation own the
+immutable values.
+
+Affected callers are pipeline producers using `RenderFrontend::CreateGraphicsPipeline`
+and concrete `IRenderResourceBackend` preparation adapters. Producers with non-empty
+overrides compute `PipelineCacheCompatibility::pipelineDescriptorDigest` using
+`ComputeRenderGraphicsPipelineDescriptorDigest(state, values)`. Empty overrides
+produce the identical legacy state-only digest, so existing source callers and
+cache identities are preserved. Existing Metal/OpenGL implementations already
+reject any declared specialization inputs; they continue returning typed
+unsupported errors rather than dropping valid overrides. Null/D3D12 preparation
+retains the existing typed unsupported boundary.
+
+All consumers must rebuild against the additive public struct layout; no stable
+binary ABI compatibility is claimed during active development. No new header or
+CMake owner is introduced. The RenderApi descriptor/cache tests, existing public
+header consumer, Vulkan override/cache tests and Linux native smoke cover the
+migration. Both hosted Vulkan matrix jobs build the affected public consumer and
+cache/permutation test targets; general renderer CI qualifies peer compositions.

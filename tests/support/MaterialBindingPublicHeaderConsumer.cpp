@@ -2,8 +2,11 @@
 #include "Horo/Runtime/Render/MaterialBindingBackend.h"
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderBackend.h"
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 
 #include <type_traits>
+static_assert(std::is_same_v<decltype(Horo::Render::RenderGraphicsPipelineDescriptor{}.specializationValues),
+                             std::vector<Horo::Render::ShaderSpecializationValue>>);
 static_assert(std::is_base_of_v<Horo::Render::IMaterialBindingBackend, Horo::Render::IRenderBackend>);
 
 static_assert(!std::is_same_v<Horo::Render::MaterialBindingId, Horo::Render::MaterialBindingGenerationId>);
