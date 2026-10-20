@@ -9,6 +9,8 @@ using Horo::Editor::PartitionedWorldSnapshot;
 using Horo::Editor::PartitionedWorldSnapshotLease;
 using Horo::Editor::PartitionedWorldWorkspace;
 using Horo::Editor::WorldDocumentFence;
+using Horo::Editor::WorldStreamingPreview;
+using Horo::Editor::WorldStreamingPreviewCell;
 
 static_assert(std::is_same_v<PartitionedWorldSnapshotLease::element_type, const PartitionedWorldSnapshot>);
 static_assert(!std::is_copy_constructible_v<PartitionedWorldWorkspace>);

@@ -79,6 +79,34 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Rejects desired evidence from another policy, cell, source lifetime or publication time. */
+        Result<void> ValidateDesiredFence(const WS::StreamingPlannedCell &desired, const std::uint64_t sampledAt) {
+            const auto &stability = desired.stability;
+            const auto &owner = desired.cell.binding.owner;
+            if (!stability.policy.IsValid() || !stability.policyRevision.IsValid())
+                return Fail<void>(WorldDocumentErrors::Invalid);
+            if (stability.partition != owner.partition || stability.epoch != owner.epoch || stability.cell != desired.cell.cell)
+                return Fail<void>(WorldDocumentErrors::Stale);
+            if (stability.observedAtServiceMilliseconds > sampledAt || desired.queuedAtServiceMilliseconds > sampledAt)
+                return Fail<void>(WorldDocumentErrors::Stale);
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates optional pin and source-priority provenance without inventing a new reduction rule. */
+        Result<void> ValidateDesiredProvenance(const WS::StreamingPlannedCell &desired) {
+            if (desired.pinnedFloor &&
+                (*desired.pinnedFloor == WS::StreamingDesiredResidency::Unloaded || *desired.pinnedFloor > desired.residency))
+                return Fail<void>(WorldDocumentErrors::Invalid);
+            if (!desired.prioritySource)
+                return Result<void>::Success();
+            if (!desired.prioritySource->IsValid())
+                return Fail<void>(WorldDocumentErrors::Invalid);
+            const auto &owner = desired.cell.binding.owner;
+            if (desired.prioritySource->owner.partition != owner.partition || desired.prioritySource->owner.epoch != owner.epoch)
+                return Fail<void>(WorldDocumentErrors::Stale);
+            return Result<void>::Success();
+        }
+
         /** @brief Copies one exact desired row per registry cell, rejecting duplicate and foreign handles. */
         Result<void> AttachDesired(Cells &cells, const WS::WorldPartitionRegistrySnapshot &registry,
                                    const WS::StreamingSourcePlanView &plan, const std::stop_token cancellation) {
@@ -91,6 +119,12 @@ namespace Horo::Editor {
                 const auto valid = ValidateDesired(desired);
                 if (valid.HasError())
                     return valid;
+                const auto fence = ValidateDesiredFence(desired, plan.sampledAtServiceMilliseconds);
+                if (fence.HasError())
+                    return fence;
+                const auto provenance = ValidateDesiredProvenance(desired);
+                if (provenance.HasError())
+                    return provenance;
                 auto &row = cells[desired.cell.slot];
                 if (row.desired)
                     return Fail<void>(WorldDocumentErrors::Conflict);

@@ -43,6 +43,11 @@ namespace Horo::Editor {
                 REQUIRE(registry->Publish(std::move(descriptor).Value(), Id<WS::WorldPartitionRegistryRevision>()).HasValue());
                 snapshot = registry->Snapshot().Value();
                 desired.push_back({.cell = snapshot.Find(cells.front().id).Value(), .residency = WS::StreamingDesiredResidency::Activated});
+                desired.front().stability = {.policy = Id<WS::StreamingCellStabilityPolicyId>(),
+                                             .policyRevision = Id<WS::StreamingCellStabilityPolicyRevision>(),
+                                             .partition = world,
+                                             .epoch = owner.epoch,
+                                             .cell = desired.front().cell.cell};
             }
 
             WS::WorldStreamingDiagnosticSnapshot Diagnostics(
@@ -89,7 +94,11 @@ namespace Horo::Editor {
             }
 
             WS::StreamingSourcePlanView Plan() const {
-                return {.partition = snapshot.Binding(), .revision = 1, .cells = desired, .contributions = contributions};
+                return {.partition = snapshot.Binding(),
+                        .revision = 1,
+                        .sampledAtServiceMilliseconds = 10,
+                        .cells = desired,
+                        .contributions = contributions};
             }
 
             WorldStreamingPreviewFence Fence() const {
@@ -183,6 +192,33 @@ namespace Horo::Editor {
             }
             RequireError(WorldStreamingPreview::Create(fixture.source, fixture.snapshot, fixture.Plan(), diagnostics, fence, limits,
                                                        cancellation.get_token()),
+                         error);
+            REQUIRE(fixture.workspace.Snapshot().Value() == fixture.source);
+        }
+
+        TEST_CASE("Streaming preview rejects malformed desired provenance", "[unit][editor][streaming_preview]") {
+            Fixture fixture;
+            const auto diagnostics = fixture.Diagnostics();
+            std::string_view error = "world_document.invalid";
+            SECTION("invalid priority source") {
+                fixture.desired.front().prioritySource = WS::StreamingSourceDescriptor{};
+            }
+            SECTION("stale stability cell") {
+                ++fixture.desired.front().stability.cell.x;
+                error = "world_document.stale";
+            }
+            SECTION("invalid stability policy") {
+                fixture.desired.front().stability.policy = {};
+            }
+            SECTION("future desired time") {
+                fixture.desired.front().queuedAtServiceMilliseconds = 11;
+                error = "world_document.stale";
+            }
+            SECTION("pin exceeds desired residency") {
+                fixture.desired.front().residency = WS::StreamingDesiredResidency::Loaded;
+                fixture.desired.front().pinnedFloor = WS::StreamingDesiredResidency::Activated;
+            }
+            RequireError(WorldStreamingPreview::Create(fixture.source, fixture.snapshot, fixture.Plan(), diagnostics, fixture.Fence()),
                          error);
             REQUIRE(fixture.workspace.Snapshot().Value() == fixture.source);
         }
