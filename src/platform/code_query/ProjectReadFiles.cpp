@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
+#include <array>
 
 namespace Horo::Platform::ProjectReadErrors {
     namespace {
@@ -13,14 +14,14 @@ namespace Horo::Platform::ProjectReadErrors {
         }
     }  // namespace
 
-    const ErrorCodeDescriptor Invalid = Descriptor("invalid", "The read-only request is malformed.");
-    const ErrorCodeDescriptor UnsafePath = Descriptor("unsafe_path", "The file path or native object is unsafe.");
-    const ErrorCodeDescriptor ReadFailed = Descriptor("read_failed", "The file could not be read consistently.");
-    const ErrorCodeDescriptor Capacity = Descriptor("capacity", "The read exceeds a finite resource limit.");
-    const ErrorCodeDescriptor Stale = Descriptor("stale", "The root authority or file observation changed.");
-    const ErrorCodeDescriptor Unavailable = Descriptor("unavailable", "The read-only capability is unavailable.");
-    const ErrorCodeDescriptor Cancelled = Descriptor("cancelled", "The read was cancelled or its authority expired.");
-    const ErrorCodeDescriptor Deadline = Descriptor("deadline", "The read deadline expired.");
+    const ErrorCodeDescriptor Invalid = Descriptor("project_read.invalid", "The read-only request is malformed.");
+    const ErrorCodeDescriptor UnsafePath = Descriptor("project_read.unsafe_path", "The file path or native object is unsafe.");
+    const ErrorCodeDescriptor ReadFailed = Descriptor("project_read.read_failed", "The file could not be read consistently.");
+    const ErrorCodeDescriptor Capacity = Descriptor("project_read.capacity", "The read exceeds a finite resource limit.");
+    const ErrorCodeDescriptor Stale = Descriptor("project_read.stale", "The root authority or file observation changed.");
+    const ErrorCodeDescriptor Unavailable = Descriptor("project_read.unavailable", "The read-only capability is unavailable.");
+    const ErrorCodeDescriptor Cancelled = Descriptor("project_read.cancelled", "The read was cancelled or its authority expired.");
+    const ErrorCodeDescriptor Deadline = Descriptor("project_read.deadline", "The read deadline expired.");
 }  // namespace Horo::Platform::ProjectReadErrors
 
 namespace Horo::Platform {
@@ -42,6 +43,8 @@ namespace Horo::Platform {
     }
 
     namespace {
+        constexpr std::array ForbiddenPathCharacters{'\\', ':', '<', '>', '"', '|', '?', '*'};
+
         /** @brief Compares portable device names using only ASCII case folding. */
         bool MatchesDevice(const std::string_view value, const std::string_view name) {
             return value.size() == name.size() && std::equal(value.begin(), value.end(), name.begin(), [](const char a, const char b) {
@@ -86,7 +89,7 @@ namespace Horo::Platform {
         for (std::size_t i = 0; i <= path.size(); ++i) {
             if (i < path.size() && path[i] != '/') {
                 if (const auto byte = static_cast<unsigned char>(path[i]);
-                    byte < 32 || byte == 127 || std::string_view{R"(\:<>"|?*)"}.find(path[i]) != std::string_view::npos)
+                    byte < 32 || byte == 127 || std::ranges::find(ForbiddenPathCharacters, path[i]) != ForbiddenPathCharacters.end())
                     return false;
                 continue;
             }
@@ -95,5 +98,15 @@ namespace Horo::Platform {
             start = i + 1;
         }
         return true;
+    }
+}  // namespace Horo::Platform
+
+namespace Horo::Platform {
+    /** @copydoc ProjectReadErrorDomain */
+    ModuleErrorDomainDescriptor ProjectReadErrorDomain() {
+        return {.id = ProjectReadErrors::Invalid.domain,
+                .descriptors = {&ProjectReadErrors::Invalid, &ProjectReadErrors::UnsafePath, &ProjectReadErrors::ReadFailed,
+                                &ProjectReadErrors::Capacity, &ProjectReadErrors::Stale, &ProjectReadErrors::Unavailable,
+                                &ProjectReadErrors::Cancelled, &ProjectReadErrors::Deadline}};
     }
 }  // namespace Horo::Platform

@@ -1,6 +1,9 @@
 #include "AssetErrors.h"
 
+#include "Horo/Assets/AssetErrorDomain.h"
 #include "Horo/Assets/AssetRegistrySource.h"
+
+#include <array>
 
 namespace Horo::Assets::AssetErrors {
     namespace {
@@ -175,3 +178,69 @@ namespace Horo::Assets::AssetRegistrySourceErrors {
                                        "The complete asset inventory operation exceeded its deadline.",
                                        "Retry with a current source and a host-approved finite inventory budget."};
 }
+
+namespace Horo::Assets {
+    namespace {
+        const std::array Descriptors{&AssetErrors::IdentityInvalid,
+                                     &AssetErrors::TypeInvalid,
+                                     &AssetErrors::SidecarMissing,
+                                     &AssetErrors::IdentityMissing,
+                                     &AssetErrors::RegistryIdentityInvalid,
+                                     &AssetErrors::SidecarMalformed,
+                                     &AssetErrors::TypeMismatch,
+                                     &AssetErrors::SchemaUnsupported,
+                                     &AssetErrors::SourceMissing,
+                                     &AssetErrors::DuplicateId,
+                                     &AssetErrors::DuplicatePath,
+                                     &AssetErrors::PathCollision,
+                                     &AssetErrors::RootInvalid,
+                                     &AssetErrors::SymlinkAmbiguous,
+                                     &AssetErrors::IndexMalformed,
+                                     &AssetErrors::IndexIo,
+                                     &AssetErrors::ProviderNotFound,
+                                     &AssetErrors::ProviderTooLarge,
+                                     &AssetErrors::ProviderReadFailed,
+                                     &AssetErrors::LoadCancelled,
+                                     &AssetErrors::LoadNotReady,
+                                     &AssetErrors::LoadConsumed,
+                                     &AssetErrors::LoadQueueFull,
+                                     &AssetErrors::LoadShutdown,
+                                     &AssetErrors::PreviewRequestInvalid,
+                                     &AssetErrors::PreviewInputTooLarge,
+                                     &AssetErrors::PreviewReadFailed,
+                                     &AssetErrors::PreviewOutputInvalid,
+                                     &AssetErrors::PreviewProviderFailed,
+                                     &AssetErrors::PreviewCancelled,
+                                     &AssetErrors::PreviewNotReady,
+                                     &AssetErrors::PreviewConsumed,
+                                     &AssetErrors::PreviewQueueFull,
+                                     &AssetErrors::PreviewShutdown,
+                                     &CookErrors::UnsupportedFormat,
+                                     &CookErrors::MalformedArtifact,
+                                     &CookErrors::NotPublished,
+                                     &CookErrors::TooLarge,
+                                     &CookErrors::HashMismatch,
+                                     &CookErrors::CookerMissing,
+                                     &CookErrors::DuplicateCooker,
+                                     &CookErrors::CatalogSealed,
+                                     &CookErrors::Cancelled,
+                                     &CookErrors::DependencyUnsupported,
+                                     &CookErrors::SourceReadFailed,
+                                     &CookErrors::CookerFailed,
+                                     &CookErrors::OutputIdentityExhausted,
+                                     &CookErrors::OperationAdmissionFailed,
+                                     &ImportErrors::NoImporter,
+                                     &ImportErrors::ObjNoVertices,
+                                     &ImportErrors::FbxMalformed,
+                                     &ImportErrors::ImportCancelled,
+                                     &ImportErrors::ObjParseWarning,
+                                     &ImportErrors::PreFracturedSourceInvalid,
+                                     &ImportErrors::PreFracturedSourceLimit,
+                                     &AssetRegistrySourceErrors::Deadline};
+    }
+
+    /** @copydoc AssetErrorDomain */
+    ModuleErrorDomainDescriptor AssetErrorDomain() {
+        return {.id = AssetErrors::IdentityInvalid.domain, .descriptors = {Descriptors.begin(), Descriptors.end()}};
+    }
+}  // namespace Horo::Assets

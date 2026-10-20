@@ -2,7 +2,8 @@
 
 /**
  * @file McpErrors.h
- * @brief Stable failures for local MCP session admission, framing, and lifecycle.
+ * @brief Stable namespaced failures for local MCP session admission, framing, and lifecycle.
+ * @note Serialized codes use the mcp. prefix; error domains and JSON framing are unchanged.
  */
 
 #include "Horo/Foundation/ErrorCode.h"

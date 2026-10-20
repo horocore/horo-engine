@@ -2,10 +2,12 @@
 #include "Horo/Cli/CliDispatcher.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Mcp/McpErrors.h"
+#include "Horo/Mcp/NavigationTools.h"
 #include "Horo/Mcp/PackageTools.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "McpServe.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <thread>
@@ -266,7 +268,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Builds inert tool registrations after host capability admission, without invoking package policy. */
         Result<std::vector<Mcp::McpToolRegistration>> HostTools(std::shared_ptr<HostObservabilitySession> session,
-                                                                const McpPackageBinding &packages) {
+                                                                const McpPackageBinding &packages, const McpNavigationBinding &navigation) {
             std::vector<Mcp::McpToolRegistration> registrations{
                 {.descriptor = {.id = {"observability.smoke"},
                                 .description = "Run the application's headless observability smoke operation.",
@@ -287,34 +289,74 @@ namespace Horo::Application::Internal {
                 registrations.insert(registrations.end(), std::make_move_iterator(tools.Value().begin()),
                                      std::make_move_iterator(tools.Value().end()));
             }
+            if (navigation.application) {
+                auto tools = Mcp::MakeNavigationTools(navigation.application, navigation.projectIdentity, navigation.generation,
+                                                      navigation.currentGeneration, Mcp::McpOwnerContext::Runtime);
+                if (tools.HasError())
+                    return Result<std::vector<Mcp::McpToolRegistration>>::Failure(tools.ErrorValue());
+                registrations.insert(registrations.end(), std::make_move_iterator(tools.Value().begin()),
+                                     std::make_move_iterator(tools.Value().end()));
+            }
             return Result<std::vector<Mcp::McpToolRegistration>>::Success(std::move(registrations));
+        }
+
+        /** @brief Validates explicitly bound capabilities and canonicalizes the exact credential scope. */
+        Result<std::vector<std::string>> HostCapabilities(const Cli::CliExecutionContext &context, const McpPackageBinding &packages,
+                                                          const McpNavigationBinding &navigation) {
+            std::vector<std::string> capabilities{"horo.observability.smoke"};
+            if (packages.application) {
+                if (!context.HasCapability(Cli::CliCapabilityId{"horo.package.manage"}))
+                    return Result<std::vector<std::string>>::Failure(MakeError(Cli::CliErrors::CapabilityUnauthorized));
+                capabilities.emplace_back("horo.package.manage");
+            }
+            if (navigation.application) {
+                if (!context.HasCapability(Cli::CliCapabilityId{"horo.navigation.bake"}))
+                    return Result<std::vector<std::string>>::Failure(MakeError(Cli::CliErrors::CapabilityUnauthorized));
+                if (packages.application && packages.projectIdentity != navigation.projectIdentity)
+                    return Result<std::vector<std::string>>::Failure(MakeError(Cli::CliErrors::ExecutionContextInvalid));
+                capabilities.emplace_back("horo.navigation.bake");
+            }
+            std::ranges::sort(capabilities);
+            return Result<std::vector<std::string>>::Success(std::move(capabilities));
+        }
+
+        /** @brief Advances both explicitly owned applications at the host safe point, preserving the first failure. */
+        Result<void> PumpApplications(const McpPackageBinding &packages, const McpNavigationBinding &navigation) {
+            if (packages.pump) {
+                auto result = packages.pump();
+                if (result.HasError())
+                    return result;
+            }
+            return navigation.pump ? navigation.pump() : Result<void>::Success();
         }
     }  // namespace
 
     /** @copydoc ServeNativeMcp */
     Result<void> ServeNativeMcp(const Cli::CliExecutionContext &context, std::shared_ptr<HostObservabilitySession> session,
-                                McpPackageBinding packages) {
+                                McpPackageBinding packages, McpNavigationBinding navigation) {
         Stdio stdio;
         if (const auto started = stdio.Start(); started.HasError())
             return started;
         if (!session || !context.HasCapability(Cli::CliCapabilityId{"horo.observability.smoke"}))
             return Result<void>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
-        std::vector<std::string> capabilities{"horo.observability.smoke"};
-        if (packages.application) {
-            if (!context.HasCapability(Cli::CliCapabilityId{"horo.package.manage"}))
-                return Result<void>::Failure(MakeError(Cli::CliErrors::CapabilityUnauthorized));
-            capabilities.emplace_back("horo.package.manage");
-        }
+        auto granted = HostCapabilities(context, packages, navigation);
+        if (granted.HasError())
+            return Result<void>::Failure(granted.ErrorValue());
+        auto capabilities = std::move(granted).Value();
         auto authorization = std::make_shared<Mcp::McpAuthorization>(Platform::CreateNativeSecureRandomSource());
         auto registry = std::make_shared<Mcp::McpToolRegistry>(authorization);
-        auto registrations = HostTools(std::move(session), packages);
+        auto registrations = HostTools(std::move(session), packages, navigation);
         if (registrations.HasError())
             return Result<void>::Failure(registrations.ErrorValue());
         const auto published = registry->Publish(std::move(registrations).Value(), capabilities);
         if (published.HasError())
             return Result<void>::Failure(published.ErrorValue());
-        auto admission = LocalAdmission(authorization, capabilities, published.Value(),
-                                        packages.application ? std::optional{packages.projectIdentity} : std::nullopt);
+        std::optional<std::string> project;
+        if (navigation.application)
+            project = navigation.projectIdentity;
+        else if (packages.application)
+            project = packages.projectIdentity;
+        auto admission = LocalAdmission(authorization, capabilities, published.Value(), project);
         if (admission.HasError())
             return Result<void>::Failure(admission.ErrorValue());
         return ServeMcp(std::move(registry),
@@ -330,7 +372,10 @@ namespace Horo::Application::Internal {
                              [&stdio, &context] {
             return stdio.Stopped() || context.IsStopRequested();
         },
-                         .pumpApplication = packages.pump},
+                         .pumpApplication =
+                             [&packages, &navigation] {
+            return PumpApplications(packages, navigation);
+        }},
                         {std::move(authorization), std::move(admission).Value()});
     }
 }  // namespace Horo::Application::Internal

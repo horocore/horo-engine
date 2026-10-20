@@ -4,6 +4,7 @@
  * @brief Root-bound read-only filesystem capability, independent of application and protocol models.
  */
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Foundation/ModuleDescriptor.h"
 #include "Horo/Foundation/Result.h"
 
 #include <chrono>
@@ -25,6 +26,12 @@ namespace Horo::Platform {
         extern const ErrorCodeDescriptor Cancelled;
         extern const ErrorCodeDescriptor Deadline;
     }  // namespace ProjectReadErrors
+
+    /** @brief Describes the actual namespaced read failures without opening a project or issuing authority.
+     * @return Independently owned inert metadata with process-lifetime immutable descriptor pointers.
+     * Hosts register this contribution under the owning Platform project-read module before presenting its errors.
+     */
+    [[nodiscard]] ModuleErrorDomainDescriptor ProjectReadErrorDomain();
 
     /** @brief Finite read-only budgets; callers may reduce these hard limits. */
     struct ProjectReadLimits final {

@@ -1,5 +1,6 @@
 #include "../../mcp/McpAuthorizationTestSupport.h"
 #include "Horo/Cli/NavigationCommands.h"
+#include "Horo/Mcp/McpSession.h"
 #include "Horo/Mcp/NavigationTools.h"
 #include "navigation/NavigationBakeApplicationFixture.h"
 
@@ -263,4 +264,50 @@ namespace Horo::Application {
         CHECK_FALSE(session.application->Query(1).HasValue());
     }
 
+    TEST_CASE("Navigation MCP executes only an exact host-approved registry mutation and refuses replay",
+              "[navigation][application][mcp]") {
+        Session session;
+        auto policy = std::make_shared<Mcp::McpAuthorization>(std::make_shared<Mcp::Test::Entropy>());
+        REQUIRE(policy->SetTrust("project-one", 3, true).HasValue());
+        auto tools = Mcp::MakeNavigationTools(Borrow(session), "project-one", 1, [] {
+            return 1U;
+        });
+        REQUIRE(tools.HasValue());
+        Mcp::McpToolRegistry registry{policy};
+        const std::vector<std::string> capabilities{"horo.navigation.bake"};
+        const auto published = registry.Publish(std::move(tools).Value(), capabilities);
+        REQUIRE(published.HasValue());
+        const auto admission = Mcp::Test::Authenticate({.clientIdentity = "local-client",
+                                                        .capabilities = capabilities,
+                                                        .projectIdentity = "project-one",
+                                                        .authorizationRevision = 3,
+                                                        .registryRevision = published.Value()},
+                                                       policy);
+        Mcp::McpRequestContext context{.session = {1, 1},
+                                       .clientIdentity = admission.clientIdentity,
+                                       .capabilities = admission.capabilities,
+                                       .projectIdentity = admission.projectIdentity,
+                                       .authorizationRevision = admission.authorizationRevision,
+                                       .registryRevision = admission.registryRevision,
+                                       .deadline = std::chrono::steady_clock::now() + std::chrono::minutes{1},
+                                       .authority = admission.authority,
+                                       .authorization = policy,
+                                       .requestIdentity = 7};
+        const nlohmann::json arguments{{"validateOnly", true}};
+        const auto snapshot = registry.Read();
+        CHECK(snapshot->Invoke({"navigation.bake"}, arguments, context).HasError());
+        CHECK_FALSE(session.application->Query(1).HasValue());
+        const Mcp::McpRequest request{.id = 7, .method = "tools/call", .params = {{"name", "navigation.bake"}, {"arguments", arguments}}};
+        const auto challenge = policy->Challenge(context, request, std::chrono::minutes{1});
+        REQUIRE(challenge.HasValue());
+        REQUIRE(policy->Decide(challenge.Value(), true).HasValue());
+        const auto started = snapshot->Invoke({"navigation.bake"}, arguments, context);
+        REQUIRE(started.HasValue());
+        const auto id = std::stoull(started.Value().at("operationId").get<std::string>());
+        CHECK(session.Finish(id).state == OperationState::Succeeded);
+        CHECK(snapshot->Invoke({"navigation.bake"}, arguments, context).HasError());
+        CHECK_FALSE(session.application->Query(id + 1).HasValue());
+        CHECK(session.builder->builds.load() == 0);
+        CHECK_FALSE(std::filesystem::exists(session.service.targetRoot));
+    }
 }  // namespace Horo::Application

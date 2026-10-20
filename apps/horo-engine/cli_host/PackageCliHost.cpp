@@ -1,6 +1,7 @@
 #include "PackageCliHost.h"
 
 #include "Horo/Cli/CliErrors.h"
+#include "ProjectProtocolIdentity.h"
 
 #include <algorithm>
 #include <chrono>
@@ -103,8 +104,7 @@ namespace Horo::Application::Internal {
         auto application = Bind(request, context);
         if (application.HasError())
             return Result<McpPackageBinding>::Failure(application.ErrorValue());
-        const auto spelling = projectRoot_.generic_u8string();
-        const auto identity = "horo.project." + FormatSha256(ComputeSha256(std::as_bytes(std::span{spelling})));
+        const auto identity = ProjectProtocolIdentity(projectRoot_);
         return Result<McpPackageBinding>::Success({.application = std::move(application).Value(),
                                                    .projectIdentity = identity,
                                                    .generation = project_->Generation(),

@@ -3,6 +3,7 @@
  * @file SceneSource.h
  * @brief Read-only canonical Scene source decoding shared by host applications and Editor.
  */
+#include "Horo/Foundation/ModuleDescriptor.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Scene/SceneSourceModel.h"
 
@@ -11,6 +12,12 @@
 #include <string_view>
 
 namespace Horo::SceneSource {
+    /** @brief Describes existing portable Scene persistence failures without decoding or accessing files.
+     * @return Independently owned inert metadata with process-lifetime immutable descriptor pointers.
+     * The legacy error domain text does not confer Editor UI ownership or an Editor dependency.
+     */
+    [[nodiscard]] ModuleErrorDomainDescriptor SceneSourceErrorDomain();
+
     /** @brief Detached authored values; contains no editor session, mutation authority or runtime world. */
     struct SceneSourceDocument final {
         std::vector<SceneObjectSnapshot> objects;

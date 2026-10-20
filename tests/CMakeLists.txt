@@ -1343,6 +1343,17 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
             HoroEngine::CliNavigationAdapters HoroEngine::McpNavigationAdapters)
     horo_register_catch_test(HoroNavigationBakeAdapterTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage;native")
 
+    add_executable(HoroNavigationNativeCliTests unit/application/navigation/NavigationNativeCliTests.cpp)
+    target_compile_features(HoroNavigationNativeCliTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationNativeCliTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationNativeCliTests PRIVATE HoroEngine::NavigationBakeAutomation HoroEngine::Platform HoroEngine::PlatformProjectReadFiles nlohmann_json::nlohmann_json)
+    target_compile_definitions(HoroNavigationNativeCliTests PRIVATE
+            HORO_TEST_ENGINE_EXECUTABLE="$<TARGET_FILE:horo-engine>"
+            HORO_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}"
+            HORO_TEST_NAVIGATION_MCP_SCRIPT="${PROJECT_SOURCE_DIR}/tests/integration/cli_navigation_mcp_contract.py")
+    add_dependencies(HoroNavigationNativeCliTests horo-engine)
+    horo_register_catch_test(HoroNavigationNativeCliTests LABELS "unit;navigation;cli;integration;headless;ci-windows;sonar-coverage")
+
     add_executable(HoroNavigationBakeApplicationTests unit/application/navigation/NavigationBakeApplicationTests.cpp)
     target_compile_features(HoroNavigationBakeApplicationTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationBakeApplicationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -5227,6 +5238,17 @@ target_compile_features(HoroCliOutputPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroCliOutputPublicHeaderConsumer PRIVATE HoroEngine::CliHost)
 add_test(NAME HoroCliOutputPublicHeaderConsumer COMMAND HoroCliOutputPublicHeaderConsumer)
 set_tests_properties(HoroCliOutputPublicHeaderConsumer PROPERTIES LABELS "cli;headless;sonar-coverage;ci-windows")
+add_executable(HoroNavigationHostErrorTests unit/application/navigation/NavigationHostErrorTests.cpp
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostErrorTranslation.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/CliHostInterrupts.cpp"
+    "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host/NavigationCliHost.cpp")
+target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
+target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::CliHost HoroEngine::HostErrors
+    HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
+horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
+
 add_executable(HoroCliProductionOutputContract integration/CliProductionOutputContract.cpp)
 target_compile_features(HoroCliProductionOutputContract PRIVATE cxx_std_20)
 target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::Platform nlohmann_json::nlohmann_json)
