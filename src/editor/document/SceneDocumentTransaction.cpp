@@ -330,7 +330,7 @@ namespace Horo::Editor {
     /** @copydoc SceneDocumentTransactions::PreparePrefabReplacement */
     Result<SceneDocumentTransactions::PrefabReplacement> SceneDocumentTransactions::PreparePrefabReplacement(
         const SceneTransactionContext &context, const SceneObjectId root, const Prefab::PrefabAssetReference &source,
-        const SceneTransactionLimits limits) {
+        const SceneTransactionLimits limits) const {
         using Return = Result<PrefabReplacement>;
         if (auto admitted = Admit(context); admitted.HasError())
             return Return::Failure(admitted.ErrorValue());
@@ -362,7 +362,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SceneDocumentTransactions::CommitPrefabReplacement */
-    Result<SceneTransactionResult> SceneDocumentTransactions::CommitPrefabReplacement(PrefabReplacement &replacement) {
+    Result<SceneTransactionResult> SceneDocumentTransactions::CommitPrefabReplacement(const PrefabReplacement &replacement) {
         if (!replacement.prepared_)
             return Result<SceneTransactionResult>::Failure(Rejected(SceneTransactionFailure::Invalid));
         if (auto valid = ValidatePrepared(*replacement.prepared_); valid.HasError())

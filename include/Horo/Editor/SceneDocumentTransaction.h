@@ -123,11 +123,13 @@ namespace Horo::Editor {
         [[nodiscard]] Result<PrefabReplacement> PreparePrefabReplacement(const SceneTransactionContext &context,
                                                                          SceneSource::SceneObjectId root,
                                                                          const Prefab::PrefabAssetReference &source,
-                                                                         SceneTransactionLimits limits = {});
+                                                                         SceneTransactionLimits limits = {}) const;
         /** @brief Revalidates and publishes the reserved Scene root and single history record without callbacks.
-         * @param replacement Candidate prepared by this exact live port. @return Commit metadata or stale/cancelled rejection.
+         * @param replacement Borrowed wrapper to the mutable canonical Prepared owner created by this exact live port.
+         * The wrapper is not consumed or deeply immutable; the owner still enforces one publication through its state fence.
+         * @return Commit metadata or stale/cancelled rejection.
          */
-        [[nodiscard]] Result<SceneTransactionResult> CommitPrefabReplacement(PrefabReplacement &replacement);
+        [[nodiscard]] Result<SceneTransactionResult> CommitPrefabReplacement(const PrefabReplacement &replacement);
 
         /** @brief Construct an inert port. */
         SceneDocumentTransactions() noexcept;

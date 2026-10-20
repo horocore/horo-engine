@@ -9,6 +9,7 @@
 #include <map>
 #include <new>
 #include <nlohmann/json.hpp>
+#include <type_traits>
 
 namespace Horo::Editor {
     namespace {
@@ -22,6 +23,19 @@ namespace Horo::Editor {
                              "Selection contains unsupported or boundary-crossing references; inspect every source/target site.");
         }
 
+        /** @brief Appends one parent's children in canonical source order to the bounded growing frontier. */
+        Result<void> AppendSubtreeChildren(const SceneTransactionSnapshot &snapshot, const Id parent,
+                                           std::vector<const SceneSource::SceneObjectSnapshot *> &result) {
+            for (const auto &object : snapshot.objects) {
+                if (object.parent != parent)
+                    continue;
+                if (result.size() == snapshot.objects.size())
+                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::HierarchyInvalid));
+                result.push_back(&object);
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Collects a complete bounded parent-first subtree from a canonical document snapshot. */
         Result<std::vector<const SceneSource::SceneObjectSnapshot *>> Subtree(const SceneTransactionSnapshot &snapshot, const Id root) {
             using Return = Result<std::vector<const SceneSource::SceneObjectSnapshot *>>;
@@ -30,14 +44,13 @@ namespace Horo::Editor {
             const auto selected = std::ranges::find(snapshot.objects, root, &SceneSource::SceneObjectSnapshot::id);
             if (selected == snapshot.objects.end())
                 return Return::Failure(MakeError(Prefab::PrefabErrors::HierarchyInvalid));
-            std::vector<const SceneSource::SceneObjectSnapshot *> result{std::to_address(selected)};
-            for (std::size_t cursor = 0; cursor < result.size(); ++cursor)
-                for (const auto &object : snapshot.objects)
-                    if (object.parent == result[cursor]->id) {
-                        if (result.size() == snapshot.objects.size())
-                            return Return::Failure(MakeError(Prefab::PrefabErrors::HierarchyInvalid));
-                        result.push_back(&object);
-                    }
+            std::vector result{std::to_address(selected)};
+            std::size_t cursor{};
+            while (cursor < result.size()) {
+                const auto parent = result[cursor++]->id;
+                if (auto appended = AppendSubtreeChildren(snapshot, parent, result); appended.HasError())
+                    return Return::Failure(std::move(appended).ErrorValue());
+            }
             return Return::Success(std::move(result));
         }
 
@@ -52,7 +65,7 @@ namespace Horo::Editor {
             };
             const auto surface = [&](const Navigation::SurfaceId id, const char *property) {
                 if (const auto target = surfaces.find(id); target != surfaces.end() && (selected(source.id) || selected(target->second)))
-                    boundaries.push_back({source.id, target->second, property});
+                    boundaries.emplace_back(source.id, target->second, property);
             };
             for (const auto &navigation : source.components.navigationSources)
                 surface(navigation.surface, "navigationSources.surface");
@@ -80,6 +93,38 @@ namespace Horo::Editor {
                 boundaries.push_back({object.id, {}, "navigation.unsupported_portable_reference"});
         }
 
+        /** @brief Audits one object's explicit body endpoints and opaque sites, preserving incoming and disabled references. */
+        void AuditObjectBodyReferences(const SceneSource::SceneObjectSnapshot &object, const bool inside,
+                                       const std::vector<const SceneSource::SceneObjectSnapshot *> &selection,
+                                       std::vector<PrefabCreationBoundary> &boundaries) {
+            const auto selected = [&selection](const Id id) {
+                return std::ranges::any_of(selection, [id](const auto *candidate) {
+                    return candidate->id == id;
+                });
+            };
+            const auto body = [&object, &boundaries, &selected, inside](const Runtime::PhysicsBodyReference &reference,
+                                                                        std::string property) {
+                const Id target{reference.object.value};
+                if (inside != selected(target))
+                    boundaries.emplace_back(object.id, target, std::move(property));
+            };
+            for (const auto &collider : object.components.colliders)
+                body(collider.body, "colliders.body");
+            for (const auto &constraint : object.components.physicsConstraints) {
+                body(constraint.first.body, "physicsConstraints.first.body");
+                if (const auto *endpoint = std::get_if<Runtime::PhysicsConstraintBodyEndpoint>(&constraint.second))
+                    body(endpoint->body, "physicsConstraints.second.body");
+            }
+            if (object.components.characterController && object.components.characterController->collision.excludedBody) {
+                const Id target{object.components.characterController->collision.excludedBody->object.value};
+                if (inside || selected(target))
+                    boundaries.emplace_back(object.id, target, "characterController.collision.excludedBody");
+            }
+            // Opaque bytes cannot prove either outgoing or incoming relationship safety.
+            for (const auto &component : object.components.gameplayComponents)
+                boundaries.push_back({object.id, {}, component.typeId.Value()});
+        }
+
         /** @brief Audits explicit body references on both sides of the replacement boundary, including disabled data. */
         void AuditReferences(const SceneTransactionSnapshot &snapshot,
                              const std::vector<const SceneSource::SceneObjectSnapshot *> &selection,
@@ -96,26 +141,7 @@ namespace Horo::Editor {
             for (const auto &object : snapshot.objects) {
                 const bool inside = selected(object.id);
                 AuditNavigationReferences(object, surfaces, selection, boundaries);
-                const auto body = [&](const Runtime::PhysicsBodyReference &reference, std::string property) {
-                    const Id target{reference.object.value};
-                    if (inside != selected(target))
-                        boundaries.push_back({object.id, target, std::move(property)});
-                };
-                for (const auto &collider : object.components.colliders)
-                    body(collider.body, "colliders.body");
-                for (const auto &constraint : object.components.physicsConstraints) {
-                    body(constraint.first.body, "physicsConstraints.first.body");
-                    if (const auto *endpoint = std::get_if<Runtime::PhysicsConstraintBodyEndpoint>(&constraint.second))
-                        body(endpoint->body, "physicsConstraints.second.body");
-                }
-                if (object.components.characterController && object.components.characterController->collision.excludedBody) {
-                    const Id target{object.components.characterController->collision.excludedBody->object.value};
-                    if (inside || selected(target))
-                        boundaries.push_back({object.id, target, "characterController.collision.excludedBody"});
-                }
-                // Opaque bytes cannot prove either outgoing or incoming relationship safety.
-                for (const auto &component : object.components.gameplayComponents)
-                    boundaries.push_back({object.id, {}, component.typeId.Value()});
+                AuditObjectBodyReferences(object, inside, selection, boundaries);
                 if (!inside)
                     continue;
                 AuditSelectedObject(object, boundaries);
@@ -202,25 +228,25 @@ namespace Horo::Editor {
         /** @brief Uses only declared canonical Scene fields and the existing built-in decoder, never opaque reference heuristics. */
         Result<void> AppendComponents(const SceneSource::SceneObjectSnapshot &object, const Json &encoded, Prefab::PrefabObjectNode &node,
                                       std::uint64_t &nextInstance) {
-            const std::array fields{std::pair{"camera", Kind::Camera},
-                                    std::pair{"light", Kind::Light},
-                                    std::pair{"audioSource", Kind::AudioSource},
-                                    std::pair{"audioListener", Kind::AudioListener},
-                                    std::pair{"navigationSurface", Kind::NavigationSurface},
-                                    std::pair{"navigationRegion", Kind::NavigationRegion},
-                                    std::pair{"navigationModifier", Kind::NavigationModifier},
-                                    std::pair{"navigationLink", Kind::NavigationLink},
-                                    std::pair{"navigationAgent", Kind::NavigationAgent},
-                                    std::pair{"aiAgent", Kind::AiAgent},
-                                    std::pair{"aiController", Kind::AiController},
-                                    std::pair{"characterController", Kind::CharacterController},
-                                    std::pair{"rigidBody", Kind::RigidBody},
-                                    std::pair{"colliders", Kind::Collider},
-                                    std::pair{"physicsConstraints", Kind::PhysicsConstraint}};
+            using enum Kind;
+            const std::array fields{std::pair{"camera", Camera},
+                                    std::pair{"light", Light},
+                                    std::pair{"audioSource", AudioSource},
+                                    std::pair{"audioListener", AudioListener},
+                                    std::pair{"navigationSurface", NavigationSurface},
+                                    std::pair{"navigationRegion", NavigationRegion},
+                                    std::pair{"navigationModifier", NavigationModifier},
+                                    std::pair{"navigationLink", NavigationLink},
+                                    std::pair{"navigationAgent", NavigationAgent},
+                                    std::pair{"aiAgent", AiAgent},
+                                    std::pair{"aiController", AiController},
+                                    std::pair{"characterController", CharacterController},
+                                    std::pair{"rigidBody", RigidBody},
+                                    std::pair{"colliders", Collider},
+                                    std::pair{"physicsConstraints", PhysicsConstraint}};
             ComponentProjection projection;
             if (object.primitiveMesh)
-                if (const auto added =
-                        AppendBuiltinOccurrence(Kind::PrimitiveMesh, encoded.at("primitiveMesh"), node, nextInstance, projection);
+                if (const auto added = AppendBuiltinOccurrence(PrimitiveMesh, encoded.at("primitiveMesh"), node, nextInstance, projection);
                     added.HasError())
                     return added;
             for (const auto &[field, value] : encoded.at("components").items()) {
@@ -263,48 +289,62 @@ namespace Horo::Editor {
                         boundaries.push_back({object->id, {}, behavior.typeId.Value()});
         }
 
+        /** @brief Admits an asset against its exact registry type and appends each identity once in first-use order. */
+        Result<void> AppendAsset(const Assets::AssetId id, const Assets::AssetRegistrySnapshot &registry,
+                                 std::vector<Assets::AssetId> &references, const std::string_view expected = {}) {
+            if (const auto *record = registry.Find(id); !record || (!expected.empty() && record->type.Value() != expected))
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DependencyTypeMismatch));
+            if (std::ranges::find(references, id) == references.end())
+                references.push_back(id);
+            return Result<void>::Success();
+        }
+
+        /** @brief Preserves the typed audio reference alternative while collecting its existing portable asset identity. */
+        Result<void> AppendAudioAsset(const Runtime::AudioSourceComponent &source, const Assets::AssetRegistrySnapshot &registry,
+                                      std::vector<Assets::AssetId> &references) {
+            return std::visit([&registry, &references]<typename T>(const T &target) -> Result<void> {
+                if constexpr (std::is_same_v<T, std::monostate>)
+                    return Result<void>::Success();
+                else if constexpr (std::is_same_v<T, Audio::AudioSoundExtensionReference>)
+                    return AppendAsset(target.definition.Asset(), registry, references);
+                else
+                    return AppendAsset(target.Asset(), registry, references);
+            }, source.sound.target);
+        }
+
+        /** @brief Collects shape and material references from every collider, including disabled authored data. */
+        Result<void> AppendColliderAssets(const std::vector<Runtime::ColliderComponent> &colliders,
+                                          const Assets::AssetRegistrySnapshot &registry, std::vector<Assets::AssetId> &references) {
+            for (const auto &collider : colliders) {
+                if (const auto *shape = std::get_if<Runtime::PhysicsShapeAssetReference>(&collider.source))
+                    if (auto added = AppendAsset(shape->asset, registry, references, "core.physics_shape"); added.HasError())
+                        return added;
+                for (const auto &material : collider.materials)
+                    if (auto added = AppendAsset(material.material, registry, references, "core.physics_material"); added.HasError())
+                        return added;
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Captures typed AssetIds from all supported authored references, including disabled components. */
         Result<void> AppendAssets(const SceneSource::SceneObjectSnapshot &object, const Assets::AssetRegistrySnapshot &registry,
                                   std::vector<Assets::AssetId> &references) {
-            const auto add = [&](const Assets::AssetId id, const std::string_view expected = {}) -> Result<void> {
-                const auto *record = registry.Find(id);
-                if (!record || (!expected.empty() && record->type.Value() != expected))
-                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DependencyTypeMismatch));
-                if (std::ranges::find(references, id) == references.end())
-                    references.push_back(id);
-                return Result<void>::Success();
-            };
             const auto &components = object.components;
-            if (components.audioSource) {
-                const auto audio = std::visit([&]<typename T>(const T &target) -> Result<void> {
-                    if constexpr (std::is_same_v<T, std::monostate>)
-                        return Result<void>::Success();
-                    else if constexpr (std::is_same_v<T, Audio::AudioSoundExtensionReference>)
-                        return add(target.definition.Asset());
-                    else
-                        return add(target.Asset());
-                }, components.audioSource->sound.target);
-                if (audio.HasError())
-                    return audio;
-            }
+            if (components.audioSource)
+                if (auto added = AppendAudioAsset(*components.audioSource, registry, references); added.HasError())
+                    return added;
             if (components.navigationSurface)
-                if (auto added = add(components.navigationSurface->definition, "core.navmesh"); added.HasError())
+                if (auto added = AppendAsset(components.navigationSurface->definition, registry, references, "core.navmesh");
+                    added.HasError())
                     return added;
             if (components.aiController)
                 return Result<void>::Failure(Unsupported());  // Decision-asset identity has no portable AssetId projection in this tier.
             if (components.characterController && components.characterController->collision.defaultMaterial)
-                if (auto added = add(components.characterController->collision.defaultMaterial->material, "core.physics_material");
+                if (auto added = AppendAsset(components.characterController->collision.defaultMaterial->material, registry, references,
+                                             "core.physics_material");
                     added.HasError())
                     return added;
-            for (const auto &collider : components.colliders) {
-                if (const auto *shape = std::get_if<Runtime::PhysicsShapeAssetReference>(&collider.source))
-                    if (auto added = add(shape->asset, "core.physics_shape"); added.HasError())
-                        return added;
-                for (const auto &material : collider.materials)
-                    if (auto added = add(material.material, "core.physics_material"); added.HasError())
-                        return added;
-            }
-            return Result<void>::Success();
+            return AppendColliderAssets(components.colliders, registry, references);
         }
     }  // namespace
 

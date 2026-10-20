@@ -11,6 +11,16 @@ namespace Horo::Editor {
     namespace {
         using namespace PrefabHierarchyTestSupport;
 
+        /** @brief Observer failure families that must not roll back authoritative committed state. */
+        enum class ObserverException {
+            Standard,
+            Allocation,
+            NonStandard
+        };
+
+        /** @brief Observer failure deliberately outside the standard exception hierarchy. */
+        struct ForeignObserverFailure final {};
+
         /** @brief Retain and assert the same authoritative commit observations inside and after an observer failure. */
         struct CommitObservation final {
             bool committed{};
@@ -34,6 +44,8 @@ namespace Horo::Editor {
             ProjectMutationCoordinator mutations{files};
             Assets::AssetRegistry registry;
             Runtime::RuntimeSceneService runtime;
+            bool failNextPrefabCapture{};
+            std::size_t postCommitCaptureFailures{};
             std::unique_ptr<EditorWorkspaceController> controller;
 
             SceneObjectId selected{11};
@@ -69,6 +81,11 @@ namespace Horo::Editor {
                                                                                                                const auto &limits,
                                                                                                                const auto &cancellation)
                                                                                -> Result<PreparedPrefabHierarchySources> {
+                    if (failNextPrefabCapture) {
+                        failNextPrefabCapture = false;
+                        ++postCommitCaptureFailures;
+                        throw ForeignObserverFailure{};
+                    }
                     auto lease = mutations.TryAcquire({root, ProjectMutationOwner::Asset, "test.prefab.create.capture"});
                     if (lease.HasError())
                         return Result<PreparedPrefabHierarchySources>::Failure(lease.ErrorValue());
@@ -98,6 +115,23 @@ namespace Horo::Editor {
                 controller->ProcessCommand(command);
             }
         };
+
+        /** @brief Observes every canonical commit owner inside the callback before any injected observer failure. */
+        CommitObservation ObserveCommittedCreation(CreationWorkspace &fixture, const SelectionChangedEvent &event,
+                                                   const SelectionRevision selectionBefore) {
+            const auto &owner = *fixture.controller;
+            CommitObservation observation;
+            const auto &outcome = owner.ViewModel().prefabCreationOutcome;
+            observation.committed = outcome && outcome->committed && !outcome->error;
+            observation.pair = std::filesystem::exists(fixture.root / "assets/Created.prefab") &&
+                               std::filesystem::exists(fixture.root / "assets/Created.prefab.horo");
+            observation.selection = event.kind == SelectionChangeKind::Cleared && event.revision == owner.CurrentSelectionRevision() &&
+                                    event.revision > selectionBefore && owner.ViewModel().prefabSelection && outcome &&
+                                    owner.ViewModel().prefabSelection->instance == outcome->instance;
+            observation.replacement = owner.CapturePrefabCreationIntent(fixture.selected).HasError();
+            observation.Check();
+            return observation;
+        }
     }  // namespace
 
     TEST_CASE("Workspace prefab creation reconciles selection and one history entry through actual source capture",
@@ -183,7 +217,7 @@ namespace Horo::Editor {
 
     TEST_CASE("Workspace postcommit observer failures cannot delete the created prefab or revert the linked Scene",
               "[editor][prefab][creation][native]") {
-        const bool allocation = GENERATE(false, true);
+        const auto exception = GENERATE(ObserverException::Standard, ObserverException::Allocation, ObserverException::NonStandard);
         CreationWorkspace fixture;
         auto &owner = *fixture.controller;
         std::optional<Tests::AllocationProbe::ScopedFailure> failure;
@@ -192,17 +226,11 @@ namespace Horo::Editor {
         CommitObservation observation;
         auto subscription = owner.DataBus().Subscribe<SelectionChangedEvent>([&](const SelectionChangedEvent &event) {
             ++observed;
-            const auto &outcome = owner.ViewModel().prefabCreationOutcome;
-            observation.committed = outcome && outcome->committed && !outcome->error;
-            observation.pair = std::filesystem::exists(fixture.root / "assets/Created.prefab") &&
-                               std::filesystem::exists(fixture.root / "assets/Created.prefab.horo");
-            observation.selection = event.kind == SelectionChangeKind::Cleared && event.revision == owner.CurrentSelectionRevision() &&
-                                    event.revision > selectionBefore && owner.ViewModel().prefabSelection && outcome &&
-                                    owner.ViewModel().prefabSelection->instance == outcome->instance;
-            observation.replacement = owner.CapturePrefabCreationIntent(fixture.selected).HasError();
-            observation.Check();
-            if (allocation)
+            observation = ObserveCommittedCreation(fixture, event, selectionBefore);
+            if (exception == ObserverException::Allocation)
                 failure.emplace(0);
+            else if (exception == ObserverException::NonStandard)
+                fixture.failNextPrefabCapture = true;
             else
                 throw std::runtime_error{"postcommit observer"};
         });
@@ -216,8 +244,9 @@ namespace Horo::Editor {
         CHECK(owner.ViewModel().prefabSelection.has_value());
         CHECK(std::filesystem::exists(fixture.root / "assets/Created.prefab"));
         CHECK(std::filesystem::exists(fixture.root / "assets/Created.prefab.horo"));
-        if (allocation)
+        if (exception != ObserverException::Standard)
             CHECK(owner.ViewModel().prefabPostCommitError.has_value());
+        CHECK(fixture.postCommitCaptureFailures == (exception == ObserverException::NonStandard ? 1 : 0));
         EditorWorkspaceViewCommandData history;
         history.command = EditorWorkspaceViewCommand::UndoScene;
         owner.ProcessCommand(history);

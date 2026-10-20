@@ -529,6 +529,13 @@ namespace Horo::Editor {
         [[nodiscard]] bool ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
         void RetirePrefabHierarchy() noexcept;
+        /** @brief Contains every postcommit observer failure without reverting authoritative Scene or asset state.
+         * @param selectionChanged Whether the canonical selection owner committed a clear requiring notification.
+         * @param observerFailure Engaged fallback optional prepared before publication and moved without throwing on observer failure.
+         * @pre The immutable committed outcome and canonical selection are already published; observerFailure is engaged.
+         * @post Every provider exception, including non-standard types, is contained and retained as presentation failure.
+         */
+        void NotifyPrefabCreation(bool selectionChanged, std::optional<Error> &observerFailure) noexcept;
         /** @brief Atomically commits the current default-scene snapshot and updates dirty state on
          * success. */
         /** @brief Routes typed source publication/close intent through workspace-owned document services. */

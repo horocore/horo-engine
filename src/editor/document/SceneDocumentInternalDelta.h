@@ -463,6 +463,17 @@ namespace Horo::Editor::SceneDocumentDetail {
         }
     }
 
+    /** @brief Mutates the optional linked placement alongside its canonical object replacement delta. */
+    template <bool Revert>
+    inline void MutateReplacementPrefab(std::vector<ScenePrefabInstance> &instances, const SceneObjectsReplacedDelta &delta) {
+        if (!delta.prefabCreation)
+            return;
+        if constexpr (Revert)
+            RevertPrefabTypedDelta(instances, *delta.prefabCreation);
+        else
+            ApplyPrefabTypedDelta(instances, *delta.prefabCreation);
+    }
+
     /** @brief Dispatch one typed delta while preserving the separate canonical Prefab and object owners. */
     template <bool Revert, class Delta>
     inline void MutateOneDelta(std::vector<SceneObjectSnapshot> &objects, std::vector<ScenePrefabInstance> &instances,
@@ -479,14 +490,8 @@ namespace Horo::Editor::SceneDocumentDetail {
                 RevertTypedDelta(objects, typedDelta);
             else
                 ApplyTypedDelta(objects, typedDelta);
-            if constexpr (std::is_same_v<Delta, SceneObjectsReplacedDelta>) {
-                if (typedDelta.prefabCreation) {
-                    if constexpr (Revert)
-                        RevertPrefabTypedDelta(instances, *typedDelta.prefabCreation);
-                    else
-                        ApplyPrefabTypedDelta(instances, *typedDelta.prefabCreation);
-                }
-            }
+            if constexpr (std::is_same_v<Delta, SceneObjectsReplacedDelta>)
+                MutateReplacementPrefab<Revert>(instances, typedDelta);
             if constexpr (std::is_same_v<Delta, DeletedObjectsDelta>) {
                 if constexpr (Revert)
                     RevertPrefabTypedDelta(instances, typedDelta);

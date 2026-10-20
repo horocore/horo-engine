@@ -48,10 +48,11 @@ namespace Horo::Editor {
                 continue;
             }
             const auto first = sources.begin() + static_cast<std::ptrdiff_t>(slot);
-            const auto cached = std::find_if(first, sources.end(), [&](const SourceDocumentSnapshot &candidate) {
+            if (const auto cached = std::find_if(first, sources.end(),
+                                                 [&](const SourceDocumentSnapshot &candidate) {
                 return candidate.SharesStateWith(source.Value());
             });
-            if (cached != sources.end()) {
+                cached != sources.end()) {
                 // Reorder leases without recomputing byte-derived dirty state for unchanged publications.
                 std::rotate(first, cached, cached + 1);
                 continue;

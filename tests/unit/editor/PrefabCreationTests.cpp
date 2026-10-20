@@ -1,15 +1,31 @@
+#include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
 #include "NativePublicationFiles.h"
 #include "PrefabHierarchyTestSupport.h"
 #include "editor/screens/workspace/prefab/PrefabCreation.h"
 
+#include <array>
 #include <catch2/generators/catch_generators.hpp>
 #include <fstream>
 #include <functional>
+#include <new>
+#include <span>
+#include <stdexcept>
 
 namespace Horo::Editor {
     namespace {
         using namespace PrefabHierarchyTestSupport;
+
+        /** @brief Exception families that must all retain publication ownership through rollback. */
+        enum class PublicationException {
+            Provider,
+            Allocation,
+            NonStandard
+        };
+
+        /** @brief Provider failure deliberately outside the standard exception hierarchy. */
+        struct ForeignProviderFailure final {};
 
         /** @brief Injects failures at real durable boundaries while keeping genuine native identity/lease semantics. */
         struct Files final : TestSupport::NativePublicationFiles {
@@ -22,6 +38,7 @@ namespace Horo::Editor {
             bool failUncapturedSecond{};
             bool partialSecond{};
             std::function<void()> beforeSecond;
+            std::function<void(const std::filesystem::path &)> beforeCleanup;
 
             Result<void> WritePrivateDurable(const std::filesystem::path &path, const std::span<const std::byte> bytes, bool &created,
                                              const std::filesystem::perms mode) override {
@@ -43,6 +60,8 @@ namespace Horo::Editor {
             }
 
             Result<void> RemoveDurable(const std::filesystem::path &path) override {
+                if (beforeCleanup)
+                    beforeCleanup(path);
                 return failCleanup ? Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority)) : native.RemoveDurable(path);
             }
 
@@ -115,11 +134,32 @@ namespace Horo::Editor {
                 CHECK(document.PrefabInstances().empty());
             }
 
+            /** @brief Saves the canonical working Scene and returns the exact accepted disk fence used by publication. */
+            PrefabCreationSourceFence SaveSceneFence() {
+                const auto path = root / "assets/Scene.horo";
+                const auto encoded = SceneSource::EncodeSceneSource({document.Objects(), document.PrefabInstances()});
+                const auto bytes = std::as_bytes(std::span{encoded.data(), encoded.size()});
+                REQUIRE(files.native.WriteDurable(path, bytes).HasValue());
+                return {path, {true, encoded.size(), ComputeSha256(bytes)}};
+            }
+
             std::string Read(const std::filesystem::path &path) {
                 std::ifstream input(path, std::ios::binary);
                 return {std::istreambuf_iterator<char>{input}, {}};
             }
         };
+
+        /** @brief Probes actual cooperating writer admission both during rollback and after transaction lease release. */
+        void CheckWriterAdmission(Creation &fixture, const std::array<std::filesystem::path, 3> &sources, const bool available) {
+            const auto project = fixture.mutations.TryAcquire({fixture.root, ProjectMutationOwner::Save, "tests.prefab.rollback_probe"});
+            CHECK(project.HasValue() == available);
+            for (const auto &source : sources) {
+                const auto path = Assets::AssetSourcePublicationLockPath(fixture.root, source);
+                REQUIRE(path.HasValue());
+                const auto writer = fixture.files.native.TryAcquireExclusive(path.Value(), "tests.prefab.rollback_probe");
+                CHECK(writer.HasValue() == available);
+            }
+        }
     }  // namespace
 
     TEST_CASE("Prefab creation commits portable source sidecar placement and one canonical undo step", "[prefab][creation][native]") {
@@ -335,6 +375,58 @@ namespace Horo::Editor {
         }
         CHECK(fixture.document.IsDirty() == (failure == Failure::RevisionConflict));
         CHECK(fixture.history.CanUndo() == (failure == Failure::RevisionConflict));
+    }
+
+    TEST_CASE("Prefab exception rollback retains project and all source writer leases until cleanup completes",
+              "[prefab][creation][native][leases]") {
+        const auto exception =
+            GENERATE(PublicationException::Provider, PublicationException::Allocation, PublicationException::NonStandard);
+        Creation fixture;
+        const auto before = fixture.document.Snapshot();
+        const auto fence = fixture.SaveSceneFence();
+        const auto original = fixture.Read(fence.path);
+        auto metadata = fixture.destination;
+        metadata += ".horo";
+        const std::array sources{fixture.destination, metadata, fence.path};
+        std::size_t observedCleanup{};
+        fixture.files.beforeSecond = [&] {
+            if (exception == PublicationException::Allocation)
+                throw std::bad_alloc{};
+            if (exception == PublicationException::NonStandard)
+                throw ForeignProviderFailure{};
+            throw std::runtime_error{"provider write failure"};
+        };
+        fixture.files.beforeCleanup = [&](const std::filesystem::path &removed) {
+            ++observedCleanup;
+            CHECK(removed == fixture.destination);
+            CheckWriterAdmission(fixture, sources, false);
+        };
+        const auto result = CreatePrefabFromSelection(fixture.scene,
+                                                      {fixture.Context(),
+                                                       {20},
+                                                       fixture.root,
+                                                       fixture.destination,
+                                                       fixture.asset,
+                                                       ScenePrefabVersion(),
+                                                       fixture.registry.Snapshot(),
+                                                       nullptr,
+                                                       fence},
+                                                      fixture.mutations, fixture.files);
+        fixture.files.beforeSecond = {};
+        fixture.files.beforeCleanup = {};
+        fixture.CheckUncommitted(result);
+        const auto expected = exception == PublicationException::Allocation ? Prefab::PrefabErrors::ExpansionCacheAllocationFailed
+                                                                            : Assets::AssetSourceErrors::ReadFailed;
+        CHECK(result.error->code.Value() == expected.code.Value());
+        CHECK(observedCleanup == 1);
+        CheckWriterAdmission(fixture, sources, true);
+        CHECK_FALSE(std::filesystem::exists(fixture.destination));
+        CHECK_FALSE(std::filesystem::exists(metadata));
+        CHECK(fixture.Read(fence.path) == original);
+        CHECK(fixture.document.State() == before.state);
+        CHECK(fixture.document.Revision() == before.revision);
+        CHECK_FALSE(fixture.document.IsDirty());
+        CHECK_FALSE(fixture.history.CanUndo());
     }
 
     TEST_CASE("Prefab failed writes with a native creation receipt retain unverified sidecars for explicit reconciliation",

@@ -98,6 +98,29 @@ namespace Horo::Editor {
             };
         }
 
+        /** @brief Formats the bounded creation diagnostics from an immutable outcome after the workspace lifetime fence passed. */
+        std::string PrefabCreationFailureMessage(const PrefabCreationOutcome *outcome, const ILocalizationService &localization) {
+            std::string message = localization.Get("editor", "workspace.prefab.create.failed");
+            if (!outcome)
+                return message;
+            if (outcome->error)
+                message += std::format("\n{}", outcome->error->message);
+            constexpr std::size_t maximumVisibleBoundaries{32};
+            const auto count = std::min(outcome->boundaries.size(), maximumVisibleBoundaries);
+            for (const auto &boundary : std::span{outcome->boundaries}.first(count)) {
+                message += std::format("\n{}: {}", boundary.source.value, boundary.property);
+                if (boundary.target)
+                    message += std::format(" -> {}", boundary.target->value);
+            }
+            if (count < outcome->boundaries.size())
+                message += std::format("\n{} {}", outcome->boundaries.size() - count,
+                                       localization.Get("editor", "workspace.prefab.create.more_diagnostics"));
+            for (const auto &receipt : outcome->files)
+                if (receipt.recoveryError)
+                    message += std::format("\n{}: {}", receipt.path.generic_string(), receipt.recoveryError->message);
+            return message;
+        }
+
         struct WorkspacePublishedRevisions {
             DocumentRevision scene{};
             SelectionRevision selection{};
@@ -898,26 +921,7 @@ namespace Horo::Editor {
                     const auto &outcome = controller->ViewModel().prefabCreationOutcome;
                     if (outcome && outcome->committed)
                         return {};
-                    std::string message = localization->Get("editor", "workspace.prefab.create.failed");
-                    if (outcome) {
-                        if (outcome->error)
-                            message += "\n" + outcome->error->message;
-                        constexpr std::size_t maximumVisibleBoundaries{32};
-                        const auto count = std::min(outcome->boundaries.size(), maximumVisibleBoundaries);
-                        for (std::size_t index = 0; index < count; ++index) {
-                            const auto &boundary = outcome->boundaries[index];
-                            message += "\n" + std::to_string(boundary.source.value) + ": " + boundary.property;
-                            if (boundary.target)
-                                message += " -> " + std::to_string(boundary.target->value);
-                        }
-                        if (count < outcome->boundaries.size())
-                            message += "\n" + std::to_string(outcome->boundaries.size() - count) + " " +
-                                       localization->Get("editor", "workspace.prefab.create.more_diagnostics");
-                        for (const auto &receipt : outcome->files)
-                            if (receipt.recoveryError)
-                                message += "\n" + receipt.path.generic_string() + ": " + receipt.recoveryError->message;
-                    }
-                    return message;
+                    return PrefabCreationFailureMessage(outcome.get(), *localization);
                 }));
                 if (opened.HasError())
                     LOG_WARN("editor.prefab", "Creation modal could not open: %s", opened.ErrorValue().message.c_str());

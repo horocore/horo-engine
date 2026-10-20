@@ -163,6 +163,19 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Appends one parent's children to the bounded frontier without retaining references into its growing storage. */
+        Result<void> AppendPrefabChildren(const std::vector<SceneObjectSnapshot> &objects, const SceneObjectId parent,
+                                          const std::size_t maximumChanges, std::vector<SceneObjectId> &subtree) {
+            for (const auto &object : objects) {
+                if (object.parent != parent)
+                    continue;
+                if (subtree.size() >= maximumChanges)
+                    return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
+                subtree.push_back(object.id);
+            }
+            return Result<void>::Success();
+        }
+
         /** @copydoc CapturePrefabSubtree */
         Result<SceneObjectsReplacedDelta> CapturePrefabSubtree(const std::vector<SceneObjectSnapshot> &objects,
                                                                const std::vector<ScenePrefabInstance> &instances, const SceneObjectId root,
@@ -170,13 +183,12 @@ namespace Horo::Editor {
             using Return = Result<SceneObjectsReplacedDelta>;
             std::vector<SceneObjectReplacement> changes;
             std::vector<SceneObjectId> subtree{root};
-            for (std::size_t cursor = 0; cursor < subtree.size(); ++cursor)
-                for (const auto &object : objects)
-                    if (object.parent == subtree[cursor]) {
-                        if (subtree.size() >= maximumChanges)
-                            return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
-                        subtree.push_back(object.id);
-                    }
+            std::size_t cursor{};
+            while (cursor < subtree.size()) {
+                const auto parent = subtree[cursor++];
+                if (auto appended = AppendPrefabChildren(objects, parent, maximumChanges, subtree); appended.HasError())
+                    return Return::Failure(std::move(appended).ErrorValue());
+            }
             for (const auto id : subtree) {
                 const auto object = FindObject(objects, id);
                 if (object->generated || IsEffectivelyLocked(objects, id))
@@ -184,7 +196,7 @@ namespace Horo::Editor {
                 const auto digest = FingerprintSceneObjectContent(*object, MaximumSceneObjectFingerprintBytes);
                 if (digest.HasError())
                     return Return::Failure(digest.ErrorValue());
-                changes.push_back({id, digest.Value()});
+                changes.emplace_back(id, digest.Value());
             }
             for (const auto &placement : instances)
                 if (placement.parent && std::ranges::find(subtree, *placement.parent) != subtree.end())

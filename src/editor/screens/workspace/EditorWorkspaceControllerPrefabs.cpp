@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <type_traits>
 
 namespace Horo::Editor {
     namespace {
@@ -113,8 +114,8 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::ExecutePrefabCreation */
     PrefabCreationOutcome EditorWorkspaceController::ExecutePrefabCreation(const PrefabCreationIntent &intent) {
         PrefabCreationOutcome outcome;
-        const auto admission = CapturePrefabCreationIntent(intent.root);
-        if (admission.HasError() || admission.Value().documentRevision != intent.documentRevision ||
+        if (const auto admission = CapturePrefabCreationIntent(intent.root);
+            admission.HasError() || admission.Value().documentRevision != intent.documentRevision ||
             admission.Value().replacementEpoch != intent.replacementEpoch) {
             outcome.error =
                 admission.HasError() ? admission.ErrorValue() : MakeError(SceneTransactionError(SceneTransactionFailure::Stale));
@@ -164,9 +165,9 @@ namespace Horo::Editor {
         const auto &intent = *command.prefabCreation;
         // Prepare presentation ownership before creating files; the immutable outcome keeps every failed-cleanup receipt.
         auto outcome = std::make_shared<PrefabCreationOutcome>();
-        auto observerFailure =
+        std::optional<Error> observerFailure{
             MakeError(SceneTransactionError(SceneTransactionFailure::Capacity),
-                      Localized("workspace.prefab.create.post_commit", "Prefab created; workspace presentation needs refresh."));
+                      Localized("workspace.prefab.create.post_commit", "Prefab created; workspace presentation needs refresh."))};
         m_viewModel.prefabPostCommitError.reset();
         *outcome = ExecutePrefabCreation(intent);
         m_viewModel.prefabCreationOutcome = outcome;
@@ -175,6 +176,14 @@ namespace Horo::Editor {
         // These canonical selection changes allocate no storage. Derived views may be rebuilt independently afterward.
         const bool selectionChanged = m_selection.ClearForTransaction();
         m_viewModel.prefabSelection = PrefabHierarchyTarget{outcome->instance, std::nullopt};
+        NotifyPrefabCreation(selectionChanged, observerFailure);
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::NotifyPrefabCreation */
+    void EditorWorkspaceController::NotifyPrefabCreation(const bool selectionChanged, std::optional<Error> &observerFailure) noexcept {
+        static_assert(std::is_nothrow_move_constructible_v<std::optional<Error>>);
+        static_assert(std::is_nothrow_move_assignable_v<std::optional<Error>>);
         try {
             if (selectionChanged)
                 m_selection.NotifyTransactionClear();
@@ -197,7 +206,6 @@ namespace Horo::Editor {
             // Every authoritative owner already committed; observer allocation/failure never removes created assets.
             m_viewModel.prefabPostCommitError = std::move(observerFailure);
         }
-        return true;
     }
 
     /** @copydoc EditorWorkspaceController::RetirePrefabHierarchy */

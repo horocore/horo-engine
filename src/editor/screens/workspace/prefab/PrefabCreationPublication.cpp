@@ -7,14 +7,16 @@
 
 #include <algorithm>
 #include <cctype>
+#include <format>
 #include <new>
+#include <string_view>
 #include <type_traits>
 
 namespace Horo::Editor {
     namespace {
         /** @brief Admits only portable filenames in existing ordinary project asset directories. */
         Result<void> ValidateDestination(const std::filesystem::path &root, const std::filesystem::path &destination,
-                                         DurableFileSystem &files) {
+                                         const DurableFileSystem &files) {
             const auto invalid = [] {
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
             };
@@ -22,15 +24,16 @@ namespace Horo::Editor {
                 destination != destination.lexically_normal() || destination.extension() != ".prefab")
                 return invalid();
             const auto relative = destination.lexically_relative(root);
-            const auto assetRoot = ProjectLayout::AssetRoot(root);
-            if (relative.empty() || *relative.begin() != assetRoot.filename())
+            if (const auto assetRoot = ProjectLayout::AssetRoot(root); relative.empty() || *relative.begin() != assetRoot.filename())
                 return invalid();
             for (const auto &part : relative) {
                 const auto bytes = part.generic_u8string();
-                const std::string_view text{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-                if (text.empty() || text.size() > 128 || text.front() == '.' || text.back() == '.' || text.back() == ' ' ||
-                    !IsValidUtf8ScalarSequence(text) || std::ranges::any_of(text, [](const unsigned char value) {
-                    return value < 32U || std::string_view{"<>:\"/\\|?*"}.find(static_cast<char>(value)) != std::string_view::npos;
+                if (bytes.empty() || bytes.size() > 128)
+                    return invalid();
+                const std::string text{bytes.begin(), bytes.end()};
+                if (text.front() == '.' || text.back() == '.' || text.back() == ' ' || !IsValidUtf8ScalarSequence(text) ||
+                    std::ranges::any_of(text, [](const unsigned char value) {
+                    return value < 32U || std::string_view{R"(<>:"/\|?*)"}.find(static_cast<char>(value)) != std::string_view::npos;
                 }))
                     return invalid();
                 std::string name{text.substr(0, text.find('.'))};
@@ -52,19 +55,18 @@ namespace Horo::Editor {
                 if (!entry.Value() || entry.Value()->kind != FileEntryKind::Directory)
                     return invalid();
             }
-            auto lock = Assets::AssetSourcePublicationLockPath(root, destination);
-            if (lock.HasError())
+            if (auto lock = Assets::AssetSourcePublicationLockPath(root, destination); lock.HasError())
                 return Result<void>::Failure(lock.ErrorValue());
             return Result<void>::Success();
         }
 
         /** @brief Hashes complete prepared bytes before any durable writes occur. */
-        Assets::AssetSourceIdentity Content(const std::string &bytes) {
+        Assets::AssetSourceIdentity Content(const std::string_view bytes) {
             return {true, bytes.size(), ComputeSha256(std::as_bytes(std::span{bytes.data(), bytes.size()}))};
         }
 
         /** @brief Captures exact object/mutation evidence immediately after exclusive creation, retaining uncertainty explicitly. */
-        Result<void> CaptureCreated(PrefabCreationReceipt &receipt, DurableFileSystem &files) {
+        Result<void> CaptureCreated(PrefabCreationReceipt &receipt, const DurableFileSystem &files) {
             auto entry = files.InspectEntry(receipt.path);
             if (entry.HasError())
                 return Result<void>::Failure(entry.ErrorValue());
@@ -76,7 +78,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Rechecks both published creations before exposing a Scene reference to them. */
-        Result<void> ValidateCreatedFiles(const PrefabCreationOutcome &outcome, DurableFileSystem &files) {
+        Result<void> ValidateCreatedFiles(const PrefabCreationOutcome &outcome, const DurableFileSystem &files) {
             for (const auto &receipt : outcome.files) {
                 auto current = files.InspectEntry(receipt.path);
                 if (current.HasError())
@@ -88,8 +90,8 @@ namespace Horo::Editor {
                 auto captured = files.ReadFileBounded(receipt.path, Prefab::PrefabHardLimits::SourceDocumentBytes);
                 if (captured.HasError())
                     return Result<void>::Failure(captured.ErrorValue());
-                const auto &bytes = captured.Value();
-                if (bytes.size() != receipt.content.bytes || ComputeSha256(std::as_bytes(std::span{bytes})) != receipt.content.digest)
+                if (const auto &bytes = captured.Value();
+                    bytes.size() != receipt.content.bytes || ComputeSha256(std::as_bytes(std::span{bytes})) != receipt.content.digest)
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
                 auto after = files.InspectEntry(receipt.path);
                 if (after.HasError() || !after.Value() || receipt.identity->identity != after.Value()->identity)
@@ -133,8 +135,8 @@ namespace Horo::Editor {
                         continue;
                     }
                     const auto &bytes = captured.Value();
-                    auto after = files.InspectEntry(receipt.path);
-                    if (bytes.size() != receipt.content.bytes || ComputeSha256(std::as_bytes(std::span{bytes})) != receipt.content.digest ||
+                    if (auto after = files.InspectEntry(receipt.path);
+                        bytes.size() != receipt.content.bytes || ComputeSha256(std::as_bytes(std::span{bytes})) != receipt.content.digest ||
                         after.HasError() || !after.Value() || after.Value()->identity != receipt.identity->identity) {
                         rejected();
                         continue;
@@ -150,7 +152,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Rechecks the last accepted persisted Scene source without comparing it to unsaved working content. */
-        Result<void> ValidateSceneSource(const PrefabCreationRequest &request, DurableFileSystem &files) {
+        Result<void> ValidateSceneSource(const PrefabCreationRequest &request, const DurableFileSystem &files) {
             if (!request.sceneSource)
                 return Result<void>::Success();
             const auto &source = *request.sceneSource;
@@ -159,8 +161,8 @@ namespace Horo::Editor {
             const auto captured = files.ReadFileBounded(source.path, MaximumSceneObjectFingerprintBytes);
             if (captured.HasError())
                 return Result<void>::Failure(captured.ErrorValue());
-            const auto &bytes = captured.Value();
-            if (bytes.size() != source.accepted.bytes || ComputeSha256(std::as_bytes(std::span{bytes})) != source.accepted.digest)
+            if (const auto &bytes = captured.Value();
+                bytes.size() != source.accepted.bytes || ComputeSha256(std::as_bytes(std::span{bytes})) != source.accepted.digest)
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict,
                                                        "The persisted Scene source changed after this document accepted its disk base."));
             return Result<void>::Success();
@@ -237,8 +239,10 @@ namespace Horo::Editor {
             if (replacement.HasError())
                 return Return::Failure(replacement.ErrorValue());
             PreparedCreation prepared{std::move(replacement).Value(),
-                                      {std::move(encoded).Value(), "{\"schemaVersion\":1,\"assetId\":\"" + request.asset.ToString() +
-                                                                       "\",\"assetType\":\"core.prefab\"}\n"}};
+                                      {std::move(encoded).Value(),
+                                       std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"core.prefab"}})"
+                                                   "\n",
+                                                   request.asset.ToString())}};
             outcome.instance = prepared.replacement.Instance();
             outcome.files[0] = {.path = request.destination, .content = Content(prepared.bytes[0])};
             auto metadata = request.destination;
@@ -264,17 +268,49 @@ namespace Horo::Editor {
             }
             return ValidateCreatedFiles(outcome, files);
         }
+
+        /** @brief Attempts the guarded publication while borrowing leases retained by the caller through rollback.
+         * @details Both exception fallbacks are allocated by the caller before any source writes; this helper neither
+         * acquires project authority nor releases source leases when the guarded attempt returns or catches a failure.
+         */
+        void AttemptCreation(SceneDocumentTransactions &scene, const PrefabCreationRequest &request, PrefabCreationOutcome &outcome,
+                             DurableFileSystem &files, std::array<std::optional<ExclusiveFileLock>, 3> &locks,
+                             std::optional<Error> &exceptionError, std::optional<Error> &providerError) noexcept {
+            static_assert(std::is_nothrow_move_constructible_v<std::optional<Error>>);
+            static_assert(std::is_nothrow_move_assignable_v<std::optional<Error>>);
+            try {
+                auto prepared = PrepareCreation(scene, request, outcome, files, locks);
+                if (prepared.HasError()) {
+                    outcome.error = prepared.ErrorValue();
+                    return;
+                }
+                auto candidate = std::move(prepared).Value();
+                if (const auto written = WritePreparedFiles(candidate, request.context.cancellation, outcome, files); written.HasError()) {
+                    outcome.error = written.ErrorValue();
+                } else if (const auto source = ValidateSceneSource(request, files); source.HasError()) {
+                    outcome.error = source.ErrorValue();
+                } else if (const auto committed = scene.CommitPrefabReplacement(candidate.replacement); committed.HasError()) {
+                    outcome.error = committed.ErrorValue();
+                } else {
+                    outcome.committed = committed.Value().committed;
+                }
+            } catch (const std::bad_alloc &) {
+                outcome.error = std::move(exceptionError);
+            } catch (...) {
+                outcome.error = std::move(providerError);
+            }
+        }
     }  // namespace
 
     /** @copydoc CreatePrefabFromSelection */
     PrefabCreationOutcome CreatePrefabFromSelection(SceneDocumentTransactions &scene, const PrefabCreationRequest &request,
-                                                    ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+                                                    const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
         PrefabCreationOutcome outcome;
         outcome.asset = request.asset;
-        auto exceptionError = MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed);
-        auto providerError =
+        std::optional<Error> exceptionError{MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed)};
+        std::optional<Error> providerError{
             MakeError(Assets::AssetSourceErrors::ReadFailed,
-                      "Filesystem provider failed during prefab creation; retained file receipts identify any unresolved publication.");
+                      "Filesystem provider failed during prefab creation; retained file receipts identify any unresolved publication.")};
         std::array<Error, 2> recoveryFailures;
         for (auto &failure : recoveryFailures)
             failure = MakeError(Assets::AssetSourceErrors::Conflict,
@@ -286,30 +322,10 @@ namespace Horo::Editor {
             return outcome;
         }
         [[maybe_unused]] auto projectLease = std::move(acquired).Value();
-        // These leases deliberately outlive the try/catch: failure cleanup below the catch
-        // must remain serialized with cooperating project/source writers until rollback finishes.
+        // Caller-owned leases span the guarded attempt and the subsequent rollback, keeping cleanup
+        // serialized with cooperating project/source writers even after an attempt exception.
         std::array<std::optional<ExclusiveFileLock>, 3> locks;
-        try {
-            auto prepared = PrepareCreation(scene, request, outcome, files, locks);
-            if (prepared.HasError()) {
-                outcome.error = prepared.ErrorValue();
-                return outcome;
-            }
-            auto candidate = std::move(prepared).Value();
-            if (const auto written = WritePreparedFiles(candidate, request.context.cancellation, outcome, files); written.HasError()) {
-                outcome.error = written.ErrorValue();
-            } else if (const auto source = ValidateSceneSource(request, files); source.HasError()) {
-                outcome.error = source.ErrorValue();
-            } else if (const auto committed = scene.CommitPrefabReplacement(candidate.replacement); committed.HasError()) {
-                outcome.error = committed.ErrorValue();
-            } else {
-                outcome.committed = committed.Value().committed;
-            }
-        } catch (const std::bad_alloc &) {
-            outcome.error = std::move(exceptionError);
-        } catch (...) {
-            outcome.error = std::move(providerError);
-        }
+        AttemptCreation(scene, request, outcome, files, locks, exceptionError, providerError);
         if (!outcome.committed)
             Rollback(outcome, files, recoveryFailures);
         return outcome;

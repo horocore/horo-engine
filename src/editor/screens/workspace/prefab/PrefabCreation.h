@@ -88,5 +88,5 @@ namespace Horo::Editor {
      * the newly created reusable asset remains. Foreign replacements are never removed by rollback.
      */
     [[nodiscard]] PrefabCreationOutcome CreatePrefabFromSelection(SceneDocumentTransactions &scene, const PrefabCreationRequest &request,
-                                                                  ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+                                                                  const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
 }  // namespace Horo::Editor
