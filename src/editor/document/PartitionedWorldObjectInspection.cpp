@@ -39,7 +39,7 @@ namespace Horo::Editor {
             auto coverage = WS::WorldSpatialAssignment::CreateForAuthoring(domain, std::span{&candidate, 1},
                                                                            {1, limits.maximumCellsPerObject, limits.maximumTotalCells});
             if (coverage.HasError()) {
-                if (coverage.ErrorValue().code == WS::WorldStreamingErrors::SpatialAssignmentCapacityExceeded.code)
+                if (coverage.ErrorValue().code.Value() == WS::WorldStreamingErrors::SpatialAssignmentCapacityExceeded.code.Value())
                     return Result<WorldObjectInspection>::Failure(MakeError(WorldDocumentErrors::Capacity));
                 result.diagnostic = coverage.ErrorValue();
                 return Result<WorldObjectInspection>::Success(std::move(result));
@@ -53,7 +53,7 @@ namespace Horo::Editor {
                 WS::WorldSpanningObjectPlan::Create(coverage.Value(), directives,
                                                     {1, document.settings.maximumDirectCellsPerObject, limits.maximumTotalCells});
             if (placement.HasError()) {
-                if (placement.ErrorValue().code == WS::WorldStreamingErrors::SpanningObjectPlanCapacityExceeded.code)
+                if (placement.ErrorValue().code.Value() == WS::WorldStreamingErrors::SpanningObjectPlanCapacityExceeded.code.Value())
                     return Result<WorldObjectInspection>::Failure(MakeError(WorldDocumentErrors::Capacity));
                 result.diagnostic = placement.ErrorValue();
             } else {

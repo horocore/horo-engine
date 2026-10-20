@@ -41,7 +41,7 @@ namespace Horo::Editor {
 
         template <typename T> void InspectionError(const Result<T> &result, const ErrorCodeDescriptor &code) {
             REQUIRE(result.HasError());
-            REQUIRE(result.ErrorValue().code == code.code);
+            REQUIRE(result.ErrorValue().code.Value() == code.code.Value());
         }
 
         PartitionedWorldSnapshotLease SelectFirst(PartitionedWorldWorkspace &workspace, const PartitionedWorldDocument &document) {
@@ -183,7 +183,7 @@ namespace Horo::Editor {
             const auto result = workspace.InspectSelectedObjects(selected->fence).Value();
             const auto &row = result->objects.front();
             REQUIRE(row.diagnostic);
-            REQUIRE(row.diagnostic->code == expected->code);
+            REQUIRE(row.diagnostic->code.Value() == expected->code.Value());
             REQUIRE_FALSE(row.placement);
             REQUIRE(row.placementCells.empty());
             REQUIRE(row.source.descriptor.bounds == object.descriptor.bounds);
@@ -359,9 +359,11 @@ namespace Horo::Editor {
             bool wrongInspection{};
             std::thread worker([&] {
                 const auto selection = workspace.SetSelection({}, std::nullopt, selected->fence);
-                wrongSelection = selection.HasError() && selection.ErrorValue().code == WorldDocumentErrors::WrongThread.code;
+                wrongSelection =
+                    selection.HasError() && selection.ErrorValue().code.Value() == WorldDocumentErrors::WrongThread.code.Value();
                 const auto inspection = workspace.InspectSelectedObjects(selected->fence);
-                wrongInspection = inspection.HasError() && inspection.ErrorValue().code == WorldDocumentErrors::WrongThread.code;
+                wrongInspection =
+                    inspection.HasError() && inspection.ErrorValue().code.Value() == WorldDocumentErrors::WrongThread.code.Value();
             });
             worker.join();
             REQUIRE(wrongSelection);

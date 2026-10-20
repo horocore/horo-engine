@@ -124,9 +124,9 @@ namespace Horo::WorldStreaming {
             REQUIRE(result.HasError());
             // Invalid grid extents preserve the canonical quantization failure rather than translating it.
             if (source.bounds.maximum.Millimeters()[0] == 9000)
-                REQUIRE(result.ErrorValue().code == WorldStreamingErrors::CellOutOfBounds.code);
+                REQUIRE(result.ErrorValue().code.Value() == WorldStreamingErrors::CellOutOfBounds.code.Value());
             else
-                REQUIRE(result.ErrorValue().code == expected->code);
+                REQUIRE(result.ErrorValue().code.Value() == expected->code.Value());
             REQUIRE(candidates.front().address == Candidate(1, 1).address);
         }
 
