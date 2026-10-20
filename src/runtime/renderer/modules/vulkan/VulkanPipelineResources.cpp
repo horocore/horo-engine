@@ -42,17 +42,17 @@ namespace Horo::Render::Detail {
             }
 
             void ConfigureRaster(const RenderGraphicsPipelineState &state) {
-                raster =
-                    VkPipelineRasterizationStateCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-                                                           .polygonMode = VK_POLYGON_MODE_FILL,
-                                                           .cullMode = state.cull == RenderCullMode::None
-                                                                           ? VK_CULL_MODE_NONE
-                                                                           : (state.cull == RenderCullMode::Front ? VK_CULL_MODE_FRONT_BIT
-                                                                                                                  : VK_CULL_MODE_BACK_BIT),
-                                                           .frontFace = state.frontFace == RenderFrontFace::CounterClockwise
-                                                                            ? VK_FRONT_FACE_COUNTER_CLOCKWISE
-                                                                            : VK_FRONT_FACE_CLOCKWISE,
-                                                           .lineWidth = 1};
+                raster = VkPipelineRasterizationStateCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+                                                                .polygonMode = VK_POLYGON_MODE_FILL,
+                                                                .cullMode = static_cast<VkCullModeFlags>(
+                                                                    state.cull == RenderCullMode::None
+                                                                        ? VK_CULL_MODE_NONE
+                                                                        : (state.cull == RenderCullMode::Front ? VK_CULL_MODE_FRONT_BIT
+                                                                                                               : VK_CULL_MODE_BACK_BIT)),
+                                                                .frontFace = state.frontFace == RenderFrontFace::CounterClockwise
+                                                                                 ? VK_FRONT_FACE_COUNTER_CLOCKWISE
+                                                                                 : VK_FRONT_FACE_CLOCKWISE,
+                                                                .lineWidth = 1};
                 samples = VkPipelineMultisampleStateCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
                                                                .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
                 ConfigureDepth(state);

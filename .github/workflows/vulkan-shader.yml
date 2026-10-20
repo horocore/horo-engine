@@ -65,7 +65,7 @@ jobs:
       - name: Build native Vulkan contracts
         run: cmake --build build/ci --target HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingPublicHeaderConsumer --parallel 2
       - name: Run Vulkan native-call and lifecycle regressions
-        run: ctest --test-dir build/ci -R '^(HoroRenderVulkanTests|HoroPipelineCacheTests|HoroShaderPermutationTests|HoroMaterialBindingPublicHeaderConsumer)$' --output-on-failure
+        run: ctest --test-dir build/ci --no-tests=error -R '^(HoroRenderVulkanTests::|HoroPipelineCacheTests::|HoroShaderPermutationTests::|HoroMaterialBindingPublicHeaderConsumer$)' --output-on-failure
       - name: Cook final SPIR-V and qualify real Linux native device preparation
         if: runner.os == 'Linux'
         run: |

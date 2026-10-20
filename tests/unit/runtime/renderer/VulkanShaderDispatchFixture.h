@@ -130,10 +130,19 @@ namespace {
 
     VKAPI_ATTR void VKAPI_CALL UpdateSets(VkDevice, std::uint32_t count, const VkWriteDescriptorSet *writes, std::uint32_t,
                                           const VkCopyDescriptorSet *) {
-        CHECK(count == 1);
-        CHECK(writes[0].descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
-        REQUIRE(writes[0].pBufferInfo != nullptr);
-        CHECK(writes[0].pBufferInfo->range == 16);
+        REQUIRE(count > 0);
+        for (std::uint32_t index = 0; index < count; ++index) {
+            if (writes[index].descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
+                REQUIRE(writes[index].pBufferInfo != nullptr);
+                CHECK(writes[index].pBufferInfo->range == 16);
+            } else {
+                REQUIRE(writes[index].pImageInfo != nullptr);
+                if (writes[index].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)
+                    CHECK(writes[index].pImageInfo->imageView != VK_NULL_HANDLE);
+                else
+                    CHECK(writes[index].pImageInfo->sampler != VK_NULL_HANDLE);
+            }
+        }
         ++driver->updates;
     }
 

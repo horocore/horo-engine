@@ -17,11 +17,17 @@ namespace {
     using namespace Horo;
     using namespace Horo::Render;
     using namespace Horo::Render::Detail;
+    static_assert(!std::is_copy_constructible_v<VulkanPreparedMaterialBinding>);
+    static_assert(!std::is_copy_assignable_v<VulkanPreparedMaterialBinding>);
 
     struct Fixture {
         Driver state;
         VulkanShaderRuntime runtime;
         std::uint64_t next{1};
+        std::uint32_t maximumUniformDescriptors{128};
+        std::uint32_t maximumStageUniformDescriptors{128};
+        std::uint32_t maximumBoundSets{4};
+        bool pairedSampler{false};
         ShaderTargetRequirement target{.backend = ShaderTargetBackend::Vulkan,
                                        .payloadFormat = ShaderPayloadFormat::SpirV16,
                                        .descriptorVersion = 1,
@@ -58,27 +64,46 @@ namespace {
             VkPhysicalDeviceProperties properties{};
             properties.limits.minUniformBufferOffsetAlignment = 16;
             properties.limits.maxUniformBufferRange = 65536;
+            properties.limits.maxDescriptorSetUniformBuffers = maximumUniformDescriptors;
+            properties.limits.maxDescriptorSetSampledImages = 128;
+            properties.limits.maxDescriptorSetSamplers = 128;
+            properties.limits.maxPerStageDescriptorUniformBuffers = maximumStageUniformDescriptors;
+            properties.limits.maxPerStageDescriptorSampledImages = 128;
+            properties.limits.maxPerStageDescriptorSamplers = 128;
+            properties.limits.maxPerStageResources = 128;
+            properties.limits.maxBoundDescriptorSets = maximumBoundSets;
+            properties.limits.maxSamplerAllocationCount = 4096;
             return runtime.Initialize(Handle<VkDevice>(1), properties, RenderAdapterId{"vulkan:test"}, Resolve,
                                       [this]() -> std::optional<std::uint64_t> {
                 return next++;
             }, [](const MaterialResidentResource &r, ShaderResourceKind kind) -> Result<VulkanMaterialResource> {
+                if (r.instance == 98 && kind == ShaderResourceKind::SampledTexture && r.kind == MaterialResidentResourceKind::TextureView &&
+                    r.offset == 0 && r.byteCount == 0)
+                    return Result<VulkanMaterialResource>::Success({.view = Handle<VkImageView>(98)});
                 if (r.instance != 99 || kind != ShaderResourceKind::UniformBuffer || r.kind != MaterialResidentResourceKind::Buffer)
                     return Result<VulkanMaterialResource>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
                 return Result<VulkanMaterialResource>::Success({.buffer = Handle<VkBuffer>(99), .bytes = 16});
             });
         }
 
+        void UseSampledMaterial() {
+            manifest.bindings.push_back(
+                {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment});
+            manifest.bindings.push_back(
+                {{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment});
+            pairedSampler = true;
+        }
+
         void Reflect() {
             ShaderReflectionCandidate candidate{.backend = ShaderTargetBackend::Vulkan,
                                                 .interfaceSchemaVersion = 1,
-                                                .bindings = {{{1},
-                                                              ShaderResourceKind::UniformBuffer,
-                                                              ShaderResourceAccess::ReadOnly,
-                                                              1,
-                                                              ShaderStageVisibility::Fragment,
-                                                              true}},
-                                                .parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1, 0, 0, 0, true, true}},
-                                                .targetBindings = {{{1}, 0, 0, 0, "", {}, true}}};
+                                                .parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1, 0, 0, 0, true, true}}};
+            for (const auto &binding : manifest.bindings) {
+                candidate.bindings.push_back({binding.id, binding.kind, binding.access, binding.arrayCount, binding.stages, true});
+                candidate.targetBindings.push_back({binding.id, 0, 0, binding.id.value - 1, "", {}, true});
+            }
+            if (pairedSampler)
+                candidate.targetBindings[1].pairedSampler = {3};
             auto normalized = NormalizeShaderReflection(manifest, target, candidate);
             REQUIRE(normalized.HasValue());
             reflection = normalized.Value();
@@ -199,6 +224,29 @@ TEST_CASE("Vulkan depth writes without testing use an always-pass native depth t
     CHECK(f.state.depthCompare == VK_COMPARE_OP_ALWAYS);
 }
 
+TEST_CASE("Vulkan realizes separate sampled views and samplers with logical pairing metadata", "[vulkan][material][sampled]") {
+    Fixture f;
+    f.UseSampledMaterial();
+    f.Prepare();
+    const auto pipeline = f.Pipeline();
+    REQUIRE(pipeline.HasValue());
+    const auto cost = f.runtime.QuerySamplerMemoryCost({});
+    REQUIRE(cost.HasValue());
+    const auto sampler = f.runtime.CreateSampler({}, TestSupport::PlacementFor(cost.Value(), f.next));
+    REQUIRE(sampler.HasValue());
+    auto material = f.Material();
+    material.resources.push_back({{2}, 0, RenderTextureViewHandle{{1}, 4, 1}});
+    material.resources.push_back({{3}, 0, RenderSamplerHandle{{1}, 5, 1}});
+    const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, 99, 0, 16},
+                               MaterialResidentResource{MaterialResidentResourceKind::TextureView, 98, 0, 0},
+                               MaterialResidentResource{MaterialResidentResourceKind::Sampler, sampler.Value(), 0, 0}};
+    auto table = f.runtime.RealizeResolved(material, pipeline.Value(), resources);
+    REQUIRE(table.HasValue());
+    CHECK(f.state.updates == 1);
+    std::move(table).Value().reset();
+    f.runtime.DestroySampler(sampler.Value());
+}
+
 TEST_CASE("Vulkan shader admission rejects malformed artifacts before native creation", "[vulkan][shader][failure]") {
     Fixture f;
     REQUIRE(f.Initialize().HasValue());
@@ -225,6 +273,25 @@ TEST_CASE("Vulkan shader admission rejects malformed artifacts before native cre
     }
     CHECK(f.runtime.CreateShaderModule(d, code, TestSupport::PlacementFor(cost.Value(), 1)).HasError());
     CHECK(f.state.shaders == 0);
+}
+
+TEST_CASE("Vulkan device descriptor limits reject before layout creation", "[vulkan][pipeline][limits]") {
+    Fixture f;
+    SECTION("aggregate descriptor count") {
+        f.maximumUniformDescriptors = 0;
+    }
+    SECTION("per-stage descriptor count") {
+        f.maximumStageUniformDescriptors = 0;
+    }
+    SECTION("bound-set index") {
+        f.maximumBoundSets = 0;
+    }
+    f.Prepare();
+    const auto cost = f.runtime.QueryGraphicsPipelineMemoryCost(f.descriptor, f.vertex, f.fragment);
+    REQUIRE(cost.HasError());
+    CHECK(cost.ErrorValue().code == VulkanBackendErrors::ResourceUnsupported.code);
+    CHECK(f.state.layouts == 0);
+    CHECK(f.state.pipelines == 0);
 }
 
 TEST_CASE("Vulkan pipeline native failures release partial native objects", "[vulkan][pipeline][failure]") {
@@ -292,168 +359,4 @@ TEST_CASE("Vulkan shader lifecycle rejects incomplete dispatch and foreign-threa
     f.runtime.DestroySampler(sampler.Value());
 }
 
-#if defined(__linux__)
-#include <cstdlib>
-#include <dlfcn.h>
-#include <fstream>
-#include <iterator>
-
-namespace {
-    /** @brief Test-only system loader; no surface or display is required for native pipeline preparation. */
-    class NativeLoader final : public IVulkanLoaderPort {
-    public:
-        ~NativeLoader() override {
-            ReleaseLoader();
-        }
-
-        Result<void> AcquireLoader() override {
-            library_ = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
-            if (!library_)
-                return Result<void>::Failure(MakeError(VulkanBackendErrors::NativeCallFailed, "System Vulkan loader missing."));
-            return Result<void>::Success();
-        }
-
-        PFN_vkGetInstanceProcAddr GetInstanceProcAddr() noexcept override {
-            return reinterpret_cast<PFN_vkGetInstanceProcAddr>(dlsym(library_, "vkGetInstanceProcAddr"));
-        }
-
-        Result<std::vector<std::string>> RequiredPresentationExtensions() override {
-            return Result<std::vector<std::string>>::Success({});
-        }
-
-        Result<bool> SupportsPresentation(VkPhysicalDevice, std::uint32_t) override {
-            return Result<bool>::Success(false);
-        }
-
-        Result<bool> IsDriverAllowed(const VkPhysicalDeviceProperties &) override {
-            return Result<bool>::Success(true);
-        }
-
-        void ReleaseLoader() noexcept override {
-            if (library_)
-                dlclose(library_);
-            library_ = nullptr;
-        }
-
-    private:
-        void *library_{};
-    };
-
-    std::vector<std::uint8_t> ReadShader(const char *path) {
-        std::ifstream input(path, std::ios::binary);
-        REQUIRE(input.good());
-        return {std::istreambuf_iterator<char>(input), {}};
-    }
-}  // namespace
-
-namespace {
-    /** @brief Owns real native preparation in phases, releasing all consumer descriptors before device teardown. */
-    struct NativePreparationFixture {
-        NativeLoader loader;
-        RenderBackendRegistry registry;
-        std::unique_ptr<IRenderBackend> backend;
-        Fixture metadata;
-        std::uint64_t vertex{}, fragment{}, native{};
-
-        void Initialize() {
-            REQUIRE(RegisterVulkanRenderBackend(registry, loader).HasValue());
-            auto created = registry.Create(RenderBackendId{"vulkan"});
-            REQUIRE(created.HasValue());
-            backend = std::move(created).Value();
-            RenderBackendConfig config;
-            config.requirePresentation = false;
-            const auto initialized = backend->Initialize(config);
-            INFO((initialized.HasError() ? initialized.ErrorValue().message : "Vulkan native device initialized"));
-            REQUIRE(initialized.HasValue());
-        }
-
-        std::uint64_t Shader(ShaderStage stage, const std::vector<std::uint8_t> &bytes) {
-            RenderShaderModuleDescriptor d{metadata.target, stage, "main", metadata.artifact, metadata.reflection.interfaceCompatibility};
-            auto cost = backend->QueryShaderModuleMemoryCost(d, bytes.size());
-            REQUIRE(cost.HasValue());
-            auto result = backend->CreateShaderModule(d, bytes, TestSupport::PlacementFor(cost.Value(), 1));
-            INFO((result.HasError() ? result.ErrorValue().message : "Native shader created"));
-            REQUIRE(result.HasValue());
-            return result.Value();
-        }
-
-        void PrepareShaders(const char *vertexPath, const char *fragmentPath) {
-            metadata.Reflect();
-            const auto vertexBytes = ReadShader(vertexPath), fragmentBytes = ReadShader(fragmentPath);
-            std::vector<std::uint8_t> artifactBytes = vertexBytes;
-            artifactBytes.insert(artifactBytes.end(), fragmentBytes.begin(), fragmentBytes.end());
-            metadata.artifact = ComputeSha256(std::as_bytes(std::span{artifactBytes}));
-            vertex = Shader(ShaderStage::Vertex, vertexBytes);
-            fragment = Shader(ShaderStage::Fragment, fragmentBytes);
-        }
-
-        void PreparePipeline() {
-            const auto identity = backend->QueryPipelineDeviceIdentity();
-            REQUIRE(identity.HasValue());
-            RenderGraphicsPipelineDescriptor pipeline{.vertex = {{1}, 1, 1},
-                                                      .fragment = {{1}, 2, 1},
-                                                      .manifest = metadata.manifest,
-                                                      .target = metadata.target,
-                                                      .reflection = metadata.reflection};
-            pipeline.compatibility = {.schemaVersion = 1,
-                                      .backend = identity.Value().backend,
-                                      .backendModuleVersion = identity.Value().backendModuleVersion,
-                                      .adapter = identity.Value().adapter,
-                                      .deviceCompatibilityDigest = identity.Value().deviceCompatibilityDigest,
-                                      .driverIdentity = identity.Value().driverIdentity,
-                                      .driverVersion = identity.Value().driverVersion,
-                                      .shaderBackend = metadata.target.backend,
-                                      .shaderFormat = metadata.target.payloadFormat,
-                                      .shaderArtifactKey = metadata.artifact,
-                                      .shaderInterface = metadata.reflection.interfaceCompatibility,
-                                      .pipelineDescriptorDigest = ComputeRenderGraphicsPipelineStateDigest(pipeline.state).Value()};
-            pipeline.specializationValues = {{{7}, ShaderValueType::Uint32, 13}};
-            pipeline.compatibility.pipelineDescriptorDigest =
-                ComputeRenderGraphicsPipelineDescriptorDigest(pipeline.state, pipeline.specializationValues).Value();
-            const auto cost = backend->QueryGraphicsPipelineMemoryCost(pipeline, vertex, fragment);
-            REQUIRE(cost.HasValue());
-            const auto createdPipeline =
-                backend->CreateGraphicsPipeline(pipeline, vertex, fragment, TestSupport::PlacementFor(cost.Value(), 2));
-            INFO((createdPipeline.HasError() ? createdPipeline.ErrorValue().message : "Native graphics pipeline created"));
-            REQUIRE(createdPipeline.HasValue());
-            native = createdPipeline.Value();
-        }
-
-        void PrepareMaterialAndShutdown() {
-            const RenderBufferDescriptor bufferDescriptor{.byteSize = 16,
-                                                          .usage = RenderBufferUsage::Uniform,
-                                                          .access = RenderBufferAccess::HostVisible};
-            const auto bufferCost = backend->QueryBufferMemoryCost(bufferDescriptor);
-            REQUIRE(bufferCost.HasValue());
-            const std::array<std::byte, 16> values{};
-            const auto buffer = backend->CreateBuffer(bufferDescriptor, values, TestSupport::PlacementFor(bufferCost.Value(), 3));
-            REQUIRE(buffer.HasValue());
-            const auto material = metadata.Material();
-            const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, buffer.Value(), 0, 16}};
-            auto table = backend->RealizeResolved(material, native, resources);
-            INFO((table.HasError() ? table.ErrorValue().message : "Native descriptors updated"));
-            REQUIRE(table.HasValue());
-            std::move(table).Value().reset();
-            backend->DestroyBuffer(buffer.Value());
-            backend->DestroyGraphicsPipeline(native);
-            backend->DestroyShaderModule(vertex);
-            backend->DestroyShaderModule(fragment);
-            backend->Shutdown();
-            CHECK(backend->QueryPipelineDeviceIdentity().HasError());
-        }
-    };
-}  // namespace
-
-TEST_CASE("Vulkan native device consumes compiled SPIR-V pipeline and material descriptors", "[vulkan][shader][native-smoke]") {
-    const char *vertexPath = std::getenv("HORO_VULKAN_VERTEX_FIXTURE");
-    const char *fragmentPath = std::getenv("HORO_VULKAN_FRAGMENT_FIXTURE");
-    if (!vertexPath || !fragmentPath)
-        SKIP("Opt-in native qualification requires both compiled SPIR-V fixture paths.");
-    NativePreparationFixture fixture;
-    fixture.Initialize();
-    fixture.PrepareShaders(vertexPath, fragmentPath);
-    fixture.PreparePipeline();
-    fixture.PrepareMaterialAndShutdown();
-}
-
-#endif
+#include "VulkanShaderNativeSmoke.inl"

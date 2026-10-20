@@ -21,6 +21,9 @@ namespace Horo::Render::Detail {
      * @details Host destroys leases before draining/destroying the device. No destructor waits for the GPU. */
     class VulkanPreparedMaterialBinding final : public IResidentMaterialBinding {
     public:
+        VulkanPreparedMaterialBinding() = default;
+        VulkanPreparedMaterialBinding(const VulkanPreparedMaterialBinding &) = delete;
+        VulkanPreparedMaterialBinding &operator=(const VulkanPreparedMaterialBinding &) = delete;
         ~VulkanPreparedMaterialBinding() override;
         VkDevice device{VK_NULL_HANDLE};
         PFN_vkDestroyDescriptorPool destroyPool{nullptr};

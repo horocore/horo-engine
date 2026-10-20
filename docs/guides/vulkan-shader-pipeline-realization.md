@@ -16,7 +16,8 @@ checks cancellation before/after a call. No asynchronous compilation is launched
 
 The owner checks SPIR-V 1.6 header/instruction bounds and exact entry-point/stage,
 then creates shader modules. Final-artifact reflection produces direct descriptor
-set layouts and a pipeline layout. The established MeshVertex triangle ABI,
+set layouts and a pipeline layout, after exact selected-device aggregate/per-stage
+descriptor and bound-set admission. The established MeshVertex triangle ABI,
 attachment/depth/raster/blend state and dynamic viewport/scissor become a real
 Vulkan graphics pipeline using dynamic rendering. Manifest specialization IDs
 map directly to SPIR-V SpecId decorations. Canonical typed runtime overrides from
@@ -49,8 +50,9 @@ Vulkan frame rendering, image upload/transitions or presentation ownership.
 Qualification separates injected native-call failure/lifecycle coverage on Linux
 and Windows from the opt-in Linux real-device preparation smoke. The latter cooks
 GLSL fixtures to SPIR-V 1.6, initializes the production native runtime, and creates
-shader modules, pipeline/layout/cache, host-visible uniform backing and descriptor
-sets. It does not submit frame work and requires no display. The hosted workflow
+shader modules, pipeline/layout/cache, host-visible uniform backing, sampled texture/view and sampler objects, and
+complete descriptor sets. Logical paired-sampler metadata is preserved while
+native Vulkan descriptors stay separate. It does not submit frame work and requires no display. The hosted workflow
 fails if its explicitly requested Vulkan device is unavailable. The ordinary suite
 skips this smoke unless both fixture paths are supplied. macOS is not a supported
 Vulkan product platform and supplies no native Vulkan qualification evidence.

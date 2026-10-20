@@ -337,7 +337,8 @@ namespace Horo::Render::Detail {
     Result<RenderMemoryCostPlan> VulkanShaderRuntime::QuerySamplerMemoryCost(const RenderSamplerDescriptor &descriptor) const {
         if (!impl_->Ready())
             return Result<RenderMemoryCostPlan>::Failure(impl_->AdmissionError());
-        if (!descriptor.IsValid() || descriptor.maximumAnisotropy != 1 || impl_->samplers.size() >= MaximumObjects)
+        const auto maximumSamplers = std::min<std::size_t>(MaximumObjects, impl_->properties.limits.maxSamplerAllocationCount);
+        if (!descriptor.IsValid() || descriptor.maximumAnisotropy != 1 || impl_->samplers.size() >= maximumSamplers)
             return Result<RenderMemoryCostPlan>::Failure(
                 MakeError(VulkanBackendErrors::ResourceUnsupported, "Vulkan baseline samplers require anisotropy one."));
         return Result<RenderMemoryCostPlan>::Success(Estimate(42, 256));

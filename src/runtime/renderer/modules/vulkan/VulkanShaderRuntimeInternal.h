@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <map>
 #include <thread>
 #include <unordered_map>
@@ -29,6 +30,9 @@ namespace Horo::Render::Detail {
         };
 
         struct Pipeline {
+            Pipeline() = default;
+            Pipeline(const Pipeline &) = delete;
+            Pipeline &operator=(const Pipeline &) = delete;
             VkDevice device{VK_NULL_HANDLE};
             PFN_vkDestroyPipeline destroy{nullptr};
             PFN_vkDestroyPipelineLayout destroyLayout{nullptr};
@@ -131,13 +135,74 @@ namespace Horo::Render::Detail {
 
         /** @brief Keeps final-artifact mappings in the bounded separate descriptor namespace. */
         static bool MappingSupported(const ShaderTargetBindingMapEntry &map) {
-            return map.generatedHelperIndex == 0 && map.nativeSpace < 4 && map.nativeBinding < 128 && !map.pairedSampler.IsValid();
+            return map.generatedHelperIndex == 0 && map.nativeSpace < 4 && map.nativeBinding < 128;
         }
 
         /** @brief Matches the established MeshVertex attribute shape. */
         static bool VertexInputSupported(const ShaderReflectedInterfaceVariable &input) {
             return input.location <= 2 && input.type == ShaderValueType::Float32 && input.rows == 1 && input.arrayCount == 1 &&
                    input.columns == (input.location == 2 ? 2 : 3);
+        }
+
+        /** @brief Counts actual descriptors, including arrays, without issuing native calls. */
+        struct DescriptorCounts {
+            std::uint64_t buffers{}, images{}, samplers{};
+
+            void Add(const ShaderReflectedBinding &binding) noexcept {
+                switch (binding.kind) {
+                    case ShaderResourceKind::UniformBuffer:
+                        buffers += binding.arrayCount;
+                        break;
+                    case ShaderResourceKind::SampledTexture:
+                        images += binding.arrayCount;
+                        break;
+                    case ShaderResourceKind::Sampler:
+                        samplers += binding.arrayCount;
+                        break;
+                    default:
+                        break;  // ValidateLayout rejects all other kinds before this count.
+                }
+            }
+
+            bool Fits(std::uint32_t maxBuffers, std::uint32_t maxImages, std::uint32_t maxSamplers,
+                      std::uint32_t maxResources) const noexcept {
+                return buffers <= maxBuffers && images <= maxImages && samplers <= maxSamplers &&
+                       buffers + images + samplers <= maxResources;
+            }
+        };
+
+        /** @brief Rejects legitimate cooked layouts that exceed the exact selected device's descriptor limits. */
+        Result<void> ValidateDescriptorLimits(const NormalizedShaderReflection &reflection) const {
+            DescriptorCounts total;
+            std::array<DescriptorCounts, 2> stages;
+            constexpr std::array stageFlags{VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+            for (const auto &binding : reflection.bindings) {
+                if (!binding.active)
+                    continue;
+                total.Add(binding);
+                for (std::size_t stage = 0; stage < stages.size(); ++stage)
+                    if ((Stages(binding.stages) & stageFlags[stage]) != 0)
+                        stages[stage].Add(binding);
+            }
+            const auto &limits = properties.limits;
+            if (!total.Fits(limits.maxDescriptorSetUniformBuffers, limits.maxDescriptorSetSampledImages, limits.maxDescriptorSetSamplers,
+                            std::numeric_limits<std::uint32_t>::max()))
+                return Result<void>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceUnsupported,
+                              "Cooked pipeline descriptors exceed the selected Vulkan device's aggregate descriptor limits."));
+            for (const auto &stage : stages)
+                if (!stage.Fits(limits.maxPerStageDescriptorUniformBuffers, limits.maxPerStageDescriptorSampledImages,
+                                limits.maxPerStageDescriptorSamplers, limits.maxPerStageResources))
+                    return Result<void>::Failure(
+                        MakeError(VulkanBackendErrors::ResourceUnsupported,
+                                  "Cooked shader stage exceeds the selected Vulkan device's per-stage descriptor limits."));
+            if (std::ranges::any_of(reflection.targetBindings, [&](const auto &entry) {
+                return entry.active && entry.nativeSpace >= limits.maxBoundDescriptorSets;
+            }))
+                return Result<void>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceUnsupported,
+                              "Cooked descriptor set number exceeds the selected Vulkan device's bound-set limit."));
+            return Result<void>::Success();
         }
 
         /** @brief Validates a complete cooked layout within guaranteed Vulkan 1.3 baseline bounds. */
@@ -164,7 +229,7 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(
                     MakeError(VulkanBackendErrors::ResourceUnsupported,
                               "Vulkan graphics requires the established MeshVertex location and component contract."));
-            return Result<void>::Success();
+            return ValidateDescriptorLimits(descriptor.reflection);
         }
 
         /** @brief Computes bounded scalar/vector packing for frontend-admitted uniform buffers. */
