@@ -1921,6 +1921,8 @@ target_link_libraries(HoroNavigationBakeService PUBLIC HoroEngine::NavigationRun
         PRIVATE nlohmann_json::nlohmann_json)
 
 add_library(HoroNavigationBakeAutomation STATIC
+        application/navigation/NavigationProjectBakeInput.cpp
+        application/navigation/NavigationProjectBakeTileLayout.cpp
         application/navigation/NavigationProjectBakeSource.cpp
         application/navigation/NavigationPrimitiveGeometry.cpp
         application/navigation/NavigationSceneBakeGeometry.cpp

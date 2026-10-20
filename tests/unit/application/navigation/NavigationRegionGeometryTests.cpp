@@ -14,6 +14,12 @@ namespace {
     using Nav::TestSupport::RequireError;
     using enum Runtime::NavigationRegionMode;
 
+    /** @brief Capture the complete project closure for region/input integration checks. */
+    auto Capture(const Inputs::Project &project, const NavigationProjectBakeInputLimits &limits = {}) {
+        return CaptureNavigationProjectBakeInput(project.Capture(), NavigationSourceTestSupport::Asset(1), Inputs::Project::Revisions(),
+                                                 limits);
+    }
+
 }  // namespace
 
 TEST_CASE("Overlapping include regions form a disjoint union before exclusions", "[navigation][geometry][region]") {
@@ -70,6 +76,13 @@ TEST_CASE("Complete exclusion retains empty geometry and its original source foo
     CHECK(selected.Value().front().geometry.triangles.empty());
     CHECK(selected.Value().front().footprint->minimum.x == 0);
     CHECK(selected.Value().front().footprint->maximum.x == 8);
+    const auto projectInput = Capture(project);
+    REQUIRE(projectInput.HasValue());
+    CHECK(projectInput.Value().contributions.size() == 2);
+    CHECK(projectInput.Value().input->Partitions().size() == 2);
+    REQUIRE(projectInput.Value().tiles.size() == 2);
+    CHECK(projectInput.Value().input->Triangles().empty());
+    CHECK(projectInput.Value().tiles.front().bounds.maximum.x == 8);
 }
 
 TEST_CASE("Region ordering is canonical and exact authored generations remain in source evidence",
@@ -142,4 +155,19 @@ TEST_CASE("Region metadata fragments and work ceilings reject complete candidate
         policy.maximumRegionWorkUnits = 1;
     }
     RequireError(Regions::First(project, policy), Nav::NavigationErrors::CapacityExceeded);
+}
+
+TEST_CASE("Region work is shared across project Scenes", "[navigation][geometry][region][budget]") {
+    Inputs::Project project;
+    auto object = Inputs::Project::Object();
+    const auto region = Regions::Region(1, Include, {4, 0, 4}, {4, 2, 4});
+    const std::array objects{object, region};
+    Regions::Scenes(project, objects);
+    NavigationProjectBakeInputLimits limits;
+    limits.scene.maximumRegionWorkUnits = 1500;
+    RequireError(Capture(project, limits), Nav::NavigationErrors::CapacityExceeded);
+    object.components.navigationSources.clear();
+    const std::array emptyObjects{object, region};
+    project.source.Write("Assets/second.horo", SceneSource::EncodeSceneSource({emptyObjects, {}}));
+    CHECK(Capture(project, limits).HasValue());
 }
