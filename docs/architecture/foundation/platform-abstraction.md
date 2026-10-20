@@ -452,10 +452,14 @@ An unsupported atomic no-replace primitive fails instead of degrading to an
 overwriting rename. A post-commit durability error can leave a complete cache
 entry; it does not represent a generation-selector commit or rollback receipt.
 
-The only shared native implementation contract is the staged, non-installed
-`HoroRootedFileNativeInternal` interface. Its existing handle/read primitives remain
-owned by `HoroPlatformProjectReadFiles`; `HoroPlatformImmutableFileStorage` consumes
-that interface privately. The two new public headers have exactly one owner each
+Shared handle/read primitives use the staged, non-installed
+`HoroRootedFileNativeInternal` interface and remain owned by
+`HoroPlatformProjectReadFiles`. The separate non-installed
+`HoroRootedStorageNativeInternal` target owns storage preparation, synchronization,
+and Windows handle-relative rename primitives shared by the immutable and mutable
+publication backends. Mutation is not added to the project-read capability, and
+neither backend reopens an admitted descendant through its former absolute path.
+The two new public headers have exactly one owner each
 in the public-header registry. Consumers depend on the Foundation contract;
 application composition chooses the concrete Platform factory. The inert error
 domain contribution must be registered explicitly by a host before presenting

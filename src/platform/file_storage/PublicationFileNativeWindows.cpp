@@ -134,23 +134,13 @@ namespace Horo::Platform::PublicationFileNative {
             std::filesystem::path path_;
         };
 
-        /** @brief Serializes a bounded relative rename without forming a flexible-array pointer. */
+        /** @brief Records commit only after the shared native relative rename succeeds. */
         Result<void> Rename(const Handle &file, const Handle &parent, const std::string_view name, AtomicFileReplacementReceipt &receipt) {
-            const auto spelling = std::filesystem::path{std::u8string{name.begin(), name.end()}}.native();
-            const auto nameBytes = spelling.size() * sizeof(wchar_t);
-            const auto totalBytes = sizeof(FILE_RENAME_INFO) + nameBytes;
-            alignas(FILE_RENAME_INFO) std::array<std::byte, 16384> buffer{};
-            if (totalBytes > buffer.size())
-                return Result<void>::Failure(MakeError(FileStorageErrors::Capacity));
-            FILE_RENAME_INFO header{};
-            std::ranges::fill(std::as_writable_bytes(std::span{&header, 1}), std::byte{});
-            header.ReplaceIfExists = TRUE;
-            header.RootDirectory = parent.Get();
-            header.FileNameLength = static_cast<DWORD>(nameBytes);
-            std::ranges::copy(std::as_bytes(std::span{&header, 1}).first(offsetof(FILE_RENAME_INFO, FileName)), buffer.begin());
-            std::ranges::copy(std::as_bytes(std::span{spelling}), buffer.begin() + offsetof(FILE_RENAME_INFO, FileName));
-            if (!SetFileInformationByHandle(file.Get(), FileRenameInfo, buffer.data(), static_cast<DWORD>(totalBytes)))
-                return Result<void>::Failure(MakeError(FileStorageErrors::IoFailed));
+            auto renamed = ImmutableFileNative::RenameRelative(file, parent, name, true);
+            if (renamed.HasError())
+                return Result<void>::Failure(renamed.ErrorValue());
+            if (!renamed.Value())
+                return Result<void>::Failure(MakeError(FileStorageErrors::Conflict));
             receipt.RecordCommitted();
             return Result<void>::Success();
         }
