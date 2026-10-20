@@ -47,6 +47,10 @@ namespace Horo::Editor {
         /** @brief Draws the prepared provider layer after scene affordances and below toolbar controls. */
         void RenderContributions(ImDrawList &drawList, const ViewportSurfaceLayout &layout) const;
 
+        /** @brief Defines the viewport pointer surface only outside toolbar controls or during owned capture. */
+        [[nodiscard]] static bool PrepareViewportInput(const ViewportSurfaceLayout &layout, bool inputEligible, bool surfaceInteractive);
+        /** @brief Resolves routed workspace eligibility without overriding a higher-priority input context. */
+        [[nodiscard]] bool ViewportInputEligible() const noexcept;
         void RequestViewportExtent(float width, float height) const noexcept;
         void ConfigureRenderer(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context) const;
         void DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,

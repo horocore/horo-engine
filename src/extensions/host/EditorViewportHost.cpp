@@ -54,6 +54,47 @@ namespace Horo::Extensions {
         }
     };
 
+    namespace {
+        /** @brief Revokes staged publication on every failure/exception before the final owner token is returned. */
+        struct PublicationGuard final {
+            explicit PublicationGuard(std::shared_ptr<EditorViewportSession> staged) : session(std::move(staged)) {}
+
+            PublicationGuard(const PublicationGuard &) = delete;
+            PublicationGuard &operator=(const PublicationGuard &) = delete;
+            PublicationGuard(PublicationGuard &&) = delete;
+            PublicationGuard &operator=(PublicationGuard &&) = delete;
+            std::shared_ptr<EditorViewportSession> session;
+
+            ~PublicationGuard() {
+                if (session)
+                    session->Revoke();
+            }
+        };
+
+        /** @brief Prepares copied geometry and its revocable provider pin before any registry publication. */
+        Result<std::shared_ptr<EditorViewportSession>> PrepareViewportSession(const EditorSurfaceContext &context,
+                                                                              EditorViewportDefinition definition, std::uint64_t identity,
+                                                                              const std::shared_ptr<ExtensionRetirement> &retirement) {
+            auto session = std::make_shared<EditorViewportSession>(context);
+            session->identity = identity;
+            auto capability = context.AcquireCapabilityUse(
+                context.Surface().kind == EditorSurfaceKind::Gizmo ? EditorGizmoCapability : EditorViewportOverlayCapability);
+            if (capability.HasError())
+                return Result<std::shared_ptr<EditorViewportSession>>::Failure(capability.ErrorValue());
+            session->capability.emplace(std::move(capability).Value());
+            session->visible = definition.visible;
+            auto copied = std::make_shared<EditorViewportDefinition>(std::move(definition));
+            session->definition = copied;
+            PublicationGuard rollback{session};
+            session->publication =
+                retirement->Acquire(context.Provider().moduleId, ExtensionLeaseKind::UiSurface, context.Surface().id, std::move(copied));
+            if (!session->publication || !retirement->RegisterContribution(context.Provider().moduleId, session))
+                return Rejected<std::shared_ptr<EditorViewportSession>>(ExtensionErrors::CapabilityRevoked);
+            rollback.session.reset();
+            return Result<std::shared_ptr<EditorViewportSession>>::Success(std::move(session));
+        }
+    }  // namespace
+
     /** @brief Owner-lane catalog borrows one existing registry; weak entries cannot prolong contribution publication. */
     struct EditorViewportHost::State final {
         State(EditorSurfaceRegistry &surfaces, ExtensionAdmissionPolicy evidence) : registry(surfaces), policy(std::move(evidence)) {}
@@ -134,39 +175,11 @@ namespace Horo::Extensions {
         const auto identity = AllocateGeneration();
         if (!identity)
             return Rejected<EditorViewportRegistration>(ExtensionErrors::CapabilityRevoked);
-        auto session = std::make_shared<EditorViewportSession>(context.Context());
-        session->identity = identity;
-        auto capability = session->context.AcquireCapabilityUse(
-            session->context.Surface().kind == EditorSurfaceKind::Gizmo ? EditorGizmoCapability : EditorViewportOverlayCapability);
-        if (capability.HasError())
-            return Result<EditorViewportRegistration>::Failure(capability.ErrorValue());
-        session->capability.emplace(std::move(capability).Value());
-        session->visible = definition.visible;
-        auto copied = std::make_shared<EditorViewportDefinition>(std::move(definition));
-        session->definition = copied;
-
-        /** @brief Revokes staged publication on every failure/exception before the final owner token is returned. */
-        struct PublicationGuard final {
-            explicit PublicationGuard(std::shared_ptr<EditorViewportSession> staged) : session(std::move(staged)) {}
-
-            PublicationGuard(const PublicationGuard &) = delete;
-            PublicationGuard &operator=(const PublicationGuard &) = delete;
-            PublicationGuard(PublicationGuard &&) = delete;
-            PublicationGuard &operator=(PublicationGuard &&) = delete;
-            std::shared_ptr<EditorViewportSession> session;
-
-            ~PublicationGuard() {
-                if (session)
-                    session->Revoke();
-            }
-        };
-
+        auto prepared = PrepareViewportSession(context.Context(), std::move(definition), identity, retirement);
+        if (prepared.HasError())
+            return Result<EditorViewportRegistration>::Failure(prepared.ErrorValue());
+        auto session = std::move(prepared).Value();
         PublicationGuard rollback{session};
-
-        session->publication = retirement->Acquire(session->context.Provider().moduleId, ExtensionLeaseKind::UiSurface,
-                                                   session->context.Surface().id, std::move(copied));
-        if (!session->publication || !retirement->RegisterContribution(session->context.Provider().moduleId, session))
-            return Rejected<EditorViewportRegistration>(ExtensionErrors::CapabilityRevoked);
         auto registered = state_->registry.Register(std::move(context));
         if (registered.HasError()) {
             session->Revoke();

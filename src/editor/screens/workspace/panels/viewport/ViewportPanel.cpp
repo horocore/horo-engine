@@ -321,24 +321,31 @@ namespace Horo::Editor {
         drawList.PopClipRect();
     }
 
+    /** @copydoc ViewportPanel::PrepareViewportInput */
+    bool ViewportPanel::PrepareViewportInput(const ViewportSurfaceLayout &layout, bool inputEligible, bool surfaceInteractive) {
+        if (!surfaceInteractive)
+            return false;
+        ImGui::SetCursorScreenPos(layout.origin);
+        ImGui::InvisibleButton("##ViewportSurface", {layout.width, layout.height},
+                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+        return inputEligible && ImGui::IsItemHovered();
+    }
+
+    /** @copydoc ViewportPanel::ViewportInputEligible */
+    bool ViewportPanel::ViewportInputEligible() const noexcept {
+        return inputRouter_ != nullptr && workspaceInputContext_ != nullptr &&
+               (inputRouter_->IsContextActive(*workspaceInputContext_) ||
+                (interaction_.IsActive() && !inputRouter_->HasHigherPriorityContext(Input::InputContextKind::EditorToolCapture)));
+    }
+
     void ViewportPanel::DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
         const ImVec2 pointer = ImGui::GetMousePos();
         const bool pointerOverControls = pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F;
-        const bool inputEligible =
-            inputRouter_ != nullptr && workspaceInputContext_ != nullptr &&
-            (inputRouter_->IsContextActive(*workspaceInputContext_) ||
-             (interaction_.IsActive() && !inputRouter_->HasHigherPriorityContext(Input::InputContextKind::EditorToolCapture)));
+        const bool inputEligible = ViewportInputEligible();
         const bool surfaceInteractive = !pointerOverControls || interaction_.IsActive();
-        bool surfaceHovered = false;
-        if (surfaceInteractive) {
-            ImGui::SetCursorScreenPos(layout.origin);
-            ImGui::InvisibleButton("##ViewportSurface", {layout.width, layout.height},
-                                   ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
-                                       ImGuiButtonFlags_MouseButtonMiddle);
-            surfaceHovered = inputEligible && ImGui::IsItemHovered();
-        }
+        const bool surfaceHovered = PrepareViewportInput(layout, inputEligible, surfaceInteractive);
         if (!surfaceInteractive)
             CancelAssetPlacementPreview(command);
         const auto tool = static_cast<Extensions::EditorViewportTool>(viewModel.activeTransformTool);

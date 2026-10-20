@@ -2858,6 +2858,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/ViewportOverlayRenderTests.cpp
     )
 
     target_compile_features(HoroViewportPanelRenderTests PRIVATE cxx_std_20)
