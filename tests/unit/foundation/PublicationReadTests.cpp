@@ -204,6 +204,9 @@ TEST_CASE("Native inventory classifies redirects without traversing and refuses 
     CHECK(files.ListDirectory(directory.Path() / "redirect", 4).HasError());
     CHECK(files.InspectEntry(directory.Path() / "redirect" / "").HasError());
     CHECK(files.ListDirectory(directory.Path() / "redirect" / "", 4).HasError());
+    REQUIRE(files.WriteDurable(directory.Path() / "folder" / "data", {}).HasValue());
+    CHECK(files.ReadFileBounded(directory.Path() / "redirect" / "data", 1).HasError());
+    CHECK(files.InspectEntry(directory.Path() / "redirect" / "data").HasError());
     REQUIRE(mkfifo((directory.Path() / "fifo").c_str(), 0600) == 0);
     CHECK(files.ReadFileBounded(directory.Path() / "fifo", 1).HasError());
     const auto entries = files.ListDirectory(directory.Path(), 3);

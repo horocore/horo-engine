@@ -181,7 +181,7 @@ namespace {
                 return record.code.Value() == "asset.cook.cache_hit" && record.result == BuildOutputResult::Cached &&
                        record.source.has_value();
             }));
-            auto contents = Assets::ReadCookGenerationContents(fresh.Value().generation, 1024 * 1024);
+            auto contents = Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, fresh.Value().generation, 1024 * 1024);
             REQUIRE(contents.HasValue());
             auto decoded = Assets::DecodeCookedArtifact(contents.Value().artifacts.front());
             REQUIRE(decoded.HasValue());
@@ -304,7 +304,7 @@ TEST_CASE("Collision domain-invalid cache fails with source context before reuse
                record.source->absolutePath ==
                    (session.project.root / session.project.Record().sourcePath.String()).lexically_normal().make_preferred().string();
     }));
-    REQUIRE(Assets::ResolveCurrentCookGeneration(session.request.cookedRoot).Value().manifestDigest ==
+    REQUIRE(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, session.request.cookedRoot).Value().manifestDigest ==
             session.first.generation.manifestDigest);
 }
 
@@ -333,7 +333,7 @@ TEST_CASE("Collision invalid source and cancellation retain the last-good genera
     session.project.Write(0);
     const auto failed = session.service.Cook(session.request, {});
     Test::RequireError(failed, PhysicsErrors::ShapeCookSourceInvalid);
-    const auto current = Assets::ResolveCurrentCookGeneration(session.request.cookedRoot);
+    const auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, session.request.cookedRoot);
     REQUIRE(current.HasValue());
     REQUIRE(current.Value().manifestDigest == session.first.generation.manifestDigest);
     const auto failedOutput = session.output.SnapshotIfChanged(session.snapshot.revision);
@@ -357,7 +357,7 @@ TEST_CASE("Collision invalid source and cancellation retain the last-good genera
     REQUIRE(std::ranges::any_of(cancelledOutput->records, [](const BuildOutputRecord &record) {
         return record.code.Value() == PhysicsErrors::ShapeCookCancelled.code.Value() && record.result == BuildOutputResult::None;
     }));
-    REQUIRE(Assets::ResolveCurrentCookGeneration(session.request.cookedRoot).Value().manifestDigest ==
+    REQUIRE(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, session.request.cookedRoot).Value().manifestDigest ==
             session.first.generation.manifestDigest);
 }
 
@@ -386,7 +386,7 @@ TEST_CASE("Collision unexpected importer exceptions fail joined work without rep
     REQUIRE(finding->source->absolutePath ==
             (session.project.root / session.project.Record().sourcePath.String()).lexically_normal().make_preferred().string());
     REQUIRE(finding->message == (kind == 9 ? "private adapter invariant text" : "The asset cooker threw before publication."));
-    REQUIRE(Assets::ResolveCurrentCookGeneration(session.request.cookedRoot).Value().manifestDigest ==
+    REQUIRE(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, session.request.cookedRoot).Value().manifestDigest ==
             session.first.generation.manifestDigest);
     REQUIRE(session.service.Cook(session.request, {}).HasValue());
 }

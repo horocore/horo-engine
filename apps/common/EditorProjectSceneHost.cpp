@@ -216,7 +216,8 @@ namespace Horo::Application::Internal {
                         MakeError(InvalidProjectScene,
                                   "This Play Scene requires committed assets: supply --cooked-root and --cook-target."));
                 if (policy.cooked) {
-                    auto captured = CommittedSceneAssets::Capture(*policy.cooked, registry_.Snapshot());
+                    const NativeDurableFileSystem cookFiles;
+                    auto captured = CommittedSceneAssets::Capture(cookFiles, *policy.cooked, registry_.Snapshot());
                     if (captured.HasError())
                         return Result<void>::Failure(captured.ErrorValue());
                     assets_ = std::move(captured).Value();

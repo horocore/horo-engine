@@ -134,10 +134,10 @@ TEST_CASE("PublishCookGeneration publishes a complete empty inventory through th
 
     auto result = PublishFixture(tmp.path, nullTarget, entries, payloads);
     REQUIRE(result.HasValue());
-    const auto resolved = ResolveCurrentCookGeneration(tmp.path);
+    const auto resolved = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path);
     REQUIRE(resolved.HasValue());
     CHECK(resolved.Value().artifactCount == 0U);
-    CHECK(ReadCookGenerationContents(resolved.Value(), 4096U).Value().entries.empty());
+    CHECK(ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, resolved.Value(), 4096U).Value().entries.empty());
 }
 
 TEST_CASE("PublishCookGeneration is deterministic", "[native]") {
@@ -175,7 +175,7 @@ TEST_CASE("ResolveCurrentCookGeneration reads published generation", "[native]")
     auto pubResult = PublishFixture(tmp.path, nullTarget, entries, payloads);
     REQUIRE((pubResult.HasValue()));
 
-    auto resolveResult = ResolveCurrentCookGeneration(tmp.path);
+    auto resolveResult = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path);
     REQUIRE((resolveResult.HasValue()));
     auto gen = resolveResult.Value();
 
@@ -207,7 +207,7 @@ TEST_CASE("ResolveCurrentCookGeneration rejects changed manifest and malformed c
         std::ofstream output(currentPath, std::ios::binary | std::ios::trunc);
         output << malformedCount;
     }
-    CHECK(ResolveCurrentCookGeneration(tmp.path).HasError());
+    CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).HasError());
     {
         std::ofstream output(currentPath, std::ios::binary | std::ios::trunc);
         output << current;
@@ -218,7 +218,7 @@ TEST_CASE("ResolveCurrentCookGeneration rejects changed manifest and malformed c
         std::ofstream output(manifestPath, std::ios::binary | std::ios::app);
         output << 'x';
     }
-    CHECK(ResolveCurrentCookGeneration(tmp.path).HasError());
+    CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).HasError());
 }
 
 TEST_CASE("ResolveCurrentCookGeneration rejects a generation path outside the target root", "[native]") {
@@ -227,7 +227,7 @@ TEST_CASE("ResolveCurrentCookGeneration rejects a generation path outside the ta
     current << R"({"target":"headless-null","manifestDigest":"ignored","generationPath":"../outside","artifactCount":"1"})";
     current.close();
 
-    const auto resolved = ResolveCurrentCookGeneration(tmp.path);
+    const auto resolved = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path);
 
     REQUIRE((resolved.HasError()));
 }
@@ -288,7 +288,7 @@ TEST_CASE("Immutable replay never repairs or overwrites corrupted reader storage
     CHECK(PublishFixture(tmp.path, Target("headless-null"), entries, payloads).HasError());
     CHECK(ReadText(artifact) == "corrupt");
     CHECK(ReadText(tmp.path / "current.json") == pointer);
-    CHECK(ResolveCurrentCookGeneration(tmp.path).HasError());
+    CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).HasError());
 }
 
 TEST_CASE("Pinned generation remains complete across real pointer replacement", "[native]") {
@@ -307,20 +307,21 @@ TEST_CASE("Pinned generation remains complete across real pointer replacement", 
     policy.prepareCommit = [&prepared, &oldGeneration, &tmp](const AssetCookGeneration &candidate) {
         prepared = true;
         CHECK(candidate.manifestDigest != oldGeneration.Value().manifestDigest);
-        CHECK(ResolveCurrentCookGeneration(tmp.path).Value().manifestDigest == oldGeneration.Value().manifestDigest);
+        CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).Value().manifestDigest ==
+              oldGeneration.Value().manifestDigest);
         return Result<void>::Success();
     };
     policy.afterCommit = [&adopted, &prepared, &tmp, &files](const AssetCookGeneration &candidate) {
         adopted = true;
         CHECK(prepared);
-        CHECK(ResolveCurrentCookGeneration(tmp.path).Value().manifestDigest == candidate.manifestDigest);
+        CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).Value().manifestDigest == candidate.manifestDigest);
         CHECK(files.native.TryAcquireExclusive(tmp.path / ".cook-writer.lock", "observer").HasError());
     };
     auto replacement = PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, newBytes), newBytes, 4096U, {}, policy);
     REQUIRE(replacement.HasValue());
     CHECK(adopted);
-    auto pinned = ReadCookGenerationContents(oldGeneration.Value(), 4096U);
+    auto pinned = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, oldGeneration.Value(), 4096U);
     REQUIRE(pinned.HasValue());
     CHECK(pinned.Value().artifacts.front() == oldBytes);
-    CHECK(ReadCookGenerationContents(replacement.Value(), 4096U).Value().artifacts.front() == newBytes);
+    CHECK(ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, replacement.Value(), 4096U).Value().artifacts.front() == newBytes);
 }

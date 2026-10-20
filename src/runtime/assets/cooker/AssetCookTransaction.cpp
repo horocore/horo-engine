@@ -1,6 +1,8 @@
 #include "Horo/Assets/AssetCookTransaction.h"
 
 #include "../AssetErrors.h"
+#include "AssetCookStorageInternal.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 
 #include <algorithm>
 
@@ -15,7 +17,7 @@ namespace Horo::Assets {
                 return Result<AssetCookGenerationContents>::Failure(recovered.ErrorValue());
             if (!recovered.Value())
                 return Result<AssetCookGenerationContents>::Success({});
-            return ReadCookGenerationContents(*recovered.Value(), maximumBytes, limits);
+            return ReadCookGenerationContents(*policy.files, *recovered.Value(), maximumBytes, limits);
         }
 
         /** @brief Retries only native lock contention through the host's bounded wait/cancellation policy. */
@@ -37,11 +39,16 @@ namespace Horo::Assets {
         }
 
         /** @brief Validates the replacement envelope independently from acquiring publication authority. */
-        [[nodiscard]] Result<void> ValidateReplacement(const std::filesystem::path &root, const AssetCookTargetId &target,
-                                                       const AssetCookManifestEntry &entry, const std::vector<std::uint8_t> &artifact,
-                                                       const AssetCookLimits &limits) {
-            if (std::error_code pathError; std::filesystem::weakly_canonical(root, pathError) != root || pathError)
+        [[nodiscard]] Result<void> ValidateReplacement(const DurableFileSystem &files, const std::filesystem::path &root,
+                                                       const AssetCookTargetId &target, const AssetCookManifestEntry &entry,
+                                                       const std::vector<std::uint8_t> &artifact, const AssetCookLimits &limits) {
+            if (!CookStorageDetail::IsSafePathWithin(root, root))
                 return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+            auto metadata = CookStorageDetail::InspectStorageEntry(files, root);
+            if (metadata.HasError())
+                return Result<void>::Failure(metadata.ErrorValue());
+            if (metadata.Value() && metadata.Value()->kind != FileEntryKind::Directory)
+                return Result<void>::Failure(MakeError(FileStorageErrors::IoFailed, "Cook publication root is not a directory."));
             auto envelope = DecodeCookedArtifact(artifact, limits);
             if (envelope.HasError())
                 return Result<void>::Failure(envelope.ErrorValue());
@@ -85,7 +92,7 @@ namespace Horo::Assets {
             entry.artifactFile != entry.assetId.ToString() + ".cooked" ||
             entry.artifactHash != ComputeSha256(std::as_bytes(std::span{artifact})))
             return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
-        if (auto validated = ValidateReplacement(root, target, entry, artifact, limits); validated.HasError())
+        if (auto validated = ValidateReplacement(*policy.files, root, target, entry, artifact, limits); validated.HasError())
             return Result<AssetCookGeneration>::Failure(validated.ErrorValue());
         if (auto lock = AcquireWriter(root, policy); lock.HasError())
             return Result<AssetCookGeneration>::Failure(lock.ErrorValue());

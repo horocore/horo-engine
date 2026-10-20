@@ -24,10 +24,12 @@ namespace Horo::Application::Internal {
     class CommittedSceneAssets final {
     public:
         /** @brief Captures the one explicitly selected published generation.
+         * @param files Explicit synchronous read/inspection/inventory authority; no reference is retained.
          * @param selection Exact host-selected root and target. @param registry Current project identity snapshot.
          * @return Owned immutable snapshot or original typed publication/envelope error.
          */
-        [[nodiscard]] static Result<std::unique_ptr<CommittedSceneAssets>> Capture(const SceneCookSelection &selection,
+        [[nodiscard]] static Result<std::unique_ptr<CommittedSceneAssets>> Capture(const DurableFileSystem &files,
+                                                                                   const SceneCookSelection &selection,
                                                                                    const Assets::AssetRegistrySnapshot &registry);
         /** @brief Borrows the real payload provider; this owner must outlive every AssetLoadService request. */
         [[nodiscard]] const Assets::IAssetProvider &Provider() const noexcept;

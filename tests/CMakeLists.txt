@@ -1177,7 +1177,8 @@ if(NOT HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_compile_features(HoroNavigationPortableContentTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationPortableContentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroNavigationPortableContentTests PRIVATE HoroEngine::NavigationContentIntegration
-            HoroEngine::NavigationRecastDetour HoroEngine::Platform HoroEngine::AudioCook HoroEngine::UpdateDownload miniz)
+            HoroEngine::NavigationRecastDetour HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage
+            HoroEngine::AudioCook HoroEngine::UpdateDownload miniz)
     horo_register_catch_test(HoroNavigationPortableContentTests LABELS "unit;navigation;headless;content;package;portable")
 endif()
 
@@ -4249,6 +4250,7 @@ target_link_libraries(HoroAssetCookCacheTests PRIVATE HoroEngine::Assets)
 add_executable(HoroAssetCookOutputTests
         unit/runtime/assets/AssetCookOutputTests.cpp
         unit/runtime/assets/AssetCookPublicationTests.cpp
+        unit/runtime/assets/AssetCookReadAuthorityTests.cpp
 )
 target_compile_features(HoroAssetCookOutputTests PRIVATE cxx_std_20)
 target_link_libraries(HoroAssetCookOutputTests PRIVATE HoroEngine::Assets HoroEngine::Platform)

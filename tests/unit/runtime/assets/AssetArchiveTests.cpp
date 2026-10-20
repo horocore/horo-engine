@@ -234,21 +234,22 @@ TEST_CASE("Release archive consumes only verified pinned cook generation", "[ass
                                             .writerLease = &writer.Value()};
     auto generation = PublishCookGeneration(std::filesystem::weakly_canonical(root), target, entries, payloads, {}, policy);
     REQUIRE(generation.HasValue());
-    auto archive = BuildAssetArchive(Plan(first, second), generation.Value());
+    auto archive = BuildAssetArchive(Horo::NativeDurableFileSystem{}, Plan(first, second), generation.Value());
     REQUIRE(archive.HasValue());
     auto provider = AssetArchiveProvider::Open(archive.Value(), target);
     REQUIRE(provider.HasValue());
 
-    auto undersized = BuildAssetArchive(Plan(first, second), generation.Value(), {.maximumArchiveBytes = 1U});
+    auto undersized =
+        BuildAssetArchive(Horo::NativeDurableFileSystem{}, Plan(first, second), generation.Value(), {.maximumArchiveBytes = 1U});
     CHECK(undersized.HasError());
     auto incorrectDigest = generation.Value();
     incorrectDigest.manifestDigest.bytes[0] ^= 1U;
-    CHECK(BuildAssetArchive(Plan(first, second), incorrectDigest).HasError());
+    CHECK(BuildAssetArchive(Horo::NativeDurableFileSystem{}, Plan(first, second), incorrectDigest).HasError());
 
     const auto artifactPath = generation.Value().generationRoot / entries[0].artifactFile;
     std::ofstream tamper(artifactPath, std::ios::binary | std::ios::trunc);
     REQUIRE(tamper.good());
     tamper.put('x');
     tamper.close();
-    CHECK(BuildAssetArchive(Plan(first, second), generation.Value()).HasError());
+    CHECK(BuildAssetArchive(Horo::NativeDurableFileSystem{}, Plan(first, second), generation.Value()).HasError());
 }

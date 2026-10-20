@@ -243,13 +243,14 @@ namespace Horo::Application::TestSupport {
         }
 
         [[nodiscard]] Assets::AssetCookGeneration Current() const {
-            auto current = Assets::ResolveCurrentCookGeneration(config.targetRoot, config.cookLimits);
+            auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, config.targetRoot, config.cookLimits);
             REQUIRE(current.HasValue());
             return std::move(current).Value();
         }
 
         [[nodiscard]] Assets::AssetCookGenerationContents Contents(const Assets::AssetCookGeneration &generation) const {
-            auto contents = Assets::ReadCookGenerationContents(generation, config.maximumCandidateBytes, config.cookLimits);
+            auto contents = Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation, config.maximumCandidateBytes,
+                                                               config.cookLimits);
             REQUIRE(contents.HasValue());
             return std::move(contents).Value();
         }

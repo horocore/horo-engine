@@ -31,17 +31,18 @@ namespace Horo::Assets::CookStorageDetail {
     /** @brief Rejects nonportable, escaping, oversized and Windows-reserved artifact filenames. */
     [[nodiscard]] bool IsSafeArtifactFile(const std::string_view file) noexcept;
 
-    /** @brief Confirms that absolute, canonical path components keep the candidate below its root. */
-    [[nodiscard]] bool IsSafePathWithin(const std::filesystem::path &base, const std::filesystem::path &candidate) noexcept;
+    /** @brief Checks absolute lexical descendants without querying a native filesystem. */
+    [[nodiscard]] bool IsSafePathWithin(const std::filesystem::path &base, const std::filesystem::path &candidate);
 
-    /** @brief Rejects links and lexical escapes in every existing path component, including ancestors. */
-    [[nodiscard]] bool HasPlainPath(const std::filesystem::path &path);
+    /** @brief Inspects only through the supplied authority after lexical admission; redirect/special entries fail closed. */
+    Result<std::optional<FileEntryInfo>> InspectStorageEntry(const DurableFileSystem &files, const std::filesystem::path &path);
 
-    /** @brief Confirms that a file is regular, single-link and below a plain path. */
-    [[nodiscard]] bool IsPlainFile(const std::filesystem::path &path);
+    /** @brief Reads one regular single-link file through the same supplied authority with a finite byte bound. */
+    Result<std::vector<std::uint8_t>> ReadFile(const DurableFileSystem &files, const std::filesystem::path &path, std::size_t maxBytes);
 
-    /** @brief Reads one plain file within the caller's encoded-byte bound. */
-    Result<std::vector<std::uint8_t>> ReadFile(const std::filesystem::path &path, std::size_t maxBytes);
+    /** @brief Requires complete bounded immediate children with single portable native filename components. */
+    Result<std::vector<FileDirectoryEntry>> StorageInventory(const DurableFileSystem &files, const std::filesystem::path &path,
+                                                             std::size_t maximumEntries);
 
     /** @brief Replaces prepared content and uses a native receipt to distinguish a committed selector with unknown durability. */
     Result<void> ReplaceDurably(DurableFileSystem *files, const std::filesystem::path &prepared, const std::filesystem::path &destination,

@@ -271,7 +271,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 envelopes.push_back(std::move(loaded).Value());
             }
             REQUIRE(Assets::OutputTestSupport::PublishFixture(committedRoot.path, target, entries, envelopes).HasValue());
-            auto captured = CommittedSceneAssets::Capture({committedRoot.path, target}, registry.Snapshot());
+            auto captured =
+                CommittedSceneAssets::Capture(Horo::NativeDurableFileSystem{}, {committedRoot.path, target}, registry.Snapshot());
             REQUIRE(captured.HasValue());
             committed.capture = std::move(captured).Value();
             for (std::size_t index = 0; index < entries.size(); ++index) {

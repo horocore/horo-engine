@@ -2,11 +2,13 @@
  * @file
  * @brief Enforces shared plain-path and portable artifact-filename safety for cook storage.
  */
+#include "../AssetErrors.h"
 #include "AssetCookStorageInternal.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <utility>
 
 namespace Horo::Assets::CookStorageDetail {
     /** @copydoc IsSafeArtifactFile */
@@ -40,47 +42,55 @@ namespace Horo::Assets::CookStorageDetail {
         return true;
     }
 
+    namespace {
+        /** @brief Resolves no native paths; the filesystem authority owns every parent and object-policy check. */
+        bool AdmittedStoragePath(const std::filesystem::path &path) {
+            if (path.empty() || !path.is_absolute() || (path.has_relative_path() && path.filename().empty()) ||
+                path.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
+                return false;
+            return std::ranges::none_of(path, [](const auto &component) {
+                return component == "." || component == "..";
+            });
+        }
+    }  // namespace
+
     /** @copydoc IsSafePathWithin */
-    [[nodiscard]] bool IsSafePathWithin(const std::filesystem::path &base, const std::filesystem::path &candidate) noexcept {
-        if (base.empty() || candidate.empty() || !base.is_absolute() || !candidate.is_absolute())
+    bool IsSafePathWithin(const std::filesystem::path &base, const std::filesystem::path &candidate) {
+        if (!AdmittedStoragePath(base) || !AdmittedStoragePath(candidate))
             return false;
-        std::error_code error;
-        const auto canonicalBase = std::filesystem::weakly_canonical(base, error);
-        if (error)
-            return false;
-        const auto canonicalCandidate = std::filesystem::weakly_canonical(candidate, error);
-        if (error)
-            return false;
-        const auto relative = canonicalCandidate.lexically_relative(canonicalBase);
+        const auto relative = candidate.lexically_relative(base);
         return !relative.empty() && !relative.is_absolute() && *relative.begin() != "..";
     }
 
-    /** @copydoc HasPlainPath */
-    [[nodiscard]] bool HasPlainPath(const std::filesystem::path &path) {
-        if (path.empty() || !path.is_absolute())
-            return false;
-        std::filesystem::path componentPath;
-        for (const auto &component : path) {
-            if (component == "." || component == "..")
-                return false;
-            componentPath /= component;
-            std::error_code error;
-            const auto status = std::filesystem::symlink_status(componentPath, error);
-            if (error && error != std::errc::no_such_file_or_directory)
-                return false;
-            if (std::filesystem::is_symlink(status))
-                return false;
-        }
-        return true;
+    /** @copydoc InspectStorageEntry */
+    Result<std::optional<FileEntryInfo>> InspectStorageEntry(const DurableFileSystem &files, const std::filesystem::path &path) {
+        if (!AdmittedStoragePath(path))
+            return Result<std::optional<FileEntryInfo>>::Failure(MakeError(CookErrors::MalformedArtifact));
+        auto entry = files.InspectEntry(path);
+        if (entry.HasError())
+            return entry;
+        if (entry.Value() && entry.Value()->kind != FileEntryKind::RegularFile && entry.Value()->kind != FileEntryKind::Directory)
+            return Result<std::optional<FileEntryInfo>>::Failure(MakeError(CookErrors::MalformedArtifact));
+        return entry;
     }
 
-    /** @copydoc IsPlainFile */
-    [[nodiscard]] bool IsPlainFile(const std::filesystem::path &path) {
-        if (!HasPlainPath(path))
-            return false;
-        std::error_code error;
-        if (const auto status = std::filesystem::symlink_status(path, error); error || !std::filesystem::is_regular_file(status))
-            return false;
-        return std::filesystem::hard_link_count(path, error) == 1U && !error;
+    /** @copydoc StorageInventory */
+    Result<std::vector<FileDirectoryEntry>> StorageInventory(const DurableFileSystem &files, const std::filesystem::path &path,
+                                                             const std::size_t maximumEntries) {
+        using Entries = std::vector<FileDirectoryEntry>;
+        auto entries = files.ListDirectory(path, maximumEntries);
+        if (entries.HasError())
+            return entries;
+        auto owned = std::move(entries).Value();
+        if (owned.size() > maximumEntries)
+            return Result<Entries>::Failure(MakeError(CookErrors::TooLarge));
+        for (const auto &entry : owned) {
+            if (entry.name.empty() || entry.name.has_parent_path() || entry.name.is_absolute() || !IsSafeArtifactFile(entry.name.string()))
+                return Result<Entries>::Failure(MakeError(CookErrors::MalformedArtifact));
+        }
+        std::ranges::sort(owned, {}, &FileDirectoryEntry::name);
+        if (std::ranges::adjacent_find(owned, {}, &FileDirectoryEntry::name) != owned.end())
+            return Result<Entries>::Failure(MakeError(CookErrors::MalformedArtifact));
+        return Result<Entries>::Success(std::move(owned));
     }
 }  // namespace Horo::Assets::CookStorageDetail

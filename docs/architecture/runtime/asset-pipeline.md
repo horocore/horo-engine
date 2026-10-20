@@ -1877,3 +1877,27 @@ publication authority. This source-only layer creates no cache/index/output,
 selects no provider, and performs no migration; existing editor contracts and
 persisted formats are unchanged. Geometry and bake-service adoption are separate
 consumers added in dependent changes.
+
+### Explicit generation read authority migration
+
+Generation resolution and pinned generation reads now require a borrowed
+`const DurableFileSystem&` for byte reads, no-follow inspection and bounded
+inventory. Archive construction from a generation, navigation release preparation
+and committed Scene snapshot capture forward the same explicit authority. The
+reader retains no filesystem reference after its synchronous return. Host
+composition selects the backend; a rejected capability never falls back to native
+filesystem access. Native-backed tests compose their readers explicitly.
+
+Cook publication, bootstrap and recovery use the injected writer for their reads
+and queries too. Domain path checks are lexical only; the authority owns native
+resolution. The classic native authority preserves no-follow ancestor checks
+inside its existing protected-parent contract. Provider failures and causes stay
+intact through manifest, artifact, selector and inventory failures; malformed
+schemas, mismatched hashes and invalid portable names remain domain errors.
+The persisted layout, key encoding, sole-selector ordering, bounded staging
+cleanup and native commit receipt semantics remain unchanged.
+
+This deliberately changes C++ call signatures and requires callers to pass their
+already-owned authority. All repository callers are updated, including application
+composition, release/archive helpers and tests. Root-bound native publication
+composition is still required before HORO-1253 containment is complete.

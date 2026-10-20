@@ -59,7 +59,7 @@ namespace {
     /** @brief Reads the actual published scene envelope and reloads only its source-free runtime bytes. */
     std::vector<std::uint8_t> RequirePublishedReference(const HostFixture &fixture, const AssetCookGeneration &generation,
                                                         const std::size_t instances) {
-        const auto inventory = ReadCookGenerationContents(generation, 1024U * 1024U);
+        const auto inventory = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation, 1024U * 1024U);
         REQUIRE(inventory.HasValue());
         REQUIRE(inventory.Value().artifacts.size() == 2);
         std::vector<std::uint8_t> scene;

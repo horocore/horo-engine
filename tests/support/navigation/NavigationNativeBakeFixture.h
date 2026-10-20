@@ -48,10 +48,11 @@ namespace Horo::Navigation::AssetTestSupport {
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
         }
         REQUIRE(bake->Published());
-        const auto current = Assets::ResolveCurrentCookGeneration(config.targetRoot);
+        const auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, config.targetRoot);
         REQUIRE(current.HasValue());
         REQUIRE(current.Value().manifestDigest == bake->Published()->generation.manifestDigest);
-        const auto contents = Assets::ReadCookGenerationContents(current.Value(), config.maximumCandidateBytes);
+        const auto contents =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, current.Value(), config.maximumCandidateBytes);
         REQUIRE(contents.HasValue());
         REQUIRE(contents.Value().artifacts.size() == 1);
         return contents.Value().artifacts.front();

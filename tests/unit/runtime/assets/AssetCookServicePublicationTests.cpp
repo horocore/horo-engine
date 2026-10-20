@@ -45,11 +45,12 @@ TEST_CASE("AssetCookService empty registry publishes empty generation", "[native
     REQUIRE((report.totalAssets == 0));
     REQUIRE((report.cookedAssets == 0));
     REQUIRE((report.cacheHits == 0));
-    const auto current = ResolveCurrentCookGeneration(request.cookedRoot, request.limits);
+    const auto current = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, request.cookedRoot, request.limits);
     REQUIRE(current.HasValue());
     CHECK(current.Value().manifestDigest == report.generation.manifestDigest);
     CHECK(current.Value().artifactCount == 0);
-    const auto contents = ReadCookGenerationContents(current.Value(), request.limits.maximumArtifactBytes, request.limits);
+    const auto contents =
+        ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, current.Value(), request.limits.maximumArtifactBytes, request.limits);
     REQUIRE(contents.HasValue());
     CHECK(contents.Value().entries.empty());
     CHECK(contents.Value().artifacts.empty());
@@ -161,7 +162,7 @@ TEST_CASE("AssetCookService honors the same native writer lock as partial genera
         CHECK_FALSE(std::filesystem::exists(fixture.cooked.path / "current.json"));
     }
     REQUIRE(fixture.service.Cook(fixture.request, {}).HasValue());
-    REQUIRE(ResolveCurrentCookGeneration(fixture.cooked.path).HasValue());
+    REQUIRE(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path).HasValue());
 }
 
 TEST_CASE("AssetCookService publication cancellation preserves true commit outcome and durability diagnostic", "[native]") {
@@ -185,11 +186,11 @@ TEST_CASE("AssetCookService publication cancellation preserves true commit outco
             REQUIRE(result.HasValue());
             REQUIRE(result.Value().generation.durabilityError.has_value());
             CHECK(result.Value().generation.durabilityError->code.Value() == "test.cook.publication_sync_failed");
-            REQUIRE(ResolveCurrentCookGeneration(fixture.cooked.path).HasValue());
+            REQUIRE(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path).HasValue());
         } else {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().code.Value() == "asset.cook.cancelled");
-            CHECK(ResolveCurrentCookGeneration(fixture.cooked.path).HasError());
+            CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path).HasError());
         }
     }
 }
@@ -222,7 +223,7 @@ TEST_CASE("AssetCookService contains optional history exceptions before and afte
             const auto snapshot = operations.SnapshotIfChanged(0);
             REQUIRE(snapshot.has_value());
             CHECK(snapshot->operations.front().state == (committed ? OperationState::Succeeded : OperationState::Cancelled));
-            CHECK(ResolveCurrentCookGeneration(fixture.cooked.path).HasValue() == committed);
+            CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path).HasValue() == committed);
         }
     }
 }

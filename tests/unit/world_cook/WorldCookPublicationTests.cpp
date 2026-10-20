@@ -149,7 +149,8 @@ namespace Horo::WorldCook {
         /** @brief Reads exact committed owner artifacts rather than reconstructing expected bytes in the assertion. */
         A::AssetCookGenerationContents Contents(const PublicationReport &report) {
             REQUIRE(report.publication);
-            auto contents = A::ReadCookGenerationContents(*report.publication, Limits().maximumTotalArtifactBytes);
+            auto contents =
+                A::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, *report.publication, Limits().maximumTotalArtifactBytes);
             REQUIRE(contents.HasValue());
             return std::move(contents).Value();
         }
@@ -371,7 +372,7 @@ namespace Horo::WorldCook {
         CHECK(result.Value().publication->durabilityError.has_value());
         CHECK(fixture.cache.Revision() == 2);
         CHECK(result.Value().scene->cells[0].payload->Definition().Entities()[0].localTransform.translation.x == 7);
-        auto current = A::ResolveCurrentCookGeneration(fixture.directory.path);
+        auto current = A::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.directory.path);
         REQUIRE(current.HasValue());
         CHECK(current.Value().manifestDigest == result.Value().publication->manifestDigest);
     }
@@ -427,7 +428,8 @@ namespace Horo::WorldCook {
         CHECK_FALSE(validation.Value().findings.front().cause.code.Value().empty());
         CHECK(validation.Value().findings.front().diagnostic.result == BuildOutputResult::Failed);
         CHECK(fixture.cache.Revision() == 1);
-        CHECK(A::ResolveCurrentCookGeneration(fixture.directory.path).Value().manifestDigest == first.Value().publication->manifestDigest);
+        CHECK(A::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.directory.path).Value().manifestDigest ==
+              first.Value().publication->manifestDigest);
     }
 
     TEST_CASE("World source shutdown after final reservation cannot roll back committed publication", "[world_cook][native]") {

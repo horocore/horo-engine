@@ -45,12 +45,14 @@ namespace Horo::Assets {
 
     /**
      * @brief Builds an archive from a pinned, fully verified cook generation.
+     * @param files Host-owned read/inspection/inventory authority borrowed for the synchronous build.
      * @param plan Exact chunk membership for the release.
      * @param generation Frozen generation identity and manifest digest.
      * @param limits Finite archive and artifact bounds.
      * @return Archive bytes or a typed failure before any partial output escapes.
      */
-    [[nodiscard]] Result<std::vector<std::uint8_t>> BuildAssetArchive(const AssetChunkPlan &plan, const AssetCookGeneration &generation,
+    [[nodiscard]] Result<std::vector<std::uint8_t>> BuildAssetArchive(const DurableFileSystem &files, const AssetChunkPlan &plan,
+                                                                      const AssetCookGeneration &generation,
                                                                       const AssetArchiveLimits &limits = {});
 
     /** @brief Owned identity and type validated from one visible archived cooked envelope. */

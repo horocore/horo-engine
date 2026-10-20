@@ -1,4 +1,7 @@
+#include "Horo/Foundation/ImmutableFileStorage.h"
 #include "navigation/NavigationBakeServiceFixture.h"
+
+#include <atomic>
 
 namespace Horo::Application {
     namespace {
@@ -10,6 +13,26 @@ namespace Horo::Application {
         Result<OperationId> Selected(const BakeHarness &harness, std::vector<SurfaceId> surfaces) {
             return harness.service->Submit(Request(harness, NavigationBakeExecutionMode::BuildAndPublish, std::move(surfaces)));
         }
+
+        /** @brief The worker observes only the injected selector result; the test reads its counter after terminal completion. */
+        class SelectorObservationFiles final : public Horo::TestSupport::NativePublicationFiles {
+        public:
+            explicit SelectorObservationFiles(const bool reject) : reject_(reject) {}
+
+            const Error failure{WrapError(FileStorageErrors::IoFailed, MakeError(FileStorageErrors::UnsafeObject))};
+            mutable std::atomic<std::size_t> observations{};
+
+            Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const override {
+                if (path.filename() != "current.json")
+                    return native.InspectEntry(path);
+                ++observations;
+                return reject_ ? Result<std::optional<FileEntryInfo>>::Failure(failure)
+                               : Result<std::optional<FileEntryInfo>>::Success(std::nullopt);
+            }
+
+        private:
+            const bool reject_;
+        };
     }  // namespace
 
     TEST_CASE("Selected-surface admission rejects ambiguous empty and absent surface selections", "[navigation][cook][selection]") {
@@ -71,7 +94,7 @@ namespace Horo::Application {
         for (std::size_t index = 4; index < 8; ++index)
             CHECK(updated->tiles.tiles[index] == original->tiles.tiles[index]);
         const auto builds = harness.builder->builds.load();
-        const auto previous = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto previous = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(previous.HasValue());
         harness.fixture.ExcludeBorder();
         harness.fixture.modifiers.front().surface = Id<SurfaceId>(2);
@@ -83,7 +106,7 @@ namespace Horo::Application {
         CHECK(rejected.error->code.Value() == NavigationErrors::BakeSelectionIncomplete.code.Value());
         CHECK(harness.builder->builds.load() == builds);
         CHECK(harness.service->Published() == updated);
-        const auto retained = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto retained = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(retained.HasValue());
         CHECK(retained.Value().manifestDigest == previous.Value().manifestDigest);
     }
@@ -101,5 +124,41 @@ namespace Horo::Application {
         REQUIRE(Terminal(*harness.service, harness.operations, first.Value()).state == OperationState::Succeeded);
         REQUIRE(harness.service->Published());
         CHECK(harness.service->Published()->tiles.tiles.size() == 8);
+    }
+
+    TEST_CASE("Selected validation preserves injected selector failure even when the ambient selector is absent",
+              "[navigation][cook][selection][authority]") {
+        auto files = std::make_shared<SelectorObservationFiles>(true);
+        BakeHarness harness{files};
+        REQUIRE_FALSE(std::filesystem::exists(harness.config.targetRoot / "current.json"));
+        const auto submitted =
+            harness.service->Submit(Request(harness, NavigationBakeExecutionMode::ValidateOnly, std::vector{Id<SurfaceId>(1)}));
+        REQUIRE(submitted.HasValue());
+        const auto result = Terminal(*harness.service, harness.operations, submitted.Value());
+        REQUIRE(result.state == OperationState::Failed);
+        REQUIRE(result.error);
+        CHECK(result.error->code.Value() == files->failure.code.Value());
+        REQUIRE(result.error->cause.Get());
+        CHECK(result.error->cause.Get()->code.Value() == FileStorageErrors::UnsafeObject.code.Value());
+        CHECK(files->observations.load() > 0);
+        CHECK(harness.builder->builds.load() == 0);
+        CHECK_FALSE(std::filesystem::exists(harness.config.targetRoot));
+    }
+
+    TEST_CASE("Selected validation uses injected selector absence even when an ambient selector exists",
+              "[navigation][cook][selection][authority]") {
+        auto files = std::make_shared<SelectorObservationFiles>(false);
+        BakeHarness harness{files};
+        std::filesystem::create_directories(harness.config.targetRoot);
+        const auto selector = harness.config.targetRoot / "current.json";
+        std::ofstream(selector) << "ambient bytes outside the injected selector view";
+        const auto submitted =
+            harness.service->Submit(Request(harness, NavigationBakeExecutionMode::ValidateOnly, std::vector{Id<SurfaceId>(1)}));
+        REQUIRE(submitted.HasValue());
+        CHECK(Terminal(*harness.service, harness.operations, submitted.Value()).state == OperationState::Succeeded);
+        CHECK(files->observations.load() > 0);
+        CHECK(harness.builder->builds.load() == 0);
+        CHECK_FALSE(harness.service->Published());
+        CHECK(std::filesystem::file_size(selector) == std::string_view{"ambient bytes outside the injected selector view"}.size());
     }
 }  // namespace Horo::Application

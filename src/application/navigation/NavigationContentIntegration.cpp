@@ -133,7 +133,8 @@ namespace Horo::Application {
     }
 
     /** @copydoc PrepareNavigationReleaseContent */
-    Result<PreparedNavigationReleaseContent> PrepareNavigationReleaseContent(const Assets::AssetCookGeneration &generation,
+    Result<PreparedNavigationReleaseContent> PrepareNavigationReleaseContent(const DurableFileSystem &files,
+                                                                             const Assets::AssetCookGeneration &generation,
                                                                              const Assets::AssetChunkPlan &plan,
                                                                              const Release::DistributionProductKind product,
                                                                              const Assets::AssetArchiveLimits &limits) {
@@ -150,7 +151,7 @@ namespace Horo::Application {
             // Cook-generation admission has its own legal ceilings; archive policy can tighten but cannot raise them.
             cookLimits.maximumArtifactBytes = std::min(cookLimits.maximumArtifactBytes, limits.maximumAssetBytes);
             cookLimits.maximumAssets = std::min(cookLimits.maximumAssets, limits.maximumAssets);
-            auto read = Assets::ReadCookGenerationContents(generation, limits.maximumArchiveBytes, cookLimits);
+            auto read = Assets::ReadCookGenerationContents(files, generation, limits.maximumArchiveBytes, cookLimits);
             if (read.HasError())
                 return Result<PreparedNavigationReleaseContent>::Failure(read.ErrorValue());
             auto contents = std::move(read).Value();

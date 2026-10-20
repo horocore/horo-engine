@@ -19,7 +19,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             Network::NetworkModeFactories factories;
 
             HeadlessFixture() {
-                auto assets = Internal::CommittedSceneAssets::Capture({project.project.cooked.path, project.project.request.assets.target},
+                auto assets = Internal::CommittedSceneAssets::Capture(Horo::NativeDurableFileSystem{},
+                                                                      {project.project.cooked.path, project.project.request.assets.target},
                                                                       project.project.registry.Snapshot());
                 REQUIRE(assets.HasValue());
                 committed = std::move(assets).Value();

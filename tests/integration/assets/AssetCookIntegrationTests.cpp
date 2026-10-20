@@ -114,7 +114,7 @@ TEST_CASE("End-to-end headless cook pipeline: source to provider", "[native][int
     REQUIRE((std::filesystem::exists(cookedDir.path / "current.json")));
 
     // 4. Resolve the generation
-    auto genResult = ResolveCurrentCookGeneration(cookedDir.path);
+    auto genResult = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, cookedDir.path);
     REQUIRE((genResult.HasValue()));
     auto &gen = genResult.Value();
     REQUIRE((gen.target == Target("headless-null")));

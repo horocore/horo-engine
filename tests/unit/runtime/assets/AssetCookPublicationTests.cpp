@@ -32,7 +32,7 @@ TEST_CASE("Filesystem failure before pointer commit preserves the prior generati
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == "test.publication_io");
         CHECK(ReadText(tmp.path / "current.json") == pointer);
-        CHECK(ResolveCurrentCookGeneration(tmp.path).HasValue());
+        CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).HasValue());
         files.fault = None;
         auto lock = files.native.TryAcquireExclusive(tmp.path / ".cook-writer.lock", "restart");
         REQUIRE(lock.HasValue());
@@ -62,7 +62,8 @@ TEST_CASE("Pointer durability failure and adapter exception retain true committe
         REQUIRE(result.HasValue());
         CHECK(result.Value().durabilityError.has_value());
         CHECK(adopted);
-        CHECK(ResolveCurrentCookGeneration(tmp.path).Value().manifestDigest == result.Value().manifestDigest);
+        CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).Value().manifestDigest ==
+              result.Value().manifestDigest);
     }
 }
 
@@ -91,7 +92,7 @@ TEST_CASE("Standard and foreign filesystem exceptions before commit preserve the
         CHECK(result.ErrorValue().code.Value() == "asset.cook.malformed_artifact");
         CHECK_FALSE(adopted);
         CHECK(ReadText(tmp.path / "current.json") == pointer);
-        CHECK(ResolveCurrentCookGeneration(tmp.path).HasValue());
+        CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).HasValue());
     }
 }
 
@@ -167,7 +168,7 @@ TEST_CASE("Writer contention rereads the then-current complete base and checkpoi
     REQUIRE(replacement.HasValue());
     CHECK(waits == 1U);
     CHECK(checked);
-    auto inventory = ReadCookGenerationContents(replacement.Value(), 4096U);
+    auto inventory = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, replacement.Value(), 4096U);
     REQUIRE(inventory.HasValue());
     REQUIRE(inventory.Value().entries.size() == 2U);
     CHECK(inventory.Value().artifacts.front() == firstBytes);
@@ -205,7 +206,7 @@ TEST_CASE("Restart cleans bounded owned staging without selecting inactive gener
         RecoverCookPublication(tmp.path, Target("headless-null"), 4096U, {}, {.files = &files, .writerLease = &lease.Value()}).HasError());
     CHECK(std::filesystem::is_empty(tmp.path / ".cook-staging"));
     CHECK(std::filesystem::exists(published.Value().generationRoot));
-    CHECK(ReadCookGenerationContents(published.Value(), 4096U).HasValue());
+    CHECK(ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, published.Value(), 4096U).HasValue());
 }
 
 TEST_CASE("Recovery prevalidates all owned files and preserves unexpected paths and outside links", "[native]") {
@@ -305,8 +306,8 @@ TEST_CASE("First promotion cancellation retains a durable retryable unpublished 
     const auto cancelled =
         PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, oldBytes), oldBytes, 4096U, {}, policy);
     REQUIRE(cancelled.HasError());
-    REQUIRE(ResolveCurrentCookGeneration(tmp.path).HasError());
-    CHECK(ResolveCurrentCookGeneration(tmp.path).ErrorValue().code.Value() == "asset.cook.not_published");
+    REQUIRE(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).HasError());
+    CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).ErrorValue().code.Value() == "asset.cook.not_published");
     const auto orphan = std::filesystem::directory_iterator(tmp.path / "generations")->path();
     {
         auto lease = files.native.TryAcquireExclusive(tmp.path / ".cook-writer.lock", "restart");
@@ -322,7 +323,10 @@ TEST_CASE("First promotion cancellation retains a durable retryable unpublished 
                                                       Policy(files, "10000000-0000-0000-0000-000000000002"));
     REQUIRE(replacement.HasValue());
     CHECK(std::filesystem::exists(orphan));
-    CHECK(ReadCookGenerationContents(ResolveCurrentCookGeneration(tmp.path).Value(), 4096U).Value().artifacts.front() == newBytes);
+    CHECK(ReadCookGenerationContents(Horo::NativeDurableFileSystem{},
+                                     ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).Value(), 4096U)
+              .Value()
+              .artifacts.front() == newBytes);
 }
 
 TEST_CASE("Unconfirmed unpublished baseline durability aborts before first immutable promotion and safely retries", "[native]") {
@@ -336,7 +340,7 @@ TEST_CASE("Unconfirmed unpublished baseline durability aborts before first immut
     REQUIRE(result.HasError());
     CHECK(result.ErrorValue().code.Value() == "test.publication_io");
     CHECK_FALSE(std::filesystem::exists(tmp.path / "generations"));
-    CHECK(ResolveCurrentCookGeneration(tmp.path).ErrorValue().code.Value() == "asset.cook.not_published");
+    CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, tmp.path).ErrorValue().code.Value() == "asset.cook.not_published");
     files.fault = PublicationFault::None;
     REQUIRE(PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, bytes), bytes, 4096U, {},
                                            Policy(files, "10000000-0000-0000-0000-000000000002"))
@@ -375,7 +379,7 @@ TEST_CASE("Serialized publication and restart recovery support spaces and non-AS
     auto published = PublishCookArtifactReplacement(root, Target("headless-null"), Entry(id, bytes), bytes, 4096U, {},
                                                     Policy(files, "10000000-0000-0000-0000-000000000001"));
     REQUIRE(published.HasValue());
-    CHECK(ResolveCurrentCookGeneration(root).Value().manifestDigest == published.Value().manifestDigest);
+    CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, root).Value().manifestDigest == published.Value().manifestDigest);
     auto lease = files.native.TryAcquireExclusive(root / ".cook-writer.lock", "restart");
     REQUIRE(lease.HasValue());
     CHECK(RecoverCookPublication(root, Target("headless-null"), 4096U, {}, {.files = &files, .writerLease = &lease.Value()}).HasValue());
@@ -431,9 +435,9 @@ namespace {
 
     /** @brief Verifies the complete authoritative artifact after a failed publication or retry. */
     void RequirePublishedBytes(const std::filesystem::path &root, const std::vector<std::uint8_t> &expected) {
-        const auto generation = ResolveCurrentCookGeneration(root);
+        const auto generation = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, root);
         REQUIRE(generation.HasValue());
-        const auto contents = ReadCookGenerationContents(generation.Value(), 4096U);
+        const auto contents = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation.Value(), 4096U);
         REQUIRE(contents.HasValue());
         REQUIRE(contents.Value().artifacts.size() == 1);
         CHECK(contents.Value().artifacts.front() == expected);

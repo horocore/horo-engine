@@ -148,6 +148,30 @@ namespace Horo {
                                                     : Result<void>::Success();
         }
 
+        /** @brief Preserves no-follow ancestor admission inside the native authority, under its protected-parent precondition. */
+        Result<void> CheckNativeParents(const std::filesystem::path &path, const CancellationToken &cancellation = {}) {
+            auto cursor = path.root_path();
+            for (const auto &component : path.parent_path().relative_path()) {
+                if (auto stop = CheckReadStop(cancellation); stop.HasError())
+                    return stop;
+                cursor /= component;
+#if defined(_WIN32)
+                if (const auto attributes = GetFileAttributesW(cursor.c_str());
+                    attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U)
+                    return Result<void>::Failure(MakeError(FileStorageErrors::UnsafeObject));
+#endif
+                std::error_code error;
+                const auto status = std::filesystem::symlink_status(cursor, error);
+                if (status.type() == std::filesystem::file_type::not_found && (!error || error == std::errc::no_such_file_or_directory))
+                    return Result<void>::Success();
+                if (error)
+                    return Result<void>::Failure(MakeError(FileStorageErrors::IoFailed));
+                if (!std::filesystem::is_directory(status) || std::filesystem::is_symlink(status))
+                    return Result<void>::Failure(MakeError(FileStorageErrors::UnsafeObject));
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Completes a finite transfer through one borrowed cursor; no buffer or token escapes on failure. */
         Result<Bytes> TransferBytes(const ReadHandle &handle, const std::size_t length, const CancellationToken &cancellation) {
             Bytes bytes(length);
@@ -206,6 +230,8 @@ namespace Horo {
             return Result<Bytes>::Failure(MakeError(FileStorageErrors::Capacity));
         if (auto stop = CheckReadStop(cancellation); stop.HasError())
             return Result<Bytes>::Failure(stop.ErrorValue());
+        if (auto parents = CheckNativeParents(path, cancellation); parents.HasError())
+            return Result<Bytes>::Failure(parents.ErrorValue());
         const ReadHandle handle{path};
         const auto before = handle.Snapshot();
         if (before.HasError())
@@ -233,6 +259,8 @@ namespace Horo {
     Result<std::optional<FileEntryInfo>> NativeDurableFileSystem::InspectEntry(const std::filesystem::path &path) const {
         if (!AdmittedPath(path))
             return Result<std::optional<FileEntryInfo>>::Failure(MakeError(FileStorageErrors::InvalidPath));
+        if (auto parents = CheckNativeParents(path); parents.HasError())
+            return Result<std::optional<FileEntryInfo>>::Failure(parents.ErrorValue());
 #if defined(_WIN32)
         if (const auto attributes = GetFileAttributesW(path.c_str());
             attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0U)

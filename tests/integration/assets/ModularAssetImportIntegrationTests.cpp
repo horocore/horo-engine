@@ -215,7 +215,7 @@ TEST_CASE("Full pipeline: create project, import, cook, load", "[native][integra
             REQUIRE((cookResult.Value().totalAssets >= 1));
 
             // Resolve generation
-            auto genResult = ResolveCurrentCookGeneration(cookedDir.path);
+            auto genResult = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, cookedDir.path);
             REQUIRE((genResult.HasValue()));
 
             // Load through FilesystemAssetProvider
