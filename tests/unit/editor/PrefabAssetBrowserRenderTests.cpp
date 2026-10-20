@@ -60,6 +60,39 @@ namespace Horo::Editor {
             REQUIRE(image.HasValue());
             return std::move(image).Value();
         }
+
+        /** @brief Executes and checks one real card frame independently from the resource lifetime scenario. */
+        void DrawCardFrame(Tests::EditorGuiContextFixture &fixture, AssetBrowserCardRenderer &cards, const ContentBrowserEntry &entry,
+                           const float width, const int state) {
+            fixture.imgui.BeginFrame();
+            ImGui::SetNextWindowSize({width + 30, 250});
+            ImGui::Begin("Prefab thumbnail consumer", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            const ImVec2 origin = ImGui::GetCursorScreenPos();
+            cards.Draw({.drawList = ImGui::GetWindowDrawList(),
+                        .font = ImGui::GetFont(),
+                        .iconFont = ImGui::GetFont(),
+                        .fontSize = Theme::TextPx::Label(),
+                        .cardMin = origin,
+                        .cardWidth = width,
+                        .cardHeight = 180,
+                        .previewWidth = width,
+                        .previewHeight = 128,
+                        .secondaryText = "Prefab — Geçiş gerekli",
+                        .listView = state == 4,
+                        .hovered = state == 1,
+                        .selected = state == 2,
+                        .dimmed = state == 3},
+                       entry);
+            ImGui::Dummy({width, 180});
+            ImGui::End();
+            fixture.imgui.EndFrame();
+            const auto *draw = ImGui::GetDrawData();
+            REQUIRE(draw != nullptr);
+            REQUIRE(draw->TotalVtxCount > 0);
+            for (int list = 0; list < draw->CmdListsCount; ++list)
+                for (const auto &vertex : draw->CmdLists[list]->VtxBuffer)
+                    CHECK((std::isfinite(vertex.pos.x) && std::isfinite(vertex.pos.y)));
+        }
     }  // namespace
 
     TEST_CASE("Prefab card consumer uploads canonical thumbnails once and retires textures across presentation states",
@@ -79,34 +112,7 @@ namespace Horo::Editor {
             Theme::SetThemePreset(preset);
             for (const float width : {128.0F, 280.0F})
                 for (int state = 0; state < 5; ++state) {
-                    fixture.imgui.BeginFrame();
-                    ImGui::SetNextWindowSize({width + 30, 250});
-                    ImGui::Begin("Prefab thumbnail consumer", nullptr, ImGuiWindowFlags_NoSavedSettings);
-                    const ImVec2 origin = ImGui::GetCursorScreenPos();
-                    cards.Draw({.drawList = ImGui::GetWindowDrawList(),
-                                .font = ImGui::GetFont(),
-                                .iconFont = ImGui::GetFont(),
-                                .fontSize = Theme::TextPx::Label(),
-                                .cardMin = origin,
-                                .cardWidth = width,
-                                .cardHeight = 180,
-                                .previewWidth = width,
-                                .previewHeight = 128,
-                                .secondaryText = "Prefab — Geçiş gerekli",
-                                .listView = state == 4,
-                                .hovered = state == 1,
-                                .selected = state == 2,
-                                .dimmed = state == 3},
-                               entry);
-                    ImGui::Dummy({width, 180});
-                    ImGui::End();
-                    fixture.imgui.EndFrame();
-                    const auto *draw = ImGui::GetDrawData();
-                    REQUIRE(draw != nullptr);
-                    REQUIRE(draw->TotalVtxCount > 0);
-                    for (int list = 0; list < draw->CmdListsCount; ++list)
-                        for (const auto &vertex : draw->CmdLists[list]->VtxBuffer)
-                            CHECK((std::isfinite(vertex.pos.x) && std::isfinite(vertex.pos.y)));
+                    DrawCardFrame(fixture, cards, entry, width, state);
                 }
         }
         CHECK(bridge.uploads == 1);

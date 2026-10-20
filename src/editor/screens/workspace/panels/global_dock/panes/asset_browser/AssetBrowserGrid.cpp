@@ -165,6 +165,15 @@ namespace Horo::Editor {
             return entry.assetType;
         }
 
+        /** @brief Presents preserved thumbnail/source diagnostics without changing asset or document authority. */
+        void ShowPreviewDiagnostic(const ContentBrowserEntry &entry, const EditorGuiContext &context) {
+            if (!entry.previewError)
+                return;
+            const auto diagnostic = std::format("{}\n{}\n{}", EntrySecondaryText(entry, context.localization),
+                                                entry.previewError->code.Value(), entry.previewError->message);
+            Ui::ShowTooltip(diagnostic.c_str(), &context.theme.fonts);
+        }
+
         [[nodiscard]] const char *EmptyGridMessageKey(const ContentBrowserDirectory &directory) noexcept {
             if (directory.loadState == ContentBrowserLoadState::Loading)
                 return "workspace.content_browser.loading";
@@ -267,11 +276,8 @@ namespace Horo::Editor {
                     };
                 }
             }
-            if (hovered && entry.previewError) {
-                const auto diagnostic = std::format("{}\n{}\n{}", EntrySecondaryText(entry, context.gui.localization),
-                                                    entry.previewError->code.Value(), entry.previewError->message);
-                Ui::ShowTooltip(diagnostic.c_str(), &context.gui.theme.fonts);
-            }
+            if (hovered)
+                ShowPreviewDiagnostic(entry, context.gui);
             HandleAssetDragDropSource(entry, context.gui.localization);
             HandleDirectoryDragDropTarget(entry, interactionMin, metrics.cardWidth, metrics.cardHeight, &context.drawList, context.command);
             DrawAssetBrowserEntryActions(entry, context.viewModel, context.interactionSession, context.command, context.gui);
