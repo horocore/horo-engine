@@ -1067,6 +1067,7 @@ horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPrefabOverrideModel PUBLIC_HEADERS
+    Horo/Prefab/PrefabComponentOverrideTypes.h
     Horo/Prefab/PrefabSourceRevision.h
     Horo/Prefab/PrefabValueOverrideTypes.h
 )

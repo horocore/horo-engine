@@ -19,8 +19,8 @@ namespace Horo::Editor {
         }
 
         /** @brief Prepare a detached instance edit only after the exact schema and complete source publication match. */
-        Result<Prefab::PrefabValueOverrideResolution> PrepareInstanceValues(const ScenePrefabInstance &instance,
-                                                                            const EditScenePrefabValueCommand &command,
+        template <class Command>
+        Result<Prefab::PrefabValueOverrideResolution> PrepareInstanceValues(const ScenePrefabInstance &instance, const Command &command,
                                                                             const Prefab::PrefabSourceResolverSnapshot &sources,
                                                                             const Prefab::PrefabValueSchemaSnapshot *schemas,
                                                                             const Prefab::PrefabLimitProfile &limits,
@@ -34,7 +34,11 @@ namespace Horo::Editor {
             if (source.Value().Revision() != command.expectedSource)
                 return Result<Prefab::PrefabValueOverrideResolution>::Failure(
                     MakeError(Prefab::PrefabErrors::OverrideSourceStale, "Prefab source changed before override preparation."));
-            return Prefab::PreparePrefabValueEdit(source.Value(), instance.valueOverrides, command.edit, schemas, limits, cancellation);
+            if constexpr (std::is_same_v<Command, EditScenePrefabValueCommand>)
+                return Prefab::PreparePrefabValueEdit(source.Value(), instance.valueOverrides, command.edit, schemas, limits, cancellation);
+            else
+                return Prefab::PreparePrefabComponentEdit(source.Value(), instance.valueOverrides, command.edit, schemas, limits,
+                                                          cancellation);
         }
     }  // namespace
 
@@ -42,14 +46,13 @@ namespace Horo::Editor {
     SceneDocumentPrefabValueCommands::SceneDocumentPrefabValueCommands(SceneDocument &document, EditorHistory &history) noexcept
         : m_document(document), m_history(history) {}
 
-    /** @copydoc SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabValueCommand&,const
-     * Prefab::PrefabSourceResolverSnapshot&,const Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const
-     * CancellationToken&) */
-    Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabValueCommand &command,
-                                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
-                                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
-                                                                         const Prefab::PrefabLimitProfile &limits,
-                                                                         const CancellationToken &cancellation) {
+    /** @copydoc SceneDocumentPrefabValueCommands::ExecuteEdit */
+    template <class Command>
+    Result<SceneCommandResult> SceneDocumentPrefabValueCommands::ExecuteEdit(const Command &command,
+                                                                             const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                                             const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                                             const Prefab::PrefabLimitProfile &limits,
+                                                                             const CancellationToken &cancellation) {
         try {
             if (command.expectedReplacementEpoch != m_document.m_replacementEpoch || command.expectedRevision != m_document.m_revision)
                 return Result<SceneCommandResult>::Failure(
@@ -63,7 +66,7 @@ namespace Horo::Editor {
             auto resolution = std::move(prepared).Value();
             auto &set = resolution.rebased;
             std::optional<Prefab::PrefabValueOverrideSet> after;
-            if (!set.records.empty() || !set.conflicts.empty() || !set.orphans.empty())
+            if (!set.IsEmpty())
                 after = std::move(set);
             if (after == instance.Value()->valueOverrides)
                 return Result<SceneCommandResult>::Success(PrefabNoOpResult(m_document.m_revision, m_document.m_state, command.instance,
@@ -95,6 +98,28 @@ namespace Horo::Editor {
         } catch (const std::bad_alloc &) {
             return Result<SceneCommandResult>::Failure(MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed));
         }
+    }
+
+    /** @copydoc SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabValueCommand&,const
+     * Prefab::PrefabSourceResolverSnapshot&,const Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const
+     * CancellationToken&) */
+    Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabValueCommand &command,
+                                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                                         const Prefab::PrefabLimitProfile &limits,
+                                                                         const CancellationToken &cancellation) {
+        return ExecuteEdit(command, sources, schemas, limits, cancellation);
+    }
+
+    /** @copydoc SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabComponentCommand&,const
+     * Prefab::PrefabSourceResolverSnapshot&,const Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const
+     * CancellationToken&) */
+    Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabComponentCommand &command,
+                                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                                         const Prefab::PrefabLimitProfile &limits,
+                                                                         const CancellationToken &cancellation) {
+        return ExecuteEdit(command, sources, schemas, limits, cancellation);
     }
 
     /** @copydoc SceneDocumentPrefabValueCommands::Replay */

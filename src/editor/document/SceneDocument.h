@@ -409,6 +409,16 @@ namespace Horo::Editor {
         std::uint64_t expectedReplacementEpoch{}; /**< Exact owner-local opening generation; never portable between document owners. */
     };
 
+    /** @brief Revision-fenced atomic component topology edit using the instance's existing override history. */
+    struct EditScenePrefabComponentCommand final {
+        Prefab::PrefabInstanceId instance;
+        DocumentRevision expectedRevision;
+        Prefab::PrefabResolutionRevision expectedSource;
+        Sha256Digest expectedSchema;
+        Prefab::PrefabComponentEdit edit;
+        std::uint64_t expectedReplacementEpoch{};
+    };
+
     /** @brief Typed request to duplicate a placement with a fresh scene-local instance identity. */
     struct DuplicateScenePrefabInstanceCommand final {
         Prefab::PrefabInstanceId source;
@@ -585,12 +595,29 @@ namespace Horo::Editor {
                                                          const Prefab::PrefabLimitProfile &limits,
                                                          const CancellationToken &cancellation = {});
 
+        /** @brief Prepare and atomically commit component add/remove/replace/revert intent.
+         * @param command Exact instance intent and document/source/schema fences.
+         * @param sources Owned immutable source context. @param schemas Explicit captured compatibility policies.
+         * @param limits Captured resource policy. @param cancellation Cooperative preparation cancellation.
+         * @return One complete history transition or typed error without mutation. */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const EditScenePrefabComponentCommand &command,
+                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                         const Prefab::PrefabLimitProfile &limits,
+                                                         const CancellationToken &cancellation = {});
+
     private:
         friend class SceneDocumentCommandExecutor;
         /** @brief Prepare one value-history replay completely before its no-throw publication.
          * @param undo True for undo, false for redo. @return Canonical history result preserving the current opening fence.
          */
         [[nodiscard]] Result<SceneCommandResult> Replay(bool undo);
+        /** @brief Share revision fences, detached preparation and the no-throw owner publication for both typed command families. */
+        template <class Command>
+        [[nodiscard]] Result<SceneCommandResult> ExecuteEdit(const Command &command, const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                             const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                             const Prefab::PrefabLimitProfile &limits,
+                                                             const CancellationToken &cancellation);
         SceneDocument &m_document;
         EditorHistory &m_history;
     };

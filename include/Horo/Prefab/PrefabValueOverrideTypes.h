@@ -3,6 +3,7 @@
  * @brief Owned, versioned instance value deltas and lossless conflict/provenance data.
  */
 #include "Horo/Math/SceneMath.h"
+#include "Horo/Prefab/PrefabComponentOverrideTypes.h"
 #include "Horo/Prefab/PrefabIdentity.h"
 #include "Horo/Prefab/PrefabSourceRevision.h"
 
@@ -53,7 +54,7 @@ namespace Horo::Prefab {
         [[nodiscard]] bool operator==(const PrefabValueOverrideOrphan &) const noexcept = default;
     };
 
-    /** @brief Canonical instance-local AssignValue set; unresolved intent remains serializable but cannot enter runtime output. */
+    /** @brief One canonical instance override envelope; unresolved value or component intent cannot enter runtime output. */
     struct PrefabValueOverrideSet final {
         Assets::AssetId sourcePrefab;
         PrefabSourceRevision authoredAgainst;
@@ -61,6 +62,20 @@ namespace Horo::Prefab {
         std::vector<PrefabValueOverrideRecord> records;
         std::vector<PrefabValueOverrideConflict> conflicts;
         std::vector<PrefabValueOverrideOrphan> orphans;
+        std::vector<PrefabComponentOverrideRecord> componentRecords{};
+        std::vector<PrefabComponentOverrideConflict> componentConflicts{};
+        std::vector<PrefabComponentOverrideOrphan> componentOrphans{};
+
+        /** @brief Reports whether any value or topology intent still requires explicit resolution. @return True for conflicts/orphans. */
+        [[nodiscard]] bool HasUnresolved() const noexcept {
+            return !conflicts.empty() || !orphans.empty() || !componentConflicts.empty() || !componentOrphans.empty();
+        }
+
+        /** @brief Reports whether this envelope carries no value or component intent. @return True only for completely empty intent. */
+        [[nodiscard]] bool IsEmpty() const noexcept {
+            return records.empty() && componentRecords.empty() && !HasUnresolved();
+        }
+
         [[nodiscard]] bool operator==(const PrefabValueOverrideSet &) const noexcept = default;
     };
     /** @brief Authority supplying the effective value; display text never determines provenance. */
