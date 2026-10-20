@@ -28,9 +28,10 @@ namespace Horo {
                 return false;
             if (path.has_relative_path() && path.filename().empty())
                 return false;
-            for (const auto &part : path)
-                if (part == "." || part == "..")
-                    return false;
+            if (std::ranges::any_of(path, [](const auto &part) {
+                return part == "." || part == "..";
+            }))
+                return false;
 #if defined(_WIN32)
             const auto &text = path.native();
             if (text.starts_with(L"\\\\.\\") || text.starts_with(L"\\\\?\\"))
@@ -184,7 +185,7 @@ namespace Horo {
                     return Result<Entries>::Failure(info.ErrorValue());
                 if (!info.Value())
                     return Result<Entries>::Failure(MakeError(FileStorageErrors::IoFailed));
-                entries.push_back({cursor->path().filename(), *info.Value()});
+                entries.emplace_back(cursor->path().filename(), *info.Value());
                 cursor.increment(error);
                 if (error)
                     return Result<Entries>::Failure(MakeError(FileStorageErrors::IoFailed));
