@@ -23,6 +23,7 @@ namespace Horo::Extensions {
         std::vector<EditorActivityProjection> prepared;
         std::uint64_t nextGeneration{1};
         std::uint64_t preparedRevision{};
+        bool inputAdmitted{true};
         bool shutdown{};
     };
 
@@ -62,6 +63,7 @@ namespace Horo::Extensions {
             std::optional<EditorUiForm> form;
             EditorActivityPresentation presentation;
             std::uint64_t revision{};
+            bool failed{}; /**< Published before ready; read only after its acquire load. */
             std::atomic_bool ready{};
         };
 

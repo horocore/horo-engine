@@ -8,17 +8,27 @@ static HoroEditorActivitySessionApi session;
 static uint32_t unloadCount;
 static uint32_t actionCount;
 static atomic_uint holdAction;
+static atomic_uint failAction;
 static atomic_uint resultPublished;
-static const HoroEditorActivityNode nodes[] = {{.structSize = sizeof(HoroEditorActivityNode),
-                                                .kind = HORO_EDITOR_ACTIVITY_TEXT,
-                                                .flags = HORO_EDITOR_ACTIVITY_TEXT_TECHNICAL,
-                                                .id = TEXT("fixture.output"),
-                                                .text = TEXT("fixture output")},
-                                               {.structSize = sizeof(HoroEditorActivityNode),
-                                                .kind = HORO_EDITOR_ACTIVITY_ACTION,
-                                                .id = TEXT("fixture.run"),
-                                                .labelKey = TEXT("fixture.run.label"),
-                                                .actionId = TEXT("fixture.run")}};
+static const HoroEditorActivityPlotSample samples[] = {{0.0f, 0.2f}, {0.3f, 0.8f}, {0.7f, 0.4f}, {1.0f, 0.6f}};
+/* Real native-package reference: standard Horo text/action and specialized plot share one surface. */
+static const HoroEditorActivityNodeV2 nodes[] = {{.node = {.structSize = sizeof(HoroEditorActivityNode),
+                                                           .kind = HORO_EDITOR_ACTIVITY_TEXT,
+                                                           .flags = HORO_EDITOR_ACTIVITY_TEXT_TECHNICAL,
+                                                           .id = TEXT("fixture.output"),
+                                                           .text = TEXT("fixture output")}},
+                                                 {.node = {.structSize = sizeof(HoroEditorActivityNode),
+                                                           .kind = HORO_EDITOR_ACTIVITY_ACTION,
+                                                           .id = TEXT("fixture.run"),
+                                                           .labelKey = TEXT("fixture.run.label"),
+                                                           .actionId = TEXT("fixture.run")}},
+                                                 {.node = {.structSize = sizeof(HoroEditorActivityNode),
+                                                           .kind = HORO_EDITOR_ACTIVITY_PLOT,
+                                                           .id = TEXT("fixture.plot"),
+                                                           .labelKey = TEXT("fixture.label"),
+                                                           .actionId = TEXT("fixture.inspect")},
+                                                  .samples = samples,
+                                                  .sampleCount = 4}};
 
 static HoroExtensionStatus Invoke(void *context, const HoroEditorActivityAction *action, const HoroEditorActivitySnapshotSink *sink) {
     (void)context;
@@ -30,17 +40,21 @@ static HoroExtensionStatus Invoke(void *context, const HoroEditorActivityAction 
         return HORO_EXTENSION_ERROR_CANCELLED;
     ++actionCount;
     const HoroEditorActivitySnapshot result = {.structSize = sizeof(HoroEditorActivitySnapshot),
-                                               .schemaVersion = 1,
+                                               .schemaVersion = HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION,
                                                .revision = action->revision + 1,
                                                .badgeCount = actionCount,
-                                               .nodes = nodes,
-                                               .nodeCount = 2};
+                                               .nodes = (const HoroEditorActivityNode *)nodes,
+                                               .nodeCount = 3};
     const HoroExtensionStatus status = sink->publish(sink->context, &result);
     atomic_store(&resultPublished, 1);
     while (atomic_load(&holdAction) != 0) {
         /* Test-controlled barrier after the result was copied, before successful callback completion. */
     }
-    return status;
+    return atomic_exchange(&failAction, 0) ? HORO_EXTENSION_ERROR_INIT_FAILED : status;
+}
+
+HORO_EXTENSION_EXPORT void horo_test_activity_fail_next_action(void) {
+    atomic_store(&failAction, 1);
 }
 
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_query(HoroExtensionRequirements *requirements) {
@@ -68,10 +82,10 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
                                                      .iconResource = TEXT("icons/tool.svg"),
                                                      .side = HORO_EDITOR_ACTIVITY_LEFT,
                                                      .initialSnapshot = {.structSize = sizeof(HoroEditorActivitySnapshot),
-                                                                         .schemaVersion = 1,
+                                                                         .schemaVersion = HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION,
                                                                          .revision = 1,
-                                                                         .nodes = nodes,
-                                                                         .nodeCount = 2},
+                                                                         .nodes = (const HoroEditorActivityNode *)nodes,
+                                                                         .nodeCount = 3},
                                                      .messages = messages,
                                                      .messageCount = 4,
                                                      .invokeAction = Invoke};
@@ -79,7 +93,8 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
     const HoroExtensionStatus status = host->registerEditorActivity(host->hostContext, &descriptor, &session);
     if (status == HORO_EXTENSION_SUCCESS &&
         (session.structSize < sizeof(HoroEditorActivitySessionApi) || session.sessionVersion != HORO_EDITOR_ACTIVITY_SESSION_VERSION ||
-         (session.supportedNodeMask & (1U << HORO_EDITOR_ACTIVITY_ACTION)) == 0 || !session.context || !session.publish))
+         (session.supportedNodeMask & (1U << HORO_EDITOR_ACTIVITY_ACTION)) == 0 ||
+         (session.supportedNodeMask & (1U << HORO_EDITOR_ACTIVITY_PLOT)) == 0 || !session.context || !session.publish))
         return HORO_EXTENSION_ERROR_VERSION_MISMATCH;
     *module = (HoroExtensionModuleApi){.structSize = sizeof(HoroExtensionModuleApi),
                                        .moduleId = TEXT("fixture.module"),
@@ -98,10 +113,10 @@ HORO_EXTENSION_EXPORT uint32_t horo_test_activity_unload_count(void) {
 
 HORO_EXTENSION_EXPORT HoroExtensionStatus horo_test_activity_publish(void) {
     const HoroEditorActivitySnapshot snapshot = {.structSize = sizeof(HoroEditorActivitySnapshot),
-                                                 .schemaVersion = 1,
+                                                 .schemaVersion = HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION,
                                                  .revision = 100,
-                                                 .nodes = nodes,
-                                                 .nodeCount = 2};
+                                                 .nodes = (const HoroEditorActivityNode *)nodes,
+                                                 .nodeCount = 3};
     return session.publish(session.context, &snapshot);
 }
 

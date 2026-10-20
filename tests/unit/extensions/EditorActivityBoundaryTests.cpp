@@ -3,6 +3,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <limits>
 #include <stdexcept>
 #include <type_traits>
 
@@ -142,6 +143,8 @@ namespace Horo::Extensions::Tests {
         CHECK_FALSE(fixture.session->actions.result);
         CHECK_FALSE(fixture.session->actions.job);
         CHECK(fixture.session->revision == 1);
+        CHECK(fixture.session->revoked);
+        CHECK_FALSE(fixture.session->committed);
     }
 
     TEST_CASE("Activity worker rejects malformed copy without partially publishing a result", "[Extensions][Activity][ABI]") {
@@ -210,5 +213,40 @@ namespace Horo::Extensions::Tests {
         CHECK(fixture.retirement->IsDrained());
         CHECK_FALSE(fixture.session->actions.result->form);
         CHECK(fixture.session->revision == 1);
+    }
+}  // namespace Horo::Extensions::Tests
+
+namespace Horo::Extensions::Tests {
+    TEST_CASE("Specialized plot ABI copies bounded typed data and preserves legacy transport", "[Extensions][Activity][Plot][ABI]") {
+        HoroEditorActivityPlotSample samples[] = {{0, 0}, {1, 1}};
+        HoroEditorActivityNodeV2 node{.node = {.structSize = sizeof(HoroEditorActivityNode),
+                                               .kind = HORO_EDITOR_ACTIVITY_PLOT,
+                                               .id = {"plot", 4},
+                                               .labelKey = {"plot.label", 10},
+                                               .actionId = {"inspect", 7}},
+                                      .samples = samples,
+                                      .sampleCount = 2};
+        HoroEditorActivitySnapshot snapshot{.structSize = sizeof(HoroEditorActivitySnapshot),
+                                            .schemaVersion = HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION,
+                                            .revision = 1,
+                                            .nodes = reinterpret_cast<const HoroEditorActivityNode *>(&node),
+                                            .nodeCount = 1};
+        auto copied = Detail::CopyActivityForm(snapshot, "drawer", "title");
+        REQUIRE(copied.HasValue());
+        samples[1].y = 0;
+        const auto &plot = std::get<EditorUiPlotNode>(copied.Value().nodes.front().payload);
+        CHECK(plot.samples.back().y == 1);
+        snapshot.schemaVersion = HORO_EDITOR_ACTIVITY_SCHEMA_VERSION;
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        snapshot.schemaVersion = HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION;
+        node.sampleCount = 257;
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        node.sampleCount = 2;
+        samples[1].x = std::numeric_limits<float>::quiet_NaN();
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        samples[1].x = 0;
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        node.samples = nullptr;
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
     }
 }  // namespace Horo::Extensions::Tests

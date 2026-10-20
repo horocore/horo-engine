@@ -26,6 +26,7 @@ namespace Horo::Extensions {
                 case Path:
                 case Color:
                 case Vector:
+                case Plot:
                 case Action:
                     return true;
                 default:
@@ -99,6 +100,8 @@ namespace Horo::Extensions {
                                        const EditorUiThemeMetrics &metrics) noexcept {
             using enum EditorUiNodeKind;
             switch (kind) {
+                case Plot:
+                    return metrics.largeControlHeight * 3.0F;
                 case TextField:
                 case Number:
                 case Boolean:

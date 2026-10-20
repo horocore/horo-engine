@@ -175,6 +175,35 @@ namespace {
         }
     }
 
+    /** @brief Draws the real native fixture through palette changes without rebuilding the provider. */
+    void CheckCustomPlotThemes(ExtensionActivityView &view) {
+        struct RestoreTheme {
+            Theme::Preset previous{Theme::GetThemePreset()};
+
+            ~RestoreTheme() {
+                Theme::SetThemePreset(previous);
+                Theme::ApplyCurrentTheme();
+            }
+        } restore;
+
+        for (const auto preset : {Theme::Preset::HoroDark, Theme::Preset::Light}) {
+            Theme::SetThemePreset(preset);
+            Theme::ApplyCurrentTheme();
+            view.Update();
+            ImGui::NewFrame();
+            view.DrawDrawer(Extensions::EditorActivitySide::Left, {42, 0}, {320, 420});
+            const auto accent = ImGui::GetColorU32(Theme::Accent());
+            ImGui::Render();
+            const auto *data = ImGui::GetDrawData();
+            REQUIRE(data);
+            bool found{};
+            for (int list = 0; list < data->CmdListsCount; ++list)
+                for (const auto &vertex : data->CmdLists[list]->VtxBuffer)
+                    found = found || vertex.col == accent;
+            CHECK(found);  // The specialized line adopts the live host accent in the same surface as the Horo button.
+        }
+    }
+
     void CheckRailKeyboardFocus(ExtensionActivityView &view) {
         // ImGui applies focus API navigation results at the following NewFrame.
         ImGuiID railControl{};
@@ -309,6 +338,7 @@ namespace {
         REQUIRE(view.HasDrawer(Extensions::EditorActivitySide::Left));
         REQUIRE(view.TakeNativePanelClear() == Extensions::EditorActivitySide::Left);
         CheckDrawerFocusAndNarrowFrames(view);
+        CheckCustomPlotThemes(view);
         CheckRailKeyboardFocus(view);
         CHECK(renderer.creates == 1);
         CHECK(renderer.destroys == 0);

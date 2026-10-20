@@ -1,5 +1,6 @@
 #pragma once
 #include "Horo/Extensions/EditorActivityHost.h"
+#include "editor/modals/extension_pages/EditorPageThemeCapture.h"
 
 #include <array>
 #include <imgui.h>
@@ -21,6 +22,8 @@ namespace Horo::Editor {
         ExtensionActivityView(ExtensionActivityView &&) = delete;
         ExtensionActivityView &operator=(ExtensionActivityView &&) = delete;
         void Update();
+        /** @brief Applies the workspace/modal input router decision before drawing or pumping pending actions. */
+        void SetInputAdmitted(bool admitted) noexcept;
         /** @brief Queues a generation-bound placement command; publication occurs at the next owner Update. */
         [[nodiscard]] bool QueueMove(const Extensions::EditorSurfaceProviderIdentity &provider, std::string_view id,
                                      Extensions::EditorActivityPlacement placement) noexcept;
@@ -63,6 +66,7 @@ namespace Horo::Editor {
             std::string label;
             std::string tooltip;
             std::vector<std::string> nodeText;
+            std::array<Extensions::EditorUiPlotState, 256> plots{};
             bool focusPending{};
             bool requestNativePanelClear{};
             std::uint64_t token{};
@@ -91,7 +95,9 @@ namespace Horo::Editor {
         /** @brief Copies provider-localized node text during the owner update phase. */
         void PrepareNodeText(Entry &entry, const std::string &locale);
         /** @brief Draws the admitted form using retained text and queues typed actions without invoking providers. */
-        void DrawForm(const Entry &entry) const;
+        void DrawForm(Entry &entry);
+        /** @brief Host-owned specialized plot; consumes copied data and current tokens without provider callbacks. */
+        void DrawPlot(Entry &entry, const Extensions::EditorUiPlotNode &plot, std::size_t index);
         /** @brief Presents localized destination and insertion actions for one retained control. */
         void DrawPlacementMenu(const Entry &entry, std::size_t group);
         /** @brief Presents durable user visibility choices for the current activity rail. */
@@ -104,6 +110,8 @@ namespace Horo::Editor {
         const EditorGuiContext &context_;
         Extensions::EditorActivityHost *host_{};
         IEditorGuiRenderer *renderer_{};
+        EditorPageThemeCapture themeCapture_;
+        bool inputAdmitted_{true};
         std::uint64_t revision_{};
         std::string locale_;
         std::vector<Entry> entries_;

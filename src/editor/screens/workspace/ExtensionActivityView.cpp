@@ -84,6 +84,15 @@ namespace Horo::Editor {
                    entry.projection.surface.descriptor.provider == projection.surface.descriptor.provider;
         });
         Entry entry{.projection = projection};
+        if (previous != entries_.end() && projection.surface.form && previous->projection.surface.form) {
+            const auto &oldNodes = previous->projection.surface.form->nodes;
+            for (std::size_t i = 0; i < projection.surface.form->nodes.size(); ++i) {
+                const auto &id = Extensions::EditorUiNodeBaseOf(projection.surface.form->nodes[i]).id;
+                for (std::size_t j = 0; j < oldNodes.size(); ++j)
+                    if (Extensions::EditorUiNodeBaseOf(oldNodes[j]).id == id)
+                        entry.plots[i] = previous->plots[j];
+            }
+        }
         const auto &descriptor = projection.surface.descriptor;
         entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
         entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
@@ -180,9 +189,18 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc ExtensionActivityView::SetInputAdmitted */
+    void ExtensionActivityView::SetInputAdmitted(const bool admitted) noexcept {
+        inputAdmitted_ = admitted;
+        if (host_)
+            host_->SetInputAdmitted(admitted);
+    }
+
     void ExtensionActivityView::Update() {
         if (!host_)
             return;
+        if (ImGui::GetCurrentContext())
+            static_cast<void>(themeCapture_.Update(context_));
         ApplyPendingMove();
         const auto revision = host_->Registry().Revision();
         const auto &locale = context_.settings.settings.languageTag;
@@ -363,7 +381,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ExtensionActivityView::DrawForm */
-    void ExtensionActivityView::DrawForm(const Entry &entry) const {
+    void ExtensionActivityView::DrawForm(Entry &entry) {
         const auto &surface = entry.projection.surface;
         if (!surface.form)
             return;
@@ -371,7 +389,10 @@ namespace Horo::Editor {
             const auto &node = surface.form->nodes[index];
             const auto &base = Extensions::EditorUiNodeBaseOf(node);
             ImGui::PushID(base.id.value.c_str());
-            if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
+            ImGui::BeginDisabled(!inputAdmitted_ || !surface.activity.enabled || !base.enabled);
+            if (const auto *plot = std::get_if<Extensions::EditorUiPlotNode>(&node.payload)) {
+                DrawPlot(entry, *plot, index);
+            } else if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
                 if (Ui::Button({.label = entry.nodeText[index].c_str(),
                                 .enabled = base.enabled,
                                 .font = context_.theme.fonts.sans,
@@ -383,6 +404,7 @@ namespace Horo::Editor {
                     Ui::SectionTitle(entry.nodeText[index].c_str(), context_.theme.fonts);
             } else
                 Ui::Hint(entry.nodeText[index].c_str(), context_.theme.fonts);
+            ImGui::EndDisabled();
             ImGui::PopID();
         }
     }

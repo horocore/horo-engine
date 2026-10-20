@@ -3286,6 +3286,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
+            editor/screens/workspace/ExtensionActivityPlot.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
@@ -3390,6 +3391,7 @@ add_library(HoroExtensions STATIC
         extensions/manifest/EditorSvgIcon.cpp
     extensions/manifest/EditorUiForm.cpp
     extensions/manifest/EditorUiFormBuilder.cpp
+    extensions/manifest/EditorUiPlot.cpp
     extensions/manifest/EditorUiFormRender.cpp
         extensions/manifest/ScriptExportDescriptor.cpp
         extensions/manifest/ScriptExportDescriptorInternal.h

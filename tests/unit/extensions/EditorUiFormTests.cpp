@@ -490,3 +490,42 @@ namespace Horo::Extensions::Tests {
         CHECK(snapshot.Value().nodes[2].y == Catch::Approx(28.0F));
     }
 }  // namespace Horo::Extensions::Tests
+
+namespace Horo::Extensions {
+    TEST_CASE("Custom plot shares standard theme geometry and bounded semantic input", "[Extensions][Form][Plot]") {
+        EditorUiPlotNode plot{.base = {.id = {"plot"}, .label = {EditorUiTextKind::LocalizationKey, "plot.label"}},
+                              .action = {"inspect"},
+                              .samples = {{0, 0.2F}, {0.5F, 0.8F}, {1, 0.3F}}};
+        EditorUiForm form{.id = {"custom"}, .nodes = {{plot}}};
+        REQUIRE(ValidateEditorUiForm(form).HasValue());
+        EditorThemeFrame theme;
+        auto first = BuildEditorUiRenderSnapshot(form, theme, 80);
+        REQUIRE(first.HasValue());
+        CHECK(first.Value().nodes.front().kind == EditorUiNodeKind::Plot);
+        CHECK(first.Value().nodes.front().focusable);
+        theme.revision += 1;
+        theme.uiScale = 2;
+        theme.colors.accent = {1, 0, 0, 1};
+        auto second = BuildEditorUiRenderSnapshot(form, theme, 80);
+        REQUIRE(second.HasValue());
+        CHECK(second.Value().nodes.front().height == first.Value().nodes.front().height * 2);
+        CHECK(second.Value().themeRevision != first.Value().themeRevision);
+        CHECK(second.Value().theme.colors.accent.red == 1);
+        EditorUiPlotState state;
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Next, 0, true, theme, 0.1F));
+        CHECK(state.selected == 1);
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Next, 0, false, theme, 0.1F));
+        CHECK(state.selected == 1);
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Select, 0.95F, true, theme, 0.1F));
+        CHECK(state.selected == 2);
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Activate, 0, false, theme, 0.1F));
+        CHECK(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Activate, 0, true, theme, 0.1F));
+        theme.accessibility.reduceMotion = true;
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::None, 0, false, theme, 0.1F));
+        CHECK(state.emphasis == 0);
+        plot.base.enabled = false;
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Activate, 0, true, theme, 0.1F));
+        plot.samples.resize(MaximumEditorUiPlotSamples + 1);
+        CHECK(ValidateEditorUiNode({plot}).HasError());
+    }
+}  // namespace Horo::Extensions

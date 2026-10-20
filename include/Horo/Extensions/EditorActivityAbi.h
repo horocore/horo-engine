@@ -7,6 +7,7 @@
 
 enum {
     HORO_EDITOR_ACTIVITY_SCHEMA_VERSION = 1,
+    HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION = 2,
     HORO_EDITOR_ACTIVITY_SESSION_VERSION = 1
 };
 
@@ -22,7 +23,8 @@ enum HoroEditorActivityNodeCode {
     HORO_EDITOR_ACTIVITY_LABEL = 1,
     HORO_EDITOR_ACTIVITY_ACTION = 2,
     HORO_EDITOR_ACTIVITY_STACK = 3,
-    HORO_EDITOR_ACTIVITY_GROUP = 4
+    HORO_EDITOR_ACTIVITY_GROUP = 4,
+    HORO_EDITOR_ACTIVITY_PLOT = 5
 };
 
 enum HoroEditorActivityNodeFlags {
@@ -54,6 +56,29 @@ struct HoroEditorActivityNode {
 };
 #ifndef __cplusplus
 typedef struct HoroEditorActivityNode HoroEditorActivityNode;
+#endif
+
+/** @brief Normalized semantic data, never screen coordinates or draw commands. */
+struct HoroEditorActivityPlotSample {
+    float x;
+    float y;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorActivityPlotSample HoroEditorActivityPlotSample;
+#endif
+
+/** @brief Schema2 fixed-stride node. Non-plot nodes require a null samples pointer and zero count.
+ * @details A schema2 snapshot's nodes points to an array of these records (cast through the v1 pointer).
+ * The unchanged snapshot/descriptor sizes preserve v1 binary layout. Copy completes before return.
+ * Publishers negotiate support through the session's PLOT node-mask bit. No pointer is retained.
+ */
+struct HoroEditorActivityNodeV2 {
+    HoroEditorActivityNode node;
+    const HoroEditorActivityPlotSample *samples;
+    uint32_t sampleCount;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorActivityNodeV2 HoroEditorActivityNodeV2;
 #endif
 
 /** @brief Bounded immutable view snapshot; revisions strictly increase within an activation. */

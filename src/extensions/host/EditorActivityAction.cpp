@@ -50,6 +50,12 @@ namespace Horo::Extensions {
         void PublishCompletedAction(EditorActivitySession &session) {
             if (session.actions.result && session.actions.result->ready.load(std::memory_order_acquire)) {
                 const auto completed = session.actions.result;
+                if (completed->failed) {
+                    session.Revoke();
+                    session.actions.job.reset();
+                    session.actions.result.reset();
+                    return;
+                }
                 std::lock_guard lock{completed->mutex};
                 if (session.actions.result->form && session.actions.result->revision > session.revision) {
                     if (const auto host = session.host.lock();
@@ -90,6 +96,8 @@ namespace Horo::Extensions {
                 std::lock_guard lock{result->mutex};
                 result->form.reset();
             }
+            result->failed =
+                status != HORO_EXTENSION_SUCCESS && status != HORO_EXTENSION_ERROR_CANCELLED && !cancellation.IsCancellationRequested();
             result->ready.store(true, std::memory_order_release);
             if (cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED)
                 return JobCancelled();
@@ -101,7 +109,13 @@ namespace Horo::Extensions {
         void PumpAction(EditorActivitySession &session, const JobSystem &jobs, const std::shared_ptr<EditorActivitySession> &owner) {
             if (session.revoked || !session.committed)
                 return;
+            if (const auto host = session.host.lock(); host && !host->IsLive(session.activity.surface.provider)) {
+                session.actions.pending.reset();
+                return;
+            }
             PublishCompletedAction(session);
+            if (session.revoked)
+                return;
             if (!session.actions.pending || session.actions.job)
                 return;
             const auto retirement = session.retirement.lock();

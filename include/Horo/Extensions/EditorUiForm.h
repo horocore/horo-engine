@@ -237,6 +237,49 @@ namespace Horo::Extensions {
         Destructive,
     };
 
+    inline constexpr std::size_t MaximumEditorUiPlotSamples = 256;
+
+    /** @brief Normalized plot data; x strictly increases and both coordinates remain in [0,1]. */
+    struct EditorUiPlotSample final {
+        float x{};
+        float y{};
+    };
+
+    /** @brief Specialized plot composition. The host owns drawing, selection, focus and activation.
+     * @details Samples are copied outside draw traversal. Activation emits only the declared action;
+     * it cannot supply document edits. Selected samples are transient host presentation state.
+     */
+    struct EditorUiPlotNode final {
+        EditorUiNodeBase base;
+        EditorUiActionId action;
+        std::vector<EditorUiPlotSample> samples;
+    };
+
+    /** @brief Bounded local selection and animation, discarded with the owning surface generation. */
+    struct EditorUiPlotState final {
+        std::size_t selected{};
+        float emphasis{};
+    };
+
+    /** @brief Host-scoped semantic input; no global key or platform event crosses the boundary. */
+    enum class EditorUiPlotInput : std::uint8_t {
+        None,
+        Previous,
+        Next,
+        Select,
+        Activate
+    };
+
+    /** @brief Updates local presentation without allocation, callbacks or document access.
+     * @param plot Validated owned plot. @param state Host-owned transient state.
+     * @param input Scoped semantic input. @param normalizedX Host hit-tested normalized coordinate.
+     * @param admitted Host focus/modal/provider gate. @param theme Current immutable theme frame.
+     * @param elapsedSeconds Finite frame duration, clamped to the motion duration.
+     * @return True only for an admitted activation; the caller must still use command admission.
+     */
+    [[nodiscard]] bool UpdateEditorUiPlot(const EditorUiPlotNode &plot, EditorUiPlotState &state, EditorUiPlotInput input,
+                                          float normalizedX, bool admitted, const EditorThemeFrame &theme, float elapsedSeconds) noexcept;
+
     /** @brief Typed action primitive; invocation is routed by action identity, never by callback. */
     struct EditorUiActionNode final {
         EditorUiNodeBase base;
@@ -278,7 +321,7 @@ namespace Horo::Extensions {
     using EditorUiNodePayload =
         std::variant<EditorUiLabelNode, EditorUiTextNode, EditorUiTextFieldNode, EditorUiNumberNode, EditorUiBooleanNode,
                      EditorUiChoiceNode, EditorUiPathNode, EditorUiColorNode, EditorUiVectorNode, EditorUiActionNode,
-                     EditorUiValidationNode, EditorUiContainerNode, EditorUiHelpNode>;
+                     EditorUiValidationNode, EditorUiContainerNode, EditorUiHelpNode, EditorUiPlotNode>;
 
     /** @brief One typed node in a declarative extension form. */
     struct EditorUiNode final {
@@ -303,6 +346,7 @@ namespace Horo::Extensions {
         Row,
         Grid,
         Help,
+        Plot,
     };
 
     /**
