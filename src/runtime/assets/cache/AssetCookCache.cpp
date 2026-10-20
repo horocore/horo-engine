@@ -153,9 +153,8 @@ namespace Horo::Assets {
     // AssetCookCache
     // ---------------------------------------------------------------------------
 
-    AssetCookCache::AssetCookCache(std::filesystem::path root, const AssetCookLimits &limits) : root_(std::move(root)), limits_(limits) {
-        std::filesystem::create_directories(root_);
-    }
+    /** @copydoc AssetCookCache::AssetCookCache */
+    AssetCookCache::AssetCookCache(std::filesystem::path root, const AssetCookLimits &limits) : root_(std::move(root)), limits_(limits) {}
 
     std::filesystem::path AssetCookCache::PathForKey(const Sha256Digest &digest) const {
         const auto hex = FormatHex(digest);

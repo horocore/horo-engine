@@ -1,3 +1,4 @@
+#include "../../../support/OwnedTestDirectory.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetCookCache.h"
 #include "Horo/Foundation/CancellationToken.h"
@@ -54,25 +55,6 @@ namespace {
         };
     }
 
-    /** @brief Creates a temp directory that is cleaned up after the test. */
-    struct TempDir {
-        std::filesystem::path path;
-
-        TempDir() {
-            auto tmp = std::filesystem::temp_directory_path() / "horo_cache_test";
-            std::filesystem::create_directories(tmp);
-            // Unique subdirectory per test
-            auto unique = tmp / ("test_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-            std::filesystem::create_directories(unique);
-            path = unique;
-        }
-
-        ~TempDir() {
-            std::error_code ec;
-            std::filesystem::remove_all(path, ec);
-        }
-    };
-
 }  // namespace
 
 TEST_CASE("BuildAssetCookCacheKey produces different keys for different inputs", "[native]") {
@@ -127,8 +109,8 @@ TEST_CASE("Target change invalidates cache key", "[native]") {
 }
 
 TEST_CASE("AssetCookCache miss returns nullopt", "[native]") {
-    TempDir tmp;
-    AssetCookCache cache(tmp.path);
+    Tests::OwnedTestDirectory tmp{"horo-cache-test"};
+    AssetCookCache cache(tmp.Path());
     CancellationToken cancellation;
 
     auto inputs = MakeInputs("miss-test");
@@ -140,8 +122,8 @@ TEST_CASE("AssetCookCache miss returns nullopt", "[native]") {
 }
 
 TEST_CASE("AssetCookCache write then hit returns bytes", "[native]") {
-    TempDir tmp;
-    AssetCookCache cache(tmp.path);
+    Tests::OwnedTestDirectory tmp{"horo-cache-test"};
+    AssetCookCache cache(tmp.Path());
     CancellationToken cancellation;
 
     std::vector<std::uint8_t> artifact = {'H', 'O', 'R', 'O', 0x01, 0x02, 0x03, 0x04};
@@ -159,9 +141,33 @@ TEST_CASE("AssetCookCache write then hit returns bytes", "[native]") {
     REQUIRE((loadResult.Value().value() == artifact));
 }
 
+TEST_CASE("AssetCookCache creates missing directories only when storing an entry", "[native]") {
+    Tests::OwnedTestDirectory tmp{"horo-cache-test"};
+    const auto root = tmp.Path() / "missing cache ü" / "nested";
+    const AssetCookCache cache(root);
+    REQUIRE_FALSE(std::filesystem::exists(root.parent_path()));
+    const auto key = BuildAssetCookCacheKey(MakeInputs("lazy-cache"));
+    const auto miss = cache.Load(key, {});
+    REQUIRE(miss.HasValue());
+    CHECK_FALSE(miss.Value().has_value());
+    CHECK_FALSE(std::filesystem::exists(root.parent_path()));
+
+    CancellationSource cancelled;
+    cancelled.RequestCancellation();
+    const std::vector<std::uint8_t> bytes{1, 2, 3};
+    CHECK(cache.Store(key, bytes, cancelled.Token()).HasError());
+    CHECK_FALSE(std::filesystem::exists(root.parent_path()));
+
+    REQUIRE(cache.Store(key, bytes, {}).HasValue());
+    const auto hit = cache.Load(key, {});
+    REQUIRE(hit.HasValue());
+    REQUIRE(hit.Value().has_value());
+    CHECK(*hit.Value() == bytes);
+}
+
 TEST_CASE("AssetCookCache double store is idempotent", "[native]") {
-    TempDir tmp;
-    AssetCookCache cache(tmp.path);
+    Tests::OwnedTestDirectory tmp{"horo-cache-test"};
+    AssetCookCache cache(tmp.Path());
     CancellationToken cancellation;
 
     std::vector<std::uint8_t> artifact = {0xAA, 0xBB, 0xCC};
@@ -182,8 +188,8 @@ TEST_CASE("AssetCookCache double store is idempotent", "[native]") {
 }
 
 TEST_CASE("AssetCookCache honours cancellation on load", "[native]") {
-    TempDir tmp;
-    AssetCookCache cache(tmp.path);
+    Tests::OwnedTestDirectory tmp{"horo-cache-test"};
+    AssetCookCache cache(tmp.Path());
 
     CancellationSource cancelSource;
     cancelSource.RequestCancellation();
@@ -197,8 +203,8 @@ TEST_CASE("AssetCookCache honours cancellation on load", "[native]") {
 }
 
 TEST_CASE("AssetCookCache honours cancellation on store", "[native]") {
-    TempDir tmp;
-    AssetCookCache cache(tmp.path);
+    Tests::OwnedTestDirectory tmp{"horo-cache-test"};
+    AssetCookCache cache(tmp.Path());
 
     CancellationSource cancelSource;
     cancelSource.RequestCancellation();
@@ -240,7 +246,7 @@ TEST_CASE("BuildAssetCookCacheKey artifact format version change invalidates key
 
 TEST_CASE("Dependency cache identity is canonical and separately versioned", "[native][prefab-cook]") {
     const auto inputs = MakeInputs("scene");
-    const auto semantic = inputs.sourceDigest;
+    const auto &semantic = inputs.sourceDigest;
     std::vector<AssetCookDependencyIdentity> dependencies{{Id("00000000-0000-0000-0000-000000000002"), Type("core.mesh"), semantic},
                                                           {Id("00000000-0000-0000-0000-000000000003"), Type("core.mesh"), semantic}};
     const auto key = BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 2);
@@ -252,7 +258,7 @@ TEST_CASE("Dependency cache identity is canonical and separately versioned", "[n
     REQUIRE(reordered.Value() == key.Value());
 
     SECTION("dependency bytes") {
-        dependencies[0].artifactDigest.bytes[0] ^= 1;
+        dependencies[0].artifactDigest.bytes[0] = static_cast<std::uint8_t>(dependencies[0].artifactDigest.bytes[0] + 1U);
     }
     SECTION("dependency type") {
         dependencies[0].type = Type("core.material");
@@ -269,7 +275,7 @@ TEST_CASE("Dependency cache identity binds semantic context and rejects ambiguou
     const std::vector<AssetCookDependencyIdentity> dependencies{dependency};
     const auto key = BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 1);
     REQUIRE(key.HasValue());
-    semantic.bytes[0] ^= 1;
+    semantic.bytes[0] = static_cast<std::uint8_t>(semantic.bytes[0] + 1U);
     const auto changed = BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 1);
     REQUIRE(changed.HasValue());
     REQUIRE(changed.Value() != key.Value());
