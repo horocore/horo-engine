@@ -1845,3 +1845,19 @@ adapters only; they do not own pipeline policy.
 - [Asset Browser](../../../mock-studio/designs.md#architecture-editor-asset-browser): React mock design for the main asset
   browser with folder tree, grid/list views, and preview pane.
 - [Testing Architecture](../delivery/testing-architecture.md): import and cook tests.
+
+### Retained navigation project source
+
+`HoroNavigationBakeAutomation` captures project metadata, navigation policy, the
+canonical registry, Scene documents, NAVDEF01 definitions and physical materials
+through one explicit retained project read capability. Capture and verification
+share the original identity, generation, cancellation, revocation and invocation
+deadline. Count, byte and phase-duration limits fail the whole capture rather
+than dropping inputs. Optional package bytes remain evidence, not admission.
+
+`INavigationBakeSourceValidation` is a neutral NavigationApi contract for checking
+that immutable source evidence remains current. It grants no mutation or
+publication authority. This source-only layer creates no cache/index/output,
+selects no provider, and performs no migration; existing editor contracts and
+persisted formats are unchanged. Geometry and bake-service adoption are separate
+consumers added in dependent changes.
