@@ -37,7 +37,21 @@ namespace Horo::Platform::ImmutableFileNative {
         /** @brief Maps object redirection/type failures without disclosing an NT path. */
         Error OpenError(const ULONG status) {
             const bool unsafe = status == 0xc0000103U || status == 0xc0000024U || status == 0xc000050bU;
-            return MakeError(unsafe ? FileStorageErrors::UnsafeObject : FileStorageErrors::IoFailed);
+            return MakeError(unsafe ? FileStorageErrors::UnsafeObject : FileStorageErrors::IoFailed,
+                             "Native immutable component open failed; NTSTATUS " + std::to_string(status));
+        }
+
+        /** @brief Traversal handles carry no directory data access that can conflict with the native relative rename target open. */
+        ACCESS_MASK OpenAccess(const OpenKind kind) noexcept {
+            const bool directory = kind == OpenKind::Directory || kind == OpenKind::CreateParents || kind == OpenKind::PrivateDirectory;
+            ACCESS_MASK access = FILE_READ_ATTRIBUTES | SYNCHRONIZE | (directory ? FILE_TRAVERSE : FILE_READ_DATA);
+            if (kind == OpenKind::PrivateDirectory)
+                access |= FILE_ADD_FILE | DELETE;
+            if (kind == OpenKind::PrivateFile)
+                access |= FILE_WRITE_DATA | DELETE;
+            if (kind == OpenKind::FlushableRead)
+                access |= FILE_WRITE_DATA;
+            return access;
         }
 
         /** @brief Opens or exclusively creates one component relative to an already retained directory identity. */
@@ -55,7 +69,6 @@ namespace Horo::Platform::ImmutableFileNative {
                 return Result<std::optional<Handle>>::Failure(MakeError(FileStorageErrors::Capacity));
             const bool directory = kind == OpenKind::Directory || kind == OpenKind::CreateParents || kind == OpenKind::PrivateDirectory;
             const bool exclusive = kind == OpenKind::PrivateDirectory || kind == OpenKind::PrivateFile;
-            const bool writable = exclusive || kind == OpenKind::FlushableRead;
             const auto byteLength = static_cast<USHORT>(spelling.size() * sizeof(wchar_t));
             UNICODE_STRING nativeName{byteLength, byteLength, spelling.data()};
             OBJECT_ATTRIBUTES attributes{};
@@ -71,10 +84,8 @@ namespace Horo::Platform::ImmutableFileNative {
             constexpr ULONG directoryOnly = 0x00000001U;
             constexpr ULONG nonDirectoryOnly = 0x00000040U;
             const ULONG disposition = CreationDisposition(kind);
-            const ACCESS_MASK access =
-                FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE | (writable ? FILE_WRITE_DATA : 0U) | (exclusive ? DELETE : 0U);
             const ULONG options = openReparsePoint | synchronousIo | backupIntent | (directory ? directoryOnly : nonDirectoryOnly);
-            if (const auto result = create(&opened, access, &attributes, &io, nullptr, FILE_ATTRIBUTE_NORMAL,
+            if (const auto result = create(&opened, OpenAccess(kind), &attributes, &io, nullptr, FILE_ATTRIBUTE_NORMAL,
                                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, disposition, options, nullptr, 0);
                 result < 0) {
                 const auto status = static_cast<ULONG>(result);
@@ -168,8 +179,10 @@ namespace Horo::Platform::ImmutableFileNative {
             return Result<bool>::Success(true);
         }
         const auto error = GetLastError();
-        return error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS ? Result<bool>::Success(false)
-                                                                           : Result<bool>::Failure(MakeError(FileStorageErrors::IoFailed));
+        return error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS
+                   ? Result<bool>::Success(false)
+                   : Result<bool>::Failure(MakeError(FileStorageErrors::IoFailed,
+                                                     "Native immutable relative publication failed; Win32 code " + std::to_string(error)));
     }
 
     /** @copydoc Sync */
