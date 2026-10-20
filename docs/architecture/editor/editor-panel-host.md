@@ -146,6 +146,35 @@ commands for tab activation, panel docking, activity-bar reordering, and seam
 resizing. `WorkspaceDockArea` remains placement metadata and a command boundary;
 it is not the authoritative layout representation.
 
+The central document strip renders `WorkspacePanelHost::DocumentTabs()` in its
+host-owned order. Source, sequence and navigation instances share focus, close and
+move commands rather than keeping per-kind tab lists in the view. Viewport stays
+pinned; Game continues to be composed by the Play lifecycle. Moving a document
+updates the persisted open-key order without changing its instance, owner, dirty
+state or focus. Closing the active instance selects its next neighbor, then its
+previous neighbor when it was last. A scrollable strip, bounded title widths and
+full-path tooltips retain access to long and same-named source documents.
+
+Embedded source opens now attach to that strip after source-owner admission.
+The host presents a read-only UTF-8-safe preview of at most 64 KiB; editing and
+large-file text virtualization remain the source widget adapter's responsibility.
+Save, Save As and revision-fenced Save/Discard/Keep-open close choices execute in
+the source controller, including conflict and uncertain-durability failures. The
+exclusive close workflow belongs to `EditorModalHost`. Leaving the workspace also
+captures source revisions and requires Save/Discard/Stay; a stale decision cannot
+discard a newer root. Retained snapshots survive owner close.
+
+The additive host APIs `MoveDocument` and `RefreshDocuments` preserve existing
+callers. `RefreshDocuments` follows shared registry retarget/close decisions and
+does not save, close or reconstruct a document. The owning public-header target
+remains `HoroEditorServices`; its consumer is required validation for this change.
+The same owner also exposes allocation-free `DocumentIdentityRegistry::IsCurrent`
+and exact-publication `SourceDocumentSnapshot::SharesStateWith`. Retained snapshot
+leases prevent publication-address reuse during comparison. Unchanged frame
+updates retain the existing source projection and canonical tab dirty flags;
+path ownership copies and source-byte dirty comparisons occur only when a
+publication or registry identity changes. Reordering moves existing leases.
+
 Layout persistence validates the node tree before activation and falls back to
 the versioned default layout on structural failure. Splitter and panel drag
 gestures acquire central input-router capture, so modal opening, focus loss, or

@@ -448,6 +448,12 @@ namespace Horo::Editor {
         return *iterator;
     }
 
+    /** @copydoc DocumentIdentityRegistry::IsCurrent */
+    bool DocumentIdentityRegistry::IsCurrent(const DocumentIdentity &identity) const noexcept {
+        const auto current = FindInstanceIterator(identity.instance);
+        return current != openDocuments_.end() && *current == identity;
+    }
+
     std::size_t DocumentIdentityRegistry::Size() const noexcept {
         return openDocuments_.size();
     }

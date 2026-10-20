@@ -138,6 +138,12 @@ namespace Horo::Editor {
             return m_sourceOpenService.Documents();
         }
 
+        /** @brief Refreshes current source roots and checks the workspace leave guard. @return True for any dirty source. */
+        [[nodiscard]] bool HasDirtySourceDocuments();
+        /** @brief Saves all dirty sources through their owner; uncertain durability keeps navigation blocked.
+         * @return Success only after every source is durably clean. */
+        [[nodiscard]] Result<void> SaveSourceDocuments();
+
         /** @brief Last typed single-source save/Save As outcome from the actual workspace command route. */
         [[nodiscard]] const std::optional<Result<SourceSaveResult>> &SourceSaveOutcome() const noexcept {
             return m_sourceSaveOutcome;
@@ -518,6 +524,10 @@ namespace Horo::Editor {
          * success. */
         /** @brief Routes typed source publication/close intent through workspace-owned document services. */
         bool ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Routes document tabs to their owning lifecycle and publishes detached source snapshots. */
+        bool ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Refreshes source presentation and dirty flags without disk I/O or document mutation. */
+        void RefreshSourceDocumentProjection();
         void SaveScene(bool overwriteConflict = false);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);

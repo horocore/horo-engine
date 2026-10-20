@@ -199,6 +199,18 @@
     "workspace.sequence.keys": {
       "text": "Keys"
     },
+    "workspace.documents.close": { "text": "Close" },
+    "workspace.documents.move_left": { "text": "Move left" },
+    "workspace.documents.move_right": { "text": "Move right" },
+    "workspace.documents.save": { "text": "Save" },
+    "workspace.documents.preview": { "text": "Read-only source preview" },
+    "workspace.documents.preview_limit": { "text": "Preview limited to the first 64 KiB." },
+    "workspace.documents.close_title": { "text": "Close source document" },
+    "workspace.documents.close_prompt": { "text": "This document has unsaved changes. Save them before closing, discard them, or keep the document open." },
+    "workspace.documents.close_failed": { "text": "The document could not close. Its revision or disk contents may have changed. Cancel to review it; your changes remain open." },
+    "workspace.documents.save_close": { "text": "Save and close" },
+    "workspace.documents.discard_close": { "text": "Discard and close" },
+    "workspace.documents.cancel": { "text": "Keep open" },
     "workspace.sequence.close": {
       "text": "Close"
     },

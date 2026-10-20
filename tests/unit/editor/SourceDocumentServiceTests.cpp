@@ -94,14 +94,17 @@ TEST_CASE("Source byte patches preserve scalar boundaries and deterministic dirt
     CHECK(changed.Value().BaseRevision() == 1);
     CHECK(changed.Value().DiskBase() == original.Value().Text());
     CHECK(changed.Value().Dirty());
+    CHECK_FALSE(changed.Value().SharesStateWith(original.Value()));
     ErrorIs(owner.Edit(instance, {1, 0, 1, "a"}), SourceDocumentErrors::Stale);
     const auto unchanged = owner.Edit(instance, {2, 0, 1, "b"});
     REQUIRE(unchanged.HasValue());
     CHECK(unchanged.Value().Revision() == 2);
+    CHECK(unchanged.Value().SharesStateWith(changed.Value()));
     const auto reverted = owner.Edit(instance, {2, 0, 1, "a"});
     REQUIRE(reverted.HasValue());
     CHECK(reverted.Value().Revision() == 3);
     CHECK_FALSE(reverted.Value().Dirty());
+    CHECK_FALSE(reverted.Value().SharesStateWith(original.Value()));
 }
 
 TEST_CASE("Source external inspection never silently reloads a dirty buffer", "[unit][editor][source][document]") {

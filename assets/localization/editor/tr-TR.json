@@ -199,6 +199,18 @@
     "workspace.sequence.keys": {
       "text": "Anahtarlar"
     },
+    "workspace.documents.close": { "text": "Kapat" },
+    "workspace.documents.move_left": { "text": "Sola taşı" },
+    "workspace.documents.move_right": { "text": "Sağa taşı" },
+    "workspace.documents.save": { "text": "Kaydet" },
+    "workspace.documents.preview": { "text": "Salt okunur kaynak önizlemesi" },
+    "workspace.documents.preview_limit": { "text": "Önizleme ilk 64 KiB ile sınırlıdır." },
+    "workspace.documents.close_title": { "text": "Kaynak belgesini kapat" },
+    "workspace.documents.close_prompt": { "text": "Bu belgede kaydedilmemiş değişiklikler var. Kapatmadan önce kaydedin, değişiklikleri atın veya belgeyi açık tutun." },
+    "workspace.documents.close_failed": { "text": "Belge kapatılamadı. Sürümü veya disk içeriği değişmiş olabilir. İncelemek için iptal edin; değişiklikleriniz açık kalır." },
+    "workspace.documents.save_close": { "text": "Kaydet ve kapat" },
+    "workspace.documents.discard_close": { "text": "Değişiklikleri at ve kapat" },
+    "workspace.documents.cancel": { "text": "Açık tut" },
     "workspace.sequence.close": {
       "text": "Kapat"
     },

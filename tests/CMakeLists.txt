@@ -2642,6 +2642,7 @@ target_include_directories(HoroWorkspaceSplitterInteractionTests PRIVATE
 target_link_libraries(HoroWorkspaceSplitterInteractionTests PRIVATE HoroEngine::EditorServices)
 if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
+            support/AllocationProbe.cpp
             unit/editor/EditorWorkspaceControllerTests.cpp
             unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
             unit/editor/EditorWorkspaceControllerCollisionTests.cpp
