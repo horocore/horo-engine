@@ -7,6 +7,7 @@ add_library(HoroFoundation STATIC
         foundation/AssetCookTargetId.cpp
         foundation/FoundationErrors.cpp
         foundation/ImmutableFileStorage.cpp
+        foundation/PublicationReads.cpp
         foundation/PublicationLock.cpp
         foundation/modules/ModuleActivationContext.cpp
         foundation/modules/ModuleDescriptor.cpp
@@ -217,6 +218,7 @@ endif ()
 
 add_library(HoroPlatform STATIC
         platform/Platform.cpp
+        platform/PlatformRead.cpp
         platform/NativeFileSystemErrors.cpp
         platform/PlatformPublicationLock.cpp
         platform/ProductProbeLease.cpp

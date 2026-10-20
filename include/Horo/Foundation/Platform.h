@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Time.h"
 
@@ -125,10 +126,59 @@ namespace Horo {
         Parents /**< Creates missing ancestors as well as the final component. */
     };
 
+    /** @brief No-follow object classification for authority-owned publication inspection. */
+    enum class FileEntryKind {
+        RegularFile,
+        Directory,
+        Redirect,
+        Other
+    };
+
+    /** @brief Bounded metadata without an open native handle or a discovered absolute path. */
+    struct FileEntryInfo {
+        FileEntryKind kind{FileEntryKind::Other};
+        std::uint64_t sizeBytes{}; /**< Encoded bytes for a regular file; zero for other kinds. */
+        std::uint64_t hardLinks{}; /**< Link count for a regular file; zero for other kinds. */
+    };
+
+    /** @brief One immediate child; name contains a single native filename component. */
+    struct FileDirectoryEntry {
+        std::filesystem::path name;
+        FileEntryInfo info;
+    };
+
     /** @brief Cross-platform durable filesystem primitives for user-data transactions. */
     class DurableFileSystem {
     public:
         virtual ~DurableFileSystem() = default;
+
+        /** @brief Reads a complete regular, single-link file through this authority with a finite allocation bound.
+         * @param path Authority-admitted file path. @param maximumBytes Positive bound, at most ImmutableFileStorage::MaximumEntryBytes.
+         * @param cancellation Borrowed stop token checked before access and between bounded transfers.
+         * @return Complete owned bytes, or typed admission/capacity/cancellation/I/O failure; no partial success.
+         * @details The default refuses unsupported reading without native fallback. Implementations must reject leaf redirects
+         * and special objects and fence mutation metadata around transfer. This is not an atomic content snapshot.
+         * Domain owners retain publication ownership and verify content identities. Synchronous OS calls cannot be forcibly interrupted.
+         */
+        [[nodiscard]] virtual Result<std::vector<std::uint8_t>> ReadFileBounded(const std::filesystem::path &path, std::size_t maximumBytes,
+                                                                                const CancellationToken &cancellation = {}) const;
+
+        /** @brief Inspects one object without following its final redirect.
+         * @param path Authority-admitted path. @return Metadata, nullopt only for absence, or a typed failure.
+         * @details A redirect is classified rather than followed. The default refuses unsupported inspection.
+         */
+        [[nodiscard]] virtual Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const;
+
+        /** @brief Enumerates a bounded complete immediate directory inventory without recursing or following child redirects.
+         * @param path Authority-admitted directory. @param maximumEntries Positive bound, at most 1048576 entries.
+         * @param cancellation Borrowed stop token checked before access and between entries.
+         * @return Complete owned child names and classifications or a typed error; capacity exhaustion never returns a prefix.
+         * @details Order is unspecified. Names are native filename components; domain owners enforce portable-name policy.
+         * The default refuses unsupported enumeration. The result is not a transaction-wide immutable snapshot.
+         */
+        [[nodiscard]] virtual Result<std::vector<FileDirectoryEntry>> ListDirectory(const std::filesystem::path &path,
+                                                                                    std::size_t maximumEntries,
+                                                                                    const CancellationToken &cancellation = {}) const;
 
         /** @brief Creates directories through the same host-owned authority as publication writes.
          * @param path Directory selected by the caller's filesystem authority.
@@ -192,6 +242,20 @@ namespace Horo {
     /** @brief Native Windows/macOS/Linux durable filesystem implementation. */
     class NativeDurableFileSystem final : public DurableFileSystem {
     public:
+        /** @copydoc DurableFileSystem::ReadFileBounded
+         * @pre The host authorizes the absolute normalized path and protects its parent namespace from replacement throughout the call.
+         */
+        [[nodiscard]] Result<std::vector<std::uint8_t>> ReadFileBounded(const std::filesystem::path &path, std::size_t maximumBytes,
+                                                                        const CancellationToken &cancellation = {}) const override;
+        /** @copydoc DurableFileSystem::InspectEntry
+         * @pre The host authorizes and protects the absolute path's parent namespace throughout the call.
+         */
+        [[nodiscard]] Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const override;
+        /** @copydoc DurableFileSystem::ListDirectory
+         * @pre The host authorizes and protects the absolute directory namespace throughout the call.
+         */
+        [[nodiscard]] Result<std::vector<FileDirectoryEntry>> ListDirectory(const std::filesystem::path &path, std::size_t maximumEntries,
+                                                                            const CancellationToken &cancellation = {}) const override;
         /** @copydoc DurableFileSystem::CreateDirectoryPath
          * @pre The host authorizes the path and protects its canonical parent namespace during creation.
          */

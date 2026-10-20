@@ -106,7 +106,11 @@ namespace Horo::Platform::ProjectReadNative {
             return Result<Handle>::Failure(MakeError(ProjectReadErrors::Capacity));
         const auto byteLength = static_cast<USHORT>(spelling.size() * sizeof(wchar_t));
         UNICODE_STRING nativeName{byteLength, byteLength, spelling.data()};
-        OBJECT_ATTRIBUTES attributes{sizeof(OBJECT_ATTRIBUTES), parent.Get(), &nativeName, CaseInsensitive, nullptr, nullptr};
+        OBJECT_ATTRIBUTES attributes{};
+        attributes.Length = sizeof(attributes);
+        attributes.RootDirectory = parent.Get();
+        attributes.ObjectName = &nativeName;
+        attributes.Attributes = CaseInsensitive;
         IO_STATUS_BLOCK status{};
         HANDLE opened{};
         const ULONG options = OpenReparsePoint | SynchronousIo | BackupIntent | (directory ? DirectoryOnly : 0);
@@ -139,17 +143,17 @@ namespace Horo::Platform::ProjectReadNative {
     Result<Handle> OpenDirectory(const Handle &directory) {
         FILE_ID_INFO before{};
         if (!GetFileInformationByHandleEx(directory.Get(), FileIdInfo, &before, sizeof(before)))
-            return Result<Handle>::Failure(MakeError(ProjectReadErrors::Unavailable));
-        FILE_ID_DESCRIPTOR identity{};
-        identity.dwSize = sizeof(identity);
-        identity.Type = ExtendedFileIdType;
-        identity.ExtendedFileId = before.FileId;
-        // Reopen this retained object by identity, creating an independent enumeration cursor.
-        Handle copy{OpenFileById(directory.Get(), &identity, FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)};
+            return Result<Handle>::Failure(
+                MakeError(ProjectReadErrors::Unavailable,
+                          "Retained directory identity query failed; Win32 code " + std::to_string(GetLastError())));
+        // Reopen the retained object directly; extended file-ID opens depend on the volume's identifier format.
+        Handle copy{ReOpenFile(directory.Get(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)};
         if (!copy.IsValid())
-            return Result<Handle>::Failure(MakeError(ProjectReadErrors::Unavailable));
+            return Result<Handle>::Failure(
+                MakeError(ProjectReadErrors::Unavailable,
+                          "Retained directory cursor reopen failed; Win32 code " + std::to_string(GetLastError())));
         FILE_ID_INFO after{};
         if (!GetFileInformationByHandleEx(copy.Get(), FileIdInfo, &after, sizeof(after)) ||
             before.VolumeSerialNumber != after.VolumeSerialNumber ||

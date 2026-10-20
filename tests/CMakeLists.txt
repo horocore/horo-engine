@@ -3068,6 +3068,7 @@ horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;fil
 add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
+        unit/foundation/PublicationReadTests.cpp
 )
 
 add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)

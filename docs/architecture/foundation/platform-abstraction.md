@@ -466,3 +466,31 @@ persisted formats. Migrating `AssetCookCache` and the cook selector, inventory,
 recovery and publication operations to complete host-owned I/O authority is still
 required. This capability alone does not complete HORO-1253 or grant project trust,
 authored-source writes, cache eviction or generation activation.
+
+## Bounded publication inspection and reads
+
+`DurableFileSystem` exposes `ReadFileBounded`, `InspectEntry`, and
+`ListDirectory` so publication owners can use one injected authority for reads,
+inventory and mutations. Unsupported adapters reject these operations by default;
+there is no native fallback. The native publication test adapter explicitly
+forwards all three capabilities to its owned native implementation.
+
+Reads admit a finite positive bound up to 1 GiB, open a no-follow regular
+single-link leaf, transfer in 4 KiB steps with cancellation checks, and compare
+handle-derived identity/mutation metadata before returning complete owned bytes.
+Windows read handles refuse concurrent write sharing while retaining read/delete
+sharing for atomic replacement.
+Metadata fencing detects observed changes; it does not create an atomic content
+snapshot or replace envelope/hash verification and publication writer ownership.
+Inventory enumerates only immediate children, preserves no-follow classifications,
+and fails at its finite entry bound rather than returning a prefix. It does not
+promise an immutable directory snapshot. Hosts register the existing inert
+`ImmutableFileStorageErrorDomain` contribution to present these typed failures.
+
+This adds virtual operations and plain metadata types to the existing Foundation
+header; implementations and consumers must rebuild. Existing write-only adapters
+remain write-only through explicit unsupported results. Native methods retain the
+existing host-protected-parent precondition; they do not grant project trust or
+provide a root-identity capability. The next migration must route cook selector,
+manifest, artifact and recovery inventory access through these operations and
+compose the root-bound publication implementation. Parent HORO-1253 remains open.
