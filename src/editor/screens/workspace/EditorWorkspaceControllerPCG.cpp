@@ -218,6 +218,15 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::ExecutePCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request,
                                                                     const PCGDocumentSnapshot &snapshot) {
         const auto instance = snapshot.identity.instance;
+        if (request.action == PCGEditorAction::ApplyProperties) {
+            if (!request.authoring)
+                return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Invalid)));
+            auto prepared = request.authoring->Command(snapshot, m_viewModel.pcgSchemas, request.fence.canEdit);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            prepared.Value().cancellation = request.fence.cancellation;
+            return ExecutePCGDocument(instance, prepared.Value());
+        }
         if (request.action == PCGEditorAction::Present) {
             document.canvas = request.presentation;
             return Result<void>::Success();

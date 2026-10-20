@@ -34,6 +34,7 @@ namespace Horo::Editor::PCGCanvasTestSupport {
                                                                                                  .durableFiles = &project.files,
                                                                                                  .documentSessionOwner = Asset(9),
                                                                                                  .pcgCatalog = catalog.document,
+                                                                                                 .pcgSchemas = catalog.schemas,
                                                                                                  .pcgPalette = catalog.palette});
             Open();
         }

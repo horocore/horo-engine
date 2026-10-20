@@ -383,6 +383,7 @@ namespace Horo::Editor {
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;
+        PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
 
         float leftPanelWidth = 268.0F;

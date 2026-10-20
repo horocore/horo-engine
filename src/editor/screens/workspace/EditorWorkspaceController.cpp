@@ -88,6 +88,7 @@ namespace Horo::Editor {
           m_playSession(dependencies.networkDebugger), m_audioPreview(dependencies.audioPreview),
           m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
         m_viewModel.pcgPalette = dependencies.pcgPalette;
+        m_viewModel.pcgSchemas = dependencies.pcgSchemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;

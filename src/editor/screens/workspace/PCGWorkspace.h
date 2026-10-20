@@ -23,6 +23,7 @@ namespace Horo::Editor {
     struct PCGEditorCatalog final {
         PCGDocumentCatalog document;
         std::vector<PCGPaletteEntry> palette;
+        PCG::PCGNodeCatalogSnapshot schemas;
     };
 
     /** @brief Composes repository-owned schemas without activating evaluators or selecting a backend.
@@ -63,7 +64,8 @@ namespace Horo::Editor {
         Disconnect,
         Undo,
         Redo,
-        Save
+        Save,
+        ApplyProperties
     };
 
     /** @brief One exact-frame intent. Connection gestures submit no document operations until completion. */
@@ -75,6 +77,7 @@ namespace Horo::Editor {
         PCG::NodeId sourceNode, targetNode;
         PCG::PinId sourcePin, targetPin;
         PCG::EdgeId edge;
+        std::optional<PCGGraphAuthoringDraft> authoring;
     };
 
     /** @brief Synchronizes presentation after an immutable publication, dropping stale semantic references.
@@ -84,6 +87,7 @@ namespace Horo::Editor {
      * @param state Workspace-owned gesture state. */
     void CancelPCGCanvasGesture(PCGCanvasState &state);
     class ILocalizationService;
+    struct PCGAuthoringInspectorState;
 
     namespace Theme {
         struct Fonts;
@@ -92,10 +96,13 @@ namespace Horo::Editor {
     /** @brief Draws the real graph surface from immutable source using shared controls and localized labels.
      * @param document Exact source projection. @param palette Host creation recipes.
      * @param localization Shared catalog. @param fonts Shared typography.
+     * @param schemas Optional exact host schemas. @param inspector Optional workspace presentation buffers.
      * @return Fenced input intent, or no change for an idle frame. */
     [[nodiscard]] std::optional<PCGEditorRequest> DrawPCGGraphEditor(const PCGWorkspaceDocument &document,
                                                                      std::span<const PCGPaletteEntry> palette,
-                                                                     const ILocalizationService &localization, const Theme::Fonts &fonts);
+                                                                     const ILocalizationService &localization, const Theme::Fonts &fonts,
+                                                                     const PCG::PCGNodeCatalogSnapshot *schemas = nullptr,
+                                                                     PCGAuthoringInspectorState *inspector = nullptr);
     /** @brief Checks finite, bounded presentation against one source without mutating either.
      * @param state Detached presentation intent. @param source Exact immutable source.
      * @return Zero-mutation validation result. */

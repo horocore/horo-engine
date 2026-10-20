@@ -700,6 +700,7 @@ namespace Horo::Editor {
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
                                                    .pcgCatalog = std::move(pcgCatalog.document),
+                                                   .pcgSchemas = std::move(pcgCatalog.schemas),
                                                    .pcgPalette = std::move(pcgCatalog.palette),
                                                });
                 if (controller_->InitializationError().has_value()) {

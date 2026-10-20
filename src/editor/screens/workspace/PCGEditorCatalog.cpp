@@ -73,6 +73,7 @@ namespace Horo::Editor {
         if (captured.HasError())
             return Return::Failure(captured.ErrorValue());
         PCGEditorCatalog result;
+        result.schemas = captured.Value();
         result.document.revision = captured.Value().Generation();
         for (const auto &descriptor : captured.Value().Nodes()) {
             const auto payload = InitialSettings(descriptor.kind);

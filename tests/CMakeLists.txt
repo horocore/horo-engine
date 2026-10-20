@@ -2848,8 +2848,10 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorUiComponentsRenderTests.cpp
             unit/editor/ActivityButtonIdentityTests.cpp
             unit/editor/SequenceTimelineRenderTests.cpp
+            unit/editor/PCGAuthoringInspectorRenderTests.cpp
     )
 
+    target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE "${PROJECT_SOURCE_DIR}/src/editor/pcg")
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
     target_link_libraries(HoroEditorUiComponentsRenderTests
             PRIVATE
@@ -5323,6 +5325,7 @@ set_tests_properties(HoroAnimationGraphPublicHeaderConsumer PROPERTIES LABELS "u
 
 add_executable(HoroPCGDocumentTests
         unit/editor/PCGGraphDocumentSaveTests.cpp
+        unit/editor/PCGGraphAuthoringTests.cpp
         unit/editor/PCGGraphDocumentTests.cpp
         unit/editor/PCGGraphDocumentServiceTests.cpp)
 target_compile_features(HoroPCGDocumentTests PRIVATE cxx_std_20)

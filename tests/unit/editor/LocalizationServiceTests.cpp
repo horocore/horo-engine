@@ -406,4 +406,94 @@ namespace {
             RequireCatalogKeys(service, PCGCanvasKeys);
         }
     }
+
+    constexpr std::array PCGAuthoringKeys{
+        "workspace.pcg.authoring.input_key",
+        "workspace.pcg.authoring.remove_input",
+        "workspace.pcg.authoring.expose_input",
+        "workspace.pcg.authoring.title",
+        "workspace.pcg.authoring.invalid_value",
+        "workspace.pcg.authoring.unsupported",
+        "workspace.pcg.authoring.unavailable",
+        "workspace.pcg.authoring.rejected",
+        "workspace.pcg.authoring.apply",
+        "workspace.pcg.authoring.cancel",
+        "workspace.pcg.authoring.no_properties",
+        "workspace.pcg.authoring.deterministic_defaults",
+        "workspace.pcg.authoring.external_input",
+        "workspace.pcg.authoring.non_deterministic",
+        "workspace.pcg.authoring.profile_deterministic",
+        "workspace.pcg.authoring.add_default",
+        "workspace.pcg.authoring.remove_default",
+        "workspace.pcg.authoring.tier",
+        "workspace.pcg.authoring.baseline",
+        "workspace.pcg.authoring.standard",
+        "workspace.pcg.authoring.high",
+        "workspace.pcg.authoring.mode",
+        "workspace.pcg.authoring.offline",
+        "workspace.pcg.authoring.runtime",
+        "workspace.pcg.authoring.hybrid",
+        "workspace.pcg.authoring.seed",
+        "workspace.pcg.authoring.grid",
+        "workspace.pcg.authoring.volume",
+        "workspace.pcg.authoring.fraction",
+        "workspace.pcg.authoring.strata",
+        "workspace.pcg.authoring.count",
+        "workspace.pcg.authoring.attempts",
+        "workspace.pcg.authoring.minimum_distance",
+        "workspace.pcg.authoring.minimum",
+        "workspace.pcg.authoring.maximum",
+        "workspace.pcg.authoring.minimum_degrees",
+        "workspace.pcg.authoring.maximum_degrees",
+        "workspace.pcg.authoring.attribute",
+        "workspace.pcg.authoring.comparison",
+        "workspace.pcg.authoring.equal",
+        "workspace.pcg.authoring.not_equal",
+        "workspace.pcg.authoring.less",
+        "workspace.pcg.authoring.less_equal",
+        "workspace.pcg.authoring.greater",
+        "workspace.pcg.authoring.greater_equal",
+        "workspace.pcg.authoring.predicate",
+        "workspace.pcg.authoring.predicate_type",
+        "workspace.pcg.authoring.translation",
+        "workspace.pcg.authoring.rotation",
+        "workspace.pcg.authoring.scale",
+        "workspace.pcg.authoring.space",
+        "workspace.pcg.authoring.snapshot",
+        "workspace.pcg.authoring.point_local",
+        "workspace.pcg.authoring.maximum_vertical_distance",
+        "workspace.pcg.authoring.half_extent",
+        "workspace.pcg.authoring.salt",
+        "workspace.pcg.authoring.attribute_type",
+        "workspace.pcg.authoring.boolean",
+        "workspace.pcg.authoring.signed",
+        "workspace.pcg.authoring.unsigned",
+        "workspace.pcg.authoring.scalar",
+        "workspace.pcg.authoring.vector2",
+        "workspace.pcg.authoring.vector3",
+        "workspace.pcg.authoring.vector4",
+        "workspace.pcg.authoring.frequency",
+        "workspace.pcg.authoring.amplitude",
+        "workspace.pcg.authoring.octaves",
+        "workspace.pcg.authoring.persistence",
+        "workspace.pcg.authoring.lacunarity",
+        "workspace.pcg.authoring.normalization",
+        "workspace.pcg.authoring.signed_noise",
+        "workspace.pcg.authoring.unit_interval",
+        "workspace.pcg.authoring.default",
+        "workspace.pcg.authoring.pin_default",
+    };
+
+    TEST_CASE("PCG authoring catalog keys resolve in both shipped locales", "[unit][editor][pcg][localization]") {
+        const std::filesystem::path root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+        Horo::Editor::LocalizationError error;
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            RequireCatalogKeys(service, PCGAuthoringKeys);
+        }
+    }
 }  // namespace
