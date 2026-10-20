@@ -115,6 +115,14 @@ namespace Horo::Application::NavigationBakeDetail {
                                                                 .tile = {.x = Coordinate(tile, "x"),
                                                                          .z = Coordinate(tile, "z"),
                                                                          .layer = static_cast<std::uint16_t>(layer)}};
+                if (tile.contains("sceneScope")) {
+                    const auto asset = Assets::AssetId::Parse(tile.at("sceneScope").get<std::string>());
+                    if (asset.HasError() || !asset.Value().IsValid())
+                        throw Json::type_error::create(302, "invalid Scene bake scope", &tile);
+                    record.tile->scope = Navigation::NavigationBakeScopeId::ForScene(asset.Value().Bytes()).Value();
+                }
+                if (record.tile->scope.IsSceneScoped() != (Unsigned(value, "schema") == 2))
+                    throw Json::type_error::create(302, "inconsistent diagnostic scope version", &tile);
             }
             if (value.contains("source"))
                 record.source = Source(value.at("source"));
@@ -131,7 +139,7 @@ namespace Horo::Application::NavigationBakeDetail {
 
     /** @copydoc EncodeDiagnostic */
     std::string EncodeDiagnostic(const NavigationBakeDiagnosticRecord &record, const NavigationBakeDiagnosticsConfig &config) {
-        Json value{{"schema", 1},
+        Json value{{"schema", record.tile && record.tile->scope.IsSceneScoped() ? 2 : 1},
                    {"project", config.project.Value()},
                    {"definition", config.definition.ToString()},
                    {"sequence", record.sequence},
@@ -153,6 +161,8 @@ namespace Horo::Application::NavigationBakeDetail {
                              {"x", tile.tile.x},
                              {"z", tile.tile.z},
                              {"layer", tile.tile.layer}};
+            if (tile.scope.IsSceneScoped())
+                value["tile"]["sceneScope"] = Assets::AssetId::FromBytes(tile.scope.SceneBytes()).ToString();
         }
         if (record.source) {
             const auto &source = *record.source;
@@ -176,8 +186,9 @@ namespace Horo::Application::NavigationBakeDetail {
             return std::nullopt;
         try {
             const auto value = Json::parse(bytes);
-            if (Unsigned(value, "schema") != 1 || Unsigned(value, "project") != config.project.Value() ||
-                value.at("definition") != config.definition.ToString())
+            if (const auto schema = Unsigned(value, "schema"); (schema != 1 && schema != 2) || (schema == 2 && !value.contains("tile")) ||
+                                                               Unsigned(value, "project") != config.project.Value() ||
+                                                               value.at("definition") != config.definition.ToString())
                 return std::nullopt;
             const auto event = Unsigned(value, "event");
             const auto result = Unsigned(value, "result");

@@ -8,6 +8,7 @@
 #include "Horo/Application/NavigationBakeSourceAuthority.h"
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Navigation/NavigationBakeJobs.h"
+#include "Horo/Navigation/NavigationBakeSourceValidation.h"
 #include "Horo/Navigation/NavigationTileArtifact.h"
 
 namespace Horo::Application {
@@ -33,7 +34,11 @@ namespace Horo::Application {
             diagnostics; /**< Project-owned retained output/history consumer shared by bake entry points. */
     };
 
-    /** @brief Complete owned capture; each submission replaces the entire definition tile closure. */
+    /** @brief Complete owned capture; each submission replaces the entire definition tile closure.
+     * @details Empty tiles require an input with no partitions and complete current source authority. Publication
+     * emits an explicit HNS3 empty replacement; it does not retain old tiles or invoke a tile builder. Bound empty
+     * partitions still require their complete tile layout. ValidateOnly never changes the published generation.
+     */
     struct NavigationBakeRequest {
         std::shared_ptr<const Navigation::NavigationBakeInputSnapshot> input;
         Navigation::NavigationTileBakeCompatibility compatibility;
@@ -43,6 +48,32 @@ namespace Horo::Application {
         std::vector<NavigationDiagnosticSource>
             diagnosticSources; /**< Host-resolved authored ownership for the captured source observations. */
         std::optional<Navigation::NavigationProjectProfile> projectProfile; /**< Owned release policy; omission remains non-release only. */
+        /** @brief Optional exact scope-qualified surface rebuild selection over the complete captured definition.
+         * Absence allows rebuilding every surface. A present value must be nonempty, unique and name surfaces
+         * in the complete authored surface catalog. Submission canonicalizes its order. Every unselected tile must resolve to verified
+         * current retained/cache content before any selected tile is built; otherwise the attempt fails without publication. Each key
+         * preserves its Scene UUID; an unscoped key cannot select a matching surface in a Scene. Input, tiles and source observations
+         * always describe the complete replacement closure, never a filtered subset.
+         */
+        std::optional<std::vector<Navigation::NavigationBakeSurfaceKey>> rebuildSurfaces;
+        /** @brief Validates the same capture/layout and unselected output without builder/cache writes or publication.
+         * A successful validation does not change Published or certify an older generation as current.
+         */
+        Navigation::NavigationBakeExecutionMode execution{Navigation::NavigationBakeExecutionMode::BuildAndPublish};
+        /** @brief Complete authored surface catalog, including disabled surfaces, including surfaces without current tiles.
+         * @details Each exact Scene-qualified key occurs once. Every tile belongs to this catalog. Empty surfaces
+         * can be explicitly selected to remove their old topology; removing an unselected old tile instead fails
+         * BakeSelectionIncomplete. Hosts capture this catalog from authored state, never from surviving geometry.
+         * Submission sorts this bounded table. An empty catalog is valid only for a complete zero-tile closure.
+         */
+        std::vector<Navigation::NavigationBakeSurfaceKey> authoredSurfaces;
+        /** @brief Owned external-source verification, required by file-backed host composition.
+         * @details Absence denotes an in-memory capture protected solely by sourceAuthority. File-backed commands
+         * must supply their retained source owner; the service never discovers or fabricates one. Verification runs
+         * only on workers before gathering, at validate-only completion and under the final source-adoption lease.
+         * Requests can join only when this exact immutable validation owner also matches.
+         */
+        std::shared_ptr<const Navigation::INavigationBakeSourceValidation> sourceValidation;
     };
 
     /** @brief Last successfully published immutable generation; retained readers survive subsequent submissions. */

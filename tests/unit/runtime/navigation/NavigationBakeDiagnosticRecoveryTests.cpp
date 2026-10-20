@@ -157,6 +157,27 @@ namespace Horo::Application {
         }
     }  // namespace
 
+    TEST_CASE("Recovered scoped tile checkpoints retain the full Scene UUID", "[navigation][diagnostics][scope]") {
+        Directory directory;
+        const auto scope = NavigationBakeScopeId::ForScene(Asset("2").Bytes()).Value();
+        {
+            auto journal = NavigationBakeDiagnostics::Create(DiagnosticConfig(directory)).Value();
+            TelemetryOwner telemetry{journal};
+            IncrementalBakeFixture fixture;
+            auto tile = fixture.Tiles().front().key;
+            tile.scope = scope;
+            REQUIRE(journal->Record({.operation = 1,
+                                     .event = NavigationBakeDiagnosticEvent::TileFailed,
+                                     .stage = "tile-build",
+                                     .message = "Scoped tile failure",
+                                     .tile = tile}));
+        }
+        const auto recovered = NavigationBakeDiagnostics::Create(DiagnosticConfig(directory)).Value()->Snapshot();
+        REQUIRE(recovered.records.size() == 1);
+        REQUIRE(recovered.records.front().tile);
+        CHECK(recovered.records.front().tile->scope == scope);
+    }
+
     TEST_CASE("Suppression and bounded overwrite remain visible and restart readable", "[navigation][diagnostics][retention]") {
         Directory directory;
         {
@@ -273,9 +294,10 @@ namespace Horo::Application {
             source.target.relativePath = "../escape.scene";
         }
         SECTION("absolute") {
-            const auto absolute = (directory.root / "asset.scene").generic_u8string();
-            REQUIRE(std::filesystem::path{absolute}.is_absolute());
-            source.target.relativePath.assign(absolute.begin(), absolute.end());
+            const std::filesystem::path absolute = directory.root / "asset.scene";
+            REQUIRE(absolute.is_absolute());
+            const auto spelling = absolute.generic_u8string();
+            source.target.relativePath.assign(spelling.begin(), spelling.end());
         }
         SECTION("Windows traversal") {
             source.target.relativePath = "..\\escape.scene";

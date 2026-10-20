@@ -23,8 +23,27 @@
 #include <thread>
 
 namespace Horo::Application::BakeTestSupport {
-    using namespace Horo::Navigation;
-    using namespace Horo::Navigation::TestSupport;
+    using Navigation::CreateRecastDetourNavigationMeshBuilder;
+    using Navigation::CreateRecastDetourNavigationQueryBackend;
+    using Navigation::GroundedNavigationPolygon;
+    using Navigation::INavigationMeshBuilder;
+    using Navigation::NavigationBakeExecutionMode;
+    using Navigation::NavigationBakeSurfaceKey;
+    using Navigation::NavigationCookedTile;
+    using Navigation::NavigationCookedTileSet;
+    using Navigation::NavigationFilterId;
+    using Navigation::NavigationGeneration;
+    using Navigation::NavigationPath;
+    using Navigation::NavigationQualityLevel;
+    using Navigation::NavigationQueryKind;
+    using Navigation::NavigationTileBuildRequest;
+    using Navigation::NavigationTileBuildResult;
+    using Navigation::NavigationWorldId;
+    using Navigation::NavMeshPolygon;
+    using Navigation::RecastDetourProviderCreateInfo;
+    using Navigation::SurfaceId;
+    using Navigation::TestSupport::Id;
+    using Navigation::TestSupport::IncrementalBakeFixture;
 
     /** @brief Owns one atomically created private test directory with spaces and Unicode in its path. */
     struct TempDirectory {
@@ -75,11 +94,11 @@ namespace Horo::Application::BakeTestSupport {
 
         Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
             if (failWrites.load())
-                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::BakeInputFailed));
             auto written = native.WriteDurable(path, bytes);
-            if (const std::string_view content{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-                (path.filename() == "current.json" || path.filename().string().starts_with("current.json.tmp.")) &&
-                content.find("generationPath") != std::string_view::npos) {
+            constexpr std::string_view marker{"generationPath"};
+            if (const auto content = std::ranges::search(bytes, std::as_bytes(std::span{marker.data(), marker.size()}));
+                (path.filename() == "current.json" || path.filename().string().starts_with("current.json.tmp.")) && !content.empty()) {
                 currentStaged.store(true);
                 while (holdCurrent.load())
                     std::this_thread::yield();
@@ -91,10 +110,10 @@ namespace Horo::Application::BakeTestSupport {
                                           AtomicFileReplacementReceipt &receipt) override {
             const bool current = destination.filename() == "current.json";
             if (current && failReplacement.load())
-                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::BakeInputFailed));
             auto replaced = native.AtomicReplaceTracked(prepared, destination, receipt);
             if (current && replaced.HasValue() && failAfterReplacement.load())
-                return Result<void>::Failure(MakeError(NavigationErrors::BakeInputFailed));
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::BakeInputFailed));
             return replaced;
         }
     };
@@ -173,14 +192,30 @@ namespace Horo::Application::BakeTestSupport {
         return {};
     }
 
-    [[nodiscard]] inline OperationId Submit(BakeHarness &harness) {
-        auto &service = *harness.service;
+    /** @brief Captures the complete fixture request under the same current-source authority for each mode. */
+    [[nodiscard]] inline NavigationBakeRequest Request(
+        const BakeHarness &harness, const NavigationBakeExecutionMode execution = NavigationBakeExecutionMode::BuildAndPublish,
+        std::optional<std::vector<SurfaceId>> surfaces = std::nullopt) {
+        std::optional<std::vector<NavigationBakeSurfaceKey>> qualified;
+        if (surfaces) {
+            qualified.emplace();
+            for (const auto id : *surfaces)
+                qualified->push_back({id});
+        }
         const auto &fixture = harness.fixture;
         REQUIRE(harness.config.sourceAuthority->UpdateCurrent(fixture.revisions, fixture.Observations()).HasValue());
-        auto id = service.Submit({.input = fixture.Input(),
-                                  .compatibility = fixture.compatibility,
-                                  .tiles = fixture.Tiles(),
-                                  .sources = fixture.Observations()});
+        return {.input = fixture.Input(),
+                .compatibility = fixture.compatibility,
+                .tiles = fixture.Tiles(),
+                .sources = fixture.Observations(),
+                .rebuildSurfaces = std::move(qualified),
+                .execution = execution,
+                .authoredSurfaces = fixture.SurfaceCatalog()};
+    }
+
+    [[nodiscard]] inline OperationId Submit(const BakeHarness &harness,
+                                            const NavigationBakeExecutionMode execution = NavigationBakeExecutionMode::BuildAndPublish) {
+        auto id = harness.service->Submit(Request(harness, execution));
         REQUIRE(id.HasValue());
         return id.Value();
     }

@@ -17,7 +17,8 @@ namespace Horo::Application {
             auto rejected = harness.service->Submit({.input = harness.fixture.Input(),
                                                      .compatibility = harness.fixture.compatibility,
                                                      .tiles = tiles,
-                                                     .sources = harness.fixture.Observations()});
+                                                     .sources = harness.fixture.Observations(),
+                                                     .authoredSurfaces = harness.fixture.SurfaceCatalog()});
             REQUIRE(rejected.HasError());
             CHECK(rejected.ErrorValue().domain.Value() == NavigationErrors::BakeInputInvalid.domain.Value());
             CHECK(rejected.ErrorValue().code.Value() == NavigationErrors::BakeInputInvalid.code.Value());
@@ -40,7 +41,8 @@ namespace Horo::Application {
             auto submitted = harness.service->Submit({.input = harness.fixture.Input(),
                                                       .compatibility = harness.fixture.compatibility,
                                                       .tiles = std::move(tiles),
-                                                      .sources = harness.fixture.Observations()});
+                                                      .sources = harness.fixture.Observations(),
+                                                      .authoredSurfaces = harness.fixture.SurfaceCatalog()});
             REQUIRE(submitted.HasValue());
             REQUIRE(Terminal(*harness.service, harness.operations, submitted.Value()).state == OperationState::Succeeded);
             const auto publication = harness.service->Published();

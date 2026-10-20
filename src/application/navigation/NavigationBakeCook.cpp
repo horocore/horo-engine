@@ -82,8 +82,21 @@ namespace Horo::Application::NavigationBakeDetail {
             return tile;
         }
 
+        /** @brief Verifies owned external evidence without adding filesystem work to host admission or writer polling. */
+        Result<void> ValidateSourceCapture(const Attempt &attempt, const CancellationToken &cancel) {
+            if (cancel.IsCancellationRequested())
+                return Failure<void>(NavigationErrors::BakeInputCancelled);
+            if (attempt.request.sourceValidation) {
+                if (auto verified = attempt.request.sourceValidation->ValidateCurrent(cancel); verified.HasError())
+                    return verified;
+            }
+            return cancel.IsCancellationRequested() ? Failure<void>(NavigationErrors::BakeInputCancelled) : Result<void>::Success();
+        }
+
         /** @brief Captures all tiles conservatively so removal and movement invalidate their old footprints too. */
         [[nodiscard]] Result<void> Gather(const ServiceState &state, Attempt &attempt, const CancellationToken &cancel) {
+            if (auto current = ValidateSourceCapture(attempt, cancel); current.HasError())
+                return current;
             attempt.candidate = std::make_shared<NavigationBakePublication>();
             attempt.candidate->tiles.inputFingerprint = attempt.request.input->Fingerprint();
             attempt.candidate->tiles.provenance =
@@ -149,7 +162,8 @@ namespace Horo::Application::NavigationBakeDetail {
         /** @brief Resolves a verified retained/cache hit before invoking the native builder. */
         [[nodiscard]] Result<std::shared_ptr<const NavigationCookedTile>> ResolveTile(
             const NavigationBakeServiceConfig &config, const std::shared_ptr<const NavigationBakePublication> &previous,
-            const NavigationPreparedTile &prepared, const CancellationToken &cancel, NavigationBakePublication &candidate) {
+            const NavigationPreparedTile &prepared, const CancellationToken &cancel, NavigationBakePublication &candidate,
+            const bool allowRebuild) {
             auto tile = RetainedTile(previous, prepared);
             if (!tile) {
                 auto cached = CachedTile(config, prepared, cancel);
@@ -161,6 +175,8 @@ namespace Horo::Application::NavigationBakeDetail {
                 ++candidate.reusedTiles;
                 return Result<std::shared_ptr<const NavigationCookedTile>>::Success(std::move(tile));
             }
+            if (!allowRebuild)
+                return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::BakeSelectionIncomplete);
             auto built = BuildFreshTile(config, prepared, cancel);
             if (built.HasValue())
                 ++candidate.rebuiltTiles;
@@ -176,14 +192,52 @@ namespace Horo::Application::NavigationBakeDetail {
             });
         }
 
-        /** @brief Resolves changed subsets into a complete bounded candidate without modifying published leases. */
-        [[nodiscard]] Result<void> Build(const ServiceState &state, const Attempt &attempt, const CancellationToken &cancel) {
-            const auto previous = state.publication.Load();
-            std::size_t bytes{};
-            for (const auto &prepared : attempt.prepared) {
+        /** @brief Selects builder admission only; the candidate still contains every captured surface. */
+        [[nodiscard]] bool IsSelected(const NavigationBakeRequest &request, const NavigationBakeSurfaceKey &surface) {
+            return !request.rebuildSurfaces || std::ranges::binary_search(*request.rebuildSurfaces, surface);
+        }
+
+        /** @brief Fences deletion of every unselected old tile, including after a host restart.
+         * @details Missing selectors mean no active publication; malformed or unreadable selectors fail closed.
+         * The returned immutable lease is also reused by both selected build and validate-only passes.
+         */
+        Result<std::shared_ptr<const NavigationBakePublication>> PreviousForRequest(const ServiceState &state, const Attempt &attempt,
+                                                                                    const CancellationToken &cancel) {
+            using Return = Result<std::shared_ptr<const NavigationBakePublication>>;
+            if (cancel.IsCancellationRequested())
+                return Failure<std::shared_ptr<const NavigationBakePublication>>(NavigationErrors::BakeInputCancelled);
+            auto previous = state.publication.Load();
+            if (!attempt.request.rebuildSurfaces)
+                return Return::Success(std::move(previous));
+            if (!previous) {
+                std::error_code error;
+                if (const auto status = std::filesystem::symlink_status(state.config.targetRoot / "current.json", error);
+                    error == std::errc::no_such_file_or_directory || (!error && status.type() == std::filesystem::file_type::not_found))
+                    return Return::Success({});
+                auto durable = ResolveNavigationBakePublication(state.config);
+                if (durable.HasError())
+                    return Return::Failure(durable.ErrorValue());
+                previous = std::move(durable).Value();
+            }
+            for (const auto &tile : previous->tiles.tiles) {
+                if (const auto &key = tile->Key(); !IsSelected(attempt.request, {key.surface, key.scope}) &&
+                                                   !std::ranges::binary_search(attempt.request.tiles, key, {}, &NavigationBakeTile::key))
+                    return Failure<std::shared_ptr<const NavigationBakePublication>>(NavigationErrors::BakeSelectionIncomplete);
+            }
+            return Return::Success(std::move(previous));
+        }
+
+        /** @brief Resolves one bounded pass into canonical tile positions without publishing partial content. */
+        [[nodiscard]] Result<void> BuildPass(const ServiceState &state, const Attempt &attempt,
+                                             const std::shared_ptr<const NavigationBakePublication> &previous,
+                                             const CancellationToken &cancel, const bool selected, std::size_t &bytes) {
+            for (std::size_t index = 0; index < attempt.prepared.size(); ++index) {
+                const auto &prepared = attempt.prepared[index];
+                if (IsSelected(attempt.request, {prepared.tile.key.surface, prepared.tile.key.scope}) != selected)
+                    continue;
                 if (cancel.IsCancellationRequested())
                     return Failure<void>(NavigationErrors::BakeInputCancelled);
-                auto resolved = ResolveTile(state.config, previous, prepared, cancel, *attempt.candidate);
+                auto resolved = ResolveTile(state.config, previous, prepared, cancel, *attempt.candidate, selected);
                 if (resolved.HasError()) {
                     ReportTileFailure(state, attempt, prepared, resolved.ErrorValue());
                     return Result<void>::Failure(resolved.ErrorValue());
@@ -193,9 +247,21 @@ namespace Horo::Application::NavigationBakeDetail {
                     !TopologyWithinLimits(tile->Topology(), state.config.tileLimits))
                     return Failure<void>(NavigationErrors::CapacityExceeded);
                 bytes += tile->StorageBytes();
-                attempt.candidate->tiles.tiles.push_back(std::move(tile));
+                attempt.candidate->tiles.tiles[index] = std::move(tile);
             }
             return Result<void>::Success();
+        }
+
+        /** @brief Verifies all unselected content before allowing any selected surface to invoke the builder. */
+        [[nodiscard]] Result<void> Build(const ServiceState &state, const Attempt &attempt, const CancellationToken &cancel) {
+            auto previous = PreviousForRequest(state, attempt, cancel);
+            if (previous.HasError())
+                return Result<void>::Failure(previous.ErrorValue());
+            attempt.candidate->tiles.tiles.resize(attempt.prepared.size());
+            std::size_t bytes{};
+            if (const auto retained = BuildPass(state, attempt, previous.Value(), cancel, false, bytes); retained.HasError())
+                return retained;
+            return BuildPass(state, attempt, previous.Value(), cancel, true, bytes);
         }
 
         /** @brief Assembles a complete definition-rooted artifact, including empty tiles and reused content identities. */
@@ -231,6 +297,26 @@ namespace Horo::Application::NavigationBakeDetail {
             return Result<void>::Success();
         }
 
+        /** @brief Reuses source/layout and unselected-cache validation without building or publishing any tile. */
+        [[nodiscard]] Result<void> ValidateWithoutPublication(const ServiceState &state, const Attempt &attempt,
+                                                              const CancellationToken &cancel) {
+            auto previous = PreviousForRequest(state, attempt, cancel);
+            if (previous.HasError())
+                return Result<void>::Failure(previous.ErrorValue());
+            attempt.candidate->tiles.tiles.resize(attempt.prepared.size());
+            std::size_t bytes{};
+            if (const auto retained = BuildPass(state, attempt, previous.Value(), cancel, false, bytes); retained.HasError())
+                return retained;
+            if (auto current = state.config.sourceAuthority->TryAcquirePublication(*attempt.request.input, cancel); current.HasValue()) {
+                // Keep the result's source lease alive throughout external verification.
+                if (state.desired.load() != attempt.generation)
+                    return Failure<void>(NavigationErrors::BakeInputStale);
+                return ValidateSourceCapture(attempt, cancel);
+            } else {
+                return Result<void>::Failure(current.ErrorValue());
+            }
+        }
+
         /** @brief Holds current-source authority through the irreversible selector replacement and live adoption. */
         [[nodiscard]] Result<void> AcquireAdoption(ServiceState &state, const Attempt &attempt, const CancellationToken &cancel,
                                                    std::optional<NavigationBakeSourceLease> &sourceLease) {
@@ -240,6 +326,8 @@ namespace Horo::Application::NavigationBakeDetail {
             if (current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
             sourceLease.emplace(std::move(current).Value());
+            if (auto verified = ValidateSourceCapture(attempt, cancel); verified.HasError())
+                return verified;
             if (auto expected = attempt.generation; !state.desired.compare_exchange_strong(expected, attempt.generation | Adopted))
                 return Failure<void>(NavigationErrors::BakeInputStale);
             return Result<void>::Success();
@@ -300,6 +388,31 @@ namespace Horo::Application::NavigationBakeDetail {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Adds the provider and irreversible publication stages only for an admitted build request. */
+        void AppendBuildWork(NavigationBakeJobDescriptor &descriptor, const std::shared_ptr<ServiceState> &state,
+                             const std::shared_ptr<Attempt> &attempt, const std::uint64_t resident) {
+            descriptor.work.push_back(
+                {.stage = NavigationBakeJobStage::TileBuild,
+                 .workUnits = std::max<std::uint64_t>(1, state->config.tileLimits.maximumWorkUnits * attempt->request.tiles.size()),
+                 .residentBytes = resident,
+                 .execute = [state, attempt](const CancellationToken &cancel) {
+                return Build(*state, *attempt, cancel);
+            }});
+            descriptor.work.push_back({.stage = NavigationBakeJobStage::Validation,
+                                       .workUnits = state->config.maximumCandidateBytes,
+                                       .residentBytes = resident,
+                                       .execute = [state, attempt](const CancellationToken &cancel) {
+                return Validate(*state, *attempt, cancel);
+            }});
+            descriptor.work.push_back({.stage = NavigationBakeJobStage::Publication,
+                                       .workUnits = state->config.maximumCandidateBytes,
+                                       .residentBytes = resident,
+                                       .temporaryBytes = 2 * state->config.maximumCandidateBytes,
+                                       .execute = [state, attempt](const CancellationToken &cancel) {
+                return Publish(state, *attempt, cancel);
+            }});
+        }
     }  // namespace
 
     /** @copydoc Descriptor */
@@ -307,42 +420,32 @@ namespace Horo::Application::NavigationBakeDetail {
         const std::uint64_t resident = 4 * state->config.maximumCandidateBytes + state->config.tileLimits.maximumOwnedBytes;
         const auto gathering =
             (attempt->request.input->Triangles().size() + attempt->request.input->Modifiers().size() + 1) * attempt->request.tiles.size();
-        NavigationBakeJobDescriptor descriptor{.title = "Incremental navigation bake",
+        const bool validation = attempt->request.execution == NavigationBakeExecutionMode::ValidateOnly;
+        NavigationBakeJobDescriptor descriptor{.title = validation ? "Validate navigation bake" : "Incremental navigation bake",
                                                .budget = state->config.budget,
                                                .parentCancellation = attempt->cancellation->Token(),
                                                .queuedOperation = attempt->operation,
-                                               .publicationReceipt = attempt->publicationReceipt,
-                                               .observe = [diagnostics = state->config.diagnostics](const auto &snapshot) noexcept {
+                                               .publicationReceipt = validation ? nullptr : attempt->publicationReceipt,
+                                               .observe =
+                                                   [diagnostics = state->config.diagnostics](const auto &snapshot) noexcept {
             ObserveBake(diagnostics, snapshot);
-        }};
-        descriptor.work = {{.stage = NavigationBakeJobStage::PartitionGather,
-                            .workUnits = gathering,
-                            .residentBytes = resident,
-                            .execute =
-                                [state, attempt](const CancellationToken &cancel) {
+        },
+                                               .execution = attempt->request.execution};
+        descriptor.work.push_back({.stage = NavigationBakeJobStage::PartitionGather,
+                                   .workUnits = std::max<std::uint64_t>(1, gathering),
+                                   .residentBytes = resident,
+                                   .execute = [state, attempt](const CancellationToken &cancel) {
             return Gather(*state, *attempt, cancel);
-        }},
-                           {.stage = NavigationBakeJobStage::TileBuild,
-                            .workUnits = state->config.tileLimits.maximumWorkUnits * attempt->request.tiles.size(),
-                            .residentBytes = resident,
-                            .execute =
-                                [state, attempt](const CancellationToken &cancel) {
-            return Build(*state, *attempt, cancel);
-        }},
-                           {.stage = NavigationBakeJobStage::Validation,
-                            .workUnits = state->config.maximumCandidateBytes,
-                            .residentBytes = resident,
-                            .execute =
-                                [state, attempt](const CancellationToken &cancel) {
-            return Validate(*state, *attempt, cancel);
-        }},
-                           {.stage = NavigationBakeJobStage::Publication,
-                            .workUnits = state->config.maximumCandidateBytes,
-                            .residentBytes = resident,
-                            .temporaryBytes = 2 * state->config.maximumCandidateBytes,
-                            .execute = [state, attempt](const CancellationToken &cancel) {
-            return Publish(state, *attempt, cancel);
-        }}};
+        }});
+        if (validation)
+            descriptor.work.push_back({.stage = NavigationBakeJobStage::Validation,
+                                       .workUnits = state->config.maximumCandidateBytes,
+                                       .residentBytes = resident,
+                                       .execute = [state, attempt](const CancellationToken &cancel) {
+                return ValidateWithoutPublication(*state, *attempt, cancel);
+            }});
+        else
+            AppendBuildWork(descriptor, state, attempt, resident);
         return descriptor;
     }
 }  // namespace Horo::Application::NavigationBakeDetail

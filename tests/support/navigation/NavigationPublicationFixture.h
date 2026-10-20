@@ -9,9 +9,9 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <format>
 #include <fstream>
-#include <stdexcept>
 #include <thread>
 
 namespace Horo::Application::TestSupport {
@@ -71,9 +71,7 @@ namespace Horo::Application::TestSupport {
             if (WriteFails(path))
                 return InjectedFailure();
             auto written = native.WriteDurable(path, bytes);
-            if (const std::string_view text{reinterpret_cast<const char *>(bytes.data()), bytes.size()};
-                written.HasValue() && path.filename().string().starts_with("current.json") &&
-                text.find("\"generationPath\"") != std::string_view::npos) {
+            if (written.HasValue() && path.filename().string().starts_with("current.json") && HasGenerationPath(bytes)) {
                 beforeCurrentReached.store(true);
                 while (pauseBeforeCurrent.load())
                     std::this_thread::yield();
@@ -113,6 +111,12 @@ namespace Horo::Application::TestSupport {
     private:
         [[nodiscard]] static Result<void> InjectedFailure() {
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::BakeInputFailed));
+        }
+
+        /** @brief Matches selector metadata in byte storage without aliasing it through character pointers. */
+        [[nodiscard]] static bool HasGenerationPath(std::span<const std::byte> bytes) {
+            constexpr std::string_view marker{"\"generationPath\""};
+            return !std::ranges::search(bytes, std::as_bytes(std::span{marker.data(), marker.size()})).empty();
         }
 
         [[nodiscard]] bool WriteFails(const std::filesystem::path &path) const {
@@ -155,6 +159,14 @@ namespace Horo::Application::TestSupport {
         return reached.load();
     }
 
+    /** @brief Dedicated standard exception for optional history persistence fault injection. */
+    struct PublicationHistoryFailure final : std::exception {
+        /** @brief Describes the injected fault. @return Static diagnostic with no allocation. */
+        [[nodiscard]] const char *what() const noexcept override {
+            return "Optional publication history failure";
+        }
+    };
+
     /** @brief Throws only after the operation store has retained true terminal commit outcome. */
     class ThrowingPublicationHistorySink final : public IOperationHistorySink {
     public:
@@ -166,7 +178,7 @@ namespace Horo::Application::TestSupport {
                 return;
             if (nonstandard)
                 throw 73;
-            throw std::runtime_error("Optional publication history failure");
+            throw PublicationHistoryFailure{};
         }
     };
 
@@ -210,7 +222,8 @@ namespace Horo::Application::TestSupport {
                                               .compatibility = fixture.compatibility,
                                               .tiles = fixture.Tiles(),
                                               .sources = fixture.Observations(),
-                                              .cancellation = cancellation});
+                                              .cancellation = cancellation,
+                                              .authoredSurfaces = fixture.SurfaceCatalog()});
             REQUIRE(submitted.HasValue());
             return submitted.Value();
         }
@@ -219,8 +232,8 @@ namespace Horo::Application::TestSupport {
             for (std::size_t i = 0; i < 5000; ++i) {
                 service->Pump();
                 const auto snapshot = operations.SnapshotIfChanged(0);
-                const auto found = std::ranges::find(snapshot->operations, id, &OperationRecord::id);
-                if (found != snapshot->operations.end() && found->finishedAt)
+                if (const auto found = std::ranges::find(snapshot->operations, id, &OperationRecord::id);
+                    found != snapshot->operations.end() && found->finishedAt)
                     return *found;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }

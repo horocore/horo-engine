@@ -81,7 +81,8 @@ namespace Horo::Application {
                                                    .compatibility = fixture.compatibility,
                                                    .tiles = fixture.Tiles(),
                                                    .sources = fixture.Observations(),
-                                                   .projectProfile = ContentProfile(policy)});
+                                                   .projectProfile = ContentProfile(policy),
+                                                   .authoredSurfaces = fixture.SurfaceCatalog()});
             REQUIRE(result.HasValue());
             return result.Value();
         };
@@ -144,8 +145,10 @@ namespace Horo::Application {
         CHECK(Terminal(*harness.service, harness.operations, closing).state == OperationState::Cancelled);
         CHECK(harness.service->Published() == last);
         CHECK(harness.service
-                  ->Submit(
-                      {.input = harness.fixture.Input(), .compatibility = harness.fixture.compatibility, .tiles = harness.fixture.Tiles()})
+                  ->Submit({.input = harness.fixture.Input(),
+                            .compatibility = harness.fixture.compatibility,
+                            .tiles = harness.fixture.Tiles(),
+                            .authoredSurfaces = harness.fixture.SurfaceCatalog()})
                   .HasError());
     }
 

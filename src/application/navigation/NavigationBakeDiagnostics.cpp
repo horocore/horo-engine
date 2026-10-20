@@ -102,6 +102,8 @@ namespace Horo::Application {
         if (record.tile)
             message += std::format(" [profile={}, surface={}, tile=({},{},{})]", record.tile->profile.Value(), record.tile->surface.Value(),
                                    record.tile->tile.x, record.tile->tile.z, record.tile->tile.layer);
+        if (record.tile && record.tile->scope.IsSceneScoped())
+            message += std::format(" [sceneScope={}]", Assets::AssetId::FromBytes(record.tile->scope.SceneBytes()).ToString());
         if (record.source)
             message += std::format(" [producer={}, contribution={}, revision={}]", record.source->observation.producer.Value(),
                                    record.source->observation.contribution.Value(), record.source->observation.revision.Value());

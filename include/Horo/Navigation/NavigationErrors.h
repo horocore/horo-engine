@@ -68,6 +68,8 @@ namespace Horo::Navigation::NavigationErrors {
     extern const ErrorCodeDescriptor BakeInputInvalid;
     /** @brief A bake surface or modifier references an absent profile, source, surface, filter or area. */
     extern const ErrorCodeDescriptor BakeInputReferenceMissing;
+    /** @brief A selected-surface bake cannot retain current verified output for every unselected surface. */
+    extern const ErrorCodeDescriptor BakeSelectionIncomplete;
     /** @brief Canonical bake-input capture exceeds a qualified count, work-unit or owned-byte bound. */
     extern const ErrorCodeDescriptor BakeInputCapacityExceeded;
     /** @brief A captured bake revision, request generation or source provenance no longer matches current authority. */
