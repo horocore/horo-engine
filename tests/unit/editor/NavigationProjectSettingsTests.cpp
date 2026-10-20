@@ -19,6 +19,10 @@ namespace {
         } fault{};
         NativeDurableFileSystem native;
 
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &path, Horo::DirectoryCreationMode mode) override {
+            return native.CreateDirectoryPath(path, mode);
+        }
+
         Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &p, std::string_view owner) override {
             return native.TryAcquireExclusive(p, owner);
         }

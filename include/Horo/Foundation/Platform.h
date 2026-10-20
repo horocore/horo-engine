@@ -119,10 +119,26 @@ namespace Horo {
         bool committed_{};
     };
 
+    /** @brief Explicit directory-creation scope selected by the filesystem caller. */
+    enum class DirectoryCreationMode {
+        Single, /**< Creates only the final component; its parent must exist. */
+        Parents /**< Creates missing ancestors as well as the final component. */
+    };
+
     /** @brief Cross-platform durable filesystem primitives for user-data transactions. */
     class DurableFileSystem {
     public:
         virtual ~DurableFileSystem() = default;
+
+        /** @brief Creates directories through the same host-owned authority as publication writes.
+         * @param path Directory selected by the caller's filesystem authority.
+         * @param mode Single-component or missing-parent creation.
+         * @return True when a directory was created, false when the requested directory already exists,
+         * or a typed failure. A regular file or rejected path is never reported as an existing directory.
+         * @details This method does not commit directory durability; callers use SyncDirectory at their transaction boundaries.
+         * Implementations enforce their own path and namespace policy. No native fallback is supplied.
+         */
+        [[nodiscard]] virtual Result<bool> CreateDirectoryPath(const std::filesystem::path &path, DirectoryCreationMode mode) = 0;
 
         /** @brief Creates missing parent directories and immediately acquires an exclusive OS lock. @param path Lock-file path within
          * host-owned parent directories. Symlinks, reparse points, and multiply linked files are rejected.
@@ -176,6 +192,10 @@ namespace Horo {
     /** @brief Native Windows/macOS/Linux durable filesystem implementation. */
     class NativeDurableFileSystem final : public DurableFileSystem {
     public:
+        /** @copydoc DurableFileSystem::CreateDirectoryPath
+         * @pre The host authorizes the path and protects its canonical parent namespace during creation.
+         */
+        [[nodiscard]] Result<bool> CreateDirectoryPath(const std::filesystem::path &path, DirectoryCreationMode mode) override;
         /** @copydoc DurableFileSystem::TryAcquireExclusive
          * @pre path is absolute, lexically normalized, has a nonempty filename and contains no embedded NUL.
          * The host authorizes the path and protects its canonical parent from concurrent replacement.

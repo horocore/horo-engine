@@ -1,4 +1,5 @@
 #include "../../support/AllocationProbe.h"
+#include "../../support/NativePublicationFiles.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/Platform.h"
 
@@ -59,8 +60,7 @@ namespace {
         }
     }
 
-    struct Files final : DurableFileSystem {
-        NativeDurableFileSystem native;
+    struct Files final : Horo::TestSupport::NativePublicationFiles {
         bool failWrite{};
         bool failPartialWrite{};
         std::optional<Error> writeError;
@@ -68,18 +68,6 @@ namespace {
         bool failAfterCommit{};
         std::function<void()> beforeReplace;
         std::function<void()> afterCommit;
-
-        Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
-            return native.TryAcquireExclusive(path, owner);
-        }
-
-        Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override {
-            return native.AvailableBytes(path);
-        }
-
-        Result<void> WriteDurable(const std::filesystem::path &path, std::span<const std::byte> bytes) override {
-            return native.WriteDurable(path, bytes);
-        }
 
         Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
                                          std::filesystem::perms permissions) override {
@@ -94,10 +82,6 @@ namespace {
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
             }
             return native.WritePrivateDurable(path, bytes, created, permissions);
-        }
-
-        Result<void> CopyDurable(const std::filesystem::path &source, const std::filesystem::path &destination) override {
-            return native.CopyDurable(source, destination);
         }
 
         Result<void> AtomicReplace(const std::filesystem::path &, const std::filesystem::path &) override {
@@ -116,14 +100,6 @@ namespace {
             if (receipt.WasCommitted() && failAfterCommit)
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
             return result;
-        }
-
-        Result<void> RemoveDurable(const std::filesystem::path &path) override {
-            return native.RemoveDurable(path);
-        }
-
-        Result<void> SyncDirectory(const std::filesystem::path &path) override {
-            return native.SyncDirectory(path);
         }
     };
 

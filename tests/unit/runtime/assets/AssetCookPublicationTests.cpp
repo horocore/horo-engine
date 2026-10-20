@@ -1,5 +1,7 @@
 #include "assets/AssetCookOutputFixture.h"
 
+#include <utility>
+
 #if !defined(_WIN32)
 #include <poll.h>
 #include <sys/wait.h>
@@ -411,3 +413,84 @@ TEST_CASE("Writer contention is enforced by the OS across independent processes"
     CHECK(WEXITSTATUS(status) == 0);
 }
 #endif
+
+namespace {
+    /** @brief Records every cook directory request and rejects one exact host capability invocation. */
+    class DirectoryPublicationFiles final : public Horo::TestSupport::NativePublicationFiles {
+    public:
+        std::size_t rejectRequest{};
+        std::vector<std::pair<std::filesystem::path, DirectoryCreationMode>> requests;
+
+        Result<bool> CreateDirectoryPath(const std::filesystem::path &path, const DirectoryCreationMode mode) override {
+            requests.emplace_back(path, mode);
+            if (rejectRequest != 0 && requests.size() == rejectRequest)
+                return Result<bool>::Failure(Error{.code = ErrorCode{"test.directory_denied"}, .message = "Directory authority denied."});
+            return native.CreateDirectoryPath(path, mode);
+        }
+    };
+
+    /** @brief Verifies the complete authoritative artifact after a failed publication or retry. */
+    void RequirePublishedBytes(const std::filesystem::path &root, const std::vector<std::uint8_t> &expected) {
+        const auto generation = ResolveCurrentCookGeneration(root);
+        REQUIRE(generation.HasValue());
+        const auto contents = ReadCookGenerationContents(generation.Value(), 4096U);
+        REQUIRE(contents.HasValue());
+        REQUIRE(contents.Value().artifacts.size() == 1);
+        CHECK(contents.Value().artifacts.front() == expected);
+    }
+}  // namespace
+
+TEST_CASE("Cook directory authority rejects every creation boundary without replacing the last valid generation", "[native][cook]") {
+    const auto id = Id("00000000-0000-0000-0000-000000000001");
+    const auto oldBytes = MakePayload(id, 8, 1);
+    const auto newBytes = MakePayload(id, 8, 2);
+    for (std::size_t rejected = 1; rejected <= 4; ++rejected) {
+        INFO(rejected);
+        TempDir tmp;
+        DirectoryPublicationFiles files;
+        const auto policy = [&files](const std::string_view token) {
+            return AssetCookPublicationPolicy{.files = &files, .operationId = std::string{token}};
+        };
+        REQUIRE(PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, oldBytes), oldBytes, 4096U, {},
+                                               policy("10000000-0000-0000-0000-000000000001"))
+                    .HasValue());
+        const auto pointer = ReadText(tmp.path / "current.json");
+        files.requests.clear();
+        files.rejectRequest = rejected;
+        const auto failed = PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, newBytes), newBytes, 4096U, {},
+                                                           policy("10000000-0000-0000-0000-000000000002"));
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().code.Value() == "test.directory_denied");
+        REQUIRE(files.requests.size() == rejected);
+        CHECK(ReadText(tmp.path / "current.json") == pointer);
+        RequirePublishedBytes(tmp.path, oldBytes);
+        files.rejectRequest = 0;
+        files.requests.clear();
+        const auto retried = PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, newBytes), newBytes, 4096U, {},
+                                                            policy("10000000-0000-0000-0000-000000000003"));
+        REQUIRE(retried.HasValue());
+        REQUIRE(files.requests.size() == 4);
+        CHECK(files.requests[0] == std::pair{tmp.path / "generations", DirectoryCreationMode::Parents});
+        CHECK(files.requests[1] == std::pair{tmp.path / ".cook-staging", DirectoryCreationMode::Parents});
+        CHECK(files.requests[2].second == DirectoryCreationMode::Single);
+        CHECK(files.requests[3] == std::pair{files.requests[2].first / "generation", DirectoryCreationMode::Single});
+        RequirePublishedBytes(tmp.path, newBytes);
+    }
+}
+
+TEST_CASE("Rejected initial cook directory admission performs no ambient fallback creation", "[native][cook]") {
+    TempDir tmp;
+    DirectoryPublicationFiles files;
+    files.rejectRequest = 1;
+    const auto id = Id("00000000-0000-0000-0000-000000000001");
+    const auto bytes = MakePayload(id, 8);
+    const auto result = PublishCookArtifactReplacement(tmp.path, Target("headless-null"), Entry(id, bytes), bytes, 4096U, {},
+                                                       {.files = &files, .operationId = "10000000-0000-0000-0000-000000000001"});
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == "test.directory_denied");
+    REQUIRE(files.requests.size() == 1);
+    CHECK(files.requests.front() == std::pair{tmp.path / ".cook-staging", DirectoryCreationMode::Parents});
+    CHECK_FALSE(std::filesystem::exists(tmp.path / ".cook-staging"));
+    CHECK_FALSE(std::filesystem::exists(tmp.path / "generations"));
+    CHECK_FALSE(std::filesystem::exists(tmp.path / "current.json"));
+}

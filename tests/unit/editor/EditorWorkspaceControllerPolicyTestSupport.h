@@ -57,6 +57,10 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
 
     class SyncFailingFilesystem final : public DurableFileSystem {
     public:
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &path, Horo::DirectoryCreationMode mode) override {
+            return native_.CreateDirectoryPath(path, mode);
+        }
+
         [[nodiscard]] Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                     const std::string_view ownerMetadata) override {
             return native_.TryAcquireExclusive(path, ownerMetadata);

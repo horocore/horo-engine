@@ -37,6 +37,10 @@ namespace Horo::Editor::PersistenceTestSupport {
 
     class NativeBackedFileSystem : public DurableFileSystem {
     public:
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &path, Horo::DirectoryCreationMode mode) override {
+            return native_.CreateDirectoryPath(path, mode);
+        }
+
         [[nodiscard]] Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                     std::string_view ownerMetadata) override;
         [[nodiscard]] Result<std::uint64_t> AvailableBytes(const std::filesystem::path &path) const override;

@@ -214,6 +214,25 @@ namespace Horo {
         return Result<ProductLaunchLease>::Success(ProductLaunchLease(std::move(state)));
     }
 
+    /** @copydoc DurableFileSystem::CreateDirectoryPath */
+    Result<bool> NativeDurableFileSystem::CreateDirectoryPath(const std::filesystem::path &path, const DirectoryCreationMode mode) {
+        std::error_code error;
+        bool created{};
+        switch (mode) {
+            case DirectoryCreationMode::Single:
+                created = std::filesystem::create_directory(path, error);
+                break;
+            case DirectoryCreationMode::Parents:
+                created = std::filesystem::create_directories(path, error);
+                break;
+            default:
+                return Result<bool>::Failure(FsError(IoFailed, path));
+        }
+        if (error)
+            return Result<bool>::Failure(FsError(IoFailed, path));
+        return Result<bool>::Success(created);
+    }
+
     /** @copydoc DurableFileSystem::AvailableBytes */
     Result<std::uint64_t> NativeDurableFileSystem::AvailableBytes(const std::filesystem::path &path) const {
         std::error_code error;

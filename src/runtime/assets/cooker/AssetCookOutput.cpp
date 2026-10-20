@@ -97,7 +97,10 @@ namespace Horo::Assets::CookStorageDetail {
                                                  DurableFileSystem *files) {
             std::error_code directoryError;
             const auto privateGeneration = operationRoot / "generation";
-            if (!std::filesystem::create_directory(privateGeneration, directoryError) || directoryError)
+            const auto created = files->CreateDirectoryPath(privateGeneration, DirectoryCreationMode::Single);
+            if (created.HasError())
+                return Result<void>::Failure(created.ErrorValue());
+            if (!created.Value())
                 return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
             if (const auto existingStatus = std::filesystem::symlink_status(generation.generationRoot, directoryError);
                 std::filesystem::exists(existingStatus)) {
@@ -243,10 +246,8 @@ namespace Horo::Assets {
 
         if (!HasPlainPath(genRoot) || !IsSafePathWithin(targetRoot, genRoot))
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-        std::error_code directoryError;
-        std::filesystem::create_directories(genRoot.parent_path(), directoryError);
-        if (directoryError)
-            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
+        if (auto created = policy.files->CreateDirectoryPath(genRoot.parent_path(), DirectoryCreationMode::Parents); created.HasError())
+            return Result<AssetCookGeneration>::Failure(created.ErrorValue());
         auto operation = CreateOperationRoot(targetRoot, policy);
         if (operation.HasError())
             return Result<AssetCookGeneration>::Failure(operation.ErrorValue());

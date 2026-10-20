@@ -86,6 +86,10 @@ namespace {
 
     class FaultingDurableFileSystem final : public Horo::DurableFileSystem {
     public:
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &, Horo::DirectoryCreationMode) override {
+            return Horo::Result<bool>::Failure(Horo::MakeError(kInjectedFailure));
+        }
+
         [[nodiscard]] Horo::Result<Horo::ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &,
                                                                                 const std::string_view) override {
             return Horo::Result<Horo::ExclusiveFileLock>::Success(Horo::ExclusiveFileLock{});
@@ -131,6 +135,10 @@ namespace {
 
     class BlockingReplaceDurableFileSystem final : public Horo::DurableFileSystem {
     public:
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &path, Horo::DirectoryCreationMode mode) override {
+            return native_.CreateDirectoryPath(path, mode);
+        }
+
         [[nodiscard]] Horo::Result<Horo::ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                                 const std::string_view owner) override {
             return native_.TryAcquireExclusive(path, owner);
