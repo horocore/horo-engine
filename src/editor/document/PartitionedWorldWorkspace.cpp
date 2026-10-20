@@ -232,6 +232,7 @@ namespace Horo::Editor {
             return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Cancelled);
         snapshot_ = std::move(candidate);
         generation_ = generation.Value();
+        ClearLayerHistory();
         return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);
     }
 
@@ -257,7 +258,21 @@ namespace Horo::Editor {
                 return record.head.sourceAsset == page;
             });
         });
-        return Publish(std::move(candidate), cancellation);
+        if (candidate->currentLayer && std::ranges::none_of(document.layers, [&](const auto &layer) {
+            return layer.id == *candidate->currentLayer;
+        }))
+            candidate->currentLayer.reset();
+        candidate->layerUndoCount = 0;
+        candidate->layerRedoCount = 0;
+        auto published = Publish(std::move(candidate), cancellation);
+        if (published.HasValue())
+            ClearLayerHistory();
+        return published;
+    }
+
+    /** @copydoc PartitionedWorldWorkspace::ValidateLayerCandidate */
+    Result<void> PartitionedWorldWorkspace::ValidateLayerCandidate(const PartitionedWorldDocument &document) const {
+        return ValidateDocument(document, limits_);
     }
 
     /** @copydoc PartitionedWorldWorkspace::CheckFence */
@@ -337,6 +352,7 @@ namespace Horo::Editor {
         if (snapshot_->dirty && disposition != WorldDocumentDisposition::Discard)
             return Failure<void>(WorldDocumentErrors::Dirty);
         snapshot_.reset();
+        ClearLayerHistory();
         return Result<void>::Success();
     }
 

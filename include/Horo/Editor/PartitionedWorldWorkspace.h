@@ -8,9 +8,11 @@
 #include "Horo/WorldStreaming/WorldSpatialObjectDescriptor.h"
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <stop_token>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace Horo::Editor {
@@ -94,11 +96,47 @@ namespace Horo::Editor {
         std::uint32_t maximumOpenPages{64};
     };
 
+    /** @brief Undoable presentation filter; matching is exact UTF-8 substring, never locale-dependent. */
+    struct WorldLayerOutlinerFilter final {
+        std::string name;
+        std::optional<WorldStreaming::WorldLayerOwnership> ownership;
+        [[nodiscard]] auto operator<=>(const WorldLayerOutlinerFilter &) const noexcept = default;
+    };
+
+    /** @brief Inserts one explicitly identified layer at a document ordinal; IDs are never row indices. */
+    struct CreateWorldLayer final {
+        WorldStreaming::WorldLayerDescriptor layer;
+        std::size_t position{};
+    };
+
+    /** @brief Moves an existing stable layer to its final ordinal in the complete unfiltered document. */
+    struct ReorderWorldLayer final {
+        WorldStreaming::StreamingLayerId layer;
+        std::size_t position{};
+    };
+
+    /** @brief Changes the outliner filter without changing authored layers or current authoring context. */
+    struct FilterWorldLayers final {
+        WorldLayerOutlinerFilter filter;
+    };
+
+    /** @brief Selects an existing layer, or explicitly clears authoring context; filtering never retargets it. */
+    struct SetCurrentWorldLayer final {
+        std::optional<WorldStreaming::StreamingLayerId> layer;
+    };
+
+    /** @brief Canonical typed outliner intent, executed by the document/history owner. */
+    using WorldLayerCommand = std::variant<CreateWorldLayer, ReorderWorldLayer, FilterWorldLayers, SetCurrentWorldLayer>;
+
     /** @brief Immutable read lease; retained leases survive replacement, close and workspace destruction. */
     struct PartitionedWorldSnapshot final {
         WorldDocumentFence fence;
         PartitionedWorldDocument document;
         std::vector<Assets::AssetId> openPages; /**< Transient authoring working set, never runtime residency. */
+        WorldLayerOutlinerFilter layerFilter;
+        std::optional<WorldStreaming::StreamingLayerId> currentLayer;
+        std::size_t layerUndoCount{};
+        std::size_t layerRedoCount{};
         bool dirty{}; /**< Authored metadata changed since explicit Open/Replace; never an assertion of disk durability. */
     };
 
@@ -145,6 +183,24 @@ namespace Horo::Editor {
          * rejection. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Commit(const PartitionedWorldDocument &document, WorldDocumentFence expected,
                                                                    std::stop_token cancellation = {});
+        /** @brief Applies one undoable layer command atomically on the owning thread.
+         * Source creates/reorders mark dirty; filter/context commands remain transient. No-ops retain revision/history.
+         * @param command Typed semantic intent. @param expected Exact current document fence.
+         * @param cancellation Cancellation checked before publication. @return New snapshot or typed atomic rejection.
+         */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ExecuteLayerCommand(const WorldLayerCommand &command,
+                                                                                WorldDocumentFence expected,
+                                                                                std::stop_token cancellation = {});
+        /** @brief Replays the next exact semantic layer transaction without changing pages or working-set state.
+         * @param redo False for undo, true for redo. @param expected Exact current fence.
+         * @param cancellation Cancellation checked before publication. @return New snapshot or typed rejection; empty history is Conflict.
+         */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ReplayLayerCommand(bool redo, WorldDocumentFence expected,
+                                                                               std::stop_token cancellation = {});
+        /** @brief Projects visible stable IDs in authored order from the canonical filter.
+         * @return Complete owned rows or typed lifecycle/thread rejection; current layer may be filtered out.
+         */
+        [[nodiscard]] Result<std::vector<WorldStreaming::StreamingLayerId>> VisibleLayers() const;
         /** @brief Atomically changes the transient set without touching source pages or dirty state.
          * @param pages Distinct admitted page assets; order is preserved. @param expected Exact current owner fence.
          * @param cancellation Operation cancellation fence. @return New immutable snapshot, unchanged lease for a no-op, or typed
@@ -176,6 +232,31 @@ namespace Horo::Editor {
         /** @brief Publishes one fully prepared successor after a final cancellation check. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Publish(std::shared_ptr<PartitionedWorldSnapshot> candidate,
                                                                     std::stop_token cancellation);
+
+        /** @brief Exact reversible layer-section values; no pages, runtime data or presentation widgets are retained. */
+        struct LayerState final {
+            std::vector<WorldStreaming::WorldLayerDescriptor> layers;
+            WorldLayerOutlinerFilter filter;
+            std::optional<WorldStreaming::StreamingLayerId> current;
+        };
+
+        /** @brief One semantic transaction charged against finite entry and byte budgets. */
+        struct LayerTransaction final {
+            LayerState before;
+            LayerState after;
+            std::size_t bytes{};
+            bool beforeDirty{};
+            bool afterDirty{};
+        };
+
+        /** @brief Shares complete document validation with ordinary metadata transactions. */
+        [[nodiscard]] Result<void> ValidateLayerCandidate(const PartitionedWorldDocument &document) const;
+        /** @brief Validates and applies a typed intent to detached candidate storage. */
+        [[nodiscard]] Result<void> ApplyLayerCommand(const WorldLayerCommand &command, PartitionedWorldSnapshot &candidate) const;
+        /** @brief Resets layer history after complete external metadata commits or lifecycle replacement. */
+        void ClearLayerHistory() noexcept;
+        std::vector<LayerTransaction> layerHistory_;
+        std::size_t layerCursor_{};
         Assets::AssetId owner_;
         WorldDocumentLimits limits_;
         const std::thread::id thread_{std::this_thread::get_id()};

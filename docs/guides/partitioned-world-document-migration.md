@@ -122,3 +122,47 @@ load/unload/pinning (#1635), the cell browser UI (#1630), bake, persistence,
 undo/redo history, source-control merge, crash recovery or runtime preview activation.
 Those services must consume exact immutable source revisions and must not clear dirty
 metadata without their own durable publication contract.
+
+## Layer command and outliner projection migration (WST-009.4)
+
+The existing workspace now owns `WorldLayerCommand` and its exact semantic layer
+history. There is no second document, mutable panel-owned layer table or independent
+selection authority. `CreateWorldLayer` takes a host-issued `StreamingLayerId`,
+validated descriptor and insertion ordinal. `ReorderWorldLayer` takes stable identity
+and a final ordinal in the complete authored order, including filtered-out rows.
+`FilterWorldLayers` selects a bounded, exact UTF-8 substring and optional typed
+ownership. `SetCurrentWorldLayer` selects an admitted identity or explicitly clears
+context. Filtering never changes context; it may hide the current layer.
+`VisibleLayers` projects stable IDs in authored order. Names are presentation values,
+never identities. The caller resolves IDs against its captured immutable snapshot.
+
+`ExecuteLayerCommand` and `ReplayLayerCommand` require the same owner/generation/
+publication fence as other workspace mutations. They prepare the complete candidate
+and history before publishing. Bad descriptors, missing IDs, stale fences, unsupported
+filters, capacity overflow and cancellation preserve the exact old lease, context,
+working set and history. A no-op preserves revision and redo. Undo/redo restore exact
+layer-section values rather than replaying UI input, while publication revisions
+continue increasing. Source edits mark dirty and undo restores the pre-command dirty
+state; transient filter/context edits never mark authored metadata dirty.
+
+History retains at most 128 transactions and 4 MiB of charged semantic metadata,
+including before/after layer descriptors and name/filter bytes. Oldest entries are
+evicted before a newly reserved transaction is committed. A new command drops redo;
+a failed command does neither. Pages, objects, working-set changes and runtime data
+are never retained in layer history. Complete external metadata commits clear the
+layer history and clear a removed current identity. Unchanged complete commits leave
+history intact. Working-set changes preserve history, and replay preserves the
+current working set. Replacement and close clear history/context; cancellation gates
+commands/replay but preserves immutable queries until explicit teardown.
+
+This additive C++ contract remains in the existing `HoroEditorModel` header and target.
+Existing consumers rebuild; no persisted schema or backend dependency changes.
+The public consumer fixture covers command, replay and projection signatures.
+Run `HoroPartitionedWorldWorkspaceTests` and build
+`HoroEditorModelPublicHeaderConsumer` to validate the new contract.
+
+The foundational PR does not yet connect a partitioned-world document to the live
+`EditorWorkspaceController` or panel host. This change provides the actual headless
+command/history workflow against its real document authority; visible create-modal,
+filter, reorder and authoring-context panel wiring still requires that admission/
+host composition. It is not evidence of a completed graphical WST-009.4 workflow.

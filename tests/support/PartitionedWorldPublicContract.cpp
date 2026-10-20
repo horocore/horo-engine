@@ -21,3 +21,11 @@ static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>(
                              Horo::Result<PartitionedWorldSnapshotLease>>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentRevision, Horo::WorldStreaming::WorldAuthoringRevision>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentGeneration, Horo::WorldStreaming::StreamingGeneration>);
+
+static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().ExecuteLayerCommand(
+                                 std::declval<const Horo::Editor::WorldLayerCommand &>(), WorldDocumentFence{})),
+                             Horo::Result<PartitionedWorldSnapshotLease>>);
+static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().ReplayLayerCommand(false, WorldDocumentFence{})),
+                             Horo::Result<PartitionedWorldSnapshotLease>>);
+static_assert(std::is_same_v<decltype(std::declval<const PartitionedWorldWorkspace &>().VisibleLayers()),
+                             Horo::Result<std::vector<Horo::WorldStreaming::StreamingLayerId>>>);
