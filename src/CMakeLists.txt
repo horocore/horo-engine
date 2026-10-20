@@ -2776,6 +2776,8 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
     "$<BUILD_INTERFACE:${_horo_prefab_hierarchy_headers}>")
 
 add_library(HoroEditorModel STATIC
+        editor/document/WorldCompositionBrowser.cpp
+        editor/document/PartitionedWorldSource.cpp
         editor/document/PartitionedWorldWorkspace.cpp
         editor/document/PartitionedWorldSourceAuthoring.cpp
         editor/document/WorldSourceGizmo.cpp
@@ -3190,6 +3192,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorPanelAudioWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
+            editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
             editor/screens/workspace/panels/viewport/WorldSourceViewportTool.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
@@ -3249,6 +3252,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/WorldLayerOutliner.cpp
             editor/modals/world_layer/CreateWorldLayerModal.cpp
@@ -3281,7 +3285,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::PlatformProjectReadFiles)
     target_link_libraries(HoroGui
             PUBLIC
             HoroEngine::EditorServices

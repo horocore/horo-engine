@@ -92,6 +92,10 @@ namespace Horo::Editor {
         WorldSourceTool,
         WorldLayerAuthoring,
         OpenCreateWorldLayer,
+
+        OpenWorldCompositionSource,
+        QueryWorldComposition,
+        CloseWorldComposition,
         FocusSequenceDocument,
         CloseSequenceDocument,
         UpdateSequenceTimeline,
@@ -265,6 +269,8 @@ namespace Horo::Editor {
 
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
+        std::optional<WorldBrowserQuery> worldBrowserQuery;
+        std::optional<WorldDocumentFence> worldDocumentFence;
         std::optional<WorldSourceToolCommand> worldSource;
         std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
@@ -339,6 +345,12 @@ namespace Horo::Editor {
         WorldViewportBinding worldViewport;
         std::optional<Error> worldSourceError;
         std::optional<Error> worldLayerFailure; /**< Canonical layer failure; presentation resolves localized copy. */
+
+        PartitionedWorldSnapshotLease worldDocument; /**< Immutable capture from the controller's canonical owner. */
+        std::optional<WorldBrowserSnapshot> worldBrowser;
+        WorldBrowserQuery worldBrowserQuery;
+        std::optional<Error> worldDocumentError;
+        std::string worldDocumentSource;
         bool audioPreviewAvailable{};
         std::optional<AudioComponentPreviewSnapshot> audioPreview;
         std::optional<Error> audioPreviewFailure;

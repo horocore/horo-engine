@@ -815,3 +815,17 @@ neither loads pages nor mutates runtime demand. Presentation retains the result
 lease and queries only after an owner revision changes. See the
 [world document migration guide](../../guides/partitioned-world-document-migration.md#object-assignment-and-bounds-inspection-wst-0095)
 for diagnostics, budgets, lifecycle and consumer migration.
+
+
+## World Composition projection
+
+The registered persistent `WorldCompositionTab` is a presentation surface over the
+controller's canonical `PartitionedWorldWorkspace`, never another source or
+selection authority. Project-relative `.horoworld` source admission is an explicit
+bounded command-phase operation through the Platform read capability and the
+existing Open/Replace dirty/revision guards. `Browse` derives bounded cell coverage
+through the ordinary authoring spatial-assignment kernel and publishes complete
+immutable source-fenced cell/layer results. Search/status/layer filters change
+presentation only. Authoring working-set, loaded payload, cooked availability and
+runtime residency remain independent. See the partitioned-world document migration
+guide for schema, ownership, rejection and lifecycle details.

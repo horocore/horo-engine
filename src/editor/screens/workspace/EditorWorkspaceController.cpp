@@ -75,11 +75,11 @@ namespace Horo::Editor {
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
           m_prefabSourceCapture(dependencies.prefabSources), m_workspaceSession(dependencies.documentSessionOwner),
-          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collision.inventory),
-          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
-          m_collisionSceneOwner(dependencies.documentSessionOwner), m_mutations(dependencies.mutations),
-          m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assetRegistrySource),
-          m_importerCatalog(dependencies.importerCatalog),
+          m_worldSourceFiles(dependencies.worldSourceFiles), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
+          m_collisionInventory(dependencies.collision.inventory), m_collisionActivation(dependencies.collision.activation),
+          m_previewCollisionReceipt(dependencies.collision.previewReceipt), m_collisionSceneOwner(dependencies.documentSessionOwner),
+          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles),
+          m_assetRegistrySource(dependencies.assetRegistrySource), m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceOpenNavigator), m_diagnosticSourceNavigator(dependencies.diagnosticSourceNavigator),
           m_gameplayBuilds(dependencies.gameplay.builds), m_gameplayBuildEnvironment(dependencies.gameplay.environment),
@@ -134,11 +134,14 @@ namespace Horo::Editor {
         m_viewModel.panelDockAreas = {{"horo.hierarchy", WorkspaceDockArea::Left},
                                       {"horo.viewport", WorkspaceDockArea::Document},
                                       {"horo.game", WorkspaceDockArea::Document},
+                                      {"horo.world_composition", WorkspaceDockArea::Document},
                                       {"horo.global_dock", WorkspaceDockArea::Bottom},
                                       {"horo.inspector", WorkspaceDockArea::Right}};
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.hierarchy", ActivityBarSlot{ActivityBarRail::Left, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.viewport", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.game", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 1}));
+        static_cast<void>(
+            m_viewModel.activityBarLayout.Insert("horo.world_composition", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 2}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.global_dock", ActivityBarSlot{ActivityBarRail::Left, 2, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.inspector", ActivityBarSlot{ActivityBarRail::Right, 0, 0}));
     }

@@ -2662,6 +2662,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
+            unit/editor/EditorWorkspaceWorldCompositionTests.cpp
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
@@ -2682,7 +2683,7 @@ if (HORO_BUILD_EDITOR_GUI)
             HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
     )
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json
-        HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull)
+        HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull HoroEngine::PlatformProjectReadFiles)
     add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule)
     add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)
     target_compile_features(HoroCameraCutEditorIntegrationTests PRIVATE cxx_std_20)
@@ -3158,7 +3159,9 @@ add_executable(HoroPartitionedWorldWorkspaceTests
         unit/editor/WorldSourceAuthoringTests.cpp
         unit/editor/PartitionedWorldResidencyTests.cpp
         unit/editor/PartitionedWorldObjectInspectionTests.cpp
-        unit/editor/WorldLayerCommandsTests.cpp)
+        unit/editor/WorldLayerCommandsTests.cpp
+        unit/editor/WorldCompositionBrowserTests.cpp
+        unit/editor/PartitionedWorldSourceTests.cpp)
 target_link_libraries(HoroPartitionedWorldWorkspaceTests PRIVATE HoroEngine::EditorModel)
 horo_register_catch_test(HoroPartitionedWorldWorkspaceTests LABELS "unit;headless;world_document")
 

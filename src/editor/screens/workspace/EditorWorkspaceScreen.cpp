@@ -27,6 +27,7 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Paths.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
@@ -320,6 +321,7 @@ namespace Horo::Editor {
 
                 using enum EditorWorkspaceViewCommand;
                 EditorWorkspaceViewCommandData command;
+                controller_->RefreshWorldDocumentProjection();
                 view_.Draw(controller_->ViewModel(), command, contentRegion);
 
                 if (command.command == None && !command.menuInvocation.has_value()) {
@@ -529,6 +531,7 @@ namespace Horo::Editor {
                     if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
                         LOG_ERROR("editor.navigation_document", "Navigation document shutdown is incomplete: %s",
                                   navigation.ErrorValue().message.c_str());
+                    controller_->DetachWorldSourceOwner();
                     if (const auto world = controller_->WorldDocuments().Shutdown(); world.HasError())
                         LOG_ERROR("editor.world_document", "World shutdown requires an explicit dirty decision: %s",
                                   world.ErrorValue().message.c_str());
@@ -680,6 +683,9 @@ namespace Horo::Editor {
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
+                auto worldSources = Platform::CreateNativeProjectReadFiles(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
+                if (worldSources.HasError())
+                    return Result<void>::Failure(worldSources.ErrorValue());
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -701,6 +707,7 @@ namespace Horo::Editor {
                                                    .localization = &context_.localization,
                                                    .engineEvents = &context_.engineEvents,
                                                    .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
+                                                   .worldSourceFiles = std::move(worldSources).Value(),
                                                    .documentSessionOwner = sessionOwner,
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),

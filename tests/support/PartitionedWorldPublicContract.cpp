@@ -57,3 +57,8 @@ static_assert(std::is_same_v<decltype(Horo::WorldStreaming::WorldSpatialAssignme
 
 static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().CreateLayer(std::string{}, WorldDocumentFence{})),
                              Horo::Result<PartitionedWorldSnapshotLease>>);
+
+static_assert(
+    std::is_same_v<decltype(std::declval<const PartitionedWorldWorkspace &>().Browse(
+                       std::declval<const Horo::Editor::WorldBrowserQuery &>(), std::declval<Horo::Editor::WorldDocumentFence>())),
+                   Horo::Result<Horo::Editor::WorldBrowserSnapshot>>);

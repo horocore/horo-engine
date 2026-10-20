@@ -35,13 +35,15 @@ namespace Horo::Editor {
                                     ? ApplyWorldLayerIntent(*cmd.worldLayerIntent)
                                     : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
             m_viewModel.worldLayerFailure = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
+            RefreshWorldDocumentProjection();
             return;
         }
-        static_cast<void>(ProcessWorldSourceCommand(cmd) || ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) ||
-                          ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) ||
-                          ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) ||
-                          ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
-                          ProcessLayoutCommand(cmd));
+        static_cast<void>(ProcessWorldCompositionCommand(cmd) || ProcessWorldSourceCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
+                          ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
+                          ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
+                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
+                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        RefreshWorldDocumentProjection();
     }
 
     /** @copydoc EditorWorkspaceController::ApplyWorldLayerIntent */

@@ -276,6 +276,53 @@ namespace Horo::Editor {
 
     using WorldObjectInspectionLease = std::shared_ptr<const WorldObjectSelectionInspection>;
 
+    /** @brief Authoring working-set filter; never represents runtime residency. */
+    enum class WorldBrowserStatus : std::uint8_t {
+        All,
+        Open,
+        Closed,
+        Mixed
+    };
+
+    /** @brief Bounded presentation query over one exact canonical document publication. */
+    struct WorldBrowserQuery final {
+        std::string search; /**< UTF-8 substring, ASCII case insensitive; at most 256 bytes. */
+        std::optional<WorldStreaming::StreamingLayerId> layer;
+        WorldBrowserStatus status{WorldBrowserStatus::All};
+        std::uint32_t maximumCells{8192}; /**< Finite output ceiling, at most 65536; overflow rejects the whole query. */
+        [[nodiscard]] auto operator<=>(const WorldBrowserQuery &) const noexcept = default;
+    };
+
+    /** @brief One stable cell's source coverage, independent from cooked packages and runtime state. */
+    struct WorldBrowserCell final {
+        WorldStreaming::StreamingCellId id;
+        std::uint32_t objects{};
+        std::uint32_t openObjects{};
+    };
+
+    /** @brief Layer metadata and unfiltered authoring status, including always-present objects. */
+    struct WorldBrowserLayer final {
+        WorldStreaming::WorldLayerDescriptor descriptor;
+        std::uint32_t objects{};
+        std::uint32_t openObjects{};
+        std::uint32_t alwaysPresentObjects{};
+    };
+
+    /** @brief Detached complete query output; source lease fences every row and survives owner teardown. */
+    struct WorldBrowserSnapshot final {
+        PartitionedWorldSnapshotLease source;
+        std::vector<WorldBrowserLayer> layers;
+        std::vector<WorldBrowserCell> cells;
+    };
+
+    /** @brief Decodes bounded version-one .horoworld JSON metadata; no file I/O, activation or publication.
+     * @param source At most 8 MiB UTF-8 source. @param cancellation Cooperative cancellation.
+     * @return Complete admitted metadata or typed invalid, unsupported, capacity or cancelled rejection.
+     * @details Duplicate JSON keys are invalid. The canonical workspace validates all identities, memberships and bounds.
+     */
+    [[nodiscard]] Result<PartitionedWorldDocument> DecodePartitionedWorldDocument(std::string_view source,
+                                                                                  std::stop_token cancellation = {});
+
     /** @brief Explicit dirty-state disposition; Cancel is never equivalent to discard. */
     enum class WorldDocumentDisposition : std::uint8_t {
         Preserve,
@@ -308,6 +355,13 @@ namespace Horo::Editor {
                                                                  std::stop_token cancellation = {});
         /** @brief Captures current immutable state. @return Lease or typed unavailable/wrong-thread failure. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Snapshot() const;
+        /** @brief Queries bounded searchable cell coverage and layer status without editing source or selection.
+         * @param query Filter and output ceiling. @param expected Exact owner/generation/revision.
+         * @param cancellation Cooperative cancellation. @return Complete detached projection or typed rejection; no hidden cache/state.
+         * @details Owner thread only. Cancelling owners remain readable. Spatial coverage uses the ordinary authoring assignment kernel.
+         */
+        [[nodiscard]] Result<WorldBrowserSnapshot> Browse(const WorldBrowserQuery &query, WorldDocumentFence expected,
+                                                          std::stop_token cancellation = {}) const;
         /** @brief Commits a complete typed source-metadata transaction without replacing its incarnation.
          * Unchanged pages retain their exact immutable head and objects; changed pages require the next non-wrapping revision.
          * Loaded pages must remain unchanged; use CommitLoadedPage for their metadata/content successor.

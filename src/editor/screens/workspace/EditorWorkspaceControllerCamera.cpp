@@ -43,6 +43,7 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
+        DetachWorldSourceOwner();
         StopAudioPreview();
         m_prefabCancellation.RequestCancellation();
         RetirePrefabHierarchy();

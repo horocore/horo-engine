@@ -32,6 +32,9 @@ namespace Horo::Editor {
         m_partitionedWorld = nullptr;
         m_viewModel.worldViewport = {};
         m_viewModel.worldSourceError.reset();
+        m_viewModel.worldDocument.reset();
+        m_viewModel.worldBrowser.reset();
+        m_viewModel.worldDocumentSource.clear();
     }
 
     /** @copydoc EditorWorkspaceController::SetWorldViewportBinding(const WorldViewportBinding &) */

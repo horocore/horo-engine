@@ -385,3 +385,90 @@ remain available as `EditorWorkspaceViewModel::worldLayerFailure`; the world tab
 resolves localized failure copy. The layer controller regression target exercises
 real loaded Scene content, page pinning, the single selection/primary root, stale
 command rejection and loaded-page dirty/history isolation.
+
+
+## World Composition source route and browser (HORO-1630)
+
+`horo.world_composition` is a registered persistent document-area panel, reachable
+from the workspace document rail. Enter a project-relative `.horoworld` path and
+activate **Open world source**. The workspace screen explicitly composes the retained
+project read capability and injects it into the controller. The controller captures bounded source
+through `Platform::IProjectReadFiles::SourceText`; retained root handles reject
+traversal, symlinks/reparse points, special files and multiple hardlinks. `HoroGui` and its controller test declare the narrow private
+`PlatformProjectReadFiles` dependency rather than receiving private platform headers
+through another target. File I/O
+and semantic admission execute in the command phase, never in panel drawing.
+
+The route uses the controller's existing `WorldDocuments()` authority. It does not
+create a second workspace, selection model or serializer history. Initial open
+requires no current document; replacement requires the exact displayed
+owner/generation/revision and preserves dirty content by default. Failed source
+reads, decoding and admission preserve the active source and panel focus. Closing
+the source uses the same dirty guard. Project shutdown uses the existing explicit
+leave/discard workflow. This source reader does not implement a durable save or
+claim that an authored edit has reached disk.
+
+Version-one source is strict UTF-8 JSON, at most 8 MiB, with duplicate and unknown
+keys rejected. Integers are exact (floating-point coercion and narrowing are
+rejected); coordinate arrays are signed 64-bit millimeters. `world`, page `asset`
+and object `source` use canonical nonzero AssetId UUID spelling. Page `revision`
+is nonzero; all object revisions inherit their page head. One minimal real source:
+
+```json
+{
+  "version": 1,
+  "world": "00000000-0000-0000-0000-000000000001",
+  "bounds": {"minimum": [-1000,-1000,-1000], "maximum": [1999,1999,1999]},
+  "grid": {"origin": [0,0,0], "cellMillimeters": 1000,
+           "bounds": [-1,1,-1,1,-1,1], "lodLevels": 1},
+  "layers": [{"id": 0, "name": "Terrain", "ownership": 0, "flags": 0, "priority": 1}],
+  "pages": [{"asset": "00000000-0000-0000-0000-000000000002", "revision": 1,
+    "objects": [{"id": 1, "source": "00000000-0000-0000-0000-000000000003",
+                 "bounds": {"minimum": [-1,0,0], "maximum": [1000,0,0]},
+                 "placement": 0, "layer": 0}]}]
+}
+```
+
+Ownership, flags and placement use the declared WorldStreaming enum values; unknown
+policies return typed unsupported errors rather than being silently dropped.
+Normal workspace metadata/layer/page/object ceilings still apply. The schema is
+an explicit new source interchange route; no existing Scene or cooked world.index
+file changes meaning. Existing typed in-memory callers need no migration.
+
+`PartitionedWorldWorkspace::Browse(query, expected, cancellation)` is the one
+headless cell/layer query contract. It borrows no mutable caller storage and
+returns a detached complete projection retaining its exact immutable source lease.
+The ordinary `WorldSpatialAssignment::CreateForAuthoring` kernel supplies spatial
+coverage at each object's authored assignment LOD; always-present objects remain in layer totals and never
+fabricate spatial cells or cooked packages. Cell keys use canonical layer/LOD/Z/Y/X
+order, layer keys use stable numeric IDs, and all rows belong to the returned
+source fence. This is automatic source coverage, not an assertion of effective
+spanning placement: explicit placement directives and their diagnostics remain
+owned by the canonical object-inspection contract. Rename/filtering cannot retarget
+an identity.
+
+The tab also composes the published World Layer Outliner and routes its typed
+intent through the ordinary controller and Create Layer modal. Its authored
+order/current layer/filter/history remain in the existing document owner. The
+viewport uses the published streaming-source popup/gizmo; source admission binds
+that view to the same canonical owner and exact immutable lease. No alternate
+layer or source state is introduced.
+
+Search matches layer names/IDs and cell coordinate/LOD text. ASCII letters match
+case-insensitively; non-ASCII UTF-8 matches exact bytes. Layer and authoring-set
+status filters compose with search. Open means every contributing source object
+belongs to a page in the authoring working set, closed means none, and mixed means
+a strict subset. Empty layers report closed. These statuses prove neither loaded
+Scene payloads nor runtime residency. A filter never changes selection or opens a
+page. Output and intermediate-assignment ceilings reject the entire query without
+truncation or hidden state. Invalid, unsupported, stale, cancelled and wrong-thread
+queries publish no result. Cancelling owners remain readable; close/shutdown drop
+current projections while retained old leases remain safe.
+
+The controller refreshes the VM's `worldDocument` and browser only when the source
+lease or accepted filter changes. A source-publication change clears a layer filter whose stable identity is no
+longer present, returning its presentation to All layers. The tab caches table strings by source/filter/locale,
+reuses shared controls and refreshes text colors from the active theme. All visible
+copy is paired in en-US and tr-TR. Public-header consumer coverage protects the
+new typed query signature, and focused model/controller tests cover real source
+admission, query boundaries, replacement and teardown.
