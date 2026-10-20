@@ -126,6 +126,37 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Copies ordered authored link endpoints without inventing runtime validity. */
+        void AuthoredLink(Writer &writer, NavigationOverlayScene &scene, const SceneSource::SceneObjectSnapshot &object,
+                          const Math::Mat4 &world, const std::map<N::SurfaceId, const Runtime::NavigationSurfaceComponent *> &surfaces,
+                          const Assets::AssetId definition) {
+            if (object.components.navigationLink) {
+                const auto &link = *object.components.navigationLink;
+                const auto start = surfaces.find(link.start.surface);
+                const auto end = surfaces.find(link.end.surface);
+                if (start == surfaces.end() || end == surfaces.end() || start->second->definition != definition ||
+                    end->second->definition != definition)
+                    return;
+                for (const auto profile : link.profiles) {
+                    Nav primitive{.kind = NavigationOverlayKind::Link,
+                                  .validity = link.enabled && start->second->enabled && end->second->enabled
+                                                  ? NavigationOverlayValidity::Unvalidated
+                                                  : NavigationOverlayValidity::Disabled,
+                                  .profile = profile,
+                                  .surface = link.start.surface,
+                                  .otherSurface = link.end.surface,
+                                  .object = object.id,
+                                  .link = link.id,
+                                  .points = {Math::TransformAffinePoint(world, link.start.localPosition),
+                                             Math::TransformAffinePoint(world, link.end.localPosition),
+                                             {}},
+                                  .bidirectional = link.direction == Runtime::NavigationLinkDirection::Bidirectional};
+                    if (!writer.Add(scene, primitive))
+                        return;
+                }
+            }
+        }
+
         /** @brief Projects saved authored intent; enabled links have no implied validation evidence. */
         void Authored(Writer &writer, NavigationOverlayScene &scene, const SceneSource::SceneObjectSnapshot &object,
                       const Math::Mat4 &world, const std::map<N::SurfaceId, const Runtime::NavigationSurfaceComponent *> &surfaces,
@@ -164,32 +195,157 @@ namespace Horo::Editor {
                             Cylinder(writer, scene, primitive, std::get<Runtime::NavigationCylinderVolume>(modifier.volume), world);
                     }
             }
-            if (components.navigationLink) {
-                const auto &link = *components.navigationLink;
-                const auto start = surfaces.find(link.start.surface);
-                const auto end = surfaces.find(link.end.surface);
-                if (start == surfaces.end() || end == surfaces.end() || start->second->definition != definition ||
-                    end->second->definition != definition)
-                    return;
-                for (const auto profile : link.profiles) {
-                    Nav primitive{.kind = NavigationOverlayKind::Link,
-                                  .validity = link.enabled && start->second->enabled && end->second->enabled
-                                                  ? NavigationOverlayValidity::Unvalidated
-                                                  : NavigationOverlayValidity::Disabled,
-                                  .profile = profile,
-                                  .surface = link.start.surface,
-                                  .otherSurface = link.end.surface,
-                                  .object = object.id,
-                                  .link = link.id,
-                                  .points = {Math::TransformAffinePoint(world, link.start.localPosition),
-                                             Math::TransformAffinePoint(world, link.end.localPosition),
-                                             {}},
-                                  .bidirectional = link.direction == Runtime::NavigationLinkDirection::Bidirectional};
-                    if (!writer.Add(scene, primitive))
-                        return;
+            AuthoredLink(writer, scene, object, world, surfaces, definition);
+        }
+
+        /** @brief Borrows only within source capture; no graph pointer enters the resulting snapshot. */
+        struct Graph final {
+            std::map<SceneSource::SceneObjectId, const SceneSource::SceneObjectSnapshot *> objects;
+            std::map<N::SurfaceId, const Runtime::NavigationSurfaceComponent *> surfaces;
+        };
+
+        /** @brief Validates typed component payloads and unique local identities under one inspection budget. */
+        Result<Graph> CaptureGraph(const SceneSource::SceneSourceDocument &document, Writer &writer) {
+            Graph graph;
+            for (const auto &object : document.objects) {
+                if (!writer.Step())
+                    break;
+                const auto &components = object.components;
+                if (components.navigationSurface) {
+                    const auto valid = Runtime::ValidateNavigationSurfaceComponent(*components.navigationSurface);
+                    if (valid.HasError())
+                        return Result<Graph>::Failure(valid.ErrorValue());
+                }
+                if (components.navigationModifier) {
+                    const auto valid = Runtime::ValidateNavigationModifierComponent(*components.navigationModifier);
+                    if (valid.HasError())
+                        return Result<Graph>::Failure(valid.ErrorValue());
+                }
+                if (components.navigationLink) {
+                    const auto valid = Runtime::ValidateNavigationLinkComponent(*components.navigationLink);
+                    if (valid.HasError())
+                        return Result<Graph>::Failure(valid.ErrorValue());
+                }
+                if (!graph.objects.emplace(object.id, &object).second)
+                    return Result<Graph>::Failure(MakeError(N::NavigationErrors::SourceDuplicateIdentity));
+                if (object.components.navigationSurface &&
+                    !graph.surfaces.emplace(object.components.navigationSurface->id, &*object.components.navigationSurface).second)
+                    return Result<Graph>::Failure(MakeError(N::NavigationErrors::SourceDuplicateIdentity));
+            }
+            return Result<Graph>::Success(std::move(graph));
+        }
+
+        /** @brief Resolves complete parent chains before extracting exact authored volumes and endpoints. */
+        Result<void> CaptureAuthoredScene(Writer &writer, NavigationOverlayScene &scene, const SceneSource::SceneSourceDocument &document,
+                                          const Assets::AssetId definition) {
+            const auto graph = CaptureGraph(document, writer);
+            if (graph.HasError())
+                return Result<void>::Failure(graph.ErrorValue());
+            if (!writer.truncated)
+                for (const auto &[id, object] : graph.Value().objects) {
+                    static_cast<void>(id);
+                    if (!writer.Step())
+                        break;
+                    auto world = World(*object, graph.Value().objects, writer);
+                    if (world.HasError()) {
+                        if (writer.truncated)
+                            break;
+                        return Result<void>::Failure(world.ErrorValue());
+                    }
+                    Authored(writer, scene, *object, world.Value(), graph.Value().surfaces, definition);
+                }
+            return Result<void>::Success();
+        }
+
+        /** @brief Unions exact cooked tile closure bounds for each Scene-qualified surface/profile. */
+        Result<void> CookedSurfaceBounds(Writer &writer, std::vector<NavigationOverlayScene> &scenes,
+                                         const N::NavigationCookedTileSet &tiles) {
+            std::map<N::NavigationBakeTileKey, Math::Aabb> surfaceBounds;
+            for (const auto &tile : tiles.tiles) {
+                if (!writer.Step())
+                    break;
+                if (!tile)
+                    return Result<void>::Failure(MakeError(N::NavigationErrors::BakeInputInvalid));
+                auto key = tile->Key();
+                key.tile = {};
+                const auto bounds = tile->Topology().bounds;
+                auto [entry, inserted] = surfaceBounds.emplace(key, bounds);
+                if (!inserted) {
+                    auto &current = entry->second;
+                    current.minimum = {std::min(current.minimum.x, bounds.minimum.x), std::min(current.minimum.y, bounds.minimum.y),
+                                       std::min(current.minimum.z, bounds.minimum.z)};
+                    current.maximum = {std::max(current.maximum.x, bounds.maximum.x), std::max(current.maximum.y, bounds.maximum.y),
+                                       std::max(current.maximum.z, bounds.maximum.z)};
                 }
             }
+            for (const auto &[key, bounds] : surfaceBounds) {
+                const auto scene = std::ranges::find(scenes, key.scope, &NavigationOverlayScene::scope);
+                if (scene != scenes.end())
+                    Box(writer, *scene,
+                        {.kind = NavigationOverlayKind::Surface,
+                         .validity = NavigationOverlayValidity::Cooked,
+                         .profile = key.profile,
+                         .surface = key.surface},
+                        bounds, Math::Mat4::Identity());
+            }
+            return Result<void>::Success();
         }
+
+        /** @brief Copies validated neutral convex polygons as bounded triangle fans with canonical indices. */
+        Result<void> WalkableFaces(Writer &writer, NavigationOverlayScene &scene, Nav primitive,
+                                   const N::NavigationTileBuildResult &topology) {
+            primitive.kind = NavigationOverlayKind::Walkable;
+            primitive.triangle = true;
+            std::uint32_t polygonIndex{};
+            for (const auto &polygon : topology.polygons) {
+                if (!writer.Step())
+                    break;
+                const auto first = polygon.vertexIndices.first;
+                const auto count = polygon.vertexIndices.count;
+                if (count < 3 || first > topology.polygonVertexIndices.size() || count > topology.polygonVertexIndices.size() - first)
+                    return Result<void>::Failure(MakeError(N::NavigationErrors::BakeInputInvalid));
+                primitive.polygonIndex = polygonIndex++;
+                primitive.area = polygon.area;
+                for (std::size_t corner = 1; corner + 1 < count; ++corner) {
+                    const std::array indices{topology.polygonVertexIndices[first], topology.polygonVertexIndices[first + corner],
+                                             topology.polygonVertexIndices[first + corner + 1]};
+                    for (std::size_t i = 0; i < indices.size(); ++i) {
+                        if (indices[i] >= topology.vertices.size())
+                            return Result<void>::Failure(MakeError(N::NavigationErrors::BakeInputInvalid));
+                        primitive.points[i] = topology.vertices[indices[i]];
+                    }
+                    if (!writer.Add(scene, primitive))
+                        break;
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Copies one tile's neutral bounds, walkable faces and generated transition directions. */
+        Result<void> CookedTile(Writer &writer, NavigationOverlayScene &scene, const N::NavigationCookedTile &tile) {
+            const auto &key = tile.Key();
+            const auto &topology = tile.Topology();
+            Nav primitive{.kind = NavigationOverlayKind::Tile,
+                          .validity = NavigationOverlayValidity::Cooked,
+                          .profile = key.profile,
+                          .surface = key.surface,
+                          .tile = key.tile};
+            Box(writer, scene, primitive, topology.bounds, Math::Mat4::Identity());
+            const auto walkable = WalkableFaces(writer, scene, primitive, topology);
+            if (walkable.HasError())
+                return walkable;
+            primitive.kind = NavigationOverlayKind::Link;
+            primitive.triangle = false;
+            for (const auto &link : topology.offMeshLinks) {
+                primitive.area = link.area;
+                primitive.points = {link.start, link.end, {}};
+                primitive.bidirectional = link.bidirectional;
+                if (!writer.Add(scene, primitive))
+                    break;
+            }
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     /** @copydoc NavigationOverlayFilter::Matches */
@@ -215,46 +371,9 @@ namespace Horo::Editor {
             if (scope.HasError())
                 return SnapshotResult::Failure(scope.ErrorValue());
             NavigationOverlayScene scene{.path = input.path.String(), .scope = scope.Value(), .sourceDigest = input.digest};
-            std::map<SceneSource::SceneObjectId, const SceneSource::SceneObjectSnapshot *> objects;
-            std::map<N::SurfaceId, const Runtime::NavigationSurfaceComponent *> surfaces;
-            for (const auto &object : input.document.objects) {
-                if (!writer.Step())
-                    break;
-                const auto &components = object.components;
-                if (components.navigationSurface) {
-                    const auto valid = Runtime::ValidateNavigationSurfaceComponent(*components.navigationSurface);
-                    if (valid.HasError())
-                        return SnapshotResult::Failure(valid.ErrorValue());
-                }
-                if (components.navigationModifier) {
-                    const auto valid = Runtime::ValidateNavigationModifierComponent(*components.navigationModifier);
-                    if (valid.HasError())
-                        return SnapshotResult::Failure(valid.ErrorValue());
-                }
-                if (components.navigationLink) {
-                    const auto valid = Runtime::ValidateNavigationLinkComponent(*components.navigationLink);
-                    if (valid.HasError())
-                        return SnapshotResult::Failure(valid.ErrorValue());
-                }
-                if (!objects.emplace(object.id, &object).second)
-                    return SnapshotResult::Failure(MakeError(N::NavigationErrors::SourceDuplicateIdentity));
-                if (object.components.navigationSurface &&
-                    !surfaces.emplace(object.components.navigationSurface->id, &*object.components.navigationSurface).second)
-                    return SnapshotResult::Failure(MakeError(N::NavigationErrors::SourceDuplicateIdentity));
-            }
-            if (!writer.truncated)
-                for (const auto &[id, object] : objects) {
-                    static_cast<void>(id);
-                    if (!writer.Step())
-                        break;
-                    auto world = World(*object, objects, writer);
-                    if (world.HasError()) {
-                        if (writer.truncated)
-                            break;
-                        return SnapshotResult::Failure(world.ErrorValue());
-                    }
-                    Authored(writer, scene, *object, world.Value(), surfaces, definition);
-                }
+            const auto captured = CaptureAuthoredScene(writer, scene, input.document, definition);
+            if (captured.HasError())
+                return SnapshotResult::Failure(captured.ErrorValue());
             result->scenes_.push_back(std::move(scene));
         }
         if (writer.invalid)
@@ -277,34 +396,9 @@ namespace Horo::Editor {
                     break;
             result->scenes_.push_back(std::move(scene));
         }
-        std::map<N::NavigationBakeTileKey, Math::Aabb> surfaceBounds;
-        for (const auto &tile : tiles.tiles) {
-            if (!writer.Step())
-                break;
-            if (!tile)
-                return SnapshotResult::Failure(MakeError(N::NavigationErrors::BakeInputInvalid));
-            auto key = tile->Key();
-            key.tile = {};
-            const auto bounds = tile->Topology().bounds;
-            auto [entry, inserted] = surfaceBounds.emplace(key, bounds);
-            if (!inserted) {
-                auto &current = entry->second;
-                current.minimum = {std::min(current.minimum.x, bounds.minimum.x), std::min(current.minimum.y, bounds.minimum.y),
-                                   std::min(current.minimum.z, bounds.minimum.z)};
-                current.maximum = {std::max(current.maximum.x, bounds.maximum.x), std::max(current.maximum.y, bounds.maximum.y),
-                                   std::max(current.maximum.z, bounds.maximum.z)};
-            }
-        }
-        for (const auto &[key, bounds] : surfaceBounds) {
-            const auto scene = std::ranges::find(result->scenes_, key.scope, &NavigationOverlayScene::scope);
-            if (scene != result->scenes_.end())
-                Box(writer, *scene,
-                    {.kind = NavigationOverlayKind::Surface,
-                     .validity = NavigationOverlayValidity::Cooked,
-                     .profile = key.profile,
-                     .surface = key.surface},
-                    bounds, Math::Mat4::Identity());
-        }
+        const auto bounds = CookedSurfaceBounds(writer, result->scenes_, tiles);
+        if (bounds.HasError())
+            return SnapshotResult::Failure(bounds.ErrorValue());
         for (const auto &tile : tiles.tiles) {
             if (!writer.Step())
                 break;
@@ -314,46 +408,9 @@ namespace Horo::Editor {
             auto scene = std::ranges::find(result->scenes_, key.scope, &NavigationOverlayScene::scope);
             if (scene == result->scenes_.end())
                 continue;
-            const auto &topology = tile->Topology();
-            Nav primitive{.kind = NavigationOverlayKind::Tile,
-                          .validity = NavigationOverlayValidity::Cooked,
-                          .profile = key.profile,
-                          .surface = key.surface,
-                          .tile = key.tile};
-            Box(writer, *scene, primitive, topology.bounds, Math::Mat4::Identity());
-            primitive.kind = NavigationOverlayKind::Walkable;
-            primitive.triangle = true;
-            std::uint32_t polygonIndex{};
-            for (const auto &polygon : topology.polygons) {
-                if (!writer.Step())
-                    break;
-                const auto first = polygon.vertexIndices.first;
-                const auto count = polygon.vertexIndices.count;
-                if (count < 3 || first > topology.polygonVertexIndices.size() || count > topology.polygonVertexIndices.size() - first)
-                    return SnapshotResult::Failure(MakeError(N::NavigationErrors::BakeInputInvalid));
-                primitive.polygonIndex = polygonIndex++;
-                primitive.area = polygon.area;
-                for (std::size_t corner = 1; corner + 1 < count; ++corner) {
-                    const std::array indices{topology.polygonVertexIndices[first], topology.polygonVertexIndices[first + corner],
-                                             topology.polygonVertexIndices[first + corner + 1]};
-                    for (std::size_t i = 0; i < indices.size(); ++i) {
-                        if (indices[i] >= topology.vertices.size())
-                            return SnapshotResult::Failure(MakeError(N::NavigationErrors::BakeInputInvalid));
-                        primitive.points[i] = topology.vertices[indices[i]];
-                    }
-                    if (!writer.Add(*scene, primitive))
-                        break;
-                }
-            }
-            primitive.kind = NavigationOverlayKind::Link;
-            primitive.triangle = false;
-            for (const auto &link : topology.offMeshLinks) {
-                primitive.area = link.area;
-                primitive.points = {link.start, link.end, {}};
-                primitive.bidirectional = link.bidirectional;
-                if (!writer.Add(*scene, primitive))
-                    break;
-            }
+            const auto copied = CookedTile(writer, *scene, *tile);
+            if (copied.HasError())
+                return SnapshotResult::Failure(copied.ErrorValue());
         }
         if (writer.invalid)
             return SnapshotResult::Failure(MakeError(N::NavigationErrors::SourceGeometryInvalid));

@@ -124,9 +124,14 @@ namespace Horo::Editor {
         DrawViewportSurface(drawList, surfaceLayout, textureView, hasRenderedViewport);
 
         if (navigationOverlays_ && hasRenderedViewport)
-            navigationLayer_.Draw(*navigationOverlays_, navigationProjectRoot_, viewModel.navigationScenePath, viewModel.viewportCamera,
-                                  origin, {width, height}, viewportRenderer_->ClipDepthRange(), context,
-                                  viewModel.isDirty || viewModel.sceneExternalConflict);
+            navigationLayer_.Draw(*navigationOverlays_, {.projectRoot = navigationProjectRoot_,
+                                                         .scenePath = viewModel.navigationScenePath,
+                                                         .camera = viewModel.viewportCamera,
+                                                         .origin = origin,
+                                                         .size = {width, height},
+                                                         .depthRange = viewportRenderer_->ClipDepthRange(),
+                                                         .gui = context,
+                                                         .dirty = viewModel.isDirty || viewModel.sceneExternalConflict});
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
 

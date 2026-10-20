@@ -10,6 +10,8 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr char OptionsPopup[] = "##NavigationOverlayOptions";
+
         /** @brief Resolves all copy through the editor localization authority. */
         const std::string &Text(const EditorGuiContext &context, const char *key) {
             constexpr std::string_view prefix{"workspace.navigation_overlay."};
@@ -89,6 +91,18 @@ namespace Horo::Editor {
             return Theme::U32(Theme::Text());
         }
 
+        /** @brief ImGui convex AA requires clockwise screen winding, including back-facing navigation geometry. */
+        void Clockwise(std::array<ImVec2, 12> &pixels, const std::size_t count) {
+            float winding{};
+            for (std::size_t i = 0; i < count; ++i) {
+                const auto a = pixels[i];
+                const auto b = pixels[(i + 1) % count];
+                winding += a.x * b.y - b.x * a.y;
+            }
+            if (winding < 0)
+                std::reverse(pixels.begin(), pixels.begin() + count);
+        }
+
         /** @brief Emits an already clipped primitive with shape cues and a strict draw-command ceiling. */
         void DrawPrimitive(ImDrawList &draw, const NavigationOverlayPrimitive &primitive, const Math::Mat4 &matrix, const ImVec2 origin,
                            const ImVec2 size, const Math::ClipDepthRange depth, std::size_t &commands) {
@@ -100,6 +114,7 @@ namespace Horo::Editor {
                 pixels[i] = {projected.points[i].x, projected.points[i].y};
             const auto color = Color(primitive);
             if (primitive.triangle) {
+                Clockwise(pixels, projected.count);
                 // Filled faces and outlined boxes/links remain distinguishable without color alone.
                 draw.AddConvexPolyFilled(pixels.data(), static_cast<int>(projected.count),
                                          (color & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 55));
@@ -126,6 +141,28 @@ namespace Horo::Editor {
             if (primitive.bidirectional)
                 arrow(pixels[1], pixels[0]);
         }
+
+        /** @brief Applies independent inspection/draw bounds even when every primitive is filtered out. */
+        bool DrawScene(const NavigationOverlayScene &scene, const NavigationOverlayFilter &filter, const NavigationOverlayFrame &frame) {
+            const auto matrix = BuildEditorViewportViewProjection(frame.camera, frame.size.x / frame.size.y, frame.depthRange);
+            if (matrix.HasValue()) {
+                auto &draw = *ImGui::GetWindowDrawList();
+                draw.PushClipRect(frame.origin, {frame.origin.x + frame.size.x, frame.origin.y + frame.size.y}, true);
+                std::size_t inspected{};
+                std::size_t commands{};
+                for (const auto &primitive : scene.primitives) {
+                    if (inspected++ >= 16384 || commands >= 1024) {
+                        draw.PopClipRect();
+                        return true;
+                    }
+                    if (filter.Matches(primitive))
+                        DrawPrimitive(draw, primitive, matrix.Value(), frame.origin, frame.size, frame.depthRange, commands);
+                }
+                draw.PopClipRect();
+            }
+            return false;
+        }
+
     }  // namespace
 
     /** @copydoc ProjectNavigationOverlay */
@@ -152,6 +189,8 @@ namespace Horo::Editor {
             if (p.w <= Math::DefaultEpsilon)
                 return {};
             output.points[i] = {origin.x + (p.x / p.w * 0.5F + 0.5F) * extent.x, origin.y + (0.5F - p.y / p.w * 0.5F) * extent.y};
+            if (!Math::IsFinite(output.points[i]))
+                return {};
         }
         return output;
     }
@@ -216,69 +255,60 @@ namespace Horo::Editor {
     }
 
     /** @copydoc NavigationOverlayLayer::Draw */
-    void NavigationOverlayLayer::Draw(const NavigationBakeWorkspaceAccess &access, const std::filesystem::path &root,
-                                      const std::filesystem::path &scenePath, const EditorViewportCamera &camera, const ImVec2 origin,
-                                      const ImVec2 size, const Math::ClipDepthRange depth, const EditorGuiContext &context,
-                                      const bool dirty) {
+    void NavigationOverlayLayer::Draw(const NavigationBakeWorkspaceAccess &access, const NavigationOverlayFrame &frame) {
+        const auto size = frame.size;
         capturesPointer_ = false;
         if (size.x <= 32 || size.y <= 180 || !std::isfinite(size.x) || !std::isfinite(size.y))
             return;
         ImGui::PushID("NavigationOverlays");
         const auto snapshot =
-            (visible_ || ImGui::IsPopupOpen("##NavigationOverlayOptions")) && access.overlays ? access.overlays(root) : nullptr;
+            (visible_ || ImGui::IsPopupOpen(OptionsPopup)) && access.overlays ? access.overlays(frame.projectRoot) : nullptr;
         const NavigationOverlayScene *scene{};
         if (snapshot)
             for (const auto &candidate : snapshot->Scenes())
-                if (candidate.path == scenePath) {
+                if (candidate.path == frame.scenePath) {
                     scene = &candidate;
                     break;
                 }
-        if (scene && (observed_.lock() != snapshot || scenePath_ != scenePath)) {
+        if (scene && (observed_.lock() != snapshot || scenePath_ != frame.scenePath)) {
             Choices(*scene);
             observed_ = snapshot;
-            scenePath_ = scenePath;
+            scenePath_ = frame.scenePath;
         }
-        bool frameLimited{};
-        if (visible_ && scene) {
-            const auto matrix = BuildEditorViewportViewProjection(camera, size.x / size.y, depth);
-            if (matrix.HasValue()) {
-                auto &draw = *ImGui::GetWindowDrawList();
-                draw.PushClipRect(origin, {origin.x + size.x, origin.y + size.y}, true);
-                std::size_t inspected{};
-                std::size_t commands{};
-                for (const auto &primitive : scene->primitives) {
-                    if (inspected++ >= 16384 || commands >= 1024) {
-                        frameLimited = true;
-                        break;
-                    }
-                    if (filter_.Matches(primitive))
-                        DrawPrimitive(draw, primitive, matrix.Value(), origin, size, depth, commands);
-                }
-                draw.PopClipRect();
-            }
-        }
+        const bool frameLimited = visible_ && scene && DrawScene(*scene, filter_, frame);
+        DrawOptions(access, snapshot, scene, frame, frameLimited);
+        ImGui::PopID();
+    }
+
+    /** @copydoc NavigationOverlayLayer::DrawOptions */
+    void NavigationOverlayLayer::DrawOptions(const NavigationBakeWorkspaceAccess &access,
+                                             const std::shared_ptr<const NavigationViewportSnapshot> &snapshot,
+                                             const NavigationOverlayScene *scene, const NavigationOverlayFrame &frame,
+                                             const bool frameLimited) {
+        const auto &context = frame.gui;
+        const auto origin = frame.origin;
+        const auto size = frame.size;
         ImGui::SetCursorScreenPos({origin.x + 16, origin.y + 108});
         if (Ui::Button(
                 {.label = Text(context, "title").c_str(), .size = {std::min(220.0F, size.x - 32), 0}, .font = context.theme.fonts.sans}))
-            ImGui::OpenPopup("##NavigationOverlayOptions");
-        capturesPointer_ = ImGui::IsItemHovered() || ImGui::IsPopupOpen("##NavigationOverlayOptions");
+            ImGui::OpenPopup(OptionsPopup);
+        capturesPointer_ = ImGui::IsItemHovered() || ImGui::IsPopupOpen(OptionsPopup);
         ImGui::SetNextWindowSizeConstraints({160.0F, 0.0F},
                                             {std::max(160.0F, std::min(360.0F, size.x - 32.0F)), std::max(180.0F, size.y - 32.0F)});
-        if (ImGui::BeginPopup("##NavigationOverlayOptions")) {
+        if (ImGui::BeginPopup(OptionsPopup)) {
             static_cast<void>(Ui::CheckboxControl(Text(context, "show").c_str(), &visible_, context.theme.fonts));
             if (visible_ && !prepared_ && access.prepare) {
-                auto prepared = access.prepare(root);
+                auto prepared = access.prepare(frame.projectRoot);
                 prepared_ = prepared.HasValue();
             }
             if (scene)
                 Controls(context);
             else
                 Ui::Hint(Text(context, "unavailable").c_str(), context.theme.fonts);
-            Ui::Hint(Text(context, dirty ? "dirty" : "saved").c_str(), context.theme.fonts);
+            Ui::Hint(Text(context, frame.dirty ? "dirty" : "saved").c_str(), context.theme.fonts);
             if (frameLimited || (snapshot && snapshot->Truncated()))
                 Ui::Hint(Text(context, "limited").c_str(), context.theme.fonts);
             ImGui::EndPopup();
         }
-        ImGui::PopID();
     }
 }  // namespace Horo::Editor

@@ -24,19 +24,26 @@ namespace Horo::Editor {
                                                                       Math::Vec2 origin, Math::Vec2 extent,
                                                                       Math::ClipDepthRange depth) noexcept;
 
+    /** @brief Borrowed immutable presentation inputs, valid only for the current viewport draw. */
+    struct NavigationOverlayFrame final {
+        const std::filesystem::path &projectRoot;
+        const std::filesystem::path &scenePath;
+        const EditorViewportCamera &camera;
+        ImVec2 origin;
+        ImVec2 size;
+        Math::ClipDepthRange depthRange;
+        const EditorGuiContext &gui;
+        bool dirty{};
+    };
+
     /** @brief Panel-owned visibility and identity choices; no provider memory survives a draw. */
     class NavigationOverlayLayer final {
     public:
         /** @brief Queries memory-only owner projection, then draws clipped geometry and shared controls.
-         * @param access Explicit host capability, outliving attachment. @param root Exact active project.
-         * @param scenePath Exact active Scene namespace. @param camera Canonical viewport camera.
-         * @param origin Viewport top-left. @param size Positive viewport extent.
-         * @param depthRange Concrete peer's clip convention. @param context Current tokens/fonts/localization.
-         * @param dirty Whether saved geometry differs from the editable document.
+         * @param access Explicit host capability, outliving attachment.
+         * @param frame Current immutable inputs; no reference is retained after return.
          */
-        void Draw(const NavigationBakeWorkspaceAccess &access, const std::filesystem::path &root, const std::filesystem::path &scenePath,
-                  const EditorViewportCamera &camera, ImVec2 origin, ImVec2 size, Math::ClipDepthRange depthRange,
-                  const EditorGuiContext &context, bool dirty);
+        void Draw(const NavigationBakeWorkspaceAccess &access, const NavigationOverlayFrame &frame);
 
         /** @brief Whether the options button or popup owns pointer interaction this frame. @return Presentation capture. */
         [[nodiscard]] bool CapturesPointer() const noexcept {
@@ -54,6 +61,13 @@ namespace Horo::Editor {
         void Choices(const NavigationOverlayScene &scene);
         /** @brief Draws shared localized filter controls. @param context Current presentation tokens. */
         void Controls(const EditorGuiContext &context);
+        /** @brief Draws localized geometry-interest choices without retaining snapshot leases.
+         * @param access Explicit owner capability. @param snapshot Current independent geometry.
+         * @param scene Matched Scene or absence. @param frame Current immutable presentation inputs.
+         * @param frameLimited Whether the independent frame inspection/draw budget omitted geometry.
+         */
+        void DrawOptions(const NavigationBakeWorkspaceAccess &access, const std::shared_ptr<const NavigationViewportSnapshot> &snapshot,
+                         const NavigationOverlayScene *scene, const NavigationOverlayFrame &frame, bool frameLimited);
         NavigationOverlayFilter filter_;
         std::array<std::vector<Choice>, 3> choices_;
         std::array<int, 3> selected_{};

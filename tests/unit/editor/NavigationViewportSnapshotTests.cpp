@@ -8,8 +8,8 @@
 namespace Horo::Editor {
     namespace {
         namespace N = Navigation;
-        using Application::NavigationSourceTestSupport::Asset;
         using N::TestSupport::Id;
+        using Tests::NavigationSources::Asset;
 
         /** @brief Saved typed source with a transformed surface, a cylinder and a directed link. */
         Application::NavigationSceneBakeSource Scene(const std::uint8_t identity = 2) {
@@ -57,6 +57,30 @@ namespace Horo::Editor {
         CHECK(link->validity == NavigationOverlayValidity::Unvalidated);
         CHECK(link->link == Id<N::NavigationLinkId>(10));
         CHECK_FALSE(link->bidirectional);
+    }
+
+    TEST_CASE("Navigation viewport resolves parent frames independently of input order and preserves two-way links",
+              "[editor][navigation][overlay]") {
+        auto scene = Scene();
+        scene.document.objects.front().parent = SceneSource::SceneObjectId{2};
+        scene.document.objects.front().components.navigationLink->direction = Runtime::NavigationLinkDirection::Bidirectional;
+        scene.document.objects.push_back({.id = {2}, .name = "Parent", .localTransform = {.translation = {5, 0, 0}, .scale = {2, 1, 1}}});
+        const auto snapshot = NavigationViewportSnapshot::Capture(std::span{&scene, 1}, Asset(1));
+        REQUIRE(snapshot.HasValue());
+        const auto &primitives = snapshot.Value()->Scenes().front().primitives;
+        const auto link = std::ranges::find(primitives, NavigationOverlayKind::Link, &NavigationOverlayPrimitive::kind);
+        REQUIRE(link != primitives.end());
+        CHECK((link->points[0] == Math::Vec3{25, 2, 3}));
+        CHECK((link->points[1] == Math::Vec3{33, 2, 3}));
+        CHECK(link->bidirectional);
+        NavigationOverlayFilter filter;
+        auto destination = *link;
+        destination.otherSurface = Id<N::SurfaceId>(11);
+        filter.surface = destination.otherSurface;
+        CHECK(filter.Matches(destination));
+        destination.area = Id<N::NavigationAreaId>(8);
+        filter.area = destination.area;
+        CHECK(filter.Matches(destination));
     }
 
     TEST_CASE("Navigation viewport isolates repeated surface identities by Scene and applies every typed filter",
