@@ -2,6 +2,7 @@
 #include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Editor/PCGGraphDocument.h"
 #include "Horo/Editor/PCGGraphDocumentService.h"
+#include "Horo/Editor/PCGPreviewSession.h"
 #include "Horo/Editor/SemanticDocumentHistory.h"
 
 #include <type_traits>

@@ -214,6 +214,12 @@
     "workspace.sequence.close": {
       "text": "Close"
     },
+    "workspace.pcg.preview.refresh": "Preview",
+    "workspace.pcg.preview.cancel": "Clear preview",
+    "workspace.pcg.preview.running": "Evaluating captured graph…",
+    "workspace.pcg.preview.failed": "Preview failed. The graph and Scene are unchanged.",
+    "workspace.pcg.preview.current": "Current preview · top-down points and output bounds · at most 8192 points",
+    "workspace.pcg.preview.empty": "Isolated sandbox: grid 1, box 2, surface 3. Preview does not modify the Scene.",
     "workspace.pcg.undo": {"text": "Undo"},
     "workspace.pcg.redo": {"text": "Redo"},
     "workspace.pcg.reset_view": {"text": "Reset view"},

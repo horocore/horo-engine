@@ -674,6 +674,9 @@ namespace Horo::Editor {
                 if (pcgComposition.HasError())
                     return Result<void>::Failure(pcgComposition.ErrorValue());
                 auto pcgCatalog = std::move(pcgComposition).Value();
+                auto pcgPreview = CreatePCGPreviewSandbox();
+                if (pcgPreview.HasError())
+                    return Result<void>::Failure(pcgPreview.ErrorValue());
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -700,6 +703,8 @@ namespace Horo::Editor {
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
                                                    .pcgCatalog = std::move(pcgCatalog.document),
+                                                   .pcgPreviewCatalog = pcgCatalog.executable,
+                                                   .pcgPreviewInputs = std::move(pcgPreview).Value(),
                                                    .pcgPalette = std::move(pcgCatalog.palette),
                                                });
                 if (controller_->InitializationError().has_value()) {

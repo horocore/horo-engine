@@ -2969,6 +2969,7 @@ add_library(HoroEditorServices STATIC
         editor/pcg/PCGDocumentErrors.cpp
         editor/pcg/PCGGraphDocument.cpp
         editor/pcg/PCGGraphDocumentService.cpp
+        editor/pcg/PCGPreviewSession.cpp
         editor/document/DocumentRecoveryService.cpp
         editor/audio/AudioEditorDocument.cpp
         editor/audio/AudioComponentPreview.cpp
@@ -3282,6 +3283,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPCGPreview.cpp
+            editor/screens/workspace/PCGPreviewSandbox.cpp
+            editor/screens/workspace/PCGPreviewView.cpp
             editor/screens/workspace/PCGWorkspace.cpp
             editor/screens/workspace/PCGEditorCatalog.cpp
             editor/screens/workspace/EditorWorkspaceViewPCG.cpp

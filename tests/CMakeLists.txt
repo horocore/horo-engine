@@ -2661,6 +2661,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
+            unit/editor/PCGPreviewWorkspaceTests.cpp
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
@@ -5324,7 +5325,8 @@ set_tests_properties(HoroAnimationGraphPublicHeaderConsumer PROPERTIES LABELS "u
 add_executable(HoroPCGDocumentTests
         unit/editor/PCGGraphDocumentSaveTests.cpp
         unit/editor/PCGGraphDocumentTests.cpp
-        unit/editor/PCGGraphDocumentServiceTests.cpp)
+        unit/editor/PCGGraphDocumentServiceTests.cpp
+        unit/editor/PCGPreviewSessionTests.cpp)
 target_compile_features(HoroPCGDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGDocumentTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroPCGDocumentTests LABELS "unit;editor;pcg;headless;sonar-coverage;ci-windows")

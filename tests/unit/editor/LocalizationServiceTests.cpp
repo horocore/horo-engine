@@ -346,6 +346,12 @@ namespace {
     }
 
     constexpr std::array PCGCanvasKeys{
+        "workspace.pcg.preview.refresh",
+        "workspace.pcg.preview.cancel",
+        "workspace.pcg.preview.running",
+        "workspace.pcg.preview.failed",
+        "workspace.pcg.preview.current",
+        "workspace.pcg.preview.empty",
         "workspace.pcg.undo",
         "workspace.pcg.redo",
         "workspace.pcg.reset_view",

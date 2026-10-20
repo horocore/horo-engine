@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
+#include "editor/screens/workspace/PCGPreviewView.h"
 
 #include <algorithm>
 #include <array>
@@ -363,6 +364,12 @@ namespace Horo::Editor {
         if ((frame.State().draggingNode || frame.State().connectingPin) &&
             (ImGui::GetIO().AppFocusLost || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)))
             CancelGesture(frame);
+        if (document.previewAvailable) {
+            const auto previewAction = DrawPCGPreview(document.preview, document.previewRegion, 8192, localization, fonts);
+            if (previewAction != PCGPreviewAction::None)
+                frame.Edit().action =
+                    previewAction == PCGPreviewAction::Refresh ? PCGEditorAction::PreviewRefresh : PCGEditorAction::PreviewCancel;
+        }
         DrawTools(frame);
         if (document.error) {
             Ui::ErrorText(frame.Text("workspace.pcg.rejected").c_str(), frame.fonts);

@@ -65,6 +65,8 @@ namespace Horo::Editor {
             found = std::prev(documents.end());
         }
         RefreshPCGCanvas(*found, snapshot.Value());
+        found->previewAvailable = m_pcgPreviewJobs && m_pcgPreviewInputs && m_pcgPreviewCatalog.IsValid();
+        UpdatePCGPreviews();
     }
 
     /** @copydoc EditorWorkspaceController::ExecutePCGDocument */
@@ -100,6 +102,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Stale)));
         if (const auto closed = m_pcgDocuments.Close(instance, discardDirty); closed.HasError())
             return closed;
+        RetirePCGPreview(instance);
         std::erase_if(m_viewModel.pcgDocuments, [instance](const auto &entry) {
             return entry.snapshot.identity.instance == instance;
         });
@@ -137,6 +140,7 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::ShutdownPCGDocuments(bool discardDirty) {
         auto result = m_pcgDocuments.Shutdown(!discardDirty, discardDirty);
         if (result.HasValue()) {
+            m_pcgPreviews.clear();  // Sessions cancel and join before workspace roots retire.
             m_pcgDocumentsShutdown = true;
             m_viewModel.pcgDocuments.clear();
         }
@@ -145,6 +149,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::UpdatePCGAutosave */
     void EditorWorkspaceController::UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes) {
+        UpdatePCGPreviews();
         if (m_pcgDocumentsShutdown || intervalMinutes <= 0 || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0)
             return;
         if (!HasDirtyPCGDocuments()) {
@@ -220,6 +225,15 @@ namespace Horo::Editor {
         const auto instance = snapshot.identity.instance;
         if (request.action == PCGEditorAction::Present) {
             document.canvas = request.presentation;
+            return Result<void>::Success();
+        }
+        if (request.action == PCGEditorAction::PreviewRefresh)
+            return RequestPCGPreview(instance, request.fence.cancellation);
+        if (request.action == PCGEditorAction::PreviewCancel) {
+            const auto owner = std::ranges::find(m_pcgPreviews, instance, &PCGPreviewOwner::document);
+            if (owner != m_pcgPreviews.end())
+                static_cast<void>(owner->session->Cancel());
+            UpdatePCGPreviews();
             return Result<void>::Success();
         }
         if (request.action == PCGEditorAction::Save) {

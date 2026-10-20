@@ -53,7 +53,8 @@ namespace Horo::Editor {
     /** @copydoc CreatePCGEditorCatalog */
     Result<PCGEditorCatalog> CreatePCGEditorCatalog() {
         using Return = Result<PCGEditorCatalog>;
-        const std::array grants{PCG::PCGCapability::Validation};
+        const std::array grants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview, PCG::PCGCapability::OfflineBake,
+                                PCG::PCGCapability::RuntimeEvaluation, PCG::PCGCapability::HybridEvaluation};
         const auto capabilities = PCG::PCGCapabilitySet::Create(grants);
         if (capabilities.HasError())
             return Return::Failure(capabilities.ErrorValue());
@@ -73,6 +74,7 @@ namespace Horo::Editor {
         if (captured.HasError())
             return Return::Failure(captured.ErrorValue());
         PCGEditorCatalog result;
+        result.executable = captured.Value();
         result.document.revision = captured.Value().Generation();
         for (const auto &descriptor : captured.Value().Nodes()) {
             const auto payload = InitialSettings(descriptor.kind);

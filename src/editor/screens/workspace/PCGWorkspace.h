@@ -1,6 +1,7 @@
 #pragma once
 /** @file PCGWorkspace.h @brief Workspace presentation and typed intents for the canonical PCG document. */
 #include "Horo/Editor/PCGGraphDocument.h"
+#include "Horo/Editor/PCGPreviewSession.h"
 #include "Horo/PCG/PCGNodeCatalog.h"
 
 #include <array>
@@ -23,6 +24,7 @@ namespace Horo::Editor {
     struct PCGEditorCatalog final {
         PCGDocumentCatalog document;
         std::vector<PCGPaletteEntry> palette;
+        PCG::PCGNodeCatalogSnapshot executable;
     };
 
     /** @brief Composes repository-owned schemas without activating evaluators or selecting a backend.
@@ -53,6 +55,9 @@ namespace Horo::Editor {
         PCGDocumentSnapshot snapshot;
         PCGCanvasState canvas;
         std::optional<Error> error;
+        PCGPreviewSnapshot preview;
+        Math::Aabb previewRegion{{-8, -8, -8}, {8, 8, 8}};
+        bool previewAvailable{};
     };
     /** @brief Closed canvas actions; semantic actions always use the canonical executor. */
     enum class PCGEditorAction : std::uint8_t {
@@ -63,7 +68,9 @@ namespace Horo::Editor {
         Disconnect,
         Undo,
         Redo,
-        Save
+        Save,
+        PreviewRefresh,
+        PreviewCancel
     };
 
     /** @brief One exact-frame intent. Connection gestures submit no document operations until completion. */
