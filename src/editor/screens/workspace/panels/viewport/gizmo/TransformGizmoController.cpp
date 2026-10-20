@@ -115,6 +115,8 @@ namespace Horo::Editor {
                 return HandleGeometryFailure(geometry.ErrorValue(), context.command, capture);
             geometryFailureReported_ = false;
             rotationCenter = geometry.Value().center;
+            if (context.hovered && context.contributedAxis)
+                geometry.Value().hoveredAxis = context.contributedAxis;
             const Result<void> begun = TryBeginDrag(geometry.Value(), worldTransform, *selectedObject, context, capture);
             if (begun.HasError()) {
                 LOG_ERROR("editor.viewport_gizmo", "Gizmo drag rejected: %s", begun.ErrorValue().message.c_str());

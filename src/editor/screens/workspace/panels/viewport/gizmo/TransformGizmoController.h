@@ -20,6 +20,7 @@ namespace Horo::Editor {
         const Input::RawInputSnapshot &input;
         const EditorWorkspaceViewModel &viewModel;
         EditorWorkspaceViewCommandData &command;
+        std::optional<int> contributedAxis; /**< Host-validated exact current provider pick. */
         Math::ClipDepthRange depthRange{Math::ClipDepthRange::NegativeOneToOne};
     };
 

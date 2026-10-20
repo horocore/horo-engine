@@ -1,3 +1,4 @@
+#include "../../helpers/extensions/ViewportContributionTestSupport.h"
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
@@ -114,12 +115,14 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     Input::RawInputCollector inputCollector;
     Input::InputRouter inputRouter;
     auto workspaceInput = inputRouter.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
+    Horo::Tests::ViewportContribution viewportContribution;
     ViewportPanel panel;
     PanelContext panelContext{
         .dataBus = editorEvents,
         .viewportRenderer = &renderer,
         .inputRouter = &inputRouter,
         .workspaceInputContext = &workspaceInput,
+        .extensionViewport = &viewportContribution.host,
     };
     panel.OnAttach(panelContext);
 
@@ -274,6 +277,58 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     drawFrame();
     REQUIRE((command.command == EditorWorkspaceViewCommand::CommitObjectTransform));
     REQUIRE((command.transformPayload.has_value()));
+
+    // A provider handle far from the built-in gizmo must use the same captured transaction path.
+    REQUIRE(viewportContribution.Publish({"horo.scene.transform",
+                                          Extensions::EditorViewportTool::Move,
+                                          {{0.1F, 0.7F, 0.3F, 0.7F, 2, Extensions::EditorViewportTone::X, 0}}}));
+    const auto beginContributedDrag = [&] {
+        command = {};
+        io.AddMousePosEvent(88.0F, 204.0F);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        drawFrame();
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        drawFrame();
+        REQUIRE(inputRouter.HasCapture());
+        command = {};
+        io.AddMousePosEvent(108.0F, 204.0F);
+        drawFrame();
+        REQUIRE(command.command == EditorWorkspaceViewCommand::PreviewObjectTransform);
+        REQUIRE(command.objectPayload == SceneObjectId{1});
+    };
+    beginContributedDrag();
+    command = {};
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CommitObjectTransform);
+    CHECK_FALSE(inputRouter.HasCapture());
+    beginContributedDrag();
+    REQUIRE(viewportContribution.host.SetVisible({"fixture.package", "fixture.module", 1}, "fixture.gizmo", false).HasValue());
+    command = {};
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    REQUIRE(viewportContribution.host.SetVisible({"fixture.package", "fixture.module", 1}, "fixture.gizmo", true).HasValue());
+    beginContributedDrag();
+    inputRouter.CancelCapture(Input::CaptureCancellationReason::FocusLost);
+    command = {};
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    beginContributedDrag();
+    command = {};
+    panel.OnPresentationHidden(command);
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    beginContributedDrag();
+    viewportContribution.admission->Revoke();
+    command = {};
+    drawFrame();
+    REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    command = {};
+    drawFrame();
 
     viewModel.activeTransformTool = EditorTransformTool::Rotate;
     command = {};

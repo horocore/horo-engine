@@ -46,6 +46,7 @@ namespace Horo::Extensions {
     class EditorActivityHost;
     class EditorPageHost;
     class EditorInspectorHost;
+    class EditorViewportHost;
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
@@ -100,6 +101,7 @@ namespace Horo::Editor {
         Extensions::ExtensionAdmissionPolicy extensionPagePolicy; /**< Application-sealed permission evidence. */
         Extensions::ExtensionAdmissionPolicy
             extensionInspectorPolicy; /**< Explicit inspector/drawer grants; no configuration write grant. */
+        Extensions::ExtensionAdmissionPolicy extensionViewportPolicy; /**< Explicit viewport and transform grants. */
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> gameplayRetirements;
     };
 
@@ -275,6 +277,7 @@ namespace Horo::Editor {
         std::unique_ptr<EditorPageThemeCapture> extensionPageTheme_;
         std::shared_ptr<Extensions::EditorPageHost> editorPageHost_;
         std::shared_ptr<Extensions::EditorInspectorHost> editorInspectorHost_;
+        std::shared_ptr<Extensions::EditorViewportHost> editorViewportHost_;
         std::unique_ptr<Extensions::ExtensionManager> extensionManager_;
         std::shared_ptr<const Assets::AssetImporterCatalogSnapshot> importerCatalog_;
 

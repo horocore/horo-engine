@@ -16,6 +16,7 @@ namespace Horo::Editor {
         EditorWorkspaceViewCommandData &command;
         const EditorGuiContext &gui;
         float deltaSeconds{0.0F};
+        std::optional<int> contributedAxis; /**< Host-validated exact current provider pick. */
         Math::ClipDepthRange depthRange{Math::ClipDepthRange::NegativeOneToOne};
     };
 
@@ -37,6 +38,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool ConsumePendingCancellation(EditorWorkspaceViewCommandData &command) noexcept;
 
         void Draw(const ViewportInteractionDrawContext &context);
+        /** @brief Cancels a provider-owned interaction through normal preview rollback. */
+        void CancelContribution() noexcept;
 
         void OnViewportCaptureCancelled(Input::CaptureCancellationReason reason) noexcept override;
 
