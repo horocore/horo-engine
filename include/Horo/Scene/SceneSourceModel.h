@@ -4,7 +4,8 @@
  * @file SceneSourceModel.h
  * @brief Backend-neutral authored Scene values shared by bounded source decoding and editor documents.
  *
- * Legacy-only documents retain Scene schema1; typed Character documents require schema2 so older readers reject rather than drop them.
+ * Legacy-only documents retain Scene schema1; Character requires schema2 and explicit navigation sources require schema3.
+ * Older readers reject newer document schemas rather than dropping authored data.
  * Editor visibility and lock fields are retained as inert authoring data and never grant runtime capabilities.
  */
 
@@ -66,6 +67,7 @@ namespace Horo::SceneSource {
         std::vector<Runtime::PhysicsConstraintComponent> physicsConstraints;
         std::vector<Gameplay::BehaviorComponent> behaviors;
         std::vector<Gameplay::SerializedComponent> gameplayComponents;
+        std::vector<Runtime::NavigationSourceComponent> navigationSources; /**< Explicit collider inclusion; absence stays absent. */
 
         [[nodiscard]] bool operator==(const SceneObjectComponentSet &) const noexcept = default;
     };

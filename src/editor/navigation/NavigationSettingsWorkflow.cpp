@@ -202,6 +202,19 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Repairs explicit source semantics only for their exact owning surface definition. */
+        void RepairSources(std::span<Runtime::NavigationSourceComponent> sources, const SceneTransactionSnapshot &scene,
+                           const Assets::AssetId definition, const NavigationDefinitionEdit &edit, const ReferenceReview &review) {
+            for (auto &source : sources) {
+                if (!SelectedSurface(scene, source.surface, definition))
+                    continue;
+                if (const auto *remove = std::get_if<RemoveNavigationArea>(&edit))
+                    Repair(source.area, remove->id, remove->replacement, NavigationReferenceField::SourceArea, review);
+                if (const auto *remove = std::get_if<RemoveNavigationFilter>(&edit))
+                    Repair(source.filter, remove->id, remove->replacement, NavigationReferenceField::SourceFilter, review);
+            }
+        }
+
         /** @brief Repairs one detached object's exact navigation fields while retaining all unrelated authored content. */
         Result<void> RepairObject(SceneSource::SceneObjectSnapshot &object, const SceneTransactionSnapshot &scene,
                                   const Assets::AssetId definition, const std::span<const NavigationDefinitionSnapshot> definitions,
@@ -210,6 +223,7 @@ namespace Horo::Editor {
             auto &components = object.components;
             const ReferenceReview review{scene.session.owner, object.id.value, impacts, repairable};
             for (const auto &edit : edits) {
+                RepairSources(components.navigationSources, scene, definition, edit, review);
                 if (const auto *remove = std::get_if<RemoveNavigationProfile>(&edit))
                     if (auto valid = RepairProfiles(components, scene, definition, *remove, review); valid.HasError())
                         return valid;

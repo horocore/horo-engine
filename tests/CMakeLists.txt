@@ -2493,6 +2493,7 @@ add_executable(HoroNavigationProjectSettingsTests
         unit/editor/NavigationProjectSettingsTests.cpp
         unit/editor/NavigationProjectSettingsSessionTests.cpp
         unit/editor/NavigationSettingsWorkflowTests.cpp
+        unit/editor/NavigationSourceWorkflowTests.cpp
         support/AllocationProbe.cpp)
 target_compile_features(HoroNavigationProjectSettingsTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationProjectSettingsTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -3096,8 +3097,10 @@ target_link_libraries(HoroSceneDocumentPersistenceTests PRIVATE HoroEngine::Edit
 add_executable(HoroSceneSourceTests
         unit/scene/SceneSourceTests.cpp
         unit/scene/CharacterSceneSourceTests.cpp
+        unit/scene/NavigationSceneSourceTests.cpp
 )
 target_compile_features(HoroSceneSourceTests PRIVATE cxx_std_20)
+target_include_directories(HoroSceneSourceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroSceneSourceTests PRIVATE HoroEngine::SceneSource Catch2::Catch2WithMain nlohmann_json::nlohmann_json)
 catch_discover_tests(HoroSceneSourceTests TEST_PREFIX "HoroSceneSourceTests::"
         PROPERTIES LABELS "unit;scene;serialization;headless")

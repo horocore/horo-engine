@@ -26,6 +26,7 @@ namespace Horo::SceneSource::Detail {
 
     inline constexpr std::uint32_t kSceneSchemaVersion = 1;
     inline constexpr std::uint32_t kCharacterSceneSchemaVersion = 2;
+    inline constexpr std::uint32_t kNavigationSourceSceneSchemaVersion = 3;
     inline constexpr std::uintmax_t kMaximumProjectMetadataBytes = 64U * 1024U;
     inline constexpr std::uintmax_t kMaximumSceneBytes = 16U * 1024U * 1024U;
     inline constexpr std::uintmax_t kMaximumRecoveryBytes = 20U * 1024U * 1024U;
@@ -72,6 +73,8 @@ namespace Horo::SceneSource::Detail {
     [[nodiscard]] Result<Audio::AudioSoundReference> ParseAudioSoundReference(const Json &value);
 
     [[nodiscard]] Result<Runtime::NavigationSurfaceComponent> ParseNavigationSurface(const Json &value);
+    /** @brief Decodes bounded explicit collider/source policy without assigning implicit area or filter values. */
+    [[nodiscard]] Result<std::vector<Runtime::NavigationSourceComponent>> ParseNavigationSources(const Json &value);
     [[nodiscard]] Result<Runtime::NavigationRegionComponent> ParseNavigationRegion(const Json &value);
     [[nodiscard]] Result<Runtime::NavigationModifierComponent> ParseNavigationModifier(const Json &value);
     [[nodiscard]] Result<Runtime::NavigationLinkComponent> ParseNavigationLink(const Json &value);

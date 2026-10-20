@@ -5,6 +5,7 @@
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/document/SceneDocument.h"
+#include "navigation/NavigationSceneSourceFixture.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -255,6 +256,10 @@ namespace {
         components.navigationModifier = NavigationModifier(17, 8);
         components.navigationLink = NavigationLink(23, 8);
         components.navigationAgent = NavigationAgent();
+        const auto explicitSource = Horo::Tests::NavigationSources::Object(1, 8).components;
+        components.rigidBody = explicitSource.rigidBody;
+        components.colliders = explicitSource.colliders;
+        components.navigationSources = explicitSource.navigationSources;
         components.aiAgent = Horo::AI::AiAgentComponent{.agent = Horo::AI::AgentId::Create(41).Value()};
         components.aiController =
             Horo::AI::AiControllerComponent{.controller = Horo::AI::ControllerTypeId::Create(51).Value(),
@@ -277,6 +282,11 @@ namespace {
         REQUIRE(duplicated.navigationLink->start.surface == duplicated.navigationSurface->id);
         REQUIRE(duplicated.navigationLink->end.surface == duplicated.navigationSurface->id);
         REQUIRE(duplicated.navigationAgent == components.navigationAgent);
+        REQUIRE(duplicated.navigationSources.size() == 1);
+        REQUIRE(duplicated.navigationSources.front().surface == duplicated.navigationSurface->id);
+        REQUIRE(duplicated.navigationSources.front().collider == components.navigationSources.front().collider);
+        REQUIRE(duplicated.navigationSources.front().area == components.navigationSources.front().area);
+        REQUIRE(duplicated.navigationSources.front().filter == components.navigationSources.front().filter);
         REQUIRE(duplicated.aiAgent->agent != components.aiAgent->agent);
         REQUIRE(duplicated.aiAgent->agent.Value() == 42);
         REQUIRE(duplicated.aiAgent->schemaVersion == components.aiAgent->schemaVersion);

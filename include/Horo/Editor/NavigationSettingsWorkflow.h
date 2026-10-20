@@ -47,7 +47,9 @@ namespace Horo::Editor {
         AgentProfile,
         AgentFilter,
         ModifierArea,
-        FilterAreaCost
+        FilterAreaCost,
+        SourceArea,
+        SourceFilter
     };
 
     /** @brief Owned review item; FilterAreaCost uses the filter identity in object, otherwise the Scene object identity. */

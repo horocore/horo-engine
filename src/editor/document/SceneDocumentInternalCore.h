@@ -306,7 +306,7 @@ namespace Horo::Editor::SceneDocumentDetail {
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::SceneComponentInvalid));
         if (components.navigationAgent && Runtime::ValidateNavigationAgentComponent(*components.navigationAgent).HasError())
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::AgentDescriptorInvalid));
-        return Result<void>::Success();
+        return Runtime::ValidateNavigationSourceBindings(components.navigationSources, components.colliders);
     }
 
     /** @brief Validates authored AI component payloads while preserving missing runtime descriptors. */
@@ -376,7 +376,9 @@ namespace Horo::Editor::SceneDocumentDetail {
                              .region = components.navigationRegion ? &*components.navigationRegion : nullptr,
                              .modifier = components.navigationModifier ? &*components.navigationModifier : nullptr,
                              .link = components.navigationLink ? &*components.navigationLink : nullptr,
-                             .agent = components.navigationAgent ? &*components.navigationAgent : nullptr});
+                             .agent = components.navigationAgent ? &*components.navigationAgent : nullptr,
+                             .sources = components.navigationSources,
+                             .colliders = components.colliders});
         };
         for (const SceneObjectSnapshot &object : objects) {
             collect(replacement && replacement->first == object.id ? *replacement->second : object.components);
@@ -435,6 +437,9 @@ namespace Horo::Editor::SceneDocumentDetail {
             components.navigationRegion->surface = duplicatedSurface;
         if (components.navigationModifier && components.navigationModifier->surface == sourceSurface)
             components.navigationModifier->surface = duplicatedSurface;
+        for (auto &source : components.navigationSources)
+            if (source.surface == sourceSurface)
+                source.surface = duplicatedSurface;
         if (!components.navigationLink)
             return;
         if (components.navigationLink->start.surface == sourceSurface)

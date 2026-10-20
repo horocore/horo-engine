@@ -3,6 +3,7 @@
 #include "SceneSourceInternal.h"
 
 #include <algorithm>
+#include <format>
 #include <functional>
 #include <stdexcept>
 #include <string>
@@ -31,6 +32,17 @@ namespace Horo::SceneSource::Detail {
                 ClearSceneJson(value);
             }
         };
+
+        /** @brief Selects the minimum envelope required by typed authored features for both writer and reader. */
+        std::uint32_t RequiredSceneSchema(const std::span<const SceneObjectSnapshot> objects) {
+            bool character{};
+            for (const auto &object : objects) {
+                if (!object.components.navigationSources.empty())
+                    return kNavigationSourceSceneSchemaVersion;
+                character = character || object.components.characterController.has_value();
+            }
+            return character ? kCharacterSceneSchemaVersion : kSceneSchemaVersion;
+        }
     }  // namespace
 
     [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot) {
@@ -67,10 +79,7 @@ namespace Horo::SceneSource::Detail {
             }
             prefabInstances.push_back(std::move(value));
         }
-        const bool character = std::ranges::any_of(snapshot.objects, [](const auto &object) {
-            return object.components.characterController.has_value();
-        });
-        return WireJson{{"schemaVersion", character ? kCharacterSceneSchemaVersion : kSceneSchemaVersion},
+        return WireJson{{"schemaVersion", RequiredSceneSchema(snapshot.objects)},
                         {"objects", std::move(objects)},
                         {"prefabInstances", std::move(prefabInstances)}};
     }
@@ -207,7 +216,8 @@ namespace Horo::SceneSource::Detail {
         /** @brief Admits only complete bounded legacy or Character-capable document roots. */
         bool InvalidSceneRoot(const Json &document) {
             return !document.is_object() || !document.contains("schemaVersion") ||
-                   (document["schemaVersion"] != kSceneSchemaVersion && document["schemaVersion"] != kCharacterSceneSchemaVersion) ||
+                   (document["schemaVersion"] != kSceneSchemaVersion && document["schemaVersion"] != kCharacterSceneSchemaVersion &&
+                    document["schemaVersion"] != kNavigationSourceSceneSchemaVersion) ||
                    !document.contains("objects") || !document["objects"].is_array() || document["objects"].size() > kMaximumSceneObjects ||
                    (document.contains("prefabInstances") &&
                     (!document["prefabInstances"].is_array() || document["prefabInstances"].size() > kMaximumSceneObjects));
@@ -237,12 +247,9 @@ namespace Horo::SceneSource::Detail {
                     scene.unsupportedComponentOwners.push_back(object.Value().id);
                 scene.objects.push_back(std::move(object).Value());
             }
-            if (const bool character = std::ranges::any_of(scene.objects,
-                                                           [](const auto &object) {
-                return object.components.characterController.has_value();
-            });
-                character && document["schemaVersion"] != kCharacterSceneSchemaVersion)
-                return Result<ParsedScene>::Failure(PersistenceError(SceneInvalid, "Character components require Scene source schema2."));
+            if (const auto required = RequiredSceneSchema(scene.objects); document["schemaVersion"].get<std::uint32_t>() < required)
+                return Result<ParsedScene>::Failure(
+                    PersistenceError(SceneInvalid, std::format("Scene component features require source schema {} or newer.", required)));
             if (document.contains("prefabInstances")) {
                 scene.prefabInstances.reserve(document["prefabInstances"].size());
                 for (const Json &value : document["prefabInstances"]) {
