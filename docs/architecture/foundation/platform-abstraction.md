@@ -419,3 +419,50 @@ changes or parallel legacy creation path are introduced. This migration supplies
 the required authority hook; it does not itself replace the native writer's
 host-owned-parent precondition or claim complete protection against concurrent
 hostile namespace replacement. Root-bound native publication remains separate work.
+
+## Root-bound immutable file storage
+
+`ImmutableFileStorage` is a Foundation-owned, load/tooling-time capability for
+bounded relative file reads and immutable entry publication. The host explicitly
+opens an existing authorized parent and fixes a derived-data namespace with
+`CreateNativeImmutableFileStorage`; the namespace may be absent and the factory
+performs no output creation. Per-call names cannot replace or escape that fixed
+namespace. Callers cannot select another native backend
+or fall back to ambient filesystem operations when an access is refused.
+
+The retained root and each subsequently opened parent are native directory
+identities. Replacing the root's former pathname does not redirect a capability to
+the replacement. Portable relative UTF-8 names are validated before traversal;
+symbolic links, Windows reparse points, special objects and multiply linked files
+are refused. Reads have independent cursors, finite caller-reducible byte bounds
+and mutation metadata checks around the complete transfer. A missing component is
+a miss; an unsafe or unreadable component is an error.
+
+Writes prepare complete bytes in an exclusively created private operation
+directory, flush the file and publish with a native no-replace operation. POSIX
+preparation directories admit only the owning user's access; Windows preparation
+uses the host process's security policy. The host must protect private preparation
+content from other code running with the same principal's filesystem authority.
+Parent directory identities stay retained throughout preparation and publication.
+Identical existing bytes are idempotent; different bytes are a typed conflict.
+POSIX publication synchronizes the source and destination directory identities.
+Windows follows the existing native filesystem policy: file contents are flushed,
+but this implementation does not claim a supported directory-flush primitive.
+An unsupported atomic no-replace primitive fails instead of degrading to an
+overwriting rename. A post-commit durability error can leave a complete cache
+entry; it does not represent a generation-selector commit or rollback receipt.
+
+The only shared native implementation contract is the staged, non-installed
+`HoroRootedFileNativeInternal` interface. Its existing handle/read primitives remain
+owned by `HoroPlatformProjectReadFiles`; `HoroPlatformImmutableFileStorage` consumes
+that interface privately. The two new public headers have exactly one owner each
+in the public-header registry. Consumers depend on the Foundation contract;
+application composition chooses the concrete Platform factory. The inert error
+domain contribution must be registered explicitly by a host before presenting
+these errors.
+
+This additive C++ capability does not change cache filenames, key encodings or
+persisted formats. Migrating `AssetCookCache` and the cook selector, inventory,
+recovery and publication operations to complete host-owned I/O authority is still
+required. This capability alone does not complete HORO-1253 or grant project trust,
+authored-source writes, cache eviction or generation activation.

@@ -41,6 +41,7 @@ horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
     Horo/Foundation/ErrorCodeRegistry.h
     Horo/Foundation/ValidationResult.h
     Horo/Foundation/Handles.h
+    Horo/Foundation/ImmutableFileStorage.h
     Horo/Foundation/JobSystem.h
     Horo/Foundation/Logging/LogContext.h
     Horo/Foundation/Logging/LogLevel.h
@@ -101,6 +102,7 @@ horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
 
 horo_configure_target_header_boundary(HoroProjectReadFilesApi PUBLIC_HEADERS Horo/Platform/ProjectReadFiles.h)
 horo_configure_target_header_boundary(HoroPlatformProjectReadFiles PUBLIC_HEADERS Horo/Platform/NativeProjectReadFiles.h)
+horo_configure_target_header_boundary(HoroPlatformImmutableFileStorage PUBLIC_HEADERS Horo/Platform/NativeImmutableFileStorage.h)
 horo_configure_target_header_boundary(HoroProjectCodeQuery PUBLIC_HEADERS
     Horo/Application/ProjectCodeQuery.h
     Horo/Application/CodeQueryStoreProviders.h)
