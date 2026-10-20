@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
+#include <span>
 #include <thread>
 
 namespace Horo::Application::NavigationBakeDetail {
@@ -52,6 +54,16 @@ namespace Horo::Application::NavigationBakeDetail {
                                                 config.cookLimits);
         }
 
+        /** @brief Checks every cache-key byte before admitting an envelope found under the requested key path. */
+        [[nodiscard]] bool MatchesCacheKey(const Sha256Digest &actual, const Sha256Digest &expected) noexcept {
+            const auto actualBytes = std::as_bytes(std::span{actual.bytes});
+            const auto expectedBytes = std::as_bytes(std::span{expected.bytes});
+            std::byte difference{};
+            for (std::size_t index = 0; index < actualBytes.size(); ++index)
+                difference |= actualBytes[index] ^ expectedBytes[index];
+            return difference == std::byte{};
+        }
+
         /** @brief Reads and validates cache identity, portable bytes and descriptor against the exact prepared work. */
         [[nodiscard]] Result<std::shared_ptr<const NavigationCookedTile>> CachedTile(const NavigationBakeServiceConfig &config,
                                                                                      const NavigationPreparedTile &prepared,
@@ -67,7 +79,8 @@ namespace Horo::Application::NavigationBakeDetail {
                 return Result<std::shared_ptr<const NavigationCookedTile>>::Failure(envelope.ErrorValue());
             const auto &value = envelope.Value();
             if (value.id != config.definition || value.type != config.artifactType || value.target != config.target ||
-                value.sourceDigest != prepared.dependencyKey)
+                value.sourceDigest != prepared.dependencyKey ||
+                !MatchesCacheKey(value.cacheKeyDigest, CacheKey(config, prepared.dependencyKey).digest))
                 return Failure<std::shared_ptr<const NavigationCookedTile>>(NavigationErrors::NavMeshArtifactCorrupt);
             auto tile = NavigationCookedTile::Decode(value.payload, config.tileLimits.maximumOwnedBytes);
             if (tile.HasError())
