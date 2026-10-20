@@ -45,6 +45,8 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceView::DrawDockContent */
     void EditorWorkspaceView::DrawDockContent(const WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
                                               const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const {
+        if (area == WorkspaceDockArea::Document && DrawPrefabDocument(panel, viewModel, outCommand))
+            return;
         if (area == WorkspaceDockArea::Document && DrawSourceDocument(viewModel, outCommand))
             return;
         if (area == WorkspaceDockArea::Document && DrawNavigationDocument(viewModel))
@@ -135,6 +137,69 @@ namespace Horo::Editor {
         if (bytes < text.size())
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.documents.preview_limit"),
                             Theme::Muted(), m_context.theme.fonts);
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawPrefabDocument */
+    bool EditorWorkspaceView::DrawPrefabDocument(const std::shared_ptr<IWorkspacePanel> &panel, const EditorWorkspaceViewModel &viewModel,
+                                                 EditorWorkspaceViewCommandData &outCommand) const {
+        const auto found = std::ranges::find_if(viewModel.prefabDocuments, [&](const auto &entry) {
+            return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        });
+        if (found == viewModel.prefabDocuments.end())
+            return false;
+        const auto &source = *found;
+        const auto action = [&](const char *key, const PrefabDocumentAction intent, const bool enabled) {
+            if (Ui::Button(
+                    {.label = m_context.localization.Get("editor", key).c_str(), .enabled = enabled, .font = m_context.theme.fonts.sans})) {
+                outCommand.command = EditorWorkspaceViewCommand::PrefabDocument;
+                outCommand.prefabFence = source.fence;
+                outCommand.prefabAction = intent;
+                if (intent == PrefabDocumentAction::Recover)
+                    outCommand.prefabRecovery = viewModel.prefabRecovery;
+            }
+        };
+        action("workspace.documents.save", PrefabDocumentAction::Save, source.dirty && !source.externalConflict);
+        action("workspace.prefab_document.undo", PrefabDocumentAction::Undo, source.canUndo && !source.externalConflict);
+        action("workspace.prefab_document.redo", PrefabDocumentAction::Redo, source.canRedo && !source.externalConflict);
+        action("workspace.prefab_document.reload", PrefabDocumentAction::Reload, !source.dirty);
+        action("workspace.prefab_document.recover", PrefabDocumentAction::Recover, viewModel.prefabRecoveryAvailable && !source.dirty);
+        action("workspace.prefab_document.discard_reload", PrefabDocumentAction::DiscardAndReload, source.dirty || source.externalConflict);
+        action("workspace.prefab_document.discard_close", PrefabDocumentAction::DiscardAndClose, source.dirty);
+        if (viewModel.prefabDocumentError)
+            Ui::ErrorText(viewModel.prefabDocumentError->message.c_str(), m_context.theme.fonts);
+        if (source.externalConflict)
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.prefab_document.conflict"),
+                            Theme::ConsoleWarning(), m_context.theme.fonts);
+        // Each field emits a source-local semantic transaction; no SceneDocument or runtime entity mutation is exposed.
+        ImGui::BeginChild("##prefab_source", {0, ImGui::GetContentRegionAvail().y / 3.0F});
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(source.source->Data().objects.size()));
+        while (clipper.Step())
+            for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
+                const auto &object = source.source->Data().objects[static_cast<std::size_t>(index)];
+                const auto id = std::to_string(object.localId.value);
+                ImGui::PushID(id.c_str());
+                std::string name = object.name;
+                ImGui::BeginDisabled(source.externalConflict);
+                if (Ui::InputTextControl("##name", name, Prefab::MaximumPrefabObjectNameBytes, m_context.theme.fonts,
+                                         {.hint = m_context.localization.Get("editor", "workspace.prefab_document.name").c_str(),
+                                          .componentSize = Ui::ComponentSize::Medium})) {
+                    outCommand.command = EditorWorkspaceViewCommand::PrefabDocument;
+                    outCommand.prefabFence = source.fence;
+                    outCommand.prefabEdit = RenamePrefabObject{object.localId, std::move(name)};
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+        ImGui::EndChild();
+        if (source.stageActive && panel) {
+            EditorWorkspaceViewCommandData previewOnly;
+            panel->DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), viewModel, previewOnly, m_context);
+        } else
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                            m_context.localization.Get("editor", "workspace.prefab_document.preview_unavailable"), Theme::Muted(),
+                            m_context.theme.fonts);
         return true;
     }
 

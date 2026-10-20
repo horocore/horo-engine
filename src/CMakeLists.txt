@@ -2809,7 +2809,7 @@ target_link_libraries(HoroSceneCook PUBLIC HoroEngine::RuntimeScene
 add_library(HoroPrefabHierarchyInternal INTERFACE)
 set(_horo_prefab_hierarchy_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_hierarchy_internal")
 file(MAKE_DIRECTORY "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab")
-foreach(header IN ITEMS PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h)
+foreach(header IN ITEMS PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h PrefabDocumentSession.h)
     configure_file("editor/screens/workspace/prefab/${header}"
         "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab/${header}" COPYONLY)
 endforeach()
@@ -2956,6 +2956,9 @@ target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::Runt
 
 add_library(HoroEditorServices STATIC
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
+        editor/screens/workspace/prefab/PrefabDocumentSession.cpp
+        editor/screens/workspace/prefab/PrefabDocumentPersistence.cpp
+        editor/screens/workspace/prefab/PrefabDocumentStage.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
         editor/physics/CollisionIdentityGeneration.cpp
@@ -3201,6 +3204,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabRows.cpp

@@ -180,6 +180,7 @@ namespace Horo::Editor {
         struct WorkspaceLeaveCapture final {
             std::vector<SourceDocumentSnapshot> sourceDocuments;
             std::vector<PCGDocumentSnapshot> pcgDocuments;
+            std::vector<PrefabDocumentSnapshot> prefabDocuments;
             std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
             std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
         };
@@ -433,11 +434,12 @@ namespace Horo::Editor {
             LeaveDecision CanLeave(const LeaveTarget &) const override {
                 using enum LeaveAction;
                 using enum LeaveDisposition;
-                if (controller_ &&
-                    (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() || controller_->HasDirtyCollisionSettings() ||
-                     controller_->HasDirtyNavigationDocuments() || controller_->HasDirtySourceDocuments())) {
+                if (controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPrefabDocuments() ||
+                                    controller_->HasDirtyPCGDocuments() || controller_->HasDirtyCollisionSettings() ||
+                                    controller_->HasDirtyNavigationDocuments() || controller_->HasDirtySourceDocuments())) {
                     static_cast<void>(controller_->HasDirtySourceDocuments());
                     leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
+                    leaveCapture_.prefabDocuments = controller_->ViewModel().prefabDocuments;
                     auto graphs = controller_->PCGDocuments().Snapshots();
                     if (graphs.HasError())
                         return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
@@ -460,16 +462,18 @@ namespace Horo::Editor {
                     return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
                 if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
                     return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                if (const auto prefabs = controller_->SavePrefabDocuments(); prefabs.HasError())
+                    return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
                 if (const auto sources = controller_->SaveSourceDocuments(); sources.HasError())
                     return Result<LeaveDecision>::Failure(sources.ErrorValue());
-                EditorWorkspaceViewCommandData command;
-                command.command = EditorWorkspaceViewCommand::SaveScene;
-                controller_->ProcessCommand(command);
+                controller_->SaveScene();
                 if (controller_->ViewModel().isDirty || controller_->SaveCollisionSettings().HasError() ||
                     controller_->SavePCGDocuments().HasError() || controller_->HasDirtyPCGDocuments())
                     return Result<LeaveDecision>::Success({.disposition = Deny, .requirement = std::nullopt});
                 if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
                     return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())
+                    return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
                 if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
                     return Result<LeaveDecision>::Failure(graphs.ErrorValue());
                 return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
@@ -487,6 +491,8 @@ namespace Horo::Editor {
                     return Result<LeaveDecision>::Failure(collision.ErrorValue());
                 if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
                     return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                if (const auto prefabs = controller_->ShutdownPrefabDocuments(true); prefabs.HasError())
+                    return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
                 if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
                     return Result<LeaveDecision>::Failure(graphs.ErrorValue());
                 return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
@@ -505,6 +511,16 @@ namespace Horo::Editor {
                         const auto current = controller_->SourceDocuments().Snapshot(captured.Identity().instance);
                         if (current.HasError() || current.Value().Revision() != captured.Revision() ||
                             current.Value().Identity() != captured.Identity())
+                            return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                    }
+                    const auto &prefabs = controller_->ViewModel().prefabDocuments;
+                    if (prefabs.size() != leaveCapture_.prefabDocuments.size())
+                        return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                    for (std::size_t index = 0; index < prefabs.size(); ++index) {
+                        const auto &captured = leaveCapture_.prefabDocuments[index];
+                        const auto &current = prefabs[index];
+                        if (current.identity != captured.identity || current.fence.revision != captured.fence.revision ||
+                            current.acceptedSource != captured.acceptedSource || current.savedState != captured.savedState)
                             return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                     }
                     if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
@@ -533,6 +549,9 @@ namespace Horo::Editor {
                         static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
                     SaveExtensionWorkspace();
                     controller_->FlushAutosave();
+                    if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())
+                        LOG_ERROR("editor.prefab_document", "Prefab recovery shutdown incomplete: %s",
+                                  prefabs.ErrorValue().message.c_str());
                     if (const auto gameplay = controller_->ShutdownGameplayModules(); gameplay.HasError())
                         LOG_WARN("editor.gameplay", "Gameplay retirement remains owned by the application: %s",
                                  gameplay.ErrorValue().message.c_str());

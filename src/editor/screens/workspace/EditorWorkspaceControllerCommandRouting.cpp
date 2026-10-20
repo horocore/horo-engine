@@ -6,6 +6,8 @@
 
 namespace Horo::Editor {
     void EditorWorkspaceController::ProcessCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (m_prefabRefreshing)
+            return;
         // A transient overlay must not survive the interaction or workspace action that owns it.
         if (!m_viewport.Current().transformPreviews.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
             cmd.command != EditorWorkspaceViewCommand::PreviewObjectTransform &&
@@ -27,15 +29,48 @@ namespace Horo::Editor {
         }
         DispatchWorkspaceCommand(cmd);
         RefreshSourceDocumentProjection();
+        RefreshPrefabDocuments();
     }
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
-        static_cast<void>(ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
-                          ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
-                          ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
-                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
-                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        if (m_activePrefabDocument) {
+            using enum EditorWorkspaceViewCommand;
+            if (cmd.command == SaveScene || cmd.command == UndoScene || cmd.command == RedoScene) {
+                for (const auto &entry : m_prefabDocuments) {
+                    if (entry->Snapshot().identity.instance != m_activePrefabDocument)
+                        continue;
+                    EditorWorkspaceViewCommandData request;
+                    request.command = PrefabDocument;
+                    request.prefabFence = entry->Snapshot().fence;
+                    request.prefabAction = cmd.command == SaveScene   ? PrefabDocumentAction::Save
+                                           : cmd.command == UndoScene ? PrefabDocumentAction::Undo
+                                                                      : PrefabDocumentAction::Redo;
+                    static_cast<void>(ProcessPrefabDocumentCommand(request));
+                }
+                return;
+            }
+            switch (cmd.command) {
+                case None:
+                case PrefabDocument:
+                case FocusWorkspaceDocument:
+                case CloseWorkspaceDocument:
+                case MoveWorkspaceDocument:
+                case ReturnToWelcome:
+                case DiscardSceneRecovery:
+                case StopPlay:
+                case OpenSourceFile:
+                case ChangeActivePanel:
+                    break;
+                default:
+                    return;
+            }
+        }
+        static_cast<void>(ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) ||
+                          ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
+                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
+                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
+                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

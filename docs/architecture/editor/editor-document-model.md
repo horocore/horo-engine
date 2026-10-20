@@ -323,6 +323,46 @@ Intermediate transaction state is not observable by tabs or panels until the
 transaction commits, unless the transaction is explicitly marked as a preview
 transaction.
 
+## Prefab Document Sessions And Stages
+
+`PrefabDocumentSession` owns the sole editable `PrefabDocument` for one shared
+`DocumentIdentityRegistry` open key of kind `Prefab`. The persistent key is the
+canonical project-relative source path; the sidecar/registry AssetId remains the
+asset authority. Workspace incarnation plus instance and monotonic command
+revision fence all edits. Canonical source digest, accepted on-disk byte identity,
+saved-state digest, recovery capture revision and successful preview generation
+are separate values. Undo/redo stores bounded semantic name/transform deltas,
+never runtime entities or full-document history snapshots.
+
+The workspace routes durable source edits and persistence through typed commands,
+`ProjectMutationCoordinator`, `PublishAssetSource` and `DocumentRecoveryService`.
+A native replacement whose directory durability cannot be confirmed keeps the
+source dirty and requires reconciliation. External changes reject saves; malformed
+reload and rejected dirty close retain the complete source/history/stage. Recovery
+acceptance requires the exact inspected record and unchanged source base.
+
+The authoring stage replaces the captured resolver root with the current immutable
+in-memory source, then uses canonical resolution, identity remapping, built-in
+component projection and prefab subtree expansion to construct an isolated runtime
+scene. It never changes the Scene document or starts gameplay callbacks. The
+reserved `0x4000000000000000` runtime identity namespace is separate from the Play
+namespace; a workspace advances identities for each attempt. Stage resources and
+renderer extraction leases retire on edit, switch, reload, close and shutdown.
+Retained immutable source snapshots remain readable. Failed required component or
+asset preparation produces an explicit unavailable preview, preserving source and
+recovery rather than publishing a partial hierarchy. Asset-bearing runtime
+preparation still requires the host's asset-backed Scene composition; the assetless
+stage constructor does not invent asset leases or run native subsystems.
+
+Migration: `.prefab` now routes through `SourceFileOpenService` as a typed authored
+document rather than generic text/external fallback. Existing text source save-as
+cannot target it. `DocumentKind::Prefab` appends the stable `prefab` wire spelling;
+existing kind values and open keys retain their meanings. The shared source public
+consumer and document-identity round-trip coverage protect this additive change.
+The session header is a non-installed exact-header internal contract, staged by
+`HoroPrefabHierarchyInternal`; no public ownership or repository-wide include root
+is added.
+
 ## Preview Edits
 
 Continuous tools may maintain preview state during an interaction. Preview state

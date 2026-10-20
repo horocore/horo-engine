@@ -118,6 +118,18 @@ namespace Horo::Editor {
         const bool hasRenderedViewport = viewportRenderer_ != nullptr && viewportRenderer_->IsReady() && textureView.IsValid();
         DrawViewportSurface(drawList, surfaceLayout, textureView, hasRenderedViewport);
 
+        if (std::ranges::any_of(viewModel.prefabDocuments, [&](const auto &entry) {
+            return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        })) {
+            // Source-local controls own this stage. Scene picking, overlays and drag/drop
+            // cannot bind its isolated runtime projection to the containing Scene document.
+            if (!hasRenderedViewport)
+                DrawMissingRendererMessage(centerX, origin.y, height, context);
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            return;
+        }
+
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
 
@@ -159,7 +171,10 @@ namespace Horo::Editor {
             .visible = gridOverride_.value_or(context.settings.settings.gridOverlay),
         });
         EditorViewportLightVisualizerOptions lightVisualizer;
-        if (viewModel.primarySelection.has_value()) {
+        const bool prefab = std::ranges::any_of(viewModel.prefabDocuments, [&](const auto &entry) {
+            return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        });
+        if (!prefab && viewModel.primarySelection.has_value()) {
             const auto selected =
                 std::ranges::find(viewModel.viewportLights, *viewModel.primarySelection, &ViewportLightPresentation::object);
             if (selected != viewModel.viewportLights.end())

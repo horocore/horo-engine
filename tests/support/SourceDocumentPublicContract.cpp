@@ -32,3 +32,5 @@ void QualifySourceSavePublicContract(Horo::Editor::SourceFileOpenService &open, 
     static_cast<void>(open.SaveAs(request, "copy.cpp", files));
     static_cast<void>(open.ResolveClose(request, Horo::Editor::SourceCloseDecision::Cancel, files));
 }
+
+static_assert(static_cast<unsigned>(Horo::Editor::DocumentKind::Prefab) > static_cast<unsigned>(Horo::Editor::DocumentKind::PCGGraph));

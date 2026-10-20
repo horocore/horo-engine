@@ -249,6 +249,8 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Project asset dock"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "This folder is empty."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
+        CHECK(service.Get("editor", "workspace.prefab_document.undo") == "Undo source edit");
+        CHECK(service.Get("editor", "workspace.prefab_document.preview_unavailable").find("isolated runtime") != std::string::npos);
         CHECK(service.Get("editor", "render_graph.title") == "Render Graph");
         CHECK(service.Get("editor", "render_graph.unavailable") == "Unavailable");
         CHECK(service.Get("editor", "render_graph.next") == "Next page");

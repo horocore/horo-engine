@@ -22,6 +22,7 @@
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
 
 #include <cstddef>
@@ -179,6 +180,16 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ClosePCGDocument(DocumentInstanceId instance, bool discardDirty = false);
         /** @brief Includes graph documents in the shared leave guard. @return True if any graph has unsaved semantics. */
         [[nodiscard]] bool HasDirtyPCGDocuments() const;
+        /** @brief Reports dirty prefab source sessions for the shared leave workflow. */
+        [[nodiscard]] bool HasDirtyPrefabDocuments() const;
+        /** @brief Saves every dirty prefab through the canonical source publisher. */
+        [[nodiscard]] Result<void> SavePrefabDocuments();
+        /** @brief Saves the Scene authority explicitly for the multi-document leave transaction. */
+        void SaveScene(bool overwriteConflict = false);
+        /** @brief Flushes recovery or explicitly discards before releasing prefab owners. */
+        [[nodiscard]] Result<void> ShutdownPrefabDocuments(bool discard = false);
+        /** @brief Advances bounded recovery cadence; zero requests an immediate flush. */
+        void UpdatePrefabAutosave(float seconds, int minutes);
         /** @brief Saves every dirty graph through its one document service. @return Success only for durable publications. */
         [[nodiscard]] Result<void> SavePCGDocuments();
         /** @brief Drains graph ownership after explicit save/discard/recovery policy.
@@ -228,7 +239,7 @@ namespace Horo::Editor {
         /** @brief Returns the latest owning render snapshot extracted from the authoritative document.
          */
         [[nodiscard]] const EditorViewportSceneSnapshot &ViewportScene() const noexcept {
-            return m_viewportScene;
+            return m_activePrefabDocument ? m_prefabViewportScene : m_viewportScene;
         }
 
         /** @brief Returns the active document's absolute canonical scene path when available. */
@@ -291,6 +302,13 @@ namespace Horo::Editor {
         std::optional<Result<bool>> m_sourceCloseOutcome;
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
+        std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;
+        std::optional<DocumentInstanceId> m_activePrefabDocument;
+        EditorViewportSceneSnapshot m_prefabViewportScene;
+        std::uint64_t m_nextPrefabRuntime{0x4000000000000001ULL};
+        float m_prefabAutosaveSeconds{};
+        std::uint64_t m_prefabStageAttemptRevision{};
+        bool m_prefabRefreshing{};
         PrefabHierarchySourceCapture m_prefabSourceCapture;
         Assets::AssetId m_workspaceSession;
         std::uint64_t m_prefabPublication{};
@@ -520,15 +538,13 @@ namespace Horo::Editor {
         [[nodiscard]] bool ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
         void RetirePrefabHierarchy() noexcept;
-        /** @brief Atomically commits the current default-scene snapshot and updates dirty state on
-         * success. */
         /** @brief Routes typed source publication/close intent through workspace-owned document services. */
         bool ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Routes document tabs to their owning lifecycle and publishes detached source snapshots. */
         bool ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Refreshes source presentation and dirty flags without disk I/O or document mutation. */
         void RefreshSourceDocumentProjection();
-        void SaveScene(bool overwriteConflict = false);
+
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);
         /** @brief Completes default metadata and active identity only after a successful destination source save.
@@ -634,6 +650,14 @@ namespace Horo::Editor {
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
         /** @brief Admits a sequence source into the persistent workspace document host. */
         void OpenEmbeddedPCGSource(const SourceOpenResult &result);
+        /** @brief Opens the persistent prefab source through the shared document registry. */
+        void OpenEmbeddedPrefabSource(const SourceOpenResult &result);
+        /** @brief Retires inactive stages and publishes immutable source/runtime projections. */
+        void RefreshPrefabDocuments();
+        /** @brief Applies source/session-fenced prefab application intents. */
+        bool ProcessPrefabDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Refuses dirty closes unless explicitly discarded, then closes the shared tab. */
+        Result<void> ClosePrefabDocument(DocumentInstanceId instance, bool discard);
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
         void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);

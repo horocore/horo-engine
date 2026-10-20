@@ -98,6 +98,14 @@ namespace Horo::Editor {
         RebuildContentBrowserProjection(m_viewModel.projectRoot, m_viewModel.contentBrowser.absoluteCurrentPath);
         ReconcileContentBrowserNavigation();
         RefreshPrefabHierarchy(m_document.Snapshot());
+        for (const auto &entry : m_prefabDocuments) {
+            const auto inspected = entry->InspectExternal();
+            if (inspected.HasError())
+                m_viewModel.prefabDocumentError = inspected.ErrorValue();
+            entry->ReleaseStage();
+        }
+        m_prefabStageAttemptRevision = 0;
+        RefreshPrefabDocuments();
     }
 
     void EditorWorkspaceController::UpdateContentBrowser() {

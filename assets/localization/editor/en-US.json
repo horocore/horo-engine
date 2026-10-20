@@ -4,6 +4,15 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab_document.undo": { "text": "Undo source edit" },
+    "workspace.prefab_document.redo": { "text": "Redo source edit" },
+    "workspace.prefab_document.reload": { "text": "Reload saved source" },
+    "workspace.prefab_document.recover": { "text": "Restore recovery candidate" },
+    "workspace.prefab_document.discard_reload": { "text": "Discard changes and reload source" },
+    "workspace.prefab_document.discard_close": { "text": "Discard changes and close prefab" },
+    "workspace.prefab_document.conflict": { "text": "The source changed outside this session. Reload or preserve recovery before continuing." },
+    "workspace.prefab_document.name": { "text": "Source object name" },
+    "workspace.prefab_document.preview_unavailable": { "text": "The isolated runtime preview is unavailable. Source and recovery remain available." },
     "render_graph.renderer": {
       "text": "Renderer"
     },

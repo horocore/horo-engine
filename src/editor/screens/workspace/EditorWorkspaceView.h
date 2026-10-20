@@ -121,6 +121,9 @@ namespace Horo::Editor {
                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Projects the active immutable sequence through the shared timeline control. */
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws source-only controls and the isolated stage using shared themed components. */
+        bool DrawPrefabDocument(const std::shared_ptr<IWorkspacePanel> &panel, const EditorWorkspaceViewModel &viewModel,
+                                EditorWorkspaceViewCommandData &outCommand) const;
         void DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Calculates clamped dock geometry from native and extension visibility without mutating layout or submitting UI. */
         [[nodiscard]] WorkspaceLayoutGeometry CalculateWorkspaceGeometry(const EditorWorkspaceViewModel &viewModel, const ImVec2 &display,

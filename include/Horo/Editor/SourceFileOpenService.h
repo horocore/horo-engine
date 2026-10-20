@@ -33,6 +33,7 @@ namespace Horo::Editor {
         UiCanvas,
         Sequence,
         PCGGraph,
+        Prefab,
     };
 
     /** @brief Caller that requested one source-open operation. */
@@ -70,6 +71,8 @@ namespace Horo::Editor {
         std::vector<std::string> uiCanvasExtensions;     /**< Runtime UI canvas document suffixes. */
         std::vector<std::string> pcgGraphExtensions;     /**< Binary PCG source suffixes; bypass text admission. */
         std::vector<std::string> sequenceExtensions;     /**< Versioned cinematic sequence source suffixes. */
+
+        std::vector<std::string> prefabExtensions; /**< Canonical prefab authored sources. */
 
         /**
          * @brief Returns the default source and authored-document opening policy.

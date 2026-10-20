@@ -4,6 +4,15 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab_document.undo": { "text": "Kaynak düzenlemesini geri al" },
+    "workspace.prefab_document.redo": { "text": "Kaynak düzenlemesini yinele" },
+    "workspace.prefab_document.reload": { "text": "Kaydedilmiş kaynağı yeniden yükle" },
+    "workspace.prefab_document.recover": { "text": "Kurtarma adayını geri yükle" },
+    "workspace.prefab_document.discard_reload": { "text": "Değişiklikleri bırak ve kaynağı yeniden yükle" },
+    "workspace.prefab_document.discard_close": { "text": "Değişiklikleri bırak ve prefabı kapat" },
+    "workspace.prefab_document.conflict": { "text": "Kaynak bu oturumun dışında değişti. Devam etmeden önce yeniden yükleyin veya kurtarma kaydını koruyun." },
+    "workspace.prefab_document.name": { "text": "Kaynak nesnenin adı" },
+    "workspace.prefab_document.preview_unavailable": { "text": "Yalıtılmış çalışma zamanı önizlemesi kullanılamıyor. Kaynak ve kurtarma kaydı kullanılabilir durumda." },
     "render_graph.renderer": {
       "text": "İşleyici"
     },

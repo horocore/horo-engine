@@ -85,8 +85,10 @@ namespace Horo::Editor {
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
         owner.ProcessCommand(Intent(model, member, PrefabHierarchyAction::OpenSource));
-        REQUIRE(workspace.navigated.has_value());
-        CHECK(std::filesystem::equivalent(*workspace.navigated, workspace.project.source));
+        REQUIRE(model.prefabDocuments.size() == 1);
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
+        CHECK(model.prefabDocuments.front().stageActive);
+        CHECK_FALSE(workspace.navigated.has_value());
         owner.ProcessCommand(Intent(model, member, PrefabHierarchyAction::LocateInstance));
         REQUIRE(model.prefabSelection.has_value());
         CHECK_FALSE(model.prefabSelection->member.has_value());
@@ -102,9 +104,11 @@ namespace Horo::Editor {
         const auto projection = model.prefabHierarchy;
         const auto revision = model.documentRevision;
         owner.ProcessCommand(Intent(model, projection->entries.back().target, PrefabHierarchyAction::OpenSource));
-        REQUIRE(workspace.navigated.has_value());
-        CHECK(std::filesystem::equivalent(*workspace.navigated, workspace.project.source));
-        CHECK(workspace.navigatedIdentity == workspace.project.record.sourcePath.String());
+        REQUIRE(model.prefabDocuments.size() == 1);
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
+        CHECK(model.prefabDocuments.front().stageActive);
+        CHECK_FALSE(workspace.navigated.has_value());
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
         CHECK(model.prefabHierarchy == projection);
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
@@ -118,9 +122,10 @@ namespace Horo::Editor {
         REQUIRE(model.prefabHierarchy != nullptr);
         const auto revision = model.documentRevision;
         owner.ProcessCommand(Intent(model, model.prefabHierarchy->entries.back().target, PrefabHierarchyAction::OpenSource));
-        REQUIRE(workspace.diagnosticPath.has_value());
-        CHECK(*workspace.diagnosticPath == std::filesystem::canonical(workspace.project.source));
-        CHECK(std::filesystem::equivalent(*workspace.diagnosticPath, workspace.project.source));
+        REQUIRE(model.prefabDocuments.size() == 1);
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
+        CHECK(model.prefabDocuments.front().stageActive);
+        CHECK_FALSE(workspace.diagnosticPath.has_value());
         CHECK_FALSE(workspace.navigated.has_value());
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
@@ -188,9 +193,11 @@ namespace Horo::Editor {
         CHECK_FALSE(workspace.navigated.has_value());
         CHECK_FALSE(workspace.navigatedIdentity.has_value());
         owner.ProcessCommand(Intent(model, projection->entries.front().target, PrefabHierarchyAction::OpenSource));
-        REQUIRE(workspace.navigated.has_value());
-        CHECK(std::filesystem::equivalent(*workspace.navigated, workspace.project.source));
-        CHECK(workspace.navigatedIdentity == workspace.project.record.sourcePath.String());
+        REQUIRE(model.prefabDocuments.size() == 1);
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
+        CHECK(model.prefabDocuments.front().stageActive);
+        CHECK_FALSE(workspace.navigated.has_value());
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
     }
@@ -300,5 +307,35 @@ namespace Horo::Editor {
         owner.ProcessCommand(stale);
         CHECK_FALSE(owner.ViewModel().prefabSelection.has_value());
         CHECK_FALSE(owner.ViewModel().isDirty);
+    }
+
+    TEST_CASE("Prefab source edits and focus retirement preserve the Scene authority", "[editor][prefab][native]") {
+        Workspace workspace;
+        auto &owner = *workspace.controller;
+        const auto scene = owner.ViewModel().documentRevision;
+        owner.ProcessCommand(
+            Intent(owner.ViewModel(), owner.ViewModel().prefabHierarchy->entries.front().target, PrefabHierarchyAction::OpenSource));
+        REQUIRE(owner.ViewModel().prefabDocuments.size() == 1);
+        const auto initial = owner.ViewModel().prefabDocuments.front();
+        EditorWorkspaceViewCommandData edit;
+        edit.command = EditorWorkspaceViewCommand::PrefabDocument;
+        edit.prefabFence = initial.fence;
+        edit.prefabEdit = RenamePrefabObject{{0}, "Source edit"};
+        owner.ProcessCommand(edit);
+        REQUIRE(owner.ViewModel().prefabDocuments.front().dirty);
+        CHECK(owner.ViewModel().prefabDocuments.front().stageActive);
+        CHECK(owner.ViewModel().documentRevision == scene);
+        CHECK_FALSE(owner.ViewModel().isDirty);
+        owner.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = initial.identity.instance});
+        REQUIRE(owner.ViewModel().prefabDocuments.size() == 1);
+        CHECK(owner.ViewModel().prefabDocuments.front().dirty);
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+        CHECK_FALSE(owner.ViewModel().prefabDocuments.front().dirty);
+        CHECK(owner.ViewModel().documentRevision == scene);
+        owner.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = initial.identity.instance});
+        CHECK(owner.ViewModel().prefabDocuments.empty());
+        CHECK(initial.source->Data().objects.front().name == "Source root");
     }
 }  // namespace Horo::Editor

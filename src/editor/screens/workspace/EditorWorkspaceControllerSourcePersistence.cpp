@@ -97,6 +97,12 @@ namespace Horo::Editor {
             close.command = CloseSequenceDocument;
             close.documentInstance = instance;
             static_cast<void>(ProcessSequenceDocumentCommand(close));
+        } else if (std::ranges::any_of(m_prefabDocuments, [instance](const auto &entry) {
+            return entry->Snapshot().identity.instance == instance;
+        })) {
+            const auto result = ClosePrefabDocument(instance, false);
+            if (result.HasError())
+                m_viewModel.prefabDocumentError = result.ErrorValue();
         } else if (m_pcgDocuments.Snapshot(instance).HasValue()) {
             static_cast<void>(ClosePCGDocument(instance, false));
         } else if (const auto canvas = std::ranges::find_if(m_uiCanvasDocuments,

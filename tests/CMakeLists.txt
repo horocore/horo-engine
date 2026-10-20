@@ -3166,6 +3166,7 @@ add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentPrefabValueTests.cpp
         unit/editor/PrefabHierarchyProjectionTests.cpp
         unit/editor/PrefabHierarchySourcesTests.cpp
+        unit/editor/PrefabDocumentSessionTests.cpp
 )
 
 target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
