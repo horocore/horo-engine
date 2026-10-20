@@ -6,6 +6,38 @@
 #include <cstdio>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Draws one copied plot within the host clip rectangle using current semantic tokens. */
+        void PaintPlot(const Extensions::EditorUiPlotNode &plot, const Extensions::EditorUiPlotState &state,
+                       const Extensions::EditorThemeFrame &theme, const ImVec2 origin, const ImVec2 size, const bool admitted,
+                       const bool focused) {
+            using namespace Extensions;
+            const float scale = theme.uiScale;
+            const float width = size.x;
+            const float height = size.y;
+            const auto color = [&](const EditorThemeColorRole role) {
+                const auto value = ColorFor(theme, role);
+                return ImGui::GetColorU32(ImVec4{value.red, value.green, value.blue, value.alpha});
+            };
+            auto *draw = ImGui::GetWindowDrawList();
+            const ImVec2 end{origin.x + width, origin.y + height};
+            draw->PushClipRect(origin, end, true);
+            const auto point = [&](const EditorUiPlotSample &sample) {
+                return ImVec2{origin.x + sample.x * width, end.y - sample.y * height};
+            };
+            const auto lineColor = color(admitted ? EditorThemeColorRole::Accent : EditorThemeColorRole::TextDisabled);
+            const float stroke = std::max(scale, theme.interaction.focusRingWidth * scale);
+            for (std::size_t i = 1; i < plot.samples.size(); ++i)
+                draw->AddLine(point(plot.samples[i - 1]), point(plot.samples[i]), lineColor, stroke);
+            const auto selected = point(plot.samples[state.selected]);
+            const float marker = theme.metrics.smallControlHeight * scale * (1.0F + state.emphasis) / 8.0F;
+            draw->AddCircle(selected, marker, color(EditorThemeColorRole::TextPrimary), 0, stroke);
+            if (focused)
+                draw->AddRect(origin, end, color(EditorThemeColorRole::Focus), 0, 0, stroke);
+            draw->PopClipRect();
+        }
+    }  // namespace
+
     /** @copydoc ExtensionActivityView::DrawPlot */
     void ExtensionActivityView::DrawPlot(Entry &entry, const Extensions::EditorUiPlotNode &plot, const std::size_t index) {
         using namespace Extensions;
@@ -34,26 +66,7 @@ namespace Horo::Editor {
         auto &state = entry.plots[index];
         const bool invoke = UpdateEditorUiPlot(plot, state, input, (ImGui::GetIO().MousePos.x - origin.x) / width,
                                                admitted && (focused || hovered), *theme, ImGui::GetIO().DeltaTime);
-        const auto color = [&](const EditorThemeColorRole role) {
-            const auto value = ColorFor(*theme, role);
-            return ImGui::GetColorU32(ImVec4{value.red, value.green, value.blue, value.alpha});
-        };
-        auto *draw = ImGui::GetWindowDrawList();
-        const ImVec2 end{origin.x + width, origin.y + height};
-        draw->PushClipRect(origin, end, true);
-        const auto point = [&](const EditorUiPlotSample &sample) {
-            return ImVec2{origin.x + sample.x * width, end.y - sample.y * height};
-        };
-        const auto lineColor = color(admitted ? EditorThemeColorRole::Accent : EditorThemeColorRole::TextDisabled);
-        const float stroke = std::max(scale, theme->interaction.focusRingWidth * scale);
-        for (std::size_t i = 1; i < plot.samples.size(); ++i)
-            draw->AddLine(point(plot.samples[i - 1]), point(plot.samples[i]), lineColor, stroke);
-        const auto selected = point(plot.samples[state.selected]);
-        const float marker = theme->metrics.smallControlHeight * scale * (1.0F + state.emphasis) / 8.0F;
-        draw->AddCircle(selected, marker, color(EditorThemeColorRole::TextPrimary), 0, stroke);
-        if (focused)
-            draw->AddRect(origin, end, color(EditorThemeColorRole::Focus), 0, 0, stroke);
-        draw->PopClipRect();
+        PaintPlot(plot, state, *theme, origin, {width, height}, admitted, focused);
         // A text value supplies a non-color cue and exposes exact sample data to keyboard users.
         char value[96]{};
         const auto &sample = plot.samples[state.selected];

@@ -46,6 +46,22 @@ namespace Horo::Extensions::Tests {
             REQUIRE(loaded.HasValue());
         }
 
+        /** @brief Checks disabled-provider and exclusive-modal admission through the actual native plot action. */
+        void CheckPlotAdmission(EditorActivityHost &host, const EditorSurfaceProviderIdentity &provider) {
+            REQUIRE(
+                host.Registry().SetProviderStatus({"fixture.package", "fixture.module"}, EditorSurfaceProviderStatus::Disabled).HasValue());
+            CHECK_FALSE(host.IsLive(provider));
+            CHECK(host.QueueAction(provider, "fixture.activity", "fixture.plot", "fixture.inspect", 1).HasError());
+            REQUIRE(
+                host.Registry().SetProviderStatus({"fixture.package", "fixture.module"}, EditorSurfaceProviderStatus::Active).HasValue());
+            host.SetInputAdmitted(false);
+            CHECK(host.QueueAction(provider, "fixture.activity", "fixture.plot", "fixture.inspect", 1).HasError());
+            host.SetInputAdmitted(true);
+            REQUIRE(host.QueueAction(provider, "fixture.activity", "fixture.plot", "fixture.inspect", 1).HasValue());
+            host.SetInputAdmitted(false);  // queued input is discarded when an exclusive modal takes ownership.
+            host.SetInputAdmitted(true);
+        }
+
         /** @brief Pumps the owner lane until the admitted worker publishes a newer revision or the bounded deadline expires. */
         void WaitForActivityRevision(EditorActivityHost &host, const std::uint64_t previousRevision) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
@@ -81,20 +97,7 @@ namespace Horo::Extensions::Tests {
         REQUIRE(host->Registry().ToggleActivity(initial.surface.descriptor.provider, "fixture.activity").HasValue());
         host->Update();
         CHECK(host->Prepared().front().surface.open);
-        REQUIRE(
-            host->Registry().SetProviderStatus({"fixture.package", "fixture.module"}, EditorSurfaceProviderStatus::Disabled).HasValue());
-        CHECK_FALSE(host->IsLive(initial.surface.descriptor.provider));
-        CHECK(
-            commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.plot", "fixture.inspect", 1).HasError());
-        REQUIRE(host->Registry().SetProviderStatus({"fixture.package", "fixture.module"}, EditorSurfaceProviderStatus::Active).HasValue());
-        host->SetInputAdmitted(false);
-        CHECK(
-            commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.plot", "fixture.inspect", 1).HasError());
-        host->SetInputAdmitted(true);
-        REQUIRE(
-            commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.plot", "fixture.inspect", 1).HasValue());
-        host->SetInputAdmitted(false);  // queued input is discarded when an exclusive modal takes ownership.
-        host->SetInputAdmitted(true);
+        CheckPlotAdmission(*host, initial.surface.descriptor.provider);
         REQUIRE(commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasValue());
         CHECK(commands.QueueAction(initial.surface.descriptor.provider, "fixture.activity", "fixture.run", "fixture.run", 1).HasError());
         host->Update();

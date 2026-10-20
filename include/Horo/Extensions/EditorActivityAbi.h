@@ -8,6 +8,7 @@
 enum {
     HORO_EDITOR_ACTIVITY_SCHEMA_VERSION = 1,
     HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION = 2,
+    HORO_EDITOR_ACTIVITY_MAXIMUM_PLOT_SAMPLES = 256,
     HORO_EDITOR_ACTIVITY_SESSION_VERSION = 1
 };
 
@@ -80,6 +81,25 @@ struct HoroEditorActivityNodeV2 {
 #ifndef __cplusplus
 typedef struct HoroEditorActivityNodeV2 HoroEditorActivityNodeV2;
 #endif
+
+/** @brief Validates the bounded normalized specialized payload before allocation or publication.
+ * @param plot Borrowed schema2 record. @return Nonzero only for finite ordered samples in the plot budget.
+ * @details Comparisons reject NaN and infinities without a platform math dependency. No pointer is retained.
+ */
+static inline int HoroEditorActivityPlotNodeShape(const HoroEditorActivityNodeV2 *plot) {
+    uint32_t index;
+    float previous = -1.0f;
+    if (!plot || !plot->samples || plot->sampleCount < 2 || plot->sampleCount > HORO_EDITOR_ACTIVITY_MAXIMUM_PLOT_SAMPLES)
+        return 0;
+    for (index = 0; index < plot->sampleCount; ++index) {
+        const float x = plot->samples[index].x;
+        const float y = plot->samples[index].y;
+        if (!(x >= 0.0f && x <= 1.0f && x > previous && y >= 0.0f && y <= 1.0f))
+            return 0;
+        previous = x;
+    }
+    return 1;
+}
 
 /** @brief Bounded immutable view snapshot; revisions strictly increase within an activation. */
 struct HoroEditorActivitySnapshot {

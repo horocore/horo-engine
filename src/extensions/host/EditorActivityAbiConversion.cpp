@@ -12,6 +12,47 @@ namespace Horo::Extensions::Detail {
     }
 
     namespace {
+        static_assert(MaximumEditorUiPlotSamples == HORO_EDITOR_ACTIVITY_MAXIMUM_PLOT_SAMPLES);
+
+        /** @brief Copies already bounded semantic samples; no renderer resource or borrowed storage escapes. */
+        Result<EditorUiNode> CopyPlotNode(EditorUiNodeBase base, std::string action, const HoroEditorActivityNodeV2 *input) {
+            if (action.empty() || !HoroEditorActivityPlotNodeShape(input))
+                return Result<EditorUiNode>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
+            EditorUiPlotNode plot{.base = std::move(base), .action = {std::move(action)}};
+            plot.samples.reserve(input->sampleCount);
+            for (std::uint32_t i = 0; i < input->sampleCount; ++i)
+                plot.samples.push_back({input->samples[i].x, input->samples[i].y});
+            return Result<EditorUiNode>::Success({std::move(plot)});
+        }
+
+        /** @brief Builds the closed standard vocabulary after common text and permission identities have been copied. */
+        Result<EditorUiNode> CopyStandardNode(const std::uint32_t kind, EditorUiNodeBase base, EditorUiText content, std::string action) {
+            const auto invalid = [] {
+                return Result<EditorUiNode>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
+            };
+            switch (kind) {
+                case HORO_EDITOR_ACTIVITY_TEXT:
+                    if (!action.empty())
+                        return invalid();
+                    return Result<EditorUiNode>::Success({EditorUiTextNode{std::move(base), std::move(content)}});
+                case HORO_EDITOR_ACTIVITY_LABEL:
+                    if (!action.empty())
+                        return invalid();
+                    return Result<EditorUiNode>::Success({EditorUiLabelNode{std::move(base), std::move(content)}});
+                case HORO_EDITOR_ACTIVITY_ACTION:
+                    if (!content.value.empty() || action.empty())
+                        return invalid();
+                    return Result<EditorUiNode>::Success({EditorUiActionNode{.base = std::move(base), .action = {std::move(action)}}});
+                default:
+                    if (!action.empty() || !content.value.empty())
+                        return invalid();
+                    return Result<EditorUiNode>::Success(
+                        {EditorUiContainerNode{.base = std::move(base),
+                                               .layout = kind == HORO_EDITOR_ACTIVITY_GROUP ? EditorUiLayoutKind::Group
+                                                                                            : EditorUiLayoutKind::Stack}});
+            }
+        }
+
         /** @brief Copies one bounded ABI node while charging its text to the complete snapshot budget. */
         Result<EditorUiNode> CopyNode(const HoroEditorActivityNode &input, std::size_t &textBytes,
                                       const HoroEditorActivityNodeV2 *advanced) {
@@ -38,38 +79,13 @@ namespace Horo::Extensions::Detail {
                 input.kind == HORO_EDITOR_ACTIVITY_STACK || input.kind == HORO_EDITOR_ACTIVITY_GROUP)
                 base.focusPolicy = EditorUiFocusPolicy::Never;
             if (input.kind == HORO_EDITOR_ACTIVITY_PLOT) {
-                if (!advanced || !content.value.empty() || action.empty() || advanced->sampleCount < 2 ||
-                    advanced->sampleCount > MaximumEditorUiPlotSamples || !advanced->samples)
+                if (!content.value.empty())
                     return invalid();
-                EditorUiPlotNode plot{.base = std::move(base), .action = {std::move(action)}};
-                plot.samples.reserve(advanced->sampleCount);
-                for (std::uint32_t i = 0; i < advanced->sampleCount; ++i)
-                    plot.samples.push_back({advanced->samples[i].x, advanced->samples[i].y});
-                return Result<EditorUiNode>::Success({std::move(plot)});
+                return CopyPlotNode(std::move(base), std::move(action), advanced);
             }
             if (advanced && (advanced->samples || advanced->sampleCount != 0))
                 return invalid();
-            switch (input.kind) {
-                case HORO_EDITOR_ACTIVITY_TEXT:
-                    if (!action.empty())
-                        return invalid();
-                    return Result<EditorUiNode>::Success({EditorUiTextNode{std::move(base), std::move(content)}});
-                case HORO_EDITOR_ACTIVITY_LABEL:
-                    if (!action.empty())
-                        return invalid();
-                    return Result<EditorUiNode>::Success({EditorUiLabelNode{std::move(base), std::move(content)}});
-                case HORO_EDITOR_ACTIVITY_ACTION:
-                    if (!content.value.empty() || action.empty())
-                        return invalid();
-                    return Result<EditorUiNode>::Success({EditorUiActionNode{.base = std::move(base), .action = {std::move(action)}}});
-                default:
-                    if (!action.empty() || !content.value.empty())
-                        return invalid();
-                    return Result<EditorUiNode>::Success(
-                        {EditorUiContainerNode{.base = std::move(base),
-                                               .layout = input.kind == HORO_EDITOR_ACTIVITY_GROUP ? EditorUiLayoutKind::Group
-                                                                                                  : EditorUiLayoutKind::Stack}});
-            }
+            return CopyStandardNode(input.kind, std::move(base), std::move(content), std::move(action));
         }
     }  // namespace
 

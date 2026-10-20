@@ -278,7 +278,7 @@ namespace Horo::Extensions {
     bool EditorActivityHost::IsLive(const EditorSurfaceProviderIdentity &provider) const noexcept {
         if (state_->shutdown)
             return false;
-        return std::ranges::any_of(state_->sessions, [&provider](const auto &weak) {
+        return std::ranges::any_of(state_->sessions, [this, &provider](const auto &weak) {
             const auto session = weak.lock();
             return session && session->committed && !session->revoked && session->activity.surface.provider == provider &&
                    session->admission && session->admission->ActivationLease().IsUsable() &&
