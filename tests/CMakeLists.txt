@@ -3070,6 +3070,8 @@ target_include_directories(HoroImmutableFileStorageTests PRIVATE ${PROJECT_SOURC
 horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroPlatformTests
+        support/AllocationProbe.cpp
+        unit/platform/NativeProjectIoOwnersTests.cpp
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
         unit/foundation/PublicationReadTests.cpp
@@ -3083,7 +3085,7 @@ add_dependencies(HoroPlatformTests HoroProcessTestChild)
 target_compile_definitions(HoroPlatformTests PRIVATE HORO_PROCESS_TEST_CHILD="$<TARGET_FILE:HoroProcessTestChild>")
 
 target_compile_features(HoroPlatformTests PRIVATE cxx_std_20)
-target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
+target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform HoroEngine::PlatformProjectIo)
 add_executable(HoroPlatformRequestTests
         support/AllocationProbe.cpp
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
@@ -5264,7 +5266,7 @@ add_executable(HoroNavigationHostErrorTests unit/application/navigation/Navigati
 target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
-target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::CliHost HoroEngine::HostErrors
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
     HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 
