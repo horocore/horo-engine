@@ -3,6 +3,7 @@
 #include "ScenePrefabOverrideHistoryMemory.h"
 #include "editor/document/SceneDocumentCharacterDefaults.h"
 #include "editor/document/SceneDocumentInternalCore.h"
+#include "editor/document/SceneDocumentPrefabDelta.h"
 
 namespace Horo::Editor::SceneDocumentDetail {
     [[nodiscard]] inline std::size_t EstimateBehaviorMemoryBytes(const std::vector<Gameplay::BehaviorComponent> &behaviors) noexcept {
@@ -68,6 +69,8 @@ namespace Horo::Editor::SceneDocumentDetail {
             if (object.after)
                 bytes += EstimateSceneObjectOwnedMemoryBytes(object.after->object);
         }
+        if (delta.prefabCreation)
+            bytes += EstimateTypedDeltaMemoryBytes(*delta.prefabCreation);
         return bytes;
     }
 
@@ -366,41 +369,6 @@ namespace Horo::Editor::SceneDocumentDetail {
         });
     }
 
-    inline void ApplyPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const CreatedPrefabInstanceDelta &delta) {
-        const std::size_t index = std::min(delta.index, instances.size());
-        instances.insert(instances.begin() + static_cast<std::ptrdiff_t>(index), delta.instance);
-    }
-
-    inline void ApplyPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceTransformDelta &delta) {
-        FindPrefabInstance(instances, delta.instance)->rootTransform = delta.after;
-    }
-
-    inline void ApplyPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceValuesDelta &delta) {
-        auto prepared = delta.after;
-        FindPrefabInstance(instances, delta.instance)->valueOverrides.swap(prepared);
-    }
-
-    inline void ApplyPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceReparentDelta &delta) {
-        FindPrefabInstance(instances, delta.instance)->parent = delta.after;
-    }
-
-    inline void RemovePrefabInstances(std::vector<ScenePrefabInstance> &instances,
-                                      const std::vector<IndexedPrefabInstance> &removedInstances) {
-        std::erase_if(instances, [&removedInstances](const ScenePrefabInstance &instance) {
-            return std::ranges::any_of(removedInstances, [&instance](const IndexedPrefabInstance &removed) {
-                return removed.instance.instanceId == instance.instanceId;
-            });
-        });
-    }
-
-    inline void ApplyPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const DeletedPrefabInstancesDelta &delta) {
-        RemovePrefabInstances(instances, delta.instances);
-    }
-
-    inline void ApplyPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const DeletedObjectsDelta &delta) {
-        RemovePrefabInstances(instances, delta.prefabInstances);
-    }
-
     inline void ApplyDelta(std::vector<SceneObjectSnapshot> &objects, const SceneCommandDelta &delta) {
         std::visit([&objects]<typename Delta>(const Delta &typedDelta) {
             if constexpr (!std::is_same_v<Delta, CreatedPrefabInstanceDelta> && !std::is_same_v<Delta, PrefabInstanceTransformDelta> &&
@@ -495,41 +463,6 @@ namespace Horo::Editor::SceneDocumentDetail {
         }
     }
 
-    inline void RevertPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const CreatedPrefabInstanceDelta &delta) {
-        std::erase_if(instances, [&delta](const ScenePrefabInstance &instance) {
-            return instance.instanceId == delta.instance.instanceId;
-        });
-    }
-
-    inline void RevertPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceTransformDelta &delta) {
-        FindPrefabInstance(instances, delta.instance)->rootTransform = delta.before;
-    }
-
-    inline void RevertPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceValuesDelta &delta) {
-        auto prepared = delta.before;
-        FindPrefabInstance(instances, delta.instance)->valueOverrides.swap(prepared);
-    }
-
-    inline void RevertPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const PrefabInstanceReparentDelta &delta) {
-        FindPrefabInstance(instances, delta.instance)->parent = delta.before;
-    }
-
-    inline void RestorePrefabInstances(std::vector<ScenePrefabInstance> &instances,
-                                       const std::vector<IndexedPrefabInstance> &removedInstances) {
-        for (const IndexedPrefabInstance &removed : removedInstances) {
-            const std::size_t index = std::min(removed.index, instances.size());
-            instances.insert(instances.begin() + static_cast<std::ptrdiff_t>(index), removed.instance);
-        }
-    }
-
-    inline void RevertPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const DeletedPrefabInstancesDelta &delta) {
-        RestorePrefabInstances(instances, delta.instances);
-    }
-
-    inline void RevertPrefabTypedDelta(std::vector<ScenePrefabInstance> &instances, const DeletedObjectsDelta &delta) {
-        RestorePrefabInstances(instances, delta.prefabInstances);
-    }
-
     /** @brief Dispatch one typed delta while preserving the separate canonical Prefab and object owners. */
     template <bool Revert, class Delta>
     inline void MutateOneDelta(std::vector<SceneObjectSnapshot> &objects, std::vector<ScenePrefabInstance> &instances,
@@ -546,6 +479,14 @@ namespace Horo::Editor::SceneDocumentDetail {
                 RevertTypedDelta(objects, typedDelta);
             else
                 ApplyTypedDelta(objects, typedDelta);
+            if constexpr (std::is_same_v<Delta, SceneObjectsReplacedDelta>) {
+                if (typedDelta.prefabCreation) {
+                    if constexpr (Revert)
+                        RevertPrefabTypedDelta(instances, *typedDelta.prefabCreation);
+                    else
+                        ApplyPrefabTypedDelta(instances, *typedDelta.prefabCreation);
+                }
+            }
             if constexpr (std::is_same_v<Delta, DeletedObjectsDelta>) {
                 if constexpr (Revert)
                     RevertPrefabTypedDelta(instances, typedDelta);

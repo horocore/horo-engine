@@ -576,6 +576,13 @@ namespace Horo::Editor {
                                     .c_str(),
                                 nullptr, context.theme.fonts))
             command = HierarchyEditSession::DuplicateCommand(frame.node.id);
+        if (editable &&
+            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.prefab.create.action") + "###hierarchy_create_prefab")
+                                    .c_str(),
+                                nullptr, context.theme.fonts)) {
+            command.command = EditorWorkspaceViewCommand::CreatePrefabFromSelection;
+            command.objectPayload = SceneObjectId{frame.node.id};
+        }
         Ui::ContextMenuSeparator();
         if (editable &&
             Ui::ContextMenuItem((context.localization.Get("editor", "workspace.hierarchy.delete") + "###hierarchy_action_delete").c_str(),
@@ -885,6 +892,8 @@ namespace Horo::Editor {
                                   const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                   const EditorGuiContext &context) {
         bool pendingDelete = false;
+        if (viewModel.prefabPostCommitError)
+            Ui::ErrorText(viewModel.prefabPostCommitError->message.c_str(), context.theme.fonts);
         if (viewModel.prefabHierarchyUnavailable) {
             Ui::ErrorText(viewModel.prefabHierarchyError
                               ? viewModel.prefabHierarchyError->message.c_str()

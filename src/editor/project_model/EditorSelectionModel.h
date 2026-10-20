@@ -69,6 +69,14 @@ namespace Horo::Editor {
         /** @brief Clears current selection; repeated calls are safe and do not republish. */
         void Clear();
 
+        /** @brief Clears canonical selection and advances its revision without allocation or callbacks.
+         * @return True when a post-commit clear notification is required.
+         * @details Owner-thread transaction publication only; NotifyTransactionClear follows after all owners commit.
+         */
+        [[nodiscard]] bool ClearForTransaction() noexcept;
+        /** @brief Emits the already committed clear invalidation; no selection state is changed. */
+        void NotifyTransactionClear();
+
     private:
         /** @brief Advances the selection revision and emits one post-commit notification. */
         void Publish(SelectionChangeKind kind);

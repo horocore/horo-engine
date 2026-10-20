@@ -144,7 +144,7 @@ namespace Horo::SceneSource {
             const bool collection = kind == Kind::Collider || kind == Kind::PhysicsConstraint;
             const Json value{{std::string(field), collection ? Json::array({payload.Value()}) : payload.Value()}};
             std::size_t recognized{};
-            auto decoded = Detail::ParseComponents(value, recognized);
+            auto decoded = Detail::ParseComponents(value, recognized, Runtime::PhysicsValidationDetail::BodyReferenceDomain::PrefabLocal);
             if (decoded.HasError())
                 return Result<SceneObjectComponentSet>::Failure(WrapError(Prefab::PrefabErrors::CorruptedPayload, decoded.ErrorValue()));
             if (recognized != 1)

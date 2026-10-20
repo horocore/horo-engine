@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Foundation/Time.h"
 
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -134,11 +135,21 @@ namespace Horo {
         Other
     };
 
+    /** @brief Opaque same-platform object and mutation evidence; equality alone grants no write or delete authority.
+     * @details Never persist, interpret, or transfer between machines. Native inspection captures this from its
+     * no-follow cursor. Absence means the provider cannot prove identity; conditional cleanup must fail closed.
+     */
+    struct FileEntryIdentity final {
+        std::array<std::uint64_t, 8> opaque{};
+        bool operator==(const FileEntryIdentity &) const noexcept = default;
+    };
+
     /** @brief Bounded metadata without an open native handle or a discovered absolute path. */
     struct FileEntryInfo {
         FileEntryKind kind{FileEntryKind::Other};
-        std::uint64_t sizeBytes{}; /**< Encoded bytes for a regular file; zero for other kinds. */
-        std::uint64_t hardLinks{}; /**< Link count for a regular file; zero for other kinds. */
+        std::uint64_t sizeBytes{};                 /**< Encoded bytes for a regular file; zero for other kinds. */
+        std::uint64_t hardLinks{};                 /**< Link count for a regular file; zero for other kinds. */
+        std::optional<FileEntryIdentity> identity; /**< Optional no-follow object/mutation token; default providers remain unavailable. */
     };
 
     /** @brief One immediate child; name contains a single native filename component. */

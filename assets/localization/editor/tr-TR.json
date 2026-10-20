@@ -2988,6 +2988,36 @@
     },
     "settings.navigation.override_cost": {
       "text": "Geçersiz kılınan geçiş maliyeti"
+    },
+    "workspace.prefab.create.action": {
+      "text": "Alt Ağaçtan Prefab Oluştur..."
+    },
+    "workspace.prefab.create.title": {
+      "text": "Prefab Oluştur"
+    },
+    "workspace.prefab.create.help": {
+      "text": "Yeniden kullanılabilir bir prefab oluşturun ve alt ağacı bağlı bir örnekle değiştirin. Desteklenmeyen veya dış referanslar önce çözülmelidir."
+    },
+    "workspace.prefab.create.path": {
+      "text": "Projeye göre prefab yolu"
+    },
+    "workspace.prefab.create.cancel": {
+      "text": "İptal"
+    },
+    "workspace.prefab.create.confirm": {
+      "text": "Prefab Oluştur"
+    },
+    "workspace.prefab.create.failed": {
+      "text": "Prefab oluşturma kaydedilmedi. Bildirilen kaynak ve hedef alanlarını inceleyin."
+    },
+    "workspace.prefab.create.post_commit": {
+      "text": "Prefab oluşturuldu. Çalışma alanı görünümü yenilenmeli; kaynak ve bağlı örnek kaydedildi."
+    },
+    "workspace.prefab.create.more_diagnostics": {
+      "text": "ek başvuru tanısı işlem sonucunda saklanıyor."
+    },
+    "workspace.prefab.create.expired": {
+      "text": "Çalışma alanı oturumu sona erdi. Prefab oluşturmadan önce projeyi yeniden açın."
     }
   }
 }

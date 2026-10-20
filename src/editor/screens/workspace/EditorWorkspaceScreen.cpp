@@ -34,6 +34,7 @@
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
 #include "editor/modals/packages/PackageModal.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
+#include "editor/modals/prefab_creation/PrefabCreationModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/modals/source_document/SourceDocumentCloseModal.h"
 #include "editor/renderer/EditorGuiRenderer.h"
@@ -235,7 +236,7 @@ namespace Horo::Editor {
 
                 if (auto initialized = InitializeController(projectRoot); initialized.HasError())
                     return initialized;
-                sourceCloseLifetime_ = std::make_shared<int>(0);
+                workspaceControllerLifetime_ = std::make_shared<int>(0);
                 snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
                 host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
                 LoadProjectInputProfile(controller_->ViewModel().projectRoot);
@@ -337,6 +338,8 @@ namespace Horo::Editor {
                         OpenPlayTopologyProfilesModal();
                     } else if (command.command == CompareExternalScene) {
                         OpenSceneComparison();
+                    } else if (command.command == CreatePrefabFromSelection && command.objectPayload) {
+                        OpenPrefabCreationModal(*command.objectPayload);
                     } else if (command.command == CreateLuaBehavior || command.command == CreateNativeBehavior) {
                         using enum GameplayBehaviorKind;
                         const GameplayBehaviorKind kind = command.command == CreateNativeBehavior ? Native : Lua;
@@ -525,7 +528,7 @@ namespace Horo::Editor {
             }
 
             void OnLeave() override {
-                sourceCloseLifetime_.reset();
+                workspaceControllerLifetime_.reset();
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
                 if (controller_) {
                     static_cast<void>(controller_->ShutdownCollisionSettings(true));
@@ -824,7 +827,7 @@ namespace Horo::Editor {
                 if (snapshot.HasError() || !snapshot.Value().Dirty())
                     return false;
                 static_cast<void>(
-                    modalHost_.OpenRoot(std::make_unique<SourceDocumentCloseModal>(context_, *controller_, sourceCloseLifetime_,
+                    modalHost_.OpenRoot(std::make_unique<SourceDocumentCloseModal>(context_, *controller_, workspaceControllerLifetime_,
                                                                                    SourceSaveRequest{*command.documentInstance,
                                                                                                      snapshot.Value().Revision(),
                                                                                                      {}},
@@ -872,6 +875,52 @@ namespace Horo::Editor {
                     LOG_WARN("editor.scene_document", "External scene comparison modal could not open: %s",
                              opened.ErrorValue().message.c_str());
                 }
+            }
+
+            /** @brief Opens a transient captured-subtree workflow; no file or Scene mutation occurs during opening. */
+            void OpenPrefabCreationModal(const SceneObjectId root) {
+                const auto captured = controller_->CapturePrefabCreationIntent(root);
+                if (captured.HasError())
+                    return;
+                auto opened = modalHost_.OpenRoot(
+                    std::make_unique<PrefabCreationModal>(context_, captured.Value(), controller_->ViewModel().projectRoot,
+                                                          [controller = controller_.get(), localization = &context_.localization,
+                                                           lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_},
+                                                           expired =
+                                                               context_.localization.Get("editor", "workspace.prefab.create.expired")](
+                                                              PrefabCreationIntent intent) -> std::optional<std::string> {
+                    if (lifetime.expired())
+                        return expired;
+                    EditorWorkspaceViewCommandData command;
+                    command.command = EditorWorkspaceViewCommand::CreatePrefabFromSelection;
+                    command.prefabCreation = std::move(intent);
+                    controller->ProcessCommand(command);
+                    const auto &outcome = controller->ViewModel().prefabCreationOutcome;
+                    if (outcome && outcome->committed)
+                        return {};
+                    std::string message = localization->Get("editor", "workspace.prefab.create.failed");
+                    if (outcome) {
+                        if (outcome->error)
+                            message += "\n" + outcome->error->message;
+                        constexpr std::size_t maximumVisibleBoundaries{32};
+                        const auto count = std::min(outcome->boundaries.size(), maximumVisibleBoundaries);
+                        for (std::size_t index = 0; index < count; ++index) {
+                            const auto &boundary = outcome->boundaries[index];
+                            message += "\n" + std::to_string(boundary.source.value) + ": " + boundary.property;
+                            if (boundary.target)
+                                message += " -> " + std::to_string(boundary.target->value);
+                        }
+                        if (count < outcome->boundaries.size())
+                            message += "\n" + std::to_string(outcome->boundaries.size() - count) + " " +
+                                       localization->Get("editor", "workspace.prefab.create.more_diagnostics");
+                        for (const auto &receipt : outcome->files)
+                            if (receipt.recoveryError)
+                                message += "\n" + receipt.path.generic_string() + ": " + receipt.recoveryError->message;
+                    }
+                    return message;
+                }));
+                if (opened.HasError())
+                    LOG_WARN("editor.prefab", "Creation modal could not open: %s", opened.ErrorValue().message.c_str());
             }
 
             void OpenGameplayBehaviorModal(const GameplayBehaviorKind kind, const std::string &requestedDirectory) {
@@ -1033,7 +1082,7 @@ namespace Horo::Editor {
             GuiScreenHost &host_;
             const EditorServiceRegistry &services_;
             EditorModalHost &modalHost_;
-            std::shared_ptr<const void> sourceCloseLifetime_;
+            std::shared_ptr<const void> workspaceControllerLifetime_;
             const EditorGuiContext &context_;
             WorkspaceContributionRegistries contributions_;
             WorkspaceInputState input_;

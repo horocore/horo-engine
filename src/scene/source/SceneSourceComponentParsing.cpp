@@ -396,7 +396,8 @@ namespace Horo::SceneSource::Detail {
         return Result<void>::Success();
     }
 
-    [[nodiscard]] Result<void> ParseCollectionComponents(const Json &value, SceneObjectComponentSet &components, std::size_t &recognized) {
+    [[nodiscard]] Result<void> ParseCollectionComponents(const Json &value, SceneObjectComponentSet &components, std::size_t &recognized,
+                                                         Runtime::PhysicsValidationDetail::BodyReferenceDomain domain) {
         if (value.contains("navigationSources")) {
             ++recognized;
             auto sources = ParseNavigationSources(value["navigationSources"]);
@@ -406,14 +407,14 @@ namespace Horo::SceneSource::Detail {
         }
         if (value.contains("colliders")) {
             ++recognized;
-            auto colliders = ParseColliders(value["colliders"]);
+            auto colliders = ParseColliders(value["colliders"], domain);
             if (colliders.HasError())
                 return Result<void>::Failure(colliders.ErrorValue());
             components.colliders = std::move(colliders).Value();
         }
         if (value.contains("physicsConstraints")) {
             ++recognized;
-            auto constraints = ParsePhysicsConstraints(value["physicsConstraints"]);
+            auto constraints = ParsePhysicsConstraints(value["physicsConstraints"], domain);
             if (constraints.HasError())
                 return Result<void>::Failure(constraints.ErrorValue());
             components.physicsConstraints = std::move(constraints).Value();
@@ -446,7 +447,8 @@ namespace Horo::SceneSource::Detail {
             {value["view"].get<std::uint32_t>(), static_cast<std::int32_t>(priority), weight, value["enabled"].get<bool>()});
     }
 
-    [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value, std::size_t &recognized) {
+    [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value, std::size_t &recognized,
+                                                                  Runtime::PhysicsValidationDetail::BodyReferenceDomain domain) {
         recognized = 0;
         if (!value.is_object()) {
             return Result<SceneObjectComponentSet>::Failure(PersistenceError(SceneInvalid, "Components must be an object."));
@@ -484,7 +486,7 @@ namespace Horo::SceneSource::Detail {
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
         if (auto parsed = parse("rigidBody", components.rigidBody, ParseRigidBody); parsed.HasError())
             return Result<SceneObjectComponentSet>::Failure(parsed.ErrorValue());
-        if (const Result<void> collections = ParseCollectionComponents(value, components, recognized); collections.HasError())
+        if (const Result<void> collections = ParseCollectionComponents(value, components, recognized, domain); collections.HasError())
             return Result<SceneObjectComponentSet>::Failure(collections.ErrorValue());
         return Result<SceneObjectComponentSet>::Success(std::move(components));
     }

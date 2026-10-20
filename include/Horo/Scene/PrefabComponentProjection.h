@@ -13,6 +13,9 @@ namespace Horo::SceneSource {
      * @return True when one built-in is projected, false for a custom type, or typed malformed/unsupported/duplicate failure.
      * @throws std::bad_alloc If bounded preparation storage cannot be allocated; no owner or Scene state is published.
      * @details Owner-lane load/preparation work. The destination owns decoded values; no payload view or callback is retained.
+     * Collider and constraint body endpoints remain in the transient prefab-local domain (uint32 object IDs, including root zero;
+     * nonzero body slots). Source conversion must resolve them through PrefabSceneIdentityMap; cooked hosts must
+     * resolve exact source provenance into group references before Runtime Scene admission. They are never Scene IDs.
      */
     [[nodiscard]] Result<bool> ProjectPrefabBuiltinComponent(const Prefab::RawComponentPayload &source,
                                                              Runtime::RuntimeComponentSet &destination,

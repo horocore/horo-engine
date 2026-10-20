@@ -220,6 +220,11 @@ namespace Horo::Editor {
             return m_viewport.Current().revision;
         }
 
+        /** @brief Captures an exact ordinary Scene subtree gesture before its filename modal opens.
+         * @param root Selected ordinary object. @return Immutable revision/opening fence or typed rejection.
+         */
+        [[nodiscard]] Result<PrefabCreationIntent> CapturePrefabCreationIntent(SceneObjectId root) const;
+
         /** @brief Returns the monotonic revision of the extracted viewport scene projection. */
         [[nodiscard]] std::uint64_t CurrentViewportSceneRevision() const noexcept {
             return m_viewportSceneRevision;
@@ -517,6 +522,10 @@ namespace Horo::Editor {
          * @throws std::bad_alloc before publication; the outer refresh boundary preserves the prior cache. */
         void PrepareAndPublishPrefabHierarchy(const SceneDocumentSnapshot &document, std::uint64_t publication);
         /** @brief Routes exact source/member gestures after owner/session/revision and protected-boundary checks. */
+        /** @brief Admit and publish the canonical creation result before presentation callbacks. */
+        [[nodiscard]] PrefabCreationOutcome ExecutePrefabCreation(const PrefabCreationIntent &intent);
+        /** @brief Executes a confirmed create-from-selection through canonical document/source owners. */
+        [[nodiscard]] bool ProcessCreatePrefabCommand(const EditorWorkspaceViewCommandData &command);
         [[nodiscard]] bool ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
         void RetirePrefabHierarchy() noexcept;

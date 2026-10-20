@@ -1149,6 +1149,11 @@ target_link_libraries(HoroAssets
 )
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::Assets)
 
+# Non-installed identity-domain validation bridge; inert include metadata, no reverse link to its owning model.
+add_library(HoroPhysicsReferenceValidationInternal INTERFACE)
+target_include_directories(HoroPhysicsReferenceValidationInternal INTERFACE
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/scene/physics_validation>)
+
 add_library(HoroPhysicsModel STATIC
         physics/PhysicsErrors.cpp
         physics/PhysicsFilterIdentity.cpp
@@ -1158,6 +1163,9 @@ add_library(HoroPhysicsModel STATIC
 add_library(HoroEngine::PhysicsModel ALIAS HoroPhysicsModel)
 target_compile_features(HoroPhysicsModel PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsModel PUBLIC HoroEngine::Foundation HoroEngine::Assets HoroEngine::Runtime)
+# Include-only bridge: static PRIVATE link edges leak into the build-tree Gameplay SDK export (CMake 3.25).
+target_include_directories(HoroPhysicsModel PRIVATE
+        $<TARGET_PROPERTY:HoroPhysicsReferenceValidationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
 target_link_libraries(HoroRuntimeScene PUBLIC HoroEngine::PhysicsModel)
 
 add_library(HoroAudioApi STATIC
@@ -2740,12 +2748,15 @@ target_link_libraries(HoroSceneSource
         PUBLIC HoroEngine::SceneSourceModel
         PRIVATE HoroFoundationJsonInternal nlohmann_json::nlohmann_json HoroJsonEncodingInternal HoroEngine::PrefabAuthoring
 )
+target_include_directories(HoroSceneSource PRIVATE
+        $<TARGET_PROPERTY:HoroPhysicsReferenceValidationInternal,INTERFACE_INCLUDE_DIRECTORIES>)
 
 # Non-installed, narrow codec bridge for existing Editor JSON adapters.
 # Headless applications consume SceneSource, never these implementation headers.
 add_library(HoroSceneSourceCodecInternal INTERFACE)
 target_include_directories(HoroSceneSourceCodecInternal INTERFACE
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/scene/source>
+        $<TARGET_PROPERTY:HoroPhysicsReferenceValidationInternal,INTERFACE_INCLUDE_DIRECTORIES>
 )
 target_link_libraries(HoroSceneSourceCodecInternal INTERFACE
         HoroEngine::SceneSource nlohmann_json::nlohmann_json HoroJsonEncodingInternal
@@ -2776,7 +2787,7 @@ target_link_libraries(HoroSceneCook PUBLIC HoroEngine::RuntimeScene
 add_library(HoroPrefabHierarchyInternal INTERFACE)
 set(_horo_prefab_hierarchy_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_hierarchy_internal")
 file(MAKE_DIRECTORY "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab")
-foreach(header IN ITEMS PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h)
+foreach(header IN ITEMS PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h PrefabCreation.h)
     configure_file("editor/screens/workspace/prefab/${header}"
         "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab/${header}" COPYONLY)
 endforeach()
@@ -2790,6 +2801,7 @@ add_library(HoroEditorModel STATIC
         editor/update/UpdateExperienceSession.cpp
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentTransaction.cpp
+        editor/document/SceneDocumentTransactionCapture.cpp
         editor/document/InspectorBehaviorBinding.cpp
         editor/document/PhysicsInspector.cpp
         editor/document/SceneDocumentTransactionErrors.cpp
@@ -2923,6 +2935,8 @@ target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::Runt
 
 add_library(HoroEditorServices STATIC
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
+        editor/screens/workspace/prefab/PrefabCreation.cpp
+        editor/screens/workspace/prefab/PrefabCreationPublication.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
         editor/physics/CollisionIdentityGeneration.cpp
@@ -3161,6 +3175,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/packages/PackageModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
+            editor/modals/prefab_creation/PrefabCreationModal.cpp
             editor/screens/welcome/WelcomeView.cpp
             editor/screens/welcome/WelcomeScreen.cpp
             editor/screens/project_creation/ProjectCreationView.cpp

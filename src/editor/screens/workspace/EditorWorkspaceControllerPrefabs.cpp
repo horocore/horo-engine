@@ -1,8 +1,10 @@
+#include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/document/RuntimeSceneConversion.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 
 #include <algorithm>
 #include <limits>
@@ -11,6 +13,21 @@
 namespace Horo::Editor {
     namespace {
         constexpr std::size_t MaximumHierarchyRows = 65536;
+
+        /** @brief Captures the last accepted disk base; an untitled Scene has neither a path nor a persisted fingerprint. */
+        Result<std::optional<PrefabCreationSourceFence>> CreationSceneSourceFence(const std::optional<std::filesystem::path> &path,
+                                                                                  const std::optional<SceneFileFingerprint> &fingerprint) {
+            using Return = Result<std::optional<PrefabCreationSourceFence>>;
+            if (!path && !fingerprint)
+                return Return::Success(std::nullopt);
+            if (!path || !fingerprint || !fingerprint->exists)
+                return Return::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            const auto digest = ParseSha256(fingerprint->checksum);
+            if (digest.HasError())
+                return Return::Failure(digest.ErrorValue());
+            return Return::Success(
+                PrefabCreationSourceFence{*path, {true, static_cast<std::size_t>(fingerprint->byteSize), digest.Value()}});
+        }
 
         /** @brief Retains every authored placement when its source publication is unavailable. */
         SceneSource::ScenePrefabProjection BrokenProjection(const SceneDocumentSnapshot &document, const Error &failure,
@@ -79,6 +96,109 @@ namespace Horo::Editor {
             }
         }
     }  // namespace
+
+    /** @copydoc EditorWorkspaceController::CapturePrefabCreationIntent */
+    Result<PrefabCreationIntent> EditorWorkspaceController::CapturePrefabCreationIntent(const SceneObjectId root) const {
+        const auto object = std::ranges::find(m_document.Objects(), root, &SceneObjectSnapshot::id);
+        if (object == m_document.Objects().end() || m_viewModel.sceneExternalConflict || m_viewModel.recoveryAvailable ||
+            m_playSession.IsActive() || !m_durableFiles || !m_mutations || !m_mutableAssetRegistry || !m_prefabSourceCapture ||
+            !m_collisionSceneOwner.IsValid() || m_defaultScenePath.has_value() != m_sceneFingerprint.has_value())
+            return Result<PrefabCreationIntent>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+        if (const auto state = ResolveSceneObjectEditorState(m_document.Objects(), root);
+            !state || state->effectivelyLocked || object->generated)
+            return Result<PrefabCreationIntent>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+        return Result<PrefabCreationIntent>::Success({root, m_document.Revision().value, m_document.ReplacementEpoch(), {}});
+    }
+
+    /** @copydoc EditorWorkspaceController::ExecutePrefabCreation */
+    PrefabCreationOutcome EditorWorkspaceController::ExecutePrefabCreation(const PrefabCreationIntent &intent) {
+        PrefabCreationOutcome outcome;
+        const auto admission = CapturePrefabCreationIntent(intent.root);
+        if (admission.HasError() || admission.Value().documentRevision != intent.documentRevision ||
+            admission.Value().replacementEpoch != intent.replacementEpoch) {
+            outcome.error =
+                admission.HasError() ? admission.ErrorValue() : MakeError(SceneTransactionError(SceneTransactionFailure::Stale));
+            return outcome;
+        }
+        auto boundPort = SceneDocumentTransactions::Bind(m_document, m_history, {m_collisionSceneOwner, intent.replacementEpoch + 1});
+        const auto metadata = Application::LoadProjectMetadata(m_viewModel.projectRoot);
+        if (boundPort.HasError() || metadata.HasError()) {
+            outcome.error = boundPort.HasError() ? boundPort.ErrorValue() : metadata.ErrorValue();
+            return outcome;
+        }
+        auto port = std::move(boundPort).Value();
+        const auto captured = port.Snapshot();
+        if (captured.HasError()) {
+            outcome.error = captured.ErrorValue();
+            return outcome;
+        }
+        const auto &snapshot = captured.Value();
+        const SceneTransactionContext context{snapshot.session, snapshot.revision, snapshot.state, true};
+        auto sourceFence = CreationSceneSourceFence(m_defaultScenePath, m_sceneFingerprint);
+        if (sourceFence.HasError()) {
+            outcome.error = sourceFence.ErrorValue();
+            return outcome;
+        }
+        return CreatePrefabFromSelection(port,
+                                         {context, intent.root, m_viewModel.projectRoot, intent.destination,
+                                          GenerateRandomAssetId(m_assetRegistry), metadata.Value().horoVersion.value, m_assetRegistry,
+                                          m_gameplayRegistry ? &m_gameplayRegistry->Registry() : nullptr, std::move(sourceFence).Value()},
+                                         *m_mutations, *m_durableFiles);
+    }
+
+    /** @copydoc EditorWorkspaceController::ProcessCreatePrefabCommand */
+    bool EditorWorkspaceController::ProcessCreatePrefabCommand(const EditorWorkspaceViewCommandData &command) {
+        if (command.command != EditorWorkspaceViewCommand::CreatePrefabFromSelection)
+            return false;
+        if (!command.prefabCreation)
+            return true;
+        if (m_viewModel.prefabCreationOutcome && m_durableFiles) {
+            for (const auto &receipt : m_viewModel.prefabCreationOutcome->files) {
+                if (!receipt.recoveryError)
+                    continue;
+                const auto current = m_durableFiles->InspectEntry(receipt.path);
+                if (current.HasError() || current.Value())
+                    return true;  // Only verified manual removal permits a new attempt to replace retained recovery evidence.
+            }
+        }
+        const auto &intent = *command.prefabCreation;
+        // Prepare presentation ownership before creating files; the immutable outcome keeps every failed-cleanup receipt.
+        auto outcome = std::make_shared<PrefabCreationOutcome>();
+        auto observerFailure =
+            MakeError(SceneTransactionError(SceneTransactionFailure::Capacity),
+                      Localized("workspace.prefab.create.post_commit", "Prefab created; workspace presentation needs refresh."));
+        m_viewModel.prefabPostCommitError.reset();
+        *outcome = ExecutePrefabCreation(intent);
+        m_viewModel.prefabCreationOutcome = outcome;
+        if (!outcome->committed)
+            return true;
+        // These canonical selection changes allocate no storage. Derived views may be rebuilt independently afterward.
+        const bool selectionChanged = m_selection.ClearForTransaction();
+        m_viewModel.prefabSelection = PrefabHierarchyTarget{outcome->instance, std::nullopt};
+        try {
+            if (selectionChanged)
+                m_selection.NotifyTransactionClear();
+            m_viewport.ClearTransformPreview();
+            m_viewport.ClearLightPreview();
+            m_dataBus.Publish(SceneDocumentChangedEvent{m_document.Revision(),
+                                                        m_document.State(),
+                                                        DocumentChangeKind::PrefabInstanceCreated,
+                                                        m_document.IsDirty(),
+                                                        {}});
+            if (auto rebuilt = RebuildProjectAssetRegistry(m_viewModel.projectRoot); rebuilt.HasError()) {
+                m_viewModel.prefabPostCommitError = rebuilt.ErrorValue();
+            } else {
+                m_assetRegistry = m_mutableAssetRegistry->Snapshot();
+                if (rebuilt.Value().status != Assets::AssetRegistryBuildStatus::Complete)
+                    m_viewModel.prefabPostCommitError = MakeError(Prefab::PrefabErrors::DependencyUnavailable);
+            }
+            RefreshSceneProjections();
+        } catch (...) {
+            // Every authoritative owner already committed; observer allocation/failure never removes created assets.
+            m_viewModel.prefabPostCommitError = std::move(observerFailure);
+        }
+        return true;
+    }
 
     /** @copydoc EditorWorkspaceController::RetirePrefabHierarchy */
     void EditorWorkspaceController::RetirePrefabHierarchy() noexcept {

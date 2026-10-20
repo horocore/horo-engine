@@ -2988,6 +2988,36 @@
     },
     "settings.navigation.override_cost": {
       "text": "Overridden traversal cost"
+    },
+    "workspace.prefab.create.action": {
+      "text": "Create Prefab from Subtree..."
+    },
+    "workspace.prefab.create.title": {
+      "text": "Create Prefab"
+    },
+    "workspace.prefab.create.help": {
+      "text": "Create a reusable prefab and replace this subtree with a linked instance. Unsupported or external references must be resolved first."
+    },
+    "workspace.prefab.create.path": {
+      "text": "Project-relative prefab path"
+    },
+    "workspace.prefab.create.cancel": {
+      "text": "Cancel"
+    },
+    "workspace.prefab.create.confirm": {
+      "text": "Create Prefab"
+    },
+    "workspace.prefab.create.failed": {
+      "text": "Prefab creation did not commit. Review the reported source and target sites."
+    },
+    "workspace.prefab.create.post_commit": {
+      "text": "Prefab created. Workspace presentation needs refresh; the source and linked instance remain committed."
+    },
+    "workspace.prefab.create.more_diagnostics": {
+      "text": "more reference diagnostics are retained in the transaction result."
+    },
+    "workspace.prefab.create.expired": {
+      "text": "The workspace session ended. Reopen the project before creating a prefab."
     }
   }
 }
