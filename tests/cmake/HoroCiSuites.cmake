@@ -121,6 +121,7 @@ set(HORO_CI_WINDOWS_TARGETS
     HoroCliProductionOutputContract
     HoroCliMcpServeTests
     HoroPlatformTests
+    HoroImmutableFileStorageTests
     HoroUpdateZipPackageProducerTests
     HoroVfxApiTests
     HoroVfxRenderExtractionTests

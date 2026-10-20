@@ -6,6 +6,7 @@
 #include <barrier>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -20,6 +21,33 @@ namespace {
     using Horo::Platform::CreateNativeImmutableFileStorage;
     using Horo::Tests::OwnedTestDirectory;
     const std::vector<std::uint8_t> Payload{0, 1, 127, 128, 255};
+
+    /** @brief Owns an exclusively created system-temp fixture, which can reside on a different Windows volume from the checkout. */
+    struct OwnedNativeTempDirectory {
+        std::filesystem::path root;
+
+        OwnedNativeTempDirectory()
+            : root(std::filesystem::canonical(std::filesystem::temp_directory_path()) /
+                   ("horo-immutable-volume-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
+            REQUIRE(std::filesystem::create_directory(root));
+        }
+
+        ~OwnedNativeTempDirectory() {
+            std::error_code ignored;
+            std::filesystem::remove_all(root, ignored);
+        }
+
+        OwnedNativeTempDirectory(const OwnedNativeTempDirectory &) = delete;
+        OwnedNativeTempDirectory &operator=(const OwnedNativeTempDirectory &) = delete;
+    };
+
+    /** @brief Retains every typed cause so a native runtime failure identifies the failing handle operation. */
+    std::string ErrorDetails(const Horo::Error &failure) {
+        std::string text;
+        for (auto *current = &failure; current != nullptr; current = current->cause.Get())
+            text += std::string{current->domain.Value()} + ':' + std::string{current->code.Value()} + ' ' + current->message + '\n';
+        return text;
+    }
 
     /** @brief Seeds a complete fixture file without granting the storage implementation a native fallback. */
     void Seed(const std::filesystem::path &path, const std::string_view text) {
@@ -91,6 +119,27 @@ TEST_CASE("Rooted immutable storage round trips binary and empty bytes under por
         files += entry.is_regular_file() ? 1U : 0U;
     }
     CHECK(files == 1);
+}
+
+TEST_CASE("Rooted immutable storage round trips actual cook cache names from the native temp volume", "[platform][storage]") {
+    OwnedNativeTempDirectory directory;
+    const auto composed = CreateNativeImmutableFileStorage(directory.root, "cache");
+    REQUIRE(composed.HasValue());
+    const auto bytes = GENERATE(Payload, std::vector<std::uint8_t>{});
+    constexpr std::string_view name{"ab/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01.cooked"};
+    const auto missing = composed.Value()->Load(name, 1024, {});
+    INFO((missing.HasError() ? ErrorDetails(missing.ErrorValue()) : std::string{}));
+    REQUIRE(missing.HasValue());
+    REQUIRE_FALSE(missing.Value());
+    const auto stored = composed.Value()->Store(name, bytes, {});
+    INFO((stored.HasError() ? ErrorDetails(stored.ErrorValue()) : std::string{}));
+    REQUIRE(stored.HasValue());
+    REQUIRE(composed.Value()->Store(name, bytes, {}).HasValue());
+    const auto loaded = composed.Value()->Load(name, 1024, {});
+    INFO((loaded.HasError() ? ErrorDetails(loaded.ErrorValue()) : std::string{}));
+    REQUIRE(loaded.HasValue());
+    REQUIRE(loaded.Value());
+    CHECK(*loaded.Value() == bytes);
 }
 
 TEST_CASE("Rooted immutable storage rejects different existing bytes and enforces load bounds", "[platform][storage]") {
