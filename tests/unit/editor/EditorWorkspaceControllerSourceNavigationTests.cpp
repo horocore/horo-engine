@@ -460,17 +460,24 @@ namespace {
         CHECK(SourceDocumentCloseModal::LogicalFooterHeight(baseline) == Catch::Approx(logical));
     }
 
-    TEST_CASE("Workspace source interactions publish exact revisions history and view restoration", "[unit][editor][source][history]") {
-        const auto projectRoot =
+    /** @brief Owns the source history scenario's filesystem for the controller lifetime. */
+    struct SourceHistoryProject final {
+        std::filesystem::path root =
             std::filesystem::temp_directory_path() /
             ("horo-workspace-source-history-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-        std::filesystem::create_directory(projectRoot);
-        ScopedSourceProjectCleanup cleanup{projectRoot};
-        {
-            std::ofstream file(projectRoot / "code.cpp");
+        ScopedSourceProjectCleanup cleanup{root};
+
+        SourceHistoryProject() {
+            std::filesystem::create_directory(root);
+            std::ofstream file(root / "code.cpp");
             file << "base";
+            REQUIRE(file.good());
         }
-        TestWorkspaceController controller{projectRoot, {}, [](const SourceOpenResult &) {
+    };
+
+    TEST_CASE("Workspace source interactions publish exact revisions history and view restoration", "[unit][editor][source][history]") {
+        SourceHistoryProject project;
+        TestWorkspaceController controller{project.root, {}, [](const SourceOpenResult &) {
             return true;
         }};
         EditorWorkspaceViewCommandData command;
