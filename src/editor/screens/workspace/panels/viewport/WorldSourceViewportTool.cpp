@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "WorldSourceShapeControls.h"
 #include "editor/renderer/EditorViewportScene.h"
 
 #include <algorithm>
@@ -112,6 +113,7 @@ namespace Horo::Editor {
     /** @copydoc WorldSourceViewportTool::Cancel */
     void WorldSourceViewportTool::Cancel() {
         draft_.reset();
+        dragOriginal_.reset();
         dragged_.reset();
         previewError_.reset();
         fence_ = {};
@@ -141,6 +143,12 @@ namespace Horo::Editor {
             draft_->intent = static_cast<WS::StreamingSourceIntent>(intent);
         static_cast<void>(
             Ui::DrawColor3PropRow(label("workspace.world_sources.color"), "##source_color", draft_->debugColor, context.theme.fonts));
+        const auto previousShape = draft_->shape;
+        const auto shape = DrawWorldSourceShapeControls(*draft_, context);
+        if (shape.HasError())
+            previewError_ = shape.ErrorValue();
+        else if (previousShape != draft_->shape)
+            previewError_.reset();
     }
 
     /** @copydoc WorldSourceViewportTool::DrawSourceList */
@@ -186,7 +194,7 @@ namespace Horo::Editor {
         DrawSourceList(view);
         if (draft_) {
             DrawSourceProperties(context);
-            if (Ui::Button({.label = label("workspace.world_sources.apply")}))
+            if (Ui::Button({.label = label("workspace.world_sources.apply"), .enabled = !previewError_ && draft_->priority.IsValid()}))
                 Emit(command, WorldSourceToolAction::Edit, fence_, view.worldViewport, draft_);
             if (Ui::Button({.label = label("workspace.world_sources.remove"), .variant = Ui::ButtonVariant::Secondary}))
                 Emit(command, WorldSourceToolAction::Remove, fence_, view.worldViewport, draft_);
@@ -239,7 +247,9 @@ namespace Horo::Editor {
         const auto intersection = PointerPoint(frame.origin, frame.size, frame.view.viewportCamera, frame.depth, normal.Value(), local);
         if (!intersection)
             return;
-        draft_ = source;
+        if (!draft_ || draft_->id != source.id)
+            draft_ = source;
+        dragOriginal_ = draft_;
         fence_ = frame.view.worldViewport.snapshot->fence;
         origin_ = frame.view.worldViewport.globalOrigin;
         viewRevision_ = frame.view.worldViewport.viewRevision;
@@ -297,7 +307,7 @@ namespace Horo::Editor {
         if (pointer) {
             const auto position = WorldSourceViewportGlobal(dragStart_, *pointer - dragIntersection_);
             if (position.HasValue()) {
-                const auto value = MoveWorldSourceGizmo(*draft_, *dragged_, position.Value());
+                const auto value = MoveWorldSourceGizmo(*dragOriginal_, *dragged_, position.Value());
                 previewError_ = value.HasError() ? std::optional<Error>{value.ErrorValue()} : std::nullopt;
                 if (value.HasValue())
                     draft_ = value.Value();
@@ -311,6 +321,7 @@ namespace Horo::Editor {
             if (!previewError_) {
                 Emit(command, WorldSourceToolAction::Edit, fence_, frame.view.worldViewport, draft_);
                 dragged_.reset();
+                dragOriginal_.reset();
             } else {
                 const auto error = previewError_;
                 Cancel();
