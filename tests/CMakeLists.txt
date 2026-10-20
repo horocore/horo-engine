@@ -3013,6 +3013,11 @@ add_executable(HoroFoundationValidationResultTests
 
 target_compile_features(HoroFoundationValidationResultTests PRIVATE cxx_std_20)
 target_link_libraries(HoroFoundationValidationResultTests PRIVATE HoroEngine::Foundation)
+add_executable(HoroFoundationErrorDomainTests unit/foundation/FoundationErrorDomainTests.cpp)
+target_compile_features(HoroFoundationErrorDomainTests PRIVATE cxx_std_20)
+target_link_libraries(HoroFoundationErrorDomainTests PRIVATE HoroEngine::Foundation)
+horo_register_catch_test(HoroFoundationErrorDomainTests LABELS "unit;foundation;headless;ci-windows;sonar-coverage")
+
 add_executable(HoroFoundationJobSystemTests
         unit/foundation/JobSystemTests.cpp
         unit/foundation/JobResourceSchedulingTests.cpp

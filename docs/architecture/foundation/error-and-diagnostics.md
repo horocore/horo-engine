@@ -630,3 +630,17 @@ Required tests cover:
 - [Engine Data Bus](./engine-data-bus.md)
 - [MCP Architecture](../interfaces/mcp-architecture.md)
 - [Testing Architecture](../delivery/testing-architecture.md)
+
+## Scheduler and Scene Math host metadata
+
+`FoundationErrorDomains.h` publishes inert `JobSystemErrorDomain()` and
+`SceneMathErrorDomain()` contributions for the existing Foundation-owned failure
+identities. Hosts register them under `horo.foundation` alongside other selected
+Foundation domains; descriptors remain immutable and their public lifetime is the
+process lifetime. Constructing a contribution does not create a scheduler,
+inspect services or activate modules. Each returned container is independently
+owned. This additive metadata surface does not change failure identities,
+severities or runtime behavior. Existing callers need no migration; hosts still
+supply exact presentation mappings and must declare every retained cause. Host
+code must not include the private `src/foundation/FoundationErrors.h` or fabricate
+replacement descriptors from observed error messages.

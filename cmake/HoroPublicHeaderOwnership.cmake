@@ -24,6 +24,7 @@ horo_configure_target_header_boundary(HoroSceneCook PUBLIC_HEADERS
 message(STATUS "Configuring target-specific public header boundaries")
 
 horo_configure_target_header_boundary(HoroFoundation PUBLIC_HEADERS
+    Horo/Foundation/FoundationErrorDomains.h
     Horo/Foundation/AssetCookTargetId.h
     Horo/Foundation/Assertions.h
     Horo/Foundation/BorrowedCallbackContext.h
