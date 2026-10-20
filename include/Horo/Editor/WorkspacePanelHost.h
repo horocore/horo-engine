@@ -89,6 +89,15 @@ namespace Horo::Editor {
         /** @brief Activates one currently open document without changing its source identity. */
         [[nodiscard]] Result<void> FocusDocument(DocumentInstanceId instance);
 
+        /** @brief Moves an open document before another, or to the end, without changing focus or ownership.
+         * @param instance Open document to move. @param before Existing destination, or empty for the end.
+         * @return Success or unknown-instance error; rejected moves leave both live and persisted order unchanged. */
+        [[nodiscard]] Result<void> MoveDocument(DocumentInstanceId instance, std::optional<DocumentInstanceId> before);
+
+        /** @brief Reconciles tab identity and presence after the document owner retargets or closes a session.
+         * @details Does not close, save, discard or reopen documents. Call after owner lifecycle operations on the workspace thread. */
+        void RefreshDocuments();
+
         /** @brief Returns the current document tabs in workspace order. */
         [[nodiscard]] std::span<const WorkspaceDocumentTab> DocumentTabs() const noexcept {
             return m_documentTabs;

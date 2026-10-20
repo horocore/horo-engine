@@ -71,6 +71,9 @@ namespace Horo::Editor {
 
     enum class EditorWorkspaceViewCommand {
         None,
+        FocusWorkspaceDocument,
+        CloseWorkspaceDocument,
+        MoveWorkspaceDocument,
         FocusSequenceDocument,
         CloseSequenceDocument,
         UpdateSequenceTimeline,
@@ -245,6 +248,7 @@ namespace Horo::Editor {
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
+        std::optional<DocumentInstanceId> documentMoveBefore;
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
         std::optional<SequenceTimelineState> sequenceTimeline;
@@ -374,6 +378,7 @@ namespace Horo::Editor {
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
+        std::vector<SourceDocumentSnapshot> sourceDocuments;
 
         float leftPanelWidth = 268.0F;
         float rightPanelWidth = 300.0F;

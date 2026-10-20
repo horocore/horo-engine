@@ -3155,6 +3155,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/asset_import/AssetImportModalPresentation.cpp
             editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
             editor/modals/play_topology/PlayTopologyModal.cpp
+            editor/modals/source_document/SourceDocumentCloseModal.cpp
             editor/modals/packages/PackageModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
