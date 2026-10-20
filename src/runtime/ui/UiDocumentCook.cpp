@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Ui/UiDocument.h"
 #include "UiDocumentCookPresentation.h"
+#include "UiElementPresentationCodec.h"
 
 #include <algorithm>
 #include <array>
@@ -165,6 +166,13 @@ namespace Horo::Runtime::Ui {
                 for (const UiReference &reference : element.references)
                     if (!WriteReference(writer, reference, maximumTextBytes))
                         return false;
+                if (!writer.Byte(element.presentation ? 1 : 0))
+                    return false;
+                if (element.presentation) {
+                    auto encoded = PresentationCodec::Write(*element.presentation);
+                    if (encoded.HasError() || !writer.Text(encoded.Value(), MaximumUiElementPresentationBytes))
+                        return false;
+                }
             }
             return true;
         }
@@ -416,7 +424,8 @@ namespace Horo::Runtime::Ui {
                                                         policy});
         }
 
-        [[nodiscard]] Result<UiDocumentElement> ReadElement(CookedReader &reader, const UiDocumentCookLimits &limits) {
+        [[nodiscard]] Result<UiDocumentElement> ReadElement(CookedReader &reader, const UiDocumentCookLimits &limits,
+                                                            const std::uint32_t formatVersion) {
             auto id = ReadId<UiElementId>(reader, false);
             auto parent = ReadId<UiElementId>(reader);
             auto type = ReadType(reader, limits);
@@ -439,6 +448,20 @@ namespace Horo::Runtime::Ui {
                 if (reference.HasError())
                     return Failure<UiDocumentElement>(UiErrors::CookedPayloadMalformed);
                 element.references.push_back(std::move(reference).Value());
+            }
+            if (formatVersion >= 3) {
+                std::uint8_t present{};
+                if (!reader.Byte(present) || present > 1)
+                    return Failure<UiDocumentElement>(UiErrors::CookedPayloadMalformed);
+                if (present != 0) {
+                    auto encoded = reader.Text(MaximumUiElementPresentationBytes);
+                    if (encoded.HasError())
+                        return Failure<UiDocumentElement>(UiErrors::CookedPayloadMalformed);
+                    auto presentation = PresentationCodec::Read(encoded.Value());
+                    if (presentation.HasError())
+                        return Failure<UiDocumentElement>(UiErrors::CookedPayloadMalformed);
+                    element.presentation = std::move(presentation).Value();
+                }
             }
             return Result<UiDocumentElement>::Success(std::move(element));
         }
@@ -473,7 +496,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> DecodeElements(CookedReader &reader, const CookedDocumentHeader &header,
                                                   const UiDocumentCookLimits &limits, UiDocumentBuilder &builder) {
             for (std::uint32_t index = 0; index < header.elementCount; ++index) {
-                auto element = ReadElement(reader, limits);
+                auto element = ReadElement(reader, limits, header.formatVersion);
                 if (element.HasError() || builder.AddElement(std::move(element).Value()).HasError())
                     return Failure(UiErrors::CookedPayloadMalformed);
             }

@@ -214,6 +214,7 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static UiStyleValueSource Token(UiStyleTokenReference reference) noexcept;
         /** @brief Checks that the source selects exactly one valid alternative. @return Whether it is well-formed. */
         [[nodiscard]] bool IsValid() const noexcept;
+        [[nodiscard]] auto operator<=>(const UiStyleValueSource &) const noexcept = default;
     };
 
     /**
@@ -249,6 +250,7 @@ namespace Horo::Runtime::Ui {
         UiStylePropertyId property;
         UiStyleValueSource value;
         bool sealed{};
+        [[nodiscard]] auto operator<=>(const UiStyleAssignment &) const noexcept = default;
     };
 
     enum class UiVisualState : std::uint16_t;

@@ -1274,6 +1274,10 @@ remains runtime UI data. Preview creates an isolated ordinary game runtime and
 ADR-073 scopes/attachments. Preview/play mutations apply back only through an
 explicit document-revision-checked editor command with undo.
 
+The implemented retained hierarchy, descriptor palette, revision-checked canvas
+commands and typed layout/style source migration are described in
+[UI Canvas hierarchy and typed presentation](../../guides/ui-canvas-hierarchy-migration.md).
+
 ## Core Vs Package Boundary
 
 Core engine provides:

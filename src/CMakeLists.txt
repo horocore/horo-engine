@@ -717,6 +717,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiBindingStorePreparation.cpp
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
+        runtime/ui/UiElementPresentation.cpp
+        runtime/ui/UiElementPresentationCodec.cpp
+        runtime/ui/UiElementCatalog.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiRuntimeInstance.cpp
         runtime/ui/UiDocumentCook.cpp
@@ -2986,6 +2989,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
+        editor/UiCanvasDocumentCommands.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
         editor/document/SceneDocumentComparison.cpp
@@ -3071,6 +3075,7 @@ target_link_libraries(HoroEditorServices
         HoroEngine::Input
         HoroEngine::ProjectMigrations
         PRIVATE
+        HoroFoundationJsonInternal
         HoroEditorPlaySceneHostInternal
         HoroEngine::ProjectAssetRegistrySource
         HoroEngine::PlatformProjectReadFiles
@@ -3282,6 +3287,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/EditorWorkspaceViewUiCanvas.cpp
+            editor/screens/workspace/EditorWorkspaceControllerUiCanvas.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp

@@ -2612,6 +2612,7 @@ target_compile_features(HoroSourceDocumentPublicHeaderConsumer PRIVATE cxx_std_2
 target_link_libraries(HoroSourceDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
 target_sources(HoroSourceFileOpenServiceTests PRIVATE $<TARGET_OBJECTS:HoroSourceDocumentPublicHeaderConsumer>)
 add_executable(HoroUiCanvasDocumentTests
+        unit/editor/UiCanvasHierarchyTests.cpp
         unit/editor/UiCanvasDocumentTests.cpp
 )
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
@@ -3690,6 +3691,7 @@ target_link_libraries(HoroRuntimeUiHotReloadPublicHeaderConsumer PRIVATE HoroEng
 add_test(NAME HoroRuntimeUiHotReloadPublicHeaderConsumer COMMAND HoroRuntimeUiHotReloadPublicHeaderConsumer)
 set_tests_properties(HoroRuntimeUiHotReloadPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
 add_executable(HoroRuntimeUiDocumentTests
+        unit/runtime/ui/UiElementCatalogTests.cpp
         unit/runtime/ui/UiDocumentTests.cpp
         unit/runtime/ui/UiAssetLoadingTests.cpp
         unit/runtime/ui/UiDocumentSerializationTests.cpp
@@ -5426,3 +5428,5 @@ foreach(_horo_cache_consumer IN ITEMS
         target_include_directories(${_horo_cache_consumer} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
     endif()
 endforeach()
+
+target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiElementCatalogPublicContract.cpp)

@@ -7,6 +7,7 @@
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Runtime/Ui/UiAssetDependency.h"
 #include "Horo/Runtime/Ui/UiCanvasSpace.h"
+#include "Horo/Runtime/Ui/UiElementPresentation.h"
 #include "Horo/Runtime/Ui/UiLocalization.h"
 
 #include <compare>
@@ -41,8 +42,8 @@ namespace Horo::Runtime::Ui {
     /** @brief Maximum byte count admitted by one cooked document payload. */
     inline constexpr std::size_t MaximumCookedUiDocumentBytes = 64ULL * 1024ULL * 1024ULL;
 
-    /** @brief Binary Runtime UI payload version; v2 persists canvas presentation policy, with v1 decode retained. */
-    inline constexpr std::uint32_t CurrentCookedUiDocumentFormatVersion = 2;
+    /** @brief Binary Runtime UI payload version; v3 adds typed element presentation, retaining v1/v2 decode. */
+    inline constexpr std::uint32_t CurrentCookedUiDocumentFormatVersion = 3;
 
     /** @brief Bounded limits applied while producing or decoding one cooked Runtime UI document. */
     struct UiDocumentCookLimits final {
@@ -69,13 +70,13 @@ namespace Horo::Runtime::Ui {
     /** @brief Version of the durable Runtime UI document source schema. */
     struct UiDocumentSchemaVersion final {
         std::uint16_t major{1};
-        std::uint16_t minor{1};
+        std::uint16_t minor{2};
 
         [[nodiscard]] constexpr auto operator<=>(const UiDocumentSchemaVersion &) const noexcept = default;
     };
 
     /** @brief Current schema emitted by the Runtime UI document serializer. */
-    inline constexpr UiDocumentSchemaVersion CurrentUiDocumentSchemaVersion{1, 1};
+    inline constexpr UiDocumentSchemaVersion CurrentUiDocumentSchemaVersion{1, 2};
 
     /** @brief Closed semantic presentation band persisted by a route definition. */
     enum class UiPresentationBand : std::uint8_t {
@@ -128,6 +129,7 @@ namespace Horo::Runtime::Ui {
         Assets::AssetTypeId type;
         std::vector<UiTypedProperty> properties;
         std::vector<UiReference> references;
+        std::optional<UiElementPresentation> presentation; /**< Typed authored layout/style; absent in legacy sources. */
 
         [[nodiscard]] auto operator<=>(const UiDocumentElement &) const noexcept = default;
     };

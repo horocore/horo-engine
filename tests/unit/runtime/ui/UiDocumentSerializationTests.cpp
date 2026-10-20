@@ -303,7 +303,7 @@ namespace Horo::Runtime::Ui {
             REQUIRE(DeserializeUiDocument(duplicate).HasError());
 
             auto unsupported = encoded;
-            const auto minor = unsupported.find("\"minor\":1");
+            const auto minor = unsupported.find("\"minor\":" + std::to_string(CurrentUiDocumentSchemaVersion.minor));
             REQUIRE(minor != std::string::npos);
             unsupported.replace(minor, 9, "\"minor\":99");
             REQUIRE(DeserializeUiDocument(unsupported).HasError());
@@ -319,7 +319,7 @@ namespace Horo::Runtime::Ui {
             REQUIRE(encoded.HasValue());
             const auto parsed = DeserializeUiDocument(encoded.Value());
             REQUIRE(parsed.HasValue());
-            const std::array steps{UiDocumentMigrationStep{{1, 0}, {1, 1}, &UpgradeToCurrent}};
+            const std::array steps{UiDocumentMigrationStep{{1, 0}, CurrentUiDocumentSchemaVersion, &UpgradeToCurrent}};
             const auto migrated = MigrateUiDocument(parsed.Value(), CurrentUiDocumentSchemaVersion, steps);
             REQUIRE(migrated.HasValue());
             REQUIRE(migrated.Value().SchemaVersion() == CurrentUiDocumentSchemaVersion);

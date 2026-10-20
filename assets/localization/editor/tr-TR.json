@@ -2988,6 +2988,78 @@
     },
     "settings.navigation.override_cost": {
       "text": "Geçersiz kılınan geçiş maliyeti"
+    },
+    "workspace.ui_canvas.undo": {
+      "text": "Geri al"
+    },
+    "workspace.ui_canvas.redo": {
+      "text": "Yinele"
+    },
+    "workspace.ui_canvas.reload": {
+      "text": "Yeniden yükle"
+    },
+    "workspace.ui_canvas.command_failed": {
+      "text": "Tuval işlemi başarısız oldu. Belge durumunu kontrol edip yeniden deneyin."
+    },
+    "workspace.ui_canvas.search": {
+      "text": "Öğe türlerinde ara"
+    },
+    "workspace.ui_canvas.create": {
+      "text": "Öğe oluştur"
+    },
+    "workspace.ui_canvas.move_up": {
+      "text": "Öne taşı"
+    },
+    "workspace.ui_canvas.move_down": {
+      "text": "Arkaya taşı"
+    },
+    "workspace.ui_canvas.reparent_hint": {
+      "text": "Taşımak için bir öğeyi kapsayıcının üzerine sürükleyin."
+    },
+    "workspace.ui_canvas.no_results": {
+      "text": "Eşleşen öğe yok."
+    },
+    "workspace.ui_canvas.kind.canvas": {
+      "text": "Tuval"
+    },
+    "workspace.ui_canvas.kind.screen": {
+      "text": "Ekran"
+    },
+    "workspace.ui_canvas.kind.panel": {
+      "text": "Panel"
+    },
+    "workspace.ui_canvas.kind.frame": {
+      "text": "Çerçeve"
+    },
+    "workspace.ui_canvas.kind.layout_group": {
+      "text": "Yerleşim Grubu"
+    },
+    "workspace.ui_canvas.kind.text": {
+      "text": "Metin"
+    },
+    "workspace.ui_canvas.kind.image": {
+      "text": "Görsel"
+    },
+    "workspace.ui_canvas.kind.button": {
+      "text": "Düğme"
+    },
+    "workspace.ui_canvas.kind.progress_bar": {
+      "text": "İlerleme Çubuğu"
+    },
+    "workspace.ui_canvas.kind.slider": {
+      "text": "Kaydırıcı"
+    },
+    "workspace.ui_canvas.kind.toggle": {
+      "text": "Anahtar"
+    },
+    "workspace.ui_canvas.kind.text_input": {
+      "text": "Metin Girişi"
+    },
+    "workspace.ui_canvas.kind.scroll_view": {
+      "text": "Kaydırma Görünümü"
+    },
+    "workspace.ui_canvas.kind.collection_view": {
+      "text": "Koleksiyon Görünümü"
     }
   }
 }

@@ -528,6 +528,10 @@ namespace Horo::Editor {
         bool ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Refreshes source presentation and dirty flags without disk I/O or document mutation. */
         void RefreshSourceDocumentProjection();
+        /** @brief Refreshes changed canvas projections outside GUI draw work. */
+        void RefreshUiCanvasProjection();
+        /** @brief Routes revision-fenced hierarchy and persistence operations to the canonical canvas owner. */
+        bool ProcessUiCanvasCommand(const EditorWorkspaceViewCommandData &command);
         void SaveScene(bool overwriteConflict = false);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);

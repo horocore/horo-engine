@@ -241,7 +241,7 @@ TEST_CASE("UI Canvas loading rejects missing malformed and future-version input"
     REQUIRE(malformed.HasError());
     REQUIRE(ErrorCodeText(malformed.ErrorValue()) == "editor.ui_canvas_document.malformed");
 
-    project.Write(R"({"format":"horo.ui_canvas","formatVersion":2})");
+    project.Write(R"({"format":"horo.ui_canvas","formatVersion":3})");
     const auto future = LoadUiCanvasDocument(project.DocumentPath());
     REQUIRE(future.HasError());
     REQUIRE(ErrorCodeText(future.ErrorValue()) == "editor.ui_canvas_document.version_unsupported");
@@ -260,17 +260,24 @@ TEST_CASE("UI Canvas loading rejects malformed presentation policy", "[unit][edi
     std::ifstream input(project.DocumentPath(), std::ios::binary);
     REQUIRE(static_cast<bool>(input));
     auto serialized = nlohmann::json::parse(std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>{}));
-    auto legacy = serialized;
+    auto legacy = nlohmann::json{{"format", "horo.ui_canvas"},
+                                 {"formatVersion", 1},
+                                 {"documentId", serialized["document"]["documentId"]},
+                                 {"revision", serialized["document"]["revision"]},
+                                 {"canvases", serialized["document"]["canvases"]},
+                                 {"dependencies", serialized["document"]["dependencies"]}};
+    legacy["canvases"][0]["renderMode"] = "screen_space_overlay";
+    legacy["canvases"][0]["scaleMode"] = "scale_with_screen_size";
     legacy["canvases"][0].erase("presentation");
     project.Write(legacy.dump(2) + '\n');
     const auto loadedLegacy = LoadUiCanvasDocument(project.DocumentPath());
     REQUIRE(loadedLegacy.HasValue());
     REQUIRE(loadedLegacy.Value().document.Canvases().front().presentation == UiCanvasPresentationPolicy{});
 
-    serialized["canvases"][0]["presentation"]["fontScale"]["denominator"] = 0;
+    serialized["document"]["canvases"][0]["presentation"]["fontScale"]["denominator"] = 0;
     project.Write(serialized.dump(2) + '\n');
 
     const auto loaded = LoadUiCanvasDocument(project.DocumentPath());
     REQUIRE(loaded.HasError());
-    REQUIRE(ErrorCodeText(loaded.ErrorValue()) == "editor.ui_canvas_document.malformed");
+    REQUIRE(ErrorCodeText(loaded.ErrorValue()) == "runtime_ui.document.serialization_invalid");
 }

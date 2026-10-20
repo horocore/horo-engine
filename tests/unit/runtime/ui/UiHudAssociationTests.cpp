@@ -59,7 +59,7 @@ namespace Horo::Runtime::Ui::ReloadTests {
                 REQUIRE(rejected.HasError());
                 CHECK(rejected.ErrorValue().code.Value() == UiErrors::CookedPayloadMalformed.code.Value());
             }
-            for (const std::uint8_t version : {0, 3}) {
+            for (const std::uint8_t version : {0, 4}) {
                 auto unsupported = original;
                 unsupported[8] = version;
                 const auto rejected = CookedUiDocument::Decode(unsupported);

@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiElementCatalog.h"
 #include "Horo/Runtime/Ui/UiTheme.h"
 #include "UiTestUtils.h"
 #include "support/AllocationProbe.h"
@@ -132,6 +133,32 @@ namespace Horo::Runtime::Ui {
 
         float Red(const UiThemeSnapshot &snapshot) {
             return std::get<UiSolidDraw>(snapshot.render.Commands()[1].payload).color.red;
+        }
+
+        TEST_CASE("Authored presentation projects into actual runtime layout and paint consumers", "[runtime_ui][theme][catalog]") {
+            auto tree = Tree();
+            auto owner = Runtime();
+            Frame frame{tree};
+            auto root = CreateUiElement(UiElementKind::Canvas, Stable<UiElementId>(1), {}).Value();
+            auto child = CreateUiElement(UiElementKind::Panel, Stable<UiElementId>(2), Stable<UiElementId>(1)).Value();
+            child.presentation->layout.width = UiLength::Percent(32);
+            child.presentation->inlineStyle = {Literal(1, UiStyleDimension{512}), Literal(4, Color(0.9F))};
+            auto rootInput = ProjectUiElementSurface(root, tree.Root().Value().handle);
+            auto childInput = ProjectUiElementSurface(child, tree.Find(Stable<UiElementId>(2)).Value());
+            REQUIRE(rootInput.HasValue());
+            REQUIRE(childInput.HasValue());
+            REQUIRE(childInput.Value().layout.width == UiLength::Percent(32));
+            frame.surfaces[0] = rootInput.Value();
+            frame.surfaces[1] = childInput.Value();
+            auto published = owner.Update(tree, frame.request);
+            REQUIRE(published.HasValue());
+            REQUIRE(published.Value().layout.Get(frame.surfaces[1].style.element).Value().arrangement.contentBox.extent.width == 512);
+            REQUIRE(Red(published.Value()) == 0.9F);
+            auto text = CreateUiElement(UiElementKind::Text, Stable<UiElementId>(3), Stable<UiElementId>(1)).Value();
+            REQUIRE(ProjectUiElementSurface(text, frame.surfaces[1].style.element).HasError());
+            REQUIRE(ProjectUiElementLayout(text, frame.surfaces[1].style.element).Value().intrinsic.kind == UiLayoutIntrinsicKind::Text);
+            owner.Shutdown();
+            REQUIRE(published.Value().render.Commands().size() == 2);
         }
 
         TEST_CASE("Theme switch updates real surface layout and paint without replacing retained elements", "[runtime_ui][theme]") {

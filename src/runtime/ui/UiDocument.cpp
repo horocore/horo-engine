@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Ui/UiDocument.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Runtime/Ui/UiElementCatalog.h"
 #include "UiAssetDependencyInternal.h"
 
 #include <algorithm>
@@ -286,6 +287,10 @@ namespace Horo::Runtime::Ui {
             if (!element.id.IsValid() || element.type.Value().empty() || element.properties.size() > MaximumUiDocumentProperties ||
                 element.references.size() > MaximumUiDocumentReferences)
                 return Failure(UiErrors::DocumentSerializationInvalid);
+            if (element.presentation && (!element.presentation->IsValid() || !element.properties.empty()))
+                return Failure(UiErrors::DocumentSerializationInvalid);
+            if (auto result = ValidateCoreUiElement(element); result.HasError())
+                return result;
             if (auto result = ValidateElementProperties(element); result.HasError())
                 return result;
             return ValidateElementReferences(element, canvases, elements, dependencies);
@@ -299,6 +304,12 @@ namespace Horo::Runtime::Ui {
                 for (std::size_t previous = 0; previous < index; ++previous)
                     if (elements[previous].id == element.id)
                         return Failure(UiErrors::DocumentDuplicateIdentity);
+                if (element.parent.IsValid()) {
+                    const auto parent = std::ranges::find(elements, element.parent, &UiDocumentElement::id);
+                    const auto *descriptor = parent == elements.end() ? nullptr : UiElementCatalog::Find(parent->type.Value());
+                    if (descriptor && !descriptor->admitsChildren)
+                        return Failure(UiErrors::DocumentHierarchyInvalid);
+                }
                 if (auto result = ValidateElement(element, canvases, elements, dependencies); result.HasError())
                     return result;
             }
@@ -325,6 +336,10 @@ namespace Horo::Runtime::Ui {
             if (auto result = ValidateDocumentEnvelope(schemaVersion, id, revision, canvases, elements, dependencies, routes);
                 result.HasError())
                 return result;
+            if (schemaVersion.minor < 2 && std::ranges::any_of(elements, [](const auto &element) {
+                return element.presentation.has_value();
+            }))
+                return Failure(UiErrors::DocumentSchemaUnsupported);
             if (auto result = ValidateCanvases(canvases); result.HasError())
                 return result;
             if (auto result = ValidateDependencies(dependencies); result.HasError())

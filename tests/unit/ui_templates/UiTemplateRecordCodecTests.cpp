@@ -122,4 +122,22 @@ namespace Horo::UiTemplates {
         const std::array leases{UiTemplateCatalogLease{Reference(1), catalog}};
         CHECK(DeserializeTemplateDocument(malformed.dump(), leases, catalog, UiTemplateLimits{}).HasError());
     }
+
+    TEST_CASE("Ordinary template slots preserve the canonical typed presentation record", "[runtime_ui][template][headless]") {
+        using namespace Runtime::Ui;
+        using namespace TestSupport;
+        auto templateSource = Source(1);
+        templateSource.slots.push_back({Identity<UiTemplateSlotId>(1), templateSource.root, 0, 4, {Kind()}, {}});
+        const auto catalog = Catalog(std::move(templateSource));
+        auto source = Document();
+        UiDocumentElement element{Identity<UiElementId>(10), {}, Kind(), {}, {}};
+        element.presentation.emplace();
+        element.presentation->layout.width = UiLength::Percent(32);
+        element.presentation->layout.offsets = {-1, 2, 3, 4};
+        const auto expected = element.presentation;
+        source.instances.front().slots.push_back({Identity<UiTemplateSlotId>(1), {std::move(element)}, {}});
+        auto roundtrip = RoundTrip(std::move(source), catalog);
+        CHECK(roundtrip.reopened->Capture().Source().instances.front().slots.front().elements.front().presentation == expected);
+        CHECK(SerializeTemplateDocument(roundtrip.reopened->Capture()).Value() == roundtrip.bytes);
+    }
 }  // namespace Horo::UiTemplates

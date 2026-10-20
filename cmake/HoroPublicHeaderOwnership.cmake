@@ -344,6 +344,8 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiBindingStore.h
     Horo/Runtime/Ui/UiCanvasSpace.h
     Horo/Runtime/Ui/UiLocalization.h
+    Horo/Runtime/Ui/UiElementPresentation.h
+    Horo/Runtime/Ui/UiElementCatalog.h
     Horo/Runtime/Ui/UiDocument.h
     Horo/Runtime/Ui/UiAssetLoading.h
     Horo/Runtime/Ui/UiSceneReconciliation.h

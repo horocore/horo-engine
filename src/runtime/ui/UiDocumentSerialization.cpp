@@ -1,6 +1,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "JsonUtils.h"
 #include "UiDocumentSerializationInternal.h"
+#include "UiElementPresentationCodec.h"
 
 #include <algorithm>
 #include <array>
@@ -507,11 +508,14 @@ namespace Horo::Runtime::Ui::SerializationInternal {
         OrderedJson encodedReferences = OrderedJson::array();
         for (const auto &reference : references)
             encodedReferences.push_back(EncodeReference(reference));
-        return OrderedJson{{"id", EncodeUiId(element.id)},
-                           {"parent", element.parent.IsValid() ? OrderedJson(EncodeUiId(element.parent)) : OrderedJson(nullptr)},
-                           {"type", element.type.Value()},
-                           {"properties", std::move(encodedProperties)},
-                           {"references", std::move(encodedReferences)}};
+        OrderedJson encoded{{"id", EncodeUiId(element.id)},
+                            {"parent", element.parent.IsValid() ? OrderedJson(EncodeUiId(element.parent)) : OrderedJson(nullptr)},
+                            {"type", element.type.Value()},
+                            {"properties", std::move(encodedProperties)},
+                            {"references", std::move(encodedReferences)}};
+        if (element.presentation)
+            encoded["presentation"] = PresentationCodec::Encode(*element.presentation);
+        return encoded;
     }
 
     [[nodiscard]] Result<std::vector<UiTypedProperty>> DecodeProperties(const Json &encoded, const UiDocumentSerializationLimits &limits) {
@@ -563,7 +567,7 @@ namespace Horo::Runtime::Ui::SerializationInternal {
     }
 
     [[nodiscard]] Result<UiDocumentElement> DecodeElement(const Json &value, const UiDocumentSerializationLimits &limits) {
-        if (!Horo::Foundation::HasAllowedFields(value, {"id", "parent", "type", "properties", "references"}))
+        if (!Horo::Foundation::HasAllowedFields(value, {"id", "parent", "type", "properties", "references"}, {"presentation"}))
             return Failed<UiDocumentElement>(UiErrors::DocumentSerializationInvalid, "Runtime UI element fields are not canonical.");
         auto id = DecodeUiId<UiElementId>(value.at("id"));
         if (id.HasError())
@@ -584,8 +588,16 @@ namespace Horo::Runtime::Ui::SerializationInternal {
             return Result<UiDocumentElement>::Failure(properties.ErrorValue());
         if (references.HasError())
             return Result<UiDocumentElement>::Failure(references.ErrorValue());
-        return Result<UiDocumentElement>::Success(
-            {id.Value(), parent.Value(), type.Value(), std::move(properties).Value(), std::move(references).Value()});
+        UiDocumentElement element{id.Value(), parent.Value(), type.Value(), std::move(properties).Value(), std::move(references).Value()};
+        if (value.contains("presentation")) {
+            if (value["presentation"].dump().size() > MaximumUiElementPresentationBytes)
+                return Failed<UiDocumentElement>(UiErrors::DocumentPayloadTooLarge);
+            auto presentation = PresentationCodec::Decode(value["presentation"]);
+            if (presentation.HasError())
+                return Result<UiDocumentElement>::Failure(presentation.ErrorValue());
+            element.presentation = std::move(presentation).Value();
+        }
+        return Result<UiDocumentElement>::Success(std::move(element));
     }
 
     [[nodiscard]] OrderedJson EncodeDependency(const UiAssetDependency &dependency) {
@@ -667,5 +679,9 @@ namespace Horo::Runtime::Ui::SerializationInternal {
     template Result<std::uint32_t> ReadUnsigned<std::uint32_t>(const Json &value);
     template Result<std::uint64_t> ReadUnsigned<std::uint64_t>(const Json &value);
     template Result<UiDocumentId> DecodeUiId<UiDocumentId>(const Json &value);
+    template Result<RuntimeStyleAssetId> DecodeUiId<RuntimeStyleAssetId>(const Json &value);
+    template Result<UiStyleClassId> DecodeUiId<UiStyleClassId>(const Json &value);
+    template Result<UiStyleTokenId> DecodeUiId<UiStyleTokenId>(const Json &value);
+    template Result<UiStylePropertyId> DecodeUiId<UiStylePropertyId>(const Json &value);
 
 }  // namespace Horo::Runtime::Ui::SerializationInternal

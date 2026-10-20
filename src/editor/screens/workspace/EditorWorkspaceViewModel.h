@@ -7,6 +7,7 @@
 #include "Horo/Editor/PhysicsInspector.h"
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderScene.h"
@@ -82,6 +83,14 @@ namespace Horo::Editor {
         SaveSourceDocumentAs,
         SaveAllSourceDocuments,
         CloseSourceDocument,
+        UiCanvasSelect,
+        UiCanvasCreate,
+        UiCanvasMove,
+        UiCanvasSearch,
+        UiCanvasUndo,
+        UiCanvasRedo,
+        UiCanvasSave,
+        UiCanvasReload,
         SaveScene,
         SaveSceneAs,
         SaveSceneCopyAs,
@@ -230,6 +239,20 @@ namespace Horo::Editor {
         SequenceTimelineState timeline;
     };
 
+    /** @brief Cached immutable hierarchy presentation; no source data is rebuilt during drawing. */
+    struct UiCanvasWorkspaceDocument final {
+        DocumentIdentity identity;
+        UiCanvasDocumentStateId state;
+        Runtime::Ui::UiElementId root;
+        Runtime::Ui::UiElementId selection;
+        std::vector<UiCanvasHierarchyRow> rows;
+        std::string search;
+        std::optional<Error> diagnostic;
+        bool canUndo{};
+        bool canRedo{};
+        bool dirty{};
+    };
+
     struct TransparentStringHash {
         using is_transparent = void;
 
@@ -251,6 +274,10 @@ namespace Horo::Editor {
         std::optional<DocumentInstanceId> documentMoveBefore;
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
+        UiCanvasDocumentStateId uiCanvasState;
+        Runtime::Ui::UiElementId uiCanvasElement;
+        Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
+        std::optional<UiCanvasMoveElement> uiCanvasMove;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;
@@ -379,6 +406,7 @@ namespace Horo::Editor {
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
 
         float leftPanelWidth = 268.0F;
         float rightPanelWidth = 300.0F;

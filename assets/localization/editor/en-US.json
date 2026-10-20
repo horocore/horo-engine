@@ -2988,6 +2988,78 @@
     },
     "settings.navigation.override_cost": {
       "text": "Overridden traversal cost"
+    },
+    "workspace.ui_canvas.undo": {
+      "text": "Undo"
+    },
+    "workspace.ui_canvas.redo": {
+      "text": "Redo"
+    },
+    "workspace.ui_canvas.reload": {
+      "text": "Reload"
+    },
+    "workspace.ui_canvas.command_failed": {
+      "text": "The canvas operation failed. Check the document state and try again."
+    },
+    "workspace.ui_canvas.search": {
+      "text": "Search element types"
+    },
+    "workspace.ui_canvas.create": {
+      "text": "Create element"
+    },
+    "workspace.ui_canvas.move_up": {
+      "text": "Move earlier"
+    },
+    "workspace.ui_canvas.move_down": {
+      "text": "Move later"
+    },
+    "workspace.ui_canvas.reparent_hint": {
+      "text": "Drag an element onto a container to move it."
+    },
+    "workspace.ui_canvas.no_results": {
+      "text": "No matching elements."
+    },
+    "workspace.ui_canvas.kind.canvas": {
+      "text": "Canvas"
+    },
+    "workspace.ui_canvas.kind.screen": {
+      "text": "Screen"
+    },
+    "workspace.ui_canvas.kind.panel": {
+      "text": "Panel"
+    },
+    "workspace.ui_canvas.kind.frame": {
+      "text": "Frame"
+    },
+    "workspace.ui_canvas.kind.layout_group": {
+      "text": "Layout Group"
+    },
+    "workspace.ui_canvas.kind.text": {
+      "text": "Text"
+    },
+    "workspace.ui_canvas.kind.image": {
+      "text": "Image"
+    },
+    "workspace.ui_canvas.kind.button": {
+      "text": "Button"
+    },
+    "workspace.ui_canvas.kind.progress_bar": {
+      "text": "Progress Bar"
+    },
+    "workspace.ui_canvas.kind.slider": {
+      "text": "Slider"
+    },
+    "workspace.ui_canvas.kind.toggle": {
+      "text": "Toggle"
+    },
+    "workspace.ui_canvas.kind.text_input": {
+      "text": "Text Input"
+    },
+    "workspace.ui_canvas.kind.scroll_view": {
+      "text": "Scroll View"
+    },
+    "workspace.ui_canvas.kind.collection_view": {
+      "text": "Collection View"
     }
   }
 }

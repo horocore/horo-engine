@@ -112,6 +112,8 @@ namespace Horo::Editor {
         /** @brief Draws the host's ordered instance tabs using shared controls and typed lifecycle commands. */
         void DrawWorkspaceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Presents the active immutable source; text editing belongs to the source widget adapter. */
+        /** @brief Draws cached retained hierarchy and descriptor palette, emitting typed owner commands. */
+        bool DrawUiCanvasDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         bool DrawSourceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         std::optional<DocumentInstanceId> m_lastPresentedDocument;
         /** @brief Resolves theme-sized document chrome, including its overflow affordance. */
