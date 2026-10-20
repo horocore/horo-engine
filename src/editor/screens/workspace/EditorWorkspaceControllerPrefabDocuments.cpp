@@ -48,6 +48,69 @@ namespace Horo::Editor {
         m_viewModel.prefabDocumentError.reset();
     }
 
+    /** @copydoc EditorWorkspaceController::PreparePrefabStage */
+    void EditorWorkspaceController::PreparePrefabStage(PrefabDocumentSession &document) {
+        const auto snapshot = document.Snapshot();
+        m_prefabStageAttemptRevision = snapshot.fence.revision;
+        m_prefabStageExtractedRevision = 0;
+        m_prefabViewportScene = {};
+        ++m_viewportSceneRevision;
+        auto limits = Prefab::PrefabLimitProfile::Create({});
+        const std::array roots{snapshot.source->Data().assetId};
+        auto captured = m_prefabSourceCapture
+                            ? m_prefabSourceCapture(m_assetRegistry, roots, limits.Value(), m_prefabCancellation.Token())
+                            : Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+        if (captured.HasError())
+            m_viewModel.prefabDocumentError = captured.ErrorValue();
+        else if (m_nextPrefabRuntime > EditorLastPrefabStage.value)
+            m_viewModel.prefabDocumentError = MakeError(Prefab::PrefabErrors::WorkBudgetExceeded);
+        else if (auto activated = document.ActivateStage(m_assetRegistry, captured.Value().sources.resolver,
+                                                         Runtime::SceneRuntimeId{m_nextPrefabRuntime++}, m_prefabStageFactory);
+                 activated.HasError())
+            m_viewModel.prefabDocumentError = activated.ErrorValue();
+        m_viewModel.prefabRecoveryAvailable = false;
+        m_viewModel.prefabRecovery.reset();
+        if (!m_mutations || !m_durableFiles)
+            return;
+        DocumentRecoveryService recovery(m_sourceOpenService.ProjectRoot(), *m_mutations, *m_durableFiles);
+        auto candidate = recovery.Inspect(snapshot.source->Data().assetId, snapshot.identity.key);
+        if (candidate.HasError())
+            m_viewModel.prefabDocumentError = candidate.ErrorValue();
+        else {
+            m_viewModel.prefabRecoveryAvailable = candidate.Value().has_value();
+            if (candidate.Value())
+                m_viewModel.prefabRecovery = std::make_shared<const DocumentRecoveryRecord>(*candidate.Value());
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::ExtractPrefabStage */
+    void EditorWorkspaceController::ExtractPrefabStage(PrefabDocumentSession &document) {
+        if (!document.HasStage())
+            return;
+        auto advanced = document.AdvanceStage();
+        if (advanced.HasError()) {
+            m_viewModel.prefabDocumentError = advanced.ErrorValue();
+            return;
+        }
+        if (!advanced.Value()) {
+            m_prefabStagePending = true;
+            return;
+        }
+        const auto snapshot = document.Snapshot();
+        if (m_prefabStageExtractedRevision == snapshot.previewRevision)
+            return;
+        auto extracted =
+            ExtractEditorViewportScene(*document.StageView(), {snapshot.fence.revision}, m_viewModel.viewportCamera, m_primitiveMeshCache);
+        if (extracted.HasError()) {
+            document.ReleaseStage();
+            m_viewModel.prefabDocumentError = extracted.ErrorValue();
+            return;
+        }
+        m_prefabViewportScene = std::move(extracted).Value();
+        m_prefabStageExtractedRevision = snapshot.previewRevision;
+        ++m_viewportSceneRevision;
+    }
+
     /** @copydoc EditorWorkspaceController::RefreshPrefabDocuments */
     void EditorWorkspaceController::RefreshPrefabDocuments() {
         if (m_prefabRefreshing)
@@ -70,60 +133,22 @@ namespace Horo::Editor {
             return entry->Snapshot().identity.instance == active;
         });
         const std::optional<DocumentInstanceId> next = found == m_prefabDocuments.end() ? std::nullopt : active;
-        const bool switched = next != m_activePrefabDocument;
         for (const auto &entry : m_prefabDocuments)
             if (entry->Snapshot().identity.instance != next)
                 entry->ReleaseStage();
-        if (switched) {
+        if (next != m_activePrefabDocument) {
             m_prefabViewportScene = {};
             m_activePrefabDocument = next;
             m_prefabStageAttemptRevision = 0;
+            m_prefabStageExtractedRevision = 0;
             ++m_viewportSceneRevision;
         }
+        m_prefabStagePending = false;
         if (found != m_prefabDocuments.end()) {
             auto &document = **found;
-            const auto snapshot = document.Snapshot();
-            if (!document.Stage() && m_prefabStageAttemptRevision != snapshot.fence.revision) {
-                m_prefabStageAttemptRevision = snapshot.fence.revision;
-                m_prefabViewportScene = {};
-                ++m_viewportSceneRevision;
-                auto limits = Prefab::PrefabLimitProfile::Create({});
-                const std::array roots{snapshot.source->Data().assetId};
-                auto captured =
-                    m_prefabSourceCapture
-                        ? m_prefabSourceCapture(m_assetRegistry, roots, limits.Value(), m_prefabCancellation.Token())
-                        : Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-                if (captured.HasError())
-                    m_viewModel.prefabDocumentError = captured.ErrorValue();
-                else if (m_nextPrefabRuntime == std::numeric_limits<std::uint64_t>::max())
-                    m_viewModel.prefabDocumentError = MakeError(Prefab::PrefabErrors::WorkBudgetExceeded);
-                else if (auto activated = document.ActivateStage(m_assetRegistry, captured.Value().sources.resolver,
-                                                                 Runtime::SceneRuntimeId{m_nextPrefabRuntime++});
-                         activated.HasError())
-                    m_viewModel.prefabDocumentError = activated.ErrorValue();
-                else {
-                    auto extracted = ExtractEditorViewportScene(document.Stage()->View(), {snapshot.fence.revision},
-                                                                m_viewModel.viewportCamera, m_primitiveMeshCache);
-                    if (extracted.HasError()) {
-                        document.ReleaseStage();
-                        m_viewModel.prefabDocumentError = extracted.ErrorValue();
-                    } else
-                        m_prefabViewportScene = std::move(extracted).Value();
-                }
-                m_viewModel.prefabRecoveryAvailable = false;
-                m_viewModel.prefabRecovery.reset();
-                if (m_mutations && m_durableFiles) {
-                    DocumentRecoveryService recovery(m_sourceOpenService.ProjectRoot(), *m_mutations, *m_durableFiles);
-                    auto candidate = recovery.Inspect(snapshot.source->Data().assetId, snapshot.identity.key);
-                    if (candidate.HasError())
-                        m_viewModel.prefabDocumentError = candidate.ErrorValue();
-                    else {
-                        m_viewModel.prefabRecoveryAvailable = candidate.Value().has_value();
-                        if (candidate.Value())
-                            m_viewModel.prefabRecovery = std::make_shared<const DocumentRecoveryRecord>(*candidate.Value());
-                    }
-                }
-            }
+            if (!document.HasStage() && m_prefabStageAttemptRevision != document.Snapshot().fence.revision)
+                PreparePrefabStage(document);
+            ExtractPrefabStage(document);
         }
         m_viewModel.prefabDocuments.clear();
         for (const auto &entry : m_prefabDocuments) {
@@ -144,15 +169,8 @@ namespace Horo::Editor {
         if (snapshot.dirty && !discard)
             return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DirtyDocument));
         if (discard && m_mutations && m_durableFiles) {
-            DocumentRecoveryService recovery(m_sourceOpenService.ProjectRoot(), *m_mutations, *m_durableFiles);
-            auto candidate = recovery.Inspect(snapshot.source->Data().assetId, snapshot.identity.key);
-            if (candidate.HasError())
-                return Result<void>::Failure(candidate.ErrorValue());
-            if (candidate.Value() && candidate.Value()->sessionOwner == snapshot.fence.owner &&
-                candidate.Value()->sessionGeneration == snapshot.identity.instance.Value()) {
-                if (auto discarded = recovery.Discard(*candidate.Value()); discarded.HasError())
-                    return discarded;
-            }
+            if (auto discarded = (*found)->DiscardOwnedRecovery(*m_mutations, *m_durableFiles); discarded.HasError())
+                return discarded;
         }
         if (auto closed = (*found)->Close(snapshot.fence, discard); closed.HasError())
             return closed;
@@ -163,6 +181,15 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessPrefabDocumentCommand */
     bool EditorWorkspaceController::ProcessPrefabDocumentCommand(const EditorWorkspaceViewCommandData &command) {
+        if (command.command == EditorWorkspaceViewCommand::CloseWorkspaceDocument && command.documentInstance &&
+            std::ranges::any_of(m_prefabDocuments, [&](const auto &entry) {
+            return entry->Snapshot().identity.instance == *command.documentInstance;
+        })) {
+            const auto result = ClosePrefabDocument(*command.documentInstance, false);
+            if (result.HasError())
+                m_viewModel.prefabDocumentError = result.ErrorValue();
+            return true;
+        }
         if (command.command != EditorWorkspaceViewCommand::PrefabDocument)
             return false;
         if (!command.prefabFence)
@@ -179,54 +206,49 @@ namespace Horo::Editor {
             m_viewModel.prefabDocumentError = MakeError(SourceDocumentErrors::Stale);
             return true;
         }
-        Result<void> result = Result<void>::Success();
-        if (command.prefabEdit)
-            result = document.Execute(fence, *command.prefabEdit);
-        else
-            switch (command.prefabAction) {
-                using enum PrefabDocumentAction;
-                case Undo:
-                    result = document.Replay(fence, false);
-                    break;
-                case Redo:
-                    result = document.Replay(fence, true);
-                    break;
-                case Reload:
-                    result = document.Reload(fence, false);
-                    break;
-                case DiscardAndReload:
-                    result = document.Reload(fence, true);
-                    break;
-                case DiscardAndClose:
-                    result = ClosePrefabDocument(fence.instance, true);
-                    break;
-                case Save: {
-                    if (!m_mutations || !m_durableFiles)
-                        result = Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
-                    else {
-                        auto saved = document.Save(fence, *m_mutations, *m_durableFiles);
-                        if (saved.HasError())
-                            result = Result<void>::Failure(saved.ErrorValue());
-                        else if (saved.Value().status != Assets::AssetSourcePublicationStatus::Durable)
-                            result = Result<void>::Failure(*saved.Value().durabilityError);
-                    }
-                    break;
-                }
-                case Recover: {
-                    if (!m_mutations || !m_durableFiles)
-                        result = Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
-                    else if (!command.prefabRecovery)
-                        result = Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
-                    else
-                        result = document.Recover(fence, *command.prefabRecovery, *m_mutations, *m_durableFiles);
-                    break;
-                }
-            }
+        const auto result =
+            command.prefabEdit ? document.Execute(fence, *command.prefabEdit) : ApplyPrefabDocumentAction(document, command);
         if (result.HasError())
             m_viewModel.prefabDocumentError = result.ErrorValue();
         else
             m_viewModel.prefabDocumentError.reset();
         return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplyPrefabDocumentAction */
+    Result<void> EditorWorkspaceController::ApplyPrefabDocumentAction(PrefabDocumentSession &document,
+                                                                      const EditorWorkspaceViewCommandData &command) {
+        const auto fence = *command.prefabFence;
+        switch (command.prefabAction) {
+            using enum PrefabDocumentAction;
+            case Undo:
+                return document.Replay(fence, false);
+            case Redo:
+                return document.Replay(fence, true);
+            case Reload:
+                return document.Reload(fence, false);
+            case DiscardAndReload:
+                return document.Reload(fence, true);
+            case DiscardAndClose:
+                return ClosePrefabDocument(fence.instance, true);
+            case Save: {
+                if (!m_mutations || !m_durableFiles)
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+                auto saved = document.Save(fence, *m_mutations, *m_durableFiles);
+                if (saved.HasError())
+                    return Result<void>::Failure(saved.ErrorValue());
+                return saved.Value().status == Assets::AssetSourcePublicationStatus::Durable
+                           ? Result<void>::Success()
+                           : Result<void>::Failure(*saved.Value().durabilityError);
+            }
+            case Recover:
+                if (!m_mutations || !m_durableFiles)
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+                if (!command.prefabRecovery)
+                    return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
+                return document.Recover(fence, *command.prefabRecovery, *m_mutations, *m_durableFiles);
+        }
+        return Result<void>::Failure(MakeError(SourceDocumentErrors::Invalid));
     }
 
     /** @copydoc EditorWorkspaceController::HasDirtyPrefabDocuments */

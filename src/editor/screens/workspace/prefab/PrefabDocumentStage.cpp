@@ -6,20 +6,63 @@
 #include <limits>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Projects complete source payloads without instantiating gameplay providers or executing callbacks. */
+        Result<std::vector<Prefab::PrefabRuntimeComponentProjection>> Components(const Prefab::EffectivePrefabCandidate &candidate) {
+            std::vector<Prefab::PrefabRuntimeComponentProjection> result;
+            for (const auto &object : candidate.Objects()) {
+                Prefab::PrefabRuntimeComponentProjection projection{.object = object.key};
+                for (const auto &component : object.object.components) {
+                    auto projected = SceneSource::ProjectPrefabBuiltinComponent(component, projection.components, projection.primitiveMesh);
+                    if (projected.HasError())
+                        return Result<std::vector<Prefab::PrefabRuntimeComponentProjection>>::Failure(projected.ErrorValue());
+                    if (!projected.Value())
+                        projection.components.gameplayComponents.push_back(component.component);
+                }
+                projection.components.behaviors = object.object.behaviors;
+                result.push_back(std::move(projection));
+            }
+            return Result<std::vector<Prefab::PrefabRuntimeComponentProjection>>::Success(std::move(result));
+        }
+
+        /** @brief Builds the entire runtime definition and actual registered asset requirements before any host activation. */
+        Result<Runtime::RuntimeSceneDefinition> Definition(const Prefab::EffectivePrefabCandidate &candidate,
+                                                           const Prefab::PrefabLimitProfile &limits, Runtime::SceneDefinitionId id,
+                                                           Runtime::SceneDefinitionRevision revision) {
+            auto identities = Prefab::RemapPrefabCandidateToScene(candidate, {}, {}, limits);
+            if (identities.HasError())
+                return Result<Runtime::RuntimeSceneDefinition>::Failure(identities.ErrorValue());
+            auto components = Components(candidate);
+            if (components.HasError())
+                return Result<Runtime::RuntimeSceneDefinition>::Failure(components.ErrorValue());
+            auto subtree = Prefab::ExpandPrefabSceneSubtree(candidate, identities.Value(), components.Value(), {}, limits);
+            if (subtree.HasError())
+                return Result<Runtime::RuntimeSceneDefinition>::Failure(subtree.ErrorValue());
+            Runtime::SceneDefinitionBuilder builder(id, revision);
+            for (const auto &entity : subtree.Value().Entities())
+                builder.Add(entity);
+            for (const auto &dependency : candidate.Revision().dependencies) {
+                if (dependency.assetType.Value() == "core.prefab")
+                    continue;
+                if (auto required = builder.RequireAsset({dependency.assetId, dependency.assetType}); required.HasError())
+                    return Result<Runtime::RuntimeSceneDefinition>::Failure(required.ErrorValue());
+            }
+            return std::move(builder).Build();
+        }
+    }  // namespace
+
     /** @copydoc PrefabDocumentSession::ActivateStage */
     Result<void> PrefabDocumentSession::ActivateStage(const Assets::AssetRegistrySnapshot &registry,
                                                       const Prefab::PrefabSourceResolverSnapshot &dependencies,
-                                                      const Runtime::SceneRuntimeId runtimeId) {
+                                                      const Runtime::SceneRuntimeId runtimeId, const EditorPlaySceneFactory &factory) {
         if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
             return admitted;
         if (previewRevision_ == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
-        // The canonical resolver owns composition. Only the active root is replaced by authored unsaved intent.
         std::vector<Prefab::PrefabDependencySource> sources;
-        for (const auto &dependency : dependencies.Sources()) {
+        for (const auto &dependency : dependencies.Sources())
             if (dependency.document.Data().assetId != source_->Data().assetId)
                 sources.push_back(dependency);
-        }
         sources.push_back({*source_, {source_->Data().projectVersion, state_}});
         auto resolver = Prefab::BuildPrefabSourceResolverSnapshot(registry, std::move(sources), limits_);
         if (resolver.HasError())
@@ -28,43 +71,72 @@ namespace Horo::Editor {
                                                   Prefab::PrefabInstanceId::Create(identity_.instance.Value()).Value(), limits_);
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
-        auto identities = Prefab::RemapPrefabCandidateToScene(candidate.Value(), {}, {}, limits_);
-        if (identities.HasError())
-            return Result<void>::Failure(identities.ErrorValue());
-        std::vector<Prefab::PrefabRuntimeComponentProjection> components;
-        for (const auto &object : candidate.Value().Objects()) {
-            Prefab::PrefabRuntimeComponentProjection projection{.object = object.key};
-            for (const auto &component : object.object.components) {
-                auto projected = SceneSource::ProjectPrefabBuiltinComponent(component, projection.components, projection.primitiveMesh);
-                if (projected.HasError())
-                    return Result<void>::Failure(projected.ErrorValue());
-                // Unknown provider bytes remain in source; never claim a partial preview as complete.
-                if (!projected.Value())
-                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-            }
-            projection.components.behaviors = object.object.behaviors;
-            components.push_back(std::move(projection));
-        }
-        auto subtree = Prefab::ExpandPrefabSceneSubtree(candidate.Value(), identities.Value(), components, {}, limits_);
-        if (subtree.HasError())
-            return Result<void>::Failure(subtree.ErrorValue());
-        Runtime::SceneDefinitionBuilder builder({identity_.instance.Value()}, {previewRevision_ + 1});
-        for (const auto &entity : subtree.Value().Entities())
-            builder.Add(entity);
-        for (const auto &dependency : candidate.Value().Revision().dependencies) {
-            if (dependency.assetType.Value() == "core.prefab")
-                continue;
-            if (auto required = builder.RequireAsset({dependency.assetId, dependency.assetType}); required.HasError())
-                return Result<void>::Failure(required.ErrorValue());
-        }
-        auto definition = std::move(builder).Build();
+        auto definition = Definition(candidate.Value(), limits_, {identity_.instance.Value()}, {previewRevision_ + 1});
         if (definition.HasError())
             return Result<void>::Failure(definition.ErrorValue());
-        auto runtime = Runtime::RuntimeScene::Create(definition.Value(), runtimeId);
-        if (runtime.HasError())
-            return Result<void>::Failure(runtime.ErrorValue());
-        stage_ = std::move(runtime).Value();
-        ++previewRevision_;
+        return InstallStage(std::move(definition).Value(), runtimeId, factory);
+    }
+
+    /** @copydoc PrefabDocumentSession::InstallStage */
+    Result<void> PrefabDocumentSession::InstallStage(Runtime::RuntimeSceneDefinition definition, Runtime::SceneRuntimeId runtimeId,
+                                                     const EditorPlaySceneFactory &factory) {
+        if (factory) {
+            auto prepared = factory(runtimeId, definition);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            if (!prepared.Value())
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+            CancellationSource cancellation;
+            auto &scenes = prepared.Value()->Scenes();
+            if (auto started = scenes.Startup(cancellation.Token()); started.HasError()) {
+                prepared.Value()->Shutdown();
+                return started;
+            }
+            if (auto queued = scenes.QueuePreparation(std::move(definition)); queued.HasError()) {
+                prepared.Value()->Shutdown();
+                return queued;
+            }
+            ReleaseStage();
+            stageCancellation_ = std::move(cancellation);
+            hostedStage_ = std::move(prepared).Value();
+            stageFrame_ = 1;
+        } else {
+            auto runtime = Runtime::RuntimeScene::Create(definition, runtimeId);
+            if (runtime.HasError())
+                return Result<void>::Failure(runtime.ErrorValue());
+            ReleaseStage();
+            stage_ = std::move(runtime).Value();
+            ++previewRevision_;
+        }
         return Result<void>::Success();
+    }
+
+    /** @copydoc PrefabDocumentSession::AdvanceStage */
+    Result<bool> PrefabDocumentSession::AdvanceStage() {
+        if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
+            return Result<bool>::Failure(admitted.ErrorValue());
+        if (!hostedStage_)
+            return Result<bool>::Success(stage_ != nullptr);
+        if (hostedStagePublished_)
+            return Result<bool>::Success(true);
+        const Runtime::FrameContext frame{.frameNumber = stageFrame_++, .cancellation = stageCancellation_.Token()};
+        auto advanced = hostedStage_->CommitSceneChanges(frame);
+        auto failure = advanced.HasError() ? std::optional<Error>{advanced.ErrorValue()} : hostedStage_->Scenes().TakeOperationError();
+        if (failure) {
+            ReleaseStage();
+            return Result<bool>::Failure(*failure);
+        }
+        if (!hostedStage_->Scenes().ActiveScene())
+            return Result<bool>::Success(false);
+        hostedStagePublished_ = true;
+        ++previewRevision_;
+        return Result<bool>::Success(true);
+    }
+
+    /** @copydoc PrefabDocumentSession::StageView */
+    std::optional<Runtime::RuntimeSceneView> PrefabDocumentSession::StageView() const noexcept {
+        if (stage_)
+            return stage_->View();
+        return hostedStage_ && hostedStagePublished_ ? hostedStage_->Scenes().ActiveScene() : std::nullopt;
     }
 }  // namespace Horo::Editor

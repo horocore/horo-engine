@@ -1,5 +1,6 @@
 #pragma once
 /** @file PrefabDocumentSession.h @brief Persistent prefab source authority and disposable runtime stage. */
+#include "EditorPlaySceneHost.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Editor/SemanticDocumentHistory.h"
@@ -55,6 +56,8 @@ namespace Horo::Editor {
      */
     class PrefabDocumentSession final {
     public:
+        /** @brief Cancels pending preparation and retires all isolated native resources. */
+        ~PrefabDocumentSession();
         /** @brief Opens a validated canonical source without mutation.
          * @param root Canonical project root. @param path Canonical contained source path.
          * @param asset Registry-authoritative identity. @param identity Shared document registry identity.
@@ -91,13 +94,30 @@ namespace Horo::Editor {
          * @param files Native durable service. @return Success or zero-mutation conflict/corruption error. */
         [[nodiscard]] Result<void> Recover(PrefabDocumentFence fence, const DocumentRecoveryRecord &record,
                                            const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Discards only this session's recovery record or its explicitly accepted exact candidate.
+         * @param mutations Shared writer. @param files Durable service. @return Success or retained candidate on failure.
+         */
+        [[nodiscard]] Result<void> DiscardOwnedRecovery(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Resolves current in-memory source, projects typed components and creates a real isolated runtime scene.
          * @param registry Pinned registry. @param dependencies Canonical captured dependency sources, root replaced by this session.
-         * @param runtimeId Host-reserved unique runtime incarnation. @return Complete stage or retained old stage with typed error.
+         * @param runtimeId Host-reserved unique runtime incarnation. @param factory Explicit native/assets composition or assetless tests.
+         * @return Accepted complete preparation or typed zero-publication failure.
          */
         [[nodiscard]] Result<void> ActivateStage(const Assets::AssetRegistrySnapshot &registry,
                                                  const Prefab::PrefabSourceResolverSnapshot &dependencies,
-                                                 Runtime::SceneRuntimeId runtimeId);
+                                                 Runtime::SceneRuntimeId runtimeId, const EditorPlaySceneFactory &factory = {});
+        /** @brief Advances one bounded owner-lane preparation frame without simulation/gameplay callbacks.
+         * @return Whether a complete runtime scene is ready, or typed preparation failure.
+         */
+        [[nodiscard]] Result<bool> AdvanceStage();
+        /** @brief Borrows the completely activated stage. @return Current view or no ready stage. */
+        [[nodiscard]] std::optional<Runtime::RuntimeSceneView> StageView() const noexcept;
+
+        /** @brief Reports pending/active resource ownership. @return Whether a stage is owned. */
+        [[nodiscard]] bool HasStage() const noexcept {
+            return stage_ || hostedStage_;
+        }
+
         /** @brief Releases every preview/runtime resource without changing source, history or saved/recovery state. */
         void ReleaseStage() noexcept;
 
@@ -123,6 +143,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Admit(PrefabDocumentFence fence) const;
         [[nodiscard]] Result<std::shared_ptr<const Prefab::PrefabDocument>> Apply(const PrefabSourceEdit &edit) const;
         [[nodiscard]] Result<void> Replace(const Assets::AssetSourceCapture &capture);
+        /** @brief Installs only a complete definition, retaining the old stage on preparation rejection. */
+        [[nodiscard]] Result<void> InstallStage(Runtime::RuntimeSceneDefinition definition, Runtime::SceneRuntimeId id,
+                                                const EditorPlaySceneFactory &factory);
         std::filesystem::path root_, path_;
         DocumentIdentity identity_;
         Assets::AssetId owner_;
@@ -134,6 +157,10 @@ namespace Horo::Editor {
         SemanticDocumentHistory<Delta> history_;
         std::optional<DocumentRecoveryRecord> acceptedRecovery_;
         std::unique_ptr<Runtime::RuntimeScene> stage_;
+        std::unique_ptr<EditorPlaySceneHost> hostedStage_;
+        CancellationSource stageCancellation_;
+        std::uint64_t stageFrame_{};
+        bool hostedStagePublished_{};
         std::uint64_t revision_{1}, recoveryRevision_{}, previewRevision_{};
         bool conflict_{}, closed_{}, busy_{};
     };

@@ -53,4 +53,10 @@ namespace Horo::Application::Internal {
      * @return Application closure; it validates/captures each exact project's authorities before Scene admission.
      */
     [[nodiscard]] Editor::EditorProjectPlaySceneFactory MakeEditorProjectSceneFactory(JobSystem &jobs, EditorProjectScenePolicy policy);
+    /** @brief Composes isolated prefab authoring resources in the reserved stage identity range.
+     * @param jobs Application workers outliving returned hosts. @param policy Explicit native/asset policy.
+     * @return Typed factory capability; source documents cannot select a backend or start gameplay callbacks.
+     */
+    [[nodiscard]] Editor::EditorProjectPrefabStageFactory MakeEditorProjectPrefabStageFactory(JobSystem &jobs,
+                                                                                              EditorProjectScenePolicy policy);
 }  // namespace Horo::Application::Internal

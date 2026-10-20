@@ -345,14 +345,19 @@ The authoring stage replaces the captured resolver root with the current immutab
 in-memory source, then uses canonical resolution, identity remapping, built-in
 component projection and prefab subtree expansion to construct an isolated runtime
 scene. It never changes the Scene document or starts gameplay callbacks. The
-reserved `0x4000000000000000` runtime identity namespace is separate from the Play
-namespace; a workspace advances identities for each attempt. Stage resources and
+reserved `0x4000000000000000` runtime identity namespace is separate from ordinary
+scene previews and Play; a workspace advances identities for each attempt. Stage resources and
 renderer extraction leases retire on edit, switch, reload, close and shutdown.
 Retained immutable source snapshots remain readable. Failed required component or
 asset preparation produces an explicit unavailable preview, preserving source and
-recovery rather than publishing a partial hierarchy. Asset-bearing runtime
-preparation still requires the host's asset-backed Scene composition; the assetless
-stage constructor does not invent asset leases or run native subsystems.
+recovery rather than publishing a partial hierarchy. The application explicitly
+injects the same project/native/committed-asset composition used by Scene into a
+separate authoring-stage capability and identity range. Bounded owner-lane ticks
+advance pending asset preparation; preview revision advances only after complete
+Scene activation. Cancellation and host shutdown retire prepared and resident
+resources. No behavior runtime or fixed update is started. Unknown portable project
+components remain typed opaque runtime payloads. An omitted factory admits only
+assetless test compositions; it cannot invent asset leases or select a backend.
 
 Migration: `.prefab` now routes through `SourceFileOpenService` as a typed authored
 document rather than generic text/external fallback. Existing text source save-as
@@ -360,8 +365,9 @@ cannot target it. `DocumentKind::Prefab` appends the stable `prefab` wire spelli
 existing kind values and open keys retain their meanings. The shared source public
 consumer and document-identity round-trip coverage protect this additive change.
 The session header is a non-installed exact-header internal contract, staged by
-`HoroPrefabHierarchyInternal`; no public ownership or repository-wide include root
-is added.
+`HoroPrefabDocumentSessionInternal`; the pure hierarchy/model target does not
+inherit the stage host capability. No public ownership or repository-wide include
+root is added.
 
 ## Preview Edits
 

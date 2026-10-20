@@ -8,6 +8,39 @@ namespace Horo::Editor {
     using namespace PrefabHierarchyTestSupport;
 
     namespace {
+        struct StageProbe final {
+            bool hold{true};
+            std::size_t shutdowns{}, fixedUpdates{};
+        };
+
+        /** @brief Real Scene service behind an explicitly owned deferred-preparation test host. */
+        class StageHost final : public EditorPlaySceneHost {
+        public:
+            StageHost(Runtime::SceneRuntimeId id, std::shared_ptr<StageProbe> probe) : scenes_(id), probe_(std::move(probe)) {}
+
+            Runtime::RuntimeSceneService &Scenes() noexcept override {
+                return scenes_;
+            }
+
+            Result<void> CommitSceneChanges(const Runtime::FrameContext &frame) override {
+                return probe_->hold ? Result<void>::Success() : EditorPlaySceneHost::CommitSceneChanges(frame);
+            }
+
+            Result<void> FixedUpdate(Gameplay::FixedDeltaTime) override {
+                ++probe_->fixedUpdates;
+                return Result<void>::Success();
+            }
+
+            void Shutdown() noexcept override {
+                ++probe_->shutdowns;
+                scenes_.Shutdown();
+            }
+
+        private:
+            Runtime::RuntimeSceneService scenes_;
+            std::shared_ptr<StageProbe> probe_;
+        };
+
         /** @brief Owns real canonical files, shared identity registry and one source authority. */
         struct Fixture final {
             Project project;
@@ -163,6 +196,37 @@ namespace Horo::Editor {
         CHECK_FALSE(fixture.document->Snapshot().dirty);
     }
 
+    TEST_CASE("Prefab hosted stage advances separately and cancels without gameplay or source mutation", "[editor][prefab][session]") {
+        Fixture fixture;
+        auto sources = fixture.Capture();
+        auto probe = std::make_shared<StageProbe>();
+        EditorPlaySceneFactory factory = [probe](Runtime::SceneRuntimeId id,
+                                                 const Runtime::RuntimeSceneDefinition &) -> Result<std::unique_ptr<EditorPlaySceneHost>> {
+            return Result<std::unique_ptr<EditorPlaySceneHost>>::Success(std::make_unique<StageHost>(id, probe));
+        };
+        const auto initial = fixture.document->Snapshot();
+        REQUIRE(fixture.document->ActivateStage(fixture.project.registry.Snapshot(), sources.sources.resolver, {81}, factory).HasValue());
+        CHECK(fixture.document->HasStage());
+        CHECK_FALSE(fixture.document->Snapshot().stageActive);
+        REQUIRE_FALSE(fixture.document->AdvanceStage().Value());
+        CHECK(fixture.document->Snapshot().previewRevision == 0);
+        fixture.document->ReleaseStage();
+        CHECK(probe->shutdowns == 1);
+        probe->hold = false;
+        REQUIRE(fixture.document->ActivateStage(fixture.project.registry.Snapshot(), sources.sources.resolver, {82}, factory).HasValue());
+        for (int frame = 0; frame < 16 && !fixture.document->Snapshot().stageActive; ++frame)
+            REQUIRE(fixture.document->AdvanceStage().HasValue());
+        REQUIRE(fixture.document->Snapshot().stageActive);
+        REQUIRE(fixture.document->StageView().has_value());
+        CHECK(fixture.document->StageView()->SlotCount() == 2);
+        CHECK(fixture.document->Snapshot().previewRevision == 1);
+        CHECK(fixture.document->Snapshot().sourceRevision == initial.sourceRevision);
+        CHECK(fixture.document->Snapshot().fence.revision == initial.fence.revision);
+        CHECK(probe->fixedUpdates == 0);
+        REQUIRE(fixture.document->Close(fixture.document->Snapshot().fence, false).HasValue());
+        CHECK(probe->shutdowns == 2);
+    }
+
     TEST_CASE("Prefab save publishes canonical source and external conflicts retain local history", "[editor][prefab][session]") {
         Fixture fixture;
         fixture.Rename("Saved");
@@ -209,7 +273,8 @@ namespace Horo::Editor {
                         .HasValue());
             CHECK(fixture.document->Snapshot().source->Data().objects.front().name == "Recovered intent");
             CHECK(fixture.document->Snapshot().dirty);
-            REQUIRE(fixture.document->Autosave(fixture.project.mutations, fixture.project.files).HasValue());
+            REQUIRE(fixture.document->DiscardOwnedRecovery(fixture.project.mutations, fixture.project.files).HasValue());
+            CHECK_FALSE(recovery.Inspect(fixture.project.asset, original.identity.key).Value().has_value());
         }
         SECTION("external source replacement") {
             fixture.project.WriteSource("External");

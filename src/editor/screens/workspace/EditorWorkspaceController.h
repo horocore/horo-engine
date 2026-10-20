@@ -84,6 +84,7 @@ namespace Horo::Editor {
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
+        EditorPlaySceneFactory prefabStageFactory;         /**< Explicit isolated native/assets stage composition. */
         PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
@@ -305,10 +306,13 @@ namespace Horo::Editor {
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;
         std::optional<DocumentInstanceId> m_activePrefabDocument;
         EditorViewportSceneSnapshot m_prefabViewportScene;
-        std::uint64_t m_nextPrefabRuntime{0x4000000000000001ULL};
+        std::uint64_t m_nextPrefabRuntime{EditorFirstPrefabStage.value};
         float m_prefabAutosaveSeconds{};
         std::uint64_t m_prefabStageAttemptRevision{};
         bool m_prefabRefreshing{};
+        bool m_prefabStagePending{};
+        std::uint64_t m_prefabStageExtractedRevision{};
+        EditorPlaySceneFactory m_prefabStageFactory;
         PrefabHierarchySourceCapture m_prefabSourceCapture;
         Assets::AssetId m_workspaceSession;
         std::uint64_t m_prefabPublication{};
@@ -654,6 +658,12 @@ namespace Horo::Editor {
         void OpenEmbeddedPrefabSource(const SourceOpenResult &result);
         /** @brief Retires inactive stages and publishes immutable source/runtime projections. */
         void RefreshPrefabDocuments();
+        /** @brief Captures source closure/recovery and queues one isolated stage. */
+        void PreparePrefabStage(PrefabDocumentSession &document);
+        /** @brief Advances bounded preparation and extracts only a newly ready generation. */
+        void ExtractPrefabStage(PrefabDocumentSession &document);
+        /** @brief Executes an admitted durable or history action on its sole source owner. */
+        Result<void> ApplyPrefabDocumentAction(PrefabDocumentSession &document, const EditorWorkspaceViewCommandData &command);
         /** @brief Applies source/session-fenced prefab application intents. */
         bool ProcessPrefabDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Refuses dirty closes unless explicitly discarded, then closes the shared tab. */
