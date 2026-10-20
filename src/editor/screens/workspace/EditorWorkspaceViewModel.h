@@ -332,6 +332,7 @@ namespace Horo::Editor {
         bool contentBrowserCanNavigateBack{false};
         bool contentBrowserCanNavigateForward{false};
         DocumentRevision documentRevision;
+        AssetSceneDropFence assetDropFence;
         std::uint64_t inspectorDocumentGeneration{};
         std::uint64_t inspectorBehaviorRegistryRevision{};
         std::uint64_t inspectorApprovalRevision{};

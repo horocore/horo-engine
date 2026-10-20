@@ -88,13 +88,14 @@ namespace Horo::Editor {
             ImGui::EndDragDropTarget();
         }
 
-        void HandleAssetDragDropSource(const ContentBrowserEntry &entry, const ILocalizationService &localization) {
+        void HandleAssetDragDropSource(const ContentBrowserEntry &entry, const ILocalizationService &localization,
+                                       const AssetSceneDropFence &fence) {
             if (entry.kind != ContentBrowserEntryKind::Asset || !ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                 return;
             }
-            const AssetSceneDragPayload payload =
-                MakeAssetSceneDragPayload(entry.assetId, entry.assetType, entry.absolutePath, entry.registered);
-            ImGui::SetDragDropPayload(AssetSceneDragPayloadType, &payload, sizeof(payload));
+            AssetSceneDragPayload payload = MakeAssetSceneDragPayload(entry.assetId, entry.assetType, entry.absolutePath, entry.registered);
+            payload.fence = fence;
+            ImGui::SetDragDropPayload(AssetSceneDragPayloadType, &payload, sizeof(payload), ImGuiCond_Once);
             ImGui::TextUnformatted(entry.displayName.c_str());
             const bool copy = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
             ImGui::TextColored(Theme::Dim(), "%s",
@@ -255,7 +256,7 @@ namespace Horo::Editor {
                     };
                 }
             }
-            HandleAssetDragDropSource(entry, context.gui.localization);
+            HandleAssetDragDropSource(entry, context.gui.localization, context.viewModel.assetDropFence);
             HandleDirectoryDragDropTarget(entry, interactionMin, metrics.cardWidth, metrics.cardHeight, &context.drawList, context.command);
             DrawAssetBrowserEntryActions(entry, context.viewModel, context.interactionSession, context.command, context.gui);
             ImGui::PopID();

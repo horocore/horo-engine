@@ -90,6 +90,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RefreshAssets(const Assets::AssetRegistrySnapshot &assetRegistry) {
         if (assetRegistry.Revision() == m_viewModel.assetRegistryRevision)
             return;
+        CancelAssetPlacementPreview();
         m_prefabSources.reset();
         m_assetRegistry = assetRegistry;
         m_viewModel.assetRegistryRevision = assetRegistry.Revision();

@@ -1,4 +1,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Prefab/PrefabErrors.h"
+#include "editor/document/RuntimeSceneConversion.h"
+#include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <format>
@@ -14,6 +17,21 @@ namespace Horo::Editor {
             if (const std::filesystem::path draggedPath{request.absoluteAssetPath}; draggedPath.is_absolute())
                 return draggedPath;
             return std::filesystem::path{viewModel.projectRoot} / record.sourcePath.String();
+        }
+
+        /** @brief Requires the process-local source path to still name the exact registered project source. */
+        bool MatchesPrefabDropSource(const EditorWorkspaceViewModel &model, const AssetSceneDropRequest &request,
+                                     const Assets::AssetRecord &record) {
+            if (request.absoluteAssetPath.empty() || (request.target == AssetSceneDropTarget::Viewport && request.parent))
+                return false;
+            std::error_code error;
+            const auto expected = std::filesystem::weakly_canonical(std::filesystem::path{model.projectRoot} /
+                                                                        std::filesystem::u8path(record.sourcePath.String()),
+                                                                    error);
+            if (error)
+                return false;
+            const auto dragged = std::filesystem::weakly_canonical(std::filesystem::u8path(request.absoluteAssetPath), error);
+            return !error && dragged == expected;
         }
     }  // namespace
 
@@ -86,8 +104,116 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @copydoc EditorWorkspaceController::AdmitPrefabDrop */
+    bool EditorWorkspaceController::AdmitPrefabDrop(const AssetSceneDropRequest &request) const {
+        return request.fence == m_viewModel.assetDropFence && request.fence.session.IsValid() &&
+               request.fence.replacementEpoch == m_document.ReplacementEpoch() && !m_playSession.IsActive() &&
+               !m_viewModel.sceneExternalConflict && !m_viewModel.recoveryAvailable && m_mutations && m_prefabSourceCapture;
+    }
+
+    /** @copydoc EditorWorkspaceController::PreparePrefabDrop */
+    Result<void> EditorWorkspaceController::PreparePrefabDrop(const AssetSceneDropRequest &request, const Assets::AssetRecord &record) {
+        if (!AdmitPrefabDrop(request))
+            return Result<void>::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
+        if (m_prefabDrop && m_prefabDrop->asset == record.id && m_prefabDrop->fence == request.fence &&
+            m_prefabDrop->registry == m_assetRegistry.Revision())
+            return Result<void>::Success();
+        m_prefabDrop.reset();
+        auto limits = Prefab::PrefabLimitProfile::Create({});
+        if (limits.HasError())
+            return Result<void>::Failure(limits.ErrorValue());
+        std::vector<Assets::AssetId> roots{record.id};
+        for (const auto &instance : m_document.Snapshot().prefabInstances)
+            roots.push_back(instance.sourcePrefab.Asset());
+        auto captured = m_prefabSourceCapture(m_assetRegistry, roots, limits.Value(), m_prefabCancellation.Token());
+        if (captured.HasError())
+            return Result<void>::Failure(captured.ErrorValue());
+        const auto reference = Prefab::PrefabAssetReference::Create(record.id);
+        if (reference.HasError())
+            return Result<void>::Failure(reference.ErrorValue());
+        SceneDocumentSnapshot detached{.revision = m_document.Revision(), .state = m_document.State()};
+        detached.prefabInstances.push_back({Prefab::PrefabInstanceId::Create(1).Value(), reference.Value(), std::nullopt, {}});
+        auto definition = ConvertSceneDocumentToRuntime(detached, m_previewSceneId, captured.Value().sources.resolver, limits.Value(),
+                                                        nullptr, m_triggerBinding);
+        if (definition.HasError())
+            return Result<void>::Failure(definition.ErrorValue());
+        auto geometry = PreparePrefabDropGeometry(definition.Value(), m_primitiveMeshCache);
+        if (geometry.HasError())
+            return Result<void>::Failure(geometry.ErrorValue());
+        auto projectMetadata =
+            Assets::CaptureAssetSource(m_viewModel.projectRoot, std::filesystem::path{m_viewModel.projectRoot} / ".horo/project.json",
+                                       1024U * 1024U, m_prefabCancellation.Token());
+        if (projectMetadata.HasError())
+            return Result<void>::Failure(projectMetadata.ErrorValue());
+        m_prefabDrop.emplace(request.fence, record.id, m_assetRegistry.Revision(), std::move(captured.Value().sources),
+                             std::move(geometry).Value(), projectMetadata.Value().identity);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::ValidatePrefabDropPublication */
+    Result<ProjectMutationLease> EditorWorkspaceController::ValidatePrefabDropPublication(const AssetSceneDropRequest &request) const {
+        using Return = Result<ProjectMutationLease>;
+        if (!m_prefabDrop || !AdmitPrefabDrop(request))
+            return Return::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
+        auto lease = m_mutations->TryAcquire({m_viewModel.projectRoot, ProjectMutationOwner::Asset, "editor.prefab.drop"});
+        if (lease.HasError())
+            return lease;
+        const auto unchanged = m_prefabDrop->sources.inputs.VerifyUnchanged(m_prefabCancellation.Token());
+        if (unchanged.HasError())
+            return Return::Failure(unchanged.ErrorValue());
+        const auto projectMetadata =
+            Assets::CaptureAssetSource(m_viewModel.projectRoot, std::filesystem::path{m_viewModel.projectRoot} / ".horo/project.json",
+                                       1024U * 1024U, m_prefabCancellation.Token());
+        if (projectMetadata.HasError() || projectMetadata.Value().identity != m_prefabDrop->projectMetadata)
+            return Return::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
+        if (m_defaultScenePath) {
+            const auto current = InspectProjectSceneFingerprint(m_viewModel.projectRoot, *m_defaultScenePath);
+            if (current.HasError() || !m_sceneFingerprint || current.Value() != *m_sceneFingerprint)
+                return Return::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
+        }
+        return lease;
+    }
+
+    /** @copydoc EditorWorkspaceController::PlacePrefabAsset */
+    void EditorWorkspaceController::PlacePrefabAsset(const AssetSceneDropRequest &request, const Assets::AssetRecord &record) {
+        auto prepared = PreparePrefabDrop(request, record);
+        if (prepared.HasError()) {
+            HandleInstantiatedAssetCommand(Result<SceneCommandResult>::Failure(prepared.ErrorValue()));
+            m_prefabDrop.reset();
+            return;
+        }
+        Math::Transform placement;
+        if (!ApplyAssetViewportPlacement(request, m_prefabDrop->geometry.bounds, placement))
+            return;
+        auto validated = ValidatePrefabDropPublication(request);
+        if (validated.HasError()) {
+            HandleInstantiatedAssetCommand(Result<SceneCommandResult>::Failure(validated.ErrorValue()));
+            m_prefabDrop.reset();
+            return;
+        }
+        std::optional<ProjectMutationLease> publicationLease{std::move(validated).Value()};
+        // One canonical command owns placement, dirty state, recovery revision and exactly one semantic history entry.
+        const auto reference = Prefab::PrefabAssetReference::Create(record.id);
+        if (reference.HasError())
+            return;
+        auto result = m_documentCommands.Execute(CreateScenePrefabInstanceCommand{reference.Value(), request.parent, placement});
+        // Release the writer lease before derived hierarchy refresh can request a new source capture.
+        publicationLease.reset();
+        if (result.HasValue() && result.Value().committed)
+            m_prefabSources.emplace(std::move(m_prefabDrop->sources));
+        m_prefabDrop.reset();
+        if (result.HasError() || !result.Value().committed) {
+            HandleInstantiatedAssetCommand(result);
+            return;
+        }
+        m_selection.Clear();
+        m_viewModel.prefabSelection = PrefabHierarchyTarget{*result.Value().prefabInstance, std::nullopt};
+        HandleDocumentCommandResult(result, "Place prefab");
+        RefreshSelectionProjection();
+    }
+
     void EditorWorkspaceController::PreviewAssetPlacement(const AssetSceneDropRequest &request) {
-        if (request.target != AssetSceneDropTarget::Viewport)
+        if (request.target != AssetSceneDropTarget::Viewport && request.assetType != "core.prefab")
             return;
         if (m_assetPlacementPreviewActive) {
             static_cast<void>(ClearAssetViewportPlacementPreview(m_viewportScene));
@@ -96,6 +222,21 @@ namespace Horo::Editor {
         const Assets::AssetRecord *record = ResolveAssetDropRecord(request, false);
         if (record == nullptr)
             return;
+        if (record->type.Value() == "core.prefab") {
+            if (const auto prepared = PreparePrefabDrop(request, *record); prepared.HasError())
+                return;
+            if (request.target != AssetSceneDropTarget::Viewport)
+                return;
+            Math::Transform placement;
+            if (!ApplyAssetViewportPlacement(request, m_prefabDrop->geometry.bounds, placement, false))
+                return;
+            // Viewport drops are world-root placements; hierarchy uses the same identity-local policy as final commit.
+            if (const auto shown = ApplyPrefabDropPreview(m_viewportScene, m_prefabDrop->geometry, placement); shown.HasError())
+                return;
+            m_assetPlacementPreviewActive = true;
+            ++m_viewportSceneRevision;
+            return;
+        }
         const std::filesystem::path source = ResolveAssetSourcePath(m_viewModel, request, *record);
         const auto loaded = m_assetMeshCache.Load(record->id, source);
         if (loaded.HasError())
@@ -114,6 +255,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::CancelAssetPlacementPreview() {
+        m_prefabDrop.reset();
         if (!m_assetPlacementPreviewActive)
             return;
         static_cast<void>(ClearAssetViewportPlacementPreview(m_viewportScene));
@@ -122,10 +264,19 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::HandleInstantiateAsset(const AssetSceneDropRequest &request) {
-        CancelAssetPlacementPreview();
+        // Retain source evidence until final revalidation; remove only the disposable render overlay.
+        if (ClearAssetViewportPlacementPreview(m_viewportScene))
+            ++m_viewportSceneRevision;
+        m_assetPlacementPreviewActive = false;
         const Assets::AssetRecord *record = ResolveAssetDropRecord(request);
-        if (record == nullptr)
+        if (record == nullptr) {
+            m_prefabDrop.reset();
             return;
+        }
+        if (record->type.Value() == "core.prefab") {
+            PlacePrefabAsset(request, *record);
+            return;
+        }
 
         const std::filesystem::path source = ResolveAssetSourcePath(m_viewModel, request, *record);
         const auto loaded = m_assetMeshCache.Load(record->id, source);
@@ -169,6 +320,8 @@ namespace Horo::Editor {
             }
             return nullptr;
         }
+        if (record->type.Value() == "core.prefab" && !MatchesPrefabDropSource(m_viewModel, request, *record))
+            return nullptr;
         if (!CanInstantiateAssetType(record->type.Value())) {
             if (publishFailure) {
                 m_notifications.Publish("asset", NotificationSeverity::Info,

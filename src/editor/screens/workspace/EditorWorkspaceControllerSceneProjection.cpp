@@ -50,6 +50,7 @@ namespace Horo::Editor {
         ReconcileAudioPreview();
         const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
         m_viewModel.documentRevision = documentSnapshot.revision;
+        m_viewModel.assetDropFence = {m_workspaceSession, documentSnapshot.revision, m_document.ReplacementEpoch()};
         RefreshPhysicsInspectorPort();
         m_viewModel.objects.clear();
         m_viewModel.objects.reserve(documentSnapshot.objects.size());
@@ -82,6 +83,13 @@ namespace Horo::Editor {
             return;
 
         Result<Runtime::RuntimeSceneDefinition> definition = ConvertSceneDocumentToRuntime(snapshot, m_previewSceneId, m_triggerBinding);
+        if (!snapshot.prefabInstances.empty() && m_prefabSources && m_viewModel.prefabHierarchy &&
+            !m_viewModel.prefabHierarchyUnavailable && m_viewModel.prefabHierarchy->documentRevision == snapshot.revision.value) {
+            auto limits = Prefab::PrefabLimitProfile::Create({});
+            if (limits.HasValue())
+                definition = ConvertScenePrefabProjectionToRuntime(snapshot, m_previewSceneId, *m_viewModel.prefabHierarchy->sources,
+                                                                   m_prefabSources->resolver, limits.Value(), nullptr, m_triggerBinding);
+        }
         if (definition.HasError()) {
             LOG_ERROR("editor.runtime_scene", "Scene conversion failed: %s", definition.ErrorValue().message.c_str());
             return;

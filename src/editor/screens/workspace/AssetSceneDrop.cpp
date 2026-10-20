@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
 
 namespace Horo::Editor {
     namespace {
@@ -32,12 +33,13 @@ namespace Horo::Editor {
         CopyBounded(payload.assetId, assetId);
         CopyBounded(payload.assetType, assetType);
         CopyBounded(payload.absolutePath, absolutePath);
-        payload.registered = registered;
+        payload.registered = registered && assetId.size() < payload.assetId.size() && assetType.size() < payload.assetType.size() &&
+                             absolutePath.size() < payload.absolutePath.size();
         return payload;
     }
 
     bool CanInstantiateAssetType(const std::string_view assetType) noexcept {
-        return assetType == "core.mesh";
+        return assetType == "core.mesh" || assetType == "core.prefab";
     }
 
     AssetSceneDropPolicyResult EvaluateAssetSceneDrop(const AssetSceneDragPayload &payload) noexcept {
@@ -69,7 +71,10 @@ namespace Horo::Editor {
             return Result<AssetViewportPlacement>::Failure(ray.ErrorValue());
 
         float nearest = std::numeric_limits<float>::max();
-        for (const EditorViewportInstance &instance : request.scene.instances) {
+        for (std::size_t index = 0; index < request.scene.instances.size(); ++index) {
+            if (index < request.scene.instanceObjects.size() && request.scene.instanceObjects[index] == AssetPlacementPreviewObject)
+                continue;
+            const auto &instance = request.scene.instances[index];
             const Result<Math::Aabb> worldBounds = Math::TransformAabb(instance.localBounds, instance.localToWorld);
             if (worldBounds.HasError())
                 return Result<AssetViewportPlacement>::Failure(worldBounds.ErrorValue());
@@ -121,30 +126,105 @@ namespace Horo::Editor {
         if (scene.instances.size() != scene.instanceObjects.size() || scene.instances.size() != scene.instancePickable.size())
             return false;
 
-        std::optional<Render::RenderMeshSourceHandle> previewMesh;
         bool removed = false;
         for (std::size_t index = scene.instanceObjects.size(); index > 0; --index) {
             const std::size_t candidate = index - 1;
             if (scene.instanceObjects[candidate] != AssetPlacementPreviewObject)
                 continue;
-            previewMesh = scene.instances[candidate].mesh;
             scene.instances.erase(scene.instances.begin() + static_cast<std::ptrdiff_t>(candidate));
             scene.instanceObjects.erase(scene.instanceObjects.begin() + static_cast<std::ptrdiff_t>(candidate));
             scene.instancePickable.erase(scene.instancePickable.begin() + static_cast<std::ptrdiff_t>(candidate));
             removed = true;
         }
-        if (!previewMesh.has_value())
-            return removed;
-        if (const bool resourceInUse = std::ranges::any_of(scene.instances,
-                                                           [previewMesh](const EditorViewportInstance &instance) {
-            return instance.mesh == *previewMesh;
-        });
-            !resourceInUse) {
-            std::erase_if(scene.meshResources, [previewMesh](const EditorViewportMeshResourceView &resource) {
-                return resource.handle == *previewMesh;
+        if (removed) {
+            std::erase_if(scene.meshResources, [&scene](const auto &resource) {
+                return std::ranges::none_of(scene.instances, [&resource](const auto &instance) {
+                    return instance.mesh == resource.handle;
+                });
+            });
+            std::erase_if(scene.meshLeases, [&scene](const auto &lease) {
+                return std::ranges::none_of(scene.meshResources, [&lease](const auto &resource) {
+                    return resource.handle == Render::RenderMeshSourceHandle{lease.Id(), 1};
+                });
             });
         }
         return removed;
+    }
+
+    /** @copydoc PreparePrefabDropGeometry */
+    Result<PrefabDropGeometry> PreparePrefabDropGeometry(const Runtime::RuntimeSceneDefinition &definition,
+                                                         Runtime::PrimitiveMeshCache &meshes) {
+        PrefabDropGeometry result;
+        std::map<Runtime::SceneObjectId, Math::Mat4> worlds;
+        bool hasBounds = false;
+        for (const auto &entity : definition.Entities()) {
+            Math::Mat4 world = entity.localTransform.ToMatrix();
+            if (entity.parent) {
+                const auto parent = worlds.find(*entity.parent);
+                if (parent == worlds.end())
+                    return Result<PrefabDropGeometry>::Failure(Error{.message = "Prefab preview parent order is invalid."});
+                world = parent->second * world;
+            }
+            worlds.emplace(entity.object, world);
+            if (!entity.primitiveMesh)
+                continue;
+            auto acquired = meshes.Acquire(*entity.primitiveMesh);
+            if (acquired.HasError())
+                return Result<PrefabDropGeometry>::Failure(acquired.ErrorValue());
+            auto lease = std::move(acquired).Value();
+            auto bounds = Math::TransformAabb(lease.Data().localBounds, world);
+            if (bounds.HasError())
+                return Result<PrefabDropGeometry>::Failure(bounds.ErrorValue());
+            if (!hasBounds) {
+                result.bounds = bounds.Value();
+                hasBounds = true;
+            } else {
+                const auto &other = bounds.Value();
+                result.bounds.minimum = {std::min(result.bounds.minimum.x, other.minimum.x),
+                                         std::min(result.bounds.minimum.y, other.minimum.y),
+                                         std::min(result.bounds.minimum.z, other.minimum.z)};
+                result.bounds.maximum = {std::max(result.bounds.maximum.x, other.maximum.x),
+                                         std::max(result.bounds.maximum.y, other.maximum.y),
+                                         std::max(result.bounds.maximum.z, other.maximum.z)};
+            }
+            result.instances.emplace_back(Render::RenderMeshSourceHandle{lease.Id(), 1}, world, lease.Data().localBounds,
+                                          Render::CoreDefaultMaterial);
+            result.leases.push_back(std::move(lease));
+        }
+        // Empty/light-only prefabs still expose a visible placement marker, never authored geometry.
+        if (result.instances.empty()) {
+            auto marker = meshes.Acquire(Runtime::PrimitiveMeshDescriptor{});
+            if (marker.HasError())
+                return Result<PrefabDropGeometry>::Failure(marker.ErrorValue());
+            auto lease = std::move(marker).Value();
+            result.instances.emplace_back(Render::RenderMeshSourceHandle{lease.Id(), 1}, Math::Mat4::Identity(), lease.Data().localBounds,
+                                          Render::CoreDefaultMaterial);
+            result.leases.push_back(std::move(lease));
+        }
+        return Result<PrefabDropGeometry>::Success(std::move(result));
+    }
+
+    /** @copydoc ApplyPrefabDropPreview */
+    Result<void> ApplyPrefabDropPreview(EditorViewportSceneSnapshot &scene, const PrefabDropGeometry &geometry,
+                                        const Math::Transform &placement) {
+        if (!Math::IsFinite(placement.translation) || scene.instances.size() != scene.instanceObjects.size() ||
+            scene.instances.size() != scene.instancePickable.size())
+            return Result<void>::Failure(Error{.message = "Prefab preview placement is invalid."});
+        static_cast<void>(ClearAssetViewportPlacementPreview(scene));
+        for (const auto &lease : geometry.leases) {
+            const Render::RenderMeshSourceHandle handle{lease.Id(), 1};
+            if (std::ranges::find(scene.meshResources, handle, &EditorViewportMeshResourceView::handle) == scene.meshResources.end()) {
+                scene.meshResources.emplace_back(handle, lease.Data().vertices, lease.Data().indices, lease.Data().localBounds);
+                scene.meshLeases.push_back(lease);
+            }
+        }
+        for (auto instance : geometry.instances) {
+            instance.localToWorld = placement.ToMatrix() * instance.localToWorld;
+            scene.instances.push_back(instance);
+            scene.instanceObjects.push_back(AssetPlacementPreviewObject);
+            scene.instancePickable.push_back(0U);
+        }
+        return Result<void>::Success();
     }
 
     Result<void> ApplyAssetViewportPlacementPreview(EditorViewportSceneSnapshot &scene, const EditorAssetMeshView &mesh,

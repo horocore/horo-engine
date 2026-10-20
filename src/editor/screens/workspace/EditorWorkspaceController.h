@@ -378,6 +378,19 @@ namespace Horo::Editor {
         std::unique_ptr<CameraPreviewState> m_cameraPreview;
         std::uint64_t m_viewportSceneRevision{};
         bool m_assetPlacementPreviewActive{false};
+
+        /** @brief Disposable source-qualified gesture; never owns scene or history state or a project writer lease. */
+        struct PrefabDropState final {
+            AssetSceneDropFence fence;
+            Assets::AssetId asset;
+            Assets::AssetRegistryRevision registry;
+            PrefabHierarchySources sources;
+            PrefabDropGeometry geometry;
+            Assets::AssetSourceIdentity projectMetadata;
+        };
+
+        std::optional<PrefabDropState> m_prefabDrop;
+
         std::optional<SceneDocumentSnapshot> m_deferredRuntimeSnapshot;
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> m_gameplayRetirements{std::make_shared<Gameplay::GameModuleRetirementQueue>()};
         std::unique_ptr<ProjectGameplayRegistry> m_gameplayRegistry;
@@ -588,6 +601,14 @@ namespace Horo::Editor {
         void HandleCreatePrimitive(Runtime::PrimitiveId primitive, std::optional<SceneObjectId> parent);
         [[nodiscard]] bool ApplyAssetViewportPlacement(const AssetSceneDropRequest &request, const Math::Aabb &localBounds,
                                                        Math::Transform &localTransform, bool publishFailure = true) const;
+        /** @brief Tests exact source-gesture ownership and project mode admission without mutation. */
+        [[nodiscard]] bool AdmitPrefabDrop(const AssetSceneDropRequest &request) const;
+        /** @brief Acquires a short writer lease and verifies exact source/project/Scene publication evidence. */
+        [[nodiscard]] Result<ProjectMutationLease> ValidatePrefabDropPublication(const AssetSceneDropRequest &request) const;
+        /** @brief Prepares/reuses exact canonical source geometry; failure changes no authored owner. */
+        [[nodiscard]] Result<void> PreparePrefabDrop(const AssetSceneDropRequest &request, const Assets::AssetRecord &record);
+        /** @brief Revalidates source and scene fences, then executes one canonical typed semantic placement command. */
+        void PlacePrefabAsset(const AssetSceneDropRequest &request, const Assets::AssetRecord &record);
         void PreviewAssetPlacement(const AssetSceneDropRequest &request);
         void CancelAssetPlacementPreview();
         void HandleInstantiateAsset(const AssetSceneDropRequest &request);

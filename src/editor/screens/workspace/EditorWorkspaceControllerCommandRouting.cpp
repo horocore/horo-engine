@@ -19,7 +19,7 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelLightComponentPreview) {
             CancelLightComponentPreview();
         }
-        if (m_assetPlacementPreviewActive && cmd.command != EditorWorkspaceViewCommand::None &&
+        if ((m_assetPlacementPreviewActive || m_prefabDrop) && cmd.command != EditorWorkspaceViewCommand::None &&
             cmd.command != EditorWorkspaceViewCommand::PreviewAssetPlacement &&
             cmd.command != EditorWorkspaceViewCommand::InstantiateAsset &&
             cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {

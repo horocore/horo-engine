@@ -216,6 +216,7 @@ namespace Horo::Editor {
             .aspect = layout.width / layout.height,
             .depthRange = depthRange,
             .documentRevision = viewModel.documentRevision,
+            .fence = payload->fence,
         };
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             CancelAssetPlacementPreview(command);

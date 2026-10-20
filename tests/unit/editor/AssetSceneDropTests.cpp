@@ -32,10 +32,12 @@ namespace {
         }
     };
 
-    TEST_CASE("Asset scene drop policy accepts only registered core meshes", "[unit][editor][asset-drop]") {
+    TEST_CASE("Asset scene drop policy accepts registered core meshes and prefabs", "[unit][editor][asset-drop]") {
         const std::string id = "00112233-4455-6677-8899-aabbccddeeff";
         const AssetSceneDragPayload mesh = MakeAssetSceneDragPayload(id, "core.mesh", "/tmp/cube.mesh", true);
         CHECK(EvaluateAssetSceneDrop(mesh).canInstantiate);
+        CHECK(EvaluateAssetSceneDrop(MakeAssetSceneDragPayload(id, "core.prefab", "/tmp/cube.prefab", true)).canInstantiate);
+        CHECK_FALSE(EvaluateAssetSceneDrop(MakeAssetSceneDragPayload(id, "core.prefab", std::string(1200, 'x'), true)).canInstantiate);
 
         const AssetSceneDragPayload texture = MakeAssetSceneDragPayload(id, "core.texture", "/tmp/cube.png", true);
         CHECK_FALSE(EvaluateAssetSceneDrop(texture).canInstantiate);
@@ -90,7 +92,11 @@ namespace {
         CHECK(scene.instancePickable == std::vector<std::uint8_t>{0U});
         CHECK(Math::TransformPoint(scene.instances.front().localToWorld, {}) == Math::Vec3{2.0F, 3.0F, 4.0F});
 
+        const auto retained = scene;
         REQUIRE(ClearAssetViewportPlacementPreview(scene));
+        CHECK(scene.meshLeases.empty());
+        REQUIRE_FALSE(retained.meshLeases.empty());
+        CHECK(retained.View().IsValid());
         CHECK(scene.instances.empty());
         CHECK(scene.instanceObjects.empty());
         CHECK(scene.instancePickable.empty());
@@ -170,5 +176,39 @@ namespace {
         REQUIRE((commands.Redo().HasValue()));
         REQUIRE((document.Objects().size() == 3));
         CHECK(document.Objects().back().localTransform.translation == Math::Vec3{1.0F, 2.0F, 3.0F});
+    }
+
+    TEST_CASE("Prefab drop geometry composes nested transforms and clears every ghost resource", "[unit][editor][asset-drop]") {
+        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{8}, Runtime::SceneDefinitionRevision{1}};
+        builder.Add({.object = Runtime::SceneObjectId{1},
+                     .localTransform = {.translation = {2.0F, 0.0F, 0.0F}},
+                     .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}});
+        builder.Add({.object = Runtime::SceneObjectId{2},
+                     .parent = Runtime::SceneObjectId{1},
+                     .localTransform = {.translation = {3.0F, 2.0F, 0.0F}, .scale = {2.0F, 2.0F, 2.0F}},
+                     .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}});
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        Runtime::PrimitiveMeshCache meshes;
+        auto geometry = PreparePrefabDropGeometry(definition.Value(), meshes);
+        REQUIRE(geometry.HasValue());
+        REQUIRE(geometry.Value().instances.size() == 2);
+        CHECK(geometry.Value().bounds.minimum.x == 1.5F);
+        CHECK(geometry.Value().bounds.maximum.x == 6.0F);
+        CHECK(geometry.Value().bounds.maximum.y == 3.0F);
+        EditorViewportSceneSnapshot scene;
+        const Math::Transform placement{.translation = {10.0F, 0.0F, 4.0F}};
+        REQUIRE(ApplyPrefabDropPreview(scene, geometry.Value(), placement).HasValue());
+        REQUIRE(scene.instances.size() == 2);
+        CHECK(scene.instances.back().localToWorld.At(0, 3) == 15.0F);
+        CHECK(scene.instancePickable == std::vector<std::uint8_t>{0U, 0U});
+        const auto retained = scene;
+        REQUIRE(ClearAssetViewportPlacementPreview(scene));
+        CHECK(scene.meshLeases.empty());
+        REQUIRE_FALSE(retained.meshLeases.empty());
+        CHECK(retained.View().IsValid());
+        CHECK(scene.instances.empty());
+        CHECK(scene.meshResources.empty());
+        CHECK_FALSE(ClearAssetViewportPlacementPreview(scene));
     }
 }  // namespace
