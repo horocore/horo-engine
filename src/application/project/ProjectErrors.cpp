@@ -1,5 +1,7 @@
 #include "ProjectErrors.h"
 
+#include "Horo/Application/ProjectErrorDomain.h"
+
 namespace Horo::Application::ProjectErrors {
     namespace {
         const ErrorDomainId Domain{"horo.application.project"};
@@ -297,3 +299,46 @@ namespace Horo::Application::ProjectErrors {
                                                       .retryable = false,
                                                       .userActionable = true};
 }  // namespace Horo::Application::ProjectErrors
+
+namespace Horo::Application {
+    /** @copydoc ProjectErrorDomain */
+    ModuleErrorDomainDescriptor ProjectErrorDomain() {
+        return {.id = ProjectErrors::VersionInvalid.domain,
+                .descriptors = {&ProjectErrors::VersionInvalid,
+                                &ProjectErrors::HashInvalid,
+                                &ProjectErrors::RegistryInvalid,
+                                &ProjectErrors::RegistryDuplicateRelease,
+                                &ProjectErrors::RegistryBaselineMismatch,
+                                &ProjectErrors::RegistryPatchContractDrift,
+                                &ProjectErrors::ProofRejected,
+                                &ProjectErrors::MetadataNotFound,
+                                &ProjectErrors::MetadataReadFailed,
+                                &ProjectErrors::MetadataSizeInvalid,
+                                &ProjectErrors::MetadataInvalidJson,
+                                &ProjectErrors::MetadataDuplicateKey,
+                                &ProjectErrors::MetadataLimitExceeded,
+                                &ProjectErrors::MetadataInvalidSchema,
+                                &ProjectErrors::MetadataInvalidValue,
+                                &ProjectErrors::MigrationCatalogInvalid,
+                                &ProjectErrors::MigrationDuplicateIdentity,
+                                &ProjectErrors::MigrationDuplicateEdge,
+                                &ProjectErrors::MigrationBackwardEdge,
+                                &ProjectErrors::MigrationCycle,
+                                &ProjectErrors::MigrationAmbiguous,
+                                &ProjectErrors::MigrationPathMissing,
+                                &ProjectErrors::MigrationContractMismatch,
+                                &ProjectErrors::MigrationProviderMissing,
+                                &ProjectErrors::MigrationPipelineInvalid,
+                                &ProjectErrors::MigrationInventoryInvalid,
+                                &ProjectErrors::MigrationInventoryLimit,
+                                &ProjectErrors::MigrationDocumentStale,
+                                &ProjectErrors::MigrationWriteConflict,
+                                &ProjectErrors::MigrationStageFailed,
+                                &ProjectErrors::MigrationCancelled,
+                                &ProjectErrors::MigrationLocked,
+                                &ProjectErrors::MigrationInputChanged,
+                                &ProjectErrors::MigrationCapacityInsufficient,
+                                &ProjectErrors::MigrationPublishFailed,
+                                &ProjectErrors::MigrationRecoveryFailed}};
+    }
+}  // namespace Horo::Application

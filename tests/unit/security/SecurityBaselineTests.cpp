@@ -167,14 +167,14 @@ namespace Horo::Security::Tests {
     TEST_CASE("Credential vault fails closed and supports recovery and full lifecycle", "[Security][Credentials]") {
         auto random = std::make_shared<DeterministicRandom>();
         CredentialVault vault{nullptr, random};
-        CHECK(vault.Put(Secret("unavailable")).ErrorValue().code.Value() == "credential_backend_unavailable");
+        CHECK(vault.Put(Secret("unavailable")).ErrorValue().code.Value() == "security.credential_backend_unavailable");
 
         auto backend = std::make_shared<MemoryCredentialBackend>();
         vault.SetBackend(backend);
         random->fail = true;
-        CHECK(vault.Put(Secret("entropy-failure")).ErrorValue().code.Value() == "entropy_unavailable");
+        CHECK(vault.Put(Secret("entropy-failure")).ErrorValue().code.Value() == "security.entropy_unavailable");
         random->fail = false;
-        CHECK(vault.Put(SecureBytes{}).ErrorValue().code.Value() == "invalid_input");
+        CHECK(vault.Put(SecureBytes{}).ErrorValue().code.Value() == "security.invalid_input");
         auto stored = vault.Put(Secret("alpha"), 50U);
         REQUIRE(stored.HasValue());
         CHECK(stored.Value().Value().starts_with("cred:v1:"));
@@ -184,16 +184,16 @@ namespace Horo::Security::Tests {
         REQUIRE(vault.Rotate(stored.Value(), Secret("beta"), 100U).HasValue());
         CHECK(SecretText(vault.Resolve(stored.Value(), 99U).Value()) == "beta");
         backend->available = false;
-        CHECK(vault.Resolve(stored.Value()).ErrorValue().code.Value() == "credential_backend_unavailable");
+        CHECK(vault.Resolve(stored.Value()).ErrorValue().code.Value() == "security.credential_backend_unavailable");
         backend->available = true;
         CHECK(SecretText(vault.Resolve(stored.Value()).Value()) == "beta");
-        CHECK(vault.Resolve(stored.Value(), 100U).ErrorValue().code.Value() == "credential_expired");
-        CHECK(vault.Resolve(stored.Value()).ErrorValue().code.Value() == "credential_revoked");
+        CHECK(vault.Resolve(stored.Value(), 100U).ErrorValue().code.Value() == "security.credential_expired");
+        CHECK(vault.Resolve(stored.Value()).ErrorValue().code.Value() == "security.credential_revoked");
 
         auto second = vault.Put(Secret("gamma"));
         REQUIRE(second.HasValue());
         REQUIRE(vault.Revoke(second.Value()).HasValue());
-        CHECK(vault.Resolve(second.Value()).ErrorValue().code.Value() == "credential_revoked");
+        CHECK(vault.Resolve(second.Value()).ErrorValue().code.Value() == "security.credential_revoked");
         CHECK(backend->values.empty());
     }
 
@@ -219,24 +219,25 @@ namespace Horo::Security::Tests {
         CHECK(verified.Value().PublisherId() == fixture.envelope.publisherId);
 
         fixture.artifact.front() ^= std::byte{1};
-        CHECK(verifier.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "integrity_mismatch");
+        CHECK(verifier.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "security.integrity_mismatch");
         fixture.artifact.front() ^= std::byte{1};
         fixture.envelope.signature.front() ^= std::byte{1};
-        CHECK(verifier.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "invalid_signature");
+        CHECK(verifier.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "security.invalid_signature");
         REQUIRE(roots->Revoke("com.horo.tests", "release-1").HasValue());
-        CHECK(verifier.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "unknown_signing_key");
+        CHECK(verifier.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "security.unknown_signing_key");
     }
 
     TEST_CASE("Artifact verifier rejects unknown algorithms keys and missing providers", "[Security][Signature]") {
         SignedFixture fixture = MakeSignedFixture();
         auto roots = std::make_shared<TrustedRootStore>();
         ArtifactVerifier unknownKey{CreateMbedTlsSignatureProvider(), roots};
-        CHECK(unknownKey.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "unknown_signing_key");
+        CHECK(unknownKey.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "security.unknown_signing_key");
         REQUIRE(roots->Add(fixture.trustedKey).HasValue());
         ArtifactVerifier missingProvider{nullptr, roots};
-        CHECK(missingProvider.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "signature_provider_unavailable");
+        CHECK(missingProvider.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() ==
+              "security.signature_provider_unavailable");
         fixture.envelope.algorithm = static_cast<SignatureAlgorithm>(255U);
-        CHECK(unknownKey.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "unsupported_algorithm");
+        CHECK(unknownKey.Verify(fixture.artifact, fixture.envelope).ErrorValue().code.Value() == "security.unsupported_algorithm");
     }
 
     TEST_CASE("Detached file gate verifies current bytes and fails closed without composition", "[Security][Signature][File]") {
@@ -272,10 +273,10 @@ namespace Horo::Security::Tests {
             std::ofstream changed{artifactPath, std::ios::binary | std::ios::app};
             changed.put('\0');
         }
-        CHECK(gate.Verify(artifactPath).ErrorValue().code.Value() == "integrity_mismatch");
+        CHECK(gate.Verify(artifactPath).ErrorValue().code.Value() == "security.integrity_mismatch");
         CHECK(verifier->VerifyFile(artifactPath, fixture.artifact.size(), fixture.envelope).HasError());
 
         DetachedFileArtifactGate missingComposition{nullptr, {}};
-        CHECK(missingComposition.Verify(artifactPath).ErrorValue().code.Value() == "missing_evidence");
+        CHECK(missingComposition.Verify(artifactPath).ErrorValue().code.Value() == "security.missing_evidence");
     }
 }  // namespace Horo::Security::Tests

@@ -1,6 +1,8 @@
 #include "CliHost.h"
 
 #include "CliHostCommands.h"
+#include "CliHostErrorTranslation.h"
+#include "CliHostInterrupts.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Cli/CliOptionParser.h"
 #include "Horo/Cli/CliOutputPresenter.h"
@@ -9,6 +11,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "HostModuleComposition.h"
+#include "NavigationCliHost.h"
 #include "PackageCliHost.h"
 
 #include <algorithm>
@@ -76,50 +79,6 @@ namespace Horo::Application::Internal {
                 return Result<std::string>::Success(std::string{spelling.begin(), spelling.end()});
             }
         };
-
-        /** @brief Exact CLI mappings composed with the original application-domain identities. */
-        std::optional<Hosts::ErrorTranslator> Translator() {
-            using enum Hosts::ExitCategory;
-            const auto cliErrors = CliErrors::ErrorDomain();
-            const auto bundleErrors = Diagnostics::DiagnosticBundleErrorDomain();
-            const std::vector<ModuleDescriptor> modules{{.id = {"horo.cli"}, .version = {1, 0, 0}, .errorDomains = {cliErrors}},
-                                                        {.id = {"horo.foundation"}, .version = {1, 0, 0}, .errorDomains = {bundleErrors}}};
-            auto registry = BuildErrorCodeRegistry(modules);
-            if (registry.HasError())
-                return std::nullopt;
-            const std::vector<std::pair<const ErrorCodeDescriptor *, Hosts::ExitCategory>>
-                scope{{&CliErrors::DescriptorInvalid, Invariant},
-                      {&CliErrors::RegistryCapacityExceeded, Invariant},
-                      {&CliErrors::CommandPathDuplicate, Invariant},
-                      {&CliErrors::OptionNameDuplicate, Invariant},
-                      {&CliErrors::OptionSchemaIncompatible, Invariant},
-                      {&CliErrors::OutputSchemaIncompatible, Invariant},
-                      {&CliErrors::CapabilityUnauthorized, Permission},
-                      {&CliErrors::HostUnsupported, Capability},
-                      {&CliErrors::ContractVersionIncompatible, Capability},
-                      {&CliErrors::ParserPolicyInvalid, Invariant},
-                      {&CliErrors::CommandUnknown, Usage},
-                      {&CliErrors::ParseFailed, Usage},
-                      {&CliErrors::InputModeUnsupported, Usage},
-                      {&CliErrors::InputCapacityExceeded, Usage},
-                      {&CliErrors::InteractiveInputUnavailable, Usage},
-                      {&CliErrors::DispatchRegistrationInvalid, Invariant},
-                      {&CliErrors::CommandUnavailable, Capability},
-                      {&CliErrors::SideEffectUnauthorized, Permission},
-                      {&CliErrors::ExecutionContextInvalid, Invariant},
-                      {&CliErrors::ExecutionCancelled, Cancelled},
-                      {&CliErrors::ExecutionTimedOut, Timeout},
-                      {&CliErrors::ExecutionCapacityExceeded, Operation},
-                      {&CliErrors::HostFailure, Invariant}};
-            std::vector<Hosts::ErrorMapping> mappings;
-            for (const auto &[descriptor, category] : scope)
-                mappings.emplace_back(descriptor->domain, descriptor->code, category);
-            mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.invalid_request"}, Validation);
-            mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.read_failed"}, Operation);
-            mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.write_failed"}, Operation);
-            mappings.emplace_back(bundleErrors.id, ErrorCode{"observability.bundle.size_exceeded"}, Validation);
-            return Hosts::ErrorTranslator::Create(std::move(registry).Value(), mappings);
-        }
 
         /** @brief Conservative toolchain authority unchanged from the existing headless host. */
         class DenyToolchainPolicy final : public Extensions::IToolchainInvocationPolicy {
@@ -195,19 +154,11 @@ namespace Horo::Application::Internal {
             return session.extensions->Start({});
         }
 
-        /** @brief Owns a mutable admitted dispatcher before invoking its borrowed application services. */
-        int ExecuteCommand(CliCommandRegistry registry, const std::span<const CliCommandDescriptor> descriptors,
-                           const CliCommandRequest &request, HostObservabilityIdentity identity, CliOutputPresenter &presenter) {
-            DenyToolchainPolicy toolchain;
-            NativeExternalProcessRunner processes;
-            HostSession session;
-            PackageCliHost packages;
-            if (const auto activated = ActivateSession(session, std::move(identity), toolchain, processes); activated.HasError())
-                return CompleteError(presenter, activated.ErrorValue());
-            auto configuration = Configuration();
-            if (configuration.HasError())
-                return CompleteError(presenter, configuration.ErrorValue());
-            auto adapters = HostCommandAdapters(descriptors, session.observability, {}, &packages);
+        /** @brief Binds one invocation's explicit package and navigation owners to the admitted adapters. */
+        std::vector<CliCommandAdapterRegistration> CommandAdapters(std::span<const CliCommandDescriptor> descriptors,
+                                                                   const std::shared_ptr<HostObservabilitySession> &observability,
+                                                                   PackageCliHost &packages, NavigationCliHost &navigation) {
+            auto adapters = HostCommandAdapters(descriptors, observability, {}, &packages, &navigation);
             auto packageAdapters =
                 Cli::MakePackageCommandAdapters([&packages](const CliCommandRequest &command, const CliExecutionContext &context) {
                 return packages.Bind(command, context);
@@ -216,17 +167,50 @@ namespace Horo::Application::Internal {
             });
             adapters.insert(adapters.end(), std::make_move_iterator(packageAdapters.begin()),
                             std::make_move_iterator(packageAdapters.end()));
-            auto admitted =
-                CliDispatcher::Create(std::move(registry), std::move(adapters),
-                                      {.activeHost = CliHostKind::HoroEngine,
-                                       .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
-                                       .grantedCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}, {"horo.package.manage"}}});
+            adapters.push_back(
+                Cli::MakeNavigationBakeCommandAdapter([&navigation](const CliCommandRequest &command, const CliExecutionContext &context) {
+                return navigation.Bind(command, context);
+            }));
+            return adapters;
+        }
+
+        /** @brief Owns a mutable admitted dispatcher before invoking its borrowed application services. */
+        int ExecuteCommand(CliCommandRegistry registry, const std::span<const CliCommandDescriptor> descriptors,
+                           const CliCommandRequest &request, HostObservabilityIdentity identity, CliOutputPresenter &presenter) {
+            CliInvocationStopController stop{std::chrono::milliseconds{0}};
+            NativeCliInterrupts interrupts;
+            if (request.command.segments != std::vector<std::string>{"mcp", "serve"}) {
+                if (const auto started = interrupts.Start(stop); started.HasError())
+                    return CompleteError(presenter, started.ErrorValue());
+            }
+            DenyToolchainPolicy toolchain;
+            NativeExternalProcessRunner processes;
+            HostSession session;
+            PackageCliHost packages;
+            NavigationCliHost navigation;
+            if (const auto activated = ActivateSession(session, std::move(identity), toolchain, processes); activated.HasError())
+                return CompleteError(presenter, activated.ErrorValue());
+            auto configuration = Configuration();
+            if (configuration.HasError())
+                return CompleteError(presenter, configuration.ErrorValue());
+            auto adapters = CommandAdapters(descriptors, session.observability, packages, navigation);
+            auto admitted = CliDispatcher::Create(std::move(registry), std::move(adapters),
+                                                  {.activeHost = CliHostKind::HoroEngine,
+                                                   .maximumSideEffects = CliSideEffectPolicy::WritesFiles,
+                                                   .grantedCapabilities = {{"horo.mcp.serve"},
+                                                                           {"horo.observability.smoke"},
+                                                                           {"horo.package.manage"},
+                                                                           {"horo.navigation.bake"}}});
             if (admitted.HasError())
                 return CompleteError(presenter, admitted.ErrorValue());
             CliDispatcher dispatcher = std::move(admitted).Value();
             CliProgressMailbox mailbox;
-            const auto result =
-                dispatcher.Dispatch(request, {.invocation = {1}, .configuration = &configuration.Value(), .progress = &mailbox});
+            const auto result = dispatcher.Dispatch(request, {.invocation = {1},
+                                                              .configuration = &configuration.Value(),
+                                                              .cancellation = stop.Token(),
+                                                              .forceCancellation = stop.ForceToken(),
+                                                              .stopControl = &stop,
+                                                              .progress = &mailbox});
             if (const auto progress = mailbox.Take(); progress)
                 static_cast<void>(presenter.Progress(*progress));
             return presenter.Complete(result).exitCode;
@@ -237,7 +221,7 @@ namespace Horo::Application::Internal {
     int RunCli(const std::span<const std::string_view> arguments, HostObservabilityIdentity identity, std::ostream &output,
                std::ostream &diagnostics, const bool terminal, std::optional<Error> admissionFailure) {
         const auto descriptors = DescribeHostCommands();
-        auto translator = Translator();
+        auto translator = MakeCliHostErrorTranslator();
         if (!translator)
             return 1;
         const auto normalized = NormalizeArguments(arguments);
@@ -246,7 +230,8 @@ namespace Horo::Application::Internal {
                                                                  .supportedContractVersion = {1, 0, 0},
                                                                  .grantedCapabilities = {{"horo.mcp.serve"},
                                                                                          {"horo.observability.smoke"},
-                                                                                         {"horo.package.manage"}}});
+                                                                                         {"horo.package.manage"},
+                                                                                         {"horo.navigation.bake"}}});
         const CliCommandDescriptor *selected = nullptr;
         auto parsed = [&]() {
             if (admissionFailure)

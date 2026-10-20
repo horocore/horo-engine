@@ -327,3 +327,11 @@ namespace Horo::SceneSource::Detail {
         return Result<PrimitiveMeshDescriptor>::Success(std::move(descriptor));
     }
 }  // namespace Horo::SceneSource::Detail
+
+namespace Horo::SceneSource {
+    /** @copydoc SceneSourceErrorDomain */
+    ModuleErrorDomainDescriptor SceneSourceErrorDomain() {
+        return {.id = Detail::ScenePersistenceDomain,
+                .descriptors = {&Detail::ScenePathInvalid, &Detail::SceneReadFailed, &Detail::SceneInvalid}};
+    }
+}  // namespace Horo::SceneSource

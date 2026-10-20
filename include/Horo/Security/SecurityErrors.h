@@ -2,7 +2,8 @@
 
 /**
  * @file SecurityErrors.h
- * @brief Stable typed failures for credential, entropy, integrity, and signature operations.
+ * @brief Stable namespaced failures for credential, entropy, integrity, and signature operations.
+ * @note Serialized codes use the security. prefix; error domains and severities are unchanged.
  */
 
 #include "Horo/Foundation/ErrorCode.h"

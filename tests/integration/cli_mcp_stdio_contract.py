@@ -69,9 +69,9 @@ def check_authority(cli, checks):
     with cli.start(["mcp", "serve", "--output", "jsonl"]) as process:
         # A CLI capability and local authentication do not approve a mutating MCP request.
         denied = exchange(process, checks, 1, "tools/call", {"name": "observability.smoke", "arguments": {}})
-        checks.assertEqual(denied["error"]["data"]["code"], "approval_required", denied)
+        checks.assertEqual(denied["error"]["data"]["code"], "mcp.approval_required", denied)
         unavailable = exchange(process, checks, 3, "tools/call", {"name": "renderer.inspect", "arguments": {}})
-        checks.assertEqual(unavailable["error"]["data"]["code"], "tool_unavailable", unavailable)
+        checks.assertEqual(unavailable["error"]["data"]["code"], "mcp.tool_unavailable", unavailable)
         process.stdin.close()
         process.stdin = None
         output, diagnostics = process.communicate(timeout=15)

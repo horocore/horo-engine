@@ -16,6 +16,7 @@ namespace Horo::Cli {
 namespace Horo::Application {
     class HostObservabilitySession;
     class PackageApplication;
+    class NavigationBakeApplication;
 }  // namespace Horo::Application
 
 namespace Horo::Application::Internal {
@@ -57,12 +58,22 @@ namespace Horo::Application::Internal {
         std::function<Result<void>()> pump;
     };
 
+    /** @brief Optional native navigation owner bound before protocol admission. */
+    struct McpNavigationBinding final {
+        std::shared_ptr<NavigationBakeApplication> application;
+        std::string projectIdentity;
+        std::uint64_t generation{};
+        std::function<std::uint64_t()> currentGeneration;
+        std::function<Result<void>()> pump;
+    };
+
     /** @brief Serves process stdio with bounded polling and process interrupt handling.
      * @param context Admitted invocation stop and deadline view.
      * @param session Application observability owner retained by tool adapters through drainage.
      * @param packages Optional explicit host-approved project package owner and safe-point pump.
+     * @param navigation Optional explicit navigation owner; protocol arguments cannot select a replacement project.
      * @return Typed outcome after restoring native process state.
      */
     [[nodiscard]] Result<void> ServeNativeMcp(const Cli::CliExecutionContext &context, std::shared_ptr<HostObservabilitySession> session,
-                                              McpPackageBinding packages = {});
+                                              McpPackageBinding packages = {}, McpNavigationBinding navigation = {});
 }  // namespace Horo::Application::Internal

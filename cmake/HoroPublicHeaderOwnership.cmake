@@ -115,6 +115,7 @@ horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 
 horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
+    Horo/Platform/NativeFileSystemErrors.h
     Horo/Platform/AndroidLifecycle.h
     Horo/Platform/AndroidStorage.h
     Horo/Platform/ConfigurationFileStore.h
@@ -154,6 +155,7 @@ horo_configure_target_header_boundary(HoroPlatformServicesExtension PUBLIC_HEADE
 )
 
 horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
+    Horo/Application/ProjectErrorDomain.h
     Horo/Application/HostObservability.h
     Horo/Application/ProjectCompatibility.h
     Horo/Application/ProjectSourceDocument.h
@@ -528,6 +530,7 @@ horo_configure_target_header_boundary(HoroGameplayLua PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroAssets PUBLIC_HEADERS
+    Horo/Assets/AssetErrorDomain.h
     Horo/Assets/AssetArchive.h
     Horo/Assets/AssetChunkPlan.h
     Horo/Assets/AssetDependency.h

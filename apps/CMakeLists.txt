@@ -60,7 +60,10 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost)
 add_executable(horo-engine
     horo-engine/main.cpp
     horo-engine/cli_host/CliHost.cpp
+    horo-engine/cli_host/CliHostErrorTranslation.cpp
+    horo-engine/cli_host/CliHostInterrupts.cpp
     horo-engine/cli_host/PackageCliHost.cpp
+    horo-engine/cli_host/NavigationCliHost.cpp
     horo-engine/cli_host/CliHostCommands.cpp
     horo-engine/cli_host/McpServe.cpp
     horo-engine/cli_host/McpStdio.cpp
@@ -68,6 +71,27 @@ add_executable(horo-engine
     horo-engine/NetworkProductLaunchOptions.cpp
 )
 target_compile_features(horo-engine PRIVATE cxx_std_20)
+
+# Conservative provider closure: any first-party navigation implementation or
+# public contract change invalidates native bake compatibility. Configure again
+# when contents change, including uncommitted edits; a Git revision is insufficient.
+file(GLOB_RECURSE horo_navigation_identity_inputs CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/include/Horo/*.h"
+    "${PROJECT_SOURCE_DIR}/src/runtime/navigation/*.cpp"
+    "${PROJECT_SOURCE_DIR}/src/runtime/navigation/*.h"
+    "${PROJECT_SOURCE_DIR}/src/application/navigation/*.cpp"
+    "${PROJECT_SOURCE_DIR}/src/application/navigation/*.h"
+    "${PROJECT_SOURCE_DIR}/src/foundation/math/*.cpp"
+    "${PROJECT_SOURCE_DIR}/src/foundation/math/*.h")
+list(SORT horo_navigation_identity_inputs)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${horo_navigation_identity_inputs})
+set(horo_navigation_identity_material "recast=${HORO_RECAST_NAVIGATION_REVISION};enabled=${HORO_BUILD_NAVIGATION_RECAST_DETOUR};compiler=${CMAKE_CXX_COMPILER_ID}/${CMAKE_CXX_COMPILER_VERSION};target=${CMAKE_CXX_COMPILER_TARGET};system=${CMAKE_SYSTEM_NAME}/${CMAKE_SYSTEM_PROCESSOR};architectures=${CMAKE_OSX_ARCHITECTURES};pointer=${CMAKE_SIZEOF_VOID_P};flags=${CMAKE_CXX_FLAGS};debug=${CMAKE_CXX_FLAGS_DEBUG};release=${CMAKE_CXX_FLAGS_RELEASE};relwithdebinfo=${CMAKE_CXX_FLAGS_RELWITHDEBINFO};minsize=${CMAKE_CXX_FLAGS_MINSIZEREL};definitions=DT_POLYREF64,RC_DISABLE_ASSERTS")
+foreach(horo_navigation_identity_input IN LISTS horo_navigation_identity_inputs)
+    file(SHA256 "${horo_navigation_identity_input}" horo_navigation_identity_digest)
+    file(RELATIVE_PATH horo_navigation_identity_path "${PROJECT_SOURCE_DIR}" "${horo_navigation_identity_input}")
+    string(APPEND horo_navigation_identity_material ";${horo_navigation_identity_path}=${horo_navigation_identity_digest}")
+endforeach()
+string(SHA256 HORO_NAVIGATION_BUILD_FINGERPRINT "${horo_navigation_identity_material}")
 if(MINGW)
     target_link_options(horo-engine PRIVATE -municode)
 endif()
@@ -76,10 +100,12 @@ target_compile_definitions(horo-engine PRIVATE
     HORO_BUILD_CONFIGURATION="$<CONFIG>"
     HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}"
     HORO_PRODUCT_HAS_GNS=$<BOOL:${HORO_BUILD_NETWORK_GNS}>
+    HORO_NAVIGATION_BUILD_FINGERPRINT="${HORO_NAVIGATION_BUILD_FINGERPRINT}-$<CONFIG>"
 )
 target_link_libraries(horo-engine PRIVATE HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles
     HoroEngine::Application HoroEngine::Extensions HoroHostModuleComposition
     HoroNetworkProductHost HoroPackageProjectHost HoroEngine::CliPackageAdapters HoroEngine::McpPackageAdapters
+    HoroEngine::CliNavigationAdapters HoroEngine::McpNavigationAdapters HoroEngine::NavigationRecastDetour
     HoroEngine::Runtime
     HoroEngine::CliHost
     HoroEngine::McpController

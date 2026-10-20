@@ -812,11 +812,10 @@ The command reserves stdout exclusively for `McpLocalTransport` response frames.
 CLI syntax failures, startup errors, progress and the final terminal result use
 stderr, including when `--output=json` or `--output=jsonl` selects diagnostic
 presentation. The shared logger already emits human console records to stderr.
-MCP protocol errors retain their existing wire identities. Those short error codes
-are not registered in the CLI translator, whose canonical application codes must
-be namespaced. Unmapped service failures follow the existing fail-closed CLI
-presentation contract; mapped CLI cancellation and syntax errors keep their
-declared exit categories.
+MCP protocol errors retain their JSON framing and use the namespaced producer
+identities described in the migration below. The CLI translator registers their
+actual metadata. Unmapped service failures retain fail-closed presentation;
+mapped CLI cancellation and syntax errors keep their declared exit categories.
 The executable does not implement MCP methods, authorization, schema validation,
 operation identity, cancellation notifications or framing. The application
 composition publishes `observability.smoke` over the same application operation
@@ -832,7 +831,7 @@ entirely in host memory. Protocol arguments cannot grant identity or capability.
 The principal expires after 24 hours; restarting the service authenticates a new
 invocation. Authentication does not approve mutation: this noninteractive host
 has no local exact-request approval channel, so `observability.smoke` calls return
-`approval_required`. The explicit terminal `observability smoke` command remains
+`mcp.approval_required`. The explicit terminal `observability smoke` command remains
 available. Query tools and discovery retain the usual authenticated MCP behavior.
 
 The process owns a bounded stdio polling loop and binds Runtime, Background and
@@ -866,3 +865,57 @@ remaining-duration API remains suitable for synchronous subprocess caps. This is
 an additive contract; existing callers retain their behavior and binary consumers
 rebuild. Cancellation/presentation failure requests cancellation and observes the
 accepted operation through terminal drainage before returning.
+
+### Native navigation error identity migration
+
+The headless navigation host registers actual scheduler, Math, project read,
+project compatibility, Scene source and native filesystem metadata before
+presenting operation failures. Producer targets own these inert contributions;
+hosts do not include private implementation headers or derive descriptors from
+messages. Error category selection remains explicit host policy.
+
+The Platform project-read domain stays `horo.platform.project_read`. Its eight
+previously unqualified codes (`invalid`, `unsafe_path`, `read_failed`, `capacity`,
+`stale`, `unavailable`, `cancelled`, `deadline`) now use the `project_read.` prefix.
+This makes the existing identities admissible to the strict error registry,
+without weakening canonical namespace validation. Internal consumers compare the
+existing typed descriptors and require no call-site migration. Clients matching
+serialized error-code strings must add this prefix; no persisted project or
+artifact format changes and no parallel legacy aliases are introduced.
+
+The same canonicalization adds `mcp.` to the existing 26 MCP error-code tokens
+and `security.` to the existing 13 Security tokens. Their error domains,
+severities, authorization policy, and JSON framing are unchanged. Typed descriptor
+consumers remain source-compatible; clients matching serialized `error.data.code`
+or Security failure code strings must use the prefixed codes. Integration and
+Security boundary tests assert the updated wire identities. These are producer
+identity fixes required for strict registration of original failures and retained
+causes; the host does not invent replacement metadata or discard causes.
+
+### Native navigation composition
+
+The terminal executable explicitly links CliNavigationAdapters,
+McpNavigationAdapters and the RecastDetour provider peer. Shared command and tool
+adapters remain backend-neutral; only the executable's NavigationCliHost selects
+the native builder, project read capability, fixed cache/output namespaces,
+scheduler, source authority and entropy. The provider target's existing omitted
+implementation returns a typed unsupported result when Recast is disabled;
+there is no silent backend fallback. This is a forward host composition edge,
+not a dependency from shared feature code into a native provider.
+
+The invocation retains its exact absolute deadline. MCP receives only a bound
+project identity/generation and owner pump. Shutdown revokes admission and drains
+accepted application work before its scheduler, store and source authority die.
+
+Ordinary synchronous CLI commands own a private native interrupt lease. A
+lock-free signal counter is relayed to the existing CliInvocationStopController
+outside native handlers, including repeated-interrupt escalation. The tooling
+relay joins after application owners drain and before prior native handlers are
+restored. MCP stdio retains its existing exclusive signal ownership; two native
+bridges are never installed for the same invocation.
+
+Native package and navigation composition use one ProjectProtocolIdentity helper.
+It retains the complete SHA-256 root digest while rendering the digest separator
+as an underscore, so the opaque project token satisfies MCP authority grammar.
+The raw canonical root is never disclosed. The host canonicalizes capability
+order before issuing credentials, retaining exact admission matching.

@@ -1,9 +1,11 @@
 #include "CliHostCommands.h"
 
 #include "Horo/Cli/CliErrors.h"
+#include "Horo/Cli/NavigationCommands.h"
 #include "Horo/Cli/PackageCommands.h"
 #include "Horo/Foundation/Telemetry/Telemetry.h"
 #include "McpServe.h"
+#include "NavigationCliHost.h"
 #include "PackageCliHost.h"
 
 #include <algorithm>
@@ -67,9 +69,9 @@ namespace Horo::Application::Internal {
         class HostCommandAdapter final : public Cli::ICliCommandAdapter {
         public:
             HostCommandAdapter(Cli::CliCommandDescriptor descriptor, std::shared_ptr<HostObservabilitySession> session, std::string help,
-                               PackageCliHost *packages)
-                : packages_(packages), descriptor_(std::move(descriptor)), session_(std::move(session)), help_(std::move(help)),
-                  command_(SelectCommand(descriptor_.path)) {}
+                               PackageCliHost *packages, NavigationCliHost *navigation)
+                : packages_(packages), navigation_(navigation), descriptor_(std::move(descriptor)), session_(std::move(session)),
+                  help_(std::move(help)), command_(SelectCommand(descriptor_.path)) {}
 
             const Cli::CliCommandDescriptor &GetDescriptor() const noexcept override {
                 return descriptor_;
@@ -88,24 +90,9 @@ namespace Horo::Application::Internal {
                         return SmokeResult();
                     case Bundle:
                         return BundleResult(request, context);
-                    case McpServe: {
-                        McpPackageBinding binding;
-                        if (const bool configured = std::ranges::any_of(request.options,
-                                                                        [](const Cli::CliParsedOption &option) {
-                            return option.name == "package-cache-root" || option.name == "package-temporary-root";
-                        });
-                            configured) {
-                            if (packages_ == nullptr)
-                                return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
-                            auto acquired = packages_->BindMcp(request, context);
-                            if (acquired.HasError())
-                                return Result<Cli::CliCommandResult>::Failure(acquired.ErrorValue());
-                            binding = std::move(acquired).Value();
-                        }
-                        if (const auto served = ServeNativeMcp(context, session_, std::move(binding)); served.HasError())
-                            return Result<Cli::CliCommandResult>::Failure(served.ErrorValue());
-                        return Result<Cli::CliCommandResult>::Success({});
-                    }
+                    case McpServe:
+                        return Serve(request, context);
+
                     case Unknown:
                         return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
                 }
@@ -113,6 +100,38 @@ namespace Horo::Application::Internal {
             }
 
         private:
+            /** @brief Tests a canonical parser-owned option without reparsing protocol input. */
+            static bool HasOption(const Cli::CliCommandRequest &request, std::string_view name) {
+                return std::ranges::any_of(request.options, [name](const Cli::CliParsedOption &option) {
+                    return option.name == name;
+                });
+            }
+
+            /** @brief Binds only explicitly selected project services before handing exclusive stdio to MCP. */
+            Result<Cli::CliCommandResult> Serve(const Cli::CliCommandRequest &request, const Cli::CliExecutionContext &context) {
+                McpPackageBinding packages;
+                if (HasOption(request, "package-cache-root") || HasOption(request, "package-temporary-root")) {
+                    if (!packages_)
+                        return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
+                    auto acquired = packages_->BindMcp(request, context);
+                    if (acquired.HasError())
+                        return Result<Cli::CliCommandResult>::Failure(acquired.ErrorValue());
+                    packages = std::move(acquired).Value();
+                }
+                McpNavigationBinding navigation;
+                if (HasOption(request, "definition")) {
+                    if (!navigation_)
+                        return Result<Cli::CliCommandResult>::Failure(MakeError(Cli::CliErrors::CommandUnavailable));
+                    auto acquired = navigation_->BindMcp(request, context);
+                    if (acquired.HasError())
+                        return Result<Cli::CliCommandResult>::Failure(acquired.ErrorValue());
+                    navigation = std::move(acquired).Value();
+                }
+                if (const auto served = ServeNativeMcp(context, session_, std::move(packages), std::move(navigation)); served.HasError())
+                    return Result<Cli::CliCommandResult>::Failure(served.ErrorValue());
+                return Result<Cli::CliCommandResult>::Success({});
+            }
+
             /** @brief Calls the existing observability smoke operation without changing its metrics. */
             Result<Cli::CliCommandResult> SmokeResult() const {
                 if (const auto emitted = EmitHostObservabilitySmoke(); emitted.HasError())
@@ -143,11 +162,30 @@ namespace Horo::Application::Internal {
             }
 
             PackageCliHost *packages_{};
+            NavigationCliHost *navigation_{};
             Cli::CliCommandDescriptor descriptor_;
             std::shared_ptr<HostObservabilitySession> session_;
             std::string help_;
             HostCommand command_;
         };
+
+        /** @brief Declares exclusive stdio and optional host-owned project bindings as inert command metadata. */
+        void ConfigureMcpDescriptor(Cli::CliCommandDescriptor &descriptor) {
+            descriptor.summary = "Serve the MCP-owned local protocol on exclusive stdio.";
+            descriptor.requiredCapabilities = {{"horo.mcp.serve"},
+                                               {"horo.navigation.bake"},
+                                               {"horo.observability.smoke"},
+                                               {"horo.package.manage"}};
+            descriptor.options.push_back({.name = "definition",
+                                          .summary = "Optional exact navigation definition UUID for project-bound bake tools.",
+                                          .valueKind = Cli::CliOptionValueKind::String});
+            for (const char *storageOption : {"package-cache-root", "package-temporary-root"})
+                descriptor.options.push_back({.name = storageOption,
+                                              .summary = "Optional explicit project package host storage root.",
+                                              .valueKind = Cli::CliOptionValueKind::Path});
+            descriptor.sideEffects = Cli::CliSideEffectPolicy::WritesFiles;
+            descriptor.stdinPolicy = Cli::CliStdinPolicy::BinaryStream;
+        }
     }  // namespace
 
     /** @copydoc EmitHostObservabilitySmoke */
@@ -188,14 +226,7 @@ namespace Horo::Application::Internal {
             if (SelectCommand(path) == HostCommand::Smoke)
                 descriptor.requiredCapabilities = {{"horo.observability.smoke"}};
             if (SelectCommand(path) == HostCommand::McpServe) {
-                descriptor.summary = "Serve the MCP-owned local protocol on exclusive stdio.";
-                descriptor.requiredCapabilities = {{"horo.mcp.serve"}, {"horo.observability.smoke"}, {"horo.package.manage"}};
-                for (const char *storageOption : {"package-cache-root", "package-temporary-root"})
-                    descriptor.options.push_back({.name = storageOption,
-                                                  .summary = "Optional explicit project package host storage root.",
-                                                  .valueKind = CliOptionValueKind::Path});
-                descriptor.sideEffects = CliSideEffectPolicy::WritesFiles;
-                descriptor.stdinPolicy = CliStdinPolicy::BinaryStream;
+                ConfigureMcpDescriptor(descriptor);
             }
             if (SelectCommand(path) == HostCommand::Bundle) {
                 descriptor.sideEffects = CliSideEffectPolicy::WritesFiles;
@@ -208,18 +239,19 @@ namespace Horo::Application::Internal {
         }
         auto packages = Cli::DescribePackageCommands();
         descriptors.insert(descriptors.end(), std::make_move_iterator(packages.begin()), std::make_move_iterator(packages.end()));
+        descriptors.push_back(Cli::DescribeNavigationBakeCommand());
         return descriptors;
     }
 
     /** @copydoc HostCommandAdapters */
     std::vector<Cli::CliCommandAdapterRegistration> HostCommandAdapters(const std::span<const Cli::CliCommandDescriptor> descriptors,
                                                                         std::shared_ptr<HostObservabilitySession> session, std::string help,
-                                                                        PackageCliHost *packages) {
+                                                                        PackageCliHost *packages, NavigationCliHost *navigation) {
         std::vector<Cli::CliCommandAdapterRegistration> adapters;
         for (const auto &descriptor : descriptors) {
             if (SelectCommand(descriptor.path) == HostCommand::Unknown)
                 continue;
-            adapters.push_back({.adapter = std::make_unique<HostCommandAdapter>(descriptor, session, help, packages),
+            adapters.push_back({.adapter = std::make_unique<HostCommandAdapter>(descriptor, session, help, packages, navigation),
                                 .capabilities = descriptor.requiredCapabilities});
         }
         return adapters;
