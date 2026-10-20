@@ -230,9 +230,10 @@ namespace Horo::Application::NavigationBakeDetail {
             if (!attempt.request.rebuildSurfaces)
                 return Return::Success(std::move(previous));
             if (!previous) {
-                std::error_code error;
-                if (const auto status = std::filesystem::symlink_status(state.config.targetRoot / "current.json", error);
-                    error == std::errc::no_such_file_or_directory || (!error && status.type() == std::filesystem::file_type::not_found))
+                const auto selector = state.config.files->InspectEntry(state.config.targetRoot / "current.json");
+                if (selector.HasError())
+                    return Return::Failure(selector.ErrorValue());
+                if (!selector.Value())
                     return Return::Success({});
                 auto durable = ResolveNavigationBakePublication(state.config);
                 if (durable.HasError())

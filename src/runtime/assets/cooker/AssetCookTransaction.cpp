@@ -2,6 +2,7 @@
 
 #include "../AssetErrors.h"
 #include "AssetCookStorageInternal.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 
 #include <algorithm>
 
@@ -47,7 +48,7 @@ namespace Horo::Assets {
             if (metadata.HasError())
                 return Result<void>::Failure(metadata.ErrorValue());
             if (metadata.Value() && metadata.Value()->kind != FileEntryKind::Directory)
-                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+                return Result<void>::Failure(MakeError(FileStorageErrors::IoFailed, "Cook publication root is not a directory."));
             auto envelope = DecodeCookedArtifact(artifact, limits);
             if (envelope.HasError())
                 return Result<void>::Failure(envelope.ErrorValue());

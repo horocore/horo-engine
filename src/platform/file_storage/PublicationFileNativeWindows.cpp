@@ -249,8 +249,8 @@ namespace Horo::Platform::PublicationFileNative {
         return Result<Handle>::Success(*std::move(opened).Value());
     }
 
-    /** @copydoc CreateDirectory */
-    Result<bool> CreateDirectory(const Handle &parent, const std::string_view name) {
+    /** @copydoc CreateRelativeDirectory */
+    Result<bool> CreateRelativeDirectory(const Handle &parent, const std::string_view name) {
         auto created = Open(parent, name, Access::Create, nullptr, true);
         if (created.HasError() && created.ErrorValue().code.Value() == FileStorageErrors::Conflict.code.Value()) {
             auto existing = ImmutableFileNative::Directory(parent, name, false);

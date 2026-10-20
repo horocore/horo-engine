@@ -120,8 +120,8 @@ namespace Horo::Platform::PublicationFileNative {
         return Result<Handle>::Success(std::move(file));
     }
 
-    /** @copydoc CreateDirectory */
-    Result<bool> CreateDirectory(const Handle &parent, const std::string_view name) {
+    /** @copydoc CreateRelativeDirectory */
+    Result<bool> CreateRelativeDirectory(const Handle &parent, const std::string_view name) {
         const std::string spelling{name};
         if (mkdirat(parent.Get(), spelling.c_str(), S_IRWXU) == 0)
             return Result<bool>::Success(true);
