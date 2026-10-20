@@ -1919,7 +1919,10 @@ target_compile_features(HoroNavigationBakeService PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationBakeService PUBLIC HoroEngine::NavigationRuntime HoroEngine::Assets HoroEngine::Platform HoroEngine::Runtime
         PRIVATE nlohmann_json::nlohmann_json)
 
-add_library(HoroNavigationBakeAutomation STATIC application/navigation/NavigationProjectBakeSource.cpp)
+add_library(HoroNavigationBakeAutomation STATIC
+        application/navigation/NavigationProjectBakeSource.cpp
+        application/navigation/NavigationPrimitiveGeometry.cpp
+)
 add_library(HoroEngine::NavigationBakeAutomation ALIAS HoroNavigationBakeAutomation)
 target_compile_features(HoroNavigationBakeAutomation PUBLIC cxx_std_20)
 target_link_libraries(HoroNavigationBakeAutomation PUBLIC HoroEngine::ProjectSettings HoroEngine::SceneSource

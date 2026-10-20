@@ -892,6 +892,7 @@ horo_configure_target_header_boundary(HoroProjectAssetRegistrySource PUBLIC_HEAD
 )
 horo_configure_target_header_boundary(HoroNavigationBakeAutomation PUBLIC_HEADERS
     Horo/Application/NavigationProjectBakeSource.h
+    Horo/Application/NavigationPrimitiveGeometry.h
 )
 horo_configure_target_header_boundary(HoroNavigationBakeService PUBLIC_HEADERS
     Horo/Application/NavigationBakeService.h
