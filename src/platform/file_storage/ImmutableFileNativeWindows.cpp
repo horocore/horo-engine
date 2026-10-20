@@ -18,6 +18,8 @@ namespace Horo::Platform::ImmutableFileNative {
         using CreateRelativeFile = NTSTATUS(NTAPI *)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, PLARGE_INTEGER, ULONG,
                                                      ULONG, ULONG, ULONG, PVOID, ULONG);
         using SetRelativeFileInformation = NTSTATUS(NTAPI *)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+        // User-mode SDKs may omit this enumerator; the documented native rename information class is 10.
+        constexpr auto RenameInformation = static_cast<FILE_INFORMATION_CLASS>(10);
         enum class OpenKind {
             Directory,
             CreateParents,
@@ -181,7 +183,7 @@ namespace Horo::Platform::ImmutableFileNative {
         std::ranges::copy(std::as_bytes(std::span{spelling}), buffer.begin() + offsetof(FILE_RENAME_INFO, FileName));
         // The native relative-name contract keeps the retained directory authoritative throughout rename.
         IO_STATUS_BLOCK io{};
-        const auto status = set(file.Get(), &io, buffer.data(), static_cast<ULONG>(totalBytes), FileRenameInformation);
+        const auto status = set(file.Get(), &io, buffer.data(), static_cast<ULONG>(totalBytes), RenameInformation);
         if (status >= 0)
             return Result<bool>::Success(true);
         return static_cast<ULONG>(status) == 0xc0000035U
