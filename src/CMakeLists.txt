@@ -6,6 +6,7 @@ add_library(HoroFoundation STATIC
         foundation/assertions/Assertions.cpp
         foundation/AssetCookTargetId.cpp
         foundation/FoundationErrors.cpp
+        foundation/ImmutableFileStorage.cpp
         foundation/PublicationLock.cpp
         foundation/modules/ModuleActivationContext.cpp
         foundation/modules/ModuleDescriptor.cpp
@@ -131,6 +132,27 @@ if (WIN32)
     target_compile_definitions(HoroPlatformProjectReadFiles PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 else ()
     target_sources(HoroPlatformProjectReadFiles PRIVATE platform/code_query/ProjectReadNativePosix.cpp)
+endif ()
+
+# Only this existing root-handle contract is shared with the immutable-storage backend.
+add_library(HoroRootedFileNativeInternal INTERFACE)
+set(_horo_rooted_file_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/rooted-file")
+file(MAKE_DIRECTORY "${_horo_rooted_file_headers}")
+configure_file(platform/code_query/ProjectReadNative.h
+    "${_horo_rooted_file_headers}/ProjectReadNative.h" COPYONLY)
+target_include_directories(HoroRootedFileNativeInternal INTERFACE "${_horo_rooted_file_headers}")
+
+add_library(HoroPlatformImmutableFileStorage STATIC
+    platform/file_storage/NativeImmutableFileStorage.cpp)
+add_library(HoroEngine::PlatformImmutableFileStorage ALIAS HoroPlatformImmutableFileStorage)
+target_compile_features(HoroPlatformImmutableFileStorage PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformImmutableFileStorage PUBLIC HoroEngine::Foundation
+    PRIVATE HoroEngine::PlatformProjectReadFiles HoroRootedFileNativeInternal)
+if (WIN32)
+    target_sources(HoroPlatformImmutableFileStorage PRIVATE platform/file_storage/ImmutableFileNativeWindows.cpp)
+    target_compile_definitions(HoroPlatformImmutableFileStorage PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+else ()
+    target_sources(HoroPlatformImmutableFileStorage PRIVATE platform/file_storage/ImmutableFileNativePosix.cpp)
 endif ()
 
 add_library(HoroProjectCodeQuery STATIC

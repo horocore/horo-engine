@@ -3059,6 +3059,12 @@ target_link_libraries(HoroDirectoryCreationTests PRIVATE HoroEngine::Platform)
 target_include_directories(HoroDirectoryCreationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 horo_register_catch_test(HoroDirectoryCreationTests LABELS "unit;platform;filesystem;headless")
 
+add_executable(HoroImmutableFileStorageTests unit/platform/ImmutableFileStorageTests.cpp)
+target_compile_features(HoroImmutableFileStorageTests PRIVATE cxx_std_20)
+target_link_libraries(HoroImmutableFileStorageTests PRIVATE HoroEngine::PlatformImmutableFileStorage Threads::Threads)
+target_include_directories(HoroImmutableFileStorageTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
+
 add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
