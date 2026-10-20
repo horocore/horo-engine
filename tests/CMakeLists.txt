@@ -3074,6 +3074,7 @@ add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
         unit/foundation/PublicationReadTests.cpp
+        unit/platform/NativePublicationFileSystemTests.cpp
 )
 
 add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)
