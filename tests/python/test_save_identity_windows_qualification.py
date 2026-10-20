@@ -41,7 +41,7 @@ def test_release_save_qualification_is_mandatory_and_debug_skips_are_explicit() 
     assert "--output-junit build/ci-audio-release/" not in step
     verifier = workflow.split("      - name: Verify Windows Release Save allocation variants", 1)[1].split("      - name:", 1)[0]
     assert "steps.save_allocation_release_tests.outcome == 'success'" in verifier
-    assert "python scripts/verify_save_allocation_qualification.py build/ci-audio-release/save-allocation-ctest.xml" in verifier
+    assert 'python scripts/dev.py qualify-save build/ci-audio-release/save-allocation-ctest.xml' in verifier
     assert "continue-on-error" not in step + verifier
     assert "github.head_ref == 'fix/HORO-2421_windows_save_allocation_recovery'" not in workflow
     assert workflow.count("github.head_ref == 'fix/HORO-2421_windows_save_allocation_capture'") == 3

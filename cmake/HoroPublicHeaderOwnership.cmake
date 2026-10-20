@@ -103,6 +103,7 @@ horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroProjectReadFilesApi PUBLIC_HEADERS Horo/Platform/ProjectReadFiles.h)
 horo_configure_target_header_boundary(HoroPlatformProjectReadFiles PUBLIC_HEADERS Horo/Platform/NativeProjectReadFiles.h)
 horo_configure_target_header_boundary(HoroPlatformImmutableFileStorage PUBLIC_HEADERS Horo/Platform/NativeImmutableFileStorage.h)
+horo_configure_target_header_boundary(HoroPlatformProjectIo PUBLIC_HEADERS Horo/Platform/NativeProjectIoOwners.h)
 horo_configure_target_header_boundary(HoroProjectCodeQuery PUBLIC_HEADERS
     Horo/Application/ProjectCodeQuery.h
     Horo/Application/CodeQueryStoreProviders.h)

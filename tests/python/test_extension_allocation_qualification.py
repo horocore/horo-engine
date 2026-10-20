@@ -1,5 +1,7 @@
 """The Extension/Workspace Release route must execute every complete, unsampled allocation probe."""
 
+import dev
+
 from argparse import ArgumentTypeError
 from html import escape
 import importlib.util
@@ -15,20 +17,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
-    "extension_allocation_qualification", ROOT / "scripts/ci/run_extension_allocation_qualification.py"
+    "extension_allocation_qualification", ROOT / 'scripts/dev.py'
 )
 QUALIFICATION = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = QUALIFICATION
 SPEC.loader.exec_module(QUALIFICATION)
-EVIDENCE = QUALIFICATION.EVIDENCE
+
 
 
 def discovery():
-    return {"tests": [{"name": name, "properties": []} for name in QUALIFICATION.CASES]}
+    return {"tests": [{"name": name, "properties": []} for name in QUALIFICATION.EXTENSION_CASES]}
 
 
 def junit(tmp_path, transform=lambda body: body):
     bodies = []
-    for name, (marker, count) in QUALIFICATION.CASES.items():
+    for name, (marker, count) in QUALIFICATION.EXTENSION_CASES.items():
         if marker == "workspace-allocation":
             output = f"[{marker}] measured=7\n[{marker}] completed=7"
         else:
@@ -40,8 +43,8 @@ def junit(tmp_path, transform=lambda body: body):
 
 
 def test_all_exact_cases_and_all_five_sweeps_are_accepted(tmp_path):
-    QUALIFICATION.verify_discovery(discovery())
-    QUALIFICATION.verify_junit(junit(tmp_path))
+    QUALIFICATION.extension_verify_discovery(discovery())
+    QUALIFICATION.extension_verify_junit(junit(tmp_path))
 
 
 @pytest.mark.parametrize("alteration", ["missing", "duplicate", "disabled", "unexpected"])
@@ -54,9 +57,9 @@ def test_discovery_requires_all_enabled_exact_cases(alteration):
     elif alteration == "disabled":
         document["tests"][0]["properties"] = [{"name": "DISABLED", "value": True}]
     else:
-        document["tests"].append({"name": QUALIFICATION.PREFIX + "unexpected"})
+        document["tests"].append({"name": QUALIFICATION.EXTENSION_PREFIX + "unexpected"})
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_discovery(document)
+        QUALIFICATION.extension_verify_discovery(document)
 
 
 @pytest.mark.parametrize("replacement", ["", "[manifest-allocation] measured=0 completed=0",
@@ -64,14 +67,14 @@ def test_discovery_requires_all_enabled_exact_cases(alteration):
 def test_missing_zero_or_partial_sweep_cannot_pass(tmp_path, replacement):
     path = junit(tmp_path, lambda body: body.replace("[manifest-allocation] measured=1 completed=1", replacement))
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_junit(path)
+        QUALIFICATION.extension_verify_junit(path)
 
 
 @pytest.mark.parametrize("tag", ["failure", "error", "skipped"])
 def test_nonpassing_execution_is_rejected(tmp_path, tag):
     path = junit(tmp_path, lambda body: body.replace("<system-out>", f"<{tag}/><system-out>", 1))
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_junit(path)
+        QUALIFICATION.extension_verify_junit(path)
 
 
 def test_checked_debug_keeps_functional_tests_and_release_runs_full_probes():
@@ -82,26 +85,26 @@ def test_checked_debug_keeps_functional_tests_and_release_runs_full_probes():
     assert "HoroWorkspaceLayoutPersistenceTests" in build
     step = re.search(r"- name: Test Windows Release extension allocation qualification\n(.*?)(?=\n      - name:)", workflow, re.S).group(1)
     for required in ("steps.mcp_release_build.outcome == 'success'", "--show-only=json-v1", "--discovery", "--output-junit",
-                     "--no-tests=error --timeout 90", "--test-output-size-passed 65536", "run_extension_allocation_qualification.py"):
+                     "--no-tests=error --timeout 90", "--test-output-size-passed 65536", 'dev.py'):
         assert required in step
     assert "continue-on-error" not in step
     assert "            build/ci-audio-release/extension-allocation-ctest.xml" in workflow
     cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert 'if(NOT MSVC OR CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")' in cmake
     assert 'COMMAND HoroExtensionManagerTests "${extension_allocation_case}"' in cmake
-    for name in QUALIFICATION.CASES:
-        if name.startswith(QUALIFICATION.PREFIX):
-            assert name.removeprefix(QUALIFICATION.PREFIX) in cmake
+    for name in QUALIFICATION.EXTENSION_CASES:
+        if name.startswith(QUALIFICATION.EXTENSION_PREFIX):
+            assert name.removeprefix(QUALIFICATION.EXTENSION_PREFIX) in cmake
     assert "HoroWorkspaceLayoutPersistenceTests" in cmake
     assert "HoroWorkspaceLayoutAllocationTests" not in cmake
-    extension_cases = [name for name in QUALIFICATION.CASES if name.startswith(QUALIFICATION.PREFIX)]
+    extension_cases = [name for name in QUALIFICATION.EXTENSION_CASES if name.startswith(QUALIFICATION.EXTENSION_PREFIX)]
     for filename, case in (("EditorActivityRecoveryTests.cpp", extension_cases[0]),
                            ("ExtensionManifestParserTests.cpp", extension_cases[1])):
         source = (ROOT / "tests/unit/extensions" / filename).read_text(encoding="utf-8")
-        position = source.index(case.removeprefix(QUALIFICATION.PREFIX))
+        position = source.index(case.removeprefix(QUALIFICATION.EXTENSION_PREFIX))
         guard = source.rfind("#if !defined(_MSC_VER) || _ITERATOR_DEBUG_LEVEL == 0", 0, position)
         assert guard >= 0
-        assert "#endif" in source[source.index(case.removeprefix(QUALIFICATION.PREFIX)):]
+        assert "#endif" in source[source.index(case.removeprefix(QUALIFICATION.EXTENSION_PREFIX)):]
 
 
 def test_workspace_provider_recovery_is_in_actual_windows_build_and_test_routes():
@@ -117,7 +120,7 @@ def test_workspace_provider_recovery_is_in_actual_windows_build_and_test_routes(
 def test_workspace_sweep_cannot_omit_zero_or_miscount_a_position(tmp_path, replacement):
     path = junit(tmp_path, lambda body: body.replace("[workspace-allocation] measured=7", replacement))
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_junit(path)
+        QUALIFICATION.extension_verify_junit(path)
 
 
 def test_split_fault_injection_is_mandatory_release_and_functional_debug_remains():
@@ -136,9 +139,9 @@ def test_split_fault_injection_is_mandatory_release_and_functional_debug_remains
 def test_shared_writer_accepts_in_workspace_spaces_and_exact_cases(tmp_path, monkeypatch, absolute):
     monkeypatch.chdir(tmp_path)
     destination = tmp_path / "regex with spaces.txt"
-    QUALIFICATION.write_case_regex(destination if absolute else destination.name, QUALIFICATION.CASES)
+    QUALIFICATION.write_case_regex(destination if absolute else destination.name, QUALIFICATION.EXTENSION_CASES)
     pattern = destination.read_text(encoding="utf-8")
-    for name in QUALIFICATION.CASES:
+    for name in QUALIFICATION.EXTENSION_CASES:
         assert re.fullmatch(pattern, name)
     assert re.fullmatch(pattern, "unselected test") is None
 
@@ -151,9 +154,9 @@ def test_shared_admission_and_actual_writer_reject_traversal(tmp_path, monkeypat
     outside = tmp_path / "must not be created.txt"
     argument = outside if absolute else Path("..") / outside.name
     with pytest.raises(ArgumentTypeError):
-        EVIDENCE["workspace_path"](argument)
+        dev.evidence_workspace_path(argument)
     with pytest.raises(ValueError):
-        QUALIFICATION.write_case_regex(argument, QUALIFICATION.CASES)
+        QUALIFICATION.write_case_regex(argument, QUALIFICATION.EXTENSION_CASES)
     assert not outside.exists()
 
 
@@ -163,14 +166,14 @@ def test_shared_writer_rechecks_symlink_after_argument_admission(tmp_path, monke
     monkeypatch.chdir(root)
     inside = root / "evidence"
     inside.mkdir()
-    admitted = EVIDENCE["workspace_path"](inside / "regex.txt")
+    admitted = dev.evidence_workspace_path(inside / "regex.txt")
     inside.rmdir()
     try:
         inside.symlink_to(tmp_path, target_is_directory=True)
     except OSError:
         pytest.skip("Host does not permit test symlink creation")
     with pytest.raises(ValueError):
-        QUALIFICATION.write_case_regex(admitted, QUALIFICATION.CASES)
+        QUALIFICATION.write_case_regex(admitted, QUALIFICATION.EXTENSION_CASES)
     assert not (tmp_path / "regex.txt").exists()
 
 
@@ -185,11 +188,12 @@ def test_shared_cli_still_requires_discovery_output(monkeypatch):
     ("extension", None), ("scene", None), ("character", None), ("scene", "navigation"),
 ])
 def test_all_three_standalone_clis_keep_the_same_discovery_contract(tmp_path, monkeypatch, family, route):
-    script = ROOT / f"scripts/ci/run_{family}_allocation_qualification.py"
+    script = ROOT / "scripts/dev.py"
     spec = importlib.util.spec_from_file_location(f"{family}_cli_contract", script)
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
-    cases = module.NAVIGATION_CASES if route == "navigation" else module.CASES
+    cases = module.NAVIGATION_CASES if route == "navigation" else getattr(module, family.upper() + "_CASES")
     selected = {"tests": [{"name": name, "properties": []} for name in cases]}
     evidence = tmp_path / "discovery with spaces.json"
     evidence.write_text(json.dumps(selected), encoding="utf-8")
@@ -209,7 +213,7 @@ def test_all_three_standalone_clis_keep_the_same_discovery_contract(tmp_path, mo
     environment = dict(os.environ, PATH=str(interpreter.parent) + os.pathsep + os.environ["PATH"])
     # Isolated mode rejects ambient module injection while exercising real script entry points.
     result = subprocess.run(  # nosec B603, B607
-        ["python3", "-I", str(script), *family_arguments, "--discovery", str(evidence), "--regex-output", str(output)],
+        ["python3", "-I", str(script), "qualify-" + family, *family_arguments, "--discovery", str(evidence), "--regex-output", str(output)],
         executable=str(interpreter), env=environment,
         cwd=tmp_path, capture_output=True, text=True, check=False, shell=False, timeout=30,
     )

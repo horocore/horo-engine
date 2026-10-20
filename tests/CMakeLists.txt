@@ -99,7 +99,7 @@ set_tests_properties(HoroExtensionSdkReconfigureTest PROPERTIES
 add_test(NAME HoroExtensionScaffoldsTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_EXTENSION_SDK_PACKAGE_DIR=${HORO_EXTENSION_SDK_PACKAGE_DIR}"
-        "-DHORO_EXTENSION_SCAFFOLDER=${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-scaffold-extension.py"
+        "-DHORO_EXTENSION_SCAFFOLDER=${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/project.py"
         "-DHORO_EXTENSION_ACTIVATION_TEST=$<TARGET_FILE:HoroPackagedExtensionActivation>"
         "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/extension-scaffolds"
         "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
@@ -3079,6 +3079,8 @@ target_include_directories(HoroImmutableFileStorageTests PRIVATE ${PROJECT_SOURC
 horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroPlatformTests
+        support/AllocationProbe.cpp
+        unit/platform/NativeProjectIoOwnersTests.cpp
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
         unit/foundation/PublicationReadTests.cpp
@@ -3092,7 +3094,7 @@ add_dependencies(HoroPlatformTests HoroProcessTestChild)
 target_compile_definitions(HoroPlatformTests PRIVATE HORO_PROCESS_TEST_CHILD="$<TARGET_FILE:HoroProcessTestChild>")
 
 target_compile_features(HoroPlatformTests PRIVATE cxx_std_20)
-target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
+target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform HoroEngine::PlatformProjectIo)
 add_executable(HoroPlatformRequestTests
         support/AllocationProbe.cpp
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
@@ -5303,7 +5305,7 @@ add_executable(HoroNavigationHostErrorTests unit/application/navigation/Navigati
 target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
-target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::CliHost HoroEngine::HostErrors
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
     HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 
@@ -5373,7 +5375,7 @@ add_test(NAME HoroSceneAllocationJunitPathContract
     COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/scene_junit_path_contract"
         "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
         "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
-        "-DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_scene_allocation_qualification.py"
+        "-DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/dev.py"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SceneAllocationJunitPathContract.cmake")
 set_tests_properties(HoroSceneAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
 
@@ -5381,7 +5383,7 @@ add_test(NAME HoroCharacterAllocationJunitPathContract
     COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/character_junit_path_contract"
         "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
         -DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}
-        -DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_character_allocation_qualification.py
+        -DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/dev.py
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CharacterAllocationJunitPathContract.cmake")
 set_tests_properties(HoroCharacterAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
 

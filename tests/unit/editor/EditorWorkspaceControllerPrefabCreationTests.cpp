@@ -69,18 +69,27 @@ namespace Horo::Editor {
                 const std::vector<SceneObjectSnapshot> objects{{.id = {11}, .name = "Selected subtree"}};
                 if (!untitled)
                     std::ofstream(root / "assets/main.horo") << SceneSource::EncodeSceneSource({objects, {}});
-                controller = std::make_unique<
-                    EditorWorkspaceController>(root, runtime, registry.Snapshot(),
-                                               EditorWorkspaceDependencies{.mutableAssetRegistry = &registry,
-                                                                           .mutations = &mutations,
-                                                                           .durableFiles = &files,
-                                                                           .documentSessionOwner = PrefabAsset(9).Asset(),
-                                                                           .prefabSources =
-                                                                               [this, version = release.value](const auto &publication,
-                                                                                                               const auto roots,
-                                                                                                               const auto &limits,
-                                                                                                               const auto &cancellation)
-                                                                               -> Result<PreparedPrefabHierarchySources> {
+                controller =
+                    std::make_unique<EditorWorkspaceController>(root, runtime, registry.Snapshot(),
+                                                                EditorWorkspaceDependencies{.mutableAssetRegistry = &registry,
+                                                                                            .mutations = &mutations,
+                                                                                            .durableFiles = &files,
+                                                                                            .documentSessionOwner = PrefabAsset(9).Asset(),
+                                                                                            .prefabSources = SourceCapture(release.value)});
+                REQUIRE_FALSE(controller->InitializationError());
+                if (untitled)
+                    selected = controller->ViewModel().objects.front().id;
+                EditorWorkspaceViewCommandData select;
+                select.command = EditorWorkspaceViewCommand::SelectObject;
+                select.objectPayload = selected;
+                controller->ProcessCommand(select);
+                REQUIRE(controller->ViewModel().primarySelection == selected);
+            }
+
+            /** @brief Supplies the actual canonical capture callback with one-shot postcommit fault injection. */
+            PrefabHierarchySourceCapture SourceCapture(const Application::HoroVersion &version) {
+                return [this, version](const auto &publication, const auto roots, const auto &limits,
+                                       const auto &cancellation) -> Result<PreparedPrefabHierarchySources> {
                     if (failNextPrefabCapture) {
                         failNextPrefabCapture = false;
                         ++postCommitCaptureFailures;
@@ -93,15 +102,7 @@ namespace Horo::Editor {
                     if (captured.HasError())
                         return Result<PreparedPrefabHierarchySources>::Failure(captured.ErrorValue());
                     return Result<PreparedPrefabHierarchySources>::Success({std::move(captured).Value(), std::move(lease).Value()});
-                }});
-                REQUIRE_FALSE(controller->InitializationError());
-                if (untitled)
-                    selected = controller->ViewModel().objects.front().id;
-                EditorWorkspaceViewCommandData select;
-                select.command = EditorWorkspaceViewCommand::SelectObject;
-                select.objectPayload = selected;
-                controller->ProcessCommand(select);
-                REQUIRE(controller->ViewModel().primarySelection == selected);
+                };
             }
 
             void Create() {

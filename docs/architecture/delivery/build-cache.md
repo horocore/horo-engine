@@ -250,7 +250,7 @@ described below already exist.
   download metadata, including the stamps that prevent a redundant clone.
   Dependency `*-build` object directories are recreated. Exact keys include the OS,
   architecture, composition profile, CMake major/minor, and a dependency digest
-  from `scripts/ci_cache_identity.py`. The digest includes the root CMake
+  from `scripts/dev.py`. The digest includes the root CMake
   capability defaults, `Dependencies.cmake`, dependency helper/policy files, and
   GNS protobuf setup; it normalizes CRLF and excludes engine target/source edits.
   Dependency caches have no partial-match fallback. Change the composition

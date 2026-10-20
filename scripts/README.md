@@ -1,12 +1,16 @@
 # Scripts
 
+Exactly three implementation files own repository tooling: `dev.py` (build/setup, cache, CI, release and PR),
+`analyze.py` (quality, owned Sonar sessions, secrets, Codacy and coverage), and
+`project.py` (Android, extensions and deterministic code generation). Use each file's `--help`; commands take explicit subcommands. The SDK installs standalone `bin/project.py`.
+
 Developer and reusable tooling scripts belong here. GitHub workflow helpers belong
 under `.github/scripts/`; shared action setup belongs under `.github/actions/`.
 Legacy scripts are under `deprecated/scripts/` until migrated.
 
 ## Pull request annotations
 
-`pr_annotations.py` checks a PR against its development issue. It validates the
+`dev.py pr-annotations` checks a PR against its development issue. It validates the
 milestone, a GitHub closing reference, labels, projects, and assignee. It finds
 the issue from the PR's closing references/body/title, or searches for the Jira
 key in the head branch. Use `--issue` when that lookup is ambiguous. If the
@@ -19,10 +23,10 @@ Repository names must be ASCII `OWNER/REPO` identifiers. Requests and credential
 lookup have a 30-second timeout; responses and pagination are bounded.
 
 ```bash
-python3 scripts/pr_annotations.py 3067              # read-only check
-python3 scripts/pr_annotations.py 3079 --project 1 --fix
-python3 scripts/pr_annotations.py --all --project 1 --state all
-python3 scripts/pr_annotations.py --all --project 1 --state all --fix
+python3 scripts/dev.py pr-annotations 3067              # read-only check
+python3 scripts/dev.py pr-annotations 3079 --project 1 --fix
+python3 scripts/dev.py pr-annotations --all --project 1 --state all
+python3 scripts/dev.py pr-annotations --all --project 1 --state all --fix
 ```
 
 The `--all` run paginates through every PR, including historical merged PRs,
@@ -57,10 +61,10 @@ Grafana service checks have been removed; old Grafana environment keys are ignor
 Run Sonar IDE, CLI secrets and Codacy against one worktree change selection:
 
 ```bash
-python3 scripts/quality_preflight.py check --base origin/main
-python3 scripts/quality_preflight.py check --dirty
-python3 scripts/quality_preflight.py doctor
-python3 scripts/quality_preflight.py stop
+python3 scripts/analyze.py check --base origin/main
+python3 scripts/analyze.py check --dirty
+python3 scripts/analyze.py doctor
+python3 scripts/analyze.py stop
 ```
 
 Use `--worktree` for another checkout and the actual PR target for stacked
@@ -74,7 +78,7 @@ compiler context, advisory metrics, measured timings and CI limitations.
 The Sonar workflow calls `.github/scripts/collect_sonar_coverage.sh`, which uses
 pinned fastcov 1.17 with GCC/gcov 13.3.0. It collects all existing `build/sonar` inputs,
 including unexecuted units with `--process-gcno`; test and source filters are
-unchanged. Collection failure fails the job. `fastcov_sonar_coverage.py` merges
+unchanged. Collection failure fails the job. `analyze.py coverage-convert` merges
 counters across tests and template instantiations and emits generic Sonar line coverage. It excludes only
 zero-hit comments, standalone braces and `else`, matching the former gcovr
 noncode heuristic. Real uncovered code remains in the report. Paths must resolve
@@ -91,7 +95,7 @@ gcovr's text parser; it does not prove the exact engine discrepancy from raw
 GCC 13 counters. Collector adoption changes these line accounting details.
 Branch and function coverage parity is not claimed.
 
-`compare_sonar_coverage.py` remains an offline audit utility for the original
+`analyze.py coverage-compare` remains an offline audit utility for the original
 experiment artifacts. It compares source/line identities and any-instance-covered
 flags, with complete differences in JSON and a printed Markdown summary.
 

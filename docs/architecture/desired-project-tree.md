@@ -703,14 +703,8 @@ horo-engine/
 ├── scripts/
 │   ├── requirements.txt
 │   ├── dev.py
-│   ├── ci.py
-│   ├── package.py
-│   ├── release.py
-│   ├── dependency-state.py
-│   ├── validate-docs.py
-│   ├── generate-schemas.py
-│   ├── generate_project_compatibility.py
-│   └── generate_project_migration_catalog.py
+│   ├── analyze.py
+│   └── project.py
 ├── tools/
 │   ├── package-index-server/
 │   ├── schema-validator/

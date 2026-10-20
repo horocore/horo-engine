@@ -1,3 +1,5 @@
+
+import sys
 """Collision authoring keeps canonical authority and mandatory Release fault evidence."""
 
 import importlib.util
@@ -8,9 +10,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
-    "collision_allocation_qualification", ROOT / "scripts/ci/run_scene_allocation_qualification.py"
+    "collision_allocation_qualification", ROOT / 'scripts/dev.py'
 )
 QUALIFICATION = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = QUALIFICATION
 SPEC.loader.exec_module(QUALIFICATION)
 
 
@@ -40,7 +43,7 @@ def test_exact_release_cases_and_every_measured_position(tmp_path, monkeypatch):
     assert QUALIFICATION.SIDECAR_CASE in cases
     assert len(QUALIFICATION.SIDECAR_PHASES) == 4
     assert "HoroProjectCollisionSettingsTests::Native registry inventory recovers after every one-shot allocation failure" in cases
-    QUALIFICATION.verify_discovery({"tests": [
+    QUALIFICATION.scene_verify_discovery({"tests": [
         {"name": name, "properties": []} for name in cases
     ]}, cases)
     QUALIFICATION.verify_collision_positions(report(tmp_path))

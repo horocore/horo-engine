@@ -6,6 +6,7 @@
 #include "editor/screens/workspace/prefab/PrefabCreation.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <format>
 #include <new>
@@ -14,6 +15,8 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr std::array ForbiddenFilenameCharacters{'<', '>', ':', '"', '/', '\\', '|', '?', '*'};
+
         /** @brief Admits only portable filenames in existing ordinary project asset directories. */
         Result<void> ValidateDestination(const std::filesystem::path &root, const std::filesystem::path &destination,
                                          const DurableFileSystem &files) {
@@ -33,7 +36,8 @@ namespace Horo::Editor {
                 const std::string text{bytes.begin(), bytes.end()};
                 if (text.front() == '.' || text.back() == '.' || text.back() == ' ' || !IsValidUtf8ScalarSequence(text) ||
                     std::ranges::any_of(text, [](const unsigned char value) {
-                    return value < 32U || std::string_view{R"(<>:"/\|?*)"}.find(static_cast<char>(value)) != std::string_view::npos;
+                    return value < 32U ||
+                           std::ranges::find(ForbiddenFilenameCharacters, static_cast<char>(value)) != ForbiddenFilenameCharacters.end();
                 }))
                     return invalid();
                 std::string name{text.substr(0, text.find('.'))};

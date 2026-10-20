@@ -143,12 +143,29 @@ configure_file(platform/code_query/ProjectReadNative.h
     "${_horo_rooted_file_headers}/ProjectReadNative.h" COPYONLY)
 target_include_directories(HoroRootedFileNativeInternal INTERFACE "${_horo_rooted_file_headers}")
 
+# Native composition builders share handles through a narrow, non-installed contract only.
+add_library(HoroRootedProjectOwnersInternal INTERFACE)
+set(_horo_project_owner_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/project-owners")
+file(MAKE_DIRECTORY "${_horo_project_owner_headers}")
+configure_file(platform/RootedProjectOwnersInternal.h
+    "${_horo_project_owner_headers}/RootedProjectOwnersInternal.h" COPYONLY)
+target_include_directories(HoroRootedProjectOwnersInternal INTERFACE "${_horo_project_owner_headers}")
+target_link_libraries(HoroRootedProjectOwnersInternal INTERFACE HoroEngine::ProjectReadFilesApi HoroRootedFileNativeInternal)
+target_link_libraries(HoroPlatformProjectReadFiles PRIVATE HoroRootedProjectOwnersInternal)
+
+add_library(HoroPlatformProjectIo STATIC platform/NativeProjectIoOwners.cpp)
+add_library(HoroEngine::PlatformProjectIo ALIAS HoroPlatformProjectIo)
+target_compile_features(HoroPlatformProjectIo PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformProjectIo PUBLIC HoroEngine::ProjectReadFilesApi
+    PRIVATE HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage HoroEngine::PlatformProjectReadFiles
+        HoroRootedProjectOwnersInternal)
+
 add_library(HoroPlatformImmutableFileStorage STATIC
     platform/file_storage/NativeImmutableFileStorage.cpp)
 add_library(HoroEngine::PlatformImmutableFileStorage ALIAS HoroPlatformImmutableFileStorage)
 target_compile_features(HoroPlatformImmutableFileStorage PUBLIC cxx_std_20)
 target_link_libraries(HoroPlatformImmutableFileStorage PUBLIC HoroEngine::Foundation
-    PRIVATE HoroRootedStorageNativeInternal)
+    PRIVATE HoroRootedStorageNativeInternal HoroRootedProjectOwnersInternal)
 
 # Both concrete storage capabilities share only these non-installed root-relative native primitives.
 add_library(HoroRootedStorageNativeInternal STATIC)
@@ -265,6 +282,7 @@ if (ANDROID)
 endif ()
 
 add_library(HoroEngine::Platform ALIAS HoroPlatform)
+target_link_libraries(HoroPlatform PRIVATE HoroRootedProjectOwnersInternal)
 
 target_compile_features(HoroPlatform PUBLIC cxx_std_20)
 target_include_directories(HoroPlatform

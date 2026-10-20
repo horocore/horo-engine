@@ -1,6 +1,7 @@
 #include "Horo/Platform/NativePublicationFileSystem.h"
 
 #include "PublicationFileNative.h"
+#include "RootedProjectOwnersInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -34,8 +35,12 @@ namespace Horo::Platform {
                 auto parent = OpenParent(relative.Value(), false);
                 if (parent.HasError())
                     return Result<std::optional<FileEntryInfo>>::Failure(parent.ErrorValue());
-                return parent.Value() ? Publication::Inspect(*parent.Value(), Leaf(relative.Value()))
-                                      : Result<std::optional<FileEntryInfo>>::Success(std::nullopt);
+                auto entry = parent.Value() ? Publication::Inspect(*parent.Value(), Leaf(relative.Value()))
+                                            : Result<std::optional<FileEntryInfo>>::Success(std::nullopt);
+                if (entry.HasValue() && entry.Value() && relative.Value() == namespace_ && entry.Value()->kind != FileEntryKind::Directory)
+                    return Result<std::optional<FileEntryInfo>>::Failure(MakeError(
+                        entry.Value()->kind == FileEntryKind::RegularFile ? FileStorageErrors::IoFailed : FileStorageErrors::UnsafeObject));
+                return entry;
             }
 
             /** @copydoc DurableFileSystem::ReadFileBounded */
@@ -321,6 +326,21 @@ namespace Horo::Platform {
         };
     }  // namespace
 
+    /** @copydoc RootedProjectOwnersInternal::Publication */
+    Result<std::shared_ptr<DurableFileSystem>> RootedProjectOwnersInternal::Publication(ProjectReadNative::Handle root,
+                                                                                        const std::filesystem::path &logicalRoot,
+                                                                                        const std::string_view relativeNamespace) {
+        using Return = Result<std::shared_ptr<DurableFileSystem>>;
+        if (!root.IsValid() || !logicalRoot.is_absolute() || logicalRoot.lexically_normal() != logicalRoot ||
+            !IsSafeProjectReadPath(relativeNamespace))
+            return Return::Failure(MakeError(FileStorageErrors::InvalidPath));
+        try {
+            return Return::Success(std::make_shared<PublicationFiles>(std::move(root), logicalRoot, std::string{relativeNamespace}));
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(FileStorageErrors::Capacity));
+        }
+    }
+
     /** @copydoc CreateNativePublicationFileSystem */
     Result<std::shared_ptr<DurableFileSystem>> CreateNativePublicationFileSystem(const std::filesystem::path &authorizedRoot,
                                                                                  const std::string_view relativeNamespace) {
@@ -331,8 +351,7 @@ namespace Horo::Platform {
             auto root = Native::OpenRoot(authorizedRoot);
             if (root.HasError())
                 return Result<std::shared_ptr<DurableFileSystem>>::Failure(ReadError(root.ErrorValue()));
-            return Result<std::shared_ptr<DurableFileSystem>>::Success(
-                std::make_shared<PublicationFiles>(std::move(root).Value(), authorizedRoot, std::string{relativeNamespace}));
+            return RootedProjectOwnersInternal::Publication(std::move(root).Value(), authorizedRoot, relativeNamespace);
         } catch (const std::bad_alloc &) {
             return Result<std::shared_ptr<DurableFileSystem>>::Failure(MakeError(FileStorageErrors::Capacity));
         }
