@@ -88,6 +88,22 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Cook publication classifies a file obstructing its output root as storage infrastructure failure", "[cook][authority]") {
+    TempDir directory;
+    const auto root = directory.path / "blocked output";
+    std::ofstream(root) << "protected file";
+    const auto id = Id("00000000-0000-0000-0000-000000000001");
+    const auto bytes = MakePayload(id, 8, 1);
+    PublicationFiles files;
+    files.root = root;
+    const auto published = PublishCookArtifactReplacement(root, Target("headless-null"), Entry(id, bytes), bytes, 4096U, {},
+                                                          Policy(files, "10000000-0000-0000-0000-000000000001"));
+    REQUIRE(published.HasError());
+    CHECK(published.ErrorValue().code.Value() == FileStorageErrors::IoFailed.code.Value());
+    CHECK(ReadText(root) == "protected file");
+    CHECK(std::filesystem::is_regular_file(root));
+}
+
 TEST_CASE("Cook generations resolve and load through an authority whose logical namespace is absent on disk", "[cook][authority]") {
     ReadFixture fixture;
     fixture.reader.logical = fixture.directory.path / "virtual namespace ü";

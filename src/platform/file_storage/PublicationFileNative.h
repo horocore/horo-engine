@@ -15,7 +15,7 @@ namespace Horo::Platform::PublicationFileNative {
     /** @brief Exclusively creates a regular private leaf and sets created immediately after native creation. */
     [[nodiscard]] Result<Handle> Create(const Handle &parent, std::string_view name, bool &created, std::filesystem::perms permissions);
     /** @brief Creates one directory without granting traversal or changing an existing object. */
-    [[nodiscard]] Result<bool> CreateDirectory(const Handle &parent, std::string_view name);
+    [[nodiscard]] Result<bool> CreateRelativeDirectory(const Handle &parent, std::string_view name);
     /** @brief Returns storage capacity from a retained native object rather than its former spelling. */
     [[nodiscard]] Result<std::uint64_t> Available(const Handle &directory);
     /** @brief Applies the platform's strongest supported file-data flush before directory durability. */

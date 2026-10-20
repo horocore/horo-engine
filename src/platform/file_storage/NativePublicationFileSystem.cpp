@@ -101,7 +101,7 @@ namespace Horo::Platform {
                     return Result<bool>::Failure(parent.ErrorValue());
                 if (!parent.Value())
                     return Result<bool>::Failure(MakeError(FileStorageErrors::IoFailed));
-                return Publication::CreateDirectory(*parent.Value(), Leaf(relative.Value()));
+                return Publication::CreateRelativeDirectory(*parent.Value(), Leaf(relative.Value()));
             }
 
             /** @copydoc DurableFileSystem::TryAcquireExclusive */
