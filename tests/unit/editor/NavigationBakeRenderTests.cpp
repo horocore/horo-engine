@@ -48,6 +48,8 @@ namespace {
         NavigationBakeWorkspaceAccess Access() {
             return {.prepare = [this](const auto &) {
                 ++prepares;
+                if (rejectPreparation)
+                    return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
                 return Result<void>::Success();
             }, .reload = [this](const auto &) {
                 ++reloads;
@@ -82,7 +84,7 @@ namespace {
                     continue;
                 const auto seed = scope.empty() ? window->IDStack.back() : ImHashStr(scope.c_str(), 0, window->IDStack.back());
                 ImGui::FocusWindow(window);
-                ImGui::ActivateItem(ImHashStr(label.c_str(), 0, seed));
+                ImGui::ActivateItemByID(ImHashStr(label.c_str(), 0, seed));
                 return;
             }
             FAIL("Expected navigation widget window was not drawn");
@@ -130,6 +132,7 @@ namespace {
         EditorWorkspaceViewModel model;
         EditorWorkspaceViewCommandData command;
         NavigationBakeWorkspaceSnapshot view;
+        bool rejectPreparation{};
         int prepares{};
         int queries{};
         int cancels{};
@@ -211,6 +214,25 @@ TEST_CASE("Navigation panel is lazy and renders narrow localized operation state
     harness.host.OnUpdate(0);
     CHECK(harness.queries == queries);
     CHECK(harness.cancels == 0);
+}
+
+TEST_CASE("Navigation preparation rejection never replaces its diagnostic with an unknown-owner query",
+          "[editor][gui][navigation][admission]") {
+    Harness harness;
+    harness.rejectPreparation = true;
+    NavigationTab tab{harness.Access(), harness.host};
+    PanelContext panel{.dataBus = harness.events, .projectRoot = "/navigation-project"};
+    tab.OnAttach(panel);
+    harness.Draw(tab);
+    CHECK(harness.prepares == 1);
+    CHECK(harness.queries == 0);
+    harness.rejectPreparation = false;
+    harness.Draw(tab);
+    CHECK(harness.prepares == 2);
+    CHECK(harness.queries == 1);
+    CHECK(harness.starts == 0);
+    CHECK(harness.cancels == 0);
+    tab.OnDetach();
 }
 
 TEST_CASE("Navigation widgets submit exact Scene selection and explicit modal confirmation through host capabilities",

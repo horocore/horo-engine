@@ -17,7 +17,7 @@ namespace Horo::Editor {
 
         /** @brief Formats localized labels independently of opaque technical values. */
         void Value(const EditorGuiContext &context, const char *key, const std::string &value) {
-            Ui::FieldLabel(Text(context, key).c_str(), context.theme.fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, key), Theme::Dim(), context.theme.fonts);
             Ui::Hint(value.c_str(), context.theme.fonts);
         }
 
@@ -202,19 +202,29 @@ namespace Horo::Editor {
         }
     }
 
+    /** @brief Admits preparation before querying its owner, retaining the original admission error on failure. */
+    bool NavigationTab::Prepare() {
+        if (prepared_)
+            return true;
+        if (!access_.prepare)
+            return false;
+        const auto result = access_.prepare(root_);
+        if (result.HasError()) {
+            error_ = result.ErrorValue();
+            return false;
+        }
+        prepared_ = true;
+        error_.reset();
+        return true;
+    }
+
     /** @copydoc NavigationTab::DrawPanel */
     void NavigationTab::DrawPanel(const ImVec2 &, const ImVec2 &size, const EditorWorkspaceViewModel &, EditorWorkspaceViewCommandData &,
                                   const EditorGuiContext &context) {
         // No updates or subscriptions poll the host while this panel is hidden.
         ImGui::BeginChild("##NavigationBake", size, false, ImGuiWindowFlags_NoSavedSettings);
         Ui::Hint(Text(context, "saved_source").c_str(), context.theme.fonts);
-        if (!prepared_ && access_.prepare) {
-            const auto result = access_.prepare(root_);
-            prepared_ = result.HasValue();
-            if (result.HasError())
-                error_ = result.ErrorValue();
-        }
-        if (access_.query) {
+        if (Prepare() && access_.query) {
             const auto result = access_.query(root_);
             if (result.HasValue()) {
                 const auto &view = result.Value();
