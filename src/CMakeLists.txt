@@ -2412,6 +2412,8 @@ target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
 target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
 add_library(HoroRenderApi STATIC
+        runtime/renderer/api/MultiviewSceneExtraction.cpp
+        runtime/renderer/api/MultiviewExtractionErrors.cpp
         runtime/renderer/api/PostProcessErrors.cpp
         runtime/renderer/api/PostProcessSettings.cpp
         runtime/renderer/api/PostProcessVolumes.cpp

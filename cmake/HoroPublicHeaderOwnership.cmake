@@ -1101,6 +1101,8 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+    Horo/Runtime/Render/MultiviewSceneExtraction.h
+    Horo/Runtime/Render/MultiviewExtractionErrors.h
 Horo/Runtime/Render/RenderWorldSnapshot.h
 Horo/Runtime/Render/VfxGraphWorkload.h
 Horo/Runtime/Render/VfxGraphScheduling.h
