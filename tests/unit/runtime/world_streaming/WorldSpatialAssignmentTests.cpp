@@ -67,6 +67,69 @@ namespace Horo::WorldStreaming {
 
         constexpr WorldSpatialAssignmentLimits Limits{8, 16, 32};
 
+        TEST_CASE("Authoring coverage shares cooked assignment semantics without manufacturing published cells",
+                  "[unit][world_streaming][spatial_assignment]") {
+            const auto descriptor = Descriptor();
+            const WorldSpatialAssignmentAuthoringDomain source{descriptor.Partition(), descriptor.Bounds(), descriptor.Grid(),
+                                                               descriptor.Layers()};
+            const std::array candidates{Candidate(2, 9), Candidate(1, 4)};
+            const auto authored = WorldSpatialAssignment::CreateForAuthoring(source, candidates, Limits);
+            const auto cooked = WorldSpatialAssignment::Create(descriptor, candidates, Limits);
+            REQUIRE(authored.HasValue());
+            REQUIRE(cooked.HasValue());
+            REQUIRE(authored.Value().Partition() == descriptor.Partition());
+            REQUIRE(std::ranges::equal(authored.Value().Objects(), cooked.Value().Objects()));
+            for (std::size_t index = 0; index < candidates.size(); ++index)
+                REQUIRE(std::ranges::equal(authored.Value().CellsForObject(index), cooked.Value().CellsForObject(index)));
+
+            const auto missing = Descriptor(true);
+            const WorldSpatialAssignmentAuthoringDomain uncooked{missing.Partition(), missing.Bounds(), missing.Grid(), missing.Layers()};
+            REQUIRE(WorldSpatialAssignment::CreateForAuthoring(uncooked, candidates, Limits).HasValue());
+            RequireError(WorldSpatialAssignment::Create(missing, candidates, Limits),
+                         WorldStreamingErrors::SpatialAssignmentCellUnavailable);
+        }
+
+        TEST_CASE("Authoring coverage rejects malformed source domains and budgets without touching source",
+                  "[unit][world_streaming][spatial_assignment]") {
+            const auto descriptor = Descriptor();
+            auto layers = std::vector<WorldLayerDescriptor>{descriptor.Layers().begin(), descriptor.Layers().end()};
+            WorldSpatialAssignmentAuthoringDomain source{descriptor.Partition(), descriptor.Bounds(), descriptor.Grid(), layers};
+            const auto candidates = std::array{Candidate(1, 1)};
+            const ErrorCodeDescriptor *expected = &WorldStreamingErrors::SpatialAssignmentInvalid;
+            auto limits = Limits;
+            SECTION("invalid partition") {
+                source.partition = {};
+            }
+            SECTION("reversed world bounds") {
+                std::swap(source.bounds.minimum, source.bounds.maximum);
+            }
+            SECTION("world outside grid") {
+                source.bounds.maximum = Math::WorldCoordinate64::FromMillimeters(9000, 0, 0);
+            }
+            SECTION("no layers") {
+                source.layers = {};
+            }
+            SECTION("invalid layer identity") {
+                layers[0].id = {};
+            }
+            SECTION("duplicate layers") {
+                layers[1].id = layers[0].id;
+                expected = &WorldStreamingErrors::SpatialAssignmentIdentityConflict;
+            }
+            SECTION("coverage capacity") {
+                limits.maximumCellsPerObject = 1;
+                expected = &WorldStreamingErrors::SpatialAssignmentCapacityExceeded;
+            }
+            const auto result = WorldSpatialAssignment::CreateForAuthoring(source, candidates, limits);
+            REQUIRE(result.HasError());
+            // Invalid grid extents preserve the canonical quantization failure rather than translating it.
+            if (source.bounds.maximum.Millimeters()[0] == 9000)
+                REQUIRE(result.ErrorValue().code == WorldStreamingErrors::CellOutOfBounds.code);
+            else
+                REQUIRE(result.ErrorValue().code == expected->code);
+            REQUIRE(candidates.front().address == Candidate(1, 1).address);
+        }
+
         TEST_CASE("Spatial assignment is canonical and owns deterministic multi-cell results",
                   "[unit][world_streaming][spatial_assignment]") {
             const auto descriptor = Descriptor();

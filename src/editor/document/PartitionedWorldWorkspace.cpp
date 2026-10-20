@@ -91,11 +91,30 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Validates source-owned LOD and exact spanning override identity before admission. */
+        Result<void> ValidatePlacement(const PartitionedWorldObject &object, const PartitionedWorldDocument &document) {
+            if (object.assignmentLod >= document.settings.grid.LodLevels())
+                return Failure<void>(WorldDocumentErrors::Unsupported);
+            if (object.spanning) {
+                const auto &directive = *object.spanning;
+                if (directive.policy < WS::WorldSpanningObjectPolicy::SingleCellOwner ||
+                    directive.policy > WS::WorldSpanningObjectPolicy::NonSpatial)
+                    return Failure<void>(WorldDocumentErrors::Unsupported);
+                if (directive.address != object.descriptor.address || directive.revision != object.descriptor.revision ||
+                    object.descriptor.placement != WS::WorldSpatialObjectPlacementClass::Spatial ||
+                    ((directive.policy == WS::WorldSpanningObjectPolicy::SingleCellOwner) != directive.ownerCell.IsValid()))
+                    return Failure<void>(WorldDocumentErrors::Invalid);
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Validates object descriptors and membership within one immutable page. */
         Result<void> ValidatePageObjects(const PartitionedWorldPage &page, const PartitionedWorldDocument &document) {
             std::set<WS::WorldAuthoringObjectAddress> objects;
             for (const auto &object : page.objects) {
                 if (const auto valid = WS::ValidateWorldSpatialObjectDescriptor(object.descriptor); valid.HasError())
+                    return valid;
+                if (const auto valid = ValidatePlacement(object, document); valid.HasError())
                     return valid;
                 const auto &descriptor = object.descriptor;
                 if (descriptor.address.page != page.head.sourceAsset || descriptor.revision != page.head.revision ||
@@ -136,7 +155,8 @@ namespace Horo::Editor {
             return ValidLimit(limits.maximumLayers, hard.maximumLayers) && ValidLimit(limits.maximumPages, hard.maximumPages) &&
                    ValidLimit(limits.maximumObjects, hard.maximumObjects) &&
                    ValidLimit(limits.maximumLayerNameBytes, hard.maximumLayerNameBytes) &&
-                   ValidLimit(limits.maximumOpenPages, hard.maximumOpenPages);
+                   ValidLimit(limits.maximumOpenPages, hard.maximumOpenPages) &&
+                   ValidLimit(limits.maximumSelectedObjects, hard.maximumSelectedObjects);
         }
 
         /** @brief Requires changed existing pages to advance by exactly one revision in the same partition. */
@@ -165,26 +185,35 @@ namespace Horo::Editor {
             return left.version == right.version && left.layers == right.layers && left.pages == right.pages &&
                    a.partition == b.partition && a.bounds == b.bounds && a.grid.Origin() == b.grid.Origin() &&
                    a.grid.Bounds() == b.grid.Bounds() && a.grid.BaseCellSizeMillimeters() == b.grid.BaseCellSizeMillimeters() &&
-                   a.grid.LodLevels() == b.grid.LodLevels();
+                   a.grid.LodLevels() == b.grid.LodLevels() && a.maximumDirectCellsPerObject == b.maximumDirectCellsPerObject;
+        }
+
+        /** @brief Validates source topology and its explicit direct-placement policy together. */
+        Result<void> ValidateSettings(const PartitionedWorldSettings &settings) {
+            if (settings.maximumDirectCellsPerObject == 0 || settings.maximumDirectCellsPerObject > 4096)
+                return Failure<void>(WorldDocumentErrors::Invalid);
+            if (!settings.partition.IsValid())
+                return Failure<void>(WorldDocumentErrors::Invalid);
+            const auto minimum = settings.bounds.minimum.Millimeters();
+            const auto maximum = settings.bounds.maximum.Millimeters();
+            for (std::size_t axis = 0; axis < minimum.size(); ++axis) {
+                if (minimum[axis] > maximum[axis])
+                    return Failure<void>(WorldDocumentErrors::Invalid);
+            }
+            const auto layer = WS::StreamingLayerId::Create(0).Value();
+            for (const auto &coordinate : {settings.bounds.minimum, settings.bounds.maximum}) {
+                if (const auto cell = WS::QuantizeWorldToCell(coordinate, settings.grid, 0, layer); cell.HasError())
+                    return Result<void>::Failure(cell.ErrorValue());
+            }
+            return Result<void>::Success();
         }
 
         /** @brief Admits a bounded authored aggregate before copying its storage. */
         Result<void> ValidateDocument(const PartitionedWorldDocument &document, const WorldDocumentLimits &limits) {
             if (document.version != 1)
                 return Failure<void>(WorldDocumentErrors::Unsupported);
-            if (!document.settings.partition.IsValid())
-                return Failure<void>(WorldDocumentErrors::Invalid);
-            const auto minimum = document.settings.bounds.minimum.Millimeters();
-            const auto maximum = document.settings.bounds.maximum.Millimeters();
-            for (std::size_t axis = 0; axis < minimum.size(); ++axis) {
-                if (minimum[axis] > maximum[axis])
-                    return Failure<void>(WorldDocumentErrors::Invalid);
-            }
-            const auto layer = WS::StreamingLayerId::Create(0).Value();
-            for (const auto &coordinate : {document.settings.bounds.minimum, document.settings.bounds.maximum}) {
-                if (const auto cell = WS::QuantizeWorldToCell(coordinate, document.settings.grid, 0, layer); cell.HasError())
-                    return Result<void>::Failure(cell.ErrorValue());
-            }
+            if (const auto valid = ValidateSettings(document.settings); valid.HasError())
+                return valid;
             if (document.layers.size() > limits.maximumLayers || document.pages.size() > limits.maximumPages)
                 return Failure<void>(WorldDocumentErrors::Capacity);
             if (const auto valid = ValidateLayers(document, limits); valid.HasError())
@@ -257,6 +286,15 @@ namespace Horo::Editor {
                 return record.head.sourceAsset == page;
             });
         });
+        std::erase_if(candidate->selectedObjects, [&](const auto &address) {
+            return std::ranges::none_of(document.pages, [&](const auto &page) {
+                return page.head.sourceAsset == address.page && std::ranges::any_of(page.objects, [&](const auto &object) {
+                    return object.descriptor.address == address;
+                });
+            });
+        });
+        if (candidate->primary && std::ranges::find(candidate->selectedObjects, *candidate->primary) == candidate->selectedObjects.end())
+            candidate->primary.reset();
         return Publish(std::move(candidate), cancellation);
     }
 

@@ -122,3 +122,63 @@ load/unload/pinning (#1635), the cell browser UI (#1630), bake, persistence,
 undo/redo history, source-control merge, crash recovery or runtime preview activation.
 Those services must consume exact immutable source revisions and must not clear dirty
 metadata without their own durable publication contract.
+
+## Object assignment and bounds inspection (WST-009.5)
+
+`PartitionedWorldWorkspace` is also the single authority for selected source object
+addresses. `SetSelection` takes the exact immutable workspace fence, validates
+all distinct page/local-object identities before publishing, and retains input
+order. It does not require open geometry, alter dirty state, or control page
+load/unload/pin. Selection and source changes share `WorldDocumentRevision`; there
+is no second mutable Inspector selection or independent currentness authority.
+Removing a source object prunes its selection in the same commit. Replace clears
+selection and changes the generation. Retained immutable snapshots remain usable.
+
+`InspectSelectedObjects` is an explicit owner-thread tooling query against that
+exact fence. Consumers retain the returned const lease and render it without
+rerunning enumeration on every frame. Requery after a source/selection publication.
+Cancellation is checked before allocation, between selected objects and before
+return. Cancelling/closed owners reject new inspection. No query publishes state,
+opens geometry, performs I/O, mounts a world, or claims runtime residency.
+
+Each row retains its source descriptor (including exact inclusive global
+millimeter bounds and source revision), layer, LOD and authored spanning directive.
+It explains automatic cell coverage, whether the object spans multiple cells,
+whether the source direct-cell threshold requires a decision, and effective
+placement/cells. Always-present objects report nonspatial placement with empty
+coverage. Invalid geometric bounds or a missing/conflicting geometric override
+retain the original WorldStreaming diagnostic and claim no effective placement.
+Unrelated selected rows remain available as a complete, explicitly diagnosed
+query result; no source state is repaired implicitly.
+
+`WorldSpatialAssignment::CreateForAuthoring` uses the existing cook assignment
+kernel for bounds, quantization, cardinality and canonical ordering. Its source
+domain has no cooked-cell/package authority. The original cooked `Create` still
+requires every covered cell to exist in the published descriptor. Both feed the
+same `WorldSpanningObjectPlan` for single-owner, split-per-cell and nonspatial
+policies. There is no Editor implementation of assignment or spanning policy.
+
+Migration: existing callers rebuild against the same EditorModel and
+WorldStreaming targets and staged public headers. Aggregate fields are additive:
+settings default the direct-cell threshold to one; objects default to LOD zero
+and no override. Existing cook callers keep `Create`; authoring queries supply an
+explicit source domain. This evolves the in-memory model only, with no persisted
+file-format change. Override edits go through `Commit`, including the page's exact
+revision successor and each object's matching revision. Unknown policy/LOD,
+malformed directive identity or an incompatible always-present override fails
+before publication. Geometric override mistakes remain inspectable diagnostics.
+
+Selection is bounded at 256 objects (hosts may lower it). Query ceilings default
+and cap at 4,096 automatic cells per object and 65,536 aggregate retained automatic
+plus effective cells. Both cell arrays are charged, including duplicate entries
+across the two explanations. Invalid/raised budgets, exhausted enumeration,
+stale/foreign fences and cancellation return typed errors with no partial result
+or mutation; consumers never receive silently truncated lists. Historic result
+retention remains the consumer's responsibility.
+
+Regression coverage lives in `PartitionedWorldObjectInspectionTests.cpp` within
+`HoroPartitionedWorldWorkspaceTests`, with shared-kernel parity coverage in
+`WorldSpatialAssignmentTests.cpp` within `HoroWorldStreamingTests`. Build those and
+`HoroEditorModelPublicHeaderConsumer` / `HoroWorldStreamingPublicHeaderConsumer`;
+run the existing world-document and WorldStreaming CTest groups. No native/GPU
+interaction or GUI rendering result is implied by these model-level tests.

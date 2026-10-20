@@ -3147,7 +3147,9 @@ add_executable(HoroEditorViewportSceneTests
 
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
-add_executable(HoroPartitionedWorldWorkspaceTests unit/editor/PartitionedWorldWorkspaceTests.cpp)
+add_executable(HoroPartitionedWorldWorkspaceTests
+        unit/editor/PartitionedWorldWorkspaceTests.cpp
+        unit/editor/PartitionedWorldObjectInspectionTests.cpp)
 target_link_libraries(HoroPartitionedWorldWorkspaceTests PRIVATE HoroEngine::EditorModel)
 horo_register_catch_test(HoroPartitionedWorldWorkspaceTests LABELS "unit;headless;world_document")
 
