@@ -27,6 +27,11 @@ namespace Horo::Editor {
             return drafts_;
         }
 
+        /** @brief Inspect retained typed drafts without exposing mutation. @return Session-owned drafts. */
+        [[nodiscard]] const auto &Drafts() const noexcept {
+            return drafts_;
+        }
+
         /** @brief Borrow exact authored surface candidates for reference selectors. @return Session-owned inventory. */
         [[nodiscard]] const auto &Surfaces() const noexcept {
             return surfaces_;

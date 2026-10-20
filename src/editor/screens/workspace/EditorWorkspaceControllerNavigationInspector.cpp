@@ -77,6 +77,143 @@ namespace Horo::Editor {
                        left.definition == right.definition;
             });
         }
+
+        /** @brief Decode source-owned typed components only once while the exact immutable projection is pinned. */
+        Result<Runtime::RuntimeComponentSet> ProjectComponents(const Prefab::ResolvedPrefabObject &object) {
+            Runtime::RuntimeComponentSet baseline;
+            std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
+            for (const auto &raw : object.object.components) {
+                auto projected = SceneSource::ProjectPrefabBuiltinComponent(raw, baseline, primitive);
+                if (projected.HasError())
+                    return Result<Runtime::RuntimeComponentSet>::Failure(projected.ErrorValue());
+            }
+            return Result<Runtime::RuntimeComponentSet>::Success(std::move(baseline));
+        }
+
+        /** @brief Fresh occurrence allocation also reserves all retained source removals and instance additions. */
+        std::uint64_t LastOccurrence(const Prefab::ResolvedPrefabObject &object, const ScenePrefabInstance &instance) {
+            std::uint64_t next{};
+            for (const auto &raw : object.object.components)
+                next = std::max(next, raw.instance.Value());
+            if (instance.valueOverrides)
+                for (const auto &record : instance.valueOverrides->componentRecords) {
+                    std::visit([&](const auto &intent) {
+                        using T = std::decay_t<decltype(intent)>;
+                        if constexpr (std::is_same_v<T, Prefab::PrefabAddComponentOverride>) {
+                            if (intent.object == object.key.object)
+                                next = std::max(next, intent.payload.instance.Value());
+                        } else if (intent.target.object == object.key.object)
+                            next = std::max(next, intent.target.instance.Value());
+                    }, record);
+                }
+            return next;
+        }
+
+        /** @brief Encode a single exact occurrence replacement without selecting a source or mutating an instance. */
+        Result<Prefab::PrefabReplaceComponentEdit> PrepareReplacement(const NavigationInspectorEdit &edit,
+                                                                      const Prefab::ResolvedPrefabObject &object, std::uint64_t &next) {
+            using Return = Result<Prefab::PrefabReplaceComponentEdit>;
+            const auto kind = Kind(edit.value);
+            const auto before = std::ranges::find_if(object.object.components, [kind](const auto &raw) {
+                return Runtime::FindBuiltinSceneComponent(raw.component.typeId.Value()) == kind;
+            });
+            if (before == object.object.components.end() || next == UINT64_MAX)
+                return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideOrphan));
+            auto components = Components(edit.value);
+            if (components.HasError())
+                return Return::Failure(components.ErrorValue());
+            auto raw = SceneSource::EncodePrefabNavigationComponent(kind, Prefab::PrefabComponentInstanceId::Create(++next).Value(),
+                                                                    components.Value());
+            if (raw.HasError())
+                return Return::Failure(raw.ErrorValue());
+            return Return::Success({{object.key.object, before->component.typeId, before->instance}, std::move(raw).Value()});
+        }
+
+        /** @brief Capture one component gesture against immutable source-owned identities and exact schema/opening fences. */
+        Result<EditScenePrefabComponentsCommand> PreparePrefabCommand(const NavigationInspectorRequest &request,
+                                                                      const SceneSource::ScenePrefabInstanceProjection &instance,
+                                                                      const Prefab::PrefabValueSchemaSnapshot &schemas,
+                                                                      std::uint64_t epoch) {
+            using Return = Result<EditScenePrefabComponentsCommand>;
+            const auto objects = instance.expanded->Objects();
+            const auto object = std::ranges::find(objects, *request.prefab->member, &Prefab::ResolvedPrefabObject::key);
+            if (object == objects.end())
+                return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideOrphan));
+            auto baseline = ProjectComponents(*object);
+            if (baseline.HasError())
+                return Return::Failure(baseline.ErrorValue());
+            EditScenePrefabComponentsCommand command{request.prefab->instance,
+                                                     {request.context.revision},
+                                                     instance.expanded->Revision(),
+                                                     schemas.Revision(),
+                                                     {},
+                                                     epoch};
+            auto next = LastOccurrence(*object, instance.authored);
+            std::array<bool, 5> edited{};
+            for (const auto &edit : request.edits) {
+                if (edit.object.value != 0 || edited[edit.value.index()] || !MatchesSource(edit.value, baseline.Value()))
+                    return Return::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Stale)));
+                edited[edit.value.index()] = true;
+                auto replacement = PrepareReplacement(edit, *object, next);
+                if (replacement.HasError())
+                    return Return::Failure(replacement.ErrorValue());
+                command.edits.emplace_back(std::move(replacement).Value());
+            }
+            return Return::Success(std::move(command));
+        }
+
+        /** @brief Resolve every detached edit before allowing any containing Scene/history publication. */
+        Result<Prefab::PrefabValueOverrideSet> PrepareOverrides(const Prefab::EffectivePrefabCandidate &source,
+                                                                std::optional<Prefab::PrefabValueOverrideSet> current,
+                                                                const EditScenePrefabComponentsCommand &command,
+                                                                const Prefab::PrefabValueSchemaSnapshot &schemas,
+                                                                const Prefab::PrefabLimitProfile &limits,
+                                                                const CancellationToken &cancellation) {
+            using Return = Result<Prefab::PrefabValueOverrideSet>;
+            for (const auto &edit : command.edits) {
+                auto prepared = Prefab::PreparePrefabComponentEdit(source, current, edit, &schemas, limits, cancellation);
+                if (prepared.HasError())
+                    return Return::Failure(prepared.ErrorValue());
+                if (!prepared.Value().effective || prepared.Value().rebased.HasUnresolved())
+                    return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
+                current = std::move(prepared).Value().rebased;
+            }
+            return Return::Success(std::move(*current));
+        }
+
+        /** @brief Explicit immutable validation inputs, borrowed only through this synchronous source-lease operation. */
+        struct PrefabValidationContext final {
+            const Prefab::PrefabSourceResolverSnapshot &sources;
+            const Prefab::PrefabLimitProfile &limits;
+            const Prefab::PrefabValueSchemaSnapshot &schemas;
+            std::span<const NavigationDefinitionSnapshot> definitions;
+            Runtime::SceneDefinitionId scene;
+            const std::optional<SceneSource::TriggerVolumeConversionContext> &trigger;
+        };
+
+        /** @brief Validate canonical full Scene conversion and descriptor references while retaining all unrelated authored fields. */
+        Result<void> ValidatePrefabCandidate(SceneDocumentSnapshot candidate, const EditScenePrefabComponentsCommand &command,
+                                             Prefab::PrefabValueOverrideSet overrides, const PrefabValidationContext &context) {
+            const auto placement = std::ranges::find(candidate.prefabInstances, command.instance, &ScenePrefabInstance::instanceId);
+            if (placement == candidate.prefabInstances.end())
+                return Result<void>::Failure(MakeError(Prefab::PrefabErrors::OverrideOrphan));
+            placement->valueOverrides = std::move(overrides);
+            auto runtime =
+                ConvertSceneDocumentToRuntime(candidate, context.scene, context.sources, context.limits, &context.schemas, context.trigger);
+            if (runtime.HasError())
+                return Result<void>::Failure(runtime.ErrorValue());
+            std::vector<SceneSource::SceneObjectSnapshot> graph;
+            for (const auto &entity : runtime.Value().Entities()) {
+                SceneSource::SceneObjectSnapshot projected{.id = {entity.object.value}, .name = "Navigation validation"};
+                projected.components.navigationSurface = entity.components.navigationSurface;
+                projected.components.navigationRegion = entity.components.navigationRegion;
+                projected.components.navigationModifier = entity.components.navigationModifier;
+                projected.components.navigationLink = entity.components.navigationLink;
+                projected.components.navigationAgent = entity.components.navigationAgent;
+                graph.push_back(std::move(projected));
+            }
+            return ValidateNavigationInspectorDescriptors(graph, context.definitions);
+        }
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::RefreshNavigationInspectorDefinitions */
@@ -150,6 +287,14 @@ namespace Horo::Editor {
             ApplyPrefabNavigationInspector(request);
             return;
         }
+        ApplySceneNavigationInspector(request);
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplySceneNavigationInspector */
+    void EditorWorkspaceController::ApplySceneNavigationInspector(const NavigationInspectorRequest &request) {
+        const auto reject = [this](SceneTransactionFailure failure) {
+            m_viewModel.navigationEditError = MakeError(SceneTransactionError(failure)).message;
+        };
         const auto &selection = m_selection.Current();
         if (request.selectionRevision != selection.revision.value || request.objects != selection.objects ||
             request.prefab != m_viewModel.prefabSelection || std::ranges::any_of(request.edits, [&](const auto &edit) {
@@ -188,171 +333,68 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ApplyPrefabNavigationInspector */
     void EditorWorkspaceController::ApplyPrefabNavigationInspector(const NavigationInspectorRequest &request) {
-        const auto reject = [this](const Error &error) {
-            m_viewModel.navigationEditError = error.message;
-        };
-        if (request.prefab != m_viewModel.prefabSelection || !request.prefab->member || !m_prefabSources || !request.publication ||
-            request.publication != m_viewModel.prefabHierarchy || m_viewModel.prefabHierarchyUnavailable ||
-            request.publication->publication != m_prefabPublication || m_prefabObservedDocumentEpoch != m_document.ReplacementEpoch() ||
-            request.edits.empty() || request.edits.size() > 5 ||
+        if (request.prefab != m_viewModel.prefabSelection || !request.prefab->member || !m_prefabSources || !m_prefabSourceCapture ||
+            !request.publication || request.publication != m_viewModel.prefabHierarchy || !request.publication->sources ||
+            m_viewModel.prefabHierarchyUnavailable || request.publication->publication != m_prefabPublication ||
+            m_prefabObservedDocumentEpoch != m_document.ReplacementEpoch() || request.edits.empty() || request.edits.size() > 5 ||
             m_assetRegistry.Revision() != m_prefabSources->resolver.RegistryRevision()) {
-            reject(MakeError(SceneTransactionError(SceneTransactionFailure::Stale)));
+            m_viewModel.navigationEditError = MakeError(SceneTransactionError(SceneTransactionFailure::Stale)).message;
             return;
         }
+        auto committed = CommitPrefabNavigationInspector(request);
+        if (committed.HasError()) {
+            m_viewModel.navigationEditError = committed.ErrorValue().message;
+            return;
+        }
+        m_viewModel.navigationEditError.clear();
+        HandleDocumentCommandResult(std::move(committed), "Update Prefab navigation components");
+    }
+
+    /** @copydoc EditorWorkspaceController::CommitPrefabNavigationInspector */
+    Result<SceneCommandResult> EditorWorkspaceController::CommitPrefabNavigationInspector(const NavigationInspectorRequest &request) {
+        using Return = Result<SceneCommandResult>;
         auto limits = Prefab::PrefabLimitProfile::Create({});
-        if (limits.HasError()) {
-            reject(limits.ErrorValue());
-            return;
-        }
-        if (auto schemas = EnsureNavigationPrefabSchemas(limits.Value()); schemas.HasError()) {
-            reject(schemas.ErrorValue());
-            return;
-        }
+        if (limits.HasError())
+            return Return::Failure(limits.ErrorValue());
+        if (auto schemas = EnsureNavigationPrefabSchemas(limits.Value()); schemas.HasError())
+            return Return::Failure(schemas.ErrorValue());
         const auto &instances = request.publication->sources->instances;
         const auto instance = std::ranges::find_if(instances, [&](const auto &entry) {
             return entry.authored.instanceId == request.prefab->instance;
         });
-        if (instance == instances.end() || !instance->IsSynchronized()) {
-            reject(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
-            return;
-        }
-        if (!m_prefabSourceCapture) {
-            reject(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-            return;
-        }
+        if (instance == instances.end() || !instance->IsSynchronized())
+            return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
         std::vector<Assets::AssetId> roots;
         for (const auto &placement : m_document.PrefabInstances())
             roots.push_back(placement.sourcePrefab.Asset());
         auto captured = m_prefabSourceCapture(m_assetRegistry, roots, limits.Value(), request.context.cancellation);
-        if (captured.HasError()) {
-            reject(captured.ErrorValue());
-            return;
-        }
-        // The current source bytes and project mutation lease remain pinned through final owner publication.
+        if (captured.HasError())
+            return Return::Failure(captured.ErrorValue());
+        // Current bytes and the mutation lease stay pinned through the final owner publication.
         auto fresh = std::move(captured).Value();
-        const auto objects = instance->expanded->Objects();
-        const auto object = std::ranges::find(objects, *request.prefab->member, &Prefab::ResolvedPrefabObject::key);
-        if (object == objects.end()) {
-            reject(MakeError(Prefab::PrefabErrors::OverrideOrphan));
-            return;
-        }
-        EditScenePrefabComponentsCommand command{request.prefab->instance,
-                                                 m_document.Revision(),
-                                                 instance->expanded->Revision(),
-                                                 m_navigationPrefabSchemas->Revision(),
-                                                 {},
-                                                 m_document.ReplacementEpoch()};
-        Runtime::RuntimeComponentSet baseline;
-        std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
-        for (const auto &raw : object->object.components) {
-            auto projected = SceneSource::ProjectPrefabBuiltinComponent(raw, baseline, primitive);
-            if (projected.HasError()) {
-                reject(projected.ErrorValue());
-                return;
-            }
-        }
-        std::uint64_t next{};
-        for (const auto &raw : object->object.components)
-            next = std::max(next, raw.instance.Value());
-        if (instance->authored.valueOverrides)
-            for (const auto &record : instance->authored.valueOverrides->componentRecords) {
-                std::visit([&](const auto &intent) {
-                    using T = std::decay_t<decltype(intent)>;
-                    if constexpr (std::is_same_v<T, Prefab::PrefabAddComponentOverride>) {
-                        if (intent.object == request.prefab->member->object)
-                            next = std::max(next, intent.payload.instance.Value());
-                    } else if (intent.target.object == request.prefab->member->object)
-                        next = std::max(next, intent.target.instance.Value());
-                }, record);
-            }
-        std::array<bool, 5> edited{};
-        for (const auto &edit : request.edits) {
-            if (edit.object.value != 0 || edited[edit.value.index()] || !MatchesSource(edit.value, baseline)) {
-                reject(MakeError(SceneTransactionError(SceneTransactionFailure::Stale)));
-                return;
-            }
-            edited[edit.value.index()] = true;
-            const auto kind = Kind(edit.value);
-            const auto before = std::ranges::find_if(object->object.components, [kind](const auto &raw) {
-                return Runtime::FindBuiltinSceneComponent(raw.component.typeId.Value()) == kind;
-            });
-            if (before == object->object.components.end() || next == UINT64_MAX) {
-                reject(MakeError(Prefab::PrefabErrors::OverrideOrphan));
-                return;
-            }
-            auto components = Components(edit.value);
-            if (components.HasError()) {
-                reject(components.ErrorValue());
-                return;
-            }
-            auto raw = SceneSource::EncodePrefabNavigationComponent(kind, Prefab::PrefabComponentInstanceId::Create(++next).Value(),
-                                                                    components.Value());
-            if (raw.HasError()) {
-                reject(raw.ErrorValue());
-                return;
-            }
-            command.edits.push_back(
-                Prefab::PrefabReplaceComponentEdit{{request.prefab->member->object, before->component.typeId, before->instance},
-                                                   std::move(raw).Value()});
-        }
-        auto source = fresh.sources.resolver.Resolve(instance->authored.sourcePrefab.Asset(), command.instance, limits.Value());
-        if (source.HasError()) {
-            reject(source.ErrorValue());
-            return;
-        }
-        if (source.Value().Revision() != command.expectedSource) {
-            reject(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
-            return;
-        }
-        auto current = instance->authored.valueOverrides;
-        for (const auto &edit : command.edits) {
-            auto prepared = Prefab::PreparePrefabComponentEdit(source.Value(), current, edit, &*m_navigationPrefabSchemas, limits.Value());
-            if (prepared.HasError()) {
-                reject(prepared.ErrorValue());
-                return;
-            }
-            if (!prepared.Value().effective || prepared.Value().rebased.HasUnresolved()) {
-                reject(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
-                return;
-            }
-            current = std::move(prepared).Value().rebased;
-        }
-        auto candidate = m_document.Snapshot();
-        const auto placement = std::ranges::find(candidate.prefabInstances, command.instance, &ScenePrefabInstance::instanceId);
-        if (placement == candidate.prefabInstances.end()) {
-            reject(MakeError(Prefab::PrefabErrors::OverrideOrphan));
-            return;
-        }
-        placement->valueOverrides = std::move(current);
-        auto valid = ConvertSceneDocumentToRuntime(candidate, m_previewSceneId, fresh.sources.resolver, limits.Value(),
-                                                   &*m_navigationPrefabSchemas, m_triggerBinding);
-        if (valid.HasError()) {
-            reject(valid.ErrorValue());
-            return;
-        }
-        std::vector<SceneSource::SceneObjectSnapshot> graph;
-        for (const auto &entity : valid.Value().Entities()) {
-            SceneSource::SceneObjectSnapshot projected{.id = {entity.object.value}, .name = "Navigation validation"};
-            projected.components.navigationSurface = entity.components.navigationSurface;
-            projected.components.navigationRegion = entity.components.navigationRegion;
-            projected.components.navigationModifier = entity.components.navigationModifier;
-            projected.components.navigationLink = entity.components.navigationLink;
-            projected.components.navigationAgent = entity.components.navigationAgent;
-            graph.push_back(std::move(projected));
-        }
-        if (auto descriptors = ValidateNavigationInspectorDescriptors(graph, m_viewModel.navigationDefinitions); descriptors.HasError()) {
-            reject(descriptors.ErrorValue());
-            return;
-        }
+        auto command = PreparePrefabCommand(request, *instance, *m_navigationPrefabSchemas, m_document.ReplacementEpoch());
+        if (command.HasError())
+            return Return::Failure(command.ErrorValue());
+        auto source = fresh.sources.resolver.Resolve(instance->authored.sourcePrefab.Asset(), request.prefab->instance, limits.Value());
+        if (source.HasError())
+            return Return::Failure(source.ErrorValue());
+        if (source.Value().Revision() != command.Value().expectedSource)
+            return Return::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
+        auto overrides = PrepareOverrides(source.Value(), instance->authored.valueOverrides, command.Value(), *m_navigationPrefabSchemas,
+                                          limits.Value(), request.context.cancellation);
+        if (overrides.HasError())
+            return Return::Failure(overrides.ErrorValue());
+        const PrefabValidationContext context{fresh.sources.resolver,     limits.Value(),
+                                              *m_navigationPrefabSchemas, m_viewModel.navigationDefinitions,
+                                              m_previewSceneId,           m_triggerBinding};
+        if (auto valid = ValidatePrefabCandidate(m_document.Snapshot(), command.Value(), std::move(overrides).Value(), context);
+            valid.HasError())
+            return Return::Failure(valid.ErrorValue());
         SceneDocumentPrefabValueCommands executor{m_document, m_history};
-        auto committed =
-            executor.Execute(command, fresh.sources.resolver, &*m_navigationPrefabSchemas, limits.Value(), request.context.cancellation);
-        if (committed.HasError()) {
-            reject(committed.ErrorValue());
-            return;
-        }
-        m_prefabSources.emplace(std::move(fresh.sources));
-        m_viewModel.navigationEditError.clear();
-        HandleDocumentCommandResult(std::move(committed), "Update Prefab navigation components");
+        auto committed = executor.Execute(command.Value(), fresh.sources.resolver, &*m_navigationPrefabSchemas, limits.Value(),
+                                          request.context.cancellation);
+        if (committed.HasValue())
+            m_prefabSources.emplace(std::move(fresh.sources));
+        return committed;
     }
 }  // namespace Horo::Editor

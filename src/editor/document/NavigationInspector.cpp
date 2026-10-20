@@ -94,6 +94,33 @@ namespace Horo::Editor {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Bound root, replacement ownership and foreign profile arrays before any detached copy. */
+        Result<void> ValidatePreparationBudget(const SceneTransactionSnapshot &snapshot, std::span<const NavigationInspectorEdit> edits,
+                                               SceneTransactionLimits limits) {
+            std::size_t bytes{};
+            for (const auto &object : snapshot.objects) {
+                const auto owned = sizeof(object) + SceneDocumentDetail::EstimateSceneObjectOwnedMemoryBytes(object);
+                if (owned > limits.maximumPreparedBytes || bytes > limits.maximumPreparedBytes - owned)
+                    return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
+                bytes += owned;
+            }
+            // Reserve room for the detached root, replacement ownership and validation/fingerprint scratch.
+            if (bytes > limits.maximumPreparedBytes / 3)
+                return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
+            for (const auto &edit : edits) {
+                const bool bounded = std::visit([](const auto &value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (std::is_same_v<T, Runtime::NavigationSurfaceComponent> ||
+                                  std::is_same_v<T, Runtime::NavigationLinkComponent>)
+                        return value.profiles.size() <= Runtime::MaximumNavigationSurfaceProfiles;
+                    return true;
+                }, edit.value);
+                if (!bounded)
+                    return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ValidateNavigationInspectorDescriptors */
@@ -110,26 +137,8 @@ namespace Horo::Editor {
         using Return = Result<std::vector<SceneObjectReplacement>>;
         if (edits.empty() || edits.size() > limits.maximumChanges || snapshot.objects.size() > limits.maximumSnapshotObjects)
             return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
-        std::size_t bytes{};
-        for (const auto &object : snapshot.objects) {
-            const auto owned = sizeof(object) + SceneDocumentDetail::EstimateSceneObjectOwnedMemoryBytes(object);
-            if (owned > limits.maximumPreparedBytes || bytes > limits.maximumPreparedBytes - owned)
-                return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
-            bytes += owned;
-        }
-        // Reserve room for the detached root, replacement ownership and validation/fingerprint scratch.
-        if (bytes > limits.maximumPreparedBytes / 3)
-            return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
-        for (const auto &edit : edits) {
-            const bool bounded = std::visit([](const auto &value) {
-                using T = std::decay_t<decltype(value)>;
-                if constexpr (std::is_same_v<T, Runtime::NavigationSurfaceComponent> || std::is_same_v<T, Runtime::NavigationLinkComponent>)
-                    return value.profiles.size() <= Runtime::MaximumNavigationSurfaceProfiles;
-                return true;
-            }, edit.value);
-            if (!bounded)
-                return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
-        }
+        if (auto budget = ValidatePreparationBudget(snapshot, edits, limits); budget.HasError())
+            return Return::Failure(budget.ErrorValue());
         try {
             auto candidate = snapshot.objects;
             std::vector<SceneObjectReplacement> changes;

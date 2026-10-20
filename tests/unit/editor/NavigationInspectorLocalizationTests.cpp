@@ -4,13 +4,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 
-TEST_CASE("Navigation inspector copy is complete in both supported locales", "[unit][editor][navigation][localization]") {
-    using namespace Horo::Editor;
-    LocalizationService service{LocaleTag{"en-US"}};
-    LocalizationError error;
-    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
-    REQUIRE(service.LoadCatalogFile(root / "en-US.json", &error));
-    REQUIRE(service.LoadCatalogFile(root / "tr-TR.json", &error));
+namespace {
     constexpr std::array keys{"workspace.navigation_inspector.surface",
                               "workspace.navigation_inspector.region",
                               "workspace.navigation_inspector.modifier",
@@ -61,6 +55,15 @@ TEST_CASE("Navigation inspector copy is complete in both supported locales", "[u
                               "workspace.navigation_inspector.apply",
                               "workspace.navigation_inspector.cancel",
                               "workspace.navigation_inspector.rejected"};
+}
+
+TEST_CASE("Navigation inspector copy is complete in both supported locales", "[unit][editor][navigation][localization]") {
+    using namespace Horo::Editor;
+    LocalizationService service{LocaleTag{"en-US"}};
+    LocalizationError error;
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    REQUIRE(service.LoadCatalogFile(root / "en-US.json", &error));
+    REQUIRE(service.LoadCatalogFile(root / "tr-TR.json", &error));
     for (const auto locale : {"en-US", "tr-TR"}) {
         REQUIRE(service.Prepare(LocaleTag{locale}, &error));
         REQUIRE(service.ActivatePrepared(&error));

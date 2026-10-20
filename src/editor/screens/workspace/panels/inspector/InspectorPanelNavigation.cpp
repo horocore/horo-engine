@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "PhysicsInspectorWidgets.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 
 #include <algorithm>
@@ -83,11 +84,15 @@ namespace Horo::Editor {
         /** @brief Resolve descriptor ownership from an exact authored surface rather than selecting a global registry. */
         const Navigation::NavigationDefinition *Definition(Navigation::SurfaceId surface, const NavigationInspectorSession &session,
                                                            const EditorWorkspaceViewModel &view) {
+            Assets::AssetId asset;
             const auto found = std::ranges::find(session.Surfaces(), surface, &Runtime::NavigationSurfaceComponent::id);
-            if (found == session.Surfaces().end())
-                return nullptr;
+            if (found != session.Surfaces().end())
+                asset = found->definition;
+            for (const auto &draft : session.Drafts())
+                if (const auto *value = std::get_if<Runtime::NavigationSurfaceComponent>(&draft.edit.value); value && value->id == surface)
+                    asset = value->definition;
             for (const auto &entry : view.navigationDefinitions)
-                if (entry.asset == found->definition)
+                if (entry.asset == asset)
                     return entry.definition.get();
             return nullptr;
         }
@@ -119,9 +124,13 @@ namespace Horo::Editor {
                 ImGui::PopID();
             }
             for (std::size_t index = 0; index < selected.size(); ++index) {
-                if (std::ranges::any_of(definition->Profiles(), [&](const auto &p) {
+                if (std::ranges::any_of(definition->Profiles(),
+                                        [&](const auto &p) {
                     return p.id == selected[index];
-                }))
+                }) &&
+                    (!other || std::ranges::any_of(other->Profiles(), [&](const auto &p) {
+                    return p.id == selected[index];
+                })))
                     continue;
                 ImGui::PushID(static_cast<int>(index));
                 Ui::Hint((std::string(Label(ctx, "workspace.navigation_inspector.missing")) + " " + std::to_string(selected[index].Value()))
@@ -295,6 +304,33 @@ namespace Horo::Editor {
                     return Runtime::ValidateNavigationAgentComponent(component).HasValue();
             }, value);
         }
+
+        /** @brief Draw the selected typed occurrences using one shared card contract and retain invalid drafts. */
+        bool DrawCards(NavigationInspectorSession &session, const EditorWorkspaceViewModel &view, const EditorGuiContext &context) {
+            constexpr std::array titles{"workspace.navigation_inspector.surface", "workspace.navigation_inspector.region",
+                                        "workspace.navigation_inspector.modifier", "workspace.navigation_inspector.link",
+                                        "workspace.navigation_inspector.agent"};
+            bool valid = true;
+            std::size_t index{};
+            for (auto &draft : session.Drafts()) {
+                ImGui::PushID(static_cast<int>(index++));
+                Ui::Card card({.id = "navigation"});
+                card.DrawTitleBar({.id = "title", .title = Label(context, titles[draft.edit.value.index()]), .fonts = context.theme.fonts});
+                if (card.BeginBody()) {
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, draft.label, Theme::Text(), context.theme.fonts);
+                    std::visit([&](auto &component) {
+                        Toggle(context, "workspace.navigation_inspector.enabled", component.enabled);
+                        Draw(context, component, session, view);
+                    }, draft.edit.value);
+                    if (!Valid(draft.edit.value))
+                        Ui::ErrorText(Label(context, "workspace.navigation_inspector.invalid"), context.theme.fonts);
+                }
+                valid = Valid(draft.edit.value) && valid;
+                card.Finish();
+                ImGui::PopID();
+            }
+            return valid;
+        }
     }  // namespace
 
     /** @copydoc InspectorPanel::DrawNavigation */
@@ -310,39 +346,13 @@ namespace Horo::Editor {
                 canEdit = false;
         if (view.navigationDefinitions.empty())
             Ui::Hint(Label(context, "workspace.navigation_inspector.degraded"), context.theme.fonts);
-        constexpr std::array titles{"workspace.navigation_inspector.surface", "workspace.navigation_inspector.region",
-                                    "workspace.navigation_inspector.modifier", "workspace.navigation_inspector.link",
-                                    "workspace.navigation_inspector.agent"};
-        bool valid = true;
         ImGui::BeginDisabled(!canEdit);
-        std::size_t index{};
-        for (auto &draft : m_navigationSession.Drafts()) {
-            ImGui::PushID(static_cast<int>(index++));
-            Ui::Card card({.id = "navigation"});
-            card.DrawTitleBar({.id = "title", .title = Label(context, titles[draft.edit.value.index()]), .fonts = context.theme.fonts});
-            if (card.BeginBody()) {
-                Ui::WrappedText(ImGui::GetContentRegionAvail().x, draft.label, Theme::Text(), context.theme.fonts);
-                std::visit([&](auto &component) {
-                    Toggle(context, "workspace.navigation_inspector.enabled", component.enabled);
-                    Draw(context, component, m_navigationSession, view);
-                }, draft.edit.value);
-                if (!Valid(draft.edit.value))
-                    Ui::ErrorText(Label(context, "workspace.navigation_inspector.invalid"), context.theme.fonts);
-            }
-            valid = Valid(draft.edit.value) && valid;
-            card.Finish();
-            ImGui::PopID();
-        }
+        const bool valid = DrawCards(m_navigationSession, view, context);
         const bool dirty = m_navigationSession.Dirty();
-        const bool apply = Ui::Button(
-            {.label = Label(context, "workspace.navigation_inspector.apply"),
-             .enabled = dirty && valid && !view.navigationDefinitions.empty() && command.command == EditorWorkspaceViewCommand::None,
-             .font = context.theme.fonts.sans,
-             .style = {.width = Ui::StyleWidth::FillAvailable}});
-        const bool cancel = Ui::Button({.label = Label(context, "workspace.navigation_inspector.cancel"),
-                                        .enabled = dirty,
-                                        .font = context.theme.fonts.sans,
-                                        .style = {.width = Ui::StyleWidth::FillAvailable}}) ||
+        const bool apply = PhysicsInspectorWidgets::Action(context, "workspace.navigation_inspector.apply",
+                                                           dirty && valid && !view.navigationDefinitions.empty() &&
+                                                               command.command == EditorWorkspaceViewCommand::None);
+        const bool cancel = PhysicsInspectorWidgets::Action(context, "workspace.navigation_inspector.cancel", dirty) ||
                             (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
         if (cancel)
             m_navigationSession.Cancel();

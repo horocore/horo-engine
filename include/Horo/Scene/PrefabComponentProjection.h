@@ -10,6 +10,7 @@ namespace Horo::SceneSource {
     /** @brief Encodes one typed navigation occurrence with the canonical Scene codec.
      * @param kind Exact navigation component kind. @param instance Source-owned occurrence identity.
      * @param components Detached typed values. @return Portable canonical payload or typed invalid/unsupported error.
+     * @throws std::bad_alloc If bounded canonical payload storage cannot be allocated.
      * @details This is load-time authoring work; it performs no source lookup or document mutation.
      */
     [[nodiscard]] Result<Prefab::RawComponentPayload> EncodePrefabNavigationComponent(Runtime::BuiltinSceneComponentKind kind,

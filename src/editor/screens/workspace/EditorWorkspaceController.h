@@ -301,6 +301,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> EnsureNavigationPrefabSchemas(const Prefab::PrefabLimitProfile &limits);
         /** @brief Prepare and commit one exact Prefab-member gesture with canonical runtime graph validation. */
         void ApplyPrefabNavigationInspector(const NavigationInspectorRequest &request);
+        /** @brief Commit one admitted Prefab gesture while its fresh source capture and mutation lease stay pinned. */
+        [[nodiscard]] Result<SceneCommandResult> CommitPrefabNavigationInspector(const NavigationInspectorRequest &request);
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
@@ -337,6 +339,8 @@ namespace Horo::Editor {
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
         /** @brief Admit one atomic navigation gesture through existing document/history owners. */
         void ApplyNavigationInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit the complete ordinary selection and publish one canonical Scene transaction. */
+        void ApplySceneNavigationInspector(const NavigationInspectorRequest &request);
         /** @brief Capture descriptor publications outside Draw without inventing defaults in degraded projects. */
         void RefreshNavigationInspectorDefinitions();
         void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);

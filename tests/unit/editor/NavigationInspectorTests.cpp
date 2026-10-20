@@ -111,6 +111,22 @@ TEST_CASE("Navigation rejected batches preserve content revision dirty state and
     SECTION("degraded descriptor inventory") {
         definitions.clear();
     }
+    CHECK(PrepareNavigationInspectorEdits(before, edits, definitions).HasError());
+    const auto after = owner.scene.Snapshot().Value();
+    CHECK(after.revision == 0);
+    CHECK_FALSE(after.dirty);
+    CHECK(after.objects == ObjectsWithLinks());
+    CHECK(owner.scene.Replay(Fence(after), false).HasError());
+}
+
+TEST_CASE("Navigation source-ownership rejection preserves canonical history", "[unit][editor][navigation][inspector]") {
+    Owner owner;
+    auto before = owner.scene.Snapshot().Value();
+    auto agent = *before.objects[1].components.navigationAgent;
+    agent.radiusOverride = 0.7F;
+    auto modifier = *before.objects[2].components.navigationModifier;
+    std::vector<NavigationInspectorEdit> edits{{{2}, agent}, {{3}, modifier}};
+    std::vector<NavigationDefinitionSnapshot> definitions(owner.definitions.begin(), owner.definitions.end());
     SECTION("identity reassignment") {
         modifier.id = Id<Navigation::NavigationModifierId>(999);
         edits.back().value = modifier;
