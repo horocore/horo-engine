@@ -383,3 +383,6 @@ horo_allow_target_dependencies(TARGET HoroPackageProjectHost DEPENDENCIES HoroPa
 
 horo_allow_target_dependencies(TARGET HoroProjectCollisionSettings
     DEPENDENCIES HoroApplication HoroPhysics HoroAssets HoroFoundationJsonInternal)
+
+horo_allow_target_dependencies(TARGET HoroCliNavigationAdapters DEPENDENCIES HoroCliHost HoroNavigationBakeAutomation)
+horo_allow_target_dependencies(TARGET HoroMcpNavigationAdapters DEPENDENCIES HoroMcpRegistry HoroNavigationBakeAutomation)

@@ -848,3 +848,21 @@ controller before application extensions, save telemetry, modules and host
 observability disappear. Owners are retained through synchronous drainage and
 MCP's callback leases retain asynchronous application adapters on a reported
 finite drain timeout. No shutdown path destroys callback-owned application state.
+
+## Navigation bake adapter
+
+`HoroCliNavigationAdapters` depends only on CliHost and NavigationBakeAutomation.
+Its inert `navigation bake` descriptor declares the exact horo.navigation.bake
+capability and canonical human/JSON/JSONL output. Full-project, selected-surface
+and validate-only commands invoke the shared NavigationBakeApplication. An exact
+canonical definition UUID and Scene-UUID:surface-ID selection are validated before
+host acquisition; the host must return the owner bound to that exact definition
+and admitted project. No provider or project is discovered by the adapter.
+
+CliExecutionContext now exposes its exact optional AbsoluteDeadline as an owned
+steady-clock value. Adapters retaining application work copy that value instead
+of rebuilding an absolute deadline from rounded RemainingTimeout. The existing
+remaining-duration API remains suitable for synchronous subprocess caps. This is
+an additive contract; existing callers retain their behavior and binary consumers
+rebuild. Cancellation/presentation failure requests cancellation and observes the
+accepted operation through terminal drainage before returning.

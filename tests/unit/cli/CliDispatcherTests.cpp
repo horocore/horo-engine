@@ -76,6 +76,8 @@ namespace Horo::Cli {
             CancellationSource *cancelDuringExecution{};
             CliInvocationStopController *interruptDuringExecution{};
             std::uint64_t delayMilliseconds{};
+            std::optional<std::chrono::steady_clock::time_point> observedDeadline;
+            std::optional<std::chrono::steady_clock::time_point> observedDeadlineAfterDelay;
             bool acknowledgeStop{};
             IExternalProcessRunner *processRunner{};
         };
@@ -106,6 +108,11 @@ namespace Horo::Cli {
             ProjectInspectionAdapter(CliCommandDescriptor descriptor, IProjectInspectionUseCase &useCase, UseCaseState &state)
                 : descriptor_(std::move(descriptor)), useCase_(useCase), state_(state) {}
 
+            ProjectInspectionAdapter(const ProjectInspectionAdapter &) = delete;
+            ProjectInspectionAdapter &operator=(const ProjectInspectionAdapter &) = delete;
+            ProjectInspectionAdapter(ProjectInspectionAdapter &&) = delete;
+            ProjectInspectionAdapter &operator=(ProjectInspectionAdapter &&) = delete;
+
             ~ProjectInspectionAdapter() override {
                 ++state_.adapterDestructions;
             }
@@ -118,6 +125,7 @@ namespace Horo::Cli {
                 state_.observedRead = context.HasCapability({"horo.project.read"});
                 state_.observedWrite = context.HasCapability({"horo.project.write"});
                 state_.revision = context.Configuration().Revision();
+                state_.observedDeadline = context.AbsoluteDeadline();
 
                 if (state_.bindInvalidCorrelation) {
                     static_cast<void>(context.BindOperation({0}));
@@ -139,6 +147,7 @@ namespace Horo::Cli {
                     state_.interruptDuringExecution->Interrupt();
                 if (state_.delayMilliseconds != 0)
                     std::this_thread::sleep_for(std::chrono::milliseconds(state_.delayMilliseconds));
+                state_.observedDeadlineAfterDelay = context.AbsoluteDeadline();
                 if (state_.acknowledgeStop && context.IsStopRequested())
                     return Result<CliCommandResult>::Failure(MakeError(CliErrors::ExecutionCancelled));
                 if (state_.processRunner != nullptr) {
@@ -367,6 +376,33 @@ namespace Horo::Cli {
         invocation.cancellation = acknowledgedCancellation.Token();
         const CliTerminalResult cancelledDuringExecution = fixture.dispatcher.Dispatch(Request(), invocation);
         RequireError(cancelledDuringExecution, CliErrors::ExecutionCancelled);
+    }
+
+    TEST_CASE("CLI execution context preserves the exact original deadline through adapter work") {
+        DispatcherFixture fixture;
+        fixture.state.delayMilliseconds = 2;
+        const auto before = std::chrono::steady_clock::now();
+        const auto terminal = fixture.dispatcher.Dispatch(Request(), Invocation(fixture.configuration));
+        const auto after = std::chrono::steady_clock::now();
+        REQUIRE(terminal.Outcome().HasValue());
+        REQUIRE(fixture.state.observedDeadline.has_value());
+        CHECK(fixture.state.observedDeadline == fixture.state.observedDeadlineAfterDelay);
+        CHECK(*fixture.state.observedDeadline >= before + std::chrono::seconds{1});
+        CHECK(*fixture.state.observedDeadline <= after + std::chrono::seconds{1});
+    }
+
+    TEST_CASE("CLI execution context preserves an explicitly unlimited deadline") {
+        UseCaseState state;
+        ProjectInspectionUseCase useCase{state};
+        auto descriptor = Descriptor();
+        descriptor.timeout = {};
+        auto dispatcher = MakeDispatcher(state, useCase, descriptor);
+        REQUIRE(dispatcher.HasValue());
+        const auto configuration = Configuration();
+        auto instance = std::move(dispatcher).Value();
+        REQUIRE(instance.Dispatch(Request(), Invocation(configuration)).Outcome().HasValue());
+        CHECK_FALSE(state.observedDeadline.has_value());
+        CHECK_FALSE(state.observedDeadlineAfterDelay.has_value());
     }
 
     TEST_CASE("CLI dispatcher applies the descriptor deadline to terminal production") {
