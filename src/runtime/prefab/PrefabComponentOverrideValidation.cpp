@@ -13,8 +13,8 @@ namespace Horo::Prefab::ValueDetail {
                 return Invalid<void>();
             if (const auto *add = std::get_if<PrefabAddComponentOverride>(&record))
                 return ValidateRawComponentPayload(add->payload);
-            const auto &remove = std::get<PrefabRemoveComponentOverride>(record);
-            if (!remove.target.type.IsValid() || !remove.target.instance.IsValid() || remove.componentSchemaVersion == 0)
+            if (const auto &remove = std::get<PrefabRemoveComponentOverride>(record);
+                !remove.target.type.IsValid() || !remove.target.instance.IsValid() || remove.componentSchemaVersion == 0)
                 return Invalid<void>("Component removal requires exact stable type, occurrence and schema identities.");
             return Result<void>::Success();
         }
@@ -22,8 +22,7 @@ namespace Horo::Prefab::ValueDetail {
         /** @brief Bound standalone operation bytes separately from preserved metadata and aggregate wire storage. */
         Result<void> Charge(const PrefabComponentOverrideRecord &record, const Wire &encoded, const PrefabProjectPolicy &policy,
                             std::size_t &bytes) {
-            const auto standalone = EncodeComponentRecord(record).dump(0).size();
-            if (standalone > policy.maximumOverrideValueBytes)
+            if (const auto standalone = EncodeComponentRecord(record).dump(0).size(); standalone > policy.maximumOverrideValueBytes)
                 return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
             const auto size = encoded.dump(0).size();
             if (bytes > policy.maximumOverrideSetBytes || size > policy.maximumOverrideSetBytes - bytes ||
@@ -35,8 +34,7 @@ namespace Horo::Prefab::ValueDetail {
 
         /** @brief Instance identity is unique on an object even when two records claim different component types. */
         Result<void> InsertOccurrence(const PrefabComponentOverrideRecord &record, std::set<Occurrence> &targets) {
-            const auto target = ComponentTarget(record);
-            if (!targets.emplace(target.object, target.instance.Value()).second)
+            if (const auto target = ComponentTarget(record); !targets.emplace(target.object, target.instance.Value()).second)
                 return Result<void>::Failure(
                     MakeError(PrefabErrors::OverrideConflict, "Duplicate component intent cannot add/remove the same occurrence twice."));
             return Result<void>::Success();
@@ -44,8 +42,8 @@ namespace Horo::Prefab::ValueDetail {
 
         /** @brief Same-layer property patches cannot target a component being added or removed by that layer. */
         Result<void> CheckValueTarget(const PrefabValueOverrideRecord &record, const std::set<Occurrence> &targets) {
-            const auto *property = std::get_if<PrefabPropertyAddress>(&record.target);
-            if (property && targets.contains({property->Object(), property->ComponentInstance().Value()}))
+            if (const auto *property = std::get_if<PrefabPropertyAddress>(&record.target);
+                property && targets.contains({property->Object(), property->ComponentInstance().Value()}))
                 return Result<void>::Failure(
                     MakeError(PrefabErrors::OverrideConflict, "A component topology change and a property patch cannot share a layer."));
             return Result<void>::Success();

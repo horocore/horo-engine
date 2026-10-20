@@ -29,8 +29,8 @@ namespace Horo::Editor::SceneDocumentDetail {
         for (const auto &orphan : set->orphans)
             bytes += recordBytes(orphan.original) + orphan.authoredAgainst.projectVersion.prerelease.size();
         const auto componentBytes = [](const Prefab::PrefabComponentOverrideRecord &record) {
-            return std::visit([](const auto &value) -> std::size_t {
-                if constexpr (std::is_same_v<std::decay_t<decltype(value)>, Prefab::PrefabAddComponentOverride>)
+            return std::visit([]<typename Value>(const Value &value) -> std::size_t {
+                if constexpr (std::is_same_v<Value, Prefab::PrefabAddComponentOverride>)
                     return value.payload.component.typeId.Value().size() + value.payload.component.payload.capacity();
                 else
                     return value.target.type.Value().size();

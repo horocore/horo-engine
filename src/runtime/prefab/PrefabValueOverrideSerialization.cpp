@@ -113,8 +113,8 @@ namespace Horo::Prefab {
             for (const char *field : {"records", "conflicts", "orphans"})
                 if (!value[field].is_array() || value[field].size() > policy.maximumOverrideRecords)
                     return Invalid<PrefabValueOverrideSet>();
-            const auto issues = value["conflicts"].size() + value["orphans"].size();
-            if (issues > policy.maximumConflictAndOrphanRecords || issues > policy.maximumOverrideRecords ||
+            if (const auto issues = value["conflicts"].size() + value["orphans"].size();
+                issues > policy.maximumConflictAndOrphanRecords || issues > policy.maximumOverrideRecords ||
                 value["records"].size() > policy.maximumOverrideRecords - issues)
                 return Result<PrefabValueOverrideSet>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
             auto asset = Assets::AssetId::Parse(value["sourcePrefab"].get_ref<const std::string &>());
@@ -123,6 +123,24 @@ namespace Horo::Prefab {
             if (asset.HasError() || source.HasError() || schema.HasError())
                 return Invalid<PrefabValueOverrideSet>();
             return Result<PrefabValueOverrideSet>::Success({asset.Value(), std::move(source).Value(), schema.Value(), {}, {}, {}});
+        }
+
+        /** @brief Preserve all authored and observed value-conflict identities together after validating the complete entry. */
+        Result<void> DecodeValueConflict(const Json &entry, PrefabValueOverrideSet &set) {
+            if (!Foundation::HasAllowedFields(entry,
+                                              {"record", "authoredAgainst", "schemaRevision", "actualSourceValue", "observedSource"}) ||
+                !entry["actualSourceValue"].is_string() || !entry["schemaRevision"].is_string())
+                return Invalid<void>();
+            auto record = DecodeRecord(entry["record"]);
+            auto source = Detail::ParseRevision(entry["observedSource"]);
+            auto digest = ParseSha256(entry["actualSourceValue"].get_ref<const std::string &>());
+            auto authored = Detail::ParseRevision(entry["authoredAgainst"]);
+            auto schema = ParseSha256(entry["schemaRevision"].get_ref<const std::string &>());
+            if (record.HasError() || source.HasError() || digest.HasError() || authored.HasError() || schema.HasError())
+                return Invalid<void>();
+            set.conflicts.emplace_back(std::move(record).Value(), std::move(authored).Value(), schema.Value(), digest.Value(),
+                                       std::move(source).Value());
+            return Result<void>::Success();
         }
 
         /** @brief Decode preserved evidence without discarding its exact original typed operation. */
@@ -135,19 +153,8 @@ namespace Horo::Prefab {
                     set.componentConflicts.emplace_back(std::move(decoded).Value());
                     continue;
                 }
-                if (!Foundation::HasAllowedFields(entry,
-                                                  {"record", "authoredAgainst", "schemaRevision", "actualSourceValue", "observedSource"}) ||
-                    !entry["actualSourceValue"].is_string() || !entry["schemaRevision"].is_string())
-                    return Invalid<void>();
-                auto record = DecodeRecord(entry["record"]);
-                auto source = Detail::ParseRevision(entry["observedSource"]);
-                auto digest = ParseSha256(entry["actualSourceValue"].get_ref<const std::string &>());
-                auto authored = Detail::ParseRevision(entry["authoredAgainst"]);
-                auto schema = ParseSha256(entry["schemaRevision"].get_ref<const std::string &>());
-                if (record.HasError() || source.HasError() || digest.HasError() || authored.HasError() || schema.HasError())
-                    return Invalid<void>();
-                set.conflicts.emplace_back(std::move(record).Value(), std::move(authored).Value(), schema.Value(), digest.Value(),
-                                           std::move(source).Value());
+                if (auto decoded = DecodeValueConflict(entry, set); decoded.HasError())
+                    return decoded;
             }
             for (const auto &entry : value["orphans"]) {
                 if (const auto record = entry.find("record"); record != entry.end() && IsComponentRecord(*record)) {

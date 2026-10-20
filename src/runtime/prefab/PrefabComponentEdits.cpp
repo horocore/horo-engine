@@ -46,12 +46,13 @@ namespace Horo::Prefab {
             });
             if (object == objects.end())
                 return Result<void>::Failure(MakeError(PrefabErrors::OverrideOrphan));
-            const auto component = std::ranges::find(object->object.components, target.instance, &RawComponentPayload::instance);
-            if (component == object->object.components.end()) {
-                const auto added = std::ranges::find_if(set.componentRecords, [&target](const auto &record) {
+            if (const auto component = std::ranges::find(object->object.components, target.instance, &RawComponentPayload::instance);
+                component == object->object.components.end()) {
+                if (const auto added = std::ranges::find_if(set.componentRecords,
+                                                            [&target](const auto &record) {
                     return std::holds_alternative<PrefabAddComponentOverride>(record) && ComponentTarget(record) == target;
                 });
-                if (added == set.componentRecords.end())
+                    added == set.componentRecords.end())
                     return Result<void>::Failure(MakeError(PrefabErrors::OverrideOrphan));
                 EraseComponent(set, target);
             } else {
@@ -72,8 +73,7 @@ namespace Horo::Prefab {
                 const auto other = ComponentTarget(record);
                 return other.object == target.object && other.instance == target.instance;
             };
-            const auto existing = std::ranges::find_if(set.componentRecords, sameOccurrence);
-            if (existing != set.componentRecords.end()) {
+            if (const auto existing = std::ranges::find_if(set.componentRecords, sameOccurrence); existing != set.componentRecords.end()) {
                 if (!std::holds_alternative<PrefabAddComponentOverride>(*existing) || ComponentTarget(*existing) != target)
                     return Result<void>::Failure(MakeError(PrefabErrors::OverrideConflict));
                 *existing = add;
@@ -86,8 +86,7 @@ namespace Horo::Prefab {
         Result<void> ValidateEditedObjects(const EffectivePrefabCandidate &candidate, const PrefabComponentEdit &edit,
                                            const PrefabValueSchemaSnapshot &schemas) {
             std::vector<PrefabObjectAddress> targets;
-            std::visit([&targets](const auto &value) {
-                using Edit = std::decay_t<decltype(value)>;
+            std::visit([&targets]<typename Edit>(const Edit &value) {
                 if constexpr (std::is_same_v<Edit, PrefabAddComponentOverride>)
                     targets.push_back(value.object);
                 else if constexpr (std::is_same_v<Edit, PrefabRevertComponentOverridesEdit>) {
@@ -159,7 +158,10 @@ namespace Horo::Prefab {
                                                {},
                                                {},
                                                {}};
-            auto inspected = ResolvePrefabValueOverrides(source, current ? *current : empty, schemas, limits, cancellation);
+            const PrefabValueOverrideSet *initial = &empty;
+            if (current)
+                initial = &*current;
+            auto inspected = ResolvePrefabValueOverrides(source, *initial, schemas, limits, cancellation);
             if (inspected.HasError())
                 return inspected;
             auto next = std::move(inspected).Value().rebased;

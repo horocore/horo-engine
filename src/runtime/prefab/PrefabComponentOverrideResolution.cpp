@@ -1,6 +1,7 @@
 #include "PrefabValueResolutionInternal.h"
 
 #include <algorithm>
+#include <memory>
 #include <type_traits>
 
 namespace Horo::Prefab::ValueDetail {
@@ -15,7 +16,7 @@ namespace Horo::Prefab::ValueDetail {
         /** @brief Never resolve an occurrence by type alone or by an unstable vector position. */
         const RawComponentPayload *FindComponent(const ResolvedPrefabObject &object, const PrefabComponentOverrideTarget &target) {
             const auto found = std::ranges::find(object.object.components, target.instance, &RawComponentPayload::instance);
-            return found != object.object.components.end() && found->component.typeId == target.type ? &*found : nullptr;
+            return found != object.object.components.end() && found->component.typeId == target.type ? std::to_address(found) : nullptr;
         }
 
         /** @brief Validate known fields without normalizing or discarding provider-owned opaque bytes. */
@@ -64,19 +65,20 @@ namespace Horo::Prefab::ValueDetail {
                 if (policy->schemaVersion != behavior.schemaVersion)
                     return SchemaChanged;
             }
-            const auto version = std::visit([](const auto &record) {
-                if constexpr (std::is_same_v<std::decay_t<decltype(record)>, PrefabAddComponentOverride>)
+            if (const auto version = std::visit(
+                    []<typename Record>(const Record &record) {
+                if constexpr (std::is_same_v<Record, PrefabAddComponentOverride>)
                     return record.payload.component.schemaVersion;
                 else
                     return record.componentSchemaVersion;
             }, *intent.record);
-            if (state.schemas->FindComponent(target.type)->component.schemaVersion != version)
+                state.schemas->FindComponent(target.type)->component.schemaVersion != version)
                 return SchemaChanged;
             return std::nullopt;
         }
 
         /** @brief Admit against the immutable source; staged peers never change a retained precondition. */
-        Result<void> InspectIntent(ResolutionState &state, const ComponentIntent &intent, PrefabValueOverrideResolution &result) {
+        Result<void> InspectIntent(const ResolutionState &state, const ComponentIntent &intent, PrefabValueOverrideResolution &result) {
             const auto target = ComponentTarget(*intent.record);
             const auto objects = state.source.Objects();
             const auto object = std::ranges::find_if(objects, [&target](const auto &entry) {
