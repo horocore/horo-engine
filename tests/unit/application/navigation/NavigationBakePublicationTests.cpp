@@ -406,7 +406,8 @@ namespace Horo::Application {
             malformed.resize(harness.config.cookLimits.maximumArtifactBytes + 1, 'x');
         }
         WritePublicationBytes(pointer, malformed);
-        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot, harness.config.cookLimits).HasError());
+        CHECK(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot, harness.config.cookLimits)
+                  .HasError());
         CheckCorruptGenerationCannotPublish(harness);
         CHECK(harness.service->Published() == prior);
         CHECK(PublicationBytes(pointer) == malformed);
@@ -428,7 +429,9 @@ namespace Horo::Application {
             bytes.resize(bytes.size() / 2);
             WritePublicationBytes(current.generationRoot / contents.entries.front().artifactFile, bytes);
         }
-        CHECK(Assets::ReadCookGenerationContents(current, harness.config.maximumCandidateBytes, harness.config.cookLimits).HasError());
+        CHECK(Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, current, harness.config.maximumCandidateBytes,
+                                                 harness.config.cookLimits)
+                  .HasError());
         CheckCorruptGenerationCannotPublish(harness);
     }
 

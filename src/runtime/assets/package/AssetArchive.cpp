@@ -319,12 +319,12 @@ namespace Horo::Assets {
     }  // namespace
 
     /** @copydoc BuildAssetArchive */
-    Result<std::vector<std::uint8_t>> BuildAssetArchive(const AssetChunkPlan &plan, const AssetCookGeneration &generation,
-                                                        const AssetArchiveLimits &limits) {
+    Result<std::vector<std::uint8_t>> BuildAssetArchive(const DurableFileSystem &files, const AssetChunkPlan &plan,
+                                                        const AssetCookGeneration &generation, const AssetArchiveLimits &limits) {
         const AssetCookLimits cookCeilings;
         const AssetCookLimits cookLimits{.maximumArtifactBytes = std::min(limits.maximumAssetBytes, cookCeilings.maximumArtifactBytes),
                                          .maximumAssets = std::min(limits.maximumAssets, cookCeilings.maximumAssets)};
-        auto contents = ReadCookGenerationContents(generation, limits.maximumArchiveBytes, cookLimits);
+        auto contents = ReadCookGenerationContents(files, generation, limits.maximumArchiveBytes, cookLimits);
         if (contents.HasError())
             return Result<std::vector<std::uint8_t>>::Failure(contents.ErrorValue());
         auto generationContents = std::move(contents).Value();

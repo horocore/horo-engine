@@ -181,7 +181,7 @@ namespace Horo::Application {
         CHECK(harness.builder->builds.load() == builds);
         if (mode == NavigationBakeExecutionMode::ValidateOnly)
             CHECK(TreeState(harness.directory.path) == before);
-        const auto durable = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto durable = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(durable.HasValue());
         CHECK(durable.Value().manifestDigest == previous->generation.manifestDigest);
     }

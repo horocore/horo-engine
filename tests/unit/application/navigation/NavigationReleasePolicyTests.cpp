@@ -26,7 +26,8 @@ namespace Horo::Application {
         [[nodiscard]] PreparedNavigationReleaseContent Prepare(const std::filesystem::path &root, const AssetCookTargetId &target) {
             const auto set = Navigation::TestSupport::EmptyContent();
             auto generation = Publish(root, target, Asset(), Navigation::TestSupport::ContentEnvelope(set, Asset(), target));
-            auto prepared = PrepareNavigationReleaseContent(generation, Plan(Asset(), Release::DistributionProductKind::GameRuntime),
+            auto prepared = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, generation,
+                                                            Plan(Asset(), Release::DistributionProductKind::GameRuntime),
                                                             Release::DistributionProductKind::GameRuntime);
             INFO((prepared.HasError() ? ErrorText(prepared.ErrorValue()) : std::string{}));
             REQUIRE(prepared.HasValue());
@@ -64,12 +65,13 @@ namespace Horo::Application {
         }
         const auto generation =
             Publish(directory.root / "cook", Target(), Asset(), Navigation::TestSupport::ContentEnvelope(set, Asset(), Target()));
-        const auto prepared = PrepareNavigationReleaseContent(generation, Plan(Asset(), Release::DistributionProductKind::GameRuntime),
+        const auto prepared = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, generation,
+                                                              Plan(Asset(), Release::DistributionProductKind::GameRuntime),
                                                               Release::DistributionProductKind::GameRuntime);
         Navigation::TestSupport::RequireError(prepared, Navigation::NavigationErrors::NavMeshArtifactCorrupt);
         REQUIRE_FALSE(std::filesystem::exists(directory.root / "stage"));
         REQUIRE_FALSE(std::filesystem::exists(directory.root / "output"));
-        const auto current = Assets::ResolveCurrentCookGeneration(directory.root / "cook");
+        const auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, directory.root / "cook");
         REQUIRE(current.HasValue());
         REQUIRE(current.Value().manifestDigest == generation.manifestDigest);
     }
@@ -83,34 +85,40 @@ namespace Horo::Application {
         const Assets::AssetCookLimits legalCook;
         const Assets::AssetArchiveLimits release;
         REQUIRE(release.maximumAssets > legalCook.maximumAssets);
-        REQUIRE(Assets::ReadCookGenerationContents(generation, release.maximumArchiveBytes, legalCook).HasValue());
-        REQUIRE(PrepareNavigationReleaseContent(generation, Plan(Asset(), Release::DistributionProductKind::GameRuntime),
+        REQUIRE(Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation, release.maximumArchiveBytes, legalCook)
+                    .HasValue());
+        REQUIRE(PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, generation,
+                                                Plan(Asset(), Release::DistributionProductKind::GameRuntime),
                                                 Release::DistributionProductKind::GameRuntime, release)
                     .HasValue());
         auto tooMany = legalCook;
         ++tooMany.maximumAssets;
-        const auto countFailure = Assets::ReadCookGenerationContents(generation, release.maximumArchiveBytes, tooMany);
+        const auto countFailure =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation, release.maximumArchiveBytes, tooMany);
         REQUIRE(countFailure.HasError());
         REQUIRE(countFailure.ErrorValue().domain.Value() == "horo.asset");
         REQUIRE(countFailure.ErrorValue().code.Value() == "asset.cook.too_large");
         auto tooLarge = legalCook;
         ++tooLarge.maximumArtifactBytes;
-        const auto byteFailure = Assets::ReadCookGenerationContents(generation, release.maximumArchiveBytes, tooLarge);
+        const auto byteFailure =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation, release.maximumArchiveBytes, tooLarge);
         REQUIRE(byteFailure.HasError());
         REQUIRE(byteFailure.ErrorValue().domain.Value() == "horo.asset");
         REQUIRE(byteFailure.ErrorValue().code.Value() == "asset.cook.too_large");
         auto restricted = release;
         restricted.maximumAssets = 1;
-        REQUIRE(PrepareNavigationReleaseContent(generation, Plan(Asset(), Release::DistributionProductKind::GameRuntime),
+        REQUIRE(PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, generation,
+                                                Plan(Asset(), Release::DistributionProductKind::GameRuntime),
                                                 Release::DistributionProductKind::GameRuntime, restricted)
                     .HasValue());
         restricted.maximumAssets = 0;
-        const auto noAssets = PrepareNavigationReleaseContent(generation, Plan(Asset(), Release::DistributionProductKind::GameRuntime),
+        const auto noAssets = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, generation,
+                                                              Plan(Asset(), Release::DistributionProductKind::GameRuntime),
                                                               Release::DistributionProductKind::GameRuntime, restricted);
         REQUIRE(noAssets.HasError());
         REQUIRE(noAssets.ErrorValue().domain.Value() == "horo.asset");
         REQUIRE(noAssets.ErrorValue().code.Value() == "asset.cook.too_large");
-        const auto current = Assets::ResolveCurrentCookGeneration(directory.root / "cook");
+        const auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, directory.root / "cook");
         REQUIRE(current.HasValue());
         REQUIRE(current.Value().manifestDigest == generation.manifestDigest);
         REQUIRE_FALSE(std::filesystem::exists(directory.root / "output"));
@@ -135,7 +143,8 @@ namespace Horo::Application {
         const auto set = Navigation::TestSupport::EmptyContent();
         const auto generation = Publish(directory.root / "oversize", oversizeTarget, Asset(),
                                         Navigation::TestSupport::ContentEnvelope(set, Asset(), oversizeTarget));
-        Navigation::TestSupport::RequireError(PrepareNavigationReleaseContent(generation, Plan(Asset(), GameRuntime), GameRuntime),
+        Navigation::TestSupport::RequireError(PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, generation,
+                                                                              Plan(Asset(), GameRuntime), GameRuntime),
                                               Navigation::NavigationErrors::CapacityExceeded);
         REQUIRE_FALSE(std::filesystem::exists(directory.root / "oversize-output"));
     }

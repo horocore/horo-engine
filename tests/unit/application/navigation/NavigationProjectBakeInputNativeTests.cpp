@@ -16,7 +16,8 @@ namespace Horo::Application {
             const auto durable = ResolveNavigationBakePublication(config);
             REQUIRE(durable.HasValue());
             CHECK(durable.Value()->generation.manifestDigest == publication->generation.manifestDigest);
-            const auto contents = Assets::ReadCookGenerationContents(publication->generation, config.maximumCandidateBytes);
+            const auto contents =
+                Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, publication->generation, config.maximumCandidateBytes);
             REQUIRE(contents.HasValue());
             auto byteCache = Assets::AssetPayloadCache::Create(8, 64U * 1024U).Value();
             for (const auto scene : {Asset(2), Asset(3)}) {

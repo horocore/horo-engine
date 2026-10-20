@@ -73,7 +73,7 @@ namespace Horo::Assets::CookStorageDetail {
         }
 
         /** @brief Verifies every immutable existing byte before reusing a deterministic generation. */
-        Result<void> VerifyExistingGeneration(const AssetCookGeneration &generation,
+        Result<void> VerifyExistingGeneration(const DurableFileSystem &files, const AssetCookGeneration &generation,
                                               const std::span<const std::vector<std::uint8_t>> payloads, const AssetCookLimits &limits) {
             std::size_t total{};
             for (const auto &payload : payloads) {
@@ -81,7 +81,7 @@ namespace Horo::Assets::CookStorageDetail {
                     return Result<void>::Failure(MakeError(CookErrors::TooLarge));
                 total += payload.size();
             }
-            auto existing = ReadCookGenerationContents(generation, total, limits);
+            auto existing = ReadCookGenerationContents(files, generation, total, limits);
             if (existing.HasError())
                 return Result<void>::Failure(existing.ErrorValue());
             if (!std::ranges::equal(existing.Value().artifacts, payloads))
@@ -95,27 +95,26 @@ namespace Horo::Assets::CookStorageDetail {
                                                  const std::span<const std::vector<std::uint8_t>> payloads,
                                                  const std::span<const std::uint8_t> manifestBytes, const AssetCookLimits &limits,
                                                  DurableFileSystem *files) {
-            std::error_code directoryError;
             const auto privateGeneration = operationRoot / "generation";
             const auto created = files->CreateDirectoryPath(privateGeneration, DirectoryCreationMode::Single);
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
             if (!created.Value())
                 return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
-            if (const auto existingStatus = std::filesystem::symlink_status(generation.generationRoot, directoryError);
-                std::filesystem::exists(existingStatus)) {
-                if (directoryError || !std::filesystem::is_directory(existingStatus))
+            auto existing = InspectStorageEntry(*files, generation.generationRoot);
+            if (existing.HasError())
+                return Result<void>::Failure(existing.ErrorValue());
+            if (existing.Value()) {
+                if (existing.Value()->kind != FileEntryKind::Directory)
                     return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
-                if (auto verified = VerifyExistingGeneration(generation, payloads, limits); verified.HasError())
+                if (auto verified = VerifyExistingGeneration(*files, generation, payloads, limits); verified.HasError())
                     return Result<void>::Failure(verified.ErrorValue());
             } else {
-                if (directoryError && directoryError != std::errc::no_such_file_or_directory)
-                    return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
                 if (auto written = WriteGenerationFiles(privateGeneration, entries, payloads, manifestBytes, files); written.HasError())
                     return Result<void>::Failure(written.ErrorValue());
                 auto stagedGeneration = generation;
                 stagedGeneration.generationRoot = privateGeneration;
-                if (auto verified = VerifyExistingGeneration(stagedGeneration, payloads, limits); verified.HasError())
+                if (auto verified = VerifyExistingGeneration(*files, stagedGeneration, payloads, limits); verified.HasError())
                     return Result<void>::Failure(verified.ErrorValue());
                 if (auto synced = files->SyncDirectory(privateGeneration); synced.HasError())
                     return Result<void>::Failure(synced.ErrorValue());
@@ -144,7 +143,10 @@ namespace Horo::Assets::CookStorageDetail {
             const auto preparedCurrent = operationRoot / "current.json";
             if (auto written = WritePrivate(preparedCurrent, currentBytes, policy.files); written.HasError())
                 return Result<void>::Failure(written.ErrorValue());
-            if (auto verified = ReadFile(preparedCurrent, currentBytes.size()); verified.HasError() || verified.Value() != currentBytes)
+            auto verified = ReadFile(*policy.files, preparedCurrent, currentBytes.size());
+            if (verified.HasError())
+                return Result<void>::Failure(verified.ErrorValue());
+            if (verified.Value() != currentBytes)
                 return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
             if (policy.prepareCommit) {
                 if (auto prepared = policy.prepareCommit(generation); prepared.HasError())
@@ -207,10 +209,10 @@ namespace Horo::Assets::CookStorageDetail {
 
     /** @copydoc WritePrivate */
     Result<void> WritePrivate(const std::filesystem::path &path, const std::span<const std::uint8_t> bytes, DurableFileSystem *files) {
-        std::error_code error;
-        if (const auto status = std::filesystem::symlink_status(path, error); !HasPlainPath(path) ||
-                                                                              status.type() != std::filesystem::file_type::not_found ||
-                                                                              (error && error != std::errc::no_such_file_or_directory))
+        auto existing = InspectStorageEntry(*files, path);
+        if (existing.HasError())
+            return Result<void>::Failure(existing.ErrorValue());
+        if (existing.Value())
             return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
         return files->WriteDurable(path, std::as_bytes(bytes));
     }
@@ -228,7 +230,10 @@ namespace Horo::Assets {
             return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
         if (const auto valid = ValidateGenerationEntries(entries, artifactPayloads, target, limits); valid.HasError())
             return Result<AssetCookGeneration>::Failure(valid.ErrorValue());
-        if (!HasPlainPath(targetRoot))
+        auto root = InspectStorageEntry(*policy.files, targetRoot);
+        if (root.HasError())
+            return Result<AssetCookGeneration>::Failure(root.ErrorValue());
+        if (!root.Value() || root.Value()->kind != FileEntryKind::Directory)
             return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
         if (auto initialized = EnsurePublicationBaseline(targetRoot, target, limits, policy); initialized.HasError())
             return Result<AssetCookGeneration>::Failure(initialized.ErrorValue());
@@ -244,7 +249,7 @@ namespace Horo::Assets {
         auto genRelPath = std::string("generations/") + HexEncodeSha256(manifestDigest);
         auto genRoot = targetRoot / genRelPath;
 
-        if (!HasPlainPath(genRoot) || !IsSafePathWithin(targetRoot, genRoot))
+        if (!IsSafePathWithin(targetRoot, genRoot))
             return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
         if (auto created = policy.files->CreateDirectoryPath(genRoot.parent_path(), DirectoryCreationMode::Parents); created.HasError())
             return Result<AssetCookGeneration>::Failure(created.ErrorValue());

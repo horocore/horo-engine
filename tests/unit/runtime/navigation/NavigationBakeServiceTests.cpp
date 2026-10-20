@@ -42,7 +42,7 @@ namespace Horo::Application {
     TEST_CASE("Cache store failure cannot replace an existing navigation generation", "[cache][authority]") {
         BakeHarness harness;
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
-        const auto before = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto before = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(before.HasValue());
         harness.service->Close();
         auto files = std::make_shared<Horo::TestSupport::RecordingImmutableFiles>();
@@ -54,7 +54,7 @@ namespace Horo::Application {
         REQUIRE(terminal.error);
         CHECK(ErrorChainContains(*terminal.error, FileStorageErrors::IoFailed.domain, FileStorageErrors::IoFailed.code));
         CHECK(files->stores == 1);
-        const auto after = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto after = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(after.HasValue());
         CHECK(after.Value().manifestDigest == before.Value().manifestDigest);
     }
@@ -108,9 +108,10 @@ namespace Horo::Application {
         CHECK(before->tiles.tiles[3]->ContentIdentity() == after->tiles.tiles[3]->ContentIdentity());
         CHECK(Query(after->tiles).Value().status != NavigationPathStatus::Reachable);
         CHECK(Query(before->tiles).Value().status == NavigationPathStatus::Reachable);  // Retained generation remains queryable.
-        auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(current.HasValue());
-        auto contents = Assets::ReadCookGenerationContents(current.Value(), harness.config.maximumCandidateBytes);
+        auto contents =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, current.Value(), harness.config.maximumCandidateBytes);
         REQUIRE(contents.HasValue());
         auto envelope = Assets::DecodeCookedArtifact(contents.Value().artifacts.front());
         REQUIRE(envelope.HasValue());
@@ -216,7 +217,7 @@ namespace Horo::Application {
         harness.fixture.ExcludeBorder();
         CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK(harness.service->Published() == before);
-        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).HasError());
+        CHECK(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).HasError());
     }
 
     TEST_CASE("Source invalidation and replacement failure preserve current while post-rename failure reports committed truth") {
@@ -236,16 +237,18 @@ namespace Horo::Application {
         REQUIRE(staged);
         CHECK(Terminal(*harness.service, harness.operations, stale).state == OperationState::Cancelled);
         CHECK(harness.service->Published() == before);
-        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+        CHECK(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).Value().manifestDigest ==
+              before->generation.manifestDigest);
         files->failReplacement.store(true);
         CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK(harness.service->Published() == before);
-        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+        CHECK(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).Value().manifestDigest ==
+              before->generation.manifestDigest);
         files->failReplacement.store(false);
         files->failAfterReplacement.store(true);
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         REQUIRE(harness.service->Published()->generation.durabilityError);
-        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest ==
+        CHECK(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).Value().manifestDigest ==
               harness.service->Published()->generation.manifestDigest);
     }
 
@@ -275,7 +278,8 @@ namespace Horo::Application {
         harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
         CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK_FALSE(harness.service->Published());
-        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+        CHECK(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).Value().manifestDigest ==
+              before->generation.manifestDigest);
     }
 
     TEST_CASE("Navigation warm cache rejects a foreign envelope key without rebuilding or replacing the valid generation") {
@@ -319,10 +323,11 @@ namespace Horo::Application {
         CHECK(terminal.error->code.Value() == NavigationErrors::NavMeshArtifactCorrupt.code.Value());
         CHECK(harness.builder->builds.load() == builds);
         CHECK_FALSE(harness.service->Published());
-        const auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(current.HasValue());
         CHECK(current.Value().manifestDigest == before->generation.manifestDigest);
-        CHECK(Assets::ReadCookGenerationContents(current.Value(), harness.config.maximumCandidateBytes).HasValue());
+        CHECK(Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, current.Value(), harness.config.maximumCandidateBytes)
+                  .HasValue());
     }
 
     TEST_CASE("Locked incremental publication preserves every unrelated artifact and rejects another writer") {
@@ -343,8 +348,9 @@ namespace Horo::Application {
                                                    .artifactFile = harness.config.definition.ToString() + ".cooked",
                                                    .artifactHash = ComputeSha256(std::as_bytes(std::span{artifact}))};
         PublishLegacyArtifact(harness, other, artifact);
-        const auto legacy = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value();
-        REQUIRE(Assets::ReadCookGenerationContents(legacy, harness.config.maximumCandidateBytes).HasValue());
+        const auto legacy = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).Value();
+        REQUIRE(
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, legacy, harness.config.maximumCandidateBytes).HasValue());
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         harness.fixture.ExcludeBorder();
@@ -353,12 +359,13 @@ namespace Horo::Application {
             REQUIRE(lock.HasValue());
             CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
             CHECK(harness.service->Published() == before);
-            CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest ==
+            CHECK(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).Value().manifestDigest ==
                   before->generation.manifestDigest);
         }
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
-        const auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value();
-        const auto read = Assets::ReadCookGenerationContents(current, harness.config.maximumCandidateBytes);
+        const auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).Value();
+        const auto read =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, current, harness.config.maximumCandidateBytes);
         REQUIRE(read.HasValue());
         const auto &contents = read.Value();
         REQUIRE(contents.entries.size() == 2);
@@ -366,21 +373,26 @@ namespace Horo::Application {
         CHECK(contents.entries.back().artifactHash == other.artifactHash);
         CHECK(contents.artifacts.back() == artifact);
         CHECK(contents.entries.back().artifactFile == otherId.ToString() + ".cooked");
-        CHECK(Assets::ReadCookGenerationContents(legacy, harness.config.maximumCandidateBytes).Value().artifacts.front() == artifact);
+        CHECK(Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, legacy, harness.config.maximumCandidateBytes)
+                  .Value()
+                  .artifacts.front() == artifact);
     }
 
     TEST_CASE("Artifact replacement rejects a noncanonical filename without changing the current authority") {
         BakeHarness harness;
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
-        const auto contents = Assets::ReadCookGenerationContents(before->generation, harness.config.maximumCandidateBytes).Value();
+        const auto contents =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, before->generation, harness.config.maximumCandidateBytes)
+                .Value();
         auto entry = contents.entries.front();
         entry.artifactFile = "foreign.cooked";
         CHECK(Assets::PublishCookArtifactReplacement(harness.config.targetRoot, harness.config.target, entry, contents.artifacts.front(),
                                                      harness.config.maximumCandidateBytes, harness.config.cookLimits,
                                                      {.files = harness.config.files.get(), .newOperationId = harness.config.newOperationId})
                   .HasError());
-        CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+        CHECK(Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot).Value().manifestDigest ==
+              before->generation.manifestDigest);
     }
 
     TEST_CASE("Removing all walkable geometry publishes a complete empty tile closure without retaining old topology") {
@@ -399,7 +411,9 @@ namespace Horo::Application {
             CHECK(tile->Topology().polygons.empty());
         }
         CHECK(Query(before->tiles).Value().status == NavigationPathStatus::Reachable);
-        const auto contents = Assets::ReadCookGenerationContents(after->generation, harness.config.maximumCandidateBytes).Value();
+        const auto contents =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, after->generation, harness.config.maximumCandidateBytes)
+                .Value();
         const auto envelope = Assets::DecodeCookedArtifact(contents.artifacts.front()).Value();
         const auto decoded = DecodeNavigationCookedTileSet(envelope.payload, harness.config.maximumCandidateBytes).Value();
         CHECK(std::ranges::all_of(decoded.tiles, [](const auto &tile) {

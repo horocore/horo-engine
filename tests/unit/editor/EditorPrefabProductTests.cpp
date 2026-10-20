@@ -145,7 +145,8 @@ namespace Horo::Application::PrefabEditorProductTest {
             fixture.request.runtimePrefabRoots = {fixture.prefabId};
             REQUIRE(fixture.Cook().HasValue());
             auto capture =
-                Internal::CommittedSceneAssets::Capture({fixture.cooked.path, fixture.request.assets.target}, fixture.registry.Snapshot());
+                Internal::CommittedSceneAssets::Capture(Horo::NativeDurableFileSystem{},
+                                                        {fixture.cooked.path, fixture.request.assets.target}, fixture.registry.Snapshot());
             REQUIRE(capture.HasValue());
             auto bytes = capture.Value()->ArtifactProvider().Load(fixture.prefabId, {});
             REQUIRE(bytes.HasValue());

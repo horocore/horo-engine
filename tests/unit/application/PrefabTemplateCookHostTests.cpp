@@ -16,7 +16,7 @@ namespace {
 
     /** @brief Reads actual published envelope bytes without treating a cache directory as authority. */
     Result<AssetCookArtifact> GenerationArtifact(const AssetCookGeneration &generation, const AssetId id) {
-        auto inventory = ReadCookGenerationContents(generation, 1024U * 1024U);
+        auto inventory = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation, 1024U * 1024U);
         if (inventory.HasError())
             return Result<AssetCookArtifact>::Failure(inventory.ErrorValue());
         for (const auto &bytes : inventory.Value().artifacts) {
@@ -90,7 +90,7 @@ TEST_CASE("Host publishes dynamic templates resources and expanded scenes once a
                                               Prefab::PrefabLimitProfile::Create({}).Value());
     REQUIRE(cooked.HasValue());
     REQUIRE(cooked.Value().Data().dependencies.size() == 1);
-    const auto inventory = ReadCookGenerationContents(first.Value().generation, 1024U * 1024U);
+    const auto inventory = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, first.Value().generation, 1024U * 1024U);
     REQUIRE(inventory.HasValue());
     const auto resource = std::ranges::find(inventory.Value().entries, TestMeshRecord().id, &AssetCookManifestEntry::assetId);
     REQUIRE(resource != inventory.Value().entries.end());

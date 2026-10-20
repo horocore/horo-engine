@@ -194,7 +194,7 @@ TEST_CASE("Pinned cook validates fresh and reused envelopes identically and inva
     REQUIRE(reused.Value().generation.manifestDigest == fresh.Value().generation.manifestDigest);
     WriteFile(fixture.project.dir.path / second.sourcePath.String(), std::vector<std::uint8_t>{8});
     REQUIRE(fixture.Cook().HasError());
-    const auto retained = ResolveCurrentCookGeneration(fixture.request.cookedRoot, fixture.request.limits);
+    const auto retained = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.request.cookedRoot, fixture.request.limits);
     REQUIRE(retained.HasValue());
     REQUIRE(retained.Value().manifestDigest == fresh.Value().generation.manifestDigest);
     fixture.Capture();
@@ -213,7 +213,7 @@ TEST_CASE("Pinned cook rechecks source drift at the real selector barrier and re
     fixture.request.publicationFiles = files;
     REQUIRE(fixture.Cook(2).HasError());
     REQUIRE(files->injected);
-    const auto retained = ResolveCurrentCookGeneration(fixture.request.cookedRoot, fixture.request.limits);
+    const auto retained = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.request.cookedRoot, fixture.request.limits);
     REQUIRE(retained.HasValue());
     REQUIRE(retained.Value().manifestDigest == first.Value().generation.manifestDigest);
 }
@@ -246,7 +246,7 @@ TEST_CASE("Dependent cook uses exact unpublished resource envelopes and one comb
     REQUIRE(cooked.HasValue());
     CHECK(cooked.Value().generation.artifactCount == 2);
     REQUIRE(resource.has_value());
-    const auto inventory = ReadCookGenerationContents(cooked.Value().generation, 4096);
+    const auto inventory = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, cooked.Value().generation, 4096);
     REQUIRE(inventory.HasValue());
     const auto published = std::ranges::find(inventory.Value().entries, resource->id, &AssetCookManifestEntry::assetId);
     REQUIRE(published != inventory.Value().entries.end());
@@ -276,7 +276,7 @@ TEST_CASE("Dependent factory failure or cancellation never selects a resource-on
     };
     fixture.request.dependentPhase = phase;
     REQUIRE(fixture.Cook(1, cancellation.Token()).HasError());
-    const auto retained = ResolveCurrentCookGeneration(fixture.request.cookedRoot);
+    const auto retained = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.request.cookedRoot);
     REQUIRE(retained.HasValue());
     CHECK(retained.Value().manifestDigest == previous.Value().generation.manifestDigest);
 }

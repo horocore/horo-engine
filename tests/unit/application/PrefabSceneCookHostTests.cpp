@@ -47,10 +47,10 @@ namespace {
 
         Result<Release::ReleaseStagedPayload> Package(const Release::ReleaseStageContext &, const Release::ReleaseBuiltPayload &,
                                                       const Release::ReleaseCookedPayload &cooked) override {
-            const auto active = ResolveCurrentCookGeneration(fixture_.cooked.path);
+            const auto active = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture_.cooked.path);
             if (active.HasError() || active.Value().generationRoot != cooked.root || active.Value().manifestDigest != cooked.bytesDigest)
                 return Result<Release::ReleaseStagedPayload>::Failure(MakeError(PrefabSceneCookErrors::Stale));
-            const auto inventory = ReadCookGenerationContents(active.Value(), 1024U * 1024U);
+            const auto inventory = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, active.Value(), 1024U * 1024U);
             if (inventory.HasError())
                 return Result<Release::ReleaseStagedPayload>::Failure(inventory.ErrorValue());
             packagedPinnedGeneration_ =
@@ -99,7 +99,7 @@ TEST_CASE("Host prefab scene cook publishes expanded source-free scenes and vali
     const auto first = fixture.Cook();
     REQUIRE(first.HasValue());
     CHECK(first.Value().generation.artifactCount == 2);
-    const auto inventory = ReadCookGenerationContents(first.Value().generation, 1024U * 1024U);
+    const auto inventory = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, first.Value().generation, 1024U * 1024U);
     REQUIRE(inventory.HasValue());
     bool foundScene{};
     for (const auto &encoded : inventory.Value().artifacts) {
@@ -267,12 +267,12 @@ TEST_CASE("Release cook handoff pins the actual generation and rejects changed f
     auto host = fixture.MakeHost();
     const auto handed = host.CookForRelease(*preflight.plan, current, fixture.request, {});
     REQUIRE(handed.HasValue());
-    const auto active = ResolveCurrentCookGeneration(fixture.cooked.path);
+    const auto active = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path);
     REQUIRE(active.HasValue());
     CHECK(handed.Value().root == active.Value().generationRoot);
     CHECK(handed.Value().bytesDigest == active.Value().manifestDigest);
     CHECK(handed.Value().root != fixture.cache.path);
-    REQUIRE(ReadCookGenerationContents(active.Value(), 1024U * 1024U).HasValue());
+    REQUIRE(ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, active.Value(), 1024U * 1024U).HasValue());
 
     SECTION("host observations changed") {
         current.driftAt = current.captures + 1;

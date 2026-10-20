@@ -111,7 +111,7 @@ namespace Horo::Application {
             const std::filesystem::path path{outputPath};
             REQUIRE(path.is_absolute());
             REQUIRE_FALSE(std::filesystem::exists(path));
-            const auto contents = Assets::ReadCookGenerationContents(generation, 8U * 1024U * 1024U);
+            const auto contents = Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation, 8U * 1024U * 1024U);
             REQUIRE(contents.HasValue());
             REQUIRE(contents.Value().artifacts.size() == 1);
             const auto &bytes = contents.Value().artifacts.front();
@@ -182,20 +182,21 @@ namespace Horo::Application {
         const std::array products{Release::DistributionProductKind::GameRuntime, Release::DistributionProductKind::GameDedicatedServer};
         for (std::size_t index = 0; index < products.size(); ++index) {
             const auto product = products[index];
-            const auto omitted = PrepareNavigationReleaseContent(mixed, Plan(Navigation::AssetTestSupport::Asset(), product), product);
+            const auto omitted = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, mixed,
+                                                                 Plan(Navigation::AssetTestSupport::Asset(), product), product);
             REQUIRE(omitted.HasError());
             REQUIRE(omitted.ErrorValue().code.Value() == "asset.archive.invalid");
             const auto plan = MixedPlan(Navigation::AssetTestSupport::Asset(), product);
             Assets::AssetArchiveLimits restricted;
             restricted.maximumAssets = 1;
-            const auto excluded = PrepareNavigationReleaseContent(mixed, plan, product, restricted);
+            const auto excluded = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, mixed, plan, product, restricted);
             REQUIRE(excluded.HasError());
             REQUIRE(excluded.ErrorValue().code.Value() == "asset.cook.malformed_artifact");
-            const auto prepared = PrepareNavigationReleaseContent(mixed, plan, product);
+            const auto prepared = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, mixed, plan, product);
             INFO((prepared.HasError() ? prepared.ErrorValue().code.Value() : std::string_view{}));
             REQUIRE(prepared.HasValue());
-            const auto repeated =
-                PrepareNavigationReleaseContent(mixed, MixedPlan(Navigation::AssetTestSupport::Asset(), product), product);
+            const auto repeated = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, mixed,
+                                                                  MixedPlan(Navigation::AssetTestSupport::Asset(), product), product);
             REQUIRE(repeated.HasValue());
             REQUIRE(repeated.Value().archive == prepared.Value().archive);
             REQUIRE(repeated.Value().extension == prepared.Value().extension);

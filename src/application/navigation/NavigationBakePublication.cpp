@@ -8,7 +8,7 @@ namespace Horo::Application {
         /** @brief Pins the requested definition inside the verified complete manifest before decoding its owned payload. */
         [[nodiscard]] Result<Navigation::NavigationCookedTileSet> ReadDefinition(const Assets::AssetCookGeneration &generation,
                                                                                  const NavigationBakeServiceConfig &config) {
-            auto contents = Assets::ReadCookGenerationContents(generation, config.maximumCandidateBytes, config.cookLimits);
+            auto contents = Assets::ReadCookGenerationContents(*config.files, generation, config.maximumCandidateBytes, config.cookLimits);
             if (contents.HasError())
                 return Result<Navigation::NavigationCookedTileSet>::Failure(contents.ErrorValue());
             const auto found =
@@ -48,7 +48,9 @@ namespace Horo::Application {
             config.maximumTiles == 0 || config.maximumTiles > NavMeshArtifactLimits::MaximumTiles)
             return Result<std::shared_ptr<const NavigationBakePublication>>::Failure(
                 MakeError(NavigationErrors::NavMeshArtifactCapacityExceeded));
-        auto generation = Assets::ResolveCurrentCookGeneration(config.targetRoot, config.cookLimits);
+        if (!config.files)
+            return Result<std::shared_ptr<const NavigationBakePublication>>::Failure(MakeError(NavigationErrors::BakeInputInvalid));
+        auto generation = Assets::ResolveCurrentCookGeneration(*config.files, config.targetRoot, config.cookLimits);
         if (generation.HasError())
             return Result<std::shared_ptr<const NavigationBakePublication>>::Failure(generation.ErrorValue());
         if (generation.Value().target != config.target)

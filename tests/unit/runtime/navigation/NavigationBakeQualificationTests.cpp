@@ -50,7 +50,8 @@ namespace Horo::Application {
             REQUIRE(publication->rebuiltTiles == 4);
             REQUIRE(publication->reusedTiles == 0);
             REQUIRE(harness.builder->builds.load() == 4);
-            auto read = Assets::ReadCookGenerationContents(publication->generation, harness.config.maximumCandidateBytes);
+            auto read = Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, publication->generation,
+                                                           harness.config.maximumCandidateBytes);
             REQUIRE(read.HasValue());
             const auto &contents = read.Value();
             REQUIRE(contents.artifacts.size() == 1);
@@ -79,16 +80,18 @@ namespace Horo::Application {
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         REQUIRE(before);
-        const auto priorContents = Assets::ReadCookGenerationContents(before->generation, harness.config.maximumCandidateBytes);
+        const auto priorContents =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, before->generation, harness.config.maximumCandidateBytes);
         REQUIRE(priorContents.HasValue());
         harness.fixture.ExcludeBorder();
         files->failWrites.store(true);
         CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK(harness.service->Published() == before);
-        const auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(current.HasValue());
         CHECK(current.Value().manifestDigest == before->generation.manifestDigest);
-        const auto read = Assets::ReadCookGenerationContents(current.Value(), harness.config.maximumCandidateBytes);
+        const auto read =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, current.Value(), harness.config.maximumCandidateBytes);
         REQUIRE(read.HasValue());
         CHECK(read.Value().artifacts == priorContents.Value().artifacts);
         CHECK(Query(before->tiles).Value().status == NavigationPathStatus::Reachable);
@@ -98,8 +101,9 @@ namespace Horo::Application {
         REQUIRE(after);
         CHECK(after->generation.manifestDigest != before->generation.manifestDigest);
         CHECK(Query(after->tiles).Value().status != NavigationPathStatus::Reachable);
-        CHECK(Assets::ReadCookGenerationContents(before->generation, harness.config.maximumCandidateBytes).Value().artifacts ==
-              priorContents.Value().artifacts);
+        CHECK(Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, before->generation, harness.config.maximumCandidateBytes)
+                  .Value()
+                  .artifacts == priorContents.Value().artifacts);
     }
 
     TEST_CASE("Native bake qualification refuses an undersized output profile without replacing the verified generation",
@@ -108,7 +112,8 @@ namespace Horo::Application {
         REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
         const auto before = harness.service->Published();
         REQUIRE(before);
-        const auto priorContents = Assets::ReadCookGenerationContents(before->generation, harness.config.maximumCandidateBytes);
+        const auto priorContents =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, before->generation, harness.config.maximumCandidateBytes);
         REQUIRE(priorContents.HasValue());
         harness.service->Close();
         auto restricted = harness.config;
@@ -117,10 +122,11 @@ namespace Horo::Application {
         harness.fixture.ExcludeBorder();
         CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK_FALSE(harness.service->Published());
-        const auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(current.HasValue());
         CHECK(current.Value().manifestDigest == before->generation.manifestDigest);
-        const auto read = Assets::ReadCookGenerationContents(current.Value(), harness.config.maximumCandidateBytes);
+        const auto read =
+            Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, current.Value(), harness.config.maximumCandidateBytes);
         REQUIRE(read.HasValue());
         CHECK(read.Value().artifacts == priorContents.Value().artifacts);
         CHECK(Query(before->tiles).Value().status == NavigationPathStatus::Reachable);

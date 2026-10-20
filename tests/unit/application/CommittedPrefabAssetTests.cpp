@@ -8,7 +8,8 @@ namespace Horo::Application::PrefabCookTestSupport {
         /** @brief Pins actual canonical envelopes from the same complete publication as the decoded Scene resources. */
         std::unique_ptr<Internal::CommittedSceneAssets> Capture(const HostFixture &fixture) {
             auto captured =
-                Internal::CommittedSceneAssets::Capture({fixture.cooked.path, fixture.request.assets.target}, fixture.registry.Snapshot());
+                Internal::CommittedSceneAssets::Capture(Horo::NativeDurableFileSystem{},
+                                                        {fixture.cooked.path, fixture.request.assets.target}, fixture.registry.Snapshot());
             REQUIRE(captured.HasValue());
             return std::move(captured).Value();
         }
@@ -19,9 +20,9 @@ namespace Horo::Application::PrefabCookTestSupport {
         HostFixture fixture;
         fixture.request.runtimePrefabRoots = {fixture.prefabId};
         REQUIRE(fixture.Cook().HasValue());
-        const auto generation = ResolveCurrentCookGeneration(fixture.cooked.path);
+        const auto generation = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path);
         REQUIRE(generation.HasValue());
-        const auto contents = ReadCookGenerationContents(generation.Value(), 1024U * 1024U);
+        const auto contents = ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, generation.Value(), 1024U * 1024U);
         REQUIRE(contents.HasValue());
         const auto found = std::ranges::find(contents.Value().entries, fixture.prefabId, &Assets::AssetCookManifestEntry::assetId);
         REQUIRE(found != contents.Value().entries.end());
@@ -59,13 +60,16 @@ namespace Horo::Application::PrefabCookTestSupport {
         REQUIRE(after.HasValue());
         CHECK(after.Value() != before.Value());
         CHECK(captured->ArtifactProvider().Load(fixture.prefabId, {}).Value() == before.Value());
-        const auto current = ResolveCurrentCookGeneration(fixture.cooked.path);
+        const auto current = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path);
         REQUIRE(current.HasValue());
         WriteFile(current.Value().generationRoot / (fixture.prefabId.ToString() + ".cooked"), std::array<std::uint8_t, 3>{1, 2, 3});
-        CHECK(Internal::CommittedSceneAssets::Capture({fixture.cooked.path, fixture.request.assets.target}, fixture.registry.Snapshot())
+        CHECK(Internal::CommittedSceneAssets::Capture(Horo::NativeDurableFileSystem{}, {fixture.cooked.path, fixture.request.assets.target},
+                                                      fixture.registry.Snapshot())
                   .HasError());
         CHECK(captured->ArtifactProvider().Load(fixture.prefabId, {}).Value() == before.Value());
         const auto wrongTarget = Target("other-target");
-        CHECK(Internal::CommittedSceneAssets::Capture({fixture.cooked.path, wrongTarget}, fixture.registry.Snapshot()).HasError());
+        CHECK(Internal::CommittedSceneAssets::Capture(Horo::NativeDurableFileSystem{}, {fixture.cooked.path, wrongTarget},
+                                                      fixture.registry.Snapshot())
+                  .HasError());
     }
 }  // namespace Horo::Application::PrefabCookTestSupport

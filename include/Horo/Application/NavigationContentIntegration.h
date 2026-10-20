@@ -19,13 +19,15 @@ namespace Horo::Application {
     };
 
     /** @brief Validate pinned immutable envelopes and complete HNS2 project policy before archive construction.
+     * @param files Explicit host read/inspection/inventory authority borrowed through preparation.
      * @param generation Exact promoted generation; mutable current.json is never consulted.
      * @param plan Existing validated chunk authority, including actual Base/DedicatedServer roles.
      * @param product Explicit GameRuntime or GameDedicatedServer role.
      * @param limits Existing aggregate/archive bounds; encoded content is hashed and decoded only on this control path.
      * @return Complete archive and canonical namespaced evidence, or original typed failure before any output exists.
      * @note Every selected NavMesh must carry an owned validated project profile. HNS1 and omitted policy fail closed. */
-    [[nodiscard]] Result<PreparedNavigationReleaseContent> PrepareNavigationReleaseContent(const Assets::AssetCookGeneration &generation,
+    [[nodiscard]] Result<PreparedNavigationReleaseContent> PrepareNavigationReleaseContent(const DurableFileSystem &files,
+                                                                                           const Assets::AssetCookGeneration &generation,
                                                                                            const Assets::AssetChunkPlan &plan,
                                                                                            Release::DistributionProductKind product,
                                                                                            const Assets::AssetArchiveLimits &limits = {});

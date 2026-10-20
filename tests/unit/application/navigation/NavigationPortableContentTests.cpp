@@ -64,10 +64,10 @@ namespace Horo::Application {
         for (std::size_t index = 0; index < products.size(); ++index) {
             const auto product = products[index];
             const auto plan = MixedPlan(Navigation::AssetTestSupport::Asset(), product);
-            const auto prepared = PrepareNavigationReleaseContent(mixed, plan, product);
+            const auto prepared = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, mixed, plan, product);
             INFO((prepared.HasError() ? ErrorText(prepared.ErrorValue()) : std::string{}));
             REQUIRE(prepared.HasValue());
-            const auto repeated = PrepareNavigationReleaseContent(mixed, plan, product);
+            const auto repeated = PrepareNavigationReleaseContent(Horo::NativeDurableFileSystem{}, mixed, plan, product);
             REQUIRE(repeated.HasValue());
             REQUIRE(repeated.Value().archive == prepared.Value().archive);
             REQUIRE(repeated.Value().extension == prepared.Value().extension);

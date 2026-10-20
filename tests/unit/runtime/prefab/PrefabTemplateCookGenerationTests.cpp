@@ -83,7 +83,7 @@ namespace Horo::Prefab {
         const std::vector entries{RootEntry(payloads.front())};
         auto published = PublishFixture(directory.path, Target("headless-null"), entries, payloads);
         REQUIRE(published.HasValue());
-        auto current = Assets::ResolveCurrentCookGeneration(directory.path);
+        auto current = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, directory.path);
         REQUIRE(current.HasValue());
         CHECK(current.Value().manifestDigest == published.Value().manifestDigest);
         Assets::FilesystemAssetProvider bytes(current.Value().generationRoot);
@@ -107,7 +107,7 @@ namespace Horo::Prefab {
         }, .operationId = "12345678-1234-4234-8234-123456789abc", .writerLease = &lock.Value()};
         CHECK(Assets::PublishCookGeneration(directory.path, Target("headless-null"), replacementEntries, replacementPayloads, {}, policy)
                   .HasError());
-        auto retained = Assets::ResolveCurrentCookGeneration(directory.path);
+        auto retained = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, directory.path);
         REQUIRE(retained.HasValue());
         CHECK(retained.Value().manifestDigest == published.Value().manifestDigest);
         CHECK(lease.Value().Template()->Data().entities.front().localTransform.translation.x == 3);

@@ -56,8 +56,8 @@ namespace Horo::Application::ContentTestSupport {
     [[nodiscard]] inline Assets::AssetCookGeneration PublishMixed(const std::filesystem::path &root,
                                                                   const Assets::AssetCookGeneration &navigation,
                                                                   const Assets::AssetCookGeneration &audio) {
-        auto nav = Assets::ReadCookGenerationContents(navigation, 8U * 1024U * 1024U);
-        auto clip = Assets::ReadCookGenerationContents(audio, 8U * 1024U * 1024U);
+        auto nav = Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, navigation, 8U * 1024U * 1024U);
+        auto clip = Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, audio, 8U * 1024U * 1024U);
         REQUIRE(nav.HasValue());
         REQUIRE(clip.HasValue());
         REQUIRE(nav.Value().entries.size() == 1);

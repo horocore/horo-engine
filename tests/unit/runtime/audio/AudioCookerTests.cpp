@@ -518,7 +518,7 @@ namespace Horo::Audio {
         REQUIRE(replaced.HasValue());
         CHECK(replaced.Value().cookedAssets == 1);
         CHECK(replaced.Value().cacheHits == 0);
-        auto generation = Assets::ResolveCurrentCookGeneration(request.cookedRoot);
+        auto generation = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, request.cookedRoot);
         REQUIRE(generation.HasValue());
         const auto artifactPath = generation.Value().generationRoot / (assetId.Value().ToString() + ".cooked");
         std::ifstream artifactFile(artifactPath, std::ios::binary);

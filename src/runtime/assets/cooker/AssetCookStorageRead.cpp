@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <charconv>
 #include <format>
-#include <fstream>
 #include <nlohmann/json.hpp>
 #include <utility>
 
@@ -74,23 +73,6 @@ namespace Horo::Assets::CookStorageDetail {
             return std::string(json.substr(pos, end - pos));
         }
 
-        /** @brief Confirms that a resolved generation directory still holds the exact pinned manifest bytes. */
-        [[nodiscard]] bool HasPinnedManifest(const std::filesystem::path &targetRoot, const std::filesystem::path &generationRoot,
-                                             const Sha256Digest &digest, const AssetCookLimits &limits) {
-            std::error_code error;
-            if (!HasPlainPath(targetRoot) || !HasPlainPath(generationRoot) || !IsSafePathWithin(targetRoot, generationRoot))
-                return false;
-            if (const auto generationStatus = std::filesystem::symlink_status(generationRoot, error);
-                error || !std::filesystem::is_directory(generationStatus) || std::filesystem::is_symlink(generationStatus))
-                return false;
-            const auto manifestPath = generationRoot / "manifest.json";
-            if (const auto manifestStatus = std::filesystem::symlink_status(manifestPath, error);
-                error || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus))
-                return false;
-            auto manifest = ReadFile(manifestPath, limits.maximumArtifactBytes);
-            return manifest.HasValue() && ComputeSha256(std::as_bytes(std::span{manifest.Value()})) == digest;
-        }
-
         /** @brief Parses only the exact canonical manifest bound to a pinned generation. */
         [[nodiscard]] Result<std::vector<AssetCookManifestEntry>> ParseGenerationManifest(const std::string &text,
                                                                                           const AssetCookGeneration &generation) {
@@ -124,8 +106,9 @@ namespace Horo::Assets::CookStorageDetail {
             return Result<std::vector<AssetCookManifestEntry>>::Success(std::move(entries));
         }
 
-        /** @brief An immutable generation contains exactly its manifest and declared regular, single-link artifact files. */
-        bool HasExactInventory(const std::filesystem::path &root, const std::span<const AssetCookManifestEntry> entries) {
+        /** @brief Requires exactly the declared regular single-link files through the supplied inventory authority. */
+        Result<void> HasExactInventory(const DurableFileSystem &files, const std::filesystem::path &root,
+                                       const std::span<const AssetCookManifestEntry> entries) {
             std::vector<std::string> names;
             names.reserve(entries.size() + 1U);
             names.emplace_back("manifest.json");
@@ -133,35 +116,36 @@ namespace Horo::Assets::CookStorageDetail {
                 names.push_back(entry.artifactFile);
             std::ranges::sort(names);
             if (std::ranges::adjacent_find(names) != names.end())
-                return false;
-            std::error_code error;
-            std::filesystem::directory_iterator iterator(root, error);
-            const std::filesystem::directory_iterator end;
-            std::size_t count{};
-            if (error)
-                return false;
-            for (; iterator != end; iterator.increment(error)) {
-                if (error || count == names.size() || !IsPlainFile(iterator->path()) ||
-                    !std::ranges::binary_search(names, iterator->path().filename().string()))
-                    return false;
-                ++count;
+                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+            auto inventory = StorageInventory(files, root, names.size());
+            if (inventory.HasError())
+                return Result<void>::Failure(inventory.ErrorValue());
+            if (inventory.Value().size() != names.size())
+                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+            for (const auto &entry : inventory.Value()) {
+                if (entry.info.kind != FileEntryKind::RegularFile || entry.info.hardLinks != 1U ||
+                    !std::ranges::binary_search(names, entry.name.string()))
+                    return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
             }
-            return !error && count == names.size();
+            return Result<void>::Success();
         }
 
         /** @brief Verifies a resolved inventory one envelope at a time without allocating all encoded generation content. */
-        Result<void> VerifyResolvedInventory(const AssetCookGeneration &generation, const AssetCookLimits &limits) {
-            auto manifest = ReadFile(generation.generationRoot / "manifest.json", limits.maximumArtifactBytes);
+        Result<void> VerifyResolvedInventory(const DurableFileSystem &files, const AssetCookGeneration &generation,
+                                             const AssetCookLimits &limits) {
+            auto manifest = ReadFile(files, generation.generationRoot / "manifest.json", limits.maximumArtifactBytes);
             if (manifest.HasError())
                 return Result<void>::Failure(manifest.ErrorValue());
+            if (ComputeSha256(std::as_bytes(std::span{manifest.Value()})) != generation.manifestDigest)
+                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
             auto entries = ParseGenerationManifest(std::string(manifest.Value().begin(), manifest.Value().end()), generation);
             if (entries.HasError())
                 return Result<void>::Failure(entries.ErrorValue());
-            if (!HasExactInventory(generation.generationRoot, entries.Value()))
-                return Result<void>::Failure(MakeError(CookErrors::MalformedArtifact));
+            if (auto inventory = HasExactInventory(files, generation.generationRoot, entries.Value()); inventory.HasError())
+                return inventory;
             std::size_t totalBytes{};
             for (const auto &entry : entries.Value()) {
-                auto artifact = ReadFile(generation.generationRoot / entry.artifactFile, limits.maximumArtifactBytes);
+                auto artifact = ReadFile(files, generation.generationRoot / entry.artifactFile, limits.maximumArtifactBytes);
                 if (artifact.HasError())
                     return Result<void>::Failure(artifact.ErrorValue());
                 if (artifact.Value().size() > MaximumGenerationBytes - totalBytes)
@@ -265,24 +249,19 @@ namespace Horo::Assets::CookStorageDetail {
     }
 
     /** @copydoc ReadFile */
-    Result<std::vector<std::uint8_t>> ReadFile(const std::filesystem::path &path, std::size_t maxBytes) {
-        if (!IsPlainFile(path))
+    Result<std::vector<std::uint8_t>> ReadFile(const DurableFileSystem &files, const std::filesystem::path &path,
+                                               const std::size_t maxBytes) {
+        auto entry = InspectStorageEntry(files, path);
+        if (entry.HasError())
+            return Result<std::vector<std::uint8_t>>::Failure(entry.ErrorValue());
+        if (!entry.Value() || entry.Value()->kind != FileEntryKind::RegularFile || entry.Value()->hardLinks != 1U)
             return Result<std::vector<std::uint8_t>>::Failure(MakeError(CookErrors::MalformedArtifact));
-        std::error_code ec;
-        const auto fileSize = std::filesystem::file_size(path, ec);
-        if (ec || fileSize > maxBytes)
-            return Result<std::vector<std::uint8_t>>::Failure(Error{CookErrors::TooLarge.code});
-
-        std::ifstream file(path, std::ios::binary);
-        if (!file)
-            return Result<std::vector<std::uint8_t>>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        std::vector<std::uint8_t> bytes(fileSize);
-        file.read(reinterpret_cast<char *>(bytes.data()), static_cast<std::streamsize>(fileSize));
-        if (!file || file.gcount() != static_cast<std::streamsize>(fileSize))
-            return Result<std::vector<std::uint8_t>>::Failure(Error{CookErrors::MalformedArtifact.code});
-
-        return Result<std::vector<std::uint8_t>>::Success(std::move(bytes));
+        if (maxBytes == 0U || entry.Value()->sizeBytes > maxBytes)
+            return Result<std::vector<std::uint8_t>>::Failure(MakeError(CookErrors::TooLarge));
+        auto bytes = files.ReadFileBounded(path, maxBytes);
+        if (bytes.HasValue() && bytes.Value().size() > maxBytes)
+            return Result<std::vector<std::uint8_t>>::Failure(MakeError(CookErrors::TooLarge));
+        return bytes;
     }
 
     /** @copydoc UnpublishedSelector */
@@ -308,74 +287,65 @@ namespace Horo::Assets {
     using namespace CookStorageDetail;
 
     /** @copydoc ResolveCurrentCookGeneration */
-    Result<AssetCookGeneration> ResolveCurrentCookGeneration(const std::filesystem::path &targetRoot, const AssetCookLimits &limits) {
+    Result<AssetCookGeneration> ResolveCurrentCookGeneration(const DurableFileSystem &files, const std::filesystem::path &targetRoot,
+                                                             const AssetCookLimits &limits) {
         if (!AdmittedLimits(limits))
             return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::TooLarge));
-        if (!HasPlainPath(targetRoot))
+        auto root = InspectStorageEntry(files, targetRoot);
+        if (root.HasError())
+            return Result<AssetCookGeneration>::Failure(root.ErrorValue());
+        if (!root.Value() || root.Value()->kind != FileEntryKind::Directory)
             return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
-        const auto currentPath = targetRoot / "current.json";
-        std::error_code statusError;
-        if (const auto currentStatus = std::filesystem::symlink_status(currentPath, statusError);
-            statusError || !std::filesystem::is_regular_file(currentStatus) || std::filesystem::is_symlink(currentStatus)) {
-            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-        }
-
-        auto bytesResult = ReadFile(currentPath, std::min(limits.maximumArtifactBytes, MaximumSelectorBytes));
-        if (bytesResult.HasError())
-            return Result<AssetCookGeneration>::Failure(bytesResult.ErrorValue());
-
-        const auto &bytes = bytesResult.Value();
-        std::string_view json(reinterpret_cast<const char *>(bytes.data()), bytes.size());
-
-        auto parsed = ParseCurrentSelector(targetRoot, json, limits);
+        auto bytes = ReadFile(files, targetRoot / "current.json", std::min(limits.maximumArtifactBytes, MaximumSelectorBytes));
+        if (bytes.HasError())
+            return Result<AssetCookGeneration>::Failure(bytes.ErrorValue());
+        auto parsed =
+            ParseCurrentSelector(targetRoot, std::string_view{reinterpret_cast<const char *>(bytes.Value().data()), bytes.Value().size()},
+                                 limits);
         if (parsed.HasError())
             return parsed;
         auto generation = std::move(parsed).Value();
-        if (!HasPinnedManifest(targetRoot, generation.generationRoot, generation.manifestDigest, limits))
-            return Result<AssetCookGeneration>::Failure(Error{CookErrors::MalformedArtifact.code});
-        if (auto verified = VerifyResolvedInventory(generation, limits); verified.HasError())
+        if (!IsSafePathWithin(targetRoot, generation.generationRoot))
+            return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
+        auto directory = InspectStorageEntry(files, generation.generationRoot);
+        if (directory.HasError())
+            return Result<AssetCookGeneration>::Failure(directory.ErrorValue());
+        if (!directory.Value() || directory.Value()->kind != FileEntryKind::Directory)
+            return Result<AssetCookGeneration>::Failure(MakeError(CookErrors::MalformedArtifact));
+        if (auto verified = VerifyResolvedInventory(files, generation, limits); verified.HasError())
             return Result<AssetCookGeneration>::Failure(verified.ErrorValue());
         return Result<AssetCookGeneration>::Success(std::move(generation));
     }
 
     /** @copydoc ReadCookGenerationContents */
-    Result<AssetCookGenerationContents> ReadCookGenerationContents(const AssetCookGeneration &generation,
+    Result<AssetCookGenerationContents> ReadCookGenerationContents(const DurableFileSystem &files, const AssetCookGeneration &generation,
                                                                    const std::size_t maximumTotalBytes, const AssetCookLimits &limits) {
         const auto invalid = [] {
-            return Result<AssetCookGenerationContents>::Failure(Error{CookErrors::MalformedArtifact.code});
+            return Result<AssetCookGenerationContents>::Failure(MakeError(CookErrors::MalformedArtifact));
         };
         if (!AdmittedLimits(limits) || maximumTotalBytes > MaximumGenerationBytes)
             return Result<AssetCookGenerationContents>::Failure(MakeError(CookErrors::TooLarge));
-        if (!HasPlainPath(generation.generationRoot) || generation.artifactCount > limits.maximumAssets)
+        auto directory = InspectStorageEntry(files, generation.generationRoot);
+        if (directory.HasError())
+            return Result<AssetCookGenerationContents>::Failure(directory.ErrorValue());
+        if (!directory.Value() || directory.Value()->kind != FileEntryKind::Directory || generation.artifactCount > limits.maximumAssets)
             return invalid();
-
-        const auto manifestPath = generation.generationRoot / "manifest.json";
-        std::error_code statusError;
-        if (const auto manifestStatus = std::filesystem::symlink_status(manifestPath, statusError);
-            statusError || !std::filesystem::is_regular_file(manifestStatus) || std::filesystem::is_symlink(manifestStatus) ||
-            !IsSafePathWithin(generation.generationRoot, manifestPath))
+        auto manifest = ReadFile(files, generation.generationRoot / "manifest.json", limits.maximumArtifactBytes);
+        if (manifest.HasError())
+            return Result<AssetCookGenerationContents>::Failure(manifest.ErrorValue());
+        if (ComputeSha256(std::as_bytes(std::span{manifest.Value()})) != generation.manifestDigest)
             return invalid();
-        auto manifestBytes = ReadFile(manifestPath, limits.maximumArtifactBytes);
-        if (manifestBytes.HasError() || ComputeSha256(std::as_bytes(std::span{manifestBytes.Value()})) != generation.manifestDigest)
-            return invalid();
-
-        const std::string manifestText(manifestBytes.Value().begin(), manifestBytes.Value().end());
-        auto entries = ParseGenerationManifest(manifestText, generation);
+        auto entries = ParseGenerationManifest(std::string{manifest.Value().begin(), manifest.Value().end()}, generation);
         if (entries.HasError())
-            return invalid();
-        if (!HasExactInventory(generation.generationRoot, entries.Value()))
-            return invalid();
+            return Result<AssetCookGenerationContents>::Failure(entries.ErrorValue());
+        if (auto inventory = HasExactInventory(files, generation.generationRoot, entries.Value()); inventory.HasError())
+            return Result<AssetCookGenerationContents>::Failure(inventory.ErrorValue());
         AssetCookGenerationContents contents;
         contents.entries = std::move(entries).Value();
         contents.artifacts.reserve(generation.artifactCount);
-        std::size_t totalBytes = 0;
+        std::size_t totalBytes{};
         for (const auto &entry : contents.entries) {
-            const auto artifactPath = generation.generationRoot / entry.artifactFile;
-            if (const auto artifactStatus = std::filesystem::symlink_status(artifactPath, statusError);
-                statusError || !std::filesystem::is_regular_file(artifactStatus) || std::filesystem::is_symlink(artifactStatus) ||
-                !IsSafePathWithin(generation.generationRoot, artifactPath))
-                return invalid();
-            auto bytes = ReadFile(artifactPath, limits.maximumArtifactBytes);
+            auto bytes = ReadFile(files, generation.generationRoot / entry.artifactFile, limits.maximumArtifactBytes);
             if (bytes.HasError())
                 return Result<AssetCookGenerationContents>::Failure(bytes.ErrorValue());
             if (bytes.Value().size() > maximumTotalBytes - totalBytes)

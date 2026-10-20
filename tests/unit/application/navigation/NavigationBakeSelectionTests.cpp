@@ -71,7 +71,7 @@ namespace Horo::Application {
         for (std::size_t index = 4; index < 8; ++index)
             CHECK(updated->tiles.tiles[index] == original->tiles.tiles[index]);
         const auto builds = harness.builder->builds.load();
-        const auto previous = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto previous = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(previous.HasValue());
         harness.fixture.ExcludeBorder();
         harness.fixture.modifiers.front().surface = Id<SurfaceId>(2);
@@ -83,7 +83,7 @@ namespace Horo::Application {
         CHECK(rejected.error->code.Value() == NavigationErrors::BakeSelectionIncomplete.code.Value());
         CHECK(harness.builder->builds.load() == builds);
         CHECK(harness.service->Published() == updated);
-        const auto retained = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        const auto retained = Assets::ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, harness.config.targetRoot);
         REQUIRE(retained.HasValue());
         CHECK(retained.Value().manifestDigest == previous.Value().manifestDigest);
     }

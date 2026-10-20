@@ -114,7 +114,7 @@ TEST_CASE_METHOD(TriggerCookFixture, "Public project Physics capture supplies re
     INFO((cooked.HasError() ? cooked.ErrorValue().code.Value() : std::string_view{}));
     INFO((cooked.HasError() ? cooked.ErrorValue().domain.Value() : std::string_view{}));
     REQUIRE(cooked.HasValue());
-    const auto inventory = Assets::ReadCookGenerationContents(cooked.Value().generation, 1024U * 1024U);
+    const auto inventory = Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, cooked.Value().generation, 1024U * 1024U);
     REQUIRE(inventory.HasValue());
     bool foundScene{}, foundMaterial{};
     for (const auto &encoded : inventory.Value().artifacts) {
@@ -220,7 +220,7 @@ TEST_CASE_METHOD(TriggerCookFixture, "Mixed authored trigger and actual Prefab r
                                          .parent = SceneSource::SceneObjectId{874}}};
     fixture.WriteText("assets/level.scene", SceneSource::EncodeSceneSource({objects, placements}));
     const auto cooked = CookValid();
-    const auto inventory = Assets::ReadCookGenerationContents(cooked.generation, 1024U * 1024U);
+    const auto inventory = Assets::ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, cooked.generation, 1024U * 1024U);
     REQUIRE(inventory.HasValue());
     bool foundScene{}, foundMaterial{};
     for (const auto &encoded : inventory.Value().artifacts) {

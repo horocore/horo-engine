@@ -148,11 +148,11 @@ namespace Horo::Application::PrefabCookTestSupport {
         }
 
         void AssertRetained(const AssetCookGeneration &previous) const {
-            const auto active = ResolveCurrentCookGeneration(cooked.path);
+            const auto active = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, cooked.path);
             REQUIRE(active.HasValue());
             CHECK(active.Value().manifestDigest == previous.manifestDigest);
             CHECK(active.Value().generationRoot == previous.generationRoot);
-            CHECK(ReadCookGenerationContents(previous, 1024U * 1024U).HasValue());
+            CHECK(ReadCookGenerationContents(Horo::NativeDurableFileSystem{}, previous, 1024U * 1024U).HasValue());
         }
 
         AssetId AddSpawnableRoot() {

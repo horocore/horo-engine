@@ -17,14 +17,15 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     /** @copydoc CommittedSceneAssets::Capture */
-    Result<std::unique_ptr<CommittedSceneAssets>> CommittedSceneAssets::Capture(const SceneCookSelection &selection,
+    Result<std::unique_ptr<CommittedSceneAssets>> CommittedSceneAssets::Capture(const DurableFileSystem &files,
+                                                                                const SceneCookSelection &selection,
                                                                                 const Assets::AssetRegistrySnapshot &registry) {
-        auto generation = Assets::ResolveCurrentCookGeneration(selection.targetRoot);
+        auto generation = Assets::ResolveCurrentCookGeneration(files, selection.targetRoot);
         if (generation.HasError())
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(generation.ErrorValue());
         if (generation.Value().target != selection.target)
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(MakeError(InvalidCook));
-        auto contents = Assets::ReadCookGenerationContents(generation.Value(), MaximumCommittedBytes);
+        auto contents = Assets::ReadCookGenerationContents(files, generation.Value(), MaximumCommittedBytes);
         if (contents.HasError())
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(contents.ErrorValue());
         auto published = std::move(contents).Value();

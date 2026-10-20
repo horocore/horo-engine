@@ -76,8 +76,9 @@ namespace Horo::Application::Internal {
                 auto target = Assets::AssetCookTargetId::Parse(launch.cookTarget);
                 if (target.HasError())
                     return Result<void>::Failure(target.ErrorValue());
+                const NativeDurableFileSystem cookFiles;
                 auto committed =
-                    CommittedSceneAssets::Capture({launch.cookedRoot, std::move(target).Value()}, resources.registry.Snapshot());
+                    CommittedSceneAssets::Capture(cookFiles, {launch.cookedRoot, std::move(target).Value()}, resources.registry.Snapshot());
                 if (committed.HasError())
                     return Result<void>::Failure(committed.ErrorValue());
                 resources.committed = std::move(committed).Value();
