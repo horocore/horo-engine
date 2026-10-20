@@ -25,6 +25,11 @@ namespace Horo::Platform::PublicationFileNative {
             Create
         };
 
+        /** @brief Mirrors the native 32-bit query discriminator without requiring driver-only SDK declarations. */
+        enum class VolumeInformationClass : ULONG {
+            FullSize = 7
+        };
+
         /** @brief Captures classification and identity from the already opened object. */
         Result<BY_HANDLE_FILE_INFORMATION> ObjectInfo(const Handle &handle) {
             BY_HANDLE_FILE_INFORMATION info{};
@@ -265,11 +270,10 @@ namespace Horo::Platform::PublicationFileNative {
             ULONG sectors, bytes;
         } info{};
 
-        using QueryVolume = NTSTATUS(NTAPI *)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FS_INFORMATION_CLASS);
+        using QueryVolume = NTSTATUS(NTAPI *)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, VolumeInformationClass);
         const auto query = std::bit_cast<QueryVolume>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryVolumeInformationFile"));
         IO_STATUS_BLOCK io{};
-        if (!query || query(directory.Get(), &io, &info, sizeof(info), static_cast<FS_INFORMATION_CLASS>(7)) < 0 ||
-            info.available.QuadPart < 0)
+        if (!query || query(directory.Get(), &io, &info, sizeof(info), VolumeInformationClass::FullSize) < 0 || info.available.QuadPart < 0)
             return Result<std::uint64_t>::Failure(MakeError(FileStorageErrors::IoFailed));
         const auto unit = std::uint64_t{info.sectors} * info.bytes;
         const auto count = static_cast<std::uint64_t>(info.available.QuadPart);
