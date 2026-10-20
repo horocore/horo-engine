@@ -68,6 +68,20 @@ play-session, or panel lifetime; those remain in the workspace/application host.
 
 ## Document Model
 
+### Partitioned world metadata workspace (WST-009.2)
+
+`PartitionedWorldWorkspace`, owned by `HoroEditorModel`, is the headless Editor
+authority for a partitioned world's authored settings, stable layers, immutable
+source-page/object metadata and separate transient open-page working set. It does
+not replace `SceneDocument` or equate authoring pages with cooked cells. Typed
+owner/generation/publication fences guard complete atomic metadata transactions;
+changed pages additionally require their exact immutable revision successor.
+Working-set changes never delete source metadata or mark it saved. Dirty-preserving
+close/replacement/shutdown, cancellation and immutable reader lifetimes are explicit.
+The additive public contract, dependency direction, limits, integration obligations
+and excluded UI/payload/persistence work are recorded in the
+[partitioned-world document migration guide](../../guides/partitioned-world-document-migration.md).
+
 ### Editable Source Ownership (EDT-003.4)
 
 `SourceFileOpenService` owns `SourceDocumentService` in the workspace controller,

@@ -1243,6 +1243,12 @@ cannot delete or mutate document-owned content through runtime eviction.
 
 ## World Authoring Source And Collaboration Contract
 
+The Editor-owned stateful metadata and independent working-set implementation is
+`PartitionedWorldWorkspace` in `HoroEditorModel`; see the
+[WST-009.2 ownership and migration guide](../../guides/partitioned-world-document-migration.md).
+It consumes inert World Streaming contracts without opening a runtime partition or
+requiring cooked cells. This does not move editable source authority into World Streaming.
+
 World authoring version one uses independently source-controlled **spatial page
 assets** as its durable document granularity. Each page is identified by stable
 `AssetId`, belongs to one `WorldPartitionId` and publishes immutable monotonic
