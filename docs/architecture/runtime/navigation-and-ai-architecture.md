@@ -3079,3 +3079,15 @@ bound both count and write passes; project callers share the work budget across
 Scenes. This synchronous tooling layer performs no I/O, cache writes, provider
 selection or runtime-world construction. Existing source/cooked formats and
 callers are unchanged; complete project bake composition follows separately.
+
+### Structured validation-only bake jobs
+
+`NavigationBakeExecutionMode` makes BuildAndPublish and ValidateOnly distinct job
+contracts. Existing callers default to BuildAndPublish. ValidateOnly admits only
+required PartitionGather and Validation work and owns an OperationKind::Validation
+operation; it rejects tile-builder work, publication work and commit receipts
+before admission. Progress and accepted/terminal child counts remain observable,
+and cancellation/failure drain children before terminal publication. This runtime
+job layer performs only host-supplied work and selects no source/provider; the
+application source/cook fence and command adapters follow separately. No persisted
+format or existing caller migration changes in this additive job contract.

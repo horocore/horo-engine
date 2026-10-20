@@ -113,6 +113,8 @@ namespace Horo::Navigation {
 
         /** @brief Requires a fresh receipt with exactly one final publication item when host commit tracking is supplied. */
         [[nodiscard]] bool HasValidPublicationReceipt(const NavigationBakeJobDescriptor &descriptor) noexcept {
+            if (descriptor.execution == NavigationBakeExecutionMode::ValidateOnly)
+                return !descriptor.publicationReceipt;
             return !descriptor.publicationReceipt ||
                    (!descriptor.publicationReceipt->IsCommitted() &&
                     std::ranges::count(descriptor.work, NavigationBakeJobStage::Publication, &NavigationBakeWorkItem::stage) == 1);
@@ -121,7 +123,7 @@ namespace Horo::Navigation {
         /** @brief Validates operation admission independently of work accounting and stage-order inspection. */
         [[nodiscard]] bool HasValidDescriptorInputs(const NavigationBakeJobDescriptor &descriptor) noexcept {
             return !descriptor.title.empty() && !descriptor.work.empty() && HasValidBudget(descriptor.budget) &&
-                   HasValidPublicationReceipt(descriptor);
+                   descriptor.execution < NavigationBakeExecutionMode::Count && HasValidPublicationReceipt(descriptor);
         }
 
         [[nodiscard]] Result<Preflight> Validate(const NavigationBakeJobDescriptor &descriptor) {
@@ -148,9 +150,10 @@ namespace Horo::Navigation {
                 priorStage = stageIndex;
                 observed[stageIndex] = true;
             }
-            if (!std::ranges::all_of(observed, [](const bool value) {
-                return value;
-            }))
+            if (const std::array required = descriptor.execution == NavigationBakeExecutionMode::ValidateOnly
+                                                ? std::array{true, false, true, false}
+                                                : std::array{true, true, true, true};
+                observed != required)
                 return BakeFailure<Preflight>(NavigationErrors::BakeJobInvalid);
             return Result<Preflight>::Success(Preflight{.totalWorkUnits = totalWorkUnits});
         }
@@ -362,10 +365,12 @@ namespace Horo::Navigation {
                                                    NavigationBakeJobDescriptor descriptor) {
             std::uint64_t completedUnits{};
             for (const auto stage : Stages) {
-                PublishProgress(state, stage, completedUnits);
                 auto cursor = static_cast<std::size_t>(
                     std::ranges::distance(descriptor.work.begin(),
                                           std::ranges::find(descriptor.work, stage, &NavigationBakeWorkItem::stage)));
+                if (cursor == descriptor.work.size())
+                    continue;
+                PublishProgress(state, stage, completedUnits);
                 const auto last = static_cast<std::size_t>(
                     std::ranges::distance(descriptor.work.begin(),
                                           std::ranges::find_if(descriptor.work.begin() + static_cast<std::ptrdiff_t>(cursor),
@@ -404,16 +409,18 @@ namespace Horo::Navigation {
         /** @brief Preserves an owned queued operation or admits one cancellable coordinator record. */
         [[nodiscard]] std::optional<OperationId> AdmitOperation(OperationStore &operations, const NavigationBakeJobDescriptor &descriptor,
                                                                 const std::shared_ptr<CancellationSource> &cancellation) {
+            const auto kind =
+                descriptor.execution == NavigationBakeExecutionMode::ValidateOnly ? OperationKind::Validation : OperationKind::Cook;
             if (descriptor.queuedOperation.has_value()) {
                 if (const auto snapshot = operations.SnapshotIfChanged(0);
-                    !snapshot || !std::ranges::any_of(snapshot->operations, [&descriptor](const auto &record) {
-                    return record.id == *descriptor.queuedOperation &&
+                    !snapshot || !std::ranges::any_of(snapshot->operations, [&descriptor, kind](const auto &record) {
+                    return record.id == *descriptor.queuedOperation && record.kind == kind &&
                            (record.state == OperationState::Queued || record.state == OperationState::Cancelling);
                 }))
                     return std::nullopt;
                 return descriptor.queuedOperation;
             }
-            return operations.Begin(OperationDescriptor{.kind = OperationKind::Cook,
+            return operations.Begin(OperationDescriptor{.kind = kind,
                                                         .title = descriptor.title,
                                                         .phase = "queued",
                                                         .message = "Navigation bake queued",
@@ -492,6 +499,7 @@ namespace Horo::Navigation {
 
         auto state = std::make_shared<NavigationBakeJobDetail::SharedState>();
         state->snapshot.operation = *operation;
+        state->snapshot.execution = descriptor.execution;
         state->snapshot.totalWorkUnits = std::max<std::uint64_t>(1, validation.Value().totalWorkUnits);
         state->cancellation = std::move(cancellation);
         state->operations = &operations;
