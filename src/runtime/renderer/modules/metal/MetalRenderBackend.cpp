@@ -112,6 +112,114 @@ namespace Horo::Render {
                 return runtime_->UpdateLightFrame(update);
             }
 
+            /** @copydoc IRenderResourceBackend::QueryPipelineDeviceIdentity */
+            Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override {
+                if (!initialized_)
+                    return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->QueryPipelineDeviceIdentity();
+            }
+
+            /** @copydoc IRenderResourceBackend::QueryShaderModuleMemoryCost */
+            Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &descriptor,
+                                                                     std::size_t cookedBytes) const override {
+                if (!initialized_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->QueryShaderModuleMemoryCost(descriptor, cookedBytes);
+            }
+
+            /** @copydoc IRenderResourceBackend::QueryGraphicsPipelineMemoryCost */
+            Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &descriptor,
+                                                                         std::uint64_t vertex, std::uint64_t fragment) const override {
+                if (!initialized_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
+            }
+
+            /** @copydoc IRenderResourceBackend::QuerySamplerMemoryCost */
+            Result<RenderMemoryCostPlan> QuerySamplerMemoryCost(const RenderSamplerDescriptor &descriptor) const override {
+                if (!initialized_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->QuerySamplerMemoryCost(descriptor);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateShaderModule */
+            Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &descriptor,
+                                                     std::span<const std::uint8_t> cookedCode,
+                                                     const RenderMemoryPlacement &placement) override {
+                if (!initialized_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->CreateShaderModule(descriptor, cookedCode, placement);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateGraphicsPipeline */
+            Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescriptor &descriptor, std::uint64_t vertex,
+                                                         std::uint64_t fragment, const RenderMemoryPlacement &placement) override {
+                if (!initialized_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->CreateGraphicsPipeline(descriptor, vertex, fragment, placement);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateSampler */
+            Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &descriptor,
+                                                const RenderMemoryPlacement &placement) override {
+                if (!initialized_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->CreateSampler(descriptor, placement);
+            }
+
+            /** @copydoc IMaterialBindingBackend::QueryMaterialParameterBufferSize */
+            Result<std::size_t> QueryMaterialParameterBufferSize(std::uint64_t pipeline, const MaterialBindingDescriptor &descriptor,
+                                                                 ShaderBindingId binding) const override {
+                if (!initialized_)
+                    return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->QueryMaterialParameterBufferSize(pipeline, descriptor, binding);
+            }
+
+            /** @copydoc IMaterialBindingBackend::RealizeResolved */
+            Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(
+                const MaterialBindingDescriptor &descriptor, std::uint64_t pipeline,
+                std::span<const MaterialResidentResource> resources) override {
+                if (!initialized_)
+                    return Result<std::unique_ptr<IResidentMaterialBinding>>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<std::unique_ptr<IResidentMaterialBinding>>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->RealizeResolved(descriptor, pipeline, resources);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroyShaderModule */
+            void DestroyShaderModule(std::uint64_t instance) noexcept override {
+                if (runtimeInitialized_)
+                    runtime_->DestroyShaderModule(instance);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroyGraphicsPipeline */
+            void DestroyGraphicsPipeline(std::uint64_t instance) noexcept override {
+                if (runtimeInitialized_)
+                    runtime_->DestroyGraphicsPipeline(instance);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroySampler */
+            void DestroySampler(std::uint64_t instance) noexcept override {
+                if (runtimeInitialized_)
+                    runtime_->DestroySampler(instance);
+            }
+
             /** @copydoc IRenderBackend::QueryBufferMemoryCost */
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
                 return QueryMemoryCost(initialized_, "Metal buffer memory requirements require an initialized backend.",

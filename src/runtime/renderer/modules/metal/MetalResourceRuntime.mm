@@ -315,6 +315,9 @@ namespace Horo::Render::Detail {
     void MetalResourceRuntime::Shutdown() noexcept {
         // Timeout closes this native ownership domain; it does not establish reusable completion evidence.
         static_cast<void>(ObserveMetalCommandForTeardown(impl_->lastSubmittedUpload));
+        DestroyAll(impl_->graphicsPipelines);
+        DestroyAll(impl_->samplers);
+        DestroyAll(impl_->shaderModules);
         DestroyAll(impl_->renderTargets);
         DestroyAll(impl_->textureViews);
         DestroyAll(impl_->meshes);

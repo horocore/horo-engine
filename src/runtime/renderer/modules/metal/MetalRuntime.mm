@@ -133,6 +133,132 @@ namespace Horo::Render::Detail {
                 return resources_.UpdateLightFrame(update);
             }
 
+            /** @copydoc IRenderResourceBackend::QueryPipelineDeviceIdentity */
+            Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.QueryPipelineDeviceIdentity();
+            }
+
+            /** @copydoc IRenderResourceBackend::QueryShaderModuleMemoryCost */
+            Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &descriptor,
+                                                                     std::size_t cookedBytes) const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.QueryShaderModuleMemoryCost(descriptor, cookedBytes);
+            }
+
+            /** @copydoc IRenderResourceBackend::QueryGraphicsPipelineMemoryCost */
+            Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &descriptor,
+                                                                         std::uint64_t vertex, std::uint64_t fragment) const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
+            }
+
+            /** @copydoc IRenderResourceBackend::QuerySamplerMemoryCost */
+            Result<RenderMemoryCostPlan> QuerySamplerMemoryCost(const RenderSamplerDescriptor &descriptor) const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.QuerySamplerMemoryCost(descriptor);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateShaderModule */
+            Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &descriptor,
+                                                     std::span<const std::uint8_t> cookedCode,
+                                                     const RenderMemoryPlacement &placement) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.CreateShaderModule(descriptor, cookedCode, placement);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateGraphicsPipeline */
+            Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescriptor &descriptor, std::uint64_t vertex,
+                                                         std::uint64_t fragment, const RenderMemoryPlacement &placement) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.CreateGraphicsPipeline(descriptor, vertex, fragment, placement);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateSampler */
+            Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &descriptor,
+                                                const RenderMemoryPlacement &placement) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<std::uint64_t>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.CreateSampler(descriptor, placement);
+            }
+
+            /** @copydoc IMaterialBindingBackend::QueryMaterialParameterBufferSize */
+            Result<std::size_t> QueryMaterialParameterBufferSize(std::uint64_t pipeline, const MaterialBindingDescriptor &descriptor,
+                                                                 ShaderBindingId binding) const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<std::size_t>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.QueryMaterialParameterBufferSize(pipeline, descriptor, binding);
+            }
+
+            /** @copydoc IMaterialBindingBackend::RealizeResolved */
+            Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(
+                const MaterialBindingDescriptor &descriptor, std::uint64_t pipeline,
+                std::span<const MaterialResidentResource> resources) override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<std::unique_ptr<IResidentMaterialBinding>>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<std::unique_ptr<IResidentMaterialBinding>>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<std::unique_ptr<IResidentMaterialBinding>>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return resources_.RealizeResolved(descriptor, pipeline, resources);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroyShaderModule */
+            void DestroyShaderModule(std::uint64_t instance) noexcept override {
+                if (std::this_thread::get_id() == ownerThread_)
+                    resources_.DestroyShaderModule(instance);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroyGraphicsPipeline */
+            void DestroyGraphicsPipeline(std::uint64_t instance) noexcept override {
+                if (std::this_thread::get_id() == ownerThread_)
+                    resources_.DestroyGraphicsPipeline(instance);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroySampler */
+            void DestroySampler(std::uint64_t instance) noexcept override {
+                if (std::this_thread::get_id() == ownerThread_)
+                    resources_.DestroySampler(instance);
+            }
+
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
                 return resources_.QueryBufferMemoryCost(descriptor);
             }

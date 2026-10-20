@@ -99,6 +99,12 @@ namespace Horo::Render::MetalBackendTests {
             return Result<void>::Success();
         }
 
+        /** @brief Proves the backend forwards preparation to its explicitly selected runtime. */
+        Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override {
+            return Result<RenderPipelineDeviceIdentity>::Success(
+                {.backend = RenderBackendId{"metal"}, .driverIdentity = "injected.metal.preparation"});
+        }
+
         Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
             return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(descriptor.byteSize, 1));
         }
