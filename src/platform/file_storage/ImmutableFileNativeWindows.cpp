@@ -17,6 +17,9 @@ namespace Horo::Platform::ImmutableFileNative {
     namespace {
         using CreateRelativeFile = NTSTATUS(NTAPI *)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK, PLARGE_INTEGER, ULONG,
                                                      ULONG, ULONG, ULONG, PVOID, ULONG);
+        using SetRelativeFileInformation = NTSTATUS(NTAPI *)(HANDLE, PIO_STATUS_BLOCK, PVOID, ULONG, FILE_INFORMATION_CLASS);
+        // User-mode SDKs may omit this enumerator; the documented native rename information class is 10.
+        constexpr auto RenameInformation = static_cast<FILE_INFORMATION_CLASS>(10);
         enum class OpenKind {
             Directory,
             CreateParents,
@@ -139,7 +142,7 @@ namespace Horo::Platform::ImmutableFileNative {
     }
 
     /** @copydoc Write */
-    Result<void> Write(const Handle &file, const std::span<const std::uint8_t> bytes, const CancellationToken &cancellation) {
+    Result<void> Write(const Handle &file, const std::span<const std::byte> bytes, const CancellationToken &cancellation) {
         std::size_t offset{};
         while (offset < bytes.size()) {
             if (cancellation.IsCancellationRequested())
@@ -158,8 +161,12 @@ namespace Horo::Platform::ImmutableFileNative {
         return Sync(file);
     }
 
-    /** @copydoc Publish */
-    Result<bool> Publish(const Handle &parent, Preparation &preparation, const std::string_view destination) {
+    /** @copydoc RenameRelative */
+    Result<bool> RenameRelative(const Handle &file, const Handle &parent, const std::string_view destination, const bool replace) {
+        const auto module = GetModuleHandleW(L"ntdll.dll");
+        const auto set = module ? std::bit_cast<SetRelativeFileInformation>(GetProcAddress(module, "NtSetInformationFile")) : nullptr;
+        if (!set)
+            return Result<bool>::Failure(MakeError(FileStorageErrors::IoFailed, "Native relative rename is unavailable."));
         const auto spelling = std::filesystem::path{std::u8string{destination.begin(), destination.end()}}.native();
         const auto nameBytes = spelling.size() * sizeof(wchar_t);
         const auto totalBytes = sizeof(FILE_RENAME_INFO) + nameBytes;
@@ -169,20 +176,28 @@ namespace Horo::Platform::ImmutableFileNative {
         // Serialize a native header and its bounded UTF-16 tail without forming an out-of-bounds flexible-array pointer.
         FILE_RENAME_INFO header{};
         std::ranges::fill(std::as_writable_bytes(std::span{&header, 1}), std::byte{});
-        header.ReplaceIfExists = FALSE;
+        header.ReplaceIfExists = replace;
         header.RootDirectory = parent.Get();
         header.FileNameLength = static_cast<DWORD>(nameBytes);
         std::ranges::copy(std::as_bytes(std::span{&header, 1}).first(offsetof(FILE_RENAME_INFO, FileName)), buffer.begin());
         std::ranges::copy(std::as_bytes(std::span{spelling}), buffer.begin() + offsetof(FILE_RENAME_INFO, FileName));
-        if (SetFileInformationByHandle(preparation.file.Get(), FileRenameInfo, buffer.data(), static_cast<DWORD>(totalBytes))) {
-            preparation.published = true;
+        // The native relative-name contract keeps the retained directory authoritative throughout rename.
+        IO_STATUS_BLOCK io{};
+        const auto status = set(file.Get(), &io, buffer.data(), static_cast<ULONG>(totalBytes), RenameInformation);
+        if (status >= 0)
             return Result<bool>::Success(true);
-        }
-        const auto error = GetLastError();
-        return error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS
+        return static_cast<ULONG>(status) == 0xc0000035U
                    ? Result<bool>::Success(false)
-                   : Result<bool>::Failure(MakeError(FileStorageErrors::IoFailed,
-                                                     "Native immutable relative publication failed; Win32 code " + std::to_string(error)));
+                   : Result<bool>::Failure(MakeError(FileStorageErrors::IoFailed, "Native relative rename failed; NTSTATUS " +
+                                                                                      std::to_string(static_cast<ULONG>(status))));
+    }
+
+    /** @copydoc Publish */
+    Result<bool> Publish(const Handle &parent, Preparation &preparation, const std::string_view destination) {
+        auto renamed = RenameRelative(preparation.file, parent, destination, false);
+        if (renamed.HasValue() && renamed.Value())
+            preparation.published = true;
+        return renamed;
     }
 
     /** @copydoc Sync */
