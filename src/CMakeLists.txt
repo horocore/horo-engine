@@ -1923,6 +1923,12 @@ target_link_libraries(HoroNavigationBakeService PUBLIC HoroEngine::NavigationRun
 add_library(HoroNavigationBakeAutomation STATIC
         application/navigation/NavigationProjectBakeSource.cpp
         application/navigation/NavigationPrimitiveGeometry.cpp
+        application/navigation/NavigationSceneBakeGeometry.cpp
+        application/navigation/NavigationSceneBakeGraph.cpp
+        application/navigation/NavigationGeometryClip.cpp
+        application/navigation/NavigationSceneBakeRegions.cpp
+        application/navigation/NavigationRegionClip.cpp
+        application/navigation/NavigationRegionGeometry.cpp
 )
 add_library(HoroEngine::NavigationBakeAutomation ALIAS HoroNavigationBakeAutomation)
 target_compile_features(HoroNavigationBakeAutomation PUBLIC cxx_std_20)
