@@ -1,9 +1,58 @@
 #include "editor/screens/workspace/panels/inspector/InspectorPanel.h"
 #include "editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.h"
 
+#include <algorithm>
+#include <format>
+
 namespace Horo::Editor {
     namespace {
         using namespace PhysicsInspectorWidgets;
+
+        /** @brief Select an explicit body's real stable contributors without inventing nested cooked children. */
+        void DrawColliderHierarchy(const SceneObject &object, const EditorWorkspaceViewModel &view, EditorWorkspaceViewCommandData &command,
+                                   const EditorGuiContext &context) {
+            if (!object.components.rigidBody)
+                return;
+            const Runtime::PhysicsBodyReference body{{object.id.value}, object.components.rigidBody->body};
+            Ui::Card card({.id = "physics_compound_children"});
+            card.DrawTitleBar(
+                {.id = "title", .title = Label(context, "workspace.physics.compound_children"), .fonts = context.theme.fonts});
+            if (card.BeginBody()) {
+                std::vector<ColliderEditTarget> children;
+                for (const auto &child : view.viewportColliders) {
+                    if (child.body != body)
+                        continue;
+                    const auto owner = std::ranges::find(view.objects, child.target.object, &SceneObject::id);
+                    const auto label =
+                        std::format("{} / {}", owner == view.objects.end() ? "?" : owner->name, child.target.component.value);
+                    Ui::FieldLabel(label.c_str(), context.theme.fonts);
+                    if (child.diagnostic)
+                        Ui::Hint(Label(context, "workspace.physics.gizmo_unsupported"), context.theme.fonts);
+                    ImGui::PushID(label.c_str());
+                    if (Action(context, "workspace.physics.edit_child", child.editable && child.visible)) {
+                        command.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
+                        auto selection =
+                            ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper ? view.selectedColliders : std::vector<ColliderEditTarget>{};
+                        const auto selected = std::ranges::find(selection, child.target);
+                        if (selected == selection.end())
+                            selection.push_back(child.target);
+                        else
+                            selection.erase(selected);
+                        command.colliderPayload =
+                            ColliderViewportRequest{view.physicsContext, view.colliderSelectionRevision, std::move(selection), {}};
+                    }
+                    ImGui::PopID();
+                    if (child.editable && child.visible)
+                        children.push_back(child.target);
+                }
+                if (Action(context, "workspace.physics.edit_compound", !children.empty())) {
+                    command.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
+                    command.colliderPayload =
+                        ColliderViewportRequest{view.physicsContext, view.colliderSelectionRevision, std::move(children), {}};
+                }
+            }
+            card.Finish();
+        }
 
         /** @brief Draw a staged body's portable fields; removal remains part of the same uncommitted gesture. */
         void DrawBody(PhysicsInspectorSession &session, const EditorGuiContext &context) {
@@ -140,6 +189,7 @@ namespace Horo::Editor {
         if (!canEdit)
             Ui::Hint(Label(context, "workspace.physics.unavailable"), context.theme.fonts);
         ImGui::BeginDisabled(!canEdit);
+        DrawColliderHierarchy(object, viewModel, command, context);
         DrawBody(m_physicsSession, context);
         DrawColliders(m_physicsSession, context);
         DrawConstraints(m_physicsSession, context);

@@ -802,6 +802,34 @@ shaft, tip, and plane handles while leaving the hub clear of axis capture. Plane
 drags project the pointer ray onto the selected world-space plane and convert
 the resulting displacement through the parent inverse before previewing it.
 
+Physics collider editing uses the same routed pointer-capture and transform-gizmo
+geometry. PhysicsInspector exposes the explicit body's contributor hierarchy by
+stable object/component identity, including contributors stored on other objects.
+Edit Child selects one contributor; Edit All selects the admitted flat compound.
+Ctrl/Command-click toggles children in the viewport. Move, Rotate and Scale edit
+body-local poses and positive authored bounds; Ctrl snaps relative to the captured
+primary (0.1 m, 15 degrees, 10 percent). Screen input and overlay widths use logical
+pixels; framebuffer scale affects the render-target extent only. Picking intersects
+actual oriented boxes, spheres, capsules and plane equations, using the renderer's
+clip convention and world-distance ray limits.
+
+`ColliderGizmoController` retains a detached baseline and preview only. It never
+mutates Physics runtime state or authored Scene data while dragging. Release submits
+one generation-, document- and selection-fenced multi-child batch through the
+existing `SceneDocumentTransactions` port and `EditorHistory`. Escape, capture loss,
+panel detach, selection changes, reload and play transitions discard the transient
+preview. Hidden, disabled, generated or locked contributors cannot grant edit
+permission; an explicit body's inherited lock also protects its contributors.
+
+The additive `PhysicsInspector.h` collider contracts keep the existing owner and
+callers intact; no persisted schema or public-header ownership migration is needed.
+Existing Inspector callers continue using `PreparePhysicsInspectorEdit`; viewport
+callers prepare `ColliderTransformEdit` batches against that same document owner.
+Cooked asset interiors have no editable source document in this composition and
+return `physics.operation.unsupported`; no mesh-derived or fabricated children are
+substituted. Nonuniform sphere/capsule scale, unsupported body scale and affine
+shear reject explicitly. Native solver handles never enter the editor contract.
+
 Content Browser assets that support scene instantiation follow the same preview
 boundary. While the primary pointer remains held over the viewport, the editor
 adds one tinted, non-pickable mesh instance to the render snapshot and updates

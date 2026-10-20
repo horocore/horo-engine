@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.h"
 #include "editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.h"
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.h"
 #include "editor/screens/workspace/panels/viewport/navigation/ViewportNavigationController.h"
@@ -44,5 +45,6 @@ namespace Horo::Editor {
         ViewportInteractionCapture capture_;
         ViewportNavigationController navigation_;
         TransformGizmoController gizmo_;
+        ColliderGizmoController colliders_;
     };
 }  // namespace Horo::Editor

@@ -491,3 +491,123 @@ TEST_CASE("Viewport grid control follows shading control", "[unit][editor][viewp
     REQUIRE(draw().toggleGrid);
     ImGui::DestroyContext();
 }
+
+TEST_CASE("Collider gestures pass through the real viewport in logical pixels and cancel with capture",
+          "[unit][editor][physics][collider]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    ImGui::CreateContext();
+    auto &io = ImGui::GetIO();
+    io.DisplaySize = {640, 480};
+    io.DeltaTime = 1.0F / 60;
+    io.Fonts->AddFontDefault();
+    static_cast<void>(io.Fonts->Build());
+    float dpi = 1;
+    Math::ClipDepthRange depth = Math::ClipDepthRange::NegativeOneToOne;
+    bool cancel = false;
+    bool reload = false;
+    SECTION("2x framebuffer with zero-to-one clip depth") {
+        dpi = 2;
+        depth = Math::ClipDepthRange::ZeroToOne;
+    }
+    SECTION("exclusive modal capture cancels") {
+        cancel = true;
+    }
+    SECTION("replacement generation cancels") {
+        reload = true;
+    }
+    io.DisplayFramebufferScale = {dpi, dpi};
+    EngineDataBus engine;
+    EditorDataBus events;
+    TestLocalization localization;
+    ImFont *font = io.Fonts->Fonts.front();
+    const ThemeContext theme{.fonts = {.sans = font, .sansCompact = font, .sansEmphasis = font}};
+    const EditorSettingsSnapshot settings{};
+    const EditorGuiContext gui{.engineEvents = engine,
+                               .editorEvents = events,
+                               .localization = localization,
+                               .theme = theme,
+                               .settings = settings};
+    std::array<std::uint8_t, 16> bytes{};
+    bytes.back() = 1;
+    const auto asset = Assets::AssetId::FromBytes(bytes);
+    SceneObjectSnapshot object{.id = {1}, .name = "Compound"};
+    object.components.rigidBody = Runtime::RigidBodyComponent{.id = {1}, .body = {10}};
+    object.components.colliders.push_back({.id = {2},
+                                           .collider = {20},
+                                           .body = {{1}, {10}},
+                                           .collisionProfile = Physics::CollisionProfileId::FromBytes(bytes),
+                                           .materials = {{Physics::PhysicsMaterialSlotId::FromValue(1), asset}}});
+    auto port = SceneDocumentTransactions::Create({asset, 1}, {object});
+    REQUIRE(port.HasValue());
+    const auto source = port.Value().Snapshot().Value();
+    EditorWorkspaceViewModel view;
+    view.physicsContext = {source.session, source.revision, source.state, true, {}};
+    view.viewportColliders = ProjectPhysicsColliders(source.objects).Value();
+    view.selectedColliders = {view.viewportColliders.front().target};
+    view.activeTransformTool = EditorTransformTool::Move;
+    Input::InputRouter router;
+    Input::RawInputCollector collector;
+    auto workspace = router.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
+    FakeViewportRenderer renderer;
+    renderer.depthRange = depth;
+    ViewportPanel panel;
+    PanelContext panelContext{.dataBus = events,
+                              .viewportRenderer = &renderer,
+                              .inputRouter = &router,
+                              .workspaceInputContext = &workspace};
+    panel.OnAttach(panelContext);
+    Input::FrameNumber frame = 1;
+    EditorWorkspaceViewCommandData command;
+    const auto draw = [&] {
+        command = {};
+        ImGui::NewFrame();
+        collector.BeginFrame(frame++);
+        collector.SetPointerPosition(io.MousePos.x, io.MousePos.y);
+        collector.SetPointerButton(Input::PointerButton::Primary, io.MouseDown[ImGuiMouseButton_Left]);
+        router.BeginFrame(collector.Commit());
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({420, 320});
+        ImGui::Begin("ColliderViewport", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+        panel.DrawPanel(ImGui::GetCursorScreenPos(), {400, 280}, view, command, gui);
+        ImGui::End();
+        ImGui::Render();
+    };
+    io.AddFocusEvent(true);
+    io.AddMousePosEvent(230, 148);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    draw();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    draw();
+    io.AddMousePosEvent(250, 148);
+    draw();
+    CHECK(command.command == EditorWorkspaceViewCommand::None);  // Preview is local, never an authored/object command.
+    CHECK(port.Value().Snapshot().Value().revision == source.revision);
+    std::optional<Input::InputContextToken> modal;
+    if (cancel)
+        modal.emplace(router.PushContext(Input::InputContextId{"test.modal"}, Input::InputContextKind::ModalRoot));
+    if (reload)
+        ++view.physicsContext.session.generation;
+    if (cancel || reload)
+        draw();
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    draw();
+    if (cancel || reload) {
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
+    } else {
+        REQUIRE(command.command == EditorWorkspaceViewCommand::CommitPhysicsColliders);
+        REQUIRE(command.colliderPayload);
+        REQUIRE(command.colliderPayload->edits.size() == 1);
+        CHECK(command.colliderPayload->context.session == source.session);
+        CHECK(command.colliderPayload->edits.front().transform.translation.x > 0);
+        const auto prepared = PrepareColliderTransformEdits(source, command.colliderPayload->edits);
+        REQUIRE(prepared.HasValue());
+        REQUIRE(port.Value().Execute(command.colliderPayload->context, prepared.Value()).HasValue());
+        CHECK(port.Value().Snapshot().Value().revision == source.revision + 1);
+    }
+    CHECK(renderer.requestedExtent.width == static_cast<std::uint32_t>(400 * dpi));
+    CHECK(renderer.requestedExtent.height == static_cast<std::uint32_t>(280 * dpi));
+    panel.OnDetach();
+    ImGui::DestroyContext();
+}

@@ -3158,6 +3158,7 @@ add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentTests.cpp
         unit/editor/CharacterAuthoringTests.cpp
         unit/editor/PhysicsInspectorTests.cpp
+        unit/editor/ColliderEditingTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/AudioListenerAuthoringTests.cpp

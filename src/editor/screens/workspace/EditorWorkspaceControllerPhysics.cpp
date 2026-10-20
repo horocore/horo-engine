@@ -93,3 +93,90 @@ namespace Horo::Editor {
         HandleDocumentCommandResult(Result<SceneCommandResult>::Success(std::move(event)), "Update Physics components");
     }
 }  // namespace Horo::Editor
+
+namespace Horo::Editor {
+    /** @copydoc EditorWorkspaceController::ApplyColliderViewportCommand */
+    void EditorWorkspaceController::ApplyColliderViewportCommand(const EditorWorkspaceViewCommandData &command) {
+        if (std::this_thread::get_id() != m_physicsOwnerThread || !command.colliderPayload)
+            return;
+        RefreshPhysicsInspectorPort();
+        const auto &request = *command.colliderPayload;
+        const auto reject = [this](const Error &error) {
+            m_viewModel.physicsEditError = error.message;
+        };
+        if (!m_physicsTransactions || m_playSession.IsActive()) {
+            reject(MakeError(SceneTransactionError(SceneTransactionFailure::Closed)));
+            return;
+        }
+        const auto snapshot = m_physicsTransactions->Snapshot();
+        if (snapshot.HasError()) {
+            reject(snapshot.ErrorValue());
+            return;
+        }
+        if (request.context.session != snapshot.Value().session || request.context.revision != snapshot.Value().revision ||
+            request.context.state != snapshot.Value().state || request.selectionRevision != m_viewModel.colliderSelectionRevision) {
+            reject(MakeError(SceneTransactionError(SceneTransactionFailure::Stale)));
+            return;
+        }
+        if (request.context.cancellation.IsCancellationRequested()) {
+            reject(MakeError(SceneTransactionError(SceneTransactionFailure::Cancelled)));
+            return;
+        }
+        if (command.command == EditorWorkspaceViewCommand::SelectPhysicsColliders) {
+            if (request.selection.size() > SceneTransactionLimits{}.maximumChanges) {
+                reject(MakeError(SceneTransactionError(SceneTransactionFailure::Capacity)));
+                return;
+            }
+            for (std::size_t index = 0; index < request.selection.size(); ++index) {
+                const auto target = request.selection[index];
+                if (std::ranges::find(request.selection.begin(), request.selection.begin() + static_cast<std::ptrdiff_t>(index), target) !=
+                    request.selection.begin() + static_cast<std::ptrdiff_t>(index)) {
+                    reject(MakeError(SceneTransactionError(SceneTransactionFailure::Invalid)));
+                    return;
+                }
+                const auto found = std::ranges::find(m_viewModel.viewportColliders, target, &ColliderPresentation::target);
+                if (found == m_viewModel.viewportColliders.end() || !found->visible || !found->editable) {
+                    reject(found != m_viewModel.viewportColliders.end() && found->diagnostic
+                               ? *found->diagnostic
+                               : MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+                    return;
+                }
+            }
+            m_viewModel.selectedColliders = request.selection;
+            ++m_viewModel.colliderSelectionRevision;
+            m_viewModel.physicsEditError.clear();
+            return;
+        }
+        if (!request.context.canEdit || request.selection != m_viewModel.selectedColliders ||
+            request.edits.size() != request.selection.size()) {
+            reject(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+            return;
+        }
+        for (const auto &edit : request.edits)
+            if (std::ranges::find(request.selection, edit.target) == request.selection.end()) {
+                reject(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+                return;
+            }
+        auto changes = PrepareColliderTransformEdits(snapshot.Value(), request.edits);
+        if (changes.HasError()) {
+            reject(changes.ErrorValue());
+            return;
+        }
+        SceneCommandResult event;
+        event.kind = DocumentChangeKind::ComponentChanged;
+        for (const auto &change : changes.Value())
+            event.affectedObjects.push_back(change.object);
+        if (!event.affectedObjects.empty())
+            event.object = event.affectedObjects.front();
+        const auto committed = m_physicsTransactions->Execute(request.context, changes.Value());
+        if (committed.HasError()) {
+            reject(committed.ErrorValue());
+            return;
+        }
+        event.revision = {committed.Value().revision};
+        event.state = {committed.Value().state};
+        event.committed = committed.Value().committed;
+        m_viewModel.physicsEditError.clear();
+        HandleDocumentCommandResult(Result<SceneCommandResult>::Success(std::move(event)), "Edit collider children");
+    }
+}  // namespace Horo::Editor

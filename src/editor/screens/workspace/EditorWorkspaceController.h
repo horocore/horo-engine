@@ -331,6 +331,8 @@ namespace Horo::Editor {
         void RefreshPhysicsInspectorPort();
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
         void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit collider child selection and atomic gizmo edits through this exact Scene/history owner. */
+        void ApplyColliderViewportCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Check the actual selection authority and exact owner fence before candidate preparation. */
         [[nodiscard]] Result<SceneTransactionSnapshot> CapturePhysicsInspectorSnapshot(const EditorWorkspaceViewCommandData &command) const;
         Assets::AssetId m_physicsDocumentOwner;

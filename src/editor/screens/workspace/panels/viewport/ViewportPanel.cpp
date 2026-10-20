@@ -277,7 +277,8 @@ namespace Horo::Editor {
                                       .height = layout.height,
                                       .camera = viewModel.viewportCamera,
                                       .depthRange = depthRange,
-                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive},
+                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive &&
+                                                     viewModel.selectedColliders.empty()},
                                      viewModel.viewportLights, viewModel.primarySelection);
         if (!inputEligible)
             static_cast<void>(interaction_.ConsumePendingCancellation(command));

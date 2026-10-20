@@ -2825,6 +2825,7 @@ add_library(HoroEditorModel STATIC
         editor/document/SceneDocumentTransaction.cpp
         editor/document/InspectorBehaviorBinding.cpp
         editor/document/PhysicsInspector.cpp
+        editor/document/ColliderEditing.cpp
         editor/document/SceneDocumentTransactionErrors.cpp
         editor/navigation/NavigationDefinitionDocument.cpp
         editor/navigation/NavigationSettingsWorkflow.cpp
@@ -3229,6 +3230,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
+        editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoMath.cpp
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.cpp

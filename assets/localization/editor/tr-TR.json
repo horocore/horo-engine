@@ -2466,6 +2466,12 @@
     "workspace.packages.recovery_hint": {
       "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
     },
+    "workspace.physics.compound_children": {"text": "Gövdenin çarpıştırıcı alt öğeleri"},
+    "workspace.physics.edit_child": {"text": "Alt öğeyi görünümde düzenle"},
+    "workspace.physics.edit_compound": {"text": "Tüm bileşik alt öğeleri düzenle"},
+    "workspace.physics.gizmo_hint": {"text": "Çarpıştırıcı düzenleme · Ctrl: 0,1 m / 15° / %10 yakala · Ctrl-tık: alt öğeyi seç · Escape: iptal"},
+    "workspace.physics.gizmo_rejected": {"text": "Çarpıştırıcı düzenlemesi reddedildi. Pozitif sınırlar ve küre/kapsül için eş ölçek kullanın. Tanılamaya bakın."},
+    "workspace.physics.gizmo_unsupported": {"text": "Pişirilmiş şeklin alt öğeleri kendi kaynak belgesini gerektirir; görünümde düzenlenemez."},
     "workspace.physics.title": {
       "text": "Fizik"
     },

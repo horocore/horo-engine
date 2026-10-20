@@ -123,6 +123,8 @@ namespace Horo::Editor {
         UpdateLightComponent,
         UpdateTriggerVolumeComponent,
         UpdatePhysicsComponents,
+        SelectPhysicsColliders,
+        CommitPhysicsColliders,
         UpdateAudioSourceComponent,
         UpdateCharacterComponent,
         StartAudioComponentPreview,
@@ -245,6 +247,14 @@ namespace Horo::Editor {
         PhysicsInspectorValues values;
     };
 
+    /** @brief Detached collider gesture tied to one exact document and collider-selection generation. */
+    struct ColliderViewportRequest final {
+        SceneTransactionContext context;
+        std::uint64_t selectionRevision{};
+        std::vector<ColliderEditTarget> selection;
+        std::vector<ColliderTransformEdit> edits;
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
@@ -268,6 +278,7 @@ namespace Horo::Editor {
         std::optional<Runtime::LightComponent> lightPayload = std::nullopt;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
         std::optional<PhysicsInspectorRequest> physicsPayload;
+        std::optional<ColliderViewportRequest> colliderPayload;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
         std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
         std::optional<Runtime::AudioListenerComponent> audioListenerPayload;
@@ -337,6 +348,9 @@ namespace Horo::Editor {
         SceneTransactionContext physicsContext;
         std::uint64_t physicsSelectionRevision{};
         std::string physicsEditError;
+        std::vector<ColliderPresentation> viewportColliders;
+        std::vector<ColliderEditTarget> selectedColliders;
+        std::uint64_t colliderSelectionRevision{};
         std::vector<SceneObject> objects;
         std::shared_ptr<const PrefabHierarchyProjection> prefabHierarchy; /**< Owner-published bounded cache; no Draw I/O. */
         std::optional<PrefabHierarchyTarget> prefabSelection;
