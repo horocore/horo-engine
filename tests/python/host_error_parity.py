@@ -13,11 +13,12 @@ import unittest
 from pathlib import Path
 
 SPEC = importlib.util.spec_from_file_location(
-    "horo_errors", Path(__file__).resolve().parents[2] / "scripts" / "horo_errors.py"
+    "horo_errors", Path(__file__).resolve().parents[2] / "scripts" / 'dev.py'
 )
 if SPEC is None or SPEC.loader is None:
     raise RuntimeError("Cannot load the Python application-error adapter")
 errors = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = errors
 SPEC.loader.exec_module(errors)
 
 EXCEPTIONS = {

@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Horo Engine Pre-Commit Hook
-# Automatically formats staged C++ files using clang-format via dev.py
-
-python3 scripts/dev.py format --staged

@@ -46,6 +46,7 @@ def _run_generator(script: Path, root: Path, output: Path) -> subprocess.Complet
         [
             sys.executable,
             str(script),
+            "migrations",
             str(root),
             str(output / "catalog.cpp"),
             str(output / "sources.cmake"),

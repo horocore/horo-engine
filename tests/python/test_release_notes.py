@@ -1,5 +1,6 @@
 """Release-notes source, selection, snapshot, and Welcome projection contracts."""
 
+
 import json
 import io
 from contextlib import redirect_stderr
@@ -12,10 +13,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from parse_changelog import (NotesError, main as parse_main, make_snapshot, parse_changelog, render_header,
-                             select_range, select_version, snapshot_bytes, version_parts)
-from verify_release_notes import release_body, verify
-from verify_release_archive import verify_archive
+from dev import NotesError as NotesError, notes_main as parse_main, make_snapshot as make_snapshot, parse_changelog as parse_changelog, render_header as render_header, select_range as select_range, select_version as select_version, snapshot_bytes as snapshot_bytes, version_parts as version_parts
+from dev import release_body as release_body, verify as verify
+from dev import verify_archive as verify_archive
 
 
 SOURCE = """# Changelog
@@ -116,7 +116,7 @@ class ReleaseNotesTests(unittest.TestCase):
             root = Path(temporary)
             source = root / "CHANGELOG.md"
             source.write_text(SOURCE, encoding="utf-8")
-            arguments = ["parse_changelog.py", "--source", str(source),
+            arguments = ['dev.py', "--source", str(source),
                          "--version", "0.2.0", "--product", "horo-editor"]
             errors = io.StringIO()
             with patch("sys.argv", arguments), patch.object(Path, "cwd", return_value=root), redirect_stderr(errors):
@@ -173,7 +173,7 @@ class ReleaseNotesTests(unittest.TestCase):
             tar_path, zip_path = write_archive_fixture(root, snapshot)
 
             for unsafe in ("../release-notes.json", str(root.parent / "absolute-release-notes.json"),
-                           "package/../release-notes.json", "package\\release-notes.json"):
+                           "package/../release-notes.json", "package" + chr(92) + "release-notes.json"):
                 with self.subTest(unsafe=unsafe):
                     with tarfile.open(tar_path, "w:gz") as package:
                         member = tarfile.TarInfo(unsafe)
@@ -231,11 +231,11 @@ class ReleaseNotesTests(unittest.TestCase):
             with self.subTest(tag=tag, data=data[:20]):
                 with self.assertRaises(NotesError):
                     verify(data, tag, configured, body)
-        verify(snapshot, "v0.2.0", cmake, markdown.replace("\n", "\r\n"))
+        verify(snapshot, "v0.2.0", cmake, markdown.replace("\n", (chr(13) + chr(10))))
 
     def test_release_body_fetch_uses_bounded_authenticated_api_request(self):
         with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": str(id(self))}):
-            with patch("verify_release_notes.http.client.HTTPSConnection") as constructor:
+            with patch('dev.http.client.HTTPSConnection') as constructor:
                 connection = constructor.return_value
                 connection.getresponse.return_value.status = 200
                 connection.getresponse.return_value.read.return_value = b'{"body":"Reviewed"}'
@@ -252,7 +252,7 @@ class ReleaseNotesTests(unittest.TestCase):
             with self.assertRaisesRegex(NotesError, "GITHUB_REPOSITORY"):
                 release_body("v0.2.0")
         with patch.dict("os.environ", {"GITHUB_REPOSITORY": "horocore/horo-engine", "GH_TOKEN": str(id(self))}):
-            with patch("verify_release_notes.http.client.HTTPSConnection") as constructor:
+            with patch('dev.http.client.HTTPSConnection') as constructor:
                 connection = constructor.return_value
                 connection.getresponse.return_value.status = 404
                 with self.assertRaisesRegex(NotesError, "HTTP 404"):

@@ -429,7 +429,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/scene-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --discovery "$root/scene-allocation-discovery.json" --regex-output "$root/scene-allocation-regex.txt"
+          python scripts/dev.py qualify-scene --discovery "$root/scene-allocation-discovery.json" --regex-output "$root/scene-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/scene-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/scene-allocation-ctest.xml") {
@@ -437,7 +437,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "scene-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --output-junit "$root/scene-allocation-ctest.xml"
+          python scripts/dev.py qualify-scene --output-junit "$root/scene-allocation-ctest.xml"
 
       - name: Test Windows Release extension allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -446,7 +446,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/extension-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_extension_allocation_qualification.py --discovery "$root/extension-allocation-discovery.json" --regex-output "$root/extension-allocation-regex.txt"
+          python scripts/dev.py qualify-extension --discovery "$root/extension-allocation-discovery.json" --regex-output "$root/extension-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/extension-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/extension-allocation-ctest.xml") {
@@ -454,7 +454,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 --test-output-size-passed 65536 -R $pattern --output-junit "extension-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_extension_allocation_qualification.py --output-junit "$root/extension-allocation-ctest.xml"
+          python scripts/dev.py qualify-extension --output-junit "$root/extension-allocation-ctest.xml"
 
       - name: Test Windows Release Navigation settings allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -463,7 +463,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/navigation-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --family navigation --discovery "$root/navigation-allocation-discovery.json" --regex-output "$root/navigation-allocation-regex.txt"
+          python scripts/dev.py qualify-scene --family navigation --discovery "$root/navigation-allocation-discovery.json" --regex-output "$root/navigation-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/navigation-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/navigation-allocation-ctest.xml") {
@@ -471,7 +471,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --test-output-size-passed 16384 --output-junit "navigation-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --family navigation --output-junit "$root/navigation-allocation-ctest.xml"
+          python scripts/dev.py qualify-scene --family navigation --output-junit "$root/navigation-allocation-ctest.xml"
 
       - name: Test Windows Release Collision settings allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -480,7 +480,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/collision-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --family collision --discovery "$root/collision-allocation-discovery.json" --regex-output "$root/collision-allocation-regex.txt"
+          python scripts/dev.py qualify-scene --family collision --discovery "$root/collision-allocation-discovery.json" --regex-output "$root/collision-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/collision-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/collision-allocation-ctest.xml") {
@@ -488,7 +488,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 --test-output-size-passed 16384 -R $pattern --output-junit "collision-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --family collision --output-junit "$root/collision-allocation-ctest.xml"
+          python scripts/dev.py qualify-scene --family collision --output-junit "$root/collision-allocation-ctest.xml"
 
       - name: Test Windows Release Character allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -498,7 +498,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/character-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_character_allocation_qualification.py --discovery "$root/character-allocation-discovery.json" --regex-output "$root/character-allocation-regex.txt"
+          python scripts/dev.py qualify-character --discovery "$root/character-allocation-discovery.json" --regex-output "$root/character-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/character-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/character-allocation-ctest.xml") {
@@ -506,7 +506,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "character-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_character_allocation_qualification.py --output-junit "$root/character-allocation-ctest.xml"
+          python scripts/dev.py qualify-character --output-junit "$root/character-allocation-ctest.xml"
 
       - name: Test Windows Release Save lifecycle allocation qualification
         id: save_allocation_release_tests
@@ -525,7 +525,7 @@ jobs:
 
       - name: Verify Windows Release Save allocation variants
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
-        run: python scripts/verify_save_allocation_qualification.py build/ci-audio-release/save-allocation-ctest.xml
+        run: python scripts/dev.py qualify-save build/ci-audio-release/save-allocation-ctest.xml
 
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
