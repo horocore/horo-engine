@@ -25,6 +25,16 @@ namespace Horo::Platform::ImmutableFileNative {
     [[nodiscard]] Result<std::optional<Preparation>> Prepare(const Handle &parent, std::string name);
     /** @brief Writes and flushes the complete owned payload in bounded cancellation-aware transfers. */
     [[nodiscard]] Result<void> Write(const Handle &file, std::span<const std::byte> bytes, const CancellationToken &cancellation);
+#if defined(_WIN32)
+    /** @brief Renames a synchronous, delete-authorized native object against a retained destination directory.
+     * @param file Owned source object, opened with synchronous I/O and delete access.
+     * @param parent Retained destination directory; its former pathname is never reopened.
+     * @param destination Already admitted single UTF-8 component.
+     * @param replace Replace an existing destination when true; otherwise publication is exclusive.
+     * @return True after native commit, false for an existing destination, or an error retaining NTSTATUS detail.
+     */
+    [[nodiscard]] Result<bool> RenameRelative(const Handle &file, const Handle &parent, std::string_view destination, bool replace);
+#endif
     /** @brief Atomically moves the operation-owned payload to an absent destination; false means destination already exists. */
     [[nodiscard]] Result<bool> Publish(const Handle &parent, Preparation &preparation, std::string_view destination);
     /** @brief Synchronizes an opened file or directory according to native durability policy. */

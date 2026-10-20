@@ -88,13 +88,17 @@ TEST_CASE("Rooted publication rejects paths and leaves unauthorized parents unto
 
 TEST_CASE("Rooted native publication preserves spaces and non-ASCII root namespace and leaf names", "[platform][publication]") {
     Fixture fixture;
-    const auto anchor = fixture.anchor / std::filesystem::path{u8"project dir ü"};
+    // The path and portable namespace must carry the same Unicode code points even under MSVC's default source charset.
+    const auto anchor = fixture.anchor / std::filesystem::path{u8"project dir \u00FC"};
     REQUIRE(std::filesystem::create_directory(anchor));
-    const auto root = anchor / std::filesystem::path{u8"derived/cook ü"};
-    const auto leaf = std::filesystem::path{u8"模型 çığ.bin"};
-    auto files = Platform::CreateNativePublicationFileSystem(anchor, "derived/cook ü");
+    const auto root = anchor / std::filesystem::path{u8"derived/cook \u00FC"};
+    const auto leaf = std::filesystem::path{u8"\u6A21\u578B \u00E7\u0131\u011F.bin"};
+    const std::u8string namespaceBytes{u8"derived/cook \u00FC"};
+    auto files = Platform::CreateNativePublicationFileSystem(anchor, std::string{namespaceBytes.begin(), namespaceBytes.end()});
     REQUIRE(files.HasValue());
-    REQUIRE(files.Value()->WriteDurable(root / leaf, std::as_bytes(std::span{Payload})).HasValue());
+    const auto written = files.Value()->WriteDurable(root / leaf, std::as_bytes(std::span{Payload}));
+    INFO((written.HasError() ? DescribeFailure(written.ErrorValue()) : std::string{}));
+    REQUIRE(written.HasValue());
     const auto bytes = files.Value()->ReadFileBounded(root / leaf, 1024);
     REQUIRE(bytes.HasValue());
     CHECK(std::string(bytes.Value().begin(), bytes.Value().end()) == Payload);
@@ -217,6 +221,17 @@ TEST_CASE("Rooted publication retains its original root when the old spelling is
     CHECK_FALSE(std::filesystem::exists(grantRoot / "child" / "new"));
     CHECK(granted.Value()->ListDirectory(grantRoot / "child", 1).Value().size() == 1);
     CHECK(granted.Value()->ReadFileBounded(grantRoot / "child" / "sentinel", 1024).HasError());
+    bool created{};
+    REQUIRE(granted.Value()->WritePrivateDurable(grantRoot / "child" / "prepared", std::as_bytes(std::span{Payload}), created).HasValue());
+    REQUIRE(created);
+    AtomicFileReplacementReceipt receipt;
+    const auto replaced = granted.Value()->AtomicReplaceTracked(grantRoot / "child" / "prepared", grantRoot / "child" / "new", receipt);
+    INFO((replaced.HasError() ? DescribeFailure(replaced.ErrorValue()) : std::string{}));
+    REQUIRE(replaced.HasValue());
+    CHECK(receipt.WasCommitted());
+    CHECK(granted.Value()->ReadFileBounded(grantRoot / "child" / "new", 1024).Value() ==
+          std::vector<std::uint8_t>{Payload.begin(), Payload.end()});
+    CHECK_FALSE(std::filesystem::exists(grantRoot / "child" / "new"));
 }
 
 TEST_CASE("Retained native directory cursors admit repeated inventories after a root rename", "[platform][publication]") {

@@ -183,8 +183,8 @@ namespace Horo::Platform::PublicationFileNative {
              (to.Value()->kind != from.Value()->kind || (to.Value()->kind == FileEntryKind::RegularFile && to.Value()->hardLinks != 1U))))
             return Result<void>::Failure(MakeError(FileStorageErrors::UnsafeObject));
         const std::string fromName{source};
-        const std::string toName{destination};
-        if (renameat(sourceParent.Get(), fromName.c_str(), destinationParent.Get(), toName.c_str()) != 0)
+        if (const std::string toName{destination};
+            renameat(sourceParent.Get(), fromName.c_str(), destinationParent.Get(), toName.c_str()) != 0)
             return Result<void>::Failure(Failure());
         receipt.RecordCommitted();
         if (auto synced = ImmutableFileNative::Sync(sourceParent); synced.HasError())
