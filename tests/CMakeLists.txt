@@ -5258,7 +5258,7 @@ target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
 target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::CliHost HoroEngine::HostErrors
-    HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
+    HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroCliProductionOutputContract integration/CliProductionOutputContract.cpp)
@@ -5368,3 +5368,27 @@ target_compile_features(HoroTerrainResidencyPublicHeaderConsumer PRIVATE cxx_std
 target_link_libraries(HoroTerrainResidencyPublicHeaderConsumer PRIVATE HoroEngine::TerrainStreaming)
 add_test(NAME HoroTerrainResidencyPublicHeaderConsumer COMMAND HoroTerrainResidencyPublicHeaderConsumer)
 set_tests_properties(HoroTerrainResidencyPublicHeaderConsumer PROPERTIES LABELS "unit;terrain;headless")
+
+# Native cache composition remains test-owned; production model targets depend only on the Foundation contract.
+foreach(_horo_cache_consumer IN ITEMS
+    HoroAssetCookCacheTests
+    HoroAssetCookIntegrationTests
+    HoroAssetCookServiceTests
+    HoroAudioCookTests
+    HoroCharacterSceneProductTests
+    HoroEditorPlaySessionControllerTests
+    HoroModularAssetImportIntegrationTests
+    HoroNavigationAssetLoadingTests
+    HoroNavigationBakeAdapterTests
+    HoroNavigationBakeApplicationTests
+    HoroNavigationBakeServiceTests
+    HoroNavigationNativeContentTests
+    HoroNavigationProjectBakeInputNativeTests
+    HoroPhysicsTests
+    HoroPrefabSceneCookHostTests
+)
+    if(TARGET ${_horo_cache_consumer})
+        target_link_libraries(${_horo_cache_consumer} PRIVATE HoroEngine::PlatformImmutableFileStorage)
+        target_include_directories(${_horo_cache_consumer} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
+    endif()
+endforeach()

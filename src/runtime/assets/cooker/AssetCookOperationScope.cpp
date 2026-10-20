@@ -6,6 +6,7 @@
 #include "AssetCookOperationScope.h"
 
 #include "../AssetErrors.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Foundation/JobSystem.h"
 
 #include <chrono>
@@ -46,8 +47,10 @@ namespace Horo::Assets::Detail {
     /** @copydoc CookOperationScope::RecordError */
     void CookOperationScope::RecordError(const Error &error) {
         const std::string_view domain = error.domain.Value();
-        cancelledResult_ = IsJobCancelled(error) || (error.code.Value() == CookErrors::Cancelled.code.Value() &&
-                                                     (domain.empty() || domain == CookErrors::Cancelled.domain.Value()));
+        cancelledResult_ = ErrorChainContains(error, FileStorageErrors::Cancelled.domain, FileStorageErrors::Cancelled.code) ||
+                           IsJobCancelled(error) ||
+                           (error.code.Value() == CookErrors::Cancelled.code.Value() &&
+                            (domain.empty() || domain == CookErrors::Cancelled.domain.Value()));
     }
 
     /** @copydoc CookOperationScope::Update */

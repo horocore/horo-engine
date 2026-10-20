@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NativeCacheFiles.h"
+
 /** @file NavigationBakeServiceFixture.h
  * @brief Shared native bake owners, publication faults and real topology query fixtures.
  */
@@ -123,7 +125,7 @@ namespace Horo::Application::BakeTestSupport {
         return {.definition = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000001").Value(),
                 .artifactType = Assets::AssetTypeId::Parse("core.navmesh").Value(),
                 .target = AssetCookTargetId::Parse("headless-null").Value(),
-                .cacheRoot = directory.path / "cache",
+                .cacheFiles = Horo::TestSupport::NativeCacheFiles(directory.path / "cache"),
                 .targetRoot = directory.path / "cooked",
                 .builder = std::move(builder),
                 .files = std::make_shared<NativeDurableFileSystem>(),

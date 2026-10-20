@@ -110,7 +110,7 @@ namespace Horo::Application {
         REQUIRE(terminal.error);
         CHECK(terminal.error->code.Value() == Nav::NavigationErrors::BakeInputStale.code.Value());
         CHECK(host.builder->builds.load() == 0);
-        CHECK_FALSE(std::filesystem::exists(host.config.cacheRoot));
+        CHECK_FALSE(std::filesystem::exists((project.source.directory.Path() / ".horo/cache/navigation")));
         CHECK_FALSE(std::filesystem::exists(host.config.targetRoot));
     }
 

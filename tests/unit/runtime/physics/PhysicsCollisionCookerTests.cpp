@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Physics/PhysicsCollisionCooker.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "NativeCacheFiles.h"
 #include "PhysicsTestUtils.h"
 #include "PublicationOperationId.h"
 
@@ -159,7 +160,7 @@ namespace {
         CookSession() {
             REQUIRE(registry.Publish({project.Record()}).status == Assets::AssetRegistryBuildStatus::Complete);
             request = {.sourceRoot = project.root,
-                       .cacheRoot = project.root / "cache",
+                       .cacheFiles = Horo::TestSupport::NativeCacheFiles(project.root / "cache"),
                        .cookedRoot = project.root / "cooked",
                        .registry = registry.Snapshot(),
                        .target = Target,
@@ -289,8 +290,8 @@ TEST_CASE("Collision domain-invalid cache fails with source context before reuse
     invalidArtifact.payloadDigest = ComputeSha256(std::as_bytes(std::span{invalidArtifact.payload}));
     auto encoded = Assets::EncodeCookedArtifact(invalidArtifact);
     REQUIRE(encoded.HasValue());
-    session.request.cacheRoot = session.project.root / "invalid cache";
-    Assets::AssetCookCache cache{session.request.cacheRoot};
+    session.request.cacheFiles = Horo::TestSupport::NativeCacheFiles(session.project.root / "invalid cache");
+    Assets::AssetCookCache cache{*session.request.cacheFiles};
     REQUIRE(cache.Store({invalidArtifact.cacheKeyDigest}, encoded.Value(), {}).HasValue());
     const auto invalid = session.service.Cook(session.request, {});
     Test::RequireError(invalid, PhysicsErrors::ShapeArtifactInvalid);

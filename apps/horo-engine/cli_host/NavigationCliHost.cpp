@@ -3,6 +3,7 @@
 #include "Horo/Assets/NavMeshAssetType.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
+#include "Horo/Platform/NativeImmutableFileStorage.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "ProjectProtocolIdentity.h"
@@ -65,14 +66,26 @@ namespace Horo::Application::Internal {
             return ComputeSha256(std::as_bytes(std::span{text.data(), text.size()}));
         }
 
+        /** @brief Parses the required canonical asset identifier before any native capability is created. */
+        Result<Assets::AssetId> Definition(const Cli::CliCommandRequest &request) {
+            const auto *option = Option(request, "definition");
+            const auto *text = option ? std::get_if<std::string>(option) : nullptr;
+            if (!text)
+                return Result<Assets::AssetId>::Failure(MakeError(Cli::CliErrors::ParseFailed));
+            auto definition = Assets::AssetId::Parse(*text);
+            if (definition.HasError() || !definition.Value().IsValid() || definition.Value().ToString() != *text)
+                return Result<Assets::AssetId>::Failure(MakeError(Cli::CliErrors::ParseFailed));
+            return definition;
+        }
+
         /** @brief Defines the one native headless output namespace, provider and bounded bake budget. */
-        NavigationBakeServiceConfig ServiceConfig(Assets::AssetId definition, const std::filesystem::path &cache,
+        NavigationBakeServiceConfig ServiceConfig(Assets::AssetId definition, std::shared_ptr<const ImmutableFileStorage> cache,
                                                   const std::filesystem::path &output,
                                                   std::shared_ptr<const Navigation::INavigationMeshBuilder> builder) {
             return {.definition = definition,
                     .artifactType = Assets::AssetTypeId::Parse(Assets::NavMeshAssetTypeName).Value(),
                     .target = AssetCookTargetId::Parse("headless-null").Value(),
-                    .cacheRoot = cache,
+                    .cacheFiles = std::move(cache),
                     .targetRoot = output,
                     .builder = std::move(builder),
                     .files = std::make_shared<NativeDurableFileSystem>(),
@@ -130,15 +143,11 @@ namespace Horo::Application::Internal {
         if (application_)
             return Return::Failure(MakeError(Cli::CliErrors::ExecutionContextInvalid));
         auto root = Root(request);
-        const auto *option = Option(request, "definition");
-        const auto *text = option ? std::get_if<std::string>(option) : nullptr;
         if (root.HasError())
             return Return::Failure(root.ErrorValue());
-        if (!text)
-            return Return::Failure(MakeError(Cli::CliErrors::ParseFailed));
-        auto definition = Assets::AssetId::Parse(*text);
-        if (definition.HasError() || !definition.Value().IsValid() || definition.Value().ToString() != *text)
-            return Return::Failure(MakeError(Cli::CliErrors::ParseFailed));
+        auto definition = Definition(request);
+        if (definition.HasError())
+            return Return::Failure(definition.ErrorValue());
         const auto compatibility = InspectProjectCompatibility(root.Value());
         if (!compatibility.metadata || compatibility.markerUpdateRequired ||
             (compatibility.status != ProjectCompatibilityStatus::Current &&
@@ -152,13 +161,18 @@ namespace Horo::Application::Internal {
         auto output = Output(root.Value(), std::filesystem::path{".horo/cooked/navigation"} / relative);
         if (cache.HasError() || output.HasError())
             return Return::Failure(cache.HasError() ? cache.ErrorValue() : output.ErrorValue());
+        auto cacheFiles =
+            Platform::CreateNativeImmutableFileStorage(root.Value(),
+                                                       (std::filesystem::path{".horo/cache/navigation"} / relative).generic_string());
+        if (cacheFiles.HasError())
+            return Return::Failure(cacheFiles.ErrorValue());
         auto builder = Nav::CreateRecastDetourNavigationMeshBuilder();
         if (builder.HasError())
             return Return::Failure(builder.ErrorValue());
         identity_ = ProjectProtocolIdentity(root.Value());
         const auto maximumDeadline = context.AbsoluteDeadline().value_or(std::chrono::steady_clock::time_point::max());
         NavigationBakeApplicationConfig
-            config{.service = ServiceConfig(definition.Value(), cache.Value(), output.Value(), std::move(builder).Value()),
+            config{.service = ServiceConfig(definition.Value(), std::move(cacheFiles).Value(), output.Value(), std::move(builder).Value()),
                    .compatibility = {.provider = Digest(HORO_NAVIGATION_BUILD_FINGERPRINT),
                                      .schemas = Digest("horo.navigation.automation.v1;scene3;navdef1;hnt2;hns4;canonical-rh-y-up-meters"),
                                      .settings = Digest("horo.navigation.command.v1;headless-null;recast_detour")},

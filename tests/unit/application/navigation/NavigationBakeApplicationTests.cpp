@@ -20,7 +20,7 @@ namespace Horo::Application {
         CHECK(result.tileCount == 2);
         CHECK_FALSE(result.publication);
         CHECK(session.builder->builds.load() == 0);
-        CHECK_FALSE(std::filesystem::exists(session.service.cacheRoot));
+        CHECK_FALSE(std::filesystem::exists((session.project.source.directory.Path() / ".horo/cache/navigation")));
         CHECK_FALSE(std::filesystem::exists(session.service.targetRoot));
     }
 

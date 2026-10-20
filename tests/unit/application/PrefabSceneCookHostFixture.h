@@ -1,5 +1,7 @@
 #pragma once
 
+#include "NativeCacheFiles.h"
+
 /** @file PrefabSceneCookHostFixture.h @brief Target-private project and publication fixture shared by static and runtime host tests. */
 #include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Prefab/PrefabDocument.h"
@@ -94,7 +96,7 @@ namespace Horo::Application::PrefabCookTestSupport {
             WriteText("assets/level.scene.horo", SidecarJson(sceneId.ToString(), "core.scene"));
             PublishRegistry();
             request.assets.sourceRoot = project.dir.path;
-            request.assets.cacheRoot = cache.path;
+            request.assets.cacheFiles = Horo::TestSupport::NativeCacheFiles(cache.path);
             request.assets.cookedRoot = cooked.path;
             request.assets.target = Target("headless-null");
             CookPublicationTestSupport::ConfigureNativeCookPublication(request.assets);

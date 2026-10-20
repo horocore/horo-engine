@@ -1,3 +1,4 @@
+#include "RecordingImmutableFiles.h"
 #include "navigation/NavigationBakeServiceFixture.h"
 
 #include <cstddef>
@@ -8,6 +9,55 @@ namespace Horo::Application {
     using namespace Horo::Navigation::TestSupport;
 
     using namespace BakeTestSupport;
+
+    TEST_CASE("Navigation admission requires a cache authority before scheduling", "[cache][authority]") {
+        BakeHarness harness;
+        harness.config.cacheFiles.reset();
+        const auto created = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs);
+        REQUIRE(created.HasError());
+        CHECK(harness.builder->builds.load() == 0);
+        CHECK_FALSE(std::filesystem::exists(harness.config.targetRoot));
+    }
+
+    TEST_CASE("Navigation propagates cache denial without building or publishing", "[cache][authority]") {
+        BakeHarness harness;
+        harness.service->Close();
+        auto files = std::make_shared<Horo::TestSupport::RecordingImmutableFiles>();
+        const bool cancelled = GENERATE(false, true);
+        files->loadError = MakeError(cancelled ? FileStorageErrors::Cancelled : FileStorageErrors::UnsafeObject);
+        harness.config.cacheFiles = files;
+        auto created = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs);
+        REQUIRE(created.HasValue());
+        harness.service = std::move(created).Value();
+        const auto terminal = Terminal(*harness.service, harness.operations, Submit(harness));
+        CHECK(terminal.state == (cancelled ? OperationState::Cancelled : OperationState::Failed));
+        REQUIRE(terminal.error);
+        CHECK(ErrorChainContains(*terminal.error, files->loadError->domain, files->loadError->code));
+        CHECK(harness.builder->builds.load() == 0);
+        CHECK(files->loads == 1);
+        CHECK(files->stores == 0);
+        CHECK_FALSE(std::filesystem::exists(harness.config.targetRoot / "current.json"));
+    }
+
+    TEST_CASE("Cache store failure cannot replace an existing navigation generation", "[cache][authority]") {
+        BakeHarness harness;
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
+        const auto before = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        REQUIRE(before.HasValue());
+        harness.service->Close();
+        auto files = std::make_shared<Horo::TestSupport::RecordingImmutableFiles>();
+        files->storeError = MakeError(FileStorageErrors::IoFailed);
+        harness.config.cacheFiles = files;
+        harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
+        const auto terminal = Terminal(*harness.service, harness.operations, Submit(harness));
+        CHECK(terminal.state == OperationState::Failed);
+        REQUIRE(terminal.error);
+        CHECK(ErrorChainContains(*terminal.error, FileStorageErrors::IoFailed.domain, FileStorageErrors::IoFailed.code));
+        CHECK(files->stores == 1);
+        const auto after = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        REQUIRE(after.HasValue());
+        CHECK(after.Value().manifestDigest == before.Value().manifestDigest);
+    }
 
     TEST_CASE("Incremental admission rejects invalid native ceilings before scheduling with either cold or warm cache") {
         BakeHarness harness;
@@ -208,7 +258,7 @@ namespace Horo::Application {
         CHECK(harness.service->Published()->reusedTiles == 2);
         const auto before = harness.service->Published();
         harness.service->Close();
-        for (const auto &entry : std::filesystem::recursive_directory_iterator(harness.config.cacheRoot)) {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator((harness.directory.path / "cache"))) {
             if (entry.path().extension() != ".cooked")
                 continue;
             std::ifstream file(entry.path(), std::ios::binary);
@@ -241,7 +291,7 @@ namespace Horo::Application {
         CHECK(harness.service->Published()->reusedTiles == before->tiles.tiles.size());
         harness.service->Close();
         std::size_t poisoned{};
-        for (const auto &entry : std::filesystem::recursive_directory_iterator(harness.config.cacheRoot)) {
+        for (const auto &entry : std::filesystem::recursive_directory_iterator((harness.directory.path / "cache"))) {
             if (entry.path().extension() != ".cooked")
                 continue;
             std::ifstream input(entry.path(), std::ios::binary);

@@ -1,4 +1,6 @@
+#include "../../../support/NativeCacheFiles.h"
 #include "../../../support/OwnedTestDirectory.h"
+#include "../../../support/RecordingImmutableFiles.h"
 #include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetCookCache.h"
 #include "Horo/Foundation/CancellationToken.h"
@@ -110,7 +112,8 @@ TEST_CASE("Target change invalidates cache key", "[native]") {
 
 TEST_CASE("AssetCookCache miss returns nullopt", "[native]") {
     Tests::OwnedTestDirectory tmp{"horo-cache-test"};
-    AssetCookCache cache(tmp.Path());
+    const auto cacheFiles = Horo::TestSupport::NativeCacheFiles(tmp.Path());
+    AssetCookCache cache(*cacheFiles);
     CancellationToken cancellation;
 
     auto inputs = MakeInputs("miss-test");
@@ -123,7 +126,8 @@ TEST_CASE("AssetCookCache miss returns nullopt", "[native]") {
 
 TEST_CASE("AssetCookCache write then hit returns bytes", "[native]") {
     Tests::OwnedTestDirectory tmp{"horo-cache-test"};
-    AssetCookCache cache(tmp.Path());
+    const auto cacheFiles = Horo::TestSupport::NativeCacheFiles(tmp.Path());
+    AssetCookCache cache(*cacheFiles);
     CancellationToken cancellation;
 
     std::vector<std::uint8_t> artifact = {'H', 'O', 'R', 'O', 0x01, 0x02, 0x03, 0x04};
@@ -144,7 +148,8 @@ TEST_CASE("AssetCookCache write then hit returns bytes", "[native]") {
 TEST_CASE("AssetCookCache creates missing directories only when storing an entry", "[native]") {
     Tests::OwnedTestDirectory tmp{"horo-cache-test"};
     const auto root = tmp.Path() / "missing cache ü" / "nested";
-    const AssetCookCache cache(root);
+    const auto cacheFiles = Horo::TestSupport::NativeCacheFiles(root);
+    const AssetCookCache cache(*cacheFiles);
     REQUIRE_FALSE(std::filesystem::exists(root.parent_path()));
     const auto key = BuildAssetCookCacheKey(MakeInputs("lazy-cache"));
     const auto miss = cache.Load(key, {});
@@ -167,7 +172,8 @@ TEST_CASE("AssetCookCache creates missing directories only when storing an entry
 
 TEST_CASE("AssetCookCache double store is idempotent", "[native]") {
     Tests::OwnedTestDirectory tmp{"horo-cache-test"};
-    AssetCookCache cache(tmp.Path());
+    const auto cacheFiles = Horo::TestSupport::NativeCacheFiles(tmp.Path());
+    AssetCookCache cache(*cacheFiles);
     CancellationToken cancellation;
 
     std::vector<std::uint8_t> artifact = {0xAA, 0xBB, 0xCC};
@@ -189,7 +195,8 @@ TEST_CASE("AssetCookCache double store is idempotent", "[native]") {
 
 TEST_CASE("AssetCookCache honours cancellation on load", "[native]") {
     Tests::OwnedTestDirectory tmp{"horo-cache-test"};
-    AssetCookCache cache(tmp.Path());
+    const auto cacheFiles = Horo::TestSupport::NativeCacheFiles(tmp.Path());
+    AssetCookCache cache(*cacheFiles);
 
     CancellationSource cancelSource;
     cancelSource.RequestCancellation();
@@ -204,7 +211,8 @@ TEST_CASE("AssetCookCache honours cancellation on load", "[native]") {
 
 TEST_CASE("AssetCookCache honours cancellation on store", "[native]") {
     Tests::OwnedTestDirectory tmp{"horo-cache-test"};
-    AssetCookCache cache(tmp.Path());
+    const auto cacheFiles = Horo::TestSupport::NativeCacheFiles(tmp.Path());
+    AssetCookCache cache(*cacheFiles);
 
     CancellationSource cancelSource;
     cancelSource.RequestCancellation();
@@ -283,4 +291,62 @@ TEST_CASE("Dependency cache identity binds semantic context and rejects ambiguou
     REQUIRE(BuildAssetCookCacheKeyV2(inputs, duplicates, semantic, 2).HasError());
     REQUIRE(BuildAssetCookCacheKeyV2(inputs, duplicates, semantic, 1).HasError());
     REQUIRE(BuildAssetCookCacheKeyV2(inputs, dependencies, semantic, 0).HasError());
+}
+
+TEST_CASE("Cache delegates exact digest paths and byte bounds to the supplied authority", "[cache][authority]") {
+    TestSupport::RecordingImmutableFiles files;
+    const AssetCookCache cache{files, {.maximumArtifactBytes = 4}};
+    const AssetCookCacheKey key{};
+    const std::string expected = "00/" + std::string(62, '0') + ".cooked";
+    const auto miss = cache.Load(key, {});
+    REQUIRE(miss.HasValue());
+    CHECK_FALSE(miss.Value());
+    CHECK(files.loadedPath == expected);
+    CHECK(files.bound == 4);
+    CHECK(files.stores == 0);
+    files.response = std::vector<std::uint8_t>{3, 2, 1};
+    const auto hit = cache.Load(key, {});
+    REQUIRE(hit.HasValue());
+    CHECK(hit.Value() == files.response);
+    REQUIRE(cache.Store(key, *files.response, {}).HasValue());
+    CHECK(files.storedPath == expected);
+    CHECK(files.stored == *files.response);
+}
+
+TEST_CASE("Cache preserves provider failures and nested causes without another storage route", "[cache][authority]") {
+    TestSupport::RecordingImmutableFiles files;
+    const auto cause = MakeError(FileStorageErrors::UnsafeObject);
+    files.loadError = WrapError(FileStorageErrors::IoFailed, cause);
+    files.storeError = MakeError(FileStorageErrors::Conflict);
+    const AssetCookCache cache{files};
+    const auto loaded = cache.Load({}, {});
+    REQUIRE(loaded.HasError());
+    CHECK(loaded.ErrorValue().code.Value() == FileStorageErrors::IoFailed.code.Value());
+    REQUIRE(loaded.ErrorValue().cause.Get());
+    CHECK(loaded.ErrorValue().cause.Get()->code.Value() == cause.code.Value());
+    const auto stored = cache.Store({}, {}, {});
+    REQUIRE(stored.HasError());
+    CHECK(stored.ErrorValue().domain.Value() == FileStorageErrors::Conflict.domain.Value());
+    CHECK(stored.ErrorValue().code.Value() == FileStorageErrors::Conflict.code.Value());
+    CHECK(files.loads == 1);
+    CHECK(files.stores == 1);
+}
+
+TEST_CASE("Cache rejects cancelled or oversized requests before invoking storage", "[cache][authority]") {
+    TestSupport::RecordingImmutableFiles files;
+    const AssetCookCache cache{files, {.maximumArtifactBytes = 2}};
+    CancellationSource stop;
+    stop.RequestCancellation();
+    CHECK(cache.Load({}, stop.Token()).HasError());
+    CHECK(cache.Store({}, {}, stop.Token()).HasError());
+    const std::vector<std::uint8_t> oversized{1, 2, 3};
+    CHECK(cache.Store({}, oversized, {}).HasError());
+    const AssetCookCache disabled{files, {.maximumArtifactBytes = 0}};
+    CHECK(disabled.Load({}, {}).HasError());
+    CHECK(disabled.Store({}, {}, {}).HasError());
+    CHECK(files.loads == 0);
+    CHECK(files.stores == 0);
+    files.response = oversized;
+    CHECK(cache.Load({}, {}).HasError());
+    CHECK(files.loads == 1);
 }

@@ -1,3 +1,4 @@
+#include "NativeCacheFiles.h"
 #include "assets/AssetCookServiceFixture.h"
 
 using namespace Horo;
@@ -27,7 +28,7 @@ TEST_CASE("AssetCookService empty registry publishes empty generation", "[native
 
     AssetCookRequest request{
         .sourceRoot = project.dir.path,
-        .cacheRoot = cacheDir.path,
+        .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
         .cookedRoot = cookedDir.path,
         .registry = emptySnapshot,
         .target = Target("headless-null"),
@@ -78,7 +79,7 @@ TEST_CASE("AssetCookService honours cancellation before work", "[native]") {
 
     AssetCookRequest request{
         .sourceRoot = project.dir.path,
-        .cacheRoot = cacheDir.path,
+        .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
         .cookedRoot = cookedDir.path,
         .registry = snapshot,
         .target = Target("headless-null"),
@@ -113,7 +114,7 @@ TEST_CASE("AssetCookService keeps cook cancellation separate from concurrent fai
         BuildOutputStore output{16};
         OperationStore operations{4, 4};
         AssetCookRequest request{.sourceRoot = project.dir.path,
-                                 .cacheRoot = cacheDir.path,
+                                 .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
                                  .cookedRoot = cookedDir.path,
                                  .registry = registry.Snapshot(),
                                  .target = Target("headless-null"),
@@ -224,4 +225,17 @@ TEST_CASE("AssetCookService contains optional history exceptions before and afte
             CHECK(ResolveCurrentCookGeneration(fixture.cooked.path).HasValue() == committed);
         }
     }
+}
+
+TEST_CASE("Empty cook requires explicit cache authority before operation or publication", "[cache][authority]") {
+    EmptyCookPublicationFixture fixture;
+    OperationStore operations{4, 4};
+    fixture.request.operationStore = &operations;
+    fixture.request.cacheFiles.reset();
+    const auto cooked = fixture.service.Cook(fixture.request, {});
+    REQUIRE(cooked.HasError());
+    const auto snapshot = operations.SnapshotIfChanged(0);
+    CHECK((!snapshot || snapshot->operations.empty()));
+    CHECK_FALSE(std::filesystem::exists(fixture.cooked.path / "current.json"));
+    CHECK_FALSE(std::filesystem::exists(fixture.cooked.path / "generations"));
 }

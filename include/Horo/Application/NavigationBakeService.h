@@ -7,6 +7,7 @@
 #include "Horo/Application/NavigationBakeDiagnostics.h"
 #include "Horo/Application/NavigationBakeSourceAuthority.h"
 #include "Horo/Assets/AssetCookOutput.h"
+#include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Navigation/NavigationBakeJobs.h"
 #include "Horo/Navigation/NavigationBakeSourceValidation.h"
 #include "Horo/Navigation/NavigationTileArtifact.h"
@@ -17,7 +18,7 @@ namespace Horo::Application {
         Assets::AssetId definition;
         Assets::AssetTypeId artifactType;
         AssetCookTargetId target;
-        std::filesystem::path cacheRoot;
+        std::shared_ptr<const ImmutableFileStorage> cacheFiles; /**< Required host-owned immutable cache namespace; no path fallback. */
         std::filesystem::path targetRoot;
         std::shared_ptr<const Navigation::INavigationMeshBuilder> builder;
         std::shared_ptr<DurableFileSystem> files;

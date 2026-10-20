@@ -1,3 +1,5 @@
+#include "NativeCacheFiles.h"
+#include "RecordingImmutableFiles.h"
 #include "assets/AssetCookServiceFixture.h"
 
 using namespace Horo;
@@ -29,7 +31,7 @@ TEST_CASE("AssetCookService publishes cache hits as cached scoped results", "[na
     BuildOutputStore buildOutput{16};
     AssetCookRequest request{
         .sourceRoot = project.dir.path,
-        .cacheRoot = cacheDir.path,
+        .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
         .cookedRoot = cookedDir.path,
         .registry = registry.Snapshot(),
         .target = Target("headless-null"),
@@ -58,7 +60,7 @@ TEST_CASE("AssetCookService isolates cache entries by exact strategy settings", 
     const auto target = Target("headless-null");
     AssetCookRequest request{
         .sourceRoot = project.dir.path,
-        .cacheRoot = cacheDir.path,
+        .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
         .cookedRoot = cookedDir.path,
         .registry = registry.Snapshot(),
         .target = target,
@@ -108,7 +110,7 @@ TEST_CASE("AssetCookService reports source admission failures with navigable dia
     BuildOutputStore output{8};
     OperationStore operations{4, 4};
     AssetCookRequest request{.sourceRoot = project.dir.path,
-                             .cacheRoot = cacheDir.path,
+                             .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
                              .cookedRoot = cookedDir.path,
                              .registry = registry.Snapshot(),
                              .target = Target("headless-null"),
@@ -144,7 +146,7 @@ TEST_CASE("AssetCookService reports unreadable source paths without publishing a
     AssetCookService service(jobs, catalogSnapshot.Value());
     BuildOutputStore output{8};
     AssetCookRequest request{.sourceRoot = project.dir.path,
-                             .cacheRoot = cacheDir.path,
+                             .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
                              .cookedRoot = cookedDir.path,
                              .registry = registry.Snapshot(),
                              .target = Target("headless-null"),
@@ -180,7 +182,7 @@ TEST_CASE("AssetCookService rejects cook when operation admission is full", "[na
     const auto occupied = operations.Begin(OperationDescriptor{.kind = OperationKind::Cook, .title = "Other cook"});
     REQUIRE(occupied.has_value());
     AssetCookRequest request{.sourceRoot = project.dir.path,
-                             .cacheRoot = cacheDir.path,
+                             .cacheFiles = Horo::TestSupport::NativeCacheFiles(cacheDir.path),
                              .cookedRoot = cookedDir.path,
                              .registry = registry.Snapshot(),
                              .target = Target("headless-null"),
@@ -194,4 +196,39 @@ TEST_CASE("AssetCookService rejects cook when operation admission is full", "[na
     REQUIRE(result.ErrorValue().code.Value() == "asset.cook.operation_admission_failed");
     REQUIRE_FALSE(output.SnapshotIfChanged(0).has_value());
     REQUIRE_FALSE(std::filesystem::exists(cookedDir.path / "current.json"));
+}
+
+TEST_CASE("Cook projects storage cancellation with its original identity and no published generation", "[cache][authority]") {
+    TestProject project;
+    TempDir cooked;
+    JobSystem jobs;
+    CookerCatalog catalog;
+    REQUIRE(RegisterHeadlessMeshCooker(catalog).HasValue());
+    AssetCookService service{jobs, catalog.Publish().Value()};
+    AssetRegistry registry;
+    REQUIRE(registry.Publish({TestMeshRecord()}).status == AssetRegistryBuildStatus::Complete);
+    auto cache = std::make_shared<Horo::TestSupport::RecordingImmutableFiles>();
+    cache->loadError = MakeError(FileStorageErrors::Cancelled);
+    OperationStore operations{4, 4};
+    BuildOutputStore output{16};
+    AssetCookRequest request{.sourceRoot = project.dir.path,
+                             .cacheFiles = cache,
+                             .cookedRoot = cooked.path,
+                             .registry = registry.Snapshot(),
+                             .target = Target("headless-null"),
+                             .buildOutputStore = &output,
+                             .operationStore = &operations};
+    Horo::Assets::CookPublicationTestSupport::ConfigureNativeCookPublication(request);
+    const auto result = service.Cook(request, {});
+    REQUIRE(result.HasError());
+    CHECK(result.ErrorValue().code.Value() == FileStorageErrors::Cancelled.code.Value());
+    const auto snapshot = operations.SnapshotIfChanged(0);
+    REQUIRE(snapshot);
+    REQUIRE(snapshot->operations.size() == 1);
+    CHECK(snapshot->operations.front().state == OperationState::Cancelled);
+    const auto records = output.SnapshotIfChanged(0);
+    REQUIRE(records);
+    CHECK(records->records.back().result == BuildOutputResult::Cancelled);
+    CHECK(cache->stores == 0);
+    CHECK_FALSE(std::filesystem::exists(cooked.path / "current.json"));
 }
