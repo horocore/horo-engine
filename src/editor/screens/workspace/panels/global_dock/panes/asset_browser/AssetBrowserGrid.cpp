@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
@@ -150,6 +151,17 @@ namespace Horo::Editor {
                                                                              : "workspace.content_browser.count.items");
                 return std::format("{} {}", entry.containedItemCount, unit);
             }
+            if (entry.previewError) {
+                return localization.Get("editor", entry.previewError->code == Prefab::PrefabErrors::MigrationRequired.code
+                                                      ? "workspace.content_browser.prefab.migration_required"
+                                                      : "workspace.content_browser.preview.unavailable");
+            }
+            if (entry.previewState == ContentBrowserPreviewState::Queued)
+                return localization.Get("editor", "workspace.content_browser.preview.queued");
+            if (!entry.registered)
+                return localization.Get("editor", "workspace.content_browser.asset.unregistered");
+            if (entry.IsPrefab())
+                return localization.Get("editor", "workspace.content_browser.prefab.type");
             return entry.assetType;
         }
 
@@ -251,9 +263,14 @@ namespace Horo::Editor {
                     context.command.sourceOpenRequest = SourceOpenRequest{
                         .path = entry.absolutePath,
                         .origin = SourceOpenOrigin::AssetActivation,
-                        .mode = SourceOpenMode::AllowExternalFallback,
+                        .mode = entry.IsPrefab() ? SourceOpenMode::EmbeddedOnly : SourceOpenMode::AllowExternalFallback,
                     };
                 }
+            }
+            if (hovered && entry.previewError) {
+                const auto diagnostic = std::format("{}\n{}\n{}", EntrySecondaryText(entry, context.gui.localization),
+                                                    entry.previewError->code.Value(), entry.previewError->message);
+                Ui::ShowTooltip(diagnostic.c_str(), &context.gui.theme.fonts);
             }
             HandleAssetDragDropSource(entry, context.gui.localization);
             HandleDirectoryDragDropTarget(entry, interactionMin, metrics.cardWidth, metrics.cardHeight, &context.drawList, context.command);

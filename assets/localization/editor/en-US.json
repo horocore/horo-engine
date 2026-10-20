@@ -13,6 +13,11 @@
     "workspace.prefab_document.conflict": { "text": "The source changed outside this session. Reload or preserve recovery before continuing." },
     "workspace.prefab_document.name": { "text": "Source object name" },
     "workspace.prefab_document.preview_unavailable": { "text": "The isolated runtime preview is unavailable. Source and recovery remain available." },
+    "workspace.content_browser.asset.unregistered": {"text": "Unregistered asset — inspect identity metadata"},
+    "workspace.content_browser.prefab.type": {"text": "Prefab"},
+    "workspace.content_browser.preview.queued": {"text": "Preparing preview…"},
+    "workspace.content_browser.preview.unavailable": {"text": "Preview unavailable — inspect diagnostic"},
+    "workspace.content_browser.prefab.migration_required": {"text": "Migration required"},
     "render_graph.renderer": {
       "text": "Renderer"
     },

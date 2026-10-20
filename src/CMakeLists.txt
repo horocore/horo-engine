@@ -3000,6 +3000,7 @@ add_library(HoroEditorServices STATIC
         editor/gameplay/ProjectGameplayRegistry.cpp
         editor/gameplay/EditorPlaySessionController.cpp
         editor/screens/workspace/ContentBrowserModel.cpp
+        editor/screens/workspace/prefab/PrefabAssetPreview.cpp
         editor/screens/workspace/GameplayBehaviorRequestValidation.cpp
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
         editor/modals/build_release/BuildReleaseModalSession.cpp

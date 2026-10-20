@@ -7,6 +7,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EditorWorkspaceControllerContentBrowserInternal.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
+#include "editor/screens/workspace/prefab/PrefabAssetPreview.h"
 
 #include <algorithm>
 #include <array>
@@ -36,22 +37,60 @@ namespace Horo::Editor {
             if (pending.handle.has_value())
                 static_cast<void>(pending.handle->RequestCancel());
         m_pendingContentBrowserPreviews.clear();
-        if (m_assetPreviews == nullptr || m_importerCatalog == nullptr)
-            return;
+        for (auto &entry : m_viewModel.contentBrowser.entries) {
+            entry.previewImage = {};
+            entry.previewState = ContentBrowserPreviewState::Unrequested;
+            entry.previewError.reset();
+        }
+        ++m_contentBrowserPreviewGeneration;
+        m_contentBrowserNextPreviewEntry = 0;
+        AdmitContentBrowserPreviews();
+    }
 
-        for (const ContentBrowserEntry &entry : m_viewModel.contentBrowser.entries) {
-            auto request = BuildPreviewRequest(entry, *m_importerCatalog);
+    /** @copydoc EditorWorkspaceController::AdmitContentBrowserPreviews */
+    void EditorWorkspaceController::AdmitContentBrowserPreviews() {
+        constexpr std::size_t MaximumPending = 32;
+        if (m_assetPreviews == nullptr)
+            return;
+        while (m_pendingContentBrowserPreviews.size() < MaximumPending &&
+               m_contentBrowserNextPreviewEntry < m_viewModel.contentBrowser.entries.size()) {
+            auto &entry = m_viewModel.contentBrowser.entries[m_contentBrowserNextPreviewEntry++];
+            std::optional<Assets::AssetPreviewRequest> request;
+            if (entry.IsPrefab()) {
+                // Project source capture takes an exclusive cooperative lease; serialize prefab work within this owner.
+                if (std::ranges::any_of(m_pendingContentBrowserPreviews, [](const auto &pending) {
+                    return pending.request.assetType.Value() == "core.prefab";
+                })) {
+                    --m_contentBrowserNextPreviewEntry;
+                    break;
+                }
+                auto asset = Assets::AssetId::Parse(entry.assetId);
+                if (asset.HasError())
+                    continue;
+                request = Assets::AssetPreviewRequest{
+                    .contributionId = "core.prefab.thumbnail",
+                    .moduleId = "horo.editor",
+                    .moduleVersion = std::to_string(m_assetRegistry.Revision().value),
+                    // A fresh directory publication invalidates nested-source cache entries even when identity metadata is unchanged.
+                    .providerVersion = std::to_string(m_contentBrowserPreviewGeneration),
+                    .absoluteAssetPath = entry.absolutePath,
+                    .assetType = *entry.registeredType,
+                    .provider = CreatePrefabAssetPreviewProvider(m_assetRegistry, asset.Value(), m_prefabSourceCapture),
+                };
+            } else if (m_importerCatalog != nullptr)
+                request = BuildPreviewRequest(entry, *m_importerCatalog);
             if (!request)
                 continue;
-            const std::string contributionId = request->contributionId;
-            const std::string providerVersion = request->providerVersion;
             auto submitted = m_assetPreviews->Submit(*request);
-            if (submitted.HasError() && submitted.ErrorValue().code.Value() != "asset.preview.queue_full")
+            if (submitted.HasError() && submitted.ErrorValue().code.Value() != "asset.preview.queue_full") {
+                entry.previewState = ContentBrowserPreviewState::Unavailable;
+                entry.previewError = submitted.ErrorValue();
                 continue;
+            }
+            entry.previewState = ContentBrowserPreviewState::Queued;
             m_pendingContentBrowserPreviews.push_back(PendingContentBrowserPreview{
                 .absolutePath = entry.absolutePath,
-                .contributionId = contributionId,
-                .providerVersion = providerVersion,
+                .generation = m_contentBrowserPreviewGeneration,
                 .request = std::move(*request),
                 .handle = submitted.HasValue() ? std::optional{std::move(submitted).Value()} : std::nullopt,
             });
@@ -62,27 +101,43 @@ namespace Horo::Editor {
         std::erase_if(m_pendingContentBrowserPreviews, [this](PendingContentBrowserPreview &pending) {
             return PollContentBrowserPreview(pending);
         });
+        AdmitContentBrowserPreviews();
     }
 
     bool EditorWorkspaceController::PollContentBrowserPreview(PendingContentBrowserPreview &pending) {
         if (!pending.handle.has_value()) {
             auto submitted = m_assetPreviews->Submit(pending.request);
-            if (submitted.HasError())
-                return submitted.ErrorValue().code.Value() != "asset.preview.queue_full";
+            if (submitted.HasError()) {
+                if (submitted.ErrorValue().code.Value() == "asset.preview.queue_full")
+                    return false;
+                const auto entry =
+                    std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
+                if (entry != m_viewModel.contentBrowser.entries.end() && pending.generation == m_contentBrowserPreviewGeneration) {
+                    entry->previewState = ContentBrowserPreviewState::Unavailable;
+                    entry->previewError = submitted.ErrorValue();
+                }
+                return true;
+            }
             pending.handle = std::move(submitted).Value();
         }
         if (const Assets::AssetPreviewState state = pending.handle->State();
             state == Assets::AssetPreviewState::Queued || state == Assets::AssetPreviewState::Running)
             return false;
-        if (auto completed = pending.handle->TakeResult(); completed.HasValue()) {
-            const auto entry =
-                std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
-            if (entry != m_viewModel.contentBrowser.entries.end() && entry->importerContributionId == pending.contributionId &&
-                entry->activeImporterVersion == pending.providerVersion)
-                entry->previewImage = std::move(completed).Value().image;
+        const auto entry = std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
+        if (pending.generation != m_contentBrowserPreviewGeneration || entry == m_viewModel.contentBrowser.entries.end())
+            return true;
+        auto completed = pending.handle->TakeResult();
+        if (completed.HasValue()) {
+            entry->previewImage = std::move(completed).Value().image;
+            entry->previewState = ContentBrowserPreviewState::Ready;
+            entry->previewError.reset();
         } else {
-            LOG_WARN("editor.asset_preview", "Preview generation failed for '%s': %s", pending.absolutePath.c_str(),
-                     completed.ErrorValue().code.Value().c_str());
+            entry->previewError = completed.ErrorValue();
+            if (completed.ErrorValue().code.Value() == "project.migration.locked") {
+                pending.handle.reset();
+                return false;
+            }
+            entry->previewState = ContentBrowserPreviewState::Unavailable;
         }
         return true;
     }

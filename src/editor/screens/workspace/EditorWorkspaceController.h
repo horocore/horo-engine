@@ -404,13 +404,14 @@ namespace Horo::Editor {
 
         struct PendingContentBrowserPreview {
             std::string absolutePath;
-            std::string contributionId;
-            std::string providerVersion;
+            std::uint64_t generation{};
             Assets::AssetPreviewRequest request;
             std::optional<Assets::AssetPreviewHandle> handle;
         };
 
         std::vector<PendingContentBrowserPreview> m_pendingContentBrowserPreviews;
+        std::uint64_t m_contentBrowserPreviewGeneration{};
+        std::size_t m_contentBrowserNextPreviewEntry{};
         std::vector<UiCanvasDocument> m_uiCanvasDocuments;
         float m_pcgAutosaveElapsedSeconds{};
         float m_pcgAutosaveRetrySeconds{};
@@ -458,6 +459,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> BindCollisionScene();
         void RebuildContentBrowserProjection(const std::filesystem::path &projectRoot, const std::filesystem::path &requestedDirectory);
         void ScheduleContentBrowserPreviews();
+        /** @brief Refills bounded thumbnail admission from the immutable directory projection. */
+        void AdmitContentBrowserPreviews();
         void PollContentBrowserPreviews();
         [[nodiscard]] bool PollContentBrowserPreview(PendingContentBrowserPreview &pending);
 
