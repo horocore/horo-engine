@@ -54,7 +54,7 @@ namespace Horo::Editor::WorldResidencyTests {
         REQUIRE(workspace.SetSelection(std::span{selection}.subspan(1), selection.back(), Current(workspace)->fence).HasValue());
         REQUIRE(workspace.UnloadPage(Asset(2), Current(workspace)->fence).HasValue());
         CHECK(Current(workspace)->selectedObjects == std::vector{selection.back()});
-        CHECK(Current(workspace)->primarySelection == selection.back());
+        CHECK(Current(workspace)->primary == selection.back());
         REQUIRE(workspace.SetSelection({}, {}, Current(workspace)->fence).HasValue());
         REQUIRE(workspace.UnloadPage(Asset(3), Current(workspace)->fence).HasValue());
     }
@@ -105,6 +105,14 @@ namespace Horo::Editor::WorldResidencyTests {
         const auto selected = Current(workspace);
         ErrorIs(workspace.CommitLoadedPage(next, R"({"schemaVersion":1,"objects":[]})", selected->fence), "world_document.conflict");
         CHECK(Current(workspace) == selected);
+        REQUIRE(workspace.SetSelection({}, {}, selected->fence).HasValue());
+        auto removed = workspace.CommitLoadedPage(next, R"({"schemaVersion":1,"objects":[]})", Current(workspace)->fence);
+        REQUIRE(removed.HasValue());
+        CHECK(removed.Value()->loadedPages.front().content.Objects().empty());
+        CHECK(removed.Value()->loadedPages.front().content.IsDirty());
+        CHECK(removed.Value()->selectedObjects.empty());
+        ErrorIs(workspace.UnloadPage(Asset(2), removed.Value()->fence), "world_document.dirty");
+        CHECK(baseline->loadedPages.front().content.Objects().size() == 1);
     }
 
     TEST_CASE("Malformed mismatched stale cancelled and unsupported loads leave the exact owner root untouched",
@@ -190,8 +198,8 @@ namespace Horo::Editor::WorldResidencyTests {
         const auto before = Current(workspace);
         std::stop_source stopped;
         stopped.request_stop();
-        const std::array badSelection{WS::WorldAuthoringObjectAddress{Asset(3), 1}};
-        SECTION("selection refers to unloaded page") {
+        const std::array badSelection{WS::WorldAuthoringObjectAddress{Asset(8), 1}};
+        SECTION("selection refers to unknown source page") {
             ErrorIs(workspace.SetSelection(badSelection, badSelection.front(), before->fence), "world_document.conflict");
         }
         SECTION("invalid primary") {
@@ -231,6 +239,40 @@ namespace Horo::Editor::WorldResidencyTests {
             ErrorIs(workspace.LoadPage(document.pages.front().head, Source(), before->fence), "world_document.conflict");
         }
         CHECK(Current(workspace) == before);
+    }
+
+    TEST_CASE("Unloaded metadata selection survives real loading and rejects stale consent before explicit source removal",
+              "[editor][world_residency][inspector]") {
+        PartitionedWorldWorkspace workspace{Asset(9)};
+        auto document = Document();
+        REQUIRE(workspace.Open(document).HasValue());
+        const std::array objects{WS::WorldAuthoringObjectAddress{Asset(2), 1}, WS::WorldAuthoringObjectAddress{Asset(3), 1}};
+        auto selected = workspace.SetSelection(objects, objects.back(), Current(workspace)->fence);
+        REQUIRE(selected.HasValue());
+        CHECK(selected.Value()->loadedPages.empty());
+        auto explanation = workspace.InspectSelectedObjects(selected.Value()->fence);
+        REQUIRE(explanation.HasValue());
+        CHECK(explanation.Value()->objects.size() == 2);
+        REQUIRE(workspace.LoadPage(document.pages.front().head, Source(), selected.Value()->fence).HasValue());
+        const auto loaded = Current(workspace);
+        CHECK(loaded->selectedObjects == selected.Value()->selectedObjects);
+        CHECK(loaded->primary == objects.back());
+        ErrorIs(workspace.SetSelection(objects, objects.back(), selected.Value()->fence), "world_document.stale");
+        ErrorIs(workspace.InspectSelectedObjects(selected.Value()->fence), "world_document.stale");
+        ErrorIs(workspace.UnloadPage(Asset(2), loaded->fence), "world_document.conflict");
+        REQUIRE(workspace.SetSelection(std::span{objects}.subspan(1), objects.back(), loaded->fence).HasValue());
+        const auto beforeRemoval = Current(workspace);
+        document.pages.pop_back();
+        REQUIRE(workspace.Commit(document, beforeRemoval->fence).HasValue());
+        const auto removed = Current(workspace);
+        CHECK(removed->selectedObjects.empty());
+        CHECK_FALSE(removed->primary.has_value());
+        REQUIRE(removed->loadedPages.size() == 1);
+        CHECK(removed->loadedPages.front().content.Objects().front().name == "Box");
+        CHECK(beforeRemoval->selectedObjects == std::vector{objects.back()});
+        REQUIRE(workspace.UnloadPage(Asset(2), removed->fence).HasValue());
+        CHECK(Current(workspace)->dirty);
+        CHECK(explanation.Value()->objects.size() == 2);
     }
 
     TEST_CASE("Replacement and close release residency but never invalidate retained payload readers", "[editor][world_residency]") {

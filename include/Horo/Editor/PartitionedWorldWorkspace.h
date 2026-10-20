@@ -6,7 +6,7 @@
 
 #include "Horo/Scene/SceneSourceModel.h"
 #include "Horo/WorldStreaming/WorldAuthoringContract.h"
-#include "Horo/WorldStreaming/WorldSpatialObjectDescriptor.h"
+#include "Horo/WorldStreaming/WorldSpanningObjectPlan.h"
 
 #include <memory>
 #include <optional>
@@ -66,12 +66,15 @@ namespace Horo::Editor {
         WorldStreaming::WorldPartitionId partition{};
         WorldStreaming::WorldPartitionBounds bounds{};
         WorldStreaming::WorldCellQuantizationPolicy grid;
+        std::uint32_t maximumDirectCellsPerObject{1}; /**< Source spanning-policy threshold; at most 4096. */
     };
 
     /** @brief One persistent object address and its stable authored layer membership. */
     struct PartitionedWorldObject final {
         WorldStreaming::WorldSpatialObjectDescriptor descriptor{};
         WorldStreaming::StreamingLayerId layer{};
+        std::uint8_t assignmentLod{};
+        std::optional<WorldStreaming::WorldSpanningObjectDirective> spanning; /**< Exact source override, never widget state. */
         [[nodiscard]] auto operator<=>(const PartitionedWorldObject &) const noexcept = default;
     };
 
@@ -97,6 +100,7 @@ namespace Horo::Editor {
         std::size_t maximumObjects{65536};
         std::size_t maximumLayerNameBytes{65536};
         std::uint32_t maximumOpenPages{64};
+        std::size_t maximumSelectedObjects{256};
         std::size_t maximumPageSourceBytes{16 * 1024 * 1024};     /**< Canonical source input ceiling per loaded page. */
         std::size_t maximumResidentSourceBytes{64 * 1024 * 1024}; /**< Aggregate admitted source bytes, excluding historical readers. */
     };
@@ -130,13 +134,43 @@ namespace Horo::Editor {
         PartitionedWorldDocument document;
         std::vector<Assets::AssetId> openPages; /**< Transient authoring working set, never runtime residency. */
         std::vector<WorldLoadedPage> loadedPages;
-        std::vector<WorldStreaming::WorldAuthoringObjectAddress> selectedObjects;
-        std::optional<WorldStreaming::WorldAuthoringObjectAddress> primarySelection;
+        std::vector<WorldStreaming::WorldAuthoringObjectAddress> selectedObjects; /**< Transient selection; never runtime entities. */
+        std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary;       /**< Optional selected primary address. */
         bool dirty{}; /**< Authored metadata changed since explicit Open/Replace; never an assertion of disk durability. */
     };
 
     /** @brief Shared immutable snapshot safe for synchronized handoff to readers. */
     using PartitionedWorldSnapshotLease = std::shared_ptr<const PartitionedWorldSnapshot>;
+
+    /** @brief Finite query budgets; automatic plus effective cell lists share the aggregate ceiling. */
+    struct WorldObjectInspectionLimits final {
+        std::uint32_t maximumCellsPerObject{4096};
+        std::uint32_t maximumTotalCells{65536};
+    };
+
+    /** @brief Complete explanation for one selected exact source object, including unloaded-page metadata.
+     * @details A diagnostic preserves the source bounds/override and available automatic coverage; no effective placement is claimed.
+     * Always-present objects have NonSpatial placement and empty coverage. Spanning means coverage of more than one cell;
+     * requiresDirective means coverage exceeds the authored direct-cell threshold.
+     */
+    struct WorldObjectInspection final {
+        PartitionedWorldObject source;
+        std::vector<WorldStreaming::StreamingCellId> automaticCells;
+        std::vector<WorldStreaming::StreamingCellId> placementCells;
+        bool spanning{};
+        bool requiresDirective{};
+        std::optional<WorldStreaming::WorldSpanningObjectPlacement> placement;
+        std::optional<Error> diagnostic; /**< Original WorldStreaming validation identity; never replaced by display text. */
+    };
+
+    /** @brief Immutable selection explanation tied to the exact source AND selection publication. */
+    struct WorldObjectSelectionInspection final {
+        WorldDocumentFence fence;
+        std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary;
+        std::vector<WorldObjectInspection> objects; /**< Stable selection order. Empty selection is valid. */
+    };
+
+    using WorldObjectInspectionLease = std::shared_ptr<const WorldObjectSelectionInspection>;
 
     /** @brief Explicit dirty-state disposition; Cancel is never equivalent to discard. */
     enum class WorldDocumentDisposition : std::uint8_t {
@@ -213,14 +247,27 @@ namespace Horo::Editor {
          * @param cancellation Cancellation fence. @return Successor, unchanged lease for no-op, or typed rejection. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetPagePinned(Assets::AssetId page, bool pinned, WorldDocumentFence expected,
                                                                           std::stop_token cancellation = {});
-        /** @brief Replaces page-aware selection atomically; selected pages are unload dependencies, not runtime pins.
-         * @param objects Distinct existing loaded object addresses, in presentation order.
-         * @param primary Optional member of objects. @param expected Current fence. @param cancellation Cancellation fence.
-         * @return Successor, unchanged no-op lease, or typed rejection without losing dependent selection. */
+        /** @brief Atomically selects distinct source addresses; opening geometry is not required.
+         * @param objects Existing page-scoped addresses in presentation order. @param primary Optional address within that selection.
+         * @param expected Exact source/selection fence.
+         * @param cancellation Checked before publication. @return Immutable selection root or typed zero-mutation rejection.
+         * @details Loaded addresses also require membership in their actual payload; unload retains selected dependencies.
+         * No-op retains its revision. Explicit unloaded source removal prunes selection in the same commit. Replace clears it.
+         */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetSelection(
             std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
             std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected,
             std::stop_token cancellation = {});
+        /** @brief Explains the current selected objects through canonical WorldStreaming assignment/spanning kernels.
+         * @param expected Exact source/selection publication. @param limits Bounded owned output ceilings, no larger than defaults.
+         * @param cancellation Cooperative observer. @return Complete immutable explanation or typed rejection; never truncates.
+         * @details Explicit owner-thread tooling query, never draw/frame-hot work. Invalid bounds or conflicting geometric overrides
+         * become per-object diagnostics; stale requests, unsupported policy, resource exhaustion and cancellation reject the whole query.
+         * Retained results survive source replacement, selection changes, close and shutdown. No I/O, runtime activation or mutation.
+         */
+        [[nodiscard]] Result<WorldObjectInspectionLease> InspectSelectedObjects(WorldDocumentFence expected,
+                                                                                WorldObjectInspectionLimits limits = {},
+                                                                                std::stop_token cancellation = {}) const;
 
         /** @brief Replaces a document explicitly, issuing a fresh generation and an empty working set.
          * @param document Complete new source metadata. @param expected Exact current fence.

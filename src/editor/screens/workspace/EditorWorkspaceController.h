@@ -193,7 +193,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Routes page-aware selection through the actual editor selection adapter.
-         * @param objects Loaded page-scoped addresses. @param primary Optional member. @param expected Exact publication.
+         * @param objects Authored page-scoped addresses. @param primary Optional member. @param expected Exact publication.
          * @return Typed committed world lease or rejection. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SelectWorldObjects(
             std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,

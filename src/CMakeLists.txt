@@ -2778,6 +2778,7 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
 add_library(HoroEditorModel STATIC
         editor/document/PartitionedWorldWorkspace.cpp
         editor/document/PartitionedWorldResidency.cpp
+        editor/document/PartitionedWorldObjectInspection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp

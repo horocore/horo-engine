@@ -71,7 +71,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> SetObjects(const std::vector<SceneObjectId> &objects, std::optional<SceneObjectId> primary);
 
         /** @brief Routes partitioned selection to its page/payload owner; does not duplicate page-scoped state in this adapter.
-         * @param world Actual workspace document authority. @param objects Distinct loaded page-scoped addresses.
+         * @param world Actual workspace document authority. @param objects Distinct authored page-scoped addresses.
          * @param primary Optional selected member. @param expected Exact world publication. @param cancellation Cancellation fence.
          * @return Atomic document/selection lease or typed failure; notification follows successful changed publication only. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetWorldObjects(

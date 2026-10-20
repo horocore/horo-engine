@@ -3,7 +3,6 @@
 #include "editor/document/SceneDocument.h"
 
 #include <algorithm>
-#include <set>
 
 namespace Horo::Editor {
     namespace {
@@ -30,23 +29,6 @@ namespace Horo::Editor {
             });
         }
 
-        /** @brief Validates page-scoped selection against the actual loaded Scene content. */
-        Result<void> ValidateSelection(const PartitionedWorldSnapshot &snapshot,
-                                       const std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
-                                       const std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary) {
-            std::set<WorldStreaming::WorldAuthoringObjectAddress> distinct;
-            for (const auto &object : objects) {
-                const auto page = FindLoaded(snapshot.loadedPages, object.page);
-                if (page == snapshot.loadedPages.end() || !distinct.insert(object).second ||
-                    std::ranges::none_of(page->content.Objects(), [&](const auto &value) {
-                    return value.id.value == object.object;
-                }))
-                    return Failure<void>(WorldDocumentErrors::Conflict);
-            }
-            if (primary && !distinct.contains(*primary))
-                return Failure<void>(WorldDocumentErrors::Conflict);
-            return Result<void>::Success();
-        }
     }  // namespace
 
     /** @copydoc WorldPageContentLease::Objects */
@@ -180,24 +162,4 @@ namespace Horo::Editor {
         return Publish(std::move(candidate), cancellation);
     }
 
-    /** @copydoc PartitionedWorldWorkspace::SetSelection */
-    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::SetSelection(
-        const std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
-        const std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, const WorldDocumentFence expected,
-        const std::stop_token cancellation) {
-        if (const auto valid = CheckFence(expected); valid.HasError())
-            return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
-        if (cancellation.stop_requested())
-            return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Cancelled);
-        if (objects.size() > limits_.maximumObjects)
-            return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Capacity);
-        if (const auto valid = ValidateSelection(*snapshot_, objects, primary); valid.HasError())
-            return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
-        if (std::ranges::equal(objects, snapshot_->selectedObjects) && primary == snapshot_->primarySelection)
-            return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);
-        auto candidate = std::make_shared<PartitionedWorldSnapshot>(*snapshot_);
-        candidate->selectedObjects.assign(objects.begin(), objects.end());
-        candidate->primarySelection = primary;
-        return Publish(std::move(candidate), cancellation);
-    }
 }  // namespace Horo::Editor
