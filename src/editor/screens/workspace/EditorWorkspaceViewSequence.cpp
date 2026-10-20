@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
 #include <span>
 
 namespace Horo::Editor {
@@ -69,9 +70,9 @@ namespace Horo::Editor {
             const auto separator = path.rfind('/');
             const std::string title =
                 path.substr(separator == std::string::npos ? 0 : separator + 1) + (tab.dirty ? " *" : "") + "###document";
-            const float width = std::min(ImGui::CalcTextSize(title.c_str(), nullptr, true).x + tokens.spacing.propertyRowGap * 4.0F,
-                                         240.0F * tokens.sizes.uiScale);
-            if (Ui::Button({.label = title.c_str(),
+            if (const float width = std::min(ImGui::CalcTextSize(title.c_str(), nullptr, true).x + tokens.spacing.propertyRowGap * 4.0F,
+                                             240.0F * tokens.sizes.uiScale);
+                Ui::Button({.label = title.c_str(),
                             .size = {width, 0},
                             .variant = active == instance ? Ui::ButtonVariant::Primary : Ui::ButtonVariant::Secondary,
                             .font = m_context.theme.fonts.sans})) {
@@ -127,7 +128,8 @@ namespace Horo::Editor {
         constexpr std::size_t maximumPreviewBytes = 65'536;
         const auto text = source.Text();
         std::size_t bytes = std::min(text.size(), maximumPreviewBytes);
-        while (bytes < text.size() && bytes > 0 && (static_cast<unsigned char>(text[bytes]) & 0xC0U) == 0x80U)
+        const auto previewBytes = std::as_bytes(std::span{text.data(), text.size()});
+        while (bytes < text.size() && bytes > 0 && (previewBytes[bytes] & std::byte{0xC0}) == std::byte{0x80})
             --bytes;
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, text.substr(0, bytes), Theme::Text(), m_context.theme.fonts);
         if (bytes < text.size())

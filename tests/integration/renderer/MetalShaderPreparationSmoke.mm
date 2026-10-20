@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
 #include <iterator>
+#include <string>
 
 namespace Horo::Render::Detail {
     namespace {
@@ -144,6 +145,8 @@ namespace Horo::Render::Detail {
                 REQUIRE(cost.HasValue());
                 pipelineCost = cost.Value();
                 const auto created = runtime.CreateGraphicsPipeline(pipeline, vertex, fragment, TestSupport::PlacementFor(cost.Value(), 4));
+                INFO((created.HasError() ? created.ErrorValue().code.Value() + ": " + created.ErrorValue().message
+                                         : std::string{"success"}));
                 REQUIRE(created.HasValue());
                 native = created.Value();
             }
@@ -165,6 +168,34 @@ namespace Horo::Render::Detail {
                 foreign.compatibility.driverVersion += "foreign";
                 CHECK(runtime.QueryGraphicsPipelineMemoryCost(foreign, vertex, fragment).HasError());
                 CHECK(runtime.QueryGraphicsPipelineMemoryCost(pipeline, fragment, vertex).HasError());
+            }
+
+            void CheckReservedAndMissingBindings() {
+                auto reserved = reflectionCandidate;
+                reserved.targetBindings[0].nativeBinding = MetalMeshVertexBufferIndex;
+                const auto reservedReflection = NormalizeShaderReflection(manifest, target, reserved);
+                REQUIRE(reservedReflection.HasValue());
+                auto reservedPipeline = pipeline;
+                reservedPipeline.reflection = reservedReflection.Value();
+                const auto rejected =
+                    runtime.CreateGraphicsPipeline(reservedPipeline, vertex, fragment, TestSupport::PlacementFor(pipelineCost, 41));
+                REQUIRE(rejected.HasError());
+                CHECK(rejected.ErrorValue().code.Value() == MetalBackendErrors::UnsupportedResourceOperation.code.Value());
+                auto missing = reflectionCandidate;
+                missing.bindings[1].active = false;
+                missing.targetBindings[1] = {ShaderBindingId{2}, 0, 0, 0, {}, {}, false};
+                const auto missingReflection = NormalizeShaderReflection(manifest, target, missing);
+                REQUIRE(missingReflection.HasValue());
+                auto missingPipeline = pipeline;
+                missingPipeline.reflection = missingReflection.Value();
+                const auto extra =
+                    runtime.CreateGraphicsPipeline(missingPipeline, vertex, fragment, TestSupport::PlacementFor(pipelineCost, 42));
+                REQUIRE(extra.HasError());
+                CHECK(extra.ErrorValue().code.Value() == MetalBackendErrors::ResourceIdentityInvalid.code.Value());
+                CHECK(extra.ErrorValue().message.starts_with("Metal stage " +
+                                                             std::to_string(static_cast<unsigned>(ShaderStageVisibility::Fragment)) + " "));
+                CHECK(extra.ErrorValue().message.find("has 3 active material arguments; cooked reflection requires 2.") !=
+                      std::string::npos);
             }
 
             void PrepareBufferAndSampler() {
@@ -201,7 +232,15 @@ namespace Horo::Render::Detail {
                                                                 .usage = RenderTextureUsage::Sampled};
                 const auto textureCost = runtime.QueryTextureMemoryCost(textureDescriptor);
                 REQUIRE(textureCost.HasValue());
-                const auto createdTexture = runtime.CreateTexture(textureDescriptor, {}, TestSupport::PlacementFor(textureCost.Value(), 7));
+                const auto incompatibleTexture =
+                    runtime.CreateTexture(textureDescriptor, {}, TestSupport::PlacementFor(textureCost.Value(), 7));
+                REQUIRE(incompatibleTexture.HasError());
+                CHECK(incompatibleTexture.ErrorValue().code.Value() == MetalBackendErrors::InvalidConfig.code.Value());
+                CHECK(incompatibleTexture.ErrorValue().message == "Metal resource placement conflicts with its existing backing heap.");
+                const auto createdTexture =
+                    runtime.CreateTexture(textureDescriptor, {}, TestSupport::PlacementFor(textureCost.Value(), 8, 2));
+                INFO((createdTexture.HasError() ? createdTexture.ErrorValue().code.Value() + ": " + createdTexture.ErrorValue().message
+                                                : "Metal texture preparation succeeded."));
                 REQUIRE(createdTexture.HasValue());
                 texture = createdTexture.Value();
                 const auto createdView = runtime.CreateTextureView({.texture = {{1}, 2, 1},
@@ -266,6 +305,7 @@ namespace Horo::Render::Detail {
         fixture.PrepareShaders();
         fixture.PreparePipeline();
         fixture.CheckPipelineRejections();
+        fixture.CheckReservedAndMissingBindings();
         fixture.PrepareBufferAndSampler();
         fixture.PrepareTextureAndBindings();
         fixture.CheckMaterialAndRetainedLifetime();

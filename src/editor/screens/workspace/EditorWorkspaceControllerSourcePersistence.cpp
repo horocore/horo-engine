@@ -38,28 +38,29 @@ namespace Horo::Editor {
         for (const auto &tab : host.DocumentTabs()) {
             if (tab.identity.key.kind != DocumentKind::Source)
                 continue;
-            if (const auto source = m_sourceOpenService.Documents().Snapshot(tab.identity.instance); source.HasValue()) {
-                const auto first = sources.begin() + static_cast<std::ptrdiff_t>(index);
-                const auto cached = std::find_if(first, sources.end(), [&](const SourceDocumentSnapshot &candidate) {
-                    return candidate.SharesStateWith(source.Value());
-                });
-                if (cached != sources.end()) {
-                    // Reorder leases without recomputing byte-derived dirty state for unchanged publications.
-                    std::rotate(first, cached, cached + 1);
-                } else {
-                    static_cast<void>(host.SetDocumentDirty(tab.identity.instance, source.Value().Dirty()));
-                    if (index < sources.size() && sources[index].Identity().instance == tab.identity.instance)
-                        sources[index] = source.Value();
-                    else
-                        sources.insert(first, source.Value());
-                }
-            } else {
-                if (index < sources.size())
-                    sources[index] = {};
+            const auto slot = index++;
+            const auto source = m_sourceOpenService.Documents().Snapshot(tab.identity.instance);
+            if (source.HasError()) {
+                if (slot < sources.size())
+                    sources[slot] = {};
                 else
                     sources.emplace_back();
+                continue;
             }
-            ++index;
+            const auto first = sources.begin() + static_cast<std::ptrdiff_t>(slot);
+            const auto cached = std::find_if(first, sources.end(), [&](const SourceDocumentSnapshot &candidate) {
+                return candidate.SharesStateWith(source.Value());
+            });
+            if (cached != sources.end()) {
+                // Reorder leases without recomputing byte-derived dirty state for unchanged publications.
+                std::rotate(first, cached, cached + 1);
+                continue;
+            }
+            static_cast<void>(host.SetDocumentDirty(tab.identity.instance, source.Value().Dirty()));
+            if (slot < sources.size() && sources[slot].Identity().instance == tab.identity.instance)
+                sources[slot] = source.Value();
+            else
+                sources.insert(first, source.Value());
         }
         sources.resize(index);
     }
@@ -106,7 +107,7 @@ namespace Horo::Editor {
                 m_uiCanvasDocuments.erase(canvas);
         } else {
             // Navigation's owner processes its request at the existing settings safe point.
-            for (auto &tab : m_viewModel.navigationDocuments)
+            for (const auto &tab : m_viewModel.navigationDocuments)
                 if (tab.identity.instance == instance)
                     tab.editor->requestClose = true;
         }

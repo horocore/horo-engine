@@ -11,6 +11,9 @@
 #include <tuple>
 
 namespace Horo::Render::Detail {
+    /** @brief Fixed MeshVertex fetch slot, reserved from material buffers and shared with future draw encoding. */
+    inline constexpr std::uint32_t MetalMeshVertexBufferIndex{30};
+
     /** @brief Exact cooked function; no source compiler or borrowed package storage. */
     struct MetalShaderModule {
         __strong id<MTLFunction> function{nil};

@@ -21,8 +21,12 @@ reflection independently checks active bindings, resource types, access and
 uniform packing. Direct scalar uniform-buffer, noncomparison float 2D sampled-texture and sampler
 bindings are supported; arrays, matrices, generated helpers, inline constants,
 storage resources, depth-comparison sampling and specialization inputs return typed unsupported results.
-The fixed MeshVertex layout reserves vertex-buffer slot 30. The current graphics
-preparation envelope supports single-sample pipelines.
+The fixed MeshVertex layout reserves vertex-buffer slot 30 through a shared private
+constant. Native reflection may expose an implicit fetch binding at that slot.
+Preparation admits only a non-argument, read-only struct matching MeshVertex size
+and alignment, with previously validated vertex inputs; it rejects duplicates and
+user-authored arguments. This geometry binding is counted separately from material
+resources. The current graphics preparation envelope supports single-sample pipelines.
 
 Materials use exact pipeline layout equality and frontend-resolved generations.
 Uniform buffer ranges require 256-byte alignment and the actual native block size.
@@ -45,3 +49,9 @@ test reports. Missing offline compiler tools fail fixture preparation. A runner
 without a Metal device records `skipped_no_device`; successful hosted compilation
 alone does not qualify native behavior. The main CI test registration remains in
 its existing configuration.
+
+The current typed graph workload has no mesh/material draw operation, and the
+Metal graph implementation encodes clear/copy/light operations without binding a
+vertex buffer. This change verifies native preparation, not rendered pixels or
+an absent draw-admission path. Future draw encoding must consume the shared
+reserved-slot contract within its owning submission responsibility.

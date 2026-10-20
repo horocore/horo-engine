@@ -60,10 +60,10 @@ namespace Horo::Render::Detail {
             for (NSUInteger index = 0; index < offsets.size(); ++index) {
                 vertices.attributes[index].format = index == 2 ? MTLVertexFormatFloat2 : MTLVertexFormatFloat3;
                 vertices.attributes[index].offset = offsets[index];
-                vertices.attributes[index].bufferIndex = 30;
+                vertices.attributes[index].bufferIndex = MetalMeshVertexBufferIndex;
             }
-            vertices.layouts[30].stride = sizeof(MeshVertex);
-            vertices.layouts[30].stepFunction = MTLVertexStepFunctionPerVertex;
+            vertices.layouts[MetalMeshVertexBufferIndex].stride = sizeof(MeshVertex);
+            vertices.layouts[MetalMeshVertexBufferIndex].stepFunction = MTLVertexStepFunctionPerVertex;
             native.vertexDescriptor = vertices;
         }
 
@@ -194,6 +194,46 @@ namespace Horo::Render::Detail {
             return Result<void>::Success();
         }
 
+        /** @brief Admits only the driver's implicit MeshVertex fetch after vertex attribute validation has succeeded. */
+        Result<void> ValidateMeshVertexFetch(id<MTLBufferBinding> buffer, const NormalizedShaderReflection &reflection) {
+            if (const bool hasInputs = std::ranges::any_of(reflection.stageInterface,
+                                                           [](const ShaderReflectedInterfaceVariable &input) {
+                return input.stage == ShaderStage::Vertex && input.direction == ShaderInterfaceDirection::Input;
+            });
+                buffer.argument || buffer.access != MTLBindingAccessReadOnly || buffer.bufferDataType != MTLDataTypeStruct ||
+                buffer.bufferDataSize != sizeof(MeshVertex) || buffer.bufferAlignment != alignof(MeshVertex) || !hasInputs)
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::ResourceIdentityInvalid,
+                              std::format("Metal vertex fetch at slot {} has incompatible argument={}, access={}, type={}, size={}, "
+                                          "alignment={}.",
+                                          MetalMeshVertexBufferIndex, buffer.argument, static_cast<long>(buffer.access),
+                                          static_cast<long>(buffer.bufferDataType), buffer.bufferDataSize, buffer.bufferAlignment)));
+            return Result<void>::Success();
+        }
+
+        /** @brief Counts material arguments while validating the one reserved implicit geometry fetch separately. */
+        Result<std::size_t> CountMaterialArguments(NSArray<id<MTLBinding>> *arguments, ShaderStageVisibility stage,
+                                                   const NormalizedShaderReflection &reflection) {
+            std::size_t active = 0;
+            bool vertexFetchSeen = false;
+            for (id<MTLBinding> argument in arguments) {
+                if (!argument.used)
+                    continue;
+                if (stage != ShaderStageVisibility::Vertex || argument.type != MTLBindingTypeBuffer ||
+                    argument.index != MetalMeshVertexBufferIndex) {
+                    ++active;
+                    continue;
+                }
+                if (vertexFetchSeen)
+                    return Result<std::size_t>::Failure(
+                        MakeError(MetalBackendErrors::ResourceIdentityInvalid, "Metal exposes duplicate reserved vertex-fetch bindings."));
+                if (const auto valid = ValidateMeshVertexFetch((id<MTLBufferBinding>)argument, reflection); valid.HasError())
+                    return Result<std::size_t>::Failure(valid.ErrorValue());
+                vertexFetchSeen = true;
+            }
+            return Result<std::size_t>::Success(active);
+        }
+
         /** @brief Checks each stage's complete native active argument set against the cooked logical map. */
         Result<void> ValidateArguments(NSArray<id<MTLBinding>> *arguments, ShaderStageVisibility stage,
                                        const NormalizedShaderReflection &reflection, std::array<std::size_t, 31> &sizes) {
@@ -206,20 +246,22 @@ namespace Horo::Render::Detail {
                     return entry.id == binding.id && entry.active && entry.generatedHelperIndex == 0;
                 });
                 if (mapping == reflection.targetBindings.end() || mapping->nativeSpace != 0 || mapping->nativeBinding >= 31 ||
-                    binding.arrayCount != 1 || (binding.kind == ShaderResourceKind::UniformBuffer && mapping->nativeBinding == 30))
+                    binding.arrayCount != 1 ||
+                    (binding.kind == ShaderResourceKind::UniformBuffer && mapping->nativeBinding == MetalMeshVertexBufferIndex))
                     return Result<void>::Failure(
                         MakeError(MetalBackendErrors::UnsupportedResourceOperation,
                                   "Metal requires direct scalar arguments below slot 31; buffer slot 30 is reserved for MeshVertex."));
                 if (const auto validated = ValidateArgument(arguments, binding, *mapping, reflection, sizes); validated.HasError())
                     return validated;
             }
-            std::size_t active = 0;
-            for (id<MTLBinding> argument in arguments)
-                if (argument.used)
-                    ++active;
-            if (active != expected)
-                return Result<void>::Failure(MakeError(MetalBackendErrors::ResourceIdentityInvalid,
-                                                       "Metal native stage contains extra or missing active arguments."));
+            const auto active = CountMaterialArguments(arguments, stage, reflection);
+            if (active.HasError())
+                return Result<void>::Failure(active.ErrorValue());
+            if (active.Value() != expected)
+                return Result<void>::Failure(
+                    MakeError(MetalBackendErrors::ResourceIdentityInvalid,
+                              std::format("Metal stage {} has {} active material arguments; cooked reflection requires {}.",
+                                          static_cast<unsigned>(stage), active.Value(), expected)));
             return Result<void>::Success();
         }
     }  // namespace
