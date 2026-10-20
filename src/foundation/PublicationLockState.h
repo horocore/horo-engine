@@ -7,6 +7,8 @@
 
 #include "Horo/Foundation/Platform.h"
 
+#include <utility>
+
 namespace Horo {
     /** @brief Owns one lease implementation without exposing native resources to Foundation consumers.
      * @details Only publication tooling uses the virtual observation; it adds no allocation or frame work.
@@ -25,6 +27,15 @@ namespace Horo {
 
     protected:
         State() noexcept = default;
+    };
+
+    /** @brief Non-installed native-owner bridge; adoption transfers the complete lease lifetime exactly once. */
+    class PublicationLockAccess final {
+    public:
+        /** @brief Adopts an already acquired native lease. @param state Owned live lease state. @return Move-only lease owner. */
+        [[nodiscard]] static ExclusiveFileLock Adopt(std::unique_ptr<ExclusiveFileLock::State> state) noexcept {
+            return ExclusiveFileLock{std::move(state)};
+        }
     };
 }  // namespace Horo
 

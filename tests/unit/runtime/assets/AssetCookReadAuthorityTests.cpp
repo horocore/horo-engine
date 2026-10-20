@@ -1,4 +1,5 @@
 #include "Horo/Foundation/ImmutableFileStorage.h"
+#include "Horo/Platform/NativePublicationFileSystem.h"
 #include "assets/AssetCookOutputFixture.h"
 
 #include <catch2/generators/catch_generators.hpp>
@@ -144,4 +145,49 @@ TEST_CASE("Writer recovery uses its injected read authority and retains the prev
     const auto current = ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.directory.path);
     REQUIRE(current.HasValue());
     CHECK(current.Value().manifestDigest == fixture.generation.manifestDigest);
+}
+
+TEST_CASE("Root-bound native authority completes real cook publication recovery and pinned reads", "[cook][authority][rooted]") {
+    TempDir directory;
+    const auto anchor = std::filesystem::canonical(directory.path);
+    const auto root = anchor / "derived" / "cook";
+    auto files = Horo::Platform::CreateNativePublicationFileSystem(anchor, "derived/cook");
+    REQUIRE(files.HasValue());
+    const auto id = Id("00000000-0000-0000-0000-000000000001");
+    const auto firstBytes = MakePayload(id, 8, 1);
+    auto first = PublishCookArtifactReplacement(root, Target("headless-null"), Entry(id, firstBytes), firstBytes, 4096U, {},
+                                                {.files = files.Value().get(), .operationId = "10000000-0000-0000-0000-000000000001"});
+    INFO((first.HasError() ? first.ErrorValue().code.Value() : std::string_view{}));
+    REQUIRE(first.HasValue());
+    const auto secondBytes = MakePayload(id, 8, 2);
+    auto second = PublishCookArtifactReplacement(root, Target("headless-null"), Entry(id, secondBytes), secondBytes, 4096U, {},
+                                                 {.files = files.Value().get(), .operationId = "10000000-0000-0000-0000-000000000002"});
+    INFO((second.HasError() ? second.ErrorValue().code.Value() : std::string_view{}));
+    REQUIRE(second.HasValue());
+    CHECK(first.Value().manifestDigest != second.Value().manifestDigest);
+    CHECK(ReadCookGenerationContents(*files.Value(), first.Value(), 4096U).Value().artifacts.front() == firstBytes);
+    CHECK(ReadCookGenerationContents(*files.Value(), second.Value(), 4096U).Value().artifacts.front() == secondBytes);
+    CHECK(ResolveCurrentCookGeneration(*files.Value(), root).Value().manifestDigest == second.Value().manifestDigest);
+}
+
+TEST_CASE("Real cook commit stays inside its retained project when the former project path is replaced", "[cook][authority][rooted]") {
+    TempDir directory;
+    const auto parent = std::filesystem::canonical(directory.path);
+    const auto anchor = parent / "project";
+    std::filesystem::create_directory(anchor);
+    auto files = Horo::Platform::CreateNativePublicationFileSystem(anchor, "derived/cook");
+    REQUIRE(files.HasValue());
+    std::filesystem::rename(anchor, parent / "retained");
+    std::filesystem::create_directory(anchor);
+    const auto root = anchor / "derived" / "cook";
+    const auto id = Id("00000000-0000-0000-0000-000000000001");
+    const auto bytes = MakePayload(id, 8, 1);
+    const auto published =
+        PublishCookArtifactReplacement(root, Target("headless-null"), Entry(id, bytes), bytes, 4096U, {},
+                                       {.files = files.Value().get(), .operationId = "10000000-0000-0000-0000-000000000001"});
+    INFO((published.HasError() ? published.ErrorValue().code.Value() : std::string_view{}));
+    REQUIRE(published.HasValue());
+    CHECK_FALSE(std::filesystem::exists(anchor / "derived"));
+    CHECK(std::filesystem::exists(parent / "retained" / "derived" / "cook" / "current.json"));
+    CHECK(ReadCookGenerationContents(*files.Value(), published.Value(), 4096U).Value().artifacts.front() == bytes);
 }
