@@ -23,6 +23,20 @@ namespace Horo::TestSupport {
     public:
         NativeDurableFileSystem native;
 
+        Result<std::vector<std::uint8_t>> ReadFileBounded(const std::filesystem::path &path, std::size_t maximumBytes,
+                                                          const CancellationToken &cancellation = {}) const override {
+            return native.ReadFileBounded(path, maximumBytes, cancellation);
+        }
+
+        Result<std::optional<FileEntryInfo>> InspectEntry(const std::filesystem::path &path) const override {
+            return native.InspectEntry(path);
+        }
+
+        Result<std::vector<FileDirectoryEntry>> ListDirectory(const std::filesystem::path &path, std::size_t maximumEntries,
+                                                              const CancellationToken &cancellation = {}) const override {
+            return native.ListDirectory(path, maximumEntries, cancellation);
+        }
+
         Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &path, Horo::DirectoryCreationMode mode) override {
             return native.CreateDirectoryPath(path, mode);
         }
