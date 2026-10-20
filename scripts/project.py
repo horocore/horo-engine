@@ -427,23 +427,6 @@ def extract_entry(source: zipfile.ZipFile, entry: zipfile.ZipInfo, target: Path)
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 ASSET_PREFIX = "assets/"
 PROVENANCE_ASSET = ASSET_PREFIX + "horo-package-provenance.json"
 
@@ -725,21 +708,7 @@ def apk_main(argv=None) -> int:
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
-
   # nosec B404 - the digest-verified SDK tool is the intended child.
-
-
-
-
 
 
 MAXIMUM_ARCHIVE_BYTES = 256 * 1024 * 1024
@@ -916,22 +885,11 @@ def bootstrap_main(argv=None) -> int:
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
   # nosec B404 - fixed SDK and CMake tools are the contract under test.
-
 
 
 # The bounded parser below rejects DTD/entities and disables parameter entities.
 # nosemgrep: python.lang.security.use-defused-xml.use-defused-xml
-
 
 
 MAXIMUM_JUNIT_BYTES = 8 * 1024 * 1024
@@ -1117,18 +1075,6 @@ def author_main(argv=None) -> int:
 # Scaffold
 
 #!/usr/bin/env python3
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 MAXIMUM_IDENTIFIER_BYTES = 256
@@ -1496,16 +1442,6 @@ def scaffold_main(argv=None) -> int:
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
-
 MAXIMUM_SOURCE_FILES = 4096
 MAXIMUM_BEHAVIORS = 4096
 MAXIMUM_SOURCE_BYTES = 4 * 1024 * 1024
@@ -1754,14 +1690,6 @@ def gameplay_main(argv=None) -> int:
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
 MIGRATION_SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 IDENTITY = re.compile(r"^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)*$")
 HASH = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -1882,7 +1810,6 @@ def validate_entry(directory: Path, kind: str, source_dir: str | None = None) ->
         "storageEstimate": estimate,
         "namespace": symbol(target) if kind == "sequential" else f"{symbol(target)}::From{source.replace('.', '_')}",
     }
-
 
 
 def discover(root: Path) -> list[dict]:
@@ -2061,15 +1988,6 @@ Result<std::vector<ProjectMigrationDefinition>> BuildBuiltInProjectMigrationCata
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
 def compatibility_fail(message: str) -> None:
     raise SystemExit(f"[project-compatibility] {message}")
 
@@ -2239,7 +2157,6 @@ def _validate_current_version(current_record: dict, records: list[dict], engine_
                         if isinstance(entry, dict) and entry.get("target") == engine_version]
             if not incoming:
                 compatibility_fail(f"release {engine_version} changes the persistent contract without an incoming migration definition")
-
 
 
 def _build_header_content(engine_version: str, current: dict, records: list[dict]) -> str:

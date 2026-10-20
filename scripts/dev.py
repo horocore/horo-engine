@@ -165,8 +165,6 @@ def raise_application_error(envelope: dict[str, Any]) -> None:
   # nosec B404
 
 
-
-
 class CleanupError(OSError):
 
     """Owned descendants were not proven terminal; callers must retain safety protection."""
@@ -375,9 +373,6 @@ def run(command: Sequence[str], cwd: Path, env: Mapping[str, str] | None = None)
 
 # Git metadata/worktree operations use explicit argv without a shell.
   # nosec B404
-
-
-
 
 
 _GENERATION = re.compile(r"gen-[0-9a-f]{32}")
@@ -851,14 +846,6 @@ def ci_cache_main(argv: list[str] | None = None) -> None:
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
 MAX_SOURCE_BYTES = 262144
 MAX_SNAPSHOT_BYTES = 32768
 MAX_ITEM_BYTES = 2048
@@ -1103,15 +1090,6 @@ def notes_main(argv=None) -> int:
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
 def notes_member(name: str) -> bool:
     """Accept only a root or single package-directory notes file."""
     if not name or "\\" in name or name.startswith("/"):
@@ -1172,17 +1150,6 @@ def archive_main(argv=None) -> int:
 # Release
 
 #!/usr/bin/env python3
-
-
-
-
-
-
-
-
-
-
-
 
 
 def verify(snapshot_bytes: bytes, tag: str, cmake_text: str, release_body: str) -> None:
@@ -1259,20 +1226,6 @@ def release_main(argv=None) -> int:
 # Pr
 
 #!/usr/bin/env python3
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 MAX_RESPONSE_BYTES = 16 * 1024 * 1024
@@ -1841,17 +1794,7 @@ def write_case_regex(path, cases):
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
 # Resolve the trusted sibling identically for direct CLI and file-spec loading.
-
-
 
 
 SCENE_WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
@@ -1985,16 +1928,7 @@ def scene_main(argv=None):
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
 # Resolve the trusted sibling identically for direct CLI and file-spec loading.
-
-
 
 
 CHARACTER_WORKSPACE_EVIDENCE_ERROR = "Qualification evidence must remain inside the current workspace"
@@ -2061,17 +1995,7 @@ def character_main(argv=None):
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
 # Resolve the trusted sibling identically for direct CLI and file-spec loading.
-
-
 
 
 EXTENSION_PREFIX = "HoroExtensionManagerAllocationTests::"
@@ -2213,27 +2137,6 @@ def save_main(argv=None) -> None:
 # Dev
 
 #!/usr/bin/env python3
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]

@@ -42,23 +42,8 @@ from defusedxml import ElementTree as element_tree
 # noqa: D212,D213
 
 
-
-
-
-
-
-
-
 # Process execution is restricted to resolved, fixed tool names below.
   # nosec B404
-
-
-
-
-
-
-
-
 
 
 SUPPORTED_SUFFIXES = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp"})
@@ -91,9 +76,6 @@ class Selection:
     submitted: list[Path]
     skipped: list[dict[str, str]]
     source: str
-
-
-
 
 
 def resolved_tool(name: str) -> str:
@@ -224,9 +206,6 @@ def select_files(root: Path, requested: Sequence[Path], source: str) -> Selectio
     return Selection(submitted, skipped, source)
 
 
-
-
-
 def _load_compilation_database(compilation_database: Path) -> list[object]:
     """Read and validate the top-level shape of a compilation database."""
     try:
@@ -298,9 +277,6 @@ def request_bridge(port: int, path: str, timeout: float, body: bytes | None = No
         raise AnalysisError("IDE bridge returned invalid JSON") from error
 
 
-
-
-
 def write_workspace(root: Path, cache: Path, database: Path, connection_id: str, project_key: str) -> Path:
     """Keep generated workspace state in the managed cache, never the source profile."""
     workspace = cache / "sonar.code-workspace"
@@ -308,9 +284,6 @@ def write_workspace(root: Path, cache: Path, database: Path, connection_id: str,
         "sonarlint.pathToCompileCommands": str(database), "sonarlint.connectedMode.project": {
             "connectionId": connection_id, "projectKey": project_key}}})
     return workspace
-
-
-
 
 
 def normalized_findings(response: object) -> list[dict[str, object]]:
@@ -398,27 +371,6 @@ def analyze_when_indexed(port: int, files: Sequence[Path], request_timeout: floa
             if "No files were found to be indexed by SonarQube for IDE" not in str(error) or time.monotonic() >= deadline:
                 raise
             time.sleep(0.5)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 # Native
@@ -1162,10 +1114,6 @@ def changed_ranges(root: Path, base_sha: str, paths: list[Path]) -> dict[str, li
 
 # nosec B405
 # CPD XML declarations are rejected before parsing; no external entities are accepted.
-
-
-
-
 
 
 def json_command(argv: list[str], root: Path, timeout: float = 600) -> tuple[dict, int]:
@@ -2335,27 +2283,6 @@ def sonar_check(root: Path, cache: Path, repository_cache: Path, files: list[Pat
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def arguments(argv=None):
     """Keep selectors consistent across both analyzer families."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -2666,16 +2593,6 @@ def preflight_main(argv=None) -> int:
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
-
 def complexity_main(argv=None) -> int:
     """Accept explicit C/C++ paths, a branch delta, or the dirty worktree."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -2706,14 +2623,6 @@ def complexity_main(argv=None) -> int:
 # Coverage
 
 #!/usr/bin/env python3
-
-
-
-
-
-
-
-
 
 
 def repository_path(path: Path, root: Path) -> Path:
@@ -2853,15 +2762,6 @@ def coverage_main(argv=None) -> int:
 #!/usr/bin/env python3
 
 
-
-
-
-
-
-
-
-
-
 def noncode(text: str) -> bool:
     """Match gcovr's zero-hit comment, brace and standalone else heuristic."""
     text = re.sub(r"//.*$", "", text)
@@ -2939,13 +2839,6 @@ def fastcov_main(argv=None) -> int:
 # Collector
 
 #!/usr/bin/env python3
-
-
-
-
-
-
-
 
 
 BATCH_FILES = 64
