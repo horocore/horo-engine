@@ -22,6 +22,10 @@ namespace Horo::Tests::MigrationFailure {
     public:
         explicit FailingFilesystem(std::filesystem::path root) : root_(std::move(root)) {}
 
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &path, Horo::DirectoryCreationMode mode) override {
+            return native_.CreateDirectoryPath(path, mode);
+        }
+
         Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
             auto acquired = native_.TryAcquireExclusive(path, owner);
             if (acquired.HasValue() && onExclusiveAcquired) {

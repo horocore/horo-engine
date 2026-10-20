@@ -204,11 +204,12 @@ namespace Horo::Assets::CookStorageDetail {
         const auto operationRoot = privateRoot / token;
         if (!HasPlainPath(operationRoot))
             return Result<std::filesystem::path>::Failure(MakeError(CookErrors::MalformedArtifact));
-        std::error_code error;
-        std::filesystem::create_directories(privateRoot, error);
-        if (error)
-            return Result<std::filesystem::path>::Failure(MakeError(CookErrors::MalformedArtifact));
-        if (!std::filesystem::create_directory(operationRoot, error) || error)
+        if (auto created = policy.files->CreateDirectoryPath(privateRoot, DirectoryCreationMode::Parents); created.HasError())
+            return Result<std::filesystem::path>::Failure(created.ErrorValue());
+        const auto created = policy.files->CreateDirectoryPath(operationRoot, DirectoryCreationMode::Single);
+        if (created.HasError())
+            return Result<std::filesystem::path>::Failure(created.ErrorValue());
+        if (!created.Value())
             return Result<std::filesystem::path>::Failure(MakeError(CookErrors::MalformedArtifact));
         return Result<std::filesystem::path>::Success(operationRoot);
     }

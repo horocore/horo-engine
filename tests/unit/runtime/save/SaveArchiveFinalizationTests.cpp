@@ -24,6 +24,10 @@ namespace {
         const ErrorCodeDescriptor *writeFailure{&SaveErrors::StoragePermanentIo};
         const ErrorCodeDescriptor *removeFailure{&SaveErrors::StoragePermanentIo};
 
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &, Horo::DirectoryCreationMode) override {
+            return Horo::Result<bool>::Failure(Horo::MakeError(SaveErrors::StoragePermanentIo));
+        }
+
         Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &, std::string_view) override {
             return Result<ExclusiveFileLock>::Failure(MakeError(SaveErrors::StoragePermanentIo));
         }

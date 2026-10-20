@@ -394,3 +394,28 @@ Required tests cover:
 - [Release Security](../release/release-security.md)
 - [Extension System](../extensions/plugin-system.md)
 - [Gameplay Module Boundary](../extensions/gameplay-module-boundary.md)
+
+## Cook publication directory authority migration
+
+`DurableFileSystem::CreateDirectoryPath` is an explicit pure virtual capability. Its
+`Single` policy creates only the final component and reports an already-existing
+directory without claiming exclusive creation; `Parents` permits missing-parent
+creation. Both retain typed failures. Directory durability remains an explicit
+`SyncDirectory` responsibility at the transaction boundary.
+
+Cook publication previously called native `std::filesystem` directory creation
+outside the host-injected filesystem. A restricted or root-bound writer therefore
+could not govern all publication mutations. Generation-parent, staging-parent,
+operation and private-generation creation now use the same filesystem authority
+as file writes and replacement. Reusing an exclusive operation/generation directory
+still fails; rejected creation preserves the last committed selector and original
+failure identity. No native fallback bypasses a denied capability.
+
+This deliberately changes the C++ filesystem contract: every implementation must
+provide directory creation, and binary consumers rebuild. All existing native-backed
+test adapters delegate to their established native owner; in-memory adapters that
+never supported directory publication reject it explicitly. No persistent format
+changes or parallel legacy creation path are introduced. This migration supplies
+the required authority hook; it does not itself replace the native writer's
+host-owned-parent precondition or claim complete protection against concurrent
+hostile namespace replacement. Root-bound native publication remains separate work.

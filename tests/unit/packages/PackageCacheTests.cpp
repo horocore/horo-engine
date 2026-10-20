@@ -51,6 +51,10 @@ namespace {
 
         DenyingFileSystem(Horo::NativeDurableFileSystem &native, const Failure failure) : native_(native), failure_(failure) {}
 
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &path, Horo::DirectoryCreationMode mode) override {
+            return native_.CreateDirectoryPath(path, mode);
+        }
+
         Horo::Result<Horo::ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path,
                                                                   const std::string_view owner) override {
             return native_.TryAcquireExclusive(path, owner);

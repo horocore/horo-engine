@@ -3053,6 +3053,12 @@ target_compile_features(HoroJobAdmissionPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroJobAdmissionPublicHeaderConsumer PRIVATE HoroEngine::Foundation)
 add_test(NAME HoroJobAdmissionPublicHeaderConsumer COMMAND HoroJobAdmissionPublicHeaderConsumer)
 set_tests_properties(HoroJobAdmissionPublicHeaderConsumer PROPERTIES LABELS "unit;foundation;jobs;headless;public_headers")
+add_executable(HoroDirectoryCreationTests unit/foundation/DirectoryCreationTests.cpp)
+target_compile_features(HoroDirectoryCreationTests PRIVATE cxx_std_20)
+target_link_libraries(HoroDirectoryCreationTests PRIVATE HoroEngine::Platform)
+target_include_directories(HoroDirectoryCreationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+horo_register_catch_test(HoroDirectoryCreationTests LABELS "unit;platform;filesystem;headless")
+
 add_executable(HoroPlatformTests
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp

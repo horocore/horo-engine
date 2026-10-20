@@ -95,6 +95,10 @@ namespace Horo::Editor::PCGDocumentTestSupport {
         bool untrackedSuccess{};
         std::size_t writes{}, replacements{};
 
+        Horo::Result<bool> CreateDirectoryPath(const std::filesystem::path &path, Horo::DirectoryCreationMode mode) override {
+            return native.CreateDirectoryPath(path, mode);
+        }
+
         Result<ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &path, std::string_view owner) override {
             if (beforeLock)
                 beforeLock();
