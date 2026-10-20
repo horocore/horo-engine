@@ -1,6 +1,5 @@
 """Android assembly admission regressions; no SDK, build, network or target execution."""
 
-import project
 import argparse
 import copy
 import hashlib
@@ -62,12 +61,21 @@ class AndroidPackageTests(unittest.TestCase):
         return path
 
     def test_external_version_tool_is_an_explicit_argv_capability(self):
-        command = ["/host tools/gradle;echo injected", "--version"]
+        executable = self.root / "host tools/gradle;echo injected"
+        executable.parent.mkdir()
+        executable.write_bytes(b"disposable executable fixture; execution is mocked")
+        executable.chmod(0o700)
+        command = [str(executable), "--version"]
         result = argparse.Namespace(stdout="Gradle 8.11.1", stderr="", returncode=0)
-        with patch.object(android_contract.subprocess, "run", return_value=result) as execute:
+        environment = {"HORO_TEST_TOOL": "disposable"}
+        with patch.dict(os.environ, environment, clear=True), patch.object(
+                android_contract.subprocess, "run", return_value=result) as execute:
             self.assertEqual(android_contract.version_output(command), "Gradle 8.11.1")
+        expected_environment = dict(environment)
+        if os.name == "nt":
+            expected_environment["NoDefaultCurrentDirectoryInExePath"] = "1"
         execute.assert_called_once_with(command, check=False, capture_output=True, text=True,
-                                        timeout=30, shell=False)
+                                        timeout=30, shell=False, env=expected_environment)
 
     def test_tool_downloads_enforce_https_and_binary_wheels(self):
         workflow = (android_package.ROOT / ".github/workflows/android-package.yml").read_text()

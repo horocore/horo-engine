@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import analyze
 
 import concurrent.futures
 import json

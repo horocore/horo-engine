@@ -1,8 +1,6 @@
 """Ownership and private-profile regressions for Linux/Windows sessions."""
 from __future__ import annotations
 
-import analyze
-
 import json
 import sys
 from types import SimpleNamespace
@@ -13,47 +11,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import analyze as sessions
 from analyze import AnalysisError as AnalysisError
+from sonar_session_fixtures import code_tree, profile_inputs
 
 
-def profile_inputs(tmp_path):
-    source = tmp_path / "source Code"
-    (source / "User").mkdir(parents=True)
-    extensions = tmp_path / "extensions"
-    extension = extensions / "sonarsource.sonarlint-vscode-6.1.1-win32-x64"
-    extension.mkdir(parents=True)
-    (extension / "package.json").write_text('{}', encoding="utf-8")
-    profile = tmp_path / "managed" / "profile"
-    return source, extensions, profile
 
-
-def test_new_source_profile_without_settings_keeps_workspace_trust(tmp_path):
-    source, extensions, profile = profile_inputs(tmp_path)
-    sessions.seed_profile(profile, source, extensions)
-    settings = json.loads((profile / "User/settings.json").read_text())
-    assert settings["security.workspace.trust.enabled"] is True
-    assert settings["sonarlint.connectedMode.connections.sonarcloud"] == []
-    assert not (source / "User/settings.json").exists()
-    assert not (profile / "User/globalStorage/state.vscdb").exists()
-    assert not (profile / "User/workspaceStorage").exists()
-    assert not (profile / "Local State").exists()
-    assert (profile.parent / "extensions" / "sonarsource.sonarlint-vscode-6.1.1-win32-x64/package.json").exists()
-
-
-def test_source_trust_and_inline_tokens_are_not_copied(tmp_path):
-    source, extensions, profile = profile_inputs(tmp_path)
-    original = json.dumps({
-        "security.workspace.trust.enabled": False,
-        "security.workspace.trust.untrustedFiles": "open",
-        "sonarlint.connectedMode.connections.sonarcloud": [
-            {"connectionId": "cloud", "organizationKey": "org", "token": "never-copy"}],
-    })
-    (source / "User/settings.json").write_text(original, encoding="utf-8")
-    sessions.seed_profile(profile, source, extensions)
-    settings_text = (profile / "User/settings.json").read_text()
-    assert json.loads(settings_text)["security.workspace.trust.enabled"] is True
-    assert "never-copy" not in settings_text
-    assert "untrustedFiles" not in settings_text
-    assert (source / "User/settings.json").read_text() == original
 
 
 def test_process_and_listener_wrappers_use_native_facade(monkeypatch):
@@ -90,18 +51,6 @@ def test_windows_profile_matches_only_complete_normalized_path(monkeypatch, argv
     monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform="win32"), raising=False)
     assert sessions.has_profile({"argv": argv}, Path("C:/cache/managed profile")) is expected
 
-
-def code_tree(profile):
-    record = {"pid": 10, "started": "100", "profile": str(profile), "nonce": "nonce",
-              "executable": "C:/Code/Code.exe"}
-    table = {
-        10: {"parent": 1, "started": "100", "executable": record["executable"],
-             "argv": ["Code.exe", "--user-data-dir", str(profile)], "markers": {}},
-        11: {"parent": 10, "started": "110", "executable": "C:/Code/Code.exe",
-             "argv": ["Code.exe", "--type=extensionHost"], "markers": {
-                 "HORO_QUALITY_PROFILE": str(profile), "HORO_QUALITY_SESSION": "nonce"}},
-    }
-    return record, table
 
 
 def test_windows_code_main_discovered_only_through_nonce_witness(monkeypatch, tmp_path):
@@ -144,11 +93,13 @@ def test_windows_reused_parent_pid_cannot_adopt_older_witness(monkeypatch, tmp_p
 
 
 @pytest.mark.parametrize("failure", [AnalysisError("second launch rejected"), KeyboardInterrupt()])
-def test_activation_failure_retains_launch_identity_for_safe_retirement(monkeypatch, tmp_path, failure):
+@pytest.mark.parametrize("platform_name", ["win32", "linux"])
+def test_activation_failure_retains_launch_identity_for_safe_retirement(monkeypatch, tmp_path, failure, platform_name):
+    monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform=platform_name))
     source, extensions, unused = profile_inputs(tmp_path)
     pool = sessions.SessionPool(tmp_path / "cache", tmp_path / "root")
     profile = pool.directory / sessions.identity(pool.root) / "profile"
-    record, table = code_tree(profile)
+    record, table = code_tree(profile, platform_name)
     launched = []
     def run(*args):
         launched.append(args)
@@ -178,14 +129,21 @@ def test_proven_no_escape_launch_failure_releases_slot_for_retry_and_stop(monkey
     if failure == "resolution":
         monkeypatch.setattr(sessions.shutil, 'which', lambda *args, **kwargs: None)
     elif failure == "batch":
-        monkeypatch.setattr(sessions.shutil, 'which', lambda *args, **kwargs: 'C:/Code/code.cmd')
+        shim = tmp_path / 'code.cmd'
+        shim.write_text('@echo off\n')
+        monkeypatch.setattr(sessions.shutil, 'which', lambda *args, **kwargs: str(shim))
     elif failure == "popen":
         monkeypatch.setattr(sessions, '_command', lambda *args: ['missing.exe'])
         def denied(*args, **kwargs):
             raise OSError("launch denied")
         monkeypatch.setattr(sessions.subprocess, 'Popen', denied)
     else:
-        monkeypatch.setattr(sessions, '_command', lambda *args: [sys.executable, '-c', 'import time; time.sleep(60)'])
+        # A drained non-breakaway Windows Job supplies positive no-escape
+        # evidence; mock that native boundary, not Linux's weaker process group.
+        def contained(*args):
+            args[-1]["outcome"] = "no_escape"
+            raise AnalysisError("owned Windows job drained after timeout")
+        monkeypatch.setattr(sessions, 'quality_run', contained)
     workspace = tmp_path / ("unsafe&workspace" if failure == "batch" else "workspace")
     for _ in range(2):
         with pytest.raises(AnalysisError):
@@ -267,57 +225,6 @@ def test_retirement_signals_only_owned_exact_tree(monkeypatch, tmp_path, mismatc
     assert calls == ([({10, 11}, table)] if mismatch is None else [])
 
 
-def test_windows_secret_import_requires_profile_encryption_key(monkeypatch, tmp_path):
-    import sqlite3
-    monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform="win32"))
-    source, extensions, profile = profile_inputs(tmp_path)
-    storage = source / "User/globalStorage"
-    storage.mkdir()
-    key = 'secret://{"extensionId":"sonarsource.sonarlint-vscode","key":"cloud"}'
-    value = json.dumps({"type": "Buffer", "data": list(b"v10" + bytes(range(40)))})
-    with sqlite3.connect(storage / "state.vscdb") as db:
-        db.execute("CREATE TABLE ItemTable(key TEXT, value BLOB)")
-        db.execute("INSERT INTO ItemTable VALUES (?, ?)", (key, value))
-    before = (storage / "state.vscdb").read_bytes()
-    with pytest.raises(AnalysisError, match="authenticate.*managed profile"):
-        sessions.seed_profile(profile, source, extensions)
-    assert (storage / "state.vscdb").read_bytes() == before
-    assert not (profile / "User/globalStorage/state.vscdb").exists()
-    assert not (profile / "Local State").exists()
-    assert (profile.parent / "extensions" / "sonarsource.sonarlint-vscode-6.1.1-win32-x64/package.json").exists()
-
-
-@pytest.mark.parametrize("platform_name,prefix,payload", [
-    ("win32", b"v10", bytes(range(40))), ("linux", b"v11", bytes(range(32)))])
-def test_encryption_import_is_minimal_read_only(monkeypatch, tmp_path, platform_name, prefix, payload):
-    import base64
-    import sqlite3
-    monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform=platform_name))
-    source, extensions, profile = profile_inputs(tmp_path)
-    storage = source / "User/globalStorage"
-    storage.mkdir()
-    key = 'secret://{"extensionId":"sonarsource.sonarlint-vscode","key":"cloud"}'
-    unrelated = 'secret://{"extensionId":"other.extension","key":"other"}'
-    value = json.dumps({"type": "Buffer", "data": list(prefix + payload)})
-    wrapped = base64.b64encode(b"DPAPI" + bytes(range(100))).decode("ascii")
-    original_state = json.dumps({"os_crypt": {"encrypted_key": wrapped, "other": "unrelated"},
-                                 "trusted_folders": ["never-copy"]})
-    (source / "Local State").write_text(original_state, encoding="utf-8")
-    with sqlite3.connect(storage / "state.vscdb") as db:
-        db.execute("CREATE TABLE ItemTable(key TEXT, value BLOB)")
-        db.executemany("INSERT INTO ItemTable VALUES (?, ?)", [
-            (key, value), (unrelated, "do-not-copy"), ("secret://null", "do-not-copy"),
-            ("content.trust.model.key", "do-not-copy")])
-    before = (storage / "state.vscdb").read_bytes()
-    sessions.seed_profile(profile, source, extensions)
-    if platform_name == "win32":
-        assert json.loads((profile / "Local State").read_text()) == {"os_crypt": {"encrypted_key": wrapped}}
-    else:
-        assert not (profile / "Local State").exists()
-    with sqlite3.connect(profile / "User/globalStorage/state.vscdb") as db:
-        assert db.execute("SELECT key,value FROM ItemTable").fetchall() == [(key, value)]
-    assert (storage / "state.vscdb").read_bytes() == before
-    assert (source / "Local State").read_text() == original_state
 
 
 def test_linux_code_process_title_remains_owned(monkeypatch):
@@ -336,62 +243,8 @@ def test_linux_code_process_title_remains_owned(monkeypatch):
     assert not sessions.same_path("/Profile", "/profile")
 
 
-def test_windows_plaintext_extra_fields_are_not_imported(monkeypatch, tmp_path):
-    import base64
-    monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform="win32"))
-    source, extensions, profile = profile_inputs(tmp_path)
-    profile.mkdir(parents=True)
-    wrapped = base64.b64encode(b"DPAPI" + bytes(range(100))).decode("ascii")
-    (source / "Local State").write_text(json.dumps({"os_crypt": {"encrypted_key": wrapped}}))
-    value = json.dumps({"type": "Buffer", "data": list(b"v10" + bytes(range(40))), "token": "never-copy"})
-    with pytest.raises(AnalysisError, match="authenticate.*managed profile"):
-        sessions.prepare_windows_encryption(profile, source, [("sonar", value)])
-    assert not (profile / "Local State").exists()
 
 
-@pytest.mark.parametrize("existing_key", [None, {"encrypted_key": "managed-key"}])
-def test_windows_import_never_overwrites_managed_encryption_state(monkeypatch, tmp_path, existing_key):
-    import base64
-    monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform="win32"))
-    source, extensions, profile = profile_inputs(tmp_path)
-    profile.mkdir(parents=True)
-    wrapped = base64.b64encode(b"DPAPI" + bytes(range(100))).decode("ascii")
-    (source / "Local State").write_text(json.dumps({"os_crypt": {"encrypted_key": wrapped}}))
-    original = json.dumps({"os_crypt": existing_key, "managed": "preserve"})
-    (profile / "Local State").write_text(original)
-    value = json.dumps({"type": "Buffer", "data": list(b"v10" + bytes(range(40)))})
-    with pytest.raises(AnalysisError, match="authenticate.*managed profile"):
-        sessions.prepare_windows_encryption(profile, source, [("sonar", value)])
-    assert (profile / "Local State").read_text() == original
-
-
-def test_linux_plaintext_secretstorage_is_never_copied(monkeypatch, tmp_path):
-    import sqlite3
-    monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform="linux"))
-    source, extensions, profile = profile_inputs(tmp_path)
-    storage = source / "User/globalStorage"
-    storage.mkdir()
-    key = 'secret://{"extensionId":"sonarsource.sonarlint-vscode","key":"cloud"}'
-    with sqlite3.connect(storage / "state.vscdb") as db:
-        db.execute("CREATE TABLE ItemTable(key TEXT, value BLOB)")
-        db.execute("INSERT INTO ItemTable VALUES (?, ?)", (key, "not-encrypted"))
-    with pytest.raises(AnalysisError, match="authenticate.*managed profile"):
-        sessions.seed_profile(profile, source, extensions)
-    assert not (profile / "User/globalStorage/state.vscdb").exists()
-
-
-def test_managed_auth_connection_metadata_survives_reseed(tmp_path):
-    source, extensions, profile = profile_inputs(tmp_path)
-    sessions.seed_profile(profile, source, extensions)
-    settings_path = profile / "User/settings.json"
-    managed = json.loads(settings_path.read_text())
-    key = "sonarlint.connectedMode.connections.sonarcloud"
-    managed[key] = [{"connectionId": "managed-login", "organizationKey": "org", "token": "not-a-real-token"}]
-    settings_path.write_text(json.dumps(managed), encoding="utf-8")
-    sessions.seed_profile(profile, source, extensions)
-    assert json.loads(settings_path.read_text())[key] == [
-        {"connectionId": "managed-login", "organizationKey": "org"}]
-    assert not (source / "User/settings.json").exists()
 
 
 def test_stop_explicitly_releases_every_native_slot_lock(monkeypatch, tmp_path):
@@ -494,7 +347,7 @@ def test_unique_startup_becoming_ambiguous_keeps_all_launches_reserved(monkeypat
     source, extensions, _ = profile_inputs(tmp_path)
     pool = sessions.SessionPool(tmp_path / "cache", tmp_path / "root")
     profile = pool.directory / sessions.identity(pool.root) / "profile"
-    _, first = code_tree(profile)
+    _, first = code_tree(profile, sys.platform)
     multiple = dict(first)
     multiple[20] = dict(first[10], parent=1, started="200")
     multiple[21] = dict(first[11], parent=20, started="210")
@@ -529,14 +382,16 @@ def test_unique_startup_becoming_ambiguous_keeps_all_launches_reserved(monkeypat
     assert (pool.directory / "0.json").exists()
 
 
-def test_transient_activation_gui_must_exit_before_a_unique_main_is_accepted(monkeypatch, tmp_path):
+@pytest.mark.parametrize("platform_name", ["win32", "linux"])
+def test_transient_activation_gui_must_exit_before_a_unique_main_is_accepted(monkeypatch, tmp_path, platform_name):
+    monkeypatch.setattr(sessions, 'sys', SimpleNamespace(platform=platform_name))
     source, extensions, _ = profile_inputs(tmp_path)
     pool = sessions.SessionPool(tmp_path / "cache", tmp_path / "root")
     profile = pool.directory / sessions.identity(pool.root) / "profile"
-    _, table = code_tree(profile)
+    _, table = code_tree(profile, platform_name)
     table[10]["markers"] = dict(table[11]["markers"])
     table[20] = dict(table[10], parent=1, started="200",
-                     argv=["Code.exe", "--user-data-dir", str(profile), "--reuse-window", "--goto", str(tmp_path / "x.cpp")])
+                     argv=[table[10]["argv"][0], "--user-data-dir", str(profile), "--reuse-window", "--goto", str(tmp_path / "x.cpp")])
     snapshots = []
     def processes():
         snapshots.append(None)

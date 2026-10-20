@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import cmp_to_key
 from pathlib import Path, PurePosixPath
-from xml.parsers import expat
 import argparse
 import hashlib
 import io
@@ -25,9 +24,6 @@ import zipfile
 
 
 # Android
-
-# Explicit host tool capabilities execute argv with shell=False.
-  # nosec B404
 
 ROOT = Path(__file__).resolve().parents[1]
 MAXIMUM_FILE = 256 * 1024 * 1024
@@ -124,18 +120,63 @@ def validate_profile_identity(profile: dict) -> None:
         raise AndroidError("Invalid native library identity.")
 
 
+def admitted_command(command: list[str]) -> list[str]:
+    """Require separate literal arguments, never an implicitly parsed command line."""
+    if not isinstance(command, list) or not command or any(
+            not isinstance(argument, str) or "\0" in argument for argument in command):
+        raise AndroidError("A nonempty argv list of NUL-free string arguments is required.")
+    executable = command[0]
+    if not executable:
+        raise AndroidError("The executable capability cannot be empty.")
+    if "/" in executable or "\\" in executable:
+        # Explicit relative paths are capabilities too; anchor them before cwd changes.
+        executable = str(Path(executable).absolute())
+    if not Path(executable).is_absolute():
+        # PATH is the caller's host-tool capability, not the child project cwd.
+        # Ignore implicit/relative search roots, including Windows' default CWD search.
+        roots = [Path(root) for root in os.get_exec_path() if root and Path(root).is_absolute()]
+        executable = next((found for root in roots
+                           if (found := shutil.which(str(root / executable))) is not None), "")
+    path = Path(executable)
+    if not executable or not path.is_file() or not os.access(path, os.X_OK):
+        raise AndroidError("Host executable unavailable; install the tool or supply its absolute path.")
+    # Preserve venv/symlink invocation identity after validating the real file.
+    executable = str(path.absolute())
+    if os.name == "nt" and Path(executable).suffix.lower() in {".bat", ".cmd"}:
+        raise AndroidError("Windows batch tools invoke an implicit shell; select a native executable instead.")
+    return [executable, *command[1:]]
+
+
+def execution_environment() -> dict[str, str]:
+    """Retain SDK/signing configuration while removing selected startup hooks.
+
+    Selected executables, toolchain library paths and JVM options remain trusted
+    caller capabilities. This is not a comprehensive environment sanitizer or a
+    sandbox for an untrusted compiler or Gradle distribution.
+    """
+    startup_hooks = {"LD_PRELOAD", "LD_AUDIT", "DYLD_INSERT_LIBRARIES", "PYTHONPATH",
+                     "PYTHONHOME", "PYTHONSTARTUP", "PYTHONINSPECT", "BASH_ENV", "ENV"}
+    environment = {key: value for key, value in os.environ.items() if key.upper() not in startup_hooks}
+    if os.name == "nt":
+        environment["NoDefaultCurrentDirectoryInExePath"] = "1"
+    return environment
+
+
 def android_run(command: list[str], directory: Path, log: Path, timeout: int = 1800) -> None:
     """Execute an argv command with an explicit deadline and disk log; never interpolate shell commands."""
+    command = admitted_command(command)
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("wb") as output:
-        # Caller supplies an explicit host tool capability and argv; no shell.
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-        process = subprocess.Popen(  # nosec B603
-            command, cwd=directory, stdout=output, stderr=subprocess.STDOUT, start_new_session=True, shell=False)
+        process = subprocess.Popen(
+            command, cwd=directory, stdout=output, stderr=subprocess.STDOUT,
+            start_new_session=True, shell=False, env=execution_environment())
         try:
             return_code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired as error:
-            os.killpg(process.pid, signal.SIGKILL)
+            if os.name == "nt":
+                process.kill()
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
             process.wait()
             raise AndroidError(f"Android command timed out; inspect {log.name} and retry explicitly.") from error
     if return_code:
@@ -143,10 +184,10 @@ def android_run(command: list[str], directory: Path, log: Path, timeout: int = 1
 
 
 def version_output(command: list[str]) -> str:
-    # S8701: CLI-selected executable is an explicit host capability; fixed version-query argv uses shell=False.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    result = subprocess.run(  # NOSONAR
-        command, check=False, capture_output=True, text=True, timeout=30, shell=False)  # nosec B603
+    command = admitted_command(command)
+    result = subprocess.run(
+        command, check=False, capture_output=True, text=True, timeout=30,
+        shell=False, env=execution_environment())
     text = result.stdout + result.stderr
     if result.returncode or len(text) > 65536:
         raise AndroidError(f"Cannot identify required tool {Path(command[0]).name}; install its pinned version.")
@@ -964,35 +1005,30 @@ def require_executed_tests(path: Path) -> None:
         report_bytes = source.read(MAXIMUM_JUNIT_BYTES + 1)
     if len(report_bytes) > MAXIMUM_JUNIT_BYTES:
         raise ValueError("CTest JUnit report exceeds the bounded parse size")
-    parser = expat.ParserCreate()
-    parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
+    try:
+        from defusedxml import ElementTree
+        from defusedxml.common import DefusedXmlException
+    except ImportError as error:
+        raise ValueError("CTest JUnit validation requires defusedxml; install the SDK author dependencies") from error
     case_open, skipped, executed = False, False, 0
-
-    def reject_declaration(*_arguments: object) -> None:
-        raise ValueError("CTest JUnit report cannot contain DTD or entity declarations")
-
-    def start_element(name: str, _attributes: dict[str, str]) -> None:
-        nonlocal case_open, skipped
-        if name == "testcase":
-            if case_open:
-                raise ValueError("CTest JUnit report contains nested testcases")
-            case_open, skipped = True, False
-        elif name == "skipped" and case_open:
-            skipped = True
-
-    def end_element(name: str) -> None:
-        nonlocal case_open, executed
-        if name == "testcase":
-            if not skipped:
-                executed += 1
-            case_open = False
-
-    parser.StartDoctypeDeclHandler = reject_declaration
-    parser.EntityDeclHandler = reject_declaration
-    parser.ExternalEntityRefHandler = reject_declaration
-    parser.StartElementHandler = start_element
-    parser.EndElementHandler = end_element
-    parser.Parse(report_bytes, True)
+    try:
+        events = ElementTree.iterparse(io.BytesIO(report_bytes), events=("start", "end"),
+                                       forbid_dtd=True, forbid_entities=True, forbid_external=True)
+        for event, element in events:
+            if event == "start" and element.tag == "testcase":
+                if case_open:
+                    raise ValueError("CTest JUnit report contains nested testcases")
+                case_open, skipped = True, False
+            elif event == "start" and element.tag == "skipped" and case_open:
+                skipped = True
+            elif event == "end":
+                if element.tag == "testcase":
+                    if not skipped:
+                        executed += 1
+                    case_open = False
+                element.clear()
+    except (ElementTree.ParseError, DefusedXmlException) as error:
+        raise ValueError("CTest JUnit report is malformed or contains forbidden DTD or entity declarations") from error
     if not executed:
         raise ValueError("CTest reported no executed extension tests")
 
@@ -1072,8 +1108,7 @@ def author_main(argv=None) -> int:
             scratch = Path(temporary)
             stage = build_and_stage(sdk, project, scratch)
             package_and_publish(sdk, stage, scratch, output, args, sdk_version)
-    except (OSError, ValueError, KeyError, subprocess.CalledProcessError,
-            expat.ExpatError) as error:
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f"extension author CI: {error}", file=sys.stderr)
         return 2
     return 0
@@ -2035,25 +2070,27 @@ Result<std::vector<ProjectMigrationDefinition>> BuildBuiltInProjectMigrationCata
 
 
 
-COMPATIBILITY_SEMVER = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
-)
-
-
 def compatibility_fail(message: str) -> None:
     raise SystemExit(f"[project-compatibility] {message}")
 
 
 def parse_version(text: str) -> tuple[int, int, int, tuple[str, ...]]:
-    match = COMPATIBILITY_SEMVER.fullmatch(text)
-    if match is None or len(text.encode("utf-8")) > 64:
+    # Bound before scanning, splitting or rendering diagnostics. SemVer is ASCII,
+    # so this character limit is also the existing 64-byte wire limit.
+    if len(text) > 64 or not text.isascii():
+        compatibility_fail("release directory is not canonical SemVer (maximum 64 ASCII bytes)")
+    core, separator, suffix = text.partition("-")
+    parts = core.split(".")
+    if len(parts) != 3 or any(not part or not part.isdigit() or
+                             (len(part) > 1 and part[0] == "0") for part in parts):
         compatibility_fail(f"release directory is not canonical SemVer: {text!r}")
-    prerelease = tuple(match.group(4).split(".")) if match.group(4) else ()
+    prerelease = tuple(suffix.split(".")) if separator else ()
     for identifier in prerelease:
+        if not identifier or any(not (character.isalnum() or character == "-") for character in identifier):
+            compatibility_fail(f"release directory is not canonical SemVer: {text!r}")
         if identifier.isdigit() and len(identifier) > 1 and identifier[0] == "0":
             compatibility_fail(f"release has a leading-zero prerelease identifier: {text!r}")
-    return int(match.group(1)), int(match.group(2)), int(match.group(3)), prerelease
+    return int(parts[0]), int(parts[1]), int(parts[2]), prerelease
 
 
 def _compare_prerelease_id(left_id: str, right_id: str) -> int:

@@ -1,10 +1,7 @@
 """Portable CLI, compiler-context and native analyzer regression cases."""
 from __future__ import annotations
 
-import analyze
-
 import json
-import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,10 +58,10 @@ def test_msvc_command_string_preserves_backslashes_and_quoted_includes(tmp_path,
     source.write_text('int value;\n')
     include = tmp_path / 'include path'
     database = build / 'compile_commands.json'
-    argv = ['C:\\Program Files\\MSVC\\cl.exe', '/I' + str(include),
-            '/Fo' + str(build / 'source.obj'), '/c', str(source)]
+    # Independent compiler command fixture exercises quoting rather than a paired encoder.
+    command = f'"C:\\Program Files\\MSVC\\cl.exe" "/I{include}" "/Fo{build / "source.obj"}" /c "{source}"'
     database.write_text(json.dumps([{'directory': str(build), 'file': str(source),
-                                    'command': subprocess.list2cmdline(argv)}]))
+                                    'command': command}]))
     entry = sonar.compiler_entries(database, tmp_path)[0]
     assert entry['target'] == 'source.obj'
     assert include in entry['includes']
@@ -129,11 +126,13 @@ def test_default_windows_context_does_not_force_linux_only_composition(tmp_path,
     assert '-DCMAKE_EXPORT_COMPILE_COMMANDS=ON' in calls[0]
 
 
-def test_lizard_finds_managed_native_windows_runtime(tmp_path, monkeypatch):
-    executable = tmp_path / '.codacy/runtimes/lizard-1/venv/Scripts/lizard.exe'
+@pytest.mark.parametrize('os_name,relative', [('nt', 'Scripts/lizard.exe'), ('posix', 'bin/lizard')])
+def test_lizard_finds_managed_native_runtime(tmp_path, monkeypatch, os_name, relative):
+    executable = tmp_path / '.codacy/runtimes/lizard-1/venv' / relative
     executable.parent.mkdir(parents=True)
     executable.write_bytes(b'fixture')
     monkeypatch.setattr(tools.Path, 'home', lambda: tmp_path)
+    monkeypatch.setattr(tools, 'os', SimpleNamespace(name=os_name))
     monkeypatch.setattr(tools.shutil, 'which', lambda *_: None)
     assert tools.lizard_executable() == executable
 

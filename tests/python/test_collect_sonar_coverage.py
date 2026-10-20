@@ -159,6 +159,54 @@ def test_publication_io_failure_is_terminal_not_a_transactional_pair(tmp_path: P
     assert "!cancelled() && steps.coverage.outcome == 'success'" in workflow
 
 
+COVERAGE_IMPORTS = {"argparse", "json", "os", "re", "pathlib.Path",
+                    "xml.etree.ElementTree", "defusedxml.ElementTree"}
+COVERAGE_GLOBALS = {"BATCH_FILES", "__doc__", "Path", "ValueError", "OSError", "KeyError", "TypeError",
+                    "any", "bool", "bytes", "dict", "int", "isinstance", "len", "list", "print",
+                    "range", "set", "sorted", "str", "tuple"}
+COVERAGE_OS = {"os.fsencode", "os.replace", "os.path", "os.path.realpath", "os.sep"}
+
+
+def coverage_import_bindings(node) -> list[tuple[str, str]]:
+    """Retain every import, including rebinding within one statement."""
+    if isinstance(node, ast.Import):
+        return [(alias.asname or alias.name.split(".")[0], alias.name) for alias in node.names]
+    if isinstance(node, ast.ImportFrom):
+        return [(alias.asname or alias.name, f"{node.module}.{alias.name}") for alias in node.names]
+    return []
+
+
+def coverage_imports(nodes) -> dict[str, str]:
+    """Map local import bindings to their fully qualified authority."""
+    return dict(binding for node in nodes for binding in coverage_import_bindings(node))
+
+
+def coverage_body_errors(name: str, node: ast.FunctionDef, imports: dict[str, str]) -> list[str]:
+    """Reject local authority imports and non-data OS operations, even aliases."""
+    bindings = dict(imports, **coverage_imports(ast.walk(node)))
+    errors = [f"{name} imports {imported}" for child in ast.walk(node)
+              for _, imported in coverage_import_bindings(child) if imported not in COVERAGE_IMPORTS]
+    for child in ast.walk(node):
+        if isinstance(child, ast.Attribute):
+            root, separator, tail = ast.unparse(child).partition(".")
+            attribute = bindings.get(root, root) + separator + tail
+            if attribute.startswith("os.") and attribute not in COVERAGE_OS:
+                errors.append(f"{name} reaches {attribute}")
+    return errors
+
+
+def coverage_reference_errors(name: str, references: set[str], imports: dict[str, str]) -> list[str]:
+    """Classify only non-function references after graph edges are scheduled."""
+    errors = []
+    for reference in references:
+        if reference in imports:
+            if imports[reference] not in COVERAGE_IMPORTS:
+                errors.append(f"{name} reaches import {imports[reference]}")
+        elif reference not in COVERAGE_GLOBALS:
+            errors.append(f"{name} reaches unapproved global {reference}")
+    return errors
+
+
 def coverage_authority_errors(source: str) -> list[str]:
     """Follow global references, including callback aliases, from the data API.
 
@@ -171,18 +219,7 @@ def coverage_authority_errors(source: str) -> list[str]:
     tree = ast.parse(source)
     functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
     tables = {table.get_name(): table for table in symtable.symtable(source, "coverage", "exec").get_children()}
-    imports = {}
-    for node in tree.body:
-        if isinstance(node, ast.Import):
-            imports.update({alias.asname or alias.name.split(".")[0]: alias.name for alias in node.names})
-        elif isinstance(node, ast.ImportFrom):
-            imports.update({alias.asname or alias.name: f"{node.module}.{alias.name}" for alias in node.names})
-    allowed_imports = {"argparse", "json", "os", "re", "pathlib.Path",
-                       "xml.etree.ElementTree", "defusedxml.ElementTree"}
-    allowed_globals = {"BATCH_FILES", "__doc__", "Path", "ValueError", "OSError", "KeyError", "TypeError",
-                       "any", "bool", "bytes", "dict", "int", "isinstance", "len", "list", "print",
-                       "range", "set", "sorted", "str", "tuple"}
-    allowed_os = {"os.fsencode", "os.replace", "os.path", "os.path.realpath", "os.sep"}
+    imports = coverage_imports(tree.body)
     pending = ["collector_main", "plan", "publish"]
     visited = set()
     errors = []
@@ -195,30 +232,11 @@ def coverage_authority_errors(source: str) -> list[str]:
             errors.append(f"Missing coverage function: {name}")
             continue
         node, table = functions[name], tables[name]
-        global_names = {symbol.get_name() for symbol in table.get_symbols()
-                        if symbol.is_global() and symbol.is_referenced()}
-        for reference in global_names:
-            if reference in functions:
-                pending.append(reference)
-            elif reference in imports:
-                if imports[reference] not in allowed_imports:
-                    errors.append(f"{name} reaches import {imports[reference]}")
-            elif reference not in allowed_globals:
-                errors.append(f"{name} reaches unapproved global {reference}")
-        for child in ast.walk(node):
-            if isinstance(child, ast.Import):
-                for alias in child.names:
-                    if alias.name not in allowed_imports:
-                        errors.append(f"{name} imports {alias.name}")
-            elif isinstance(child, ast.ImportFrom):
-                for alias in child.names:
-                    imported = f"{child.module}.{alias.name}"
-                    if imported not in allowed_imports:
-                        errors.append(f"{name} imports {imported}")
-            elif isinstance(child, ast.Attribute):
-                attribute = ast.unparse(child)
-                if attribute.startswith("os.") and attribute not in allowed_os:
-                    errors.append(f"{name} reaches {attribute}")
+        references = {symbol.get_name() for symbol in table.get_symbols()
+                      if symbol.is_global() and symbol.is_referenced()}
+        pending.extend(references & functions.keys())
+        errors.extend(coverage_reference_errors(name, references - functions.keys(), imports))
+        errors.extend(coverage_body_errors(name, node, imports))
     return errors
 
 
@@ -229,6 +247,8 @@ def coverage_authority_errors(source: str) -> list[str]:
     "run(['gcov'], root)",
     "__import__('subprocess').run(['gcov'])",
     "coverage_hidden_launcher()",
+    "import subprocess as duplicate; import json as duplicate",
+    "import os as local_os; local_os.system('gcov')",
 ])
 def test_coverage_authority_guard_rejects_reachable_execution(injected: str) -> None:
     source = (SCRIPTS / 'analyze.py').read_text()

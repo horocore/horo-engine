@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import analyze
 
 import json
 import sys

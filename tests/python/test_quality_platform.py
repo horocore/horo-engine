@@ -1,9 +1,8 @@
 """Native regression tests for quality process and lease ownership."""
 from __future__ import annotations
 
-import analyze
-
 import importlib
+import ipaddress
 import os
 from pathlib import Path
 import sys
@@ -59,10 +58,10 @@ def test_native_paths_and_support(monkeypatch, tmp_path):
 
 
 def test_command_line_roundtrip_preserves_windows_paths():
-    import subprocess
     api = platform()
     args = [r"C:\Program Files\Compiler\cl.exe", r"/IC:\some dir\ü" + "\\", "plain", ""]
-    command = subprocess.list2cmdline(args) if sys.platform == "win32" else __import__("shlex").join(args)
+    # Independently authored grammar, not a round trip through another encoder.
+    command = '"C:\\Program Files\\Compiler\\cl.exe" "/IC:\\some dir\\ü\\\\" plain ""' if sys.platform == "win32" else __import__("shlex").join(args)
     assert api.command_line_arguments(command) == args
 
 
@@ -83,7 +82,7 @@ def test_timeout_and_cancel_remove_entire_owned_tree(tmp_path, cancel, leader_ex
     import concurrent.futures
     import json
     import time
-    import psutil
+
     AnalysisError = platform().AnalysisError
     api = platform()
     marker = tmp_path / "tree.json"
@@ -122,7 +121,13 @@ def test_timeout_and_cancel_remove_entire_owned_tree(tmp_path, cancel, leader_ex
                 api._windows().close(handle)
     else:
         for pid in pids:
-            assert not psutil.pid_exists(pid) or psutil.Process(pid).status() == psutil.STATUS_ZOMBIE
+            status = Path(f"/proc/{pid}/stat")
+            try:
+                # The command in parentheses can itself contain spaces or ')'.
+                state = status.read_text().rsplit(")", 1)[1].split()[0]
+            except FileNotFoundError:
+                continue
+            assert state == "Z", f"owned process {pid} survived cleanup in state {state}"
 
 
 def test_cancelled_command_never_spawns(tmp_path):
@@ -232,16 +237,19 @@ def test_native_process_table_exposes_only_quality_markers():
     assert set(process["markers"]) <= {"HORO_QUALITY_SESSION", "HORO_QUALITY_PROFILE"}
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "0.0.0.0"])
-def test_native_listener_accepts_only_owned_loopback_listeners(host):
+@pytest.mark.parametrize("address,owned_loopback", [
+    ("127.0.0.1", True), ("::1", True),
+    (str(ipaddress.IPv4Address(0)), False),
+])
+def test_native_listener_accepts_only_owned_loopback_listeners(address, owned_loopback):
     import socket
     api = platform()
-    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
     with socket.socket(family) as listener:
-        listener.bind((host, 0))
+        listener.bind((address, 0))
         listener.listen()
         port = listener.getsockname()[1]
-        expected = None if host == "0.0.0.0" else (os.getpid(), port)
+        expected = (os.getpid(), port) if owned_loopback else None
         assert api.native_listener_port({os.getpid()}, range(port, port + 1)) == expected
         assert api.native_listener_port(set(), range(port, port + 1)) is None
 
@@ -338,11 +346,11 @@ def test_native_lock_excludes_another_process(tmp_path):
 
 
 def test_native_verified_termination_rejects_stale_identity_then_stops_owned_child(tmp_path):
-    import subprocess
+    import multiprocessing
     import time
     api = platform()
-    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    process = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(60,))
+    process.start()
     try:
         deadline = time.monotonic() + 5
         while True:
@@ -354,13 +362,16 @@ def test_native_verified_termination_rejects_stale_identity_then_stops_owned_chi
         original = table[process.pid]
         stale = {process.pid: dict(original, started="stale")}
         assert not api.terminate_processes({process.pid}, stale)
-        assert process.poll() is None
+        assert process.is_alive()
         assert api.terminate_processes({process.pid}, table)
-        assert process.wait(timeout=5) != 0
+        process.join(timeout=5)
+        assert not process.is_alive()
+        assert process.exitcode != 0
     finally:
-        if process.poll() is None:
-            process.kill()  # Popen's pinned handle: this fixture's own child only.
-        process.wait(timeout=5)
+        if process.is_alive():
+            process.kill()  # This fixture's own child only.
+        process.join(timeout=5)
+        process.close()
 
 
 @pytest.mark.parametrize("failure", ["reuse", "permission", "success"])

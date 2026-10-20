@@ -1,7 +1,6 @@
 """Transactional Sonar extension copies, including native Windows long paths."""
 from __future__ import annotations
 
-import analyze
 
 import os
 import shutil

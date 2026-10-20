@@ -1,8 +1,10 @@
 """Repository tooling has three real implementation files, not hidden modules."""
 import ast
 from pathlib import Path
-import subprocess
 import sys
+import threading
+
+import analyze
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
@@ -20,13 +22,15 @@ def test_entire_scripts_tree_has_exactly_three_python_files():
 
 
 def test_unified_analysis_cli_exposes_commands_and_rejects_unverified_ports():
-    result = subprocess.run([sys.executable, str(SCRIPTS / "analyze.py"), "--help"], capture_output=True, text=True)
+    result = analyze.native_run([sys.executable, str(SCRIPTS / "analyze.py"), "--help"],
+                                SCRIPTS.parent, 10, None, threading.Event())
     assert result.returncode == 0, result.stderr
     for command in ("check", "doctor", "stop", "complexity"):
         assert command in result.stdout
     for args in (["check", "--port", "64120"], ["check", "--files", "x.cpp", "--dirty"],
                  ["complexity", "--files", "x.cpp", "--base", "main"]):
-        result = subprocess.run([sys.executable, str(SCRIPTS / "analyze.py"), *args], capture_output=True, text=True)
+        result = analyze.native_run([sys.executable, str(SCRIPTS / "analyze.py"), *args],
+                                    SCRIPTS.parent, 10, None, threading.Event())
         assert result.returncode == 2
         assert "error:" in result.stderr
 

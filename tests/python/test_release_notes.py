@@ -1,6 +1,5 @@
 """Release-notes source, selection, snapshot, and Welcome projection contracts."""
 
-import dev
 
 import json
 import io

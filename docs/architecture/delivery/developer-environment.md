@@ -78,9 +78,13 @@ Optional local Git hooks may invoke `python3 scripts/dev.py hook pre-commit` and
 run staged formatting and CI-parity checks respectively; they never install or
 modify your hooks. Keep any existing personal hooks unchanged.
 
-The former `scripts/open-pr.sh` command is now `python3 scripts/dev.py open-pr
-<title> <body-file> <base> <head> <milestone> [project]`. It mutates GitHub only
-when explicitly invoked.
+The former `scripts/open-pr.sh` command is now:
+
+```text
+python3 scripts/dev.py open-pr <title> <body-file> <base> <head> <milestone> [project]
+```
+
+It mutates GitHub only when explicitly invoked.
 
 ## One-Liner Setup
 

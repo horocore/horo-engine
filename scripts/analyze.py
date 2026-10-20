@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from ctypes import wintypes as w
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import cast
 from urllib.error import HTTPError, URLError
@@ -14,6 +15,7 @@ import binascii
 import concurrent.futures
 import contextlib
 import csv
+import ctypes as c
 import fnmatch
 import functools
 import hashlib
@@ -30,7 +32,7 @@ import sys
 import threading
 import time
 import uuid
-import xml.etree.ElementTree as element_tree
+from defusedxml import ElementTree as element_tree
 
 
 # Bridge
@@ -503,32 +505,148 @@ def unlock(stream) -> None:
         fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+class BasicLimits(c.Structure):
+    _fields_ = [("process_time", c.c_int64), ("job_time", c.c_int64),
+                ("flags", w.DWORD), ("min_ws", c.c_size_t), ("max_ws", c.c_size_t),
+                ("active", w.DWORD), ("affinity", c.c_size_t), ("priority", w.DWORD), ("scheduling", w.DWORD)]
+
+class IoCounters(c.Structure):
+    _fields_ = [(name, c.c_uint64) for name in ("read_ops", "write_ops", "other_ops", "read_bytes", "write_bytes", "other_bytes")]
+
+class ExtendedLimits(c.Structure):
+    _fields_ = [("basic", BasicLimits), ("io", IoCounters), ("process_memory", c.c_size_t),
+                ("job_memory", c.c_size_t), ("peak_process", c.c_size_t), ("peak_job", c.c_size_t)]
+
+class Overlapped(c.Structure):
+    _fields_ = [("internal", c.c_size_t), ("internal_high", c.c_size_t),
+                ("offset", w.DWORD), ("offset_high", w.DWORD), ("event", w.HANDLE)]
+
+class ThreadEntry(c.Structure):
+    _fields_ = [("size", w.DWORD), ("usage", w.DWORD), ("tid", w.DWORD), ("pid", w.DWORD),
+                ("base_priority", w.LONG), ("delta_priority", w.LONG), ("flags", w.DWORD)]
+
+
+class WindowsNative:
+    def __init__(self, kernel):
+        self.kernel = kernel
+
+    def try_lock(self, stream):
+        import msvcrt
+        stream.flush()
+        # OVERLAPPED.Offset is zero even if an append-mode stream is at EOF.
+        overlapped = Overlapped()
+        handle = msvcrt.get_osfhandle(stream.fileno())
+        if not self.kernel.LockFileEx(handle, 3, 0, 1, 0, c.byref(overlapped)):
+            code = c.get_last_error()
+            if code == 33:  # ERROR_LOCK_VIOLATION, not ERROR_ACCESS_DENIED.
+                return False
+            raise c.WinError(code)
+        return True
+
+    def unlock(self, stream):
+        import msvcrt
+        overlapped = Overlapped()
+        handle = msvcrt.get_osfhandle(stream.fileno())
+        self.check(self.kernel.UnlockFileEx(handle, 0, 1, 0, c.byref(overlapped)))
+
+    def check(self, value):
+        if not value:
+            raise c.WinError(c.get_last_error())
+        return value
+
+    def close(self, handle):
+        self.check(self.kernel.CloseHandle(handle))
+
+    def open_process(self, pid, terminate=False):
+        # QUERY_LIMITED_INFORMATION | SYNCHRONIZE, optionally TERMINATE.
+        handle = self.kernel.OpenProcess(0x1000 | 0x100000 | int(terminate), False, pid)
+        if not handle:
+            code = c.get_last_error()
+            if code == 87:
+                raise ProcessLookupError(pid)
+            raise c.WinError(code)
+        return handle
+
+    def started(self, handle):
+        times = [w.FILETIME() for _ in range(4)]
+        self.check(self.kernel.GetProcessTimes(handle, *(c.byref(value) for value in times)))
+        return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+
+    def terminate(self, handle):
+        if self.kernel.WaitForSingleObject(handle, 0) == 0:
+            return
+        self.check(self.kernel.TerminateProcess(handle, 1))
+        if self.kernel.WaitForSingleObject(handle, 5000) != 0:
+            raise OSError("Timed out waiting for pinned Windows process termination")
+
+    def create_job(self):
+        job = self.check(self.kernel.CreateJobObjectW(None, None))
+        try:
+            limits = ExtendedLimits()
+            limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE; no breakaway permission.
+            self.check(self.kernel.SetInformationJobObject(job, 9, c.byref(limits), c.sizeof(limits)))
+            return job
+        except BaseException:
+            self.close(job)
+            raise
+
+    def attach_and_resume(self, job, process):
+        self.check(self.kernel.AssignProcessToJobObject(job, int(process._handle)))
+        # CREATE_SUSPENDED prevents all user code (and child creation) until
+        # this job owns the process. Popen closes its initial thread handle;
+        # Toolhelp retrieves the sole initial thread while it is suspended.
+        snapshot = self.kernel.CreateToolhelp32Snapshot(4, 0)  # SNAPTHREAD
+        if snapshot == c.c_void_p(-1).value:
+            raise c.WinError(c.get_last_error())
+        threads = []
+        try:
+            entry = ThreadEntry()
+            entry.size = c.sizeof(entry)
+            available = self.kernel.Thread32First(snapshot, c.byref(entry))
+            while available:
+                if entry.pid == process.pid:
+                    threads.append(entry.tid)
+                available = self.kernel.Thread32Next(snapshot, c.byref(entry))
+            if c.get_last_error() != 18:  # ERROR_NO_MORE_FILES
+                raise c.WinError(c.get_last_error())
+            if len(threads) != 1:
+                raise OSError("Cannot identify sole suspended process thread")
+            thread = self.check(self.kernel.OpenThread(2, False, threads[0]))
+            try:
+                if self.kernel.ResumeThread(thread) != 1:
+                    raise OSError("Unexpected suspended process thread state")
+            finally:
+                self.close(thread)
+        finally:
+            self.close(snapshot)
+
+    def release_job(self, job):
+        # Successful CLI launchers intentionally leave a marked IDE alive.
+        # Keep containment until successful communicate, then transfer its
+        # lifetime to the session registry instead of killing it on close.
+        limits = ExtendedLimits()
+        self.check(self.kernel.SetInformationJobObject(job, 9, c.byref(limits), c.sizeof(limits)))
+
+    def kill_job(self, job):
+        self.check(self.kernel.TerminateJobObject(job, 1))
+        class Accounting(c.Structure):
+            _fields_ = [("user", c.c_int64), ("kernel", c.c_int64),
+                        ("period_user", c.c_int64), ("period_kernel", c.c_int64),
+                        ("faults", w.DWORD), ("total", w.DWORD), ("active", w.DWORD), ("terminated", w.DWORD)]
+        deadline = time.monotonic() + 5
+        while True:
+            accounting = Accounting()
+            self.check(self.kernel.QueryInformationJobObject(job, 1, c.byref(accounting), c.sizeof(accounting), None))
+            if accounting.active == 0:
+                return
+            if time.monotonic() >= deadline:
+                raise OSError("Timed out waiting for owned Windows job tree")
+            time.sleep(0.01)
+
+
 @functools.lru_cache(maxsize=1)
 def _windows():
     """Bind explicitly sized Win32 handles; never truncate handles to int32."""
-    import ctypes as c
-    from ctypes import wintypes as w
-
-    class BasicLimits(c.Structure):
-        _fields_ = [("process_time", c.c_int64), ("job_time", c.c_int64),
-                    ("flags", w.DWORD), ("min_ws", c.c_size_t), ("max_ws", c.c_size_t),
-                    ("active", w.DWORD), ("affinity", c.c_size_t), ("priority", w.DWORD), ("scheduling", w.DWORD)]
-
-    class IoCounters(c.Structure):
-        _fields_ = [(name, c.c_uint64) for name in ("read_ops", "write_ops", "other_ops", "read_bytes", "write_bytes", "other_bytes")]
-
-    class ExtendedLimits(c.Structure):
-        _fields_ = [("basic", BasicLimits), ("io", IoCounters), ("process_memory", c.c_size_t),
-                    ("job_memory", c.c_size_t), ("peak_process", c.c_size_t), ("peak_job", c.c_size_t)]
-
-    class Overlapped(c.Structure):
-        _fields_ = [("internal", c.c_size_t), ("internal_high", c.c_size_t),
-                    ("offset", w.DWORD), ("offset_high", w.DWORD), ("event", w.HANDLE)]
-
-    class ThreadEntry(c.Structure):
-        _fields_ = [("size", w.DWORD), ("usage", w.DWORD), ("tid", w.DWORD), ("pid", w.DWORD),
-                    ("base_priority", w.LONG), ("delta_priority", w.LONG), ("flags", w.DWORD)]
-
     kernel = c.WinDLL("kernel32", use_last_error=True)
     signatures = {
         "LockFileEx": ([w.HANDLE, w.DWORD, w.DWORD, w.DWORD, w.DWORD, c.POINTER(Overlapped)], w.BOOL),
@@ -553,135 +671,39 @@ def _windows():
         function = getattr(kernel, name)
         function.argtypes, function.restype = args, result
 
-    class Windows:
-        def __init__(self):
-            self.kernel = kernel
+    return WindowsNative(kernel)
 
-        def try_lock(self, stream):
-            import msvcrt
-            stream.flush()
-            # OVERLAPPED.Offset is zero even if an append-mode stream is at EOF.
-            overlapped = Overlapped()
-            handle = msvcrt.get_osfhandle(stream.fileno())
-            if not self.kernel.LockFileEx(handle, 3, 0, 1, 0, c.byref(overlapped)):
-                code = c.get_last_error()
-                if code == 33:  # ERROR_LOCK_VIOLATION, not ERROR_ACCESS_DENIED.
-                    return False
-                raise c.WinError(code)
-            return True
 
-        def unlock(self, stream):
-            import msvcrt
-            overlapped = Overlapped()
-            handle = msvcrt.get_osfhandle(stream.fileno())
-            self.check(self.kernel.UnlockFileEx(handle, 0, 1, 0, c.byref(overlapped)))
+def _command_executable(argv: list[str], env: dict | None) -> str:
+    """Trust explicit absolute executables or absolute caller-selected PATH roots.
 
-        def check(self, value):
-            if not value:
-                raise c.WinError(c.get_last_error())
-            return value
-
-        def close(self, handle):
-            self.check(kernel.CloseHandle(handle))
-
-        def open_process(self, pid, terminate=False):
-            # QUERY_LIMITED_INFORMATION | SYNCHRONIZE, optionally TERMINATE.
-            handle = kernel.OpenProcess(0x1000 | 0x100000 | int(terminate), False, pid)
-            if not handle:
-                code = c.get_last_error()
-                if code == 87:
-                    raise ProcessLookupError(pid)
-                raise c.WinError(code)
-            return handle
-
-        def started(self, handle):
-            times = [w.FILETIME() for _ in range(4)]
-            self.check(kernel.GetProcessTimes(handle, *(c.byref(value) for value in times)))
-            return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
-
-        def terminate(self, handle):
-            if kernel.WaitForSingleObject(handle, 0) == 0:
-                return
-            self.check(kernel.TerminateProcess(handle, 1))
-            if kernel.WaitForSingleObject(handle, 5000) != 0:
-                raise OSError("Timed out waiting for pinned Windows process termination")
-
-        def create_job(self):
-            job = self.check(kernel.CreateJobObjectW(None, None))
-            try:
-                limits = ExtendedLimits()
-                limits.basic.flags = 0x2000  # KILL_ON_JOB_CLOSE; no breakaway permission.
-                self.check(kernel.SetInformationJobObject(job, 9, c.byref(limits), c.sizeof(limits)))
-                return job
-            except BaseException:
-                self.close(job)
-                raise
-
-        def attach_and_resume(self, job, process):
-            self.check(kernel.AssignProcessToJobObject(job, int(process._handle)))
-            # CREATE_SUSPENDED prevents all user code (and child creation) until
-            # this job owns the process. Popen closes its initial thread handle;
-            # Toolhelp retrieves the sole initial thread while it is suspended.
-            snapshot = kernel.CreateToolhelp32Snapshot(4, 0)  # SNAPTHREAD
-            if snapshot == c.c_void_p(-1).value:
-                raise c.WinError(c.get_last_error())
-            threads = []
-            try:
-                entry = ThreadEntry()
-                entry.size = c.sizeof(entry)
-                available = kernel.Thread32First(snapshot, c.byref(entry))
-                while available:
-                    if entry.pid == process.pid:
-                        threads.append(entry.tid)
-                    available = kernel.Thread32Next(snapshot, c.byref(entry))
-                if c.get_last_error() != 18:  # ERROR_NO_MORE_FILES
-                    raise c.WinError(c.get_last_error())
-                if len(threads) != 1:
-                    raise OSError("Cannot identify sole suspended process thread")
-                thread = self.check(kernel.OpenThread(2, False, threads[0]))
-                try:
-                    if kernel.ResumeThread(thread) != 1:
-                        raise OSError("Unexpected suspended process thread state")
-                finally:
-                    self.close(thread)
-            finally:
-                self.close(snapshot)
-
-        def release_job(self, job):
-            # Successful CLI launchers intentionally leave a marked IDE alive.
-            # Keep containment until successful communicate, then transfer its
-            # lifetime to the session registry instead of killing it on close.
-            limits = ExtendedLimits()
-            self.check(kernel.SetInformationJobObject(job, 9, c.byref(limits), c.sizeof(limits)))
-
-        def kill_job(self, job):
-            self.check(kernel.TerminateJobObject(job, 1))
-            class Accounting(c.Structure):
-                _fields_ = [("user", c.c_int64), ("kernel", c.c_int64),
-                            ("period_user", c.c_int64), ("period_kernel", c.c_int64),
-                            ("faults", w.DWORD), ("total", w.DWORD), ("active", w.DWORD), ("terminated", w.DWORD)]
-            deadline = time.monotonic() + 5
-            while True:
-                accounting = Accounting()
-                self.check(kernel.QueryInformationJobObject(job, 1, c.byref(accounting), c.sizeof(accounting), None))
-                if accounting.active == 0:
-                    return
-                if time.monotonic() >= deadline:
-                    raise OSError("Timed out waiting for owned Windows job tree")
-                time.sleep(0.01)
-
-    return Windows()
+    Never search the source/child working directory implicitly. PATH and explicit
+    paths are local invocation authority, not data obtained from analyzer output.
+    Arguments remain data (shell=False); batch shims have a stricter boundary.
+    """
+    if not argv or not argv[0] or any(not isinstance(value, str) or "\0" in value for value in argv):
+        raise AnalysisError("Quality command requires a valid executable and string argv")
+    candidate = Path(argv[0])
+    if candidate.is_absolute():
+        executable = shutil.which(str(candidate))
+        if executable and Path(executable).is_file() and os.access(executable, os.X_OK):
+            # Preserve venv/symlink invocation identity, not the target's identity.
+            return str(Path(executable).absolute())
+    elif candidate.name == argv[0]:
+        environment = os.environ if env is None else env
+        for directory in environment.get("PATH", os.defpath).split(os.pathsep):
+            if directory and Path(directory).is_absolute():
+                executable = shutil.which(str(Path(directory) / candidate))
+                if executable and Path(executable).is_file() and os.access(executable, os.X_OK):
+                    return str(Path(executable).absolute())
+    raise AnalysisError(f"Quality executable not found in explicit absolute PATH directories: {candidate.name}")
 
 
 def _command(argv: list[str], env: dict | None):
-    """Resolve Windows executable shims explicitly; never interpolate a shell."""
-    if not argv:
-        raise AnalysisError("Quality command requires an executable")
+    """Resolve executable authority explicitly; never interpolate a shell."""
+    executable = _command_executable(argv, env)
     if sys.platform != "win32":
-        return argv
-    executable = shutil.which(argv[0], path=(env or os.environ).get("PATH"))
-    if not executable:
-        raise AnalysisError(f"Quality executable not found: {Path(argv[0]).name}")
+        return [executable, *argv[1:]]
     if Path(executable).suffix.lower() in {".cmd", ".bat"}:
         # cmd.exe expands even quoted percent/! variables and has no universal
         # argv escaping. Refuse such input instead of silently executing it.
@@ -693,6 +715,40 @@ def _command(argv: list[str], env: dict | None):
     return [executable, *argv[1:]]
 
 
+@dataclass
+class CommandOwnership:
+    """One containment lifetime: prepare suspended creation, then drain before release."""
+
+    native: WindowsNative | None
+    lifecycle: dict | None
+    job: object = None
+    process: subprocess.Popen[str] | None = None
+    completed: bool = False
+    options: dict = field(default_factory=dict)
+
+    def __enter__(self):
+        try:
+            self.options = {"start_new_session": True}
+            if self.native:
+                self.options = {"creationflags": 4, "encoding": "utf-8", "errors": "replace"}
+                self.job = self.native.create_job()
+            if self.lifecycle is not None:
+                self.lifecycle["outcome"] = "ambiguous"
+            return self
+        except BaseException:
+            # __exit__ is not called when context entry itself is interrupted.
+            _finish_command(self.native, self.job, self.process, self.completed, self.lifecycle)
+            raise
+
+    def no_launch(self) -> None:
+        """Popen's creation failure supplies positive evidence, unlike interruption."""
+        if self.lifecycle is not None:
+            self.lifecycle["outcome"] = "no_escape"
+
+    def __exit__(self, *_exception):
+        _finish_command(self.native, self.job, self.process, self.completed, self.lifecycle)
+
+
 def native_run(argv: list[str], root: Path, timeout: float, env: dict | None,
         cancelled: threading.Event, lifecycle: dict | None = None) -> subprocess.CompletedProcess[str]:
     """Bound an owned command; Windows trees cannot run before job assignment."""
@@ -701,96 +757,104 @@ def native_run(argv: list[str], root: Path, timeout: float, env: dict | None,
     ensure_supported()
     if cancelled.is_set():
         raise AnalysisError("Quality command cancelled before launch")
-    command = _command(argv, env)
-    native = _windows() if sys.platform == "win32" else None
-    job = None
-    process = None
-    completed = False
     try:
-        options: dict = {"creationflags": 4} if native else {"start_new_session": True}
-        job = native.create_job() if native else None
-        if lifecycle is not None:
-            lifecycle["outcome"] = "ambiguous"
-        try:
-            process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603
-                                       text=True, encoding="utf-8" if native else None,
-                                       errors="replace" if native else None, env=env, **options)
-        except OSError:
-            # Popen failed to create a child; unlike interrupted creation this
-            # is positive no-launch evidence, not an empty discovery snapshot.
-            if lifecycle is not None:
-                lifecycle["outcome"] = "no_escape"
-            raise
-        if native:
-            native.attach_and_resume(job, process)
-        deadline = time.monotonic() + timeout
-        while True:
-            if cancelled.is_set():
-                raise AnalysisError(f"Quality command cancelled: {Path(argv[0]).name}")
-            if time.monotonic() >= deadline:
-                raise AnalysisError(f"Quality command timed out: {Path(argv[0]).name}")
+        command = _command(argv, env)
+        native = _windows() if sys.platform == "win32" else None
+        with CommandOwnership(native, lifecycle) as ownership:
             try:
-                stdout, stderr = process.communicate(timeout=max(0.01, min(0.1, deadline - time.monotonic())))
-                completed = True
-                return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
-            except subprocess.TimeoutExpired:
-                pass
+                ownership.process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,  # nosec B603
+                                                     text=True, shell=False, env=env, **ownership.options)
+            except OSError:
+                ownership.no_launch()
+                raise
+            if native:
+                native.attach_and_resume(ownership.job, ownership.process)
+            stdout, stderr = _wait_command(ownership.process, Path(argv[0]).name, timeout, cancelled)
+            ownership.completed = True
+            # CompletedProcess is result metadata, not an execution entry point.
+            return subprocess.CompletedProcess(argv, ownership.process.returncode, stdout, stderr)
     except KeyboardInterrupt:
         raise AnalysisError(f"Quality command cancelled: {Path(argv[0]).name}") from None
     except OSError as error:
         # Do not print argv, environment, captured scanner text or credentials.
         raise AnalysisError(f"Cannot execute quality tool {Path(argv[0]).name}; check executable and native process permissions") from error
-    finally:
-        cleanup_error = None
-        if job is not None:
-            try:
-                try:
-                    if process is not None:
-                        if completed:
-                            native.release_job(job)
-                        else:
-                            native.kill_job(job)
-                finally:
-                    # Close before draining pipes: on any kill/release failure,
-                    # KILL_ON_JOB_CLOSE remains the fail-closed backstop.
-                    native.close(job)
-            except OSError as error:
-                cleanup_error = error
+
+
+def _wait_command(process, tool: str, timeout: float, cancelled: threading.Event) -> tuple[str, str]:
+    """Poll captured pipes within the caller's deadline and cancellation boundary."""
+    deadline = time.monotonic() + timeout
+    while True:
+        if cancelled.is_set():
+            raise AnalysisError(f"Quality command cancelled: {tool}")
+        if time.monotonic() >= deadline:
+            raise AnalysisError(f"Quality command timed out: {tool}")
+        try:
+            return process.communicate(timeout=max(0.01, min(0.1, deadline - time.monotonic())))
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _close_command_job(native, job, process, completed: bool) -> None:
+    """Keep kill-on-close containment until release or tree termination succeeds."""
+    try:
         if process is not None:
-            try:
+            if completed:
+                native.release_job(job)
+            else:
+                native.kill_job(job)
+    finally:
+        # Close before draining pipes, preserving the fail-closed backstop.
+        native.close(job)
+
+
+def _drain_command_process(native, process, completed: bool) -> None:
+    """Drain an owned leader and close its pipes and pinned handle on every exit."""
+    try:
+        try:
+            if native:
+                # Failed assignment leaves only the suspended pinned leader.
+                if process.poll() is None:
+                    process.kill()
+            elif not completed:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGTERM)
                 try:
-                    if native:
-                        # Assignment failure leaves only the suspended leader;
-                        # Popen's pinned process handle owns it, never a raw PID.
-                        if process.poll() is None:
-                            process.kill()
-                    elif not completed:
-                        with contextlib.suppress(ProcessLookupError):
-                            os.killpg(process.pid, signal.SIGTERM)
-                        try:
-                            process.communicate(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            pass
-                        with contextlib.suppress(ProcessLookupError):
-                            os.killpg(process.pid, signal.SIGKILL)
-                finally:
                     process.communicate(timeout=5)
-            except (OSError, subprocess.TimeoutExpired) as error:
-                cleanup_error = error
-            finally:
-                for stream in (process.stdout, process.stderr):
-                    if stream:
-                        stream.close()
-                if native:
-                    process._handle.Close()
-        if cleanup_error is not None:
-            if lifecycle is not None:
-                lifecycle["outcome"] = "ambiguous"
-            raise AnalysisError("Owned quality process cleanup failed; check native process permissions") from cleanup_error
-        if lifecycle is not None and native and process is not None and not completed:
-            # Suspended creation + non-breakaway job + drained job and pinned
-            # leader cleanup prove that this command left no surviving child.
-            lifecycle["outcome"] = "no_escape"
+                except subprocess.TimeoutExpired:
+                    pass
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+        finally:
+            process.communicate(timeout=5)
+    finally:
+        for stream in (process.stdout, process.stderr):
+            if stream:
+                stream.close()
+        if native:
+            process._handle.Close()
+
+
+def _finish_command(native, job, process, completed: bool, lifecycle: dict | None) -> None:
+    """Publish no-escape evidence only after both containment and leader drain."""
+    cleanup_error = None
+    if job is not None:
+        try:
+            _close_command_job(native, job, process, completed)
+        except OSError as error:
+            cleanup_error = error
+    if process is not None:
+        try:
+            _drain_command_process(native, process, completed)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            cleanup_error = error
+    if cleanup_error is not None:
+        if lifecycle is not None:
+            lifecycle["outcome"] = "ambiguous"
+        raise AnalysisError("Owned quality process cleanup failed; check native process permissions") from cleanup_error
+    if lifecycle is not None and native and process is not None and not completed:
+        # Suspended creation + non-breakaway job + drained job and pinned leader
+        # prove that this command left no surviving child.
+        lifecycle["outcome"] = "no_escape"
 
 
 def _psutil():
@@ -856,52 +920,68 @@ def native_processes() -> dict[int, dict]:
     return result
 
 
+def _windows_listener_matches(pids: set[int], ports: range) -> set[tuple[int, int]]:
+    """Read active owned Windows TCP listeners, including IPv4-mapped loopback."""
+    matches = set()
+    import ipaddress
+    psutil = _psutil()
+    try:
+        for connection in psutil.net_connections(kind="tcp"):
+            if connection.pid not in pids or connection.status != psutil.CONN_LISTEN or not connection.laddr:
+                continue
+            address = ipaddress.ip_address(connection.laddr.ip)
+            mapped = getattr(address, "ipv4_mapped", None)
+            if connection.laddr.port in ports and (address.is_loopback or (mapped and mapped.is_loopback)):
+                matches.add((connection.pid, connection.laddr.port))
+    except (psutil.Error, OSError, ValueError) as error:
+        raise AnalysisError("Cannot verify Windows listening socket ownership; check native network permissions") from error
+    return matches
+
+
+def _linux_listening_sockets(ports: range) -> dict[str, int]:
+    """Index only loopback LISTEN inodes in the configured bridge range."""
+    sockets = {}
+    try:
+        for name in ("tcp", "tcp6"):
+            for line in Path(f"/proc/net/{name}").read_text().splitlines()[1:]:
+                fields = line.split()
+                address, port_hex = fields[1].split(":")
+                port = int(port_hex, 16)
+                loopback = address in {"0100007F", "00000000000000000000000001000000",
+                                       "0000000000000000FFFF00000100007F"}
+                if fields[3] == "0A" and port in ports and loopback:
+                    sockets[fields[9]] = port
+    except (OSError, ValueError, IndexError) as error:
+        raise AnalysisError("Cannot verify Linux listening socket ownership through /proc/net") from error
+    return sockets
+
+
+def _linux_listener_matches(pids: set[int], ports: range) -> set[tuple[int, int]]:
+    """Join allowed listener inodes to descriptors in the already-owned tree."""
+    sockets = _linux_listening_sockets(ports)
+    matches = set()
+    for pid in pids:
+        try:
+            for descriptor in Path(f"/proc/{pid}/fd").iterdir():
+                try:
+                    target = os.readlink(descriptor)
+                except OSError:
+                    continue
+                match = re.fullmatch(r"socket:\[(\d+)\]", target)
+                if match and match.group(1) in sockets:
+                    matches.add((pid, sockets[match.group(1)]))
+        except OSError:
+            continue
+    return matches
+
+
 def native_listener_port(pids: set[int], ports: range) -> tuple[int, int] | None:
     """Match active TCP loopback LISTEN sockets to an owned process tree."""
     ensure_supported()
     if not pids:
         return None
-    matches = set()
-    if sys.platform == "win32":
-        import ipaddress
-        psutil = _psutil()
-        try:
-            for connection in psutil.net_connections(kind="tcp"):
-                if connection.pid not in pids or connection.status != psutil.CONN_LISTEN or not connection.laddr:
-                    continue
-                address = ipaddress.ip_address(connection.laddr.ip)
-                mapped = getattr(address, "ipv4_mapped", None)
-                if connection.laddr.port in ports and (address.is_loopback or (mapped and mapped.is_loopback)):
-                    matches.add((connection.pid, connection.laddr.port))
-        except (psutil.Error, OSError, ValueError) as error:
-            raise AnalysisError("Cannot verify Windows listening socket ownership; check native network permissions") from error
-    else:
-        import re
-        sockets = {}
-        try:
-            for name in ("tcp", "tcp6"):
-                for line in Path(f"/proc/net/{name}").read_text().splitlines()[1:]:
-                    fields = line.split()
-                    address, port_hex = fields[1].split(":")
-                    port = int(port_hex, 16)
-                    loopback = address in {"0100007F", "00000000000000000000000001000000",
-                                           "0000000000000000FFFF00000100007F"}
-                    if fields[3] == "0A" and port in ports and loopback:
-                        sockets[fields[9]] = port
-        except (OSError, ValueError, IndexError) as error:
-            raise AnalysisError("Cannot verify Linux listening socket ownership through /proc/net") from error
-        for pid in pids:
-            try:
-                for descriptor in Path(f"/proc/{pid}/fd").iterdir():
-                    try:
-                        target = os.readlink(descriptor)
-                    except OSError:
-                        continue
-                    match = re.fullmatch(r"socket:\[(\d+)\]", target)
-                    if match and match.group(1) in sockets:
-                        matches.add((pid, sockets[match.group(1)]))
-            except OSError:
-                continue
+    matches = (_windows_listener_matches(pids, ports) if sys.platform == "win32"
+               else _linux_listener_matches(pids, ports))
     if len(matches) > 1:
         raise AnalysisError("Owned Code session has ambiguous Sonar listeners")
     return next(iter(matches), None)
@@ -1490,18 +1570,22 @@ def copy_encrypted_credentials(profile: Path, source: Path) -> None:
         os.chmod(storage / "state.vscdb", 0o600)
 
 
+def _secretstorage_bytes(envelope: object) -> bytes:
+    """Decode only Chromium Buffer JSON; booleans are not ciphertext octets."""
+    if not isinstance(envelope, dict) or set(envelope) != {"type", "data"}:
+        raise ValueError("Unsupported SecretStorage envelope")
+    data = envelope["data"]
+    if (envelope["type"] != "Buffer" or not isinstance(data, list)
+            or not all(isinstance(byte, int) and not isinstance(byte, bool) and 0 <= byte <= 255 for byte in data)):
+        raise ValueError("Unsupported SecretStorage envelope")
+    return bytes(data)
+
+
 def validate_secretstorage_records(profile: Path, encrypted: list[tuple]) -> None:
     """Accept only VS Code encrypted Buffer records, not plaintext/weak storage."""
     try:
         for _, value in encrypted:
-            envelope = json.loads(value)
-            if not isinstance(envelope, dict) or set(envelope) != {"type", "data"}:
-                raise ValueError("Unsupported SecretStorage envelope")
-            data = envelope["data"]
-            if (envelope["type"] != "Buffer" or not isinstance(data, list)
-                    or not all(type(byte) is int and 0 <= byte <= 255 for byte in data)):
-                raise ValueError("Unsupported SecretStorage envelope")
-            ciphertext = bytes(data)
+            ciphertext = _secretstorage_bytes(json.loads(value))
             if sys.platform == "win32":
                 valid = ciphertext.startswith(b"v10") and len(ciphertext) >= 31
             else:
@@ -1707,10 +1791,27 @@ def discover_main(table: dict, profile: Path, extension: Path, workspace: Path, 
     return main
 
 
+@dataclass(frozen=True)
+class LaunchConfiguration:
+    """Execution deadline, activation request and durable launch transaction hooks."""
+
+    timeout: float
+    activation_file: Path
+    register: Callable[[str, Path], None] | None = None
+    lifecycle: dict | None = None
+
+
 def launch_profile(root: Path, profile: Path, workspace: Path, source: Path, extensions: Path,
-                   timeout: float, activation_file: Path, register=None,
-                   lifecycle: dict | None = None) -> tuple[str, Path]:
-    """Launch the released Sonar extension in a private Code development host."""
+                   timeout: LaunchConfiguration | float, activation_file: Path | None = None) -> tuple[str, Path]:
+    """Launch a private Code host; retain the seven-argument data-only call form."""
+    if isinstance(timeout, LaunchConfiguration):
+        configuration = timeout
+    else:
+        if activation_file is None:
+            raise AnalysisError("Managed launch requires an activation file")
+        configuration = LaunchConfiguration(timeout, activation_file)
+    register, lifecycle = configuration.register, configuration.lifecycle
+    timeout, activation_file = configuration.timeout, configuration.activation_file
     extension = seed_profile(profile, source, extensions)
     nonce = uuid.uuid4().hex
     env = dict(os.environ)
@@ -1815,25 +1916,83 @@ class SessionPool:
                 finally:
                     stream.close()
 
+    def _reusable_session(self, record: dict, profile: Path, extensions: Path) -> bool:
+        """Recheck extension, nonce ownership and the exact pinned listener before reuse."""
+        table = session_processes() if record else {}
+        if not record or record.get("isolationVersion") != 4 or not owned(record, table):
+            return False
+        installed = selected_extension(extensions)
+        expected_extension = profile.parent / "extensions" / installed.name
+        extension_matches = (same_path(record.get("extension", ""), str(expected_extension))
+                             and record.get("extensionVersion") == read_json(installed / "package.json").get("version"))
+        listener = session_listener_port(descendants(record["pid"], table))
+        if (not extension_matches or not listener or listener != (record.get("listenerPid"), record.get("port"))
+                or table[listener[0]]["started"] != record.get("listenerStarted")):
+            return False
+        request_bridge(listener[1], BRIDGE_STATUS_PATH, 2)
+        return True
+
+    def _launched_record(self, main: tuple, profile: Path, extension: Path, workspace: Path, version: str | None) -> dict:
+        """Represent a provisional singleton without publishing it as a completed launch."""
+        pid, process, nonce = main
+        record = {"pid": pid, "started": process["started"], "profile": str(profile), "nonce": nonce,
+                  "isolationVersion": 4, "extension": str(extension), "extensionVersion": version,
+                  "executable": process["executable"], "worktree": str(self.root),
+                  "workspace": str(workspace), "usedAt": time.time()}
+        if len(process["argv"]) == 1:
+            record["title"] = process["argv"][0]
+        return record
+
+    def _await_launch(self, profile: Path, workspace: Path, extension: Path, nonce: str,
+                      pending: dict, deadline: float) -> dict:
+        """Keep the reservation pending until a unique main and its bridge are verified."""
+        main = []
+        while time.monotonic() < deadline:
+            if CANCELLED.is_set():
+                raise AnalysisError("Sonar startup cancelled")
+            table = session_processes()
+            main = discover_main(table, profile, extension, workspace, nonce)
+            # Activation can briefly create another GUI; persistent ambiguity
+            # fails closed. Never release pending state for a provisional singleton.
+            if len(main) == 1:
+                record = self._launched_record(main[0], profile, extension, workspace, pending.get("extensionVersion"))
+                listener = session_listener_port(descendants(record["pid"], table))
+                if listener:
+                    record.update(listenerPid=listener[0], port=listener[1],
+                                  listenerStarted=table[listener[0]]["started"])
+                    request_bridge(listener[1], BRIDGE_STATUS_PATH, 2)
+                    return record
+            time.sleep(0.2)
+        if len(main) > 1:
+            raise AnalysisError("Managed session has ambiguous owned Code main processes; refusing to guess")
+        raise AnalysisError(
+            f"Managed VS Code has no verified Sonar bridge. Prerequisites: review workspace trust "
+            f"and authenticate Sonar connected mode in the managed profile at {profile}; "
+            "close the managed window before retrying. Trust remains enabled; inspect its "
+            "extension logs if these prerequisites are already satisfied.")
+
+    def _failed_launch(self, path: Path, pending: dict, lifecycle: dict) -> None:
+        """Reconcile the entire launch, never retire only an earlier singleton snapshot."""
+        record = {}
+        if pending:
+            if lifecycle.get("outcome") == "no_escape":
+                pending["launchOutcome"] = "no_escape"
+            record = pending if pending.get("launchOutcome") == "no_escape" else resolve_pending_launch(pending)
+            write_json(path, record)
+            if record.get("launchOutcome") == "no_escape":
+                path.unlink(missing_ok=True)
+                return
+        if terminate(record):
+            path.unlink(missing_ok=True)
+
     def open(self, slot: int, record: dict, workspace: Path, source: Path, extensions: Path,
              startup_timeout: float, activation_file: Path) -> dict:
-        """Validate an existing session or launch one with owned process discovery."""
+        """Validate an existing session or launch one with durable ownership evidence."""
         profile = self.directory / identity(self.root) / "profile"
-        table = session_processes() if record else {}
-        if record and record.get("isolationVersion") == 4 and owned(record, table):
-            installed = selected_extension(extensions)
-            expected_extension = profile.parent / "extensions" / installed.name
-            extension_matches = (same_path(record.get("extension", ""), str(expected_extension))
-                                 and record.get("extensionVersion") == read_json(installed / "package.json").get("version"))
-            listener = session_listener_port(descendants(record["pid"], table))
-            if (extension_matches and listener and listener == (record.get("listenerPid"), record.get("port"))
-                    and table[listener[0]]["started"] == record.get("listenerStarted")):
-                request_bridge(listener[1], BRIDGE_STATUS_PATH, 2)
-                return record
+        if self._reusable_session(record, profile, extensions):
+            return record
+        if record:
             retire(record)
-        elif record:
-            retire(record)
-        record = {}
         path = self.directory / f"{slot}.json"
         pending = {}
         lifecycle = {}
@@ -1847,59 +2006,13 @@ class SessionPool:
 
         deadline = time.monotonic() + startup_timeout
         try:
-            nonce, extension = launch_profile(self.root, profile, workspace, source, extensions,
-                                              startup_timeout, activation_file, register, lifecycle)
-            main = []
-            while time.monotonic() < deadline:
-                if CANCELLED.is_set():
-                    raise AnalysisError("Sonar startup cancelled")
-                table = session_processes()
-                main = discover_main(table, profile, extension, workspace, nonce)
-                if len(main) > 1:
-                    # Code's activation invocation can briefly run a second GUI
-                    # before forwarding to the first. Accept nothing until the
-                    # topology is unique; persistent independent mains fail closed.
-                    time.sleep(0.2)
-                    continue
-                if main:
-                    pid, process, launch_nonce = main[0]
-                    record = {"pid": pid, "started": process["started"], "profile": str(profile), "nonce": launch_nonce,
-                              "isolationVersion": 4,
-                              "extension": str(extension), "extensionVersion": pending.get("extensionVersion"),
-                              "executable": process["executable"],
-                              "worktree": str(self.root), "workspace": str(workspace), "usedAt": time.time()}
-                    if len(process["argv"]) == 1:
-                        record["title"] = process["argv"][0]
-                    # A provisional singleton is not the complete launch outcome.
-                    # Keep the durable pending reservation until its bridge is verified.
-                    listener = session_listener_port(descendants(pid, table))
-                    if listener:
-                        record.update(listenerPid=listener[0], port=listener[1],
-                                      listenerStarted=table[listener[0]]["started"])
-                        request_bridge(listener[1], BRIDGE_STATUS_PATH, 2)
-                        write_json(self.directory / f"{slot}.json", record)
-                        return record
-                time.sleep(0.2)
-            if len(main) > 1:
-                raise AnalysisError("Managed session has ambiguous owned Code main processes; refusing to guess")
-            raise AnalysisError(
-                f"Managed VS Code has no verified Sonar bridge. Prerequisites: review workspace trust "
-                f"and authenticate Sonar connected mode in the managed profile at {profile}; "
-                "close the managed window before retrying. Trust remains enabled; inspect its "
-                "extension logs if these prerequisites are already satisfied.")
+            configuration = LaunchConfiguration(startup_timeout, activation_file, register, lifecycle)
+            nonce, extension = launch_profile(self.root, profile, workspace, source, extensions, configuration)
+            record = self._await_launch(profile, workspace, extension, nonce, pending, deadline)
+            write_json(path, record)
+            return record
         except BaseException:
-            if pending:
-                # Reconcile the whole launch, not an earlier singleton snapshot:
-                # additional independent mains may have appeared before failure.
-                if lifecycle.get("outcome") == "no_escape":
-                    pending["launchOutcome"] = "no_escape"
-                record = pending if pending.get("launchOutcome") == "no_escape" else resolve_pending_launch(pending)
-                write_json(path, record)
-                if record.get("launchOutcome") == "no_escape":
-                    path.unlink(missing_ok=True)
-                    raise
-            if terminate(record):
-                path.unlink(missing_ok=True)
+            self._failed_launch(path, pending, lifecycle)
             raise
 
     def stop(self) -> list[dict]:
@@ -2624,8 +2737,6 @@ def invocation_path(path: Path) -> str:
 
 def read_report(path: Path, root: Path) -> dict[tuple[str, int], bool]:
     """Normalize source paths and retain every measured line, including misses."""
-    from defusedxml import ElementTree as element_tree
-    from defusedxml.common import DefusedXmlException
     document = element_tree.parse(repository_path(path, root)).getroot()
     if document.tag != "coverage" or document.get("version") != "1":
         raise ValueError(f"Unsupported coverage format: {path.name}")
@@ -2707,7 +2818,6 @@ def format_summary(result: dict) -> str:
 
 def coverage_main(argv=None) -> int:
     """Write evidence; coverage differences remain diagnostic during the trial."""
-    from defusedxml import ElementTree as element_tree
     from defusedxml.common import DefusedXmlException
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, required=True)
@@ -2778,7 +2888,6 @@ def source_counts(tests: dict) -> dict[int, int]:
 
 def convert(data: dict, root: Path) -> tuple:
     """Require real repository sources and emit one boolean per measured source line."""
-    from defusedxml import ElementTree as element_tree
     # DefusedXML exposes a safe parser and serializer; the template is a constant.
     document = element_tree.fromstring('<coverage version="1"/>')
     measured = covered = excluded = 0
@@ -2811,7 +2920,6 @@ def convert(data: dict, root: Path) -> tuple:
 
 def fastcov_main(argv=None) -> int:
     """Validate repository paths before reading counters or writing the Sonar report."""
-    from defusedxml import ElementTree as element_tree
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
