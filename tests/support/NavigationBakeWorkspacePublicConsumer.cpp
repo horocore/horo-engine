@@ -1,0 +1,5 @@
+#include "Horo/Editor/NavigationBakeWorkspace.h"
+
+#include <type_traits>
+static_assert(std::is_default_constructible_v<Horo::Editor::NavigationBakeWorkspaceSnapshot>);
+static_assert(std::is_copy_constructible_v<Horo::Editor::NavigationBakeWorkspaceAccess>);

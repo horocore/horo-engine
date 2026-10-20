@@ -1,11 +1,17 @@
 #pragma once
 
 #include "Horo/Editor/IGlobalDockPane.h"
+#include "Horo/Editor/NavigationBakeWorkspace.h"
 
 #include <span>
 
 namespace Horo::Editor {
     class WorkspacePanelRegistry;
+    class EditorModalHost;
+
+    /** @brief Registers the closed-by-default persistent navigation view with explicit host capabilities.
+     * @param registry Workspace panel registry. @param access Project application capabilities. @param modals GUI modal owner. */
+    void RegisterNavigationWorkspacePanel(WorkspacePanelRegistry &registry, NavigationBakeWorkspaceAccess access, EditorModalHost &modals);
 
     /**
      * @brief Registers the built-in workspace panels.

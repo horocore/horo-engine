@@ -1,6 +1,7 @@
 #include "HoroEditorApp.h"
 
 #include "EditorAudioPreviewHost.h"
+#include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
@@ -1017,6 +1018,7 @@ namespace Horo::Editor {
         struct EditorRuntimeAuthorities final {
             Runtime::RuntimeHost *runtime;
             Application::Internal::PackageProjectHost *packages;
+            EditorNavigationBakeHost *navigation;
         };
 
         class EditorRuntimeParticipant final : public Runtime::RuntimeLifecycleParticipant, public EditorSurfaceRealizer {
@@ -1024,9 +1026,9 @@ namespace Horo::Editor {
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
                                      EditorViewportSceneState &viewportSceneState, EditorSettingsSnapshot &settingsSnapshot,
                                      std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock,
-                                     Application::Internal::PackageProjectHost &packages) noexcept
+                                     Application::Internal::PackageProjectHost &packages, EditorNavigationBakeHost &navigation) noexcept
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), authorities_{nullptr, &packages}, pacing_{clock}
+                  rendererRestart_(&rendererRestart), authorities_{nullptr, &packages, &navigation}, pacing_{clock}
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                   ,
                   qualification_{params.options.qualifySurfaceLifecycle}
@@ -1317,6 +1319,7 @@ namespace Horo::Editor {
                 screenHost_->OnUpdate(deltaSeconds);
                 // Independent owner pumping continues after modal closure or project route departure.
                 static_cast<void>(authorities_.packages->Pump(Packages::PackageActivationBoundary::Running));
+                authorities_.navigation->Pump();
                 return Result<void>::Success();
             }
 
@@ -1788,8 +1791,10 @@ namespace Horo::Editor {
             }, .retire = [&packages](const std::filesystem::path &root) {
                 return packages->Retire(root);
             }});
+            EditorNavigationBakeHost navigationBakes{p.operationServices.operationStore};
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
+            RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakes.Access(), p.modalHost);
             Extensions::ExtensionInventory extensionInventory;
             const Result<void> extensionInventoryRefresh = extensionInventory.Refresh();
             if (extensionInventoryRefresh.HasError()) {
@@ -1894,7 +1899,7 @@ namespace Horo::Editor {
                 return std::nullopt;
             }
             auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot,
-                                                                          rendererRestart, clock, *packages);
+                                                                          rendererRestart, clock, *packages, navigationBakes);
             participant->BindHost(*runtime);
             EditorRuntimeParticipant *pacingParticipant = participant.get();
             Result<void> startup = runtime->AddParticipant(std::move(participant));

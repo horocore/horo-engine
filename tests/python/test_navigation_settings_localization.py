@@ -33,3 +33,15 @@ def test_navigation_policy_does_not_depend_on_editor_local_preferences() -> None
     assert "RequestOpenDefinition" in policy_ui
     assert "PutNavigationProfile" not in policy_ui
     assert "RemoveNavigationProfile" not in policy_ui
+
+
+def test_navigation_bake_copy_is_paired_and_covers_operation_decisions() -> None:
+    english = json.loads((ROOT / "assets/localization/editor/en-US.json").read_text(encoding="utf-8"))["messages"]
+    turkish = json.loads((ROOT / "assets/localization/editor/tr-TR.json").read_text(encoding="utf-8"))["messages"]
+    prefix = "workspace.navigation_bake."
+    keys = {key for key in english if key.startswith(prefix)}
+    assert keys == {key for key in turkish if key.startswith(prefix)}
+    required = {"keep_running", "confirm_cancel", "return", "preparing", "unavailable", "selected_only", "retry",
+                "failed", "cancelling", "succeeded", "cancelled", "resources", "elapsed", "stage", "profiles_hint", "saved_source", "reload"}
+    assert {prefix + suffix for suffix in required} <= keys
+    assert all(english[key]["text"] and turkish[key]["text"] for key in keys)
