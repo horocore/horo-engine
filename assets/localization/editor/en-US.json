@@ -1654,6 +1654,78 @@
     "workspace.value.on": {"text": "On"},
     "workspace.value.off": {"text": "Off"},
     "workspace.value.static": {"text": "✓ Static"},
+    "workspace.world_sources.title": {
+      "text": "Streaming sources"
+    },
+    "workspace.world_sources.unavailable": {
+      "text": "Open a partitioned world through the world document host to author sources."
+    },
+    "workspace.world_sources.authoring_only": {
+      "text": "Source metadata authoring. Handles use the editor scene origin; distant global points require world viewport composition."
+    },
+    "workspace.world_sources.sphere": {
+      "text": "Create sphere"
+    },
+    "workspace.world_sources.box": {
+      "text": "Create box"
+    },
+    "workspace.world_sources.frustum": {
+      "text": "Create frustum"
+    },
+    "workspace.world_sources.path": {
+      "text": "Create path volume"
+    },
+    "workspace.world_sources.priority": {
+      "text": "Priority"
+    },
+    "workspace.world_sources.target": {
+      "text": "Target state"
+    },
+    "workspace.world_sources.unloaded": {
+      "text": "Unloaded"
+    },
+    "workspace.world_sources.loaded": {
+      "text": "Loaded"
+    },
+    "workspace.world_sources.activated": {
+      "text": "Activated"
+    },
+    "workspace.world_sources.intent": {
+      "text": "Intent"
+    },
+    "workspace.world_sources.camera": {
+      "text": "Camera"
+    },
+    "workspace.world_sources.gameplay": {
+      "text": "Gameplay"
+    },
+    "workspace.world_sources.network": {
+      "text": "Network relevance"
+    },
+    "workspace.world_sources.preload": {
+      "text": "Preload"
+    },
+    "workspace.world_sources.color": {
+      "text": "Debug color"
+    },
+    "workspace.world_sources.apply": {
+      "text": "Apply source"
+    },
+    "workspace.world_sources.remove": {
+      "text": "Remove source"
+    },
+    "workspace.world_sources.cancel": {
+      "text": "Cancel preview"
+    },
+    "workspace.world_sources.undo": {
+      "text": "Undo source edit"
+    },
+    "workspace.world_sources.redo": {
+      "text": "Redo source edit"
+    },
+    "workspace.world_sources.rejected": {
+      "text": "Source edit rejected"
+    },
     "workspace.viewport.object_count": {"text": "{} object(s)"},
     "workspace.viewport.perspective": {"text": "Perspective"},
     "workspace.viewport.orthographic": {"text": "Orthographic"},

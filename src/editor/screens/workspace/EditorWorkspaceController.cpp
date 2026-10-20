@@ -69,7 +69,7 @@ namespace Horo::Editor {
                                                          Runtime::RuntimeSceneService &runtimeScene,
                                                          const Assets::AssetRegistrySnapshot &assetRegistry,
                                                          const EditorWorkspaceDependencies &dependencies)
-        : m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding),
+        : m_partitionedWorld(dependencies.partitionedWorld), m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding),
           m_playSceneFactory(dependencies.gameplay.sceneFactory), m_assetRegistry(assetRegistry),
           m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
@@ -108,6 +108,7 @@ namespace Horo::Editor {
         InitializeWorkspaceLayout();
         InitializeInitialScene(absoluteProjectRoot);
         RefreshSceneProjections();
+        RefreshWorldSourceProjection();
     }
 
     void EditorWorkspaceController::InitializeProjectState(const std::filesystem::path &absoluteProjectRoot) {

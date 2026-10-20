@@ -21,3 +21,7 @@ static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>(
                              Horo::Result<PartitionedWorldSnapshotLease>>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentRevision, Horo::WorldStreaming::WorldAuthoringRevision>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentGeneration, Horo::WorldStreaming::StreamingGeneration>);
+
+static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().EditSource(Horo::Editor::WorldSourceEdit{})),
+                             Horo::Result<PartitionedWorldSnapshotLease>>);
+static_assert(std::is_same_v<decltype(Horo::Editor::WorldSourceViewportPoint({}, {})), Horo::Result<Horo::Math::Vec3>>);

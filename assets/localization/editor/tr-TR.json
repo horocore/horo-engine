@@ -1654,6 +1654,78 @@
     "workspace.value.on": {"text": "Açık"},
     "workspace.value.off": {"text": "Kapalı"},
     "workspace.value.static": {"text": "✓ Statik"},
+    "workspace.world_sources.title": {
+      "text": "Akış kaynakları"
+    },
+    "workspace.world_sources.unavailable": {
+      "text": "Kaynakları düzenlemek için dünya belge sunucusunda bölümlenmiş bir dünya açın."
+    },
+    "workspace.world_sources.authoring_only": {
+      "text": "Kaynak metadata düzenleme. Tutamaçlar editör sahne başlangıcını kullanır; uzak global noktalar dünya viewport bağlantısı gerektirir."
+    },
+    "workspace.world_sources.sphere": {
+      "text": "Küre oluştur"
+    },
+    "workspace.world_sources.box": {
+      "text": "Kutu oluştur"
+    },
+    "workspace.world_sources.frustum": {
+      "text": "Görüş hacmi oluştur"
+    },
+    "workspace.world_sources.path": {
+      "text": "Yol hacmi oluştur"
+    },
+    "workspace.world_sources.priority": {
+      "text": "Öncelik"
+    },
+    "workspace.world_sources.target": {
+      "text": "Hedef durum"
+    },
+    "workspace.world_sources.unloaded": {
+      "text": "Yüklü değil"
+    },
+    "workspace.world_sources.loaded": {
+      "text": "Yüklü"
+    },
+    "workspace.world_sources.activated": {
+      "text": "Etkin"
+    },
+    "workspace.world_sources.intent": {
+      "text": "Amaç"
+    },
+    "workspace.world_sources.camera": {
+      "text": "Kamera"
+    },
+    "workspace.world_sources.gameplay": {
+      "text": "Oynanış"
+    },
+    "workspace.world_sources.network": {
+      "text": "Ağ ilgisi"
+    },
+    "workspace.world_sources.preload": {
+      "text": "Ön yükleme"
+    },
+    "workspace.world_sources.color": {
+      "text": "Hata ayıklama rengi"
+    },
+    "workspace.world_sources.apply": {
+      "text": "Kaynağı uygula"
+    },
+    "workspace.world_sources.remove": {
+      "text": "Kaynağı kaldır"
+    },
+    "workspace.world_sources.cancel": {
+      "text": "Önizlemeyi iptal et"
+    },
+    "workspace.world_sources.undo": {
+      "text": "Kaynak düzenlemesini geri al"
+    },
+    "workspace.world_sources.redo": {
+      "text": "Kaynak düzenlemesini yinele"
+    },
+    "workspace.world_sources.rejected": {
+      "text": "Kaynak düzenlemesi reddedildi"
+    },
     "workspace.viewport.object_count": {"text": "{} nesne"},
     "workspace.viewport.perspective": {"text": "Perspektif"},
     "workspace.viewport.orthographic": {"text": "Ortografik"},

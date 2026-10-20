@@ -136,7 +136,8 @@ namespace Horo::Editor {
             return ValidLimit(limits.maximumLayers, hard.maximumLayers) && ValidLimit(limits.maximumPages, hard.maximumPages) &&
                    ValidLimit(limits.maximumObjects, hard.maximumObjects) &&
                    ValidLimit(limits.maximumLayerNameBytes, hard.maximumLayerNameBytes) &&
-                   ValidLimit(limits.maximumOpenPages, hard.maximumOpenPages);
+                   ValidLimit(limits.maximumOpenPages, hard.maximumOpenPages) && ValidLimit(limits.maximumSources, hard.maximumSources) &&
+                   ValidLimit(limits.maximumSourceHistory, hard.maximumSourceHistory);
         }
 
         /** @brief Requires changed existing pages to advance by exactly one revision in the same partition. */
@@ -163,9 +164,9 @@ namespace Horo::Editor {
             const auto &a = left.settings;
             const auto &b = right.settings;
             return left.version == right.version && left.layers == right.layers && left.pages == right.pages &&
-                   a.partition == b.partition && a.bounds == b.bounds && a.grid.Origin() == b.grid.Origin() &&
-                   a.grid.Bounds() == b.grid.Bounds() && a.grid.BaseCellSizeMillimeters() == b.grid.BaseCellSizeMillimeters() &&
-                   a.grid.LodLevels() == b.grid.LodLevels();
+                   left.sources == right.sources && a.partition == b.partition && a.bounds == b.bounds &&
+                   a.grid.Origin() == b.grid.Origin() && a.grid.Bounds() == b.grid.Bounds() &&
+                   a.grid.BaseCellSizeMillimeters() == b.grid.BaseCellSizeMillimeters() && a.grid.LodLevels() == b.grid.LodLevels();
         }
 
         /** @brief Admits a bounded authored aggregate before copying its storage. */
@@ -189,6 +190,22 @@ namespace Horo::Editor {
                 return Failure<void>(WorldDocumentErrors::Capacity);
             if (const auto valid = ValidateLayers(document, limits); valid.HasError())
                 return valid;
+            if (document.sources.size() > limits.maximumSources)
+                return Failure<void>(WorldDocumentErrors::Capacity);
+            std::set<WS::StreamingSourceId> sourceIds;
+            for (const auto &source : document.sources) {
+                if (!source.id.IsValid() || !source.revision.IsValid() || !source.priority.IsValid() ||
+                    std::ranges::any_of(source.debugColor, [](float value) {
+                    return !std::isfinite(value) || value < 0 || value > 1;
+                }))
+                    return Failure<void>(WorldDocumentErrors::Invalid);
+                if (source.intent >= WS::StreamingSourceIntent::Count || source.target > WS::StreamingDesiredResidency::Activated)
+                    return Failure<void>(WorldDocumentErrors::Unsupported);
+                if (!sourceIds.insert(source.id).second)
+                    return Failure<void>(WorldDocumentErrors::Conflict);
+                if (const auto valid = WS::ValidateStreamingSourceShape(source.shape); valid.HasError())
+                    return valid;
+            }
             return ValidatePages(document, limits);
         }
     }  // namespace
@@ -232,6 +249,11 @@ namespace Horo::Editor {
             return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Cancelled);
         snapshot_ = std::move(candidate);
         generation_ = generation.Value();
+        sourceHistory_.clear();
+        sourceHistoryCursor_ = 0;
+        sourceRevision_ = 0;
+        for (const auto &source : document.sources)
+            sourceRevision_ = std::max(sourceRevision_, source.revision.Value());
         return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);
     }
 
@@ -247,6 +269,11 @@ namespace Horo::Editor {
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
         if (const auto valid = ValidatePageSuccessors(document, snapshot_->document); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
+        for (const auto &source : document.sources) {
+            const auto old = std::ranges::find(snapshot_->document.sources, source.id, &PartitionedWorldSource::id);
+            if (old != snapshot_->document.sources.end() && *old != source && source.revision <= old->revision)
+                return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Stale);
+        }
         if (SameDocument(document, snapshot_->document))
             return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);
         auto candidate = std::make_shared<PartitionedWorldSnapshot>(*snapshot_);
@@ -257,7 +284,14 @@ namespace Horo::Editor {
                 return record.head.sourceAsset == page;
             });
         });
-        return Publish(std::move(candidate), cancellation);
+        auto result = Publish(std::move(candidate), cancellation);
+        if (result.HasValue()) {
+            for (const auto &source : document.sources)
+                sourceRevision_ = std::max(sourceRevision_, source.revision.Value());
+            sourceHistory_.clear();
+            sourceHistoryCursor_ = 0;
+        }
+        return result;
     }
 
     /** @copydoc PartitionedWorldWorkspace::CheckFence */
@@ -337,6 +371,8 @@ namespace Horo::Editor {
         if (snapshot_->dirty && disposition != WorldDocumentDisposition::Discard)
             return Failure<void>(WorldDocumentErrors::Dirty);
         snapshot_.reset();
+        sourceHistory_.clear();
+        sourceHistoryCursor_ = 0;
         return Result<void>::Success();
     }
 

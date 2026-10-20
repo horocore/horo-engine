@@ -78,6 +78,7 @@ namespace Horo::Editor {
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
+        PartitionedWorldWorkspace *partitionedWorld{};     /**< Borrowed host-owned canonical world; outlives this session. */
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
@@ -95,6 +96,14 @@ namespace Horo::Editor {
                                   const EditorWorkspaceDependencies &dependencies = {});
         ~EditorWorkspaceController();
 
+        /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
+        void RefreshWorldSourceProjection();
+        /** @brief Binds an active host view to the composed canonical document after validating the exact immutable root.
+         * @param binding Current root, exact global origin and monotonic view incarnation.
+         * @return Typed rejection for stale roots/views; no hidden replacement or ownership transfer. */
+        [[nodiscard]] Result<void> SetWorldViewportBinding(const WorldViewportBinding &binding);
+        /** @brief Host must call before destroying the borrowed world owner; retained reader leases remain immutable and valid. */
+        void DetachWorldSourceOwner() noexcept;
         /** @brief Starts captured audio through the injected host, never through a widget/backend bypass.
          * @param object Exact selected authored source. @param revision Expected document revision. @return Typed admission/failure. */
         [[nodiscard]] Result<void> StartAudioPreview(SceneObjectId object, DocumentRevision revision);
@@ -275,6 +284,10 @@ namespace Horo::Editor {
         void OpenNavigationDefinitionTab(Assets::AssetId asset);
         /** @brief Projects constant-time dirty/focus/close state without copying Scene roots per frame. */
         void UpdateNavigationDocumentTabs();
+        /** @brief Routes typed viewport source commands through the composed document/history authority. */
+        [[nodiscard]] bool ProcessWorldSourceCommand(const EditorWorkspaceViewCommandData &command);
+        PartitionedWorldWorkspace *m_partitionedWorld{};
+        std::uint64_t m_nextWorldSourceId{1};
         Runtime::RuntimeSceneService &m_runtimeScene;
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
         EditorPlaySceneFactory m_playSceneFactory;

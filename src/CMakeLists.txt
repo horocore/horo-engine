@@ -2777,6 +2777,8 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
 
 add_library(HoroEditorModel STATIC
         editor/document/PartitionedWorldWorkspace.cpp
+        editor/document/PartitionedWorldSourceAuthoring.cpp
+        editor/document/WorldSourceGizmo.cpp
         editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
@@ -3186,6 +3188,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
+            editor/screens/workspace/panels/viewport/WorldSourceViewportTool.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
@@ -3220,6 +3223,7 @@ if (HORO_BUILD_EDITOR_GUI)
         editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldSources.cpp
             editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerDockCommands.cpp

@@ -122,3 +122,58 @@ load/unload/pinning (#1635), the cell browser UI (#1630), bake, persistence,
 undo/redo history, source-control merge, crash recovery or runtime preview activation.
 Those services must consume exact immutable source revisions and must not clear dirty
 metadata without their own durable publication contract.
+
+
+## Streaming source authoring (HORO-1633)
+
+The canonical `PartitionedWorldDocument` now includes bounded authored `sources`.
+`PartitionedWorldSource` reuses World Streaming's exact sphere, box, frustum and
+path-volume types, source identity/revision, priority, intent and desired-residency
+values. Debug color is editor source metadata. Runtime owner tokens, partition
+epochs and registration are intentionally absent: authoring never mounts a world
+or changes runtime residency.
+
+`EditSource` is the single atomic source command path. It issues strictly increasing
+revisions, validates the entire document and records one bounded source-history
+step. `ReplaySources` restores authored values with fresh revisions; it never rewinds
+a publication fence. Metadata `Commit` invalidates source history, while transient
+working-set changes preserve it. Capacity, cancellation, invalid/unsupported input,
+stale fences and owner lifecycle failures preserve both root and history. A full
+history explicitly rejects new edits until history is rewound or a deliberate
+metadata publication invalidates it. No history eviction or implicit save occurs.
+Open/replacement and successful close reset history; immutable retained leases
+remain safe. The existing schema version remains an in-memory model version: this
+change defines no competing persisted world format.
+
+The GUI controller borrows the host's single `PartitionedWorldWorkspace` through
+`EditorWorkspaceDependencies::partitionedWorld`. The host must outlive the controller
+or call `DetachWorldSourceOwner` before destroying that owner. Panels receive owned
+immutable leases, never raw owner memory. The active world host supplies a
+`WorldViewportBinding` (exact root, global origin, monotonic view revision) through
+`SetWorldViewportBinding`. It owns camera/origin mapping and dirty/save/leave policy;
+the source tool does not invent another world or selection authority. The production
+world-tab composition is delivered by HORO-1630; until that composition is integrated,
+the source toolbar reports unavailable and does not synthesize a document.
+
+The viewport popup creates all four shapes and edits intent, target state, priority
+and debug color using shared controls and localized copy. Canonical control-point
+gizmos preview only in panel-owned transient storage; release submits one ordinary
+source command. Escape, focus loss, input revocation, document replacement, origin
+change, view replacement and detach cancel the preview. Undo/redo use the same
+canonical owner. Play mode rejects source edits at the controller boundary.
+
+`WorldSourceViewportPoint` subtracts integer global coordinates before any float
+conversion, including near both signed-64-bit limits. Local projection admits an
+8000-meter precision window. `WorldSourceViewportGlobal` rounds only a bounded
+local offset to millimeters and adds it with checked integer arithmetic; absolute
+global coordinates never pass through float or double. The host rebases distant
+views by publishing a new origin/view revision. Off-window points are unsupported,
+not clamped or silently relocated.
+
+Affected consumers are `HoroEditorModel`, its public-header consumer, the GUI
+workspace/controller/viewport and focused model/controller/localization tests. No
+new public header ownership or reverse dependency is introduced. Existing aggregate
+initializers remain source compatible because the new source collection and limits
+are additive with defaults. Source-only local checks do not qualify native GUI or
+GPU interaction; actual current-head hosted checks and a compatible editor session
+remain separate evidence.

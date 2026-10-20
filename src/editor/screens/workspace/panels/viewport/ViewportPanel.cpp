@@ -74,6 +74,7 @@ namespace Horo::Editor {
 
     /** @copydoc ViewportPanel::OnDetach */
     void ViewportPanel::OnDetach() {
+        worldSourceTool_.Cancel();
         interaction_.Detach();
         inputRouter_ = nullptr;
         workspaceInputContext_ = nullptr;
@@ -270,6 +271,9 @@ namespace Horo::Editor {
             CancelAssetPlacementPreview(command);
         const bool assetDragActive =
             inputEligible && surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, context, depthRange);
+        const bool sourceToolActive =
+            worldSourceTool_.Draw(drawList, layout.origin, {layout.width, layout.height}, viewModel, command, context, depthRange,
+                                  inputEligible && !interaction_.IsActive() && !assetDragActive);
         const Result<std::optional<SceneObjectId>> clickedLight =
             DrawViewportLightMarkers({.drawList = drawList,
                                       .origin = layout.origin,
@@ -277,12 +281,12 @@ namespace Horo::Editor {
                                       .height = layout.height,
                                       .camera = viewModel.viewportCamera,
                                       .depthRange = depthRange,
-                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive},
+                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !sourceToolActive},
                                      viewModel.viewportLights, viewModel.primarySelection);
         if (!inputEligible)
             static_cast<void>(interaction_.ConsumePendingCancellation(command));
         if (ResolveLightMarkerInteraction(clickedLight, lightMarkerFailureReported_, command) && inputEligible && surfaceInteractive &&
-            !assetDragActive) {
+            !assetDragActive && !sourceToolActive) {
             interaction_.Draw({.drawList = drawList,
                                .origin = layout.origin,
                                .width = layout.width,
