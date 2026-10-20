@@ -278,6 +278,11 @@ namespace Horo::Cli {
         /** @brief Returns the time left before the descriptor deadline, rounded up to one millisecond.
          * @return No value when unlimited; zero when expired. Adapters cap injected process requests to this bound. */
         [[nodiscard]] std::optional<std::chrono::milliseconds> RemainingTimeout() const noexcept;
+        /** @brief Returns the exact original admitted deadline without rounding or renewing its budget.
+         * @return Owned absolute steady-clock bound, or no value for an unlimited invocation.
+         * Application adapters copy this value when retaining work beyond the immediate call.
+         */
+        [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> AbsoluteDeadline() const noexcept;
         /** @brief Returns exact descriptor-declared grants only. @return Invocation-scoped capability identities. */
         [[nodiscard]] std::span<const CliCapabilityId> GrantedCapabilities() const noexcept;
         /** @brief Tests one exact capability identity. @param capability Candidate identity. @return Whether it was declared and granted.

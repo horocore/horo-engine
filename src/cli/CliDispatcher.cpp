@@ -254,6 +254,11 @@ namespace Horo::Cli {
                                                                         : std::chrono::ceil<std::chrono::milliseconds>(remaining);
     }
 
+    /** @copydoc CliExecutionContext::AbsoluteDeadline */
+    std::optional<std::chrono::steady_clock::time_point> CliExecutionContext::AbsoluteDeadline() const noexcept {
+        return deadline_;
+    }
+
     /** @copydoc CliExecutionContext::GrantedCapabilities */
     std::span<const CliCapabilityId> CliExecutionContext::GrantedCapabilities() const noexcept {
         return capabilities_;

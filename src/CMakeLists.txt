@@ -3412,6 +3412,16 @@ add_library(HoroEngine::PackageApplication ALIAS HoroPackageApplication)
 target_compile_features(HoroPackageApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroPackageApplication PUBLIC HoroEngine::PackageLifecycle)
 
+add_library(HoroCliNavigationAdapters STATIC cli/NavigationCommands.cpp)
+add_library(HoroEngine::CliNavigationAdapters ALIAS HoroCliNavigationAdapters)
+target_compile_features(HoroCliNavigationAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroCliNavigationAdapters PUBLIC HoroEngine::CliHost HoroEngine::NavigationBakeAutomation)
+
+add_library(HoroMcpNavigationAdapters STATIC mcp/NavigationTools.cpp)
+add_library(HoroEngine::McpNavigationAdapters ALIAS HoroMcpNavigationAdapters)
+target_compile_features(HoroMcpNavigationAdapters PUBLIC cxx_std_20)
+target_link_libraries(HoroMcpNavigationAdapters PUBLIC HoroEngine::McpRegistry HoroEngine::NavigationBakeAutomation)
+
 add_library(HoroCliPackageAdapters STATIC cli/PackageCommands.cpp)
 add_library(HoroEngine::CliPackageAdapters ALIAS HoroCliPackageAdapters)
 target_compile_features(HoroCliPackageAdapters PUBLIC cxx_std_20)

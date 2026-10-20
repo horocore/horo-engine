@@ -687,3 +687,15 @@ bytes and rows after publication. See the
 - [ADR-116: Save Data Threat Model and Trust Policy](../../adr/116-save-data-threat-model-and-trust-policy.md)
 - [Observability Architecture](../observability/observability.md): levels, categories, MDC,
   storage, and protocol-log redaction.
+
+## Navigation operation adapters
+
+`HoroMcpNavigationAdapters` depends only on McpRegistry and
+NavigationBakeAutomation. It creates bake/query/cancel registrations over an
+explicit shared project application owner. Normal capability, mutation approval,
+trust, owner-lane and project-generation policy remains effective. Protocol input
+cannot supply a replacement project identity/generation or forge operation IDs.
+The original deadline, cancellation and owned revocation view flow to source
+capture. A composition root pumps the shared application between requests and
+drains it after MCP admission closes. Descriptors and registration creation do
+not capture source, select providers or start operations.

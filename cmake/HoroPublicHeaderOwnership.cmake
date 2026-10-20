@@ -1382,5 +1382,8 @@ horo_configure_target_header_boundary(HoroProjectCollisionSettings PUBLIC_HEADER
     Horo/Application/ProjectCollisionSettings.h
 )
 
+horo_configure_target_header_boundary(HoroCliNavigationAdapters PUBLIC_HEADERS Horo/Cli/NavigationCommands.h)
+horo_configure_target_header_boundary(HoroMcpNavigationAdapters PUBLIC_HEADERS Horo/Mcp/NavigationTools.h)
+
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")
