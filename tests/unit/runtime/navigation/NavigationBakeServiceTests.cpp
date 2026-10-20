@@ -1,5 +1,8 @@
 #include "navigation/NavigationBakeServiceFixture.h"
 
+#include <cstddef>
+#include <span>
+
 namespace Horo::Application {
     using namespace Horo::Navigation;
     using namespace Horo::Navigation::TestSupport;
@@ -223,6 +226,53 @@ namespace Horo::Application {
         CHECK(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Failed);
         CHECK_FALSE(harness.service->Published());
         CHECK(Assets::ResolveCurrentCookGeneration(harness.config.targetRoot).Value().manifestDigest == before->generation.manifestDigest);
+    }
+
+    TEST_CASE("Navigation warm cache rejects a foreign envelope key without rebuilding or replacing the valid generation") {
+        const auto changedByte = GENERATE(std::size_t{0}, std::size_t{15}, std::size_t{31});
+        BakeHarness harness;
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
+        const auto before = harness.service->Published();
+        REQUIRE(before);
+        harness.service->Close();
+        harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
+        REQUIRE(Terminal(*harness.service, harness.operations, Submit(harness)).state == OperationState::Succeeded);
+        CHECK(harness.service->Published()->rebuiltTiles == 0);
+        CHECK(harness.service->Published()->reusedTiles == before->tiles.tiles.size());
+        harness.service->Close();
+        std::size_t poisoned{};
+        for (const auto &entry : std::filesystem::recursive_directory_iterator(harness.config.cacheRoot)) {
+            if (entry.path().extension() != ".cooked")
+                continue;
+            std::ifstream input(entry.path(), std::ios::binary);
+            const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+            input.close();
+            auto decoded = Assets::DecodeCookedArtifact(bytes);
+            REQUIRE(decoded.HasValue());
+            auto envelope = std::move(decoded).Value();
+            std::as_writable_bytes(std::span{envelope.cacheKeyDigest.bytes})[changedByte] ^= std::byte{0x80};
+            const auto encoded = Assets::EncodeCookedArtifact(envelope);
+            REQUIRE(encoded.HasValue());
+            REQUIRE(Assets::DecodeCookedArtifact(encoded.Value()).HasValue());
+            std::ofstream output(entry.path(), std::ios::binary | std::ios::trunc);
+            output.write(reinterpret_cast<const char *>(encoded.Value().data()), static_cast<std::streamsize>(encoded.Value().size()));
+            REQUIRE(output.good());
+            ++poisoned;
+        }
+        REQUIRE(poisoned == before->tiles.tiles.size());
+        const auto builds = harness.builder->builds.load();
+        harness.service = NavigationBakeService::Create(harness.config, harness.operations, harness.jobs).Value();
+        const auto terminal = Terminal(*harness.service, harness.operations, Submit(harness));
+        CHECK(terminal.state == OperationState::Failed);
+        REQUIRE(terminal.error);
+        CHECK(terminal.error->domain.Value() == NavigationErrors::NavMeshArtifactCorrupt.domain.Value());
+        CHECK(terminal.error->code.Value() == NavigationErrors::NavMeshArtifactCorrupt.code.Value());
+        CHECK(harness.builder->builds.load() == builds);
+        CHECK_FALSE(harness.service->Published());
+        const auto current = Assets::ResolveCurrentCookGeneration(harness.config.targetRoot);
+        REQUIRE(current.HasValue());
+        CHECK(current.Value().manifestDigest == before->generation.manifestDigest);
+        CHECK(Assets::ReadCookGenerationContents(current.Value(), harness.config.maximumCandidateBytes).HasValue());
     }
 
     TEST_CASE("Locked incremental publication preserves every unrelated artifact and rejects another writer") {
