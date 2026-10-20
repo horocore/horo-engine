@@ -1335,6 +1335,15 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_link_libraries(HoroNavigationSceneAgentLifecycleTests PRIVATE
             HoroEngine::NavigationSceneIntegration HoroEngine::NavigationRecastDetour HoroEngine::NavigationCrowdDetour)
     horo_register_catch_test(HoroNavigationSceneAgentLifecycleTests LABELS "unit;navigation;headless;scene;lifecycle;provider")
+    add_executable(HoroNavigationProjectBakeInputNativeTests unit/application/navigation/NavigationProjectBakeInputNativeTests.cpp
+        unit/application/navigation/NavigationProjectBakeSourceFenceTests.cpp)
+    target_compile_features(HoroNavigationProjectBakeInputNativeTests PRIVATE cxx_std_20)
+    target_include_directories(HoroNavigationProjectBakeInputNativeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+    target_link_libraries(HoroNavigationProjectBakeInputNativeTests PRIVATE Catch2::Catch2WithMain
+            HoroEngine::NavigationBakeAutomation HoroEngine::NavigationBakeService HoroEngine::NavigationAssetSceneIntegration
+            HoroEngine::NavigationRecastDetour HoroEngine::PlatformProjectReadFiles)
+    horo_register_catch_test(HoroNavigationProjectBakeInputNativeTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage;native")
+
     add_executable(HoroNavigationNativeContentTests unit/application/navigation/NavigationNativeContentTests.cpp)
     target_compile_features(HoroNavigationNativeContentTests PRIVATE cxx_std_20)
     target_include_directories(HoroNavigationNativeContentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
@@ -2469,6 +2478,13 @@ add_executable(HoroNavigationPrimitiveGeometryTests unit/application/navigation/
 target_compile_features(HoroNavigationPrimitiveGeometryTests PRIVATE cxx_std_20)
 target_link_libraries(HoroNavigationPrimitiveGeometryTests PRIVATE Catch2::Catch2WithMain HoroEngine::NavigationBakeAutomation)
 horo_register_catch_test(HoroNavigationPrimitiveGeometryTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage")
+
+add_executable(HoroNavigationProjectBakeInputTests unit/application/navigation/NavigationProjectBakeInputTests.cpp)
+target_compile_features(HoroNavigationProjectBakeInputTests PRIVATE cxx_std_20)
+target_include_directories(HoroNavigationProjectBakeInputTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
+target_link_libraries(HoroNavigationProjectBakeInputTests PRIVATE Catch2::Catch2WithMain
+        HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles)
+horo_register_catch_test(HoroNavigationProjectBakeInputTests LABELS "unit;navigation;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroNavigationSceneBakeGeometryTests unit/application/navigation/NavigationSceneBakeGeometryTests.cpp)
 target_compile_features(HoroNavigationSceneBakeGeometryTests PRIVATE cxx_std_20)

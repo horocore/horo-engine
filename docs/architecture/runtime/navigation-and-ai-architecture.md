@@ -3158,3 +3158,35 @@ capture before gathering, at validate-only completion and under the final source
 publication lease before selector adoption. The service performs no filesystem
 source discovery during host admission or owner-thread polling. Cancellation,
 revocation and source changes preserve the last valid published generation.
+
+### Complete project bake-input capture
+
+`CaptureNavigationProjectBakeInput` binds one exact registered navigation definition
+to the complete retained project source snapshot. It captures every registered
+Scene through the same Scene graph, Physics collider, affine clipping and region
+path used by the geometry boundary. Registered physical material payloads and the
+construction-validated project profile remain part of the same owned evidence.
+Capture checks retained source bytes before and after assembly; publication must
+still use the service's final source-validation lease.
+
+Each surface preserves its full Scene UUID. Producer/contribution IDs use versioned
+canonical full-key hashes, including persistent object/component/collider/body
+binding and surface ownership. Reserved zero values and collisions with different
+full keys fail instead of aliasing. The result retains those full keys and exact
+material identities alongside the immutable NavigationApi snapshot and sorted
+complete tile closure. Disabled and empty authored surfaces remain in the catalog.
+
+Source counts, vertices, triangles, retained source bytes and region work are
+charged across Scenes, rather than resetting the project budget per Scene. Tile
+grids use each resolved profile's authored voxel/tile geometry and finite vertical
+clearance. LocalBounds surfaces retain their full transformed coverage; subtree
+coverage retains the original source footprint even after complete exclusion.
+Grid/count/storage excess fails before truncating a candidate. Capture performs no
+provider discovery, cache writes or world publication.
+
+Enabled modifiers, links or other unsupported source capabilities currently return
+typed unsupported diagnostics instead of being omitted. This boundary provides
+complete admitted collider inputs; it does not claim those unsupported authored
+features have acquired a bake implementation. Native regression coverage composes
+the actual Recast builder, shared service/cache, exact-scope asset loader and
+file-backed final source fences without introducing an editor dependency.

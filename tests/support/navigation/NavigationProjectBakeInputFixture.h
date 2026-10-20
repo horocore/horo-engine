@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Horo/Application/NavigationSceneBakeGeometry.h"
+#include "Horo/Application/NavigationProjectBakeInput.h"
 #include "Horo/Navigation/NavigationDefinitionSerialization.h"
 #include "navigation/NavigationProjectBakeSourceFixture.h"
 #include "navigation/NavigationSceneSourceFixture.h"
@@ -48,6 +48,11 @@ namespace Horo::Application::NavigationInputTestSupport {
         /** @brief Uses the production source owner and actual project compatibility inspection. */
         auto Capture() const {
             return source.Capture();
+        }
+
+        /** @brief Explicit host-owned test revisions; source contents are independently byte-fenced. */
+        static Navigation::NavigationBakeInputRevisions Revisions() {
+            return Navigation::TestSupport::IncrementalBakeFixture{}.revisions;
         }
 
         /** @brief Writes one exact definition through the production envelope and record codecs. */
