@@ -1,0 +1,58 @@
+name: Vulkan shader qualification
+on:
+  pull_request:
+    paths:
+      - 'src/runtime/renderer/modules/vulkan/**'
+      - 'tests/unit/runtime/renderer/Vulkan*'
+      - 'tests/integration/renderer/VulkanPreparation.*'
+      - 'src/CMakeLists.txt'
+      - 'tests/CMakeLists.txt'
+      - '.github/workflows/vulkan-shader.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: vulkan-shader-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  qualification:
+    name: Vulkan shaders / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            preset: ci-linux-debug
+          - os: windows-2022
+            preset: ci-windows-debug
+    env:
+      HORO_COMPILER_LAUNCHER: ''
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: ./.github/actions/setup-build-tools
+      - name: Install native Vulkan smoke dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers libvulkan1 glslang-tools
+      - name: Configure focused headless Vulkan composition
+        run: >-
+          cmake --preset "${{ matrix.preset }}"
+          -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=OFF
+          -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
+          -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
+      - name: Build native Vulkan contracts
+        run: cmake --build build/ci --target HoroRenderVulkanTests --parallel 2
+      - name: Run Vulkan native-call and lifecycle regressions
+        run: ctest --test-dir build/ci -R '^HoroRenderVulkanTests' --output-on-failure
+      - name: Cook final SPIR-V and qualify real Linux native device preparation
+        if: runner.os == 'Linux'
+        run: |
+          glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanPreparation.vert -o "$RUNNER_TEMP/preparation.vert.spv"
+          glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanPreparation.frag -o "$RUNNER_TEMP/preparation.frag.spv"
+          HORO_VULKAN_VERTEX_FIXTURE="$RUNNER_TEMP/preparation.vert.spv" \
+          HORO_VULKAN_FRAGMENT_FIXTURE="$RUNNER_TEMP/preparation.frag.spv" \
+          build/ci/tests/HoroRenderVulkanTests '[native-smoke]'

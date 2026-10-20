@@ -238,9 +238,18 @@ namespace Horo::Render {
                 if (auto dispatch = LoadDeviceDispatch(request); dispatch.HasError()) {
                     return dispatch;
                 }
+                return InitializeResources(selected->device, request.adapter);
+            }
+
+            /** @brief Attaches the sole resource registry and shader owner to the selected native device. */
+            Result<void> InitializeResources(VkPhysicalDevice physical, const RenderAdapterId &adapter) {
                 VkPhysicalDeviceMemoryProperties memoryProperties{};
-                getPhysicalDeviceMemoryProperties_(selected->device, &memoryProperties);
-                return resources_.Initialize(memoryProperties, device_, getDeviceProcAddr_);
+                getPhysicalDeviceMemoryProperties_(physical, &memoryProperties);
+                if (const auto initialized = resources_.Initialize(memoryProperties, device_, getDeviceProcAddr_); initialized.HasError())
+                    return initialized;
+                VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                getPhysicalDeviceProperties2_(physical, &properties);
+                return resources_.InitializeShaders(properties.properties, adapter, getDeviceProcAddr_);
             }
 
             IRenderResourceBackend *ResourceBackend() noexcept override {

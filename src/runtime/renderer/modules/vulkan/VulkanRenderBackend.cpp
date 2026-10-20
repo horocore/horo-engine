@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "VulkanBackendInternal.h"
 #include "VulkanRenderBackendErrors.h"
 
@@ -197,6 +198,8 @@ namespace Horo::Render {
                 CommitInitialization(config.requirePresentation);
                 return Result<void>::Success();
             }
+
+#include "VulkanBackendShaderDelegation.inl"
 
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
                 return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->QueryBufferMemoryCost(descriptor)

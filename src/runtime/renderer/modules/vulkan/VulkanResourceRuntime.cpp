@@ -255,6 +255,9 @@ namespace Horo::Render::Detail {
                    AttachmentAspectsMatch(color, depth);
         }
 
+        Result<VulkanMaterialResource> ResolveMaterialBuffer(const MaterialResidentResource &) const;
+        Result<VulkanMaterialResource> ResolveMaterialView(const MaterialResidentResource &) const;
+
         void RemoveTargetsReferencing(const View *view) {
             std::erase_if(targets, [view](const auto &entry) {
                 return entry.second->color == view || entry.second->depth == view;
@@ -320,6 +323,8 @@ namespace Horo::Render::Detail {
         }
         return Result<void>::Success();
     }
+
+#include "VulkanResourceShaderDelegation.inl"
 
     Result<RenderMemoryCostPlan> VulkanResourceRuntime::QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const {
         if (impl_->device == VK_NULL_HANDLE || !descriptor.IsValid())
@@ -567,6 +572,7 @@ namespace Horo::Render::Detail {
     }
 
     void VulkanResourceRuntime::ShutdownResources() noexcept {
+        shaders_.Shutdown();
         impl_->targets.clear();
         impl_->views.clear();
         impl_->meshes.clear();
