@@ -2776,6 +2776,7 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
     "$<BUILD_INTERFACE:${_horo_prefab_hierarchy_headers}>")
 
 add_library(HoroEditorModel STATIC
+        editor/document/WorldStreamingPreview.cpp
         editor/document/PartitionedWorldWorkspace.cpp
         editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp

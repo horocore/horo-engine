@@ -74,6 +74,23 @@ namespace Horo::WorldStreaming {
             REQUIRE(snapshot.Cells()[3].id.lod == 1);
         }
 
+        TEST_CASE("Cell bounds use the exact registry index and reject foreign publications",
+                  "[unit][world_streaming][partition_registry]") {
+            auto registry = Registry();
+            REQUIRE(registry->Publish(Descriptor().Value(), IdentityFrom<WorldPartitionRegistryRevision>(1)).HasValue());
+            const auto first = registry->Snapshot().Value();
+            const auto handle = first.Find({-1, 0, 0, 0, Layer(2)}).Value();
+            const auto bounds = first.CellBounds(handle).Value();
+            CHECK(bounds.minimum.Millimeters()[0] == -200);
+            CHECK(bounds.maximum.Millimeters()[0] == -101);
+            REQUIRE(registry->Publish(Descriptor().Value(), IdentityFrom<WorldPartitionRegistryRevision>(2)).HasValue());
+            const auto second = registry->Snapshot().Value();
+            RequireError(second.CellBounds(handle), WorldStreamingErrors::PartitionRegistryStale);
+            registry->Shutdown();
+            CHECK(first.CellBounds(handle).Value() == bounds);
+            RequireError(first.CellBounds({}), WorldStreamingErrors::PartitionRegistryInvalid);
+        }
+
         TEST_CASE("Exact lookup and resolve reject malformed unknown and cross-generation handles",
                   "[unit][world_streaming][partition_registry][lookup]") {
             auto registry = Registry();

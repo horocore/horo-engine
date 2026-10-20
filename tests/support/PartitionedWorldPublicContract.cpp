@@ -1,4 +1,5 @@
 #include "Horo/Editor/PartitionedWorldWorkspace.h"
+#include "Horo/Editor/WorldStreamingPreview.h"
 
 #include <type_traits>
 #include <utility>
@@ -21,3 +22,5 @@ static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>(
                              Horo::Result<PartitionedWorldSnapshotLease>>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentRevision, Horo::WorldStreaming::WorldAuthoringRevision>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentGeneration, Horo::WorldStreaming::StreamingGeneration>);
+
+static_assert(std::is_same_v<decltype(std::declval<const WorldStreamingPreview &>().Cells()), std::span<const WorldStreamingPreviewCell>>);

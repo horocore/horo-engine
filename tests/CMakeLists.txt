@@ -5400,3 +5400,7 @@ foreach(_horo_cache_consumer IN ITEMS
         target_include_directories(${_horo_cache_consumer} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
     endif()
 endforeach()
+
+add_executable(HoroWorldStreamingPreviewTests unit/editor/WorldStreamingPreviewTests.cpp)
+target_link_libraries(HoroWorldStreamingPreviewTests PRIVATE HoroEngine::EditorModel)
+horo_register_catch_test(HoroWorldStreamingPreviewTests LABELS "unit;headless;streaming_preview")
