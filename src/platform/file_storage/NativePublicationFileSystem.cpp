@@ -145,8 +145,7 @@ namespace Horo::Platform {
                 auto file = Publication::Create(*parent.Value(), Leaf(relative.Value()), created, permissions);
                 if (file.HasError())
                     return Result<void>::Failure(file.ErrorValue());
-                const std::span data{reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()};
-                if (auto written = Storage::Write(file.Value(), data, {}); written.HasError())
+                if (auto written = Storage::Write(file.Value(), bytes, {}); written.HasError())
                     return written;
                 if (auto flushed = Publication::FlushFile(file.Value()); flushed.HasError())
                     return flushed;

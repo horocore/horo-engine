@@ -24,7 +24,7 @@ namespace Horo::Platform::ImmutableFileNative {
     /** @brief Exclusively creates a private operation directory and payload through a retained parent. */
     [[nodiscard]] Result<std::optional<Preparation>> Prepare(const Handle &parent, std::string name);
     /** @brief Writes and flushes the complete owned payload in bounded cancellation-aware transfers. */
-    [[nodiscard]] Result<void> Write(const Handle &file, std::span<const std::uint8_t> bytes, const CancellationToken &cancellation);
+    [[nodiscard]] Result<void> Write(const Handle &file, std::span<const std::byte> bytes, const CancellationToken &cancellation);
     /** @brief Atomically moves the operation-owned payload to an absent destination; false means destination already exists. */
     [[nodiscard]] Result<bool> Publish(const Handle &parent, Preparation &preparation, std::string_view destination);
     /** @brief Synchronizes an opened file or directory according to native durability policy. */

@@ -21,13 +21,14 @@ namespace Horo::Platform::PublicationFileNative {
 
         /** @brief Classifies one no-follow native stat result without using it as later open authority. */
         FileEntryInfo Entry(const struct stat &info) {
+            using enum FileEntryKind;
             if (S_ISREG(info.st_mode))
-                return {.kind = FileEntryKind::RegularFile,
+                return {.kind = RegularFile,
                         .sizeBytes = static_cast<std::uint64_t>(info.st_size),
                         .hardLinks = static_cast<std::uint64_t>(info.st_nlink)};
             if (S_ISDIR(info.st_mode))
-                return {.kind = FileEntryKind::Directory};
-            return {.kind = S_ISLNK(info.st_mode) ? FileEntryKind::Redirect : FileEntryKind::Other};
+                return {.kind = Directory};
+            return {.kind = S_ISLNK(info.st_mode) ? Redirect : Other};
         }
 
         /** @brief Verifies regular single-link identity before writes or replacement. */
@@ -45,7 +46,8 @@ namespace Horo::Platform::PublicationFileNative {
             bool ProtectsPath(const std::filesystem::path &path) const override {
                 if (path != path_)
                     return false;
-                struct stat owned{}, named{};
+                struct stat owned{};
+                struct stat named{};
                 return fstat(file_.Get(), &owned) == 0 && fstatat(parent_.Get(), name_.c_str(), &named, AT_SYMLINK_NOFOLLOW) == 0 &&
                        Regular(owned) && Regular(named) && owned.st_dev == named.st_dev && owned.st_ino == named.st_ino;
             }
@@ -100,7 +102,7 @@ namespace Horo::Platform::PublicationFileNative {
                 return Result<Entries>::Failure(info.ErrorValue());
             if (!info.Value())
                 return Result<Entries>::Failure(MakeError(FileStorageErrors::IoFailed));
-            entries.push_back({std::filesystem::path{name}, *info.Value()});
+            entries.emplace_back(std::filesystem::path{name}, *info.Value());
         }
     }
 
@@ -112,8 +114,7 @@ namespace Horo::Platform::PublicationFileNative {
         if (!file.IsValid())
             return Result<Handle>::Failure(errno == EEXIST ? MakeError(FileStorageErrors::Conflict) : Failure());
         created = true;
-        struct stat info{};
-        if (fstat(file.Get(), &info) != 0 || !Regular(info))
+        if (struct stat info{}; fstat(file.Get(), &info) != 0 || !Regular(info))
             return Result<Handle>::Failure(MakeError(FileStorageErrors::UnsafeObject));
         if (permissions != std::filesystem::perms::unknown && fchmod(file.Get(), mode) != 0)
             return Result<Handle>::Failure(Failure());
@@ -122,10 +123,9 @@ namespace Horo::Platform::PublicationFileNative {
 
     /** @copydoc CreateRelativeDirectory */
     Result<bool> CreateRelativeDirectory(const Handle &parent, const std::string_view name) {
-        const std::string spelling{name};
-        if (mkdirat(parent.Get(), spelling.c_str(), S_IRWXU) == 0)
+        if (const std::string spelling{name}; mkdirat(parent.Get(), spelling.c_str(), S_IRWXU) == 0)
             return Result<bool>::Success(true);
-        if (errno != EEXIST)
+        else if (errno != EEXIST)
             return Result<bool>::Failure(Failure());
         auto existing = ImmutableFileNative::Directory(parent, name, false);
         if (existing.HasError())
@@ -157,8 +157,7 @@ namespace Horo::Platform::PublicationFileNative {
         Handle file{openat(parent.Get(), name.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, S_IRUSR | S_IWUSR)};
         if (!file.IsValid())
             return Result<State>::Failure(Failure());
-        struct stat info{};
-        if (fstat(file.Get(), &info) != 0 || !Regular(info))
+        if (struct stat info{}; fstat(file.Get(), &info) != 0 || !Regular(info))
             return Result<State>::Failure(MakeError(FileStorageErrors::UnsafeObject));
         if (flock(file.Get(), LOCK_EX | LOCK_NB) != 0)
             return Result<State>::Failure(errno == EWOULDBLOCK || errno == EAGAIN ? MakeError(PlatformFileInternal::LockBusy) : Failure());
@@ -183,7 +182,8 @@ namespace Horo::Platform::PublicationFileNative {
             (to.Value() &&
              (to.Value()->kind != from.Value()->kind || (to.Value()->kind == FileEntryKind::RegularFile && to.Value()->hardLinks != 1U))))
             return Result<void>::Failure(MakeError(FileStorageErrors::UnsafeObject));
-        const std::string fromName{source}, toName{destination};
+        const std::string fromName{source};
+        const std::string toName{destination};
         if (renameat(sourceParent.Get(), fromName.c_str(), destinationParent.Get(), toName.c_str()) != 0)
             return Result<void>::Failure(Failure());
         receipt.RecordCommitted();
