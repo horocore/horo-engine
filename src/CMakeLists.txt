@@ -2681,6 +2681,8 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalResourceFormats.mm
             runtime/renderer/modules/metal/MetalResourcePolicy.cpp
             runtime/renderer/modules/metal/MetalResourceRuntime.mm
+            runtime/renderer/modules/metal/MetalShaderResources.mm
+            runtime/renderer/modules/metal/MetalMaterialResources.mm
             runtime/renderer/modules/metal/MetalParallelRecording.mm
             runtime/renderer/modules/metal/MetalDeviceDiscovery.mm
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm

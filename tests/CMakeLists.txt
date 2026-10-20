@@ -4890,6 +4890,25 @@ if (HORO_BUILD_RENDER_METAL)
         add_test(NAME HoroMetalGraphExecutionSmoke COMMAND HoroMetalGraphExecutionSmoke)
         set_tests_properties(HoroMetalGraphExecutionSmoke PROPERTIES LABELS "gpu;metal;renderer")
     endif ()
+    if (HORO_ENABLE_GPU_SMOKE_TESTS)
+        find_program(HORO_METAL_FIXTURE_XCRUN xcrun REQUIRED)
+        set(metal_preparation_fixture "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.metallib")
+        add_custom_command(OUTPUT "${metal_preparation_fixture}"
+                COMMAND "${HORO_METAL_FIXTURE_XCRUN}" -sdk macosx metal -std=macos-metal2.4 -mmacosx-version-min=14.0
+                        -c "${CMAKE_CURRENT_SOURCE_DIR}/integration/renderer/MetalPreparationFixture.metal"
+                        -o "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.air"
+                COMMAND "${HORO_METAL_FIXTURE_XCRUN}" -sdk macosx metallib "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.air"
+                        -o "${metal_preparation_fixture}"
+                DEPENDS integration/renderer/MetalPreparationFixture.metal VERBATIM)
+        add_executable(HoroMetalShaderPreparationSmoke integration/renderer/MetalShaderPreparationSmoke.mm "${metal_preparation_fixture}")
+        target_compile_features(HoroMetalShaderPreparationSmoke PRIVATE cxx_std_20)
+        target_compile_options(HoroMetalShaderPreparationSmoke PRIVATE -fobjc-arc)
+        target_compile_definitions(HoroMetalShaderPreparationSmoke PRIVATE HORO_METAL_PREPARATION_FIXTURE="${metal_preparation_fixture}")
+        target_include_directories(HoroMetalShaderPreparationSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/support)
+        target_link_libraries(HoroMetalShaderPreparationSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
+        add_test(NAME HoroMetalShaderPreparationSmoke COMMAND HoroMetalShaderPreparationSmoke)
+        set_tests_properties(HoroMetalShaderPreparationSmoke PROPERTIES LABELS "gpu;metal;shader;material" TIMEOUT 60 RUN_SERIAL TRUE)
+    endif ()
     add_executable(HoroRenderMetalTests
             unit/runtime/renderer/MetalPresentationFeedbackTests.cpp
             unit/runtime/renderer/MetalParallelWorkTests.cpp
@@ -4905,7 +4924,12 @@ if (HORO_BUILD_RENDER_METAL)
     )
 
     target_compile_features(HoroRenderMetalTests PRIVATE cxx_std_20)
-    target_compile_options(HoroRenderMetalTests PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    # These .mm files use the CXX driver but share ARC-owned types with production.
+    set_source_files_properties(
+            unit/runtime/renderer/MetalParallelCompletionTests.mm
+            unit/runtime/renderer/MetalResourceFormatsTests.mm
+            PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+    )
     target_include_directories(HoroRenderMetalTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/tests/support
