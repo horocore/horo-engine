@@ -405,7 +405,8 @@ namespace Horo::Editor {
                     OpenPackagesModal();
                     return true;
                 }
-                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
+                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
+                    !controller_->CurrentScenePath().has_value())
                     action = EditorMenuAction::SaveSceneAs;
                 if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
                     EditorWorkspaceViewCommandData command;
@@ -977,6 +978,9 @@ namespace Horo::Editor {
                     command.command = EditorWorkspaceViewCommand::UndoScene;
                 } else if (pressed(kActionSave)) {
                     command.command = EditorWorkspaceViewCommand::SaveScene;
+                } else if (controller_->HasActivePCGDocument()) {
+                    if (pressed(kActionDelete))
+                        command.command = EditorWorkspaceViewCommand::DeleteSelectedObjects;
                 } else if (pressed(kActionToolSelect)) {
                     command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
                     command.transformToolPayload = EditorTransformTool::Select;

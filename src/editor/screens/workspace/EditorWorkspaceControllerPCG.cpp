@@ -171,10 +171,19 @@ namespace Horo::Editor {
         m_pcgAutosaveErrorPresented = false;
     }
 
+    /** @copydoc EditorWorkspaceController::HasActivePCGDocument */
+    bool EditorWorkspaceController::HasActivePCGDocument() const noexcept {
+        const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
+        return std::ranges::any_of(m_viewModel.pcgDocuments, [active](const auto &entry) {
+            return active == entry.snapshot.identity.instance;
+        });
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessPCGDocumentShortcut */
     bool EditorWorkspaceController::ProcessPCGDocumentShortcut(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
-        if (command.command != UndoScene && command.command != RedoScene && command.command != SaveScene)
+        if (command.command != UndoScene && command.command != RedoScene && command.command != SaveScene &&
+            command.command != DeleteSelectedObjects)
             return false;
         const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
         const auto found = std::ranges::find_if(m_viewModel.pcgDocuments, [active](const auto &entry) {
@@ -190,6 +199,8 @@ namespace Horo::Editor {
             action = PCGEditorAction::Undo;
         else if (command.command == RedoScene)
             action = PCGEditorAction::Redo;
+        else if (command.command == DeleteSelectedObjects)
+            action = PCGEditorAction::RemoveSelection;
         routed.pcgRequest = PCGEditorRequest{.action = action, .fence = Fence(found->snapshot), .presentation = found->canvas};
         return ProcessPCGDocumentCommand(routed);
     }
