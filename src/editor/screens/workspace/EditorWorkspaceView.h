@@ -6,9 +6,12 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "WorkspaceSplitterInteraction.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/source_editor/SourceEditorTools.h"
+#include "editor/source_editor/SourceEditorWidget.h"
 
 #include <cstdint>
 #include <imgui.h>
+#include <map>
 #include <string>
 
 namespace Horo::Editor {
@@ -113,7 +116,21 @@ namespace Horo::Editor {
         void DrawWorkspaceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Presents the active immutable source; text editing belongs to the source widget adapter. */
         bool DrawSourceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Composes one view's tools and concrete widget without taking document mutation ownership. */
+        void DrawSourceEditor(const SourceDocumentSnapshot &source, const SourceHistoryState &history,
+                              const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         std::optional<DocumentInstanceId> m_lastPresentedDocument;
+
+        struct SourceView final {
+            explicit SourceView(SourceEditingViewId identity) : widget(identity) {}
+
+            SourceEditorWidget widget;
+            SourceEditorTools tools;
+        };
+
+        mutable std::map<std::uint64_t, SourceView> m_sourceWidgets;
+        mutable std::uint64_t m_nextSourceWidgetViewId{1};
+        mutable std::optional<DocumentInstanceId> m_focusedSource;
         /** @brief Resolves theme-sized document chrome, including its overflow affordance. */
         [[nodiscard]] float DocumentTabHeight(WorkspaceDockArea area) const;
         /** @brief Draws either the active document or its explicitly focused native panel. */

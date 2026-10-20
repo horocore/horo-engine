@@ -1,0 +1,161 @@
+#include "SourceEditorTools.h"
+
+#include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/Localization/ILocalizationService.h"
+
+#include <algorithm>
+#include <charconv>
+#include <utility>
+
+namespace Horo::Editor {
+    namespace {
+        /** @brief Resolves all visible copy through the owning localization catalog. */
+        const std::string &Text(const EditorGuiContext &context, const char *key) {
+            return context.localization.Get("editor", key);
+        }
+
+        /** @brief Wraps actions from measured bounds, retaining the current editor typography at narrow widths. */
+        bool Button(const EditorGuiContext &context, const char *key, const bool enabled = true) {
+            const auto &label = Text(context, key);
+            const float width = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2;
+            if (ImGui::GetContentRegionAvail().x < width)
+                ImGui::NewLine();
+            const bool clicked = Ui::Button(
+                {.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .enabled = enabled, .font = context.theme.fonts.sans});
+            ImGui::SameLine();
+            return clicked;
+        }
+    }  // namespace
+
+    /** @copydoc SourceEditorTools::TakeFocusRequest */
+    bool SourceEditorTools::TakeFocusRequest() noexcept {
+        return std::exchange(focusSource_, false);
+    }
+
+    /** @copydoc SourceEditorTools::Find */
+    void SourceEditorTools::Find(SourceEditorWidget &widget, const SourceDocumentSnapshot &source, const SourceSearchDirection direction) {
+        if (const auto match = FindSourceText(source, widget.View(), query_, direction, true)) {
+            static_cast<void>(widget.Select({match->anchor, match->caret}));
+            focusSource_ = true;
+            status_ = Status::None;
+        } else {
+            status_ = Status::NoMatch;
+        }
+    }
+
+    /** @copydoc SourceEditorTools::Replacement */
+    std::optional<SourceEditingCommand> SourceEditorTools::Replacement(SourceEditorWidget &widget, const SourceDocumentSnapshot &source,
+                                                                       const bool all) {
+        auto view = widget.View();
+        const auto low = std::min(view.anchor, view.caret);
+        const auto high = std::max(view.anchor, view.caret);
+        if (!all && source.Text().substr(low, high - low) != query_) {
+            Find(widget, source, SourceSearchDirection::Forward);
+            return std::nullopt;
+        }
+        auto plan = all ? PlanSourceReplaceAll(source, view, query_, replacement_) : PlanSourceReplacement(source, view, replacement_);
+        if (plan.HasError()) {
+            status_ = Status::Invalid;
+            return std::nullopt;
+        }
+        status_ = Status::None;
+        focusSource_ = true;
+        return SourceEditSubmission{source.Identity().instance, std::move(plan).Value()};
+    }
+
+    /** @copydoc SourceEditorTools::Search */
+    std::optional<SourceEditingCommand> SourceEditorTools::Search(SourceEditorWidget &widget, const SourceDocumentSnapshot &source,
+                                                                  const EditorGuiContext &context) {
+        if (!searchOpen_)
+            return std::nullopt;
+        const auto &fonts = context.theme.fonts;
+        static_cast<void>(
+            Ui::InputTextControl("find-query", query_, 4097, fonts, {.hint = Text(context, "workspace.source_edit.query").c_str()}));
+        static_cast<void>(Ui::InputTextControl("replacement", replacement_, 4097, fonts,
+                                               {.hint = Text(context, "workspace.source_edit.replacement").c_str()}));
+        if (Button(context, "workspace.source_edit.next", !query_.empty()))
+            Find(widget, source, SourceSearchDirection::Forward);
+        if (Button(context, "workspace.source_edit.previous", !query_.empty()))
+            Find(widget, source, SourceSearchDirection::Backward);
+        std::optional<SourceEditingCommand> intent;
+        if (Button(context, "workspace.source_edit.replace", !query_.empty()))
+            intent = Replacement(widget, source, false);
+        if (Button(context, "workspace.source_edit.replace_all", !query_.empty()))
+            intent = Replacement(widget, source, true);
+        if (Button(context, "workspace.source_edit.close_search")) {
+            searchOpen_ = false;
+            focusSource_ = true;
+        }
+        ImGui::NewLine();
+        return intent;
+    }
+
+    /** @copydoc SourceEditorTools::Navigate */
+    void SourceEditorTools::Navigate(SourceEditorWidget &widget, const SourceDocumentSnapshot &source, const EditorGuiContext &context) {
+        if (!lineOpen_)
+            return;
+        static_cast<void>(Ui::InputTextControl("line-number", line_, 32, context.theme.fonts,
+                                               {.hint = Text(context, "workspace.source_edit.line").c_str()}));
+        ImGui::PushID("navigate-apply");
+        if (Button(context, "workspace.source_edit.go_to")) {
+            std::size_t line = 0;
+            const auto parsed = std::from_chars(line_.data(), line_.data() + line_.size(), line);
+            const auto position =
+                parsed.ec == std::errc{} && parsed.ptr == line_.data() + line_.size() ? NavigateSourceLine(source, line) : std::nullopt;
+            if (position) {
+                static_cast<void>(widget.Select({position->anchor, position->caret}));
+                status_ = Status::None;
+                focusSource_ = true;
+                lineOpen_ = false;
+            } else {
+                status_ = Status::Invalid;
+            }
+        }
+        ImGui::PopID();
+        ImGui::NewLine();
+    }
+
+    /** @copydoc SourceEditorTools::StatusText */
+    void SourceEditorTools::StatusText(const SourceHistoryState &history, const std::optional<Result<SourceEditingPublication>> &outcome,
+                                       const EditorGuiContext &context) const {
+        const char *status = nullptr;
+        if (history.boundary == SourceHistoryBoundary::Evicted)
+            status = "workspace.source_edit.history_evicted";
+        else if (history.boundary == SourceHistoryBoundary::OversizedEdit)
+            status = "workspace.source_edit.history_oversized";
+        if (status)
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, status), Theme::Muted(), context.theme.fonts);
+        if (status_ == Status::NoMatch)
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, "workspace.source_edit.no_match"), Theme::Muted(),
+                            context.theme.fonts);
+        if (status_ == Status::Invalid || (outcome && outcome->HasError()))
+            Ui::ErrorText(Text(context, "workspace.source_edit.invalid").c_str(), context.theme.fonts);
+    }
+
+    /** @copydoc SourceEditorTools::Draw */
+    std::optional<SourceEditingCommand> SourceEditorTools::Draw(SourceEditorWidget &widget, const SourceDocumentSnapshot &source,
+                                                                const SourceHistoryState &history,
+                                                                const std::optional<Result<SourceEditingPublication>> &outcome,
+                                                                const EditorGuiContext &context) {
+        const auto identity = widget.Identity().value;
+        ImGui::PushID(static_cast<int>(identity >> 32));
+        ImGui::PushID(static_cast<int>(identity & 0xffffffffU));
+        std::optional<SourceEditingCommand> intent;
+        if (Button(context, "workspace.source_edit.undo", history.undoEntries != 0))
+            intent = SourceHistoryRequest{source.Identity().instance, source.Revision(), SourceHistoryDirection::Undo};
+        if (Button(context, "workspace.source_edit.redo", history.redoEntries != 0))
+            intent = SourceHistoryRequest{source.Identity().instance, source.Revision(), SourceHistoryDirection::Redo};
+        if (Button(context, "workspace.source_edit.find"))
+            searchOpen_ = !searchOpen_;
+        if (Button(context, "workspace.source_edit.go_to"))
+            lineOpen_ = !lineOpen_;
+        ImGui::NewLine();
+        if (auto search = Search(widget, source, context))
+            intent = std::move(search);
+        Navigate(widget, source, context);
+        StatusText(history, outcome, context);
+        ImGui::PopID();
+        ImGui::PopID();
+        return intent;
+    }
+}  // namespace Horo::Editor

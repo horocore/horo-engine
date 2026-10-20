@@ -2742,6 +2742,13 @@ add_executable(HoroEditorViewportModelTests
 target_compile_features(HoroEditorViewportModelTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportModelTests PRIVATE HoroEngine::EditorServices)
 if (HORO_BUILD_EDITOR_GUI)
+    add_executable(HoroSourceEditorWidgetTests unit/editor/SourceEditorWidgetTests.cpp)
+    target_compile_features(HoroSourceEditorWidgetTests PRIVATE cxx_std_20)
+    target_include_directories(HoroSourceEditorWidgetTests PRIVATE
+        ${PROJECT_SOURCE_DIR}/src/editor/source_editor ${PROJECT_SOURCE_DIR}/tests)
+    target_link_libraries(HoroSourceEditorWidgetTests PRIVATE HoroEngine::Gui HoroThirdParty::ImGui)
+    horo_register_catch_test(HoroSourceEditorWidgetTests LABELS "unit;editor;source;gui;ci-windows;sonar-coverage")
+
     add_executable(HoroHierarchyPanelRenderTests
             unit/editor/HierarchyPanelRenderTests.cpp
     )
