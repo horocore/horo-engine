@@ -139,7 +139,7 @@ namespace Horo::Platform::ImmutableFileNative {
     }
 
     /** @copydoc Write */
-    Result<void> Write(const Handle &file, const std::span<const std::uint8_t> bytes, const CancellationToken &cancellation) {
+    Result<void> Write(const Handle &file, const std::span<const std::byte> bytes, const CancellationToken &cancellation) {
         std::size_t offset{};
         while (offset < bytes.size()) {
             if (cancellation.IsCancellationRequested())

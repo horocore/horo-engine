@@ -212,7 +212,7 @@ namespace Horo::Platform {
                     if (!prepared.Value())
                         continue;
                     PreparationOwner owned{parent, *std::move(prepared).Value()};
-                    if (auto written = Storage::Write(owned.Value().file, bytes, cancellation); written.HasError())
+                    if (auto written = Storage::Write(owned.Value().file, std::as_bytes(bytes), cancellation); written.HasError())
                         return written;
                     if (auto stop = CheckStop(cancellation); stop.HasError())
                         return stop;

@@ -1,3 +1,4 @@
+#include "../../support/AllocationProbe.h"
 #include "../../support/OwnedTestDirectory.h"
 #include "Horo/Platform/NativeProjectIoOwners.h"
 
@@ -168,6 +169,43 @@ TEST_CASE("Native project I/O reports an obstructed publication namespace as sto
     CHECK(inspected.ErrorValue().code.Value() == FileStorageErrors::IoFailed.code.Value());
     CHECK(std::filesystem::is_regular_file(fixture.root / ".horo/cooked"));
     CHECK(owners.source->Text("authored/source.txt", fixture.Context(), {}).HasValue());
+}
+
+TEST_CASE("Native project I/O allocation failures leave no partial output and permit complete retry", "[platform][project-io]") {
+#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0
+    SKIP("MSVC checked-STL allocation injection requires process isolation across noexcept constructors");
+#else
+    ProjectIoFixture fixture;
+    const auto warm = fixture.Open();
+    NativeProjectIoOwners recovered;
+    bool projectCapacity{};
+    bool storageCapacity{};
+    for (std::size_t prefix = 0; prefix < 256; ++prefix) {
+        std::string identity{"project-io-test"};
+        auto attempt = [&] {
+            Tests::AllocationProbe::ScopedFailure failure{prefix};
+            return CreateNativeProjectIoOwners(fixture.root, std::move(identity), 7, ".horo/cache", ".horo/cooked");
+        }();
+        CHECK_FALSE(std::filesystem::exists(fixture.root / ".horo"));
+        if (attempt.HasValue()) {
+            recovered = std::move(attempt).Value();
+            break;
+        }
+        const auto &code = attempt.ErrorValue().code.Value();
+        projectCapacity = projectCapacity || code == ProjectReadErrors::Capacity.code.Value();
+        storageCapacity = storageCapacity || code == FileStorageErrors::Capacity.code.Value();
+        REQUIRE((code == ProjectReadErrors::Capacity.code.Value() || code == FileStorageErrors::Capacity.code.Value()));
+    }
+    REQUIRE(projectCapacity);
+    REQUIRE(storageCapacity);
+    REQUIRE(recovered.source);
+    REQUIRE(recovered.cache);
+    REQUIRE(recovered.publication);
+    CHECK(recovered.source->Text("authored/source.txt", fixture.Context(), {}).HasValue());
+    CHECK(warm.source->Text("authored/source.txt", fixture.Context(), {}).HasValue());
+    REQUIRE(recovered.cache->Store("retry", CacheBytes, {}).HasValue());
+    CHECK(recovered.publication->WriteDurable(fixture.root / ".horo/cooked/retry", std::as_bytes(std::span{CacheBytes})).HasValue());
+#endif
 }
 
 #if !defined(_WIN32)

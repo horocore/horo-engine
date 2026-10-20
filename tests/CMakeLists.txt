@@ -3067,6 +3067,7 @@ target_include_directories(HoroImmutableFileStorageTests PRIVATE ${PROJECT_SOURC
 horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroPlatformTests
+        support/AllocationProbe.cpp
         unit/platform/NativeProjectIoOwnersTests.cpp
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
