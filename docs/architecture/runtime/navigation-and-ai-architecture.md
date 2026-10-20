@@ -3190,3 +3190,37 @@ complete admitted collider inputs; it does not claim those unsupported authored
 features have acquired a bake implementation. Native regression coverage composes
 the actual Recast builder, shared service/cache, exact-scope asset loader and
 file-backed final source fences without introducing an editor dependency.
+
+### Shared navigation command operation owner
+
+`NavigationBakeApplication` owns one active project command and its last bounded
+result on its construction lane. Explicit host configuration supplies the source
+capture callback, existing operation store, scheduler, service/cache/output
+namespace and compatibility. Creation does not capture source, discover providers
+or start work. Capture executes on an owned scheduler I/O job; owner-lane `Pump`
+submits the complete input to the existing bake service only after that capture
+job has reached its durable terminal record. This avoids nested worker waits and
+publishes callback output through the scheduler's terminal synchronization.
+
+The invocation retains cancellation, the original absolute deadline and an owned
+thread-safe authority-revocation view. The returned source owner remains attached
+to final service validation. Stable content revisions and settings compatibility
+come from exact captured policy/definition/Scene/package bytes; invocation identity
+is confined to request generation. A fresh ValidateOnly result never exposes an
+older publication as its own success. Only successful BuildAndPublish attaches
+its actual immutable published generation.
+
+All facade operations reject other lanes. Lifecycle is explicitly Open, Closing
+or Closed. `Close` stops admission and requests cancellation, then returns busy
+until accepted capture/bake work drains through `Pump`; successful close is
+idempotent. The destructor requires that explicit completed close and performs
+no implicit error-producing shutdown. The operation store and scheduler outlive
+the application and its complete drain. CLI/MCP adapters consume this shared
+operation owner rather than introducing independent capture or publication flows.
+
+The concrete application target edge is `HoroNavigationBakeAutomation` to
+`HoroNavigationBakeService`. Automation owns capture-to-service orchestration;
+BakeService retains authoritative cook/cache/publication ownership and never
+links back to Automation. This forward application dependency is declared in the
+CMake dependency policy. Concrete providers remain explicitly injected by hosts;
+CLI/MCP presentation dependencies do not enter either application target.
