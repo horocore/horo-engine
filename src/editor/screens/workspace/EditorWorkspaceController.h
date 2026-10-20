@@ -637,6 +637,13 @@ namespace Horo::Editor {
         void OpenEmbeddedPCGSource(const SourceOpenResult &result);
         /** @brief Routes exact-frame canvas intents through canonical document commands. */
         bool ProcessPCGDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Translates common undo/redo/save intents only when the active document is PCG. */
+        bool ProcessPCGDocumentShortcut(const EditorWorkspaceViewCommandData &command);
+        /** @brief Validates one active-session fence and finite presentation before any edit. */
+        Result<void> ApplyPCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request);
+        /** @brief Dispatches an admitted request to the one canonical document executor or workspace presentation. */
+        Result<void> ExecutePCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request,
+                                             const PCGDocumentSnapshot &snapshot);
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
         void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
