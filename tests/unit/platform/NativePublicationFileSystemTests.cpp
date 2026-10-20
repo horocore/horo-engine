@@ -1,4 +1,5 @@
 #include "../../support/OwnedTestDirectory.h"
+#include "Horo/Foundation/ErrorCode.h"
 #include "Horo/Foundation/ImmutableFileStorage.h"
 #include "Horo/Platform/NativePublicationFileSystem.h"
 
@@ -12,6 +13,14 @@
 namespace {
     using namespace Horo;
     const std::string Payload{"publication bytes ü"};
+
+    /** @brief Retain native failure detail in CI instead of hiding the failing operation behind its outer code. */
+    std::string DescribeFailure(const Error &failure) {
+        std::string text;
+        for (auto *current = &failure; current != nullptr; current = current->cause.Get())
+            text += std::string{current->code.Value()} + ": " + current->message + '\n';
+        return text;
+    }
 
     /** @brief Owns a root outside the publication namespace and composes a real native backend without creating output. */
     struct Fixture {
@@ -29,7 +38,7 @@ namespace {
 
         void Write(const std::filesystem::path &path, const std::string_view text = Payload) {
             const auto result = files->WriteDurable(path, std::as_bytes(std::span{text}));
-            INFO((result.HasError() ? result.ErrorValue().code.Value() : std::string_view{}));
+            INFO((result.HasError() ? DescribeFailure(result.ErrorValue()) : std::string{}));
             REQUIRE(result.HasValue());
         }
     };
@@ -208,6 +217,32 @@ TEST_CASE("Rooted publication retains its original root when the old spelling is
     CHECK_FALSE(std::filesystem::exists(grantRoot / "child" / "new"));
     CHECK(granted.Value()->ListDirectory(grantRoot / "child", 1).Value().size() == 1);
     CHECK(granted.Value()->ReadFileBounded(grantRoot / "child" / "sentinel", 1024).HasError());
+}
+
+TEST_CASE("Retained native directory cursors admit repeated inventories after a root rename", "[platform][publication]") {
+    Fixture fixture;
+    fixture.Write(fixture.root / "first", "one");
+    fixture.Write(fixture.root / "second", "two");
+    auto granted = Platform::CreateNativePublicationFileSystem(fixture.root, "entries");
+    REQUIRE(granted.HasValue());
+    const auto logical = fixture.root / "entries";
+    REQUIRE(granted.Value()->WriteDurable(logical / "owned", {}).HasValue());
+    const auto moved = fixture.anchor / "moved-cursor";
+    std::filesystem::rename(fixture.root, moved);
+    std::filesystem::create_directories(logical);
+    std::ofstream(logical / "foreign") << "unowned";
+    for (unsigned attempt = 0; attempt < 3; ++attempt) {
+        const auto entries = granted.Value()->ListDirectory(logical, 1);
+        INFO((entries.HasError() ? DescribeFailure(entries.ErrorValue()) : std::string{}));
+        REQUIRE(entries.HasValue());
+        REQUIRE(entries.Value().size() == 1);
+        CHECK(entries.Value()[0].name == std::filesystem::path{"owned"});
+        CHECK(granted.Value()->ReadFileBounded(logical / "owned", 1).HasValue());
+        CHECK(granted.Value()->ReadFileBounded(logical / "foreign", 32).HasError());
+    }
+    REQUIRE(granted.Value()->WriteDurable(logical / "new", {}).HasValue());
+    CHECK(std::filesystem::exists(moved / "entries" / "new"));
+    CHECK_FALSE(std::filesystem::exists(logical / "new"));
 }
 
 #if !defined(_WIN32)
