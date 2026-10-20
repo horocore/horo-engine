@@ -84,10 +84,6 @@ namespace Horo {
                 }
 #else
                 if (descriptor >= 0) {
-                    struct flock unlock = {};
-                    unlock.l_type = F_UNLCK;
-                    unlock.l_whence = SEEK_SET;
-                    static_cast<void>(fcntl(descriptor, F_SETLK, &unlock));
                     close(descriptor);
                     descriptor = -1;
                 }
@@ -175,7 +171,7 @@ namespace Horo {
             return FlushFileBuffers(state.handle) ? Result<void>::Success() : Result<void>::Failure(FsError(IoFailed, path));
         }
 #else
-        /** @brief Acquires nonblocking POSIX record-lock authority on a verified single-link regular file. */
+        /** @brief Acquires nonblocking open-file-description exclusion shared with root-relative publication leases. */
         [[nodiscard]] Result<void> AcquireNativeExclusiveLock(NativePublicationLockState &state, const std::filesystem::path &path) {
             state.descriptor = open(path.c_str(), O_RDWR | O_CREAT | O_NOFOLLOW | O_CLOEXEC, 0600);
             if (state.descriptor < 0)
@@ -183,15 +179,12 @@ namespace Horo {
             if (struct stat information{};
                 fstat(state.descriptor, &information) != 0 || !S_ISREG(information.st_mode) || information.st_nlink != 1)
                 return Result<void>::Failure(FsError(IoFailed, path));
-            struct flock lock = {};
-            lock.l_type = F_WRLCK;
-            lock.l_whence = SEEK_SET;
-            if (fcntl(state.descriptor, F_SETLK, &lock) != 0)
+            if (flock(state.descriptor, LOCK_EX | LOCK_NB) != 0)
                 return Result<void>::Failure(FsError(errno == EACCES || errno == EAGAIN ? LockBusy : IoFailed, path));
             return Result<void>::Success();
         }
 
-        /** @brief Writes diagnostic-only metadata after POSIX record-lock authority has been acquired. */
+        /** @brief Writes diagnostic-only metadata after native exclusion has been acquired. */
         [[nodiscard]] Result<void> WriteExclusiveLockMetadata(const NativePublicationLockState &state, const std::filesystem::path &path,
                                                               const std::string_view ownerMetadata) {
             if (ftruncate(state.descriptor, 0) != 0)

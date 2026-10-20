@@ -1901,3 +1901,41 @@ This deliberately changes C++ call signatures and requires callers to pass their
 already-owned authority. All repository callers are updated, including application
 composition, release/archive helpers and tests. Root-bound native publication
 composition is still required before HORO-1253 containment is complete.
+
+### Root-bound native publication capability
+
+`CreateNativePublicationFileSystem` is explicit Platform host composition. It
+retains an existing authorized directory identity and a fixed derived-output
+namespace without creating output. The shared `DurableFileSystem` contract still
+accepts logical absolute paths; the concrete capability admits only normalized
+paths below that namespace and resolves components against retained parent
+handles. It never reopens an absolute descendant or follows a redirect. Replacing
+the granted root's old pathname cannot redirect reads, writes, inventory,
+capacity queries, locks, removal or atomic replacement to the replacement tree.
+
+Private writes are exclusive and bounded. Existing entries are not truncated;
+`WriteDurable` and `CopyDurable` in this narrow publication authority intentionally
+refuse replacement. Publication uses the existing explicit atomic-replace
+primitive. Native tracked replacement records the irreversible commit before
+syncing directories, allocating an error or invoking other code. Empty private
+files, immutable generation-directory promotion, exact staging cleanup and pinned
+generation reads use the same authority. Directory creation does not itself claim
+transaction durability; callers retain their existing directory sync boundaries.
+
+The move-only writer lease owns both the native lock and its parent identity, so
+it may outlive the filesystem wrapper. Its path check verifies the named lock's
+identity inside that retained parent rather than canonicalizing its old absolute
+spelling. Lock metadata remains diagnostic and is not required by this backend.
+POSIX native publication writers now share open-file-description `flock`
+exclusion, avoiding per-process record locks that an unrelated descriptor close
+could release. Drain older engine processes using the former `fcntl` protocol
+before upgrading; the two lock protocols must not operate concurrently on the
+same output. Windows retains native exclusion and shares no platform handles in
+the public contract.
+
+The Foundation lease adoption bridge and root-relative storage primitives are
+dedicated non-installed internal interfaces. They do not publish a broad source
+include root or couple feature code to a concrete native backend. The original
+immutable storage and the publication authority are peers using that shared
+private native boundary. Host adoption and retained source/trust fences remain
+required before closing HORO-1253.

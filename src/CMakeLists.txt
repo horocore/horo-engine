@@ -148,12 +148,22 @@ add_library(HoroPlatformImmutableFileStorage STATIC
 add_library(HoroEngine::PlatformImmutableFileStorage ALIAS HoroPlatformImmutableFileStorage)
 target_compile_features(HoroPlatformImmutableFileStorage PUBLIC cxx_std_20)
 target_link_libraries(HoroPlatformImmutableFileStorage PUBLIC HoroEngine::Foundation
-    PRIVATE HoroEngine::PlatformProjectReadFiles HoroRootedFileNativeInternal)
+    PRIVATE HoroRootedStorageNativeInternal)
+
+# Both concrete storage capabilities share only these non-installed root-relative native primitives.
+add_library(HoroRootedStorageNativeInternal STATIC)
+set(_horo_rooted_storage_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/rooted-storage")
+file(MAKE_DIRECTORY "${_horo_rooted_storage_headers}")
+configure_file(platform/file_storage/ImmutableFileNative.h
+    "${_horo_rooted_storage_headers}/ImmutableFileNative.h" COPYONLY)
+target_include_directories(HoroRootedStorageNativeInternal PUBLIC "${_horo_rooted_storage_headers}")
+target_link_libraries(HoroRootedStorageNativeInternal PUBLIC HoroEngine::PlatformProjectReadFiles HoroRootedFileNativeInternal)
+target_compile_features(HoroRootedStorageNativeInternal PUBLIC cxx_std_20)
 if (WIN32)
-    target_sources(HoroPlatformImmutableFileStorage PRIVATE platform/file_storage/ImmutableFileNativeWindows.cpp)
-    target_compile_definitions(HoroPlatformImmutableFileStorage PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_sources(HoroRootedStorageNativeInternal PRIVATE platform/file_storage/ImmutableFileNativeWindows.cpp)
+    target_compile_definitions(HoroRootedStorageNativeInternal PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 else ()
-    target_sources(HoroPlatformImmutableFileStorage PRIVATE platform/file_storage/ImmutableFileNativePosix.cpp)
+    target_sources(HoroRootedStorageNativeInternal PRIVATE platform/file_storage/ImmutableFileNativePosix.cpp)
 endif ()
 
 add_library(HoroProjectCodeQuery STATIC
@@ -224,6 +234,7 @@ add_library(HoroPlatform STATIC
         platform/ProductProbeLease.cpp
         platform/PlatformErrors.cpp
         platform/ConfigurationFileStore.cpp
+        platform/file_storage/NativePublicationFileSystem.cpp
         platform/android/AndroidLifecycle.cpp
         platform/android/AndroidLifecycleAdapter.cpp
         platform/android/AndroidStorage.cpp
@@ -231,12 +242,15 @@ add_library(HoroPlatform STATIC
 
 if (WIN32)
     target_sources(HoroPlatform PRIVATE
+            platform/file_storage/PublicationFileNativeWindows.cpp
             platform/windows/DynamicLibrary_Windows.cpp
             platform/windows/ExternalProcess_Windows.cpp
             platform/windows/SecureRandom_Windows.cpp)
+    target_compile_definitions(HoroPlatform PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
     target_link_libraries(HoroPlatform PRIVATE bcrypt)
 else ()
     target_sources(HoroPlatform PRIVATE
+            platform/file_storage/PublicationFileNativePosix.cpp
             platform/posix/DynamicLibrary_Posix.cpp
             platform/posix/ExternalProcess_Posix.cpp
             platform/posix/SecureRandom_Posix.cpp)
@@ -258,6 +272,7 @@ target_include_directories(HoroPlatform
         ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Security)
+target_link_libraries(HoroPlatform PRIVATE HoroRootedStorageNativeInternal)
 target_include_directories(HoroPlatform PRIVATE
         "$<TARGET_PROPERTY:HoroPublicationLockInternal,INTERFACE_INCLUDE_DIRECTORIES>")
 
