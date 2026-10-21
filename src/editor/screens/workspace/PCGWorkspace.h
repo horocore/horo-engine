@@ -72,8 +72,10 @@ namespace Horo::Editor {
         PCGDocumentCommand fence;
         PCGCanvasState presentation;
         PCG::NodeTypeId type;
-        PCG::NodeId sourceNode, targetNode;
-        PCG::PinId sourcePin, targetPin;
+        PCG::NodeId sourceNode;
+        PCG::NodeId targetNode;
+        PCG::PinId sourcePin;
+        PCG::PinId targetPin;
         PCG::EdgeId edge;
     };
 

@@ -33,8 +33,7 @@ namespace Horo::Editor::PCGCanvasTestSupport {
                                                                      EditorWorkspaceDependencies{.mutations = &project.mutations,
                                                                                                  .durableFiles = &project.files,
                                                                                                  .documentSessionOwner = Asset(9),
-                                                                                                 .pcgCatalog = catalog.document,
-                                                                                                 .pcgPalette = catalog.palette});
+                                                                                                 .pcg = std::move(catalog)});
             Open();
         }
 

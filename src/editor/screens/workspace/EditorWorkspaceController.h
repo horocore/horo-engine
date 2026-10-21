@@ -83,8 +83,7 @@ namespace Horo::Editor {
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
-        PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
-        std::vector<PCGPaletteEntry> pcgPalette;           /**< Host-owned recipes matching pcgCatalog; copied into workspace. */
+        PCGEditorCatalog pcg{.document = {.revision = 1}}; /**< One host-composed source-support and creation-recipe generation. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };

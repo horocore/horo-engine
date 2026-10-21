@@ -72,10 +72,9 @@ namespace Horo::Editor {
                 if (found != state.placements.end())
                     frame.Edit().presentation.pan = {-found->position.x * state.zoom, -found->position.y * state.zoom};
             }
-            float zoom = frame.State().zoom;
-            if (Ui::DrawFloatPropRow(frame.Text("workspace.pcg.zoom").c_str(), "##zoom", zoom, frame.fonts,
-                                     {.speed = 0.01F, .minimum = 0.25F, .maximum = 2.0F})
-                    .changed)
+            if (float zoom = frame.State().zoom; Ui::DrawFloatPropRow(frame.Text("workspace.pcg.zoom").c_str(), "##zoom", zoom, frame.fonts,
+                                                                      {.speed = 0.01F, .minimum = 0.25F, .maximum = 2.0F})
+                                                     .changed)
                 frame.Edit().presentation.zoom = std::clamp(zoom, 0.25F, 2.0F);
             Ui::Hint(frame.Text("workspace.pcg.navigation_hint").c_str(), frame.fonts);
         }
@@ -85,7 +84,7 @@ namespace Horo::Editor {
             Ui::SectionTitle(frame.Text("workspace.pcg.palette").c_str(), frame.fonts);
             std::array<char, 129> filter{};
             const auto &current = frame.State().filter;
-            std::copy(current.begin(), current.end(), filter.begin());
+            std::ranges::copy(current, filter.begin());
             if (Ui::InputTextControl("##palette_filter", filter.data(), filter.size(), frame.fonts,
                                      {.hint = frame.Text("workspace.pcg.filter").c_str()}))
                 frame.Edit().presentation.filter = filter.data();
@@ -180,16 +179,15 @@ namespace Horo::Editor {
                                   origin.y + frame.State().pan.y + placement->position.y * frame.State().zoom};
             const float height = row * (1 + static_cast<float>(node.pins.size()));
             const auto window = ImGui::GetWindowPos();
-            const auto size = ImGui::GetWindowSize();
-            if (position.x + width < window.x || position.y + height < window.y || position.x > window.x + size.x ||
-                position.y > window.y + size.y)
+            if (const auto size = ImGui::GetWindowSize(); position.x + width < window.x || position.y + height < window.y ||
+                                                          position.x > window.x + size.x || position.y > window.y + size.y)
                 return;
             const auto id = std::to_string(node.id.Value());
             ImGui::PushID(id.c_str());
             ImGui::SetCursorScreenPos(position);
             const auto title = std::format("{} ({})###node", frame.NodeLabel(node), node.id.Value());
-            const bool selected = std::ranges::find(frame.State().selection, node.id) != frame.State().selection.end();
-            if (Ui::Button({.label = title.c_str(),
+            if (const bool selected = std::ranges::find(frame.State().selection, node.id) != frame.State().selection.end();
+                Ui::Button({.label = title.c_str(),
                             .size = {width / Theme::GetActiveTokens().sizes.uiScale, 0},
                             .variant = selected ? Ui::ButtonVariant::Primary : Ui::ButtonVariant::Secondary,
                             .font = frame.fonts.sans}))
@@ -283,9 +281,8 @@ namespace Horo::Editor {
             }
             Ui::LabeledSeparator(frame.Text("workspace.pcg.connections").c_str(), frame.fonts);
             for (const auto &edge : frame.document.snapshot.source->Data().edges) {
-                const auto &selected = frame.State().selection;
-                if (std::ranges::find(selected, edge.sourceNode) == selected.end() &&
-                    std::ranges::find(selected, edge.targetNode) == selected.end())
+                if (const auto &selected = frame.State().selection; std::ranges::find(selected, edge.sourceNode) == selected.end() &&
+                                                                    std::ranges::find(selected, edge.targetNode) == selected.end())
                     continue;
                 const auto label = std::format("{} {}:{} → {}:{}###edge{}", frame.Text("workspace.pcg.disconnect"), edge.sourceNode.Value(),
                                                edge.sourcePin.Value(), edge.targetNode.Value(), edge.targetPin.Value(), edge.id.Value());
@@ -330,7 +327,9 @@ namespace Horo::Editor {
             }
 
             /** @copydoc IWorkspacePanel::DrawIcon */
-            void DrawIcon(ImDrawList *, const ImVec2 &, const ImVec2 &, ImU32) override {}
+            void DrawIcon(ImDrawList *, const ImVec2 &, const ImVec2 &, ImU32) override {
+                // This asset-document presenter has no activity-bar placement; its document tab supplies navigation.
+            }
 
             /** @copydoc IWorkspacePanel::DrawPanel */
             void DrawPanel(const ImVec2 &, const ImVec2 &, const EditorWorkspaceViewModel &workspace,
@@ -401,16 +400,18 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceView::DrawPCGDocument */
     bool EditorWorkspaceView::DrawPCGDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const {
         const auto active = viewModel.workspacePanelHost.ActiveDocument();
-        const auto found = std::ranges::find_if(viewModel.pcgDocuments, [active](const auto &entry) {
+        if (const auto found = std::ranges::find_if(viewModel.pcgDocuments,
+                                                    [active](const auto &entry) {
             return active == entry.snapshot.identity.instance;
         });
-        if (found == viewModel.pcgDocuments.end())
+            found == viewModel.pcgDocuments.end())
             return false;
         const auto &panels = m_panelRegistry.GetPanelsForArea(WorkspaceDockArea::Document);
-        const auto presenter = std::ranges::find_if(panels, [](const auto &panel) {
+        if (const auto presenter = std::ranges::find_if(panels,
+                                                        [](const auto &panel) {
             return panel->GetId() == PCGGraphPanelId;
         });
-        if (presenter != panels.end())
+            presenter != panels.end())
             (*presenter)->DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), viewModel, outCommand, m_context);
         else
             Ui::ErrorText(m_context.localization.Get("editor", "workspace.source_open.unavailable").c_str(), m_context.theme.fonts);
