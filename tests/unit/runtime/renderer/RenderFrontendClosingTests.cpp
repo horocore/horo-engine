@@ -87,4 +87,24 @@ namespace Horo::Tests::RenderFrontendTesting {
         CHECK(recreated != interveningPeer.Value());
         Horo::Render::Test::RequireDrainedOwner(*second);
     }
+
+    TEST_CASE("Foreign resource retirement cannot release an owner-thread native lifetime", "[renderer][frontend][retirement]") {
+        lifecycleState = {};
+        auto frontend = CreateTrackingFrontend();
+        const auto created = frontend->CreateBuffer({.byteSize = 16, .usage = RenderBufferUsage::CopySource}, {});
+        REQUIRE(created.HasValue());
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        bool rejected = false;
+        std::thread worker{[&] {
+            const auto released = frontend->ReleaseBuffer(created.Value().handle);
+            rejected = released.HasError() && released.ErrorValue().code.Value() == "render.frontend.wrong_thread";
+        }};
+        worker.join();
+        CHECK(rejected);
+        CHECK(lifecycleState.destroyBufferCount == 0);
+        REQUIRE(frontend->ReleaseBuffer(created.Value().handle).HasValue());
+        CHECK(lifecycleState.destroyBufferCount == 1);
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
+    }
+
 }  // namespace Horo::Tests::RenderFrontendTesting

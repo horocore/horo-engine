@@ -136,6 +136,9 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> CheckThread() const;
         [[nodiscard]] Result<void> CheckCurrent() const;
         [[nodiscard]] Result<void> Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance);
+        /** @brief Selects the exact requested format from bounded native discovery before allocation.
+         * @param session Native session from the current fenced owner. @return Exact native format or original validation failure. */
+        [[nodiscard]] Result<std::int64_t> SelectRuntimeFormat(XrSession session) const;
         [[nodiscard]] Result<void> Prepare(const NativeSessionBorrow &session);
         [[nodiscard]] Result<bool> ReleaseReady();
         [[nodiscard]] Result<bool> FinishClose();

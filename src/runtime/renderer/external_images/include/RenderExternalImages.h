@@ -57,6 +57,11 @@ namespace Horo::Render {
              * @param frontend Original frontend. @param texture Handle issued by this bridge, retained by its native owner.
              * @return True after native backing/queued references are terminal; false while still ready or retiring. */
             [[nodiscard]] static Result<bool> RetirementComplete(const RenderFrontend &frontend, RenderTextureHandle texture);
+
+        private:
+            /** @brief Validates thread, lifecycle, device, source and native backend admission before reserving a registry slot. */
+            [[nodiscard]] static Result<IRenderExternalTextureBackend *> ValidateImport(
+                const RenderFrontend &frontend, const std::shared_ptr<const IRenderExternalTextureSource> &source);
         };
     }  // namespace Detail
 }  // namespace Horo::Render

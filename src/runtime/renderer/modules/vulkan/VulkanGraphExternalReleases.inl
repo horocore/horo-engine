@@ -1,3 +1,31 @@
+/** @copydoc VulkanGraphRuntime::Impl::ValidateExternalAcquisition */
+Result<void> VulkanGraphRuntime::Impl::ValidateExternalAcquisition(const RenderGraphExecutionRequest &request,
+                                                                   const std::size_t index) const {
+    const auto &resource = request.graph.Resources()[index];
+    if (const auto *external = resources->ExternalTextureSource(request.resources[index].instance);
+        external != nullptr && resource.kind == RenderGraphResourceKind::Texture) {
+        if (resource.resourceClass != RenderGraphResourceClass::External || external->DeviceIncarnation() != deviceIncarnation)
+            return Result<void>::Failure(Invalid("External image registry/device incarnation does not match this native graph."));
+        if (auto current = external->Validate(); current.HasError())
+            return current;
+        const auto expected = external->RequiredFinalState();
+        const auto *boundQueue = Queue(expected.queue);
+        if (boundQueue == nullptr || !boundQueue->supportsGraphics || boundQueue->family != external->NativeQueueFamily())
+            return Result<void>::Failure(Unsupported("External image requires the exact OpenXR-bound native graphics queue."));
+        std::uint32_t obligations{};
+        for (const auto &release : request.graph.ExternalReleases()) {
+            if (release.resource != resource.id)
+                continue;
+            if (release.newState != expected)
+                return Result<void>::Failure(Invalid("External final state differs from native acquisition policy."));
+            ++obligations;
+        }
+        if (obligations != 1)
+            return Result<void>::Failure(Invalid("Every imported runtime image requires its exact encoded release obligation."));
+    }
+    return Result<void>::Success();
+}
+
 /** @brief Encodes qualified OpenXR graphics-queue handoff requirements after the exact final producer.
  * @details Called inside PreparePass's after-barrier range, before any command recording/submission.
  * This extends the canonical graph compiler and command runtime, never a parallel queue or completion ledger.

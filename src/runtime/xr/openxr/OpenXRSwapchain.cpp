@@ -109,27 +109,36 @@ namespace Horo::XR::OpenXRInternal {
         return Load(getProc, instance, "xrReleaseSwapchainImage", dispatch_.release);
     }
 
-    /** @copydoc OpenXRSwapchain::Prepare */
-    Result<void> OpenXRSwapchain::Prepare(const NativeSessionBorrow &session) {
+    /** @copydoc OpenXRSwapchain::SelectRuntimeFormat */
+    Result<std::int64_t> OpenXRSwapchain::SelectRuntimeFormat(const XrSession session) const {
         std::array<std::int64_t, MaximumFormats> formats{};
         std::uint32_t count{};
-        auto result = dispatch_.formats(session.session, 0, &count, nullptr);
+        auto result = dispatch_.formats(session, 0, &count, nullptr);
         if (XR_FAILED(result))
-            return Result<void>::Failure(NativeFailure("enumerate swapchain formats", result));
+            return Result<std::int64_t>::Failure(NativeFailure("enumerate swapchain formats", result));
         if (count == 0 || count > formats.size())
-            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+            return Result<std::int64_t>::Failure(MakeError(XRErrors::CapacityExceeded));
         const std::uint32_t capacity = count;
-        result = dispatch_.formats(session.session, capacity, &count, formats.data());
+        result = dispatch_.formats(session, capacity, &count, formats.data());
         if (XR_FAILED(result))
-            return Result<void>::Failure(NativeFailure("enumerate swapchain formats", result));
+            return Result<std::int64_t>::Failure(NativeFailure("enumerate swapchain formats", result));
         if (count == 0 || count > capacity)
-            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+            return Result<std::int64_t>::Failure(MakeError(XRErrors::CapacityExceeded));
         const auto available = std::span{formats}.first(count);
         const auto format = images_->SelectFormat(request_, available);
         if (format.HasError())
-            return Result<void>::Failure(format.ErrorValue());
+            return Result<std::int64_t>::Failure(format.ErrorValue());
         if (std::ranges::find(available, format.Value()) == available.end())
-            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "Renderer selected an unadvertised runtime format."));
+            return Result<std::int64_t>::Failure(
+                MakeError(XRErrors::OperationIncompatible, "Renderer selected an unadvertised runtime format."));
+        return format;
+    }
+
+    /** @copydoc OpenXRSwapchain::Prepare */
+    Result<void> OpenXRSwapchain::Prepare(const NativeSessionBorrow &session) {
+        const auto format = SelectRuntimeFormat(session.session);
+        if (format.HasError())
+            return Result<void>::Failure(format.ErrorValue());
         if (auto sessionState = session_->Validate(request_.target.session); sessionState.HasError())
             return sessionState;
         if (auto device = images_->Validate(request_); device.HasError())
@@ -145,7 +154,7 @@ namespace Horo::XR::OpenXRInternal {
                                          1,
                                          request_.texture.layerCount,
                                          request_.texture.mipCount};
-        result = dispatch_.create(session.session, &info, &native_);
+        auto result = dispatch_.create(session.session, &info, &native_);
         if (XR_FAILED(result))
             return Result<void>::Failure(NativeFailure("create swapchain", result));
         if (native_ == XR_NULL_HANDLE)

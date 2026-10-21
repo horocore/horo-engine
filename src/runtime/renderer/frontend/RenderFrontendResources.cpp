@@ -196,6 +196,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseOffscreenTarget */
     Result<void> RenderFrontend::ReleaseOffscreenTarget(const RenderTargetHandle target) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::TargetReleaseDuringFrame, "Offscreen target cannot be released during a frame."));
@@ -514,6 +516,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseBuffer */
     Result<void> RenderFrontend::ReleaseBuffer(const RenderBufferHandle buffer) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr) {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be released during an active frame."));
@@ -524,6 +528,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseMesh */
     Result<void> RenderFrontend::ReleaseMesh(const RenderMeshHandle mesh) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr) {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A mesh cannot be released during an active frame."));
@@ -534,6 +540,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseTexture */
     Result<void> RenderFrontend::ReleaseTexture(const RenderTextureHandle texture) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be released during an active frame."));
@@ -543,6 +551,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseTextureView */
     Result<void> RenderFrontend::ReleaseTextureView(const RenderTextureViewHandle view) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture view cannot be released during an active frame."));
@@ -552,6 +562,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseRenderTarget */
     Result<void> RenderFrontend::ReleaseRenderTarget(const RenderTargetHandle target) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A render target cannot be released during an active frame."));
