@@ -50,7 +50,7 @@ namespace Horo::Render::Detail {
                 frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
                 return Outcome::Failure(lifetime.ErrorValue());
             }
-            auto imported = backend.Value()->ImportExternalTexture(*source, std::move(lifetime.Value()));
+            auto imported = backend.Value()->ImportExternalTexture(*source, std::move(lifetime).Value());
             if (imported.HasError()) {
                 frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
                 return Outcome::Failure(imported.ErrorValue());
