@@ -101,12 +101,14 @@ namespace Horo::Prefab {
             for (const auto &intent : Intents(set))
                 if (auto applied = ApplyIntent(state, intent, result); applied.HasError())
                     return Result<PrefabValueOverrideResolution>::Failure(applied.ErrorValue());
+            if (auto finished = FinishPayloads(state); finished.HasError())
+                return Result<PrefabValueOverrideResolution>::Failure(finished.ErrorValue());
+            if (auto topology = ResolveComponentIntents(state, set, result); topology.HasError())
+                return Result<PrefabValueOverrideResolution>::Failure(topology.ErrorValue());
             result.provenance.reserve(state.bindings.size());
             for (auto &binding : state.bindings)
                 result.provenance.push_back(std::move(binding.provenance));
-            if (result.rebased.conflicts.empty() && result.rebased.orphans.empty()) {
-                if (auto finished = FinishPayloads(state); finished.HasError())
-                    return Result<PrefabValueOverrideResolution>::Failure(finished.ErrorValue());
+            if (!result.rebased.HasUnresolved()) {
                 auto bytes = SerializePrefabValueOverrides(set, limits);
                 if (bytes.HasError())
                     return Result<PrefabValueOverrideResolution>::Failure(bytes.ErrorValue());

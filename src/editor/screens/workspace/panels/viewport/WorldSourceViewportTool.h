@@ -9,13 +9,6 @@ namespace Horo::Editor {
     /** @brief Transient viewport gesture/popup only; publication and history belong to the composed world owner. */
     class WorldSourceViewportTool final {
     public:
-        /** @brief Draws the actual viewport adapter and returns whether scene input must yield to it. */
-        bool Draw(ImDrawList &draw, ImVec2 origin, ImVec2 size, const EditorWorkspaceViewModel &view,
-                  EditorWorkspaceViewCommandData &command, const EditorGuiContext &context, Math::ClipDepthRange depth, bool eligible);
-        /** @brief Cancels previews without mutating the document on detach/focus loss. */
-        void Cancel();
-
-    private:
         /** @brief Borrowed frame inputs; never retained by the gesture or source authority. */
         struct Frame {
             ImDrawList &draw;
@@ -26,8 +19,14 @@ namespace Horo::Editor {
             bool eligible{};
         };
 
+        /** @brief Draws the actual viewport adapter; frame borrows end with this synchronous call. */
+        bool Draw(const Frame &frame, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+        /** @brief Cancels previews without mutating the document on detach/focus loss. */
+        void Cancel();
+
+    private:
         /** @brief Builds a gesture only after ray/plane admission succeeds. */
-        void BeginDrag(const Frame &frame, const PartitionedWorldSource &source, std::size_t handle, Math::WorldCoordinate64 global,
+        void BeginDrag(const Frame &frame, const PartitionedWorldSource &source, std::size_t handle, const Math::WorldCoordinate64 &global,
                        Math::Vec3 local);
         /** @brief Draws exact source control points and admits a single selected-source gesture. */
         void DrawSourceHandles(const Frame &frame, const PartitionedWorldSource &source);

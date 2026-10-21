@@ -47,7 +47,7 @@ namespace {
         controller.ProcessCommand(scrub);
         CHECK(controller.ViewModel().sequenceDocuments.front().timeline.playhead == 100);
         EditorWorkspaceViewCommandData focus;
-        focus.command = EditorWorkspaceViewCommand::FocusSequenceDocument;
+        focus.command = EditorWorkspaceViewCommand::FocusWorkspaceDocument;
         focus.documentInstance = instance;
         controller.ProcessCommand(focus);
         CHECK(controller.ViewModel().workspacePanelHost.ActiveDocument() == instance);
@@ -90,7 +90,7 @@ TEST_CASE("Sequence asset activation opens focuses and closes actual document ta
     CHECK(controller.ViewModel().contentBrowserOperationError == "workspace.sequence.conflict");
     CHECK(controller.ViewModel().sequenceDocuments.size() == 1);
     EditorWorkspaceViewCommandData close;
-    close.command = EditorWorkspaceViewCommand::CloseSequenceDocument;
+    close.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument;
     close.documentInstance = instance;
     controller.ProcessCommand(close);
     CHECK(controller.ViewModel().sequenceDocuments.empty());

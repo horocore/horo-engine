@@ -5,7 +5,7 @@
  * @brief Editor-private backend-neutral GUI renderer contract.
  */
 
-#include "Horo/Foundation/Result.h"
+#include "Horo/Runtime/Render/RenderBackend.h"
 
 #include <span>
 
@@ -29,7 +29,7 @@ namespace Horo::Editor {
      * serialized on the editor UI/render thread. No native graphics type crosses
      * this contract.
      */
-    class IEditorGuiRenderer {
+    class IEditorGuiRenderer : public Render::IGuiPassExecutor {
     public:
         virtual ~IEditorGuiRenderer() = default;
 
@@ -40,7 +40,7 @@ namespace Horo::Editor {
         [[nodiscard]] virtual Result<void> BeginFrame() = 0;
 
         /** @brief Encodes current Dear ImGui draw data into the active backend frame. */
-        [[nodiscard]] virtual Result<void> RenderDrawData() = 0;
+        [[nodiscard]] Result<void> RenderDrawData() override = 0;
 
         /** @brief Uploads one immutable tightly packed RGBA8 UI texture. */
         [[nodiscard]] virtual Result<std::uintptr_t> CreateTexture(const EditorRgba8ImageView &image) = 0;

@@ -6,13 +6,15 @@ from pathlib import Path
 import sys
 
 import pytest
+from defusedxml.common import DefusedXmlException
 
 
 pytest.importorskip("defusedxml", reason="Sonar collector experiment dependency")
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "compare_sonar_coverage.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / 'analyze.py'
 SPEC = importlib.util.spec_from_file_location("compare_sonar_coverage", SCRIPT)
 comparison = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = comparison
 SPEC.loader.exec_module(comparison)
 
 
@@ -78,7 +80,7 @@ def test_rejects_entity_expansion(tmp_path: Path) -> None:
         '<coverage version="1"><file path="&text;"/></coverage>',
         encoding="utf-8",
     )
-    with pytest.raises(comparison.DefusedXmlException):
+    with pytest.raises(DefusedXmlException):
         comparison.read_report(path, tmp_path)
 
 
@@ -93,12 +95,12 @@ def test_main_writes_timing_and_complete_comparison(
     output = tmp_path / "comparison.json"
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", [
-        "compare_sonar_coverage.py", "--root", str(tmp_path),
+        'analyze.py', "--root", str(tmp_path),
         "--gcovr-report", str(baseline), "--fastcov-report", str(candidate),
         "--gcovr-seconds", "193", "--fastcov-seconds", "12",
         "--output", str(output),
     ])
-    assert comparison.main() == 0
+    assert comparison.coverage_main() == 0
     result = json.loads(output.read_text(encoding="utf-8"))
     assert result["equivalent"] == (candidate_covered == "true")
     assert result["seconds"] == {"gcovr": 193, "fastcov": 12}
@@ -110,13 +112,13 @@ def test_main_rejects_incomplete_input(tmp_path: Path, monkeypatch: pytest.Monke
     missing = tmp_path / "missing.xml"
     output = tmp_path / "comparison.json"
     monkeypatch.setattr(sys, "argv", [
-        "compare_sonar_coverage.py", "--root", str(tmp_path),
+        'analyze.py', "--root", str(tmp_path),
         "--gcovr-report", str(missing), "--fastcov-report", str(missing),
         "--gcovr-seconds", "193", "--fastcov-seconds", "12",
         "--output", str(output),
     ])
     with pytest.raises(SystemExit) as error:
-        comparison.main()
+        comparison.coverage_main()
     assert error.value.code == 2
     assert not output.exists()
 
@@ -148,13 +150,13 @@ def test_main_rejects_outside_output(tmp_path: Path, monkeypatch: pytest.MonkeyP
                     '<lineToCover lineNumber="1" covered="true"/>')
     outside = tmp_path / "outside.json"
     monkeypatch.setattr(sys, "argv", [
-        "compare_sonar_coverage.py", "--root", str(root),
+        'analyze.py', "--root", str(root),
         "--gcovr-report", str(source), "--fastcov-report", str(source),
         "--gcovr-seconds", "1", "--fastcov-seconds", "1",
         "--output", str(outside),
     ])
     with pytest.raises(SystemExit) as error:
-        comparison.main()
+        comparison.coverage_main()
     assert error.value.code == 2
     assert not outside.exists()
 

@@ -9,7 +9,7 @@ categories, each with nonempty bullets. `[Unreleased]` is not candidate
 content. Selection uses full SemVer identity, including prerelease and build
 metadata; a range query selects released entries in `(lower, upper]`.
 
-`scripts/parse_changelog.py` validates this bounded source before it emits a
+`scripts/dev.py` validates this bounded source before it emits a
 UTF-8 `ReleaseNotesSnapshot.json`. Missing, duplicate, malformed, unsafe
 Markdown, invalid dates, and oversized content fail with source-context
 diagnostics. The snapshot schema is:

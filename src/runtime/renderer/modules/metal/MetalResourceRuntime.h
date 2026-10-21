@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Render/RenderBackend.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 
 #include <memory>
 #ifdef __OBJC__
@@ -35,6 +36,36 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture);
         [[nodiscard]] Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t colorAttachment,
                                                                std::uint64_t depthAttachment);
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &descriptor,
+                                                                               std::size_t cookedBytes) const;
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &descriptor,
+                                                                                   std::uint64_t vertex, std::uint64_t fragment) const;
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<RenderMemoryCostPlan> QuerySamplerMemoryCost(const RenderSamplerDescriptor &descriptor) const;
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &descriptor,
+                                                               std::span<const std::uint8_t> cookedCode,
+                                                               const RenderMemoryPlacement &placement);
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescriptor &descriptor, std::uint64_t vertex,
+                                                                   std::uint64_t fragment, const RenderMemoryPlacement &placement);
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &descriptor,
+                                                          const RenderMemoryPlacement &placement);
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<std::size_t> QueryMaterialParameterBufferSize(std::uint64_t pipeline,
+                                                                           const MaterialBindingDescriptor &descriptor,
+                                                                           ShaderBindingId binding) const;
+        /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
+        [[nodiscard]] Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(
+            const MaterialBindingDescriptor &descriptor, std::uint64_t pipeline, std::span<const MaterialResidentResource> resources);
+        void DestroyShaderModule(std::uint64_t backendInstance) noexcept;
+        void DestroyGraphicsPipeline(std::uint64_t backendInstance) noexcept;
+        void DestroySampler(std::uint64_t backendInstance) noexcept;
         void DestroyBuffer(std::uint64_t backendInstance) noexcept;
         void DestroyMesh(std::uint64_t backendInstance) noexcept;
         void DestroyTexture(std::uint64_t backendInstance) noexcept;

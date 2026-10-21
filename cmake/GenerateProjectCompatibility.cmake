@@ -4,7 +4,7 @@ set(_HORO_RELEASE_MANIFEST "${_HORO_RELEASES_ROOT}/${PROJECT_VERSION}/release.js
 set(_HORO_PROJECT_COMPATIBILITY_OUTPUT
     "${HORO_GENERATED_DIR}/GeneratedProjectCompatibility.h")
 set(_HORO_PROJECT_COMPATIBILITY_SCRIPT
-    "${PROJECT_SOURCE_DIR}/scripts/generate_project_compatibility.py")
+    "${PROJECT_SOURCE_DIR}/scripts/project.py")
 file(GLOB_RECURSE _HORO_RELEASE_INPUTS CONFIGURE_DEPENDS "${_HORO_RELEASES_ROOT}/*.json")
 
 if(NOT EXISTS "${_HORO_PROJECT_CONTRACT}")
@@ -17,7 +17,7 @@ if(NOT EXISTS "${_HORO_RELEASE_MANIFEST}")
 endif()
 
 execute_process(
-    COMMAND "${Python3_EXECUTABLE}" "${_HORO_PROJECT_COMPATIBILITY_SCRIPT}"
+    COMMAND "${Python3_EXECUTABLE}" "${_HORO_PROJECT_COMPATIBILITY_SCRIPT}" compatibility
             "${_HORO_RELEASES_ROOT}" "${PROJECT_VERSION}" "${_HORO_PROJECT_COMPATIBILITY_OUTPUT}"
             "${_horo_generated_migration_set_hash}"
             "${HORO_PROJECT_MIGRATION_CATALOG_JSON}"
@@ -30,7 +30,7 @@ endif()
 
 add_custom_command(
     OUTPUT "${_HORO_PROJECT_COMPATIBILITY_OUTPUT}"
-    COMMAND "${Python3_EXECUTABLE}" "${_HORO_PROJECT_COMPATIBILITY_SCRIPT}"
+    COMMAND "${Python3_EXECUTABLE}" "${_HORO_PROJECT_COMPATIBILITY_SCRIPT}" compatibility
             "${_HORO_RELEASES_ROOT}" "${PROJECT_VERSION}" "${_HORO_PROJECT_COMPATIBILITY_OUTPUT}"
             "${_horo_generated_migration_set_hash}"
             "${HORO_PROJECT_MIGRATION_CATALOG_JSON}"

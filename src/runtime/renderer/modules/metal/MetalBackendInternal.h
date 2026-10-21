@@ -2,6 +2,7 @@
 
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "MetalBackendModule.h"
 #include "MetalDeviceCapabilities.h"
 #include "MetalRenderBackendErrors.h"
@@ -10,7 +11,7 @@
 
 namespace Horo::Render::Detail {
     /** @brief Runtime-owned Metal execution contract used to isolate native code and enable headless contract tests. */
-    class IMetalRuntime : public IRenderResourceBackend {
+    class IMetalRuntime : public IRenderResourceBackend, public IMaterialBindingBackend {
     public:
         ~IMetalRuntime() override = default;
 

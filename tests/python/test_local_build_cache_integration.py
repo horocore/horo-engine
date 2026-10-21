@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import os
 from pathlib import Path
 import shutil
@@ -12,9 +13,9 @@ import sys
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-import dev
-import dev_process
-import local_build_cache as cache
+import dev as dev
+import dev as dev_process
+import dev as cache
 
 
 def run(*arguments: str, cwd: Path, env: dict[str, str] | None = None) -> str:
@@ -48,7 +49,7 @@ def test_real_worktree_cache_hit_and_changed_header_miss(tmp_path: Path, monkeyp
     commit = run("git", "rev-parse", "HEAD", cwd=repo).strip()
     run("git", "update-ref", "refs/remotes/origin/main", commit, cwd=repo)
     store = tmp_path / "compiler store türkçe"
-    monkeypatch.setattr(cache, "cache_directory", lambda _: store)
+    monkeypatch.setattr(cache, 'cache_directory', lambda _: store)
 
     def compile_source(source: Path, build: Path, binding: cache.CacheBinding, stats: Path | None = None) -> None:
         command = ["cmake", "-S", str(source), "-B", str(build), "-G", "Ninja",

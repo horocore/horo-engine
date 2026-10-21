@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MetalLightCullingKernel.h"
+#include "MetalPreparedMaterialState.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceInstances.h"
 #include "MetalResourcePolicy.h"
@@ -114,11 +115,18 @@ namespace Horo::Render::Detail {
         __strong NSMutableArray<id<MTLCommandBuffer>> *submittedUploads{
             [[NSMutableArray alloc] initWithCapacity:MetalRecordingBudget::MaximumUploads]};
         std::unordered_map<PoolKey, HeapRecord, PoolKeyHash> heaps;
+        std::unordered_set<MetalShaderModule *> shaderModules;
+        std::unordered_set<MetalGraphicsPipeline *> graphicsPipelines;
+        std::unordered_set<MetalSamplerInstance *> samplers;
         std::unordered_set<MetalBufferInstance *> buffers;
         std::unordered_set<MetalMeshInstance *> meshes;
         std::unordered_set<MetalTextureInstance *> textures;
         std::unordered_set<MetalTextureViewInstance *> textureViews;
         std::unordered_set<MetalRenderTargetInstance *> renderTargets;
+
+        /** @brief Resolves one already-admitted resource without allocating native backing or publishing a partial table. */
+        [[nodiscard]] Result<MetalMaterialSlot> ResolveMaterialResource(ShaderResourceKind kind, const MaterialResidentResource &resident,
+                                                                        std::size_t requiredBufferBytes) const;
 
         [[nodiscard]] PoolKey Key(const RenderMemoryPoolId pool) const noexcept {
             return {.renderer = pool.renderer.value, .pool = pool.value};

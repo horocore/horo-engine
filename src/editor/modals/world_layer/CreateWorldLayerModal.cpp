@@ -8,7 +8,7 @@
 
 namespace Horo::Editor {
     /** @copydoc CreateWorldLayerModal::CreateWorldLayerModal */
-    CreateWorldLayerModal::CreateWorldLayerModal(const EditorGuiContext &context, const WorldDocumentFence expected, Create create)
+    CreateWorldLayerModal::CreateWorldLayerModal(const EditorGuiContext &context, const WorldDocumentFence &expected, Create create)
         : context_(context), expected_(expected), create_(std::move(create)) {}
 
     /** @copydoc CreateWorldLayerModal::Id */
@@ -68,8 +68,8 @@ namespace Horo::Editor {
         const bool valid = DrawName();
         ImGui::EndChild();
         shell.BeginFooter({Theme::Layout::CardPad, Theme::Layout::CardPad});
-        const auto cancel = context_.localization.Get("editor", "workspace.world_layers.cancel");
-        if (Ui::Button({.label = cancel.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans})) {
+        if (const auto cancel = context_.localization.Get("editor", "workspace.world_layers.cancel");
+            Ui::Button({.label = cancel.c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans})) {
             shell.EndFooter();
             return ModalFrameResult::RequestClose(ModalCloseReason::Cancelled);
         }
