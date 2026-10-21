@@ -68,9 +68,15 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc EditorWorkspaceController::UpdateUiCanvasResources */
+    void EditorWorkspaceController::UpdateUiCanvasResources() {
+        RefreshUiCanvasProjection();
+    }
+
     /** @copydoc EditorWorkspaceController::RefreshUiCanvasProjection */
     void EditorWorkspaceController::RefreshUiCanvasProjection() {
         auto &projections = m_viewModel.uiCanvasDocuments;
+        const auto refreshed = m_uiInspectorResources ? m_uiInspectorResources->Refresh() : Result<void>::Success();
         const auto resources = m_uiInspectorResources ? m_uiInspectorResources->Capture() : UiInspectorResourceSnapshot{};
         std::erase_if(projections, [this](const auto &projection) {
             return std::ranges::none_of(m_uiCanvasDocuments, [&](const auto &owner) {
@@ -110,6 +116,11 @@ namespace Horo::Editor {
             projection->inspectorAssets = resources.assets.Revision();
             projection->inspectorStyles = resources.StyleGeneration();
             projection->inspectorResourcePublication = resources.publication;
+            projection->inspectorThemes = resources.themes;
+            projection->inspectorTheme = resources.theme;
+            projection->inspectorStylePending = resources.pending;
+            if (refreshed.HasError())
+                projection->diagnostic = refreshed.ErrorValue();
             projection->root = owner.Document().Canvases().front().rootElement;
             projection->selection = owner.Selection();
             projection->canUndo = owner.CanUndo();
@@ -152,6 +163,12 @@ namespace Horo::Editor {
         Result<void> result = Result<void>::Success();
         if (command.uiCanvasState != owner->CurrentState()) {
             result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+        } else if (command.command == UiCanvasSelectTheme) {
+            if (!m_uiInspectorResources || command.uiCanvasInspectorAssets != resources.assets.Revision() ||
+                command.uiCanvasInspectorResourcePublication != resources.publication)
+                result = Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::AssetRegistryStale));
+            else
+                result = m_uiInspectorResources->SelectTheme(command.uiCanvasTheme);
         } else if (command.command == UiCanvasApplyPresentation) {
             if (!command.uiCanvasPresentation || projection->selectionRevision == std::numeric_limits<std::uint64_t>::max())
                 result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));

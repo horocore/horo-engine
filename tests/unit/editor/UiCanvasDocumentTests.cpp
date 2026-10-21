@@ -74,6 +74,19 @@ namespace {
         return registry.Open(DocumentOpenKey{.kind = DocumentKind::UiCanvas, .source = source}).Value().identity;
     }
 
+    /** @brief Projects a canonical fixture into the deliberately separate legacy editor envelope. */
+    [[nodiscard]] nlohmann::json LegacyEnvelope(const nlohmann::json &serialized) {
+        nlohmann::json legacy{{"format", "horo.ui_canvas"},
+                              {"formatVersion", 1},
+                              {"documentId", serialized["document"]["documentId"]},
+                              {"revision", serialized["document"]["revision"]},
+                              {"canvases", serialized["document"]["canvases"]},
+                              {"dependencies", serialized["document"]["dependencies"]}};
+        legacy["canvases"][0]["renderMode"] = "screen_space_overlay";
+        legacy["canvases"][0]["scaleMode"] = "scale_with_screen_size";
+        return legacy;
+    }
+
     [[nodiscard]] std::string ErrorCodeText(const Error &error) {
         return error.code.Value();
     }
@@ -121,25 +134,38 @@ TEST_CASE("UI Canvas documents round trip through the typed runtime model", "[un
     REQUIRE(reopened.Value().document.Revision().Value() == 2);
 }
 
-TEST_CASE("UI Canvas loading accepts uppercase hexadecimal identity digits", "[unit][editor][ui_canvas][validation]") {
+TEST_CASE("Legacy UI Canvas loading accepts uppercase hexadecimal identity digits", "[unit][editor][ui_canvas][validation]") {
     TemporaryProject project;
     NativeDurableFileSystem files;
     ProjectMutationCoordinator mutations(files);
     SaveInitialDocument(project, MakeDocument(1, 0xab), mutations, files);
-
     std::ifstream input(project.DocumentPath(), std::ios::binary);
     REQUIRE(static_cast<bool>(input));
-    std::string serialized((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>{});
-    const std::string lowercaseId = std::string(30U, '0') + "ab";
-    const std::string uppercaseId = std::string(30U, '0') + "AB";
-    const std::size_t idPosition = serialized.find(lowercaseId);
-    REQUIRE(idPosition != std::string::npos);
-    serialized.replace(idPosition, lowercaseId.size(), uppercaseId);
-    project.Write(serialized);
-
+    const auto serialized = nlohmann::json::parse(std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>{}));
+    input.close();
+    auto legacy = LegacyEnvelope(serialized);
+    legacy["documentId"] = std::string(30U, '0') + "AB";
+    project.Write(legacy.dump());
     const auto loaded = LoadUiCanvasDocument(project.DocumentPath());
     REQUIRE(loaded.HasValue());
     REQUIRE(loaded.Value().document.Id() == MakeDocument(1, 0xab).Id());
+}
+
+TEST_CASE("Canonical UI Canvas source rejects noncanonical uppercase identity digits", "[unit][editor][ui_canvas][validation]") {
+    TemporaryProject project;
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+    SaveInitialDocument(project, MakeDocument(1, 0xab), mutations, files);
+    std::ifstream input(project.DocumentPath(), std::ios::binary);
+    REQUIRE(static_cast<bool>(input));
+    auto serialized = nlohmann::json::parse(std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>{}));
+    input.close();
+    REQUIRE(serialized["document"]["documentId"] == std::string(30U, '0') + "ab");
+    serialized["document"]["documentId"] = std::string(30U, '0') + "AB";
+    project.Write(serialized.dump());
+    const auto loaded = LoadUiCanvasDocument(project.DocumentPath());
+    REQUIRE(loaded.HasError());
+    REQUIRE(ErrorCodeText(loaded.ErrorValue()) == "runtime_ui.document.serialization_invalid");
 }
 
 TEST_CASE("UI Canvas save detects external changes before replacing bytes", "[unit][editor][ui_canvas][persistence]") {
@@ -260,14 +286,7 @@ TEST_CASE("UI Canvas loading rejects malformed presentation policy", "[unit][edi
     std::ifstream input(project.DocumentPath(), std::ios::binary);
     REQUIRE(static_cast<bool>(input));
     auto serialized = nlohmann::json::parse(std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>{}));
-    auto legacy = nlohmann::json{{"format", "horo.ui_canvas"},
-                                 {"formatVersion", 1},
-                                 {"documentId", serialized["document"]["documentId"]},
-                                 {"revision", serialized["document"]["revision"]},
-                                 {"canvases", serialized["document"]["canvases"]},
-                                 {"dependencies", serialized["document"]["dependencies"]}};
-    legacy["canvases"][0]["renderMode"] = "screen_space_overlay";
-    legacy["canvases"][0]["scaleMode"] = "scale_with_screen_size";
+    auto legacy = LegacyEnvelope(serialized);
     legacy["canvases"][0].erase("presentation");
     project.Write(legacy.dump(2) + '\n');
     const auto loadedLegacy = LoadUiCanvasDocument(project.DocumentPath());

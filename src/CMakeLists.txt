@@ -719,6 +719,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiElementPresentation.cpp
         runtime/ui/UiElementAuthoringProjection.cpp
+        runtime/ui/UiStyleAssetValidation.cpp
+        runtime/ui/UiStyleAssetCodec.cpp
+        runtime/ui/UiCoreStyleSchema.cpp
         runtime/ui/UiElementPresentationCodec.cpp
         runtime/ui/UiElementAuthoringCodec.cpp
         runtime/ui/UiElementCatalog.cpp
@@ -3588,5 +3591,16 @@ add_library(HoroEngine::PhysicsTriggerVolumeHost ALIAS HoroPhysicsTriggerVolumeH
 target_compile_features(HoroPhysicsTriggerVolumeHost PUBLIC cxx_std_20)
 target_link_libraries(HoroPhysicsTriggerVolumeHost PUBLIC HoroEngine::ProjectPhysicsCapture HoroEngine::PrefabCookHost
         HoroEngine::PhysicsSceneIntegration HoroEngine::SceneRuntimeConversion)
+
+# Explicit Assets/RuntimeUi tooling bridge; generic Application has no reverse Runtime dependency.
+add_library(HoroUiStyleWorkspaceApplication STATIC
+        application/ui/UiStyleCook.cpp
+        application/ui/UiStyleWorkspace.cpp
+        application/ui/UiStyleWorkspaceCapture.cpp
+        application/ui/UiStyleWorkspaceLoad.cpp
+        application/ui/UiStyleWorkspaceProducer.cpp)
+add_library(HoroEngine::UiStyleWorkspaceApplication ALIAS HoroUiStyleWorkspaceApplication)
+target_compile_features(HoroUiStyleWorkspaceApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroUiStyleWorkspaceApplication PUBLIC HoroEngine::RuntimeUi HoroEngine::Assets)
 
 include(HoroPublicHeaderOwnership)

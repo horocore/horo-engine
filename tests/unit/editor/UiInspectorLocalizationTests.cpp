@@ -227,6 +227,10 @@ namespace {
         "workspace.ui_inspector.width",
         "workspace.ui_inspector.wrap",
         "workspace.ui_inspector.wrap_enabled",
+        "workspace.ui_inspector.project_theme",
+        "workspace.ui_inspector.choose_theme",
+        "workspace.ui_inspector.refresh_theme",
+        "workspace.ui_inspector.preparing_theme",
     };
 }
 

@@ -3281,6 +3281,18 @@
     "workspace.ui_inspector.role.table": {"text": "Table"},
     "workspace.ui_inspector.role.row": {"text": "Row"},
     "workspace.ui_inspector.role.cell": {"text": "Cell"},
-    "workspace.ui_inspector.role.scroll_view": {"text": "Scroll view"}
+    "workspace.ui_inspector.role.scroll_view": {"text": "Scroll view"},
+    "workspace.ui_inspector.project_theme": {
+      "text": "Project style theme"
+    },
+    "workspace.ui_inspector.choose_theme": {
+      "text": "Select a registered style asset"
+    },
+    "workspace.ui_inspector.refresh_theme": {
+      "text": "Prepare / refresh selected theme"
+    },
+    "workspace.ui_inspector.preparing_theme": {
+      "text": "Preparing style assets…"
+    }
   }
 }

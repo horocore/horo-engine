@@ -2,9 +2,11 @@
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
 #include "editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.h"
 #include "editor/screens/workspace/panels/inspector/UiInspectorWidgets.h"
+#include "support/UiStyleWorkspaceFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
@@ -241,14 +243,14 @@ TEST_CASE("Canonical authoring controls render localized typed fields without ch
     UiRenderHarness harness;
     const auto kind = GENERATE(UiElementKind::Text, UiElementKind::Toggle, UiElementKind::Slider, UiElementKind::TextInput);
     const auto scenario = GENERATE(RenderScenario::Normal, RenderScenario::Narrow, RenderScenario::Disabled);
-    const std::array arguments{UiLocalizedArgument{"integer", std::int64_t{-9007199254740993LL}},
-                               UiLocalizedArgument{"decimal", 0.12345678901234567},
-                               UiLocalizedArgument{"boolean", true},
-                               UiLocalizedArgument{"date", UiLocalizedDateTime{123}},
-                               UiLocalizedArgument{"duration", UiLocalizedDuration{456}},
-                               UiLocalizedArgument{"enum", UiLocalizedStableEnum{7, 8}},
-                               UiLocalizedArgument{"text", std::string{"Ürün"}},
-                               UiLocalizedArgument{"shortcut", UiLocalizedShortcut{0, 65}}};
+    const std::vector<UiLocalizedArgument> arguments{UiLocalizedArgument{"integer", std::int64_t{-9007199254740993LL}},
+                                                     UiLocalizedArgument{"decimal", 0.12345678901234567},
+                                                     UiLocalizedArgument{"boolean", true},
+                                                     UiLocalizedArgument{"date", UiLocalizedDateTime{123}},
+                                                     UiLocalizedArgument{"duration", UiLocalizedDuration{456}},
+                                                     UiLocalizedArgument{"enum", UiLocalizedStableEnum{7, 8}},
+                                                     UiLocalizedArgument{"text", std::string{"Ürün"}},
+                                                     UiLocalizedArgument{"shortcut", UiLocalizedShortcut{0, 65}}};
     auto message = UiLocalizedText::Create(UiMessageKey::Create("game.ui", "test").Value(), arguments, "Fallback");
     REQUIRE(message.HasValue());
     UiElementPresentation value;
@@ -279,4 +281,97 @@ TEST_CASE("Canonical authoring controls render localized typed fields without ch
         REQUIRE(ImGui::GetDrawData() != nullptr);
         CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
     }
+}
+
+namespace {
+    /** @brief Drive the actual explicit theme command and nonblocking controller handoff. */
+    UiCanvasWorkspaceDocument PrepareControllerTheme(EditorWorkspaceController &controller) {
+        auto source = controller.ViewModel().uiCanvasDocuments.front();
+        REQUIRE(source.inspectorThemes);
+        REQUIRE(source.inspectorThemes->size() == 1);
+        CHECK_FALSE(source.inspectorStyles.IsValid());
+        EditorWorkspaceViewCommandData selectTheme;
+        selectTheme.command = EditorWorkspaceViewCommand::UiCanvasSelectTheme;
+        selectTheme.documentInstance = source.identity.instance;
+        selectTheme.uiCanvasState = source.state;
+        selectTheme.uiCanvasInspectorAssets = source.inspectorAssets;
+        selectTheme.uiCanvasInspectorResourcePublication = source.inspectorResourcePublication;
+        selectTheme.uiCanvasTheme = source.inspectorThemes->front().id;
+        controller.ProcessCommand(selectTheme);
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+        while (controller.ViewModel().uiCanvasDocuments.front().inspectorStylePending && std::chrono::steady_clock::now() < deadline) {
+            controller.UpdateUiCanvasResources();
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        controller.UpdateUiCanvasResources();
+        source = controller.ViewModel().uiCanvasDocuments.front();
+        REQUIRE(source.inspectorStyles.IsValid());
+        return source;
+    }
+
+    /** @brief Construct the same owned publication request emitted by the visible inspector adapter. */
+    EditorWorkspaceViewCommandData PresentationRequest(const UiCanvasWorkspaceDocument &source, const UiElementPresentation &value) {
+        EditorWorkspaceViewCommandData edit;
+        edit.command = EditorWorkspaceViewCommand::UiCanvasApplyPresentation;
+        edit.documentInstance = source.identity.instance;
+        edit.uiCanvasState = source.state;
+        edit.uiCanvasElement = source.selection;
+        edit.uiCanvasDocumentRevision = source.documentRevision;
+        edit.uiCanvasSelectionRevision = source.selectionRevision;
+        edit.uiCanvasInspectorStyles = source.inspectorStyles;
+        edit.uiCanvasInspectorAssets = source.inspectorAssets;
+        edit.uiCanvasInspectorResourcePublication = source.inspectorResourcePublication;
+        edit.uiCanvasPresentation = UiCanvasSetPresentation{source.selection, value};
+        return edit;
+    }
+}  // namespace
+
+TEST_CASE("Real project style preparation reaches workspace controller and visible inspector command projection",
+          "[editor][ui][inspector][pipeline]") {
+    UiRenderHarness gui;
+    Horo::UiStyleTest::Project project;
+    static_cast<void>(project.WriteCanvas());
+    Horo::Runtime::RuntimeSceneService runtime;
+    Horo::CancellationSource cancellation;
+    REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
+    EditorWorkspaceController controller{project.root,
+                                         runtime,
+                                         project.assets.Snapshot(),
+                                         {.mutableAssetRegistry = &project.assets,
+                                          .uiInspectorResources = project.resources.get(),
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .jobs = &project.jobs,
+                                          .documentSessionOwner = project.workspace}};
+    const Horo::Runtime::FrameContext frame{1, {}, 0.0, 0, {}, false, cancellation.Token()};
+    REQUIRE(runtime.OnPhase(Horo::Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame).HasValue());
+    controller.SynchronizeRuntimeScenePreview();
+    EditorWorkspaceViewCommandData open;
+    open.command = EditorWorkspaceViewCommand::OpenSourceFile;
+    open.sourceOpenRequest = SourceOpenRequest{.path = "Hud.uicanvas"};
+    controller.ProcessCommand(open);
+    controller.UpdateUiCanvasResources();
+    REQUIRE(controller.ViewModel().uiCanvasDocuments.size() == 1);
+    auto source = PrepareControllerTheme(controller);
+    EditorWorkspaceViewCommandData select;
+    select.command = EditorWorkspaceViewCommand::UiCanvasSelect;
+    select.documentInstance = source.identity.instance;
+    select.uiCanvasState = source.state;
+    select.uiCanvasElement = source.root;
+    controller.ProcessCommand(select);
+    source = controller.ViewModel().uiCanvasDocuments.front();
+    REQUIRE(source.selectedElement);
+    UiCanvasInspectorPanel panel;
+    DrawSource(panel, source, gui);
+    auto value = *source.selectedElement->presentation;
+    value.inlineStyle = {
+        {CoreUiStylePropertyId(UiCoreStyleProperty::Fill), UiStyleValueSource::Literal(UiStyleColor{0.8F, 0.2F, 0.1F, 1}), false}};
+    const auto edit = PresentationRequest(source, value);
+    controller.ProcessCommand(edit);
+    source = controller.ViewModel().uiCanvasDocuments.front();
+    REQUIRE(source.selectedElement);
+    CHECK(source.selectedElement->presentation == value);
+    CHECK(source.dirty);
+    CHECK(source.canUndo);
+    DrawSource(panel, source, gui);
 }

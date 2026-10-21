@@ -3281,6 +3281,18 @@
     "workspace.ui_inspector.role.table": {"text": "Tablo"},
     "workspace.ui_inspector.role.row": {"text": "Satır"},
     "workspace.ui_inspector.role.cell": {"text": "Hücre"},
-    "workspace.ui_inspector.role.scroll_view": {"text": "Kaydırma görünümü"}
+    "workspace.ui_inspector.role.scroll_view": {"text": "Kaydırma görünümü"},
+    "workspace.ui_inspector.project_theme": {
+      "text": "Proje stil teması"
+    },
+    "workspace.ui_inspector.choose_theme": {
+      "text": "Kayıtlı bir stil varlığı seçin"
+    },
+    "workspace.ui_inspector.refresh_theme": {
+      "text": "Seçili temayı hazırla / yenile"
+    },
+    "workspace.ui_inspector.preparing_theme": {
+      "text": "Stil varlıkları hazırlanıyor…"
+    }
   }
 }

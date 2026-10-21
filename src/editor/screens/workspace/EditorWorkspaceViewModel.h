@@ -8,6 +8,7 @@
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderScene.h"
@@ -91,6 +92,7 @@ namespace Horo::Editor {
         UiCanvasRedo,
         UiCanvasSave,
         UiCanvasApplyPresentation,
+        UiCanvasSelectTheme,
         UiCanvasReload,
         SaveScene,
         SaveSceneAs,
@@ -250,6 +252,9 @@ namespace Horo::Editor {
         Assets::AssetRegistryRevision inspectorAssets;
         Runtime::Ui::RuntimeStyleGeneration inspectorStyles;
         std::uint64_t inspectorResourcePublication{};
+        std::shared_ptr<const std::vector<UiInspectorTheme>> inspectorThemes;
+        Runtime::Ui::RuntimeStyleAssetId inspectorTheme;
+        bool inspectorStylePending{};
         Runtime::Ui::UiDocumentRevision documentRevision;
         std::optional<Runtime::Ui::UiDocumentElement> selectedElement;
         std::vector<UiCanvasHierarchyRow> rows;
@@ -291,6 +296,7 @@ namespace Horo::Editor {
         Assets::AssetRegistryRevision uiCanvasInspectorAssets;
         Runtime::Ui::RuntimeStyleGeneration uiCanvasInspectorStyles;
         std::uint64_t uiCanvasInspectorResourcePublication{};
+        Runtime::Ui::RuntimeStyleAssetId uiCanvasTheme;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;

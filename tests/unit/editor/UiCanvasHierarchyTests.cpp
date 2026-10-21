@@ -21,8 +21,8 @@ namespace {
         return T::Create(bytes).Value();
     }
 
-    UiDocument Document(const bool legacy = false) {
-        UiDocumentBuilder builder{Id<UiDocumentId>(1), UiDocumentRevision::Create(1).Value()};
+    UiDocument Document(const bool legacy = false, const std::uint64_t revision = 1) {
+        UiDocumentBuilder builder{Id<UiDocumentId>(1), UiDocumentRevision::Create(revision).Value()};
         REQUIRE(
             builder.AddCanvas({.id = Id<UiCanvasId>(2), .rootElement = Id<UiElementId>(3), .referenceResolution = {800, 600}}).HasValue());
         if (!legacy)
@@ -260,7 +260,11 @@ TEST_CASE("Canvas publication fences reject undo ABA replacement and reopened se
     REQUIRE_FALSE(document.IsDirty());
     REQUIRE(document.Execute(original, UiCanvasCreateElement{Id<UiElementId>(5), Id<UiElementId>(3), {}, UiElementKind::Panel}).HasError());
     const auto beforeReplacement = document.CurrentState();
-    REQUIRE(document.Replace(Document()).HasValue());
+    const auto staleReplacement = document.Replace(Document());
+    REQUIRE(staleReplacement.HasError());
+    REQUIRE(staleReplacement.ErrorValue().code == UiErrors::RevisionStale.code);
+    REQUIRE(document.CurrentState() == beforeReplacement);
+    REQUIRE(document.Replace(Document(false, document.Document().Revision().Value() + 1)).HasValue());
     REQUIRE(document.Select(beforeReplacement, Id<UiElementId>(3)).HasError());
     const auto beforeClose = document.CurrentState();
     REQUIRE(document.Close(UiCanvasClosePolicy::DiscardChanges).HasValue());

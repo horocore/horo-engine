@@ -3,6 +3,7 @@
 #include "EditorAudioPreviewHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
+#include "EditorUiStylePreparation.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Physics/PhysicsErrors.h"
@@ -1805,14 +1806,8 @@ namespace Horo::Editor {
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
             const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
-            UiInspectorResourcesFactory uiInspectorResourcesFactory =
-                [&assetRegistry](const std::filesystem::path &, Assets::AssetId) -> Result<std::unique_ptr<UiInspectorResources>> {
-                try {
-                    return Result<std::unique_ptr<UiInspectorResources>>::Success(std::make_unique<UiInspectorResources>(assetRegistry));
-                } catch (const std::bad_alloc &) {
-                    return Result<std::unique_ptr<UiInspectorResources>>::Failure(MakeError(Runtime::Ui::UiErrors::CapacityExceeded));
-                }
-            };
+            auto uiInspectorResourcesFactory =
+                MakeEditorUiInspectorResourcesFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles);
             GuiScreenHost
                 screenHost{guiContext,
                            GuiScreenHostComposition{.modalHost = p.modalHost,

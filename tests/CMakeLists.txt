@@ -2626,6 +2626,15 @@ target_sources(HoroUiCanvasDocumentTests PRIVATE $<TARGET_OBJECTS:HoroUiInspecto
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroUiInspectorInternal)
 target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices nlohmann_json::nlohmann_json)
+add_executable(HoroUiStyleWorkspaceTests unit/application/UiStyleWorkspaceTests.cpp)
+target_include_directories(HoroUiStyleWorkspaceTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(HoroUiStyleWorkspaceTests PRIVATE HoroEditorUiStyleHostInternal HoroUiInspectorInternal nlohmann_json::nlohmann_json)
+add_library(HoroUiStyleAssetPublicHeaderConsumer OBJECT support/UiStyleAssetPublicContract.cpp)
+target_compile_features(HoroUiStyleAssetPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroUiStyleAssetPublicHeaderConsumer PRIVATE HoroEngine::UiStyleWorkspaceApplication)
+target_sources(HoroUiStyleWorkspaceTests PRIVATE $<TARGET_OBJECTS:HoroUiStyleAssetPublicHeaderConsumer>)
+horo_register_catch_test(HoroUiStyleWorkspaceTests LABELS "unit;runtime_ui;assets;headless")
+
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceSurfacePublicationTests.cpp
         unit/editor/WorkspaceLayoutPersistenceTests.cpp
@@ -2801,7 +2810,8 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/UiInspectorWidgetsTests.cpp
     )
 
-    target_link_libraries(HoroInspectorEditSessionTests PRIVATE HoroUiInspectorInternal)
+    target_link_libraries(HoroInspectorEditSessionTests PRIVATE HoroUiInspectorInternal HoroEditorUiStyleHostInternal)
+    target_include_directories(HoroInspectorEditSessionTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(HoroInspectorEditSessionTests PRIVATE cxx_std_20)
     target_include_directories(HoroInspectorEditSessionTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
@@ -3704,6 +3714,7 @@ set_tests_properties(HoroRuntimeUiHotReloadPublicHeaderConsumer PROPERTIES LABEL
 add_executable(HoroRuntimeUiDocumentTests
         unit/runtime/ui/UiElementCatalogTests.cpp
         unit/runtime/ui/UiElementAuthoringTests.cpp
+        unit/runtime/ui/UiStyleAssetTests.cpp
         unit/runtime/ui/UiDocumentTests.cpp
         unit/runtime/ui/UiAssetLoadingTests.cpp
         unit/runtime/ui/UiDocumentSerializationTests.cpp

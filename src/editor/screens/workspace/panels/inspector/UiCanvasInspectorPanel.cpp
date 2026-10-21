@@ -368,9 +368,48 @@ namespace Horo::Editor {
         return changed;
     }
 
+    /** @copydoc UiCanvasInspectorPanel::DrawTheme */
+    bool UiCanvasInspectorPanel::DrawTheme(const UiCanvasWorkspaceDocument &source, const EditorGuiContext &context,
+                                           EditorWorkspaceViewCommandData &output) {
+        if (!source.inspectorThemes || source.inspectorThemes->empty())
+            return false;
+        const auto &themes = *source.inspectorThemes;
+        const auto selected = std::ranges::find(themes, source.inspectorTheme, &UiInspectorTheme::id);
+        int index = selected == themes.end() ? 0 : static_cast<int>(std::distance(themes.begin(), selected)) + 1;
+        Ui::FieldLabel(Label(context, "workspace.ui_inspector.project_theme"), context.theme.fonts);
+        ImGui::BeginDisabled(source.inspectorStylePending);
+        bool changed = Ui::ComboControl("ui_project_theme", &index, static_cast<int>(themes.size()) + 1,
+                                        Ui::ComboItemSource{.label =
+                                                                [&](const int item) {
+            return item == 0 ? Label(context, "workspace.ui_inspector.choose_theme")
+                             : themes[static_cast<std::size_t>(item - 1)].label.c_str();
+        },
+                                                            .enabled =
+                                                                [](const int item) {
+            return item > 0;
+        }},
+                                        context.theme.fonts);
+        changed = Action(context, "workspace.ui_inspector.refresh_theme", index > 0) || changed;
+        ImGui::EndDisabled();
+        if (source.inspectorStylePending)
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.preparing_theme"), Theme::Muted(),
+                            context.theme.fonts);
+        if (!changed || index <= 0)
+            return false;
+        output.command = EditorWorkspaceViewCommand::UiCanvasSelectTheme;
+        output.documentInstance = source.identity.instance;
+        output.uiCanvasState = source.state;
+        output.uiCanvasInspectorAssets = source.inspectorAssets;
+        output.uiCanvasInspectorResourcePublication = source.inspectorResourcePublication;
+        output.uiCanvasTheme = themes[static_cast<std::size_t>(index - 1)].id;
+        return true;
+    }
+
     /** @copydoc UiCanvasInspectorPanel::Draw */
     void UiCanvasInspectorPanel::Draw(const UiCanvasWorkspaceDocument &source, const EditorGuiContext &context,
                                       EditorWorkspaceViewCommandData &output) {
+        if (DrawTheme(source, context, output))
+            return;
         if (!source.selectedElement || source.selectionRevision == std::numeric_limits<std::uint64_t>::max()) {
             Clear();
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.select_element"), Theme::Muted(),

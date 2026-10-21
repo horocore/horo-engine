@@ -375,6 +375,7 @@ horo_configure_target_header_boundary(HoroRuntimeUi PUBLIC_HEADERS
     Horo/Runtime/Ui/UiTextLayout.h
     Horo/Runtime/Ui/UiGlyphAtlas.h
     Horo/Runtime/Ui/UiStyle.h
+    Horo/Runtime/Ui/UiStyleAsset.h
     Horo/Runtime/Ui/UiTheme.h
     Horo/Runtime/Ui/UiHitTesting.h
     Horo/Runtime/Ui/UiRenderSnapshot.h
@@ -1396,6 +1397,10 @@ horo_configure_target_header_boundary(HoroProjectCollisionSettings PUBLIC_HEADER
 
 horo_configure_target_header_boundary(HoroCliNavigationAdapters PUBLIC_HEADERS Horo/Cli/NavigationCommands.h)
 horo_configure_target_header_boundary(HoroMcpNavigationAdapters PUBLIC_HEADERS Horo/Mcp/NavigationTools.h)
+
+horo_configure_target_header_boundary(HoroUiStyleWorkspaceApplication PUBLIC_HEADERS
+    Horo/Application/UiStyleWorkspace.h
+)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

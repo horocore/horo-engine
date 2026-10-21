@@ -26,6 +26,11 @@ namespace Horo::Editor {
         void Draw(const UiCanvasWorkspaceDocument &source, const EditorGuiContext &context, EditorWorkspaceViewCommandData &output);
 
     private:
+        /** @brief Select a real prepared namespace without requiring an active theme or selected element.
+         * @param source Cached actual project themes/fences. @param context Shared controls. @param output Host command.
+         * @return Whether a theme preparation command was emitted; no I/O or registry construction occurs here.
+         */
+        bool DrawTheme(const UiCanvasWorkspaceDocument &source, const EditorGuiContext &context, EditorWorkspaceViewCommandData &output);
         /** @brief Capture the exact host source and reset transient values. @param source Cached source. @param context Exact fences. */
         void Capture(const UiCanvasWorkspaceDocument &source, UiInspectorContext context);
         /** @brief Restore the captured baseline and reset text without mutating authored state. */

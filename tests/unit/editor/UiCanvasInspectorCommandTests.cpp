@@ -119,8 +119,8 @@ namespace {
         candidate.state.visible = false;
         candidate.state.enabled = false;
         candidate.state.focusable = false;
-        const std::array arguments{UiLocalizedArgument{"count", std::int64_t{-9007199254740993LL}},
-                                   UiLocalizedArgument{"label", std::string{"Türkçe"}}};
+        const std::vector<UiLocalizedArgument> arguments{UiLocalizedArgument{"count", std::int64_t{-9007199254740993LL}},
+                                                         UiLocalizedArgument{"label", std::string{"Türkçe"}}};
         const auto message =
             UiLocalizedText::Create(UiMessageKey::Create("game.ui", "authored_label").Value(), arguments, "Fallback").Value();
         if (kind == UiElementKind::Text)
@@ -228,8 +228,8 @@ TEST_CASE("UI inspector edits persist through source save and reload without a s
     auto prepared = draft.PreparePresentation(context, baseline, true);
     REQUIRE(prepared.HasValue());
     REQUIRE(ExecuteUiInspectorPresentation(owner, context, 1, prepared.Value()).HasValue());
-    ProjectMutationCoordinator mutations;
     NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations{files};
     auto saved = owner.Save(source.root, mutations, files);
     REQUIRE(saved.HasValue());
     REQUIRE(saved.Value().status == UiCanvasDocumentSaveStatus::Saved);
@@ -339,8 +339,8 @@ TEST_CASE("Inspector authored fields persist as complete canonical records throu
     CHECK_FALSE(owner.IsDirty());
     REQUIRE(owner.Redo(owner.CurrentState()).HasValue());
     CHECK(*owner.Document().Elements().back().presentation == candidate);
-    ProjectMutationCoordinator mutations;
     NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations{files};
     const auto saved = owner.Save(source.root, mutations, files);
     REQUIRE(saved.HasValue());
     REQUIRE(saved.Value().status == UiCanvasDocumentSaveStatus::Saved);

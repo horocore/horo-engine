@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <new>
 
 namespace Horo::Editor {
     namespace {
@@ -136,7 +137,9 @@ namespace Horo::Editor {
 
     /** @copydoc UiInspectorResources::Capture */
     UiInspectorResourceSnapshot UiInspectorResources::Capture() const {
-        return {assets_.Snapshot(), styles_, publication_, theme_};
+        auto assets = assets_.Snapshot();
+        const bool current = !producer_ || (!pending_ && assets.Revision() == preparedAssets_);
+        return {std::move(assets), current ? styles_ : nullptr, publication_, theme_, themes_, pending_, resources_};
     }
 
     /** @copydoc UiInspectorResources::PublishStyles */
@@ -153,5 +156,84 @@ namespace Horo::Editor {
         theme_ = theme;
         ++publication_;
         return Result<void>::Success();
+    }
+}  // namespace Horo::Editor
+
+namespace Horo::Editor {
+    /** @copydoc UiInspectorResources::~UiInspectorResources */
+    UiInspectorResources::~UiInspectorResources() {
+        if (producer_ && producer_->shutdown)
+            producer_->shutdown();
+    }
+
+    /** @copydoc UiInspectorResources::BindStyleProducer */
+    Result<void> UiInspectorResources::BindStyleProducer(UiInspectorStyleProducer producer) {
+        if (producer_ || !producer.themes || !producer.submit || !producer.poll || !producer.shutdown)
+            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::StyleLifecycleUnavailable));
+        producer_ = std::move(producer);
+        return Refresh();
+    }
+
+    /** @copydoc UiInspectorResources::SelectTheme */
+    Result<void> UiInspectorResources::SelectTheme(const Runtime::Ui::RuntimeStyleAssetId theme) {
+        if (!producer_ || pending_)
+            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::StyleLifecycleUnavailable));
+        if (publication_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::GenerationExhausted));
+        const auto assets = assets_.Snapshot();
+        const auto found =
+            themes_ ? std::ranges::find(*themes_, theme, &UiInspectorTheme::id) : std::vector<UiInspectorTheme>::const_iterator{};
+        if (!themes_ || found == themes_->end() || assets.Revision() != themesAssets_)
+            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::StyleSourceStale));
+        const auto admitted = producer_->submit(assets, theme);
+        if (admitted.HasError())
+            return admitted;
+        pending_ = true;
+        ++publication_;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiInspectorResources::Refresh */
+    Result<void> UiInspectorResources::Refresh() {
+        try {
+            if (!producer_)
+                return Result<void>::Success();
+            const auto assets = assets_.Snapshot();
+            if (!themes_ || themesAssets_ != assets.Revision()) {
+                auto themes = producer_->themes(assets);
+                if (themes.HasError())
+                    return Result<void>::Failure(themes.ErrorValue());
+                if (themes.Value().size() > Runtime::Ui::MaximumUiStyleAssets)
+                    return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::CapacityExceeded));
+                themes_ = std::make_shared<const std::vector<UiInspectorTheme>>(std::move(themes).Value());
+                themesAssets_ = assets.Revision();
+            }
+            if (!pending_)
+                return Result<void>::Success();
+            auto polled = producer_->poll(assets.Revision());
+            if (polled.HasError()) {
+                pending_ = false;
+                preparedAssets_ = {};
+                return Result<void>::Failure(polled.ErrorValue());
+            }
+            if (!polled.Value())
+                return Result<void>::Success();
+            auto candidate = std::move(*std::move(polled).Value());
+            pending_ = false;
+            if (candidate.assets != assets.Revision()) {
+                preparedAssets_ = {};
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::AssetRegistryStale));
+            }
+            const auto published = PublishStyles(std::move(candidate.styles), candidate.theme);
+            if (published.HasError()) {
+                preparedAssets_ = {};
+                return published;
+            }
+            resources_ = std::move(candidate.resources);
+            preparedAssets_ = candidate.assets;
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::CapacityExceeded));
+        }
     }
 }  // namespace Horo::Editor

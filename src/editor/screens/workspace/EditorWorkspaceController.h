@@ -251,6 +251,8 @@ namespace Horo::Editor {
         /** @brief Advances a requested synchronous Content Browser refresh without blocking the request
          * frame. */
         void UpdateContentBrowser();
+        /** @brief Poll owned style preparation and refresh cached UI Canvas resource fences without I/O. */
+        void UpdateUiCanvasResources();
         /** @brief Polls project Lua sources and applies compatible safe-point reload candidates. */
         void UpdateGameplaySources(float elapsedSeconds);
         /**

@@ -1,4 +1,5 @@
 #include "Horo/Editor/UiInspectorResources.h"
+#include "Horo/Runtime/Ui/UiElementCatalog.h"
 
 #include <catch2/catch_test_macros.hpp>
 

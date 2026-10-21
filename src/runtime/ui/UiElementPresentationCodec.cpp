@@ -3,6 +3,7 @@
 #include "JsonUtils.h"
 #include "UiDocumentSerializationInternal.h"
 #include "UiElementAuthoringCodec.h"
+#include "UiStyleValueCodec.h"
 
 #include <cmath>
 #include <limits>
@@ -325,18 +326,7 @@ namespace Horo::Runtime::Ui::PresentationCodec {
         /** @brief Decode one qualified literal/token assignment using the canonical typed value codec. */
         UiStyleAssignment Assignment(const Json &entry) {
             Fields(entry, {"property", "source"});
-            const auto &source = entry.at("source");
-            UiStyleValueSource decoded;
-            if (source.contains("token")) {
-                Fields(source, {"token"});
-                const auto &token = source.at("token");
-                Array(token, 2);
-                decoded = UiStyleValueSource::Token({Identity<RuntimeStyleAssetId>(token[0]), Identity<UiStyleTokenId>(token[1])});
-            } else {
-                Fields(source, {"literal"});
-                decoded = UiStyleValueSource::Literal(Literal(source.at("literal")));
-            }
-            return {Identity<UiStylePropertyId>(entry.at("property")), std::move(decoded), false};
+            return {Identity<UiStylePropertyId>(entry.at("property")), StyleCodec::DecodeSource(entry.at("source")), false};
         }
     }  // namespace
 
@@ -346,11 +336,7 @@ namespace Horo::Runtime::Ui::PresentationCodec {
         for (const auto &entry : presentation.classes)
             classes.push_back(Class(entry));
         for (const auto &assignment : presentation.inlineStyle) {
-            const auto &source = assignment.value;
-            assignments.push_back(
-                Out{{"property", Id(assignment.property)},
-                    {"source", source.referencesToken ? Out{{"token", Out::array({Id(source.token.asset), Id(source.token.id)})}}
-                                                      : Out{{"literal", Literal(source.literal)}}}});
+            assignments.push_back(Out{{"property", Id(assignment.property)}, {"source", StyleCodec::EncodeSource(assignment.value)}});
         }
         Out output{{"version", presentation.UsesAuthoringExtensions() ? 2 : 1},
                    {"layout", Layout(presentation.layout)},
@@ -444,3 +430,36 @@ namespace Horo::Runtime::Ui {
         return PresentationCodec::Read(source);
     }
 }  // namespace Horo::Runtime::Ui
+
+namespace Horo::Runtime::Ui::StyleCodec {
+    /** @copydoc EncodeLiteral */
+    nlohmann::ordered_json EncodeLiteral(const UiStyleValue &value) {
+        return PresentationCodec::Literal(value);
+    }
+
+    /** @copydoc DecodeLiteral */
+    UiStyleValue DecodeLiteral(const nlohmann::json &value) {
+        return PresentationCodec::Literal(value);
+    }
+
+    /** @copydoc EncodeSource */
+    nlohmann::ordered_json EncodeSource(const UiStyleValueSource &value) {
+        using Out = nlohmann::ordered_json;
+        if (value.referencesToken)
+            return Out{{"token", Out::array({PresentationCodec::Id(value.token.asset), PresentationCodec::Id(value.token.id)})}};
+        return Out{{"literal", EncodeLiteral(value.literal)}};
+    }
+
+    /** @copydoc DecodeSource */
+    UiStyleValueSource DecodeSource(const nlohmann::json &value) {
+        using namespace PresentationCodec;
+        if (value.contains("token")) {
+            Fields(value, {"token"});
+            const auto &token = value.at("token");
+            Array(token, 2);
+            return UiStyleValueSource::Token({Identity<RuntimeStyleAssetId>(token[0]), Identity<UiStyleTokenId>(token[1])});
+        }
+        Fields(value, {"literal"});
+        return UiStyleValueSource::Literal(DecodeLiteral(value.at("literal")));
+    }
+}  // namespace Horo::Runtime::Ui::StyleCodec

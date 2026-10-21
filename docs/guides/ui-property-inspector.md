@@ -57,19 +57,48 @@ owner applies the complete record through its existing transaction and inverse.
 
 ## Resources and runtime boundary
 
-The application composes `UiInspectorResources` per workspace from the actual
-Assets publisher. A real project/preview style producer can explicitly publish an
-immutable `RuntimeStyleRegistry` and selected fallback theme. Validation uses that
-registry's canonical cascade, registered categories/ranges, tokens, class/asset
-inheritance and sealed properties. Image/font references must also match the
-current typed document dependencies and pinned real asset records.
+The executable composes `UiInspectorResources` per workspace through
+`HoroEditorUiStyleHostInternal` and the Editor/GUI-free
+`HoroUiStyleWorkspaceApplication` bridge. The factory binds the actual Assets
+publisher, native storage, source lease and process scheduler. The inspector lists
+real registered `core.ui_style` namespaces before any theme is active. Selecting
+one starts owned source/cook/load preparation; Refresh retries the explicit choice.
+There is no automatic first-asset or fabricated theme selection.
+
+The producer captures the selected `.uistyle` and declared sidecar/dependency
+closure, runs the generic resource-before-dependent cook/catalog/cache/publication
+path, verifies the resulting manifest and loads through the actual Assets provider.
+One selected-root default policy and core property schema fingerprint bind actual
+resource envelopes. The runtime domain validates all namespace semantics through
+`RuntimeStyleRegistry::Create`. The owner-thread handoff checks workspace/request,
+Assets revision and candidate identity before publishing. Drawing and ordinary
+polling perform no file I/O, cooking or registry construction.
+
+The core provider owns property IDs, effects and ranges; source data only supplies
+typed style declarations and optional real font/image defaults. Absent defaults
+omit those resource properties while width/fill/opacity remain usable. Required
+font/image dependencies need their actual domain cookers supplied by the host;
+missing cookers/defaults are explicit capability failures. The producer does not
+invent resource IDs, opaque replacement cookers or an editor-theme inheritance.
+The validation cook target is `headless-null`, independent of rendering.
 
 Changing a style reference/value or its initial Disabled/Checked mask revalidates
-the cascade before mutation. With no style provider, style controls are disabled
-and those commands fail with the existing typed lifecycle error. Layout and other
-independent edits still work. The default editor composition supplies Assets but
-has no project style producer yet; it truthfully displays unavailable styling.
-No schema, theme, resource type or registry is fabricated by the inspector.
+the actual cascade before mutation. Registered categories, scalar/enum ranges,
+qualified tokens/classes, inheritance and sealed properties are checked. Image/font
+values also match declared typed dependencies and real pinned asset records.
+Pending, stale or failed preparations close editing admission while retaining
+last-good immutable registry/resource leases; a successful refreshed candidate
+reopens it. Existing drafts are rejected by monotonically advancing publication
+fences. Cancellation and shutdown join accepted work before host services die.
+
+The additive style source schema, cooked framing, stable core property vocabulary,
+selection/default policy and migration are specified in the normative
+[Runtime UI style asset contract](../architecture/runtime/game-ui-and-hud.md#runtime-style-source-and-cook-contract).
+`UiStylePropertyDescriptor::maximumEnumValue` is appended with an unrestricted
+32-bit default for existing flag schemas; the core ImageFit provider narrows it to
+the actual closed enum. Existing consumers rebuild without changing their authored
+values. Both public headers have exactly one target owner and dedicated consumer
+coverage; no new generic Application dependency on Runtime was introduced.
 
 The canonical source model owns initial state, message references and accessibility
 metadata. Source schema 1.3 / presentation format 2 persist these extended fields;
@@ -100,6 +129,11 @@ selection/state fences, actual document transactions/history, source save/reload
 shutdown/move, state-only cascade rejection, resource publication ABA, full authored
 field undo/redo/save/reload/cook and passive CPU-only shared-control frames. These are distinct from
 native editor interaction, hover/focus/popup/active-state and GPU verification.
-Local builds/tests were not run without the coordinator's grant. Hosted checks
+The new source regressions include actual sidecars/Registry/factory/cook/cache/
+manifest/provider preparation, controller handoff and passive visible inspector
+frames, semantic cache revalidation, source identity/resource failures, last-good
+leases, registry drift and cancel/join. These sources are unexecuted until a
+serialized qualification grant. Local builds/tests were not run without the
+coordinator's grant. Hosted checks
 must be evaluated at the actual pushed head; local source checks are not a build
 or quality-gate receipt.
