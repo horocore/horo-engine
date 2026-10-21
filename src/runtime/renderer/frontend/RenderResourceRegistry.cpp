@@ -1,6 +1,7 @@
 #include "RenderResourceRegistry.h"
 
 #include "Horo/Runtime/Render/RenderMemoryBudget.h"
+#include "RenderExternalImages.h"
 #include "RenderFrontendErrors.h"
 
 #include <algorithm>
@@ -334,6 +335,10 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(
                 RegistryError(FrontendErrors::ResourceNotReady, "The renderer resource has no usable backend instance."));
         }
+        if (entry.externalSource) {
+            if (auto current = entry.externalSource->Validate(); current.HasError())
+                return Result<std::uint64_t>::Failure(current.ErrorValue());
+        }
         return Result<std::uint64_t>::Success(entry.backendInstance);
     }
 
@@ -577,6 +582,7 @@ namespace Horo::Render::Detail {
         }
         entry.dependencies.clear();
         entry.backendInstance = 0;
+        entry.externalSource.reset();
         entry.memoryAllocation.reset();
         entry.operation = {};
         entry.state = RenderResourceState::Retired;

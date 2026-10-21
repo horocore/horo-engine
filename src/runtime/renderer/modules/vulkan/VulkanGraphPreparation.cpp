@@ -3,6 +3,8 @@
 #include <algorithm>
 
 namespace Horo::Render::Detail {
+#include "VulkanGraphExternalReleases.inl"
+
     /** @brief Validates exact imported generation evidence against native committed state. */
     Result<void> VulkanGraphRuntime::Impl::InitialStates(const RenderGraphExecutionRequest &request) {
         const auto graphResources = request.graph.Resources();
@@ -18,6 +20,27 @@ namespace Horo::Render::Detail {
             const auto *initial = &imported[index];
             if (initial->resource != resource.id)
                 return Result<void>::Failure(Invalid("Canonical imported generation state is missing or foreign."));
+            if (const auto *external = resources->ExternalTextureSource(request.resources[index].instance);
+                external != nullptr && resource.kind == RenderGraphResourceKind::Texture) {
+                if (resource.resourceClass != RenderGraphResourceClass::External || external->DeviceIncarnation() != deviceIncarnation)
+                    return Result<void>::Failure(Invalid("External image registry/device incarnation does not match this native graph."));
+                if (auto current = external->Validate(); current.HasError())
+                    return current;
+                const auto expected = external->RequiredFinalState();
+                const auto *boundQueue = Queue(expected.queue);
+                if (boundQueue == nullptr || !boundQueue->supportsGraphics || boundQueue->family != external->NativeQueueFamily())
+                    return Result<void>::Failure(Unsupported("External image requires the exact OpenXR-bound native graphics queue."));
+                std::uint32_t obligations{};
+                for (const auto &release : request.graph.ExternalReleases()) {
+                    if (release.resource != resource.id)
+                        continue;
+                    if (release.newState != expected)
+                        return Result<void>::Failure(Invalid("External final state differs from native acquisition policy."));
+                    ++obligations;
+                }
+                if (obligations != 1)
+                    return Result<void>::Failure(Invalid("Every imported runtime image requires its exact encoded release obligation."));
+            }
             states[index] = *bindings[index].state;
             discarded[index] = initial->contents == RenderGraphInitialContents::Discarded;
             if (discarded[index]) {
@@ -156,6 +179,8 @@ namespace Horo::Render::Detail {
         prepared.after.offset = barriers.size();
         if (auto transitions = PrepareTransitions(request, pass, true); transitions.HasError())
             return transitions;
+        if (auto external = PrepareExternalReleases(request, pass); external.HasError())
+            return external;
         prepared.after.count = barriers.size() - prepared.after.offset;
         return Result<void>::Success();
     }

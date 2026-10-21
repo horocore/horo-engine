@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "RenderExternalImages.h"
 #include "VulkanBackendInternal.h"
 #include "VulkanRenderBackendErrors.h"
 
@@ -199,7 +200,7 @@ namespace Horo::Render {
             bool claimed{false};
         };
 
-        class VulkanRenderBackend final : public IRenderBackend {  // NOSONAR(cpp:S1448)
+        class VulkanRenderBackend final : public IRenderBackend, public Detail::IRenderExternalTextureBackend {  // NOSONAR(cpp:S1448)
         public:
             VulkanRenderBackend(IVulkanRuntimePort &runtimePort, std::shared_ptr<VulkanRuntimeLease> lease) noexcept
                 : runtimePort_(&runtimePort), resourcePort_(dynamic_cast<IVulkanResourcePort *>(&runtimePort)),
@@ -275,6 +276,14 @@ namespace Horo::Render {
                 return resourceBackend_ != nullptr && initialized_
                            ? resourceBackend_->CreateRenderTarget(descriptor, color, depth, std::move(lifetime))
                            : Unsupported<std::uint64_t>();
+            }
+
+            /** @copydoc Detail::IRenderExternalTextureBackend::ImportExternalTexture */
+            Result<std::uint64_t> ImportExternalTexture(const Detail::IRenderExternalTextureSource &source,
+                                                        RenderResourceNativeLifetime lifetime) override {
+                auto *external = dynamic_cast<Detail::IRenderExternalTextureBackend *>(resourceBackend_);
+                return initialized_ && external != nullptr ? external->ImportExternalTexture(source, std::move(lifetime))
+                                                           : Unsupported<std::uint64_t>();
             }
 
             void DestroyBuffer(std::uint64_t identity) noexcept override {

@@ -50,13 +50,14 @@ namespace Horo::Render::Detail {
             AllocationResource &operator=(const AllocationResource &) = delete;
 
             ~AllocationResource() {
-                if (handle != VK_NULL_HANDLE)
+                if (handle != VK_NULL_HANDLE && !borrowed)
                     destroy(device, handle, nullptr);
                 if (memory != VK_NULL_HANDLE)
                     freeMemory(device, memory, nullptr);
             }
 
             RenderResourceNativeLifetime lifetime;
+            bool borrowed{false};
             VkDevice device{VK_NULL_HANDLE};
             NativeHandle handle{VK_NULL_HANDLE};
             VkDeviceMemory memory{VK_NULL_HANDLE};
@@ -70,12 +71,15 @@ namespace Horo::Render::Detail {
         };
 
         struct Texture final : AllocationResource<VkImage, PFN_vkDestroyImage> {
+            const IVulkanExternalTextureSource *externalSource{};
             RenderTextureDescriptor descriptor;
             VulkanGraphResourceState graphState;
             VkImageView colorView{VK_NULL_HANDLE};
             PFN_vkDestroyImageView destroyView{};
 
             ~Texture() {
+                if (externalSource != nullptr)
+                    externalSource->RecordNativeRetirement(graphState.logical, graphState.hasNativeState);
                 if (colorView != VK_NULL_HANDLE)
                     destroyView(this->device, colorView, nullptr);
             }
@@ -89,7 +93,7 @@ namespace Horo::Render::Detail {
             View &operator=(const View &) = delete;
 
             ~View() {
-                if (handle != VK_NULL_HANDLE)
+                if (handle != VK_NULL_HANDLE && !borrowed)
                     destroy(device, handle, nullptr);
             }
 
@@ -521,6 +525,8 @@ namespace Horo::Render::Detail {
         }
         return impl_->Register(impl_->textures, std::move(texture));
     }
+
+#include "VulkanExternalImageRegistration.inl"
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateTextureView(const RenderTextureViewDescriptor &descriptor,
                                                                    const std::uint64_t textureIdentity,
