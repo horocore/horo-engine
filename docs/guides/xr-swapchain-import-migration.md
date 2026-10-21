@@ -91,7 +91,9 @@ recorder and retirement through injected official dispatch. Coverage includes co
 and depth arrays, native operation order, timeout/retry, stale/reacquired plans,
 presubmission failure, deferred retirement, recreation, loss and shutdown. The
 existing installed-driver Vulkan smoke remains separate from fake-dispatch XR
-qualification. Physical headset/compositor/device qualification remains NotRun.
+qualification. Physical headset/compositor/device qualification remains NotRun. Hosts close external
+images/swapchains and the native XR session while the selected graphics device is
+still alive, then complete frontend/backend device shutdown.
 
 The native ownership/layout basis is the Khronos OpenXR Vulkan extension contract:
 https://github.com/KhronosGroup/OpenXR-Docs/blob/main/specification/sources/chapters/extensions/khr/khr_vulkan_enable.adoc

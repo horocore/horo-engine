@@ -8,6 +8,7 @@
 #endif
 
 namespace {
+    using Horo::Result;
     using namespace Horo::Render;
     using namespace Horo::Render::VulkanResourceTest;
     using namespace Horo::Render::VulkanGraphTest;
@@ -496,9 +497,13 @@ namespace {
             native.commandState.state.Complete();
             (void)frontend->ObserveSubmission({.completion = {{1}, 1}, .expectedDeviceIncarnation = 11});
             (void)swapchain.Close();
+            // Drain native commands while retaining the selected device and frontend registry.
+            (void)native.graph.BeginShutdown();
+            (void)native.graph.PollDrain();
+            (void)swapchain.Close();
+            (void)session.owner.Close();
             (void)frontend->BeginShutdown();
             (void)frontend->PollDrain();
-            (void)swapchain.Close();
         }
 
         void Acquire() {
