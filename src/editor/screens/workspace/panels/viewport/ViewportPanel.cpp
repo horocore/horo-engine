@@ -120,6 +120,8 @@ namespace Horo::Editor {
 
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
+        else
+            interaction_.CancelForUnavailableSurface(command);
 
         const ViewportOverlayAction overlay =
             DrawViewportOverlay(origin, {width, height},
@@ -277,7 +279,8 @@ namespace Horo::Editor {
                                       .height = layout.height,
                                       .camera = viewModel.viewportCamera,
                                       .depthRange = depthRange,
-                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive},
+                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive &&
+                                                     viewModel.selectedColliders.empty()},
                                      viewModel.viewportLights, viewModel.primarySelection);
         if (!inputEligible)
             static_cast<void>(interaction_.ConsumePendingCancellation(command));

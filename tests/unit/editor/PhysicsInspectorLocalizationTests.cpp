@@ -7,6 +7,12 @@
 namespace {
     constexpr std::array PhysicsKeys{
         "workspace.physics.title",
+        "workspace.physics.compound_children",
+        "workspace.physics.edit_child",
+        "workspace.physics.edit_compound",
+        "workspace.physics.gizmo_hint",
+        "workspace.physics.gizmo_rejected",
+        "workspace.physics.gizmo_unsupported",
         "workspace.physics.authoring_only",
         "workspace.physics.unavailable",
         "workspace.physics.body",

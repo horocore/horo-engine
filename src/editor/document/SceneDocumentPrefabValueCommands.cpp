@@ -34,7 +34,22 @@ namespace Horo::Editor {
             if (source.Value().Revision() != command.expectedSource)
                 return Result<Prefab::PrefabValueOverrideResolution>::Failure(
                     MakeError(Prefab::PrefabErrors::OverrideSourceStale, "Prefab source changed before override preparation."));
-            if constexpr (std::is_same_v<Command, EditScenePrefabValueCommand>)
+            if constexpr (std::is_same_v<Command, EditScenePrefabComponentsCommand>) {
+                if (command.edits.empty() || command.edits.size() > 1024)
+                    return Result<Prefab::PrefabValueOverrideResolution>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
+                auto current = instance.valueOverrides;
+                std::optional<Prefab::PrefabValueOverrideResolution> result;
+                for (const auto &edit : command.edits) {
+                    auto prepared = Prefab::PreparePrefabComponentEdit(source.Value(), current, edit, schemas, limits, cancellation);
+                    if (prepared.HasError())
+                        return prepared;
+                    if (!prepared.Value().effective || prepared.Value().rebased.HasUnresolved())
+                        return Result<Prefab::PrefabValueOverrideResolution>::Failure(MakeError(Prefab::PrefabErrors::OverrideSourceStale));
+                    result.emplace(std::move(prepared).Value());
+                    current = result->rebased;
+                }
+                return Result<Prefab::PrefabValueOverrideResolution>::Success(std::move(*result));
+            } else if constexpr (std::is_same_v<Command, EditScenePrefabValueCommand>)
                 return Prefab::PreparePrefabValueEdit(source.Value(), instance.valueOverrides, command.edit, schemas, limits, cancellation);
             else
                 return Prefab::PreparePrefabComponentEdit(source.Value(), instance.valueOverrides, command.edit, schemas, limits,
@@ -115,6 +130,17 @@ namespace Horo::Editor {
      * Prefab::PrefabSourceResolverSnapshot&,const Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const
      * CancellationToken&) */
     Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabComponentCommand &command,
+                                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                                         const Prefab::PrefabLimitProfile &limits,
+                                                                         const CancellationToken &cancellation) {
+        return ExecuteEdit(command, sources, schemas, limits, cancellation);
+    }
+
+    /** @copydoc SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabComponentsCommand&,const
+     * Prefab::PrefabSourceResolverSnapshot&,const Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const
+     * CancellationToken&) */
+    Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabComponentsCommand &command,
                                                                          const Prefab::PrefabSourceResolverSnapshot &sources,
                                                                          const Prefab::PrefabValueSchemaSnapshot *schemas,
                                                                          const Prefab::PrefabLimitProfile &limits,
