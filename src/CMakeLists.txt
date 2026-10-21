@@ -2988,8 +2988,10 @@ add_library(HoroEditorServices STATIC
         editor/physics/CollisionSourceInventory.cpp
         editor/physics/NativeAssetRegistrySource.cpp
         editor/pcg/PCGDocumentErrors.cpp
+        editor/pcg/PCGGraphAuthoring.cpp
         editor/pcg/PCGGraphDocument.cpp
         editor/pcg/PCGGraphDocumentService.cpp
+        editor/pcg/PCGPreviewSession.cpp
         editor/document/DocumentRecoveryService.cpp
         editor/audio/AudioEditorDocument.cpp
         editor/audio/AudioComponentPreview.cpp
@@ -3325,9 +3327,13 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.cpp
             editor/screens/workspace/EditorWorkspaceViewUiCanvas.cpp
             editor/screens/workspace/EditorWorkspaceControllerUiCanvas.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPCGPreview.cpp
+            editor/screens/workspace/PCGPreviewSandbox.cpp
+            editor/screens/workspace/PCGPreviewView.cpp
             editor/screens/workspace/PCGWorkspace.cpp
             editor/screens/workspace/PCGEditorCatalog.cpp
             editor/screens/workspace/EditorWorkspaceViewPCG.cpp
+            editor/pcg/PCGAuthoringInspector.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp

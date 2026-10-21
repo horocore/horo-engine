@@ -12,6 +12,7 @@
 #include <format>
 #include <limits>
 #include <new>
+#include <type_traits>
 
 namespace Horo::PCG {
     namespace {
@@ -191,6 +192,69 @@ namespace Horo::PCG {
             return NodeFailure(PCGErrors::RegistryDescriptorInvalid, node.id);
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc PCGNodeCatalogSnapshot::DecodeSettings */
+    Result<PCGNodeAuthoringSettings> PCGNodeCatalogSnapshot::DecodeSettings(const PCGGraphNode &source) const {
+        if (!source.id.IsValid())
+            return Reject<PCGNodeAuthoringSettings>(PCGErrors::RegistryDescriptorInvalid);
+        const auto found = Find(source.type);
+        if (found.HasError())
+            return Result<PCGNodeAuthoringSettings>::Failure(found.ErrorValue());
+        const auto &descriptor = *found.Value();
+        if (source.pins.size() != descriptor.pinCount || source.payload.size() > PCGGraphSourceHardLimits::NodePayloadBytes)
+            return Reject<PCGNodeAuthoringSettings>(PCGErrors::RegistryDescriptorInvalid);
+        PCGCookedNode node{.id = source.id,
+                           .type = source.type,
+                           .version = source.version,
+                           .runtimeContractVersion = descriptor.runtimeContractVersion,
+                           .determinism = descriptor.determinism,
+                           .requiredCapabilities = descriptor.requiredCapabilities,
+                           .payload = source.payload};
+        for (const auto &pin : source.pins)
+            node.pins.push_back({pin.id, pin.direction, pin.type, pin.cardinality});
+        if (const auto valid = Validate(node); valid.HasError())
+            return Result<PCGNodeAuthoringSettings>::Failure(valid.ErrorValue());
+        if (descriptor.settings == PCGNodeSettingsSchema::None)
+            return Result<PCGNodeAuthoringSettings>::Success(std::monostate{});
+        const auto convert = []<class T>(Result<T> decoded) -> Result<PCGNodeAuthoringSettings> {
+            if (decoded.HasError())
+                return Result<PCGNodeAuthoringSettings>::Failure(decoded.ErrorValue());
+            return Result<PCGNodeAuthoringSettings>::Success(std::visit([](const auto &value) {
+                return PCGNodeAuthoringSettings{value};
+            }, decoded.Value()));
+        };
+        if (detail::IsPointTransformation(descriptor.kind))
+            return convert(detail::DecodePointTransformation(node));
+        if (detail::IsPointFilter(descriptor.kind))
+            return convert(detail::DecodePointFilter(node));
+        return convert(detail::DecodePointGeneration(node));
+    }
+
+    /** @copydoc PCGNodeCatalogSnapshot::EncodeSettings */
+    Result<PCGGraphNode> PCGNodeCatalogSnapshot::EncodeSettings(const PCGGraphNode &node, const PCGNodeAuthoringSettings &settings) const {
+        const auto current = DecodeSettings(node);
+        if (current.HasError())
+            return Result<PCGGraphNode>::Failure(current.ErrorValue());
+        if (current.Value().index() != settings.index())
+            return Reject<PCGGraphNode>(PCGErrors::RegistryDescriptorInvalid);
+        auto bytes = std::visit([]<class T>(const T &value) -> Result<std::vector<std::uint8_t>> {
+            if constexpr (std::is_same_v<T, std::monostate>)
+                return Result<std::vector<std::uint8_t>>::Success({});
+            else if constexpr (std::is_constructible_v<detail::PointGenerationSettings, T>)
+                return EncodePCGPointGenerationSettings(value);
+            else if constexpr (std::is_constructible_v<PCGPointFilterSettings, T>)
+                return EncodePCGPointFilterSettings(PCGPointFilterSettings{value});
+            else
+                return EncodePCGPointTransformationSettings(value);
+        }, settings);
+        if (bytes.HasError())
+            return Result<PCGGraphNode>::Failure(bytes.ErrorValue());
+        auto candidate = node;
+        candidate.payload = std::move(bytes).Value();
+        if (const auto valid = DecodeSettings(candidate); valid.HasError())
+            return Result<PCGGraphNode>::Failure(valid.ErrorValue());
+        return Result<PCGGraphNode>::Success(std::move(candidate));
     }
 
     /** @copydoc PCGNodeCatalogSnapshot::Cost */

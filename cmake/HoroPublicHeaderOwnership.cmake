@@ -1278,6 +1278,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/DocumentRecoveryService.h
     Horo/Editor/PCGGraphDocument.h
     Horo/Editor/PCGGraphDocumentService.h
+    Horo/Editor/PCGPreviewSession.h
     Horo/Editor/SequenceDocument.h
     Horo/Editor/UiCanvasDocument.h
     Horo/Editor/UiInspectorResources.h

@@ -23,6 +23,7 @@
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/PCGPreviewWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
 
 #include <cstddef>
@@ -64,6 +65,12 @@ namespace Horo::Editor {
         EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
     };
 
+    /** @brief Host presentation routes for validated source opens and diagnostic locations; empty callbacks retain workspace defaults. */
+    struct EditorWorkspaceSourceNavigation {
+        SourceOpenNavigator sourceOpenNavigator{};
+        DiagnosticSourceNavigator diagnosticSourceNavigator{};
+    };
+
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
@@ -74,8 +81,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Assets::IAssetRegistrySource> assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
         JobSystem *jobs{};
-        SourceOpenNavigator sourceOpenNavigator{};
-        DiagnosticSourceNavigator diagnosticSourceNavigator{};
+        EditorWorkspaceSourceNavigation sourceNavigation{};
         EditorWorkspaceGameplayServices gameplay{};
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
@@ -85,7 +91,10 @@ namespace Horo::Editor {
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
-        PCGEditorCatalog pcg{.document = {.revision = 1}}; /**< One host-composed source-support and creation-recipe generation. */
+        PCGEditorCatalog pcg{
+            .document = {.revision = 1}};                 /**< One host-composed source support, executable schemas and creation recipes. */
+        std::optional<PCGPreviewInputs> pcgPreviewInputs; /**< Explicit detached provider; absent rejects preview. */
+
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -185,6 +194,11 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ClosePCGDocument(DocumentInstanceId instance, bool discardDirty = false);
         /** @brief Includes graph documents in the shared leave guard. @return True if any graph has unsaved semantics. */
         [[nodiscard]] bool HasDirtyPCGDocuments() const;
+        /** @brief Replaces detached preview input and cancels all old overlays/work without changing graph or Scene.
+         * @param inputs New immutable provider/schema/evaluation admission. @return Success or invalid input rejection. */
+        [[nodiscard]] Result<void> ReplacePCGPreviewInputs(PCGPreviewInputs inputs);
+        /** @brief Nonblocking owner-lane preview completion/invalidation sweep, independent of panel visibility/autosave. */
+        void UpdatePCGPreviews();
         /** @brief Saves every dirty graph through its one document service. @return Success only for durable publications. */
         [[nodiscard]] Result<void> SavePCGDocuments();
         /** @brief Drains graph ownership after explicit save/discard/recovery policy.
@@ -325,6 +339,17 @@ namespace Horo::Editor {
         std::optional<Result<bool>> m_sourceCloseOutcome;
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
+        JobSystem *m_pcgPreviewJobs{};
+        PCG::PCGNodeCatalogSnapshot m_pcgPreviewCatalog;
+        std::optional<PCGPreviewInputs> m_pcgPreviewInputs;
+
+        struct PCGPreviewOwner final {
+            DocumentInstanceId document;
+            std::unique_ptr<PCGPreviewSession> session;
+        };
+
+        std::vector<PCGPreviewOwner> m_pcgPreviews;
+        std::uint64_t m_nextPCGPreviewWorld{1};
         PrefabHierarchySourceCapture m_prefabSourceCapture;
         Assets::AssetId m_workspaceSession;
         std::uint64_t m_prefabPublication{};
@@ -706,6 +731,12 @@ namespace Horo::Editor {
         /** @brief Dispatches an admitted request to the one canonical document executor or workspace presentation. */
         Result<void> ExecutePCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request,
                                              const PCGDocumentSnapshot &snapshot);
+        /** @brief Captures the current canonical source into its isolated preview owner. */
+        [[nodiscard]] Result<void> RequestPCGPreview(DocumentInstanceId instance, CancellationToken cancellation);
+        /** @brief Checks the canonical catalog's explicit preview grant without granting or composing capabilities. */
+        [[nodiscard]] bool HasPCGPreviewGrant() const noexcept;
+        /** @brief Cancels one session and synchronously retires only on explicit canonical close/shutdown. */
+        void RetirePCGPreview(DocumentInstanceId instance);
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
         void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
