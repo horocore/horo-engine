@@ -13,9 +13,9 @@ namespace Horo::Editor {
     public:
         /** @brief Borrows explicit composed host and current immutable-theme view for this panel attachment. */
         InspectorContributionView(Extensions::EditorInspectorHost &host, const Extensions::EditorThemeFrame &theme);
-        /** @brief Rebuilds only on actual owner/selection/provider revisions, before default controls decide their fallback coverage. */
         /** @brief Applies the real panel/workspace input decision and discards previews when ownership is withdrawn. */
         void SetInputAdmitted(bool admitted) noexcept;
+        /** @brief Rebuilds only on actual owner/selection/provider revisions, before default controls decide their fallback coverage. */
         void Synchronize(const EditorWorkspaceViewModel &model, std::span<const SceneObjectId> selection);
         /** @brief Prepares validated current geometry before allowing custom fields to replace their generic controls.
          * @param attachment Primary attachment identity. @param context Current actual GUI context.

@@ -132,7 +132,7 @@ unchanged; custom presenters add no owned GPU resource.
 | Budgets/resources/subscriptions | Aggregate admission limits, bounded samples/state, no executable presenter callback or subscription API; allocation-forbidden scalar model and stable fractional-DPI activity-cache tests. |
 
 Qualification targets are `HoroExtensionManagerTests`, `HoroEditorActivityBoundaryTests`,
-`HoroEditorActivityTests`, relevant editor activity/inspector/page tests and affected
+`HoroExtensionActivityViewTests`, relevant editor activity/inspector/page tests and affected
 public-header consumers. Hosted and local validation evidence belongs in the PR;
 this contract does not assert that tests, native-device checks, screen readers or
 manual visual states were run. GPU/device validation requires an available editor
