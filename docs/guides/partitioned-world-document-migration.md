@@ -128,11 +128,87 @@ no-op revisions, cancellation, dirty preservation, replacement, reopen, shutdown
 wrong-thread rejection and retained readers. The consumer asserts const leases and
 type separation using only declared EditorModel dependencies.
 
-This is the complete metadata/workspace foundation, not manual cell payload I/O,
-load/unload/pinning (#1635), the cell browser UI (#1630), bake, persistence,
+The workspace now also implements the editor manual residency contract described below.
+The cell browser UI (#1630), bake, persistence,
 undo/redo history, source-control merge, crash recovery or runtime preview activation.
 Those services must consume exact immutable source revisions and must not clear dirty
 metadata without their own durable publication contract.
+
+## Manual page residency and selection (HORO-1635)
+
+The existing `PartitionedWorldWorkspace` is the sole authoring authority. It now
+owns actual immutable `SceneDocument` instances for loaded source pages, alongside
+its authored metadata. An editor cell operation names the **source page AssetId**
+and exact `WorldAuthoringPageDescriptor`, never a cooked `StreamingCellId`.
+The editor controller composes this owner from the host-issued workspace identity.
+Browser/command adapters obtain `WorldDocuments()` and invoke its narrow typed
+operations; this ticket adds no separate document map or runtime scheduler.
+
+`LoadPage` accepts canonical Scene source bytes after the host authorizes and reads
+them outside draw paths. It decodes and validates the actual Scene document,
+requires exact object-ID membership with the authored page, rejects unknown
+components that would otherwise be dropped by decoding, and charges both the open
+page slot and bounded source-byte admission. Valid nonempty pages retain their
+names, transforms, typed components, prefab references and editor flags. Loading
+is not runtime activation or an assertion of disk durability. No new file format,
+source path, filesystem authority, or native backend capability is introduced.
+
+`WorldPageContentLease` exposes only const spans over an actual document. Copies
+retain that document across unload, replacement, close, shutdown and owner
+destruction. The loaded head, source-byte charge, pin and source metadata publish
+in one immutable world root. Default hard limits are 16 MiB source bytes per page
+and 64 MiB of simultaneously resident source input; these are admission charges,
+not measured allocator bytes. Decoding/object allocations and prepared successors
+are bounded by these ceilings and the existing object limits. Historical readers
+and temporary preparation overlap must be budgeted by their consumers.
+
+`CommitLoadedPage` takes the complete successor metadata and edited canonical
+Scene content. It validates both before publication, creates an actual dirty
+SceneDocument through `LoadRecovered`, advances the page exactly once and retains
+pins and surviving selection. Selected object removal rejects; the caller must
+explicitly change selection first. Malformed, stale, unsupported, cancelled,
+over-capacity or allocation-failed preparation retains the exact previous root.
+The older metadata-only `Commit` rejects any change/removal to a loaded page;
+callers editing loaded-page assignments/bounds must submit the coherent source
+through `CommitLoadedPage`. This deliberate API restriction prevents divergence
+between the published head and loaded content. Existing unloaded metadata clients
+continue using `Commit`; the public-header consumer covers the new lease and
+load/unload signatures. No compatibility shadow document is retained.
+
+`UnloadPage` releases only a clean, unselected, unpinned page, leaving authored
+metadata intact. It never evicts another page to make room. A dirty page returns
+`world_document.dirty`; a pin or selected dependency returns
+`world_document.conflict`. Resolve the explicit pin/selection first. Dirty payloads
+remain owned until a durable-save integration exists or the user explicitly
+discards the document via Close/Replace/Shutdown. There is no false MarkSaved or
+unload-as-save behavior. `SetWorkingSet` remains metadata admission and cannot
+remove loaded pages; it is not a bypass for unloading. `SetPagePinned` is owner-local
+and transient and never changes runtime demand or grants budget bypass.
+
+Selection uses `WorldAuthoringObjectAddress` (page plus object). Equal object IDs
+in different pages remain distinct. The single 256-object selection authority admits unloaded authored metadata, and additionally checks actual content membership for loaded pages. The actual `EditorSelectionModel` adapter
+forwards `SetWorldObjects` to the workspace root and emits a typed post-commit
+notification only when selection changes. It stores no second page selection.
+The controller's `SelectWorldObjects` uses this same adapter; ordinary flat scene
+selection remains associated with its existing Scene document. Dependent page
+selection survives every failed unload/edit/lifecycle operation.
+
+The workspace leave guard captures the world fence and includes world dirty state.
+Until durable world save exists it offers Discard/Stay for dirty world pages,
+rejects an attempted Save, and rejects stale discard consent. Stay does not release
+payloads or selection. Replacement clears residency/selection only after complete
+new admission and the explicit dirty disposition. BeginCancellation gates all new
+operations while retaining queries and explicit teardown. Successful shutdown
+releases owner roots and pins; existing read leases remain usable.
+
+Focused residency tests are part of `HoroPartitionedWorldWorkspaceTests`; the
+selection adapter test belongs to `HoroEditorSelectionModelTests`, and the actual
+controller ownership test belongs to `HoroEditorWorkspaceControllerTests` (GUI
+composition build). Build those and `HoroEditorModelPublicHeaderConsumer` for
+qualification. Manual browser widgets, filesystem publication, undo/recovery and
+runtime preview remain their separately owned capabilities; these operations
+already load and retain actual editor scene content without requiring those UI
+or persistence features.
 
 ## Object assignment and bounds inspection (WST-009.5)
 
@@ -140,9 +216,9 @@ metadata without their own durable publication contract.
 addresses. `SetSelection` takes the exact immutable workspace fence, validates
 all distinct page/local-object identities before publishing, and retains input
 order. It does not require open geometry, alter dirty state, or control page
-load/unload/pin. Selection and source changes share `WorldDocumentRevision`; there
+runtime demand. Selected pages remain unload dependencies under the manual residency policy. Selection and source changes share `WorldDocumentRevision`; there
 is no second mutable Inspector selection or independent currentness authority.
-Removing a source object prunes its selection in the same commit. Replace clears
+Explicitly removing an unloaded source object prunes its selection in the same commit; loaded-page removal is rejected until payload ownership is resolved. Replace clears
 selection and changes the generation. Retained immutable snapshots remain usable.
 
 `InspectSelectedObjects` is an explicit owner-thread tooling query against that
@@ -174,7 +250,7 @@ WorldStreaming targets and staged public headers. Aggregate fields are additive:
 settings default the direct-cell threshold to one; objects default to LOD zero
 and no override. Existing cook callers keep `Create`; authoring queries supply an
 explicit source domain. This evolves the in-memory model only, with no persisted
-file-format change. Override edits go through `Commit`, including the page's exact
+file-format change. Override edits on unloaded metadata go through `Commit`; loaded pages use `CommitLoadedPage` with their coherent source. Both require the page's exact
 revision successor and each object's matching revision. Unknown policy/LOD,
 malformed directive identity or an incompatible always-present override fails
 before publication. Geometric override mistakes remain inspectable diagnostics.
@@ -201,3 +277,14 @@ Ordinary calls, including temporary/null primary values, are unchanged. Consumer
 storing member-function pointers must use the const-reference parameter types;
 the standalone public consumer asserts those exact signatures. Rebuild consumers
 with this in-memory API evolution; no source-file or serialized identity changes.
+
+The new LoadPage, CommitLoadedPage, UnloadPage and SetPagePinned methods borrow
+their page descriptors and world fences by const reference for the synchronous call.
+Selection adapters likewise borrow the optional primary and fence. Consumers rebuild against
+the updated declarations; ordinary value and temporary arguments remain supported,
+and no borrowed reference is stored. The selection adapter captures an owned fence
+before publication because the argument may alias the immutable root being replaced.
+The public-header consumer checks the exact manual load/unload signatures, and the
+selection regression exercises a fence backed solely by that owner root. Decoded Scene
+source is transferred out of its successful Result before moving its vectors into
+the actual document; moving from the immutable lvalue Result view would copy instead.

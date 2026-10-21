@@ -22,6 +22,16 @@ static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>(
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentRevision, Horo::WorldStreaming::WorldAuthoringRevision>);
 static_assert(!std::is_same_v<Horo::Editor::WorldDocumentGeneration, Horo::WorldStreaming::StreamingGeneration>);
 
+static_assert(std::is_same_v<decltype(std::declval<Horo::Editor::WorldPageContentLease>().Objects()),
+                             std::span<const Horo::SceneSource::SceneObjectSnapshot>>);
+static_assert(std::is_copy_constructible_v<Horo::Editor::WorldPageContentLease>);
+static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().LoadPage(
+                                 Horo::WorldStreaming::WorldAuthoringPageDescriptor{}, std::string_view{}, WorldDocumentFence{})),
+                             Horo::Result<PartitionedWorldSnapshotLease>>);
+static_assert(
+    std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().UnloadPage(Horo::Assets::AssetId{}, WorldDocumentFence{})),
+                   Horo::Result<PartitionedWorldSnapshotLease>>);
+
 static_assert(std::is_same_v<Horo::Editor::WorldObjectInspectionLease::element_type, const Horo::Editor::WorldObjectSelectionInspection>);
 static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().SetSelection(
                                  std::span<const Horo::WorldStreaming::WorldAuthoringObjectAddress>{}, std::nullopt, WorldDocumentFence{})),
@@ -42,6 +52,14 @@ using WorldInspectionMethod = Horo::Result<Horo::Editor::WorldObjectInspectionLe
     const WorldDocumentFence &, Horo::Editor::WorldObjectInspectionLimits, std::stop_token) const;
 static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::SetSelection), WorldSelectionMethod>);
 static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::InspectSelectedObjects), WorldInspectionMethod>);
+
+using ManualPageLoad = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(
+    const Horo::WorldStreaming::WorldAuthoringPageDescriptor &, std::string_view, const WorldDocumentFence &, std::stop_token);
+using ManualPageUnload = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(Horo::Assets::AssetId,
+                                                                                                    const WorldDocumentFence &,
+                                                                                                    std::stop_token);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::LoadPage), ManualPageLoad>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::UnloadPage), ManualPageUnload>);
 
 using CommitSignature = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(const PartitionedWorldDocument &,
                                                                                                    const WorldDocumentFence &,

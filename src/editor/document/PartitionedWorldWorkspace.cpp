@@ -156,7 +156,9 @@ namespace Horo::Editor {
                    ValidLimit(limits.maximumObjects, hard.maximumObjects) &&
                    ValidLimit(limits.maximumLayerNameBytes, hard.maximumLayerNameBytes) &&
                    ValidLimit(limits.maximumOpenPages, hard.maximumOpenPages) &&
-                   ValidLimit(limits.maximumSelectedObjects, hard.maximumSelectedObjects);
+                   ValidLimit(limits.maximumSelectedObjects, hard.maximumSelectedObjects) &&
+                   ValidLimit(limits.maximumPageSourceBytes, hard.maximumPageSourceBytes) &&
+                   ValidLimit(limits.maximumResidentSourceBytes, hard.maximumResidentSourceBytes);
         }
 
         /** @brief Requires changed existing pages to advance by exactly one revision in the same partition. */
@@ -206,6 +208,35 @@ namespace Horo::Editor {
                     return Result<void>::Failure(cell.ErrorValue());
             }
             return Result<void>::Success();
+        }
+
+        /** @brief Requires every admitted payload's complete source head to remain unchanged in metadata-only transactions. */
+        bool PreservesLoadedHeads(const PartitionedWorldDocument &document, const PartitionedWorldSnapshot &snapshot) {
+            return std::ranges::all_of(snapshot.loadedPages, [&](const auto &loaded) {
+                const auto previous = std::ranges::find(snapshot.document.pages, loaded.head.sourceAsset, [](const auto &page) {
+                    return page.head.sourceAsset;
+                });
+                const auto next = std::ranges::find(document.pages, loaded.head.sourceAsset, [](const auto &page) {
+                    return page.head.sourceAsset;
+                });
+                return next != document.pages.end() && *previous == *next;
+            });
+        }
+
+        /** @brief Checks selected-object dependencies before an edited page removes source identities. */
+        bool PreservesSelection(const PartitionedWorldPage &page, const PartitionedWorldSnapshot &snapshot) {
+            return std::ranges::all_of(snapshot.selectedObjects, [&](const auto &selected) {
+                return selected.page != page.head.sourceAsset || std::ranges::any_of(page.objects, [&](const auto &object) {
+                    return object.descriptor.address == selected;
+                });
+            });
+        }
+
+        /** @brief Checks that metadata admission retains every actual loaded payload. */
+        bool RetainsPayloads(const std::span<const Assets::AssetId> pages, const PartitionedWorldSnapshot &snapshot) {
+            return std::ranges::all_of(snapshot.loadedPages, [&](const auto &loaded) {
+                return std::ranges::find(pages, loaded.head.sourceAsset) != pages.end();
+            });
         }
 
         /** @brief Admits a bounded authored aggregate before copying its storage. */
@@ -276,6 +307,8 @@ namespace Horo::Editor {
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
         if (const auto valid = ValidatePageSuccessors(document, snapshot_->document); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
+        if (!PreservesLoadedHeads(document, *snapshot_))
+            return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Conflict);
         if (SameDocument(document, snapshot_->document))
             return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);
         auto candidate = std::make_shared<PartitionedWorldSnapshot>(*snapshot_);
@@ -295,6 +328,57 @@ namespace Horo::Editor {
         });
         if (candidate->primary && std::ranges::find(candidate->selectedObjects, *candidate->primary) == candidate->selectedObjects.end())
             candidate->primary.reset();
+        return Publish(std::move(candidate), cancellation);
+    }
+
+    /** @copydoc PartitionedWorldWorkspace::PreparePageEdit */
+    Result<PartitionedWorldDocument> PartitionedWorldWorkspace::PreparePageEdit(const PartitionedWorldPage &page) const {
+        const auto current = std::ranges::find(snapshot_->document.pages, page.head.sourceAsset, [](const auto &record) {
+            return record.head.sourceAsset;
+        });
+        if (current == snapshot_->document.pages.end() || std::ranges::none_of(snapshot_->loadedPages, [&](const auto &record) {
+            return record.head.sourceAsset == page.head.sourceAsset;
+        }))
+            return Failure<PartitionedWorldDocument>(WorldDocumentErrors::Conflict);
+        if (page.objects.size() > limits_.maximumObjects)
+            return Failure<PartitionedWorldDocument>(WorldDocumentErrors::Capacity);
+        auto document = snapshot_->document;
+        document.pages[static_cast<std::size_t>(current - snapshot_->document.pages.begin())] = page;
+        if (const auto valid = ValidateDocument(document, limits_); valid.HasError())
+            return Result<PartitionedWorldDocument>::Failure(valid.ErrorValue());
+        if (const auto valid = ValidatePageSuccessors(document, snapshot_->document); valid.HasError())
+            return Result<PartitionedWorldDocument>::Failure(valid.ErrorValue());
+        if (page.head.revision == current->head.revision)
+            return Failure<PartitionedWorldDocument>(WorldDocumentErrors::Stale);
+        if (!PreservesSelection(page, *snapshot_))
+            return Failure<PartitionedWorldDocument>(WorldDocumentErrors::Conflict);
+        return Result<PartitionedWorldDocument>::Success(std::move(document));
+    }
+
+    /** @copydoc PartitionedWorldWorkspace::CommitLoadedPage */
+    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::CommitLoadedPage(const PartitionedWorldPage &page,
+                                                                                      const std::string_view source,
+                                                                                      const WorldDocumentFence &expected,
+                                                                                      const std::stop_token cancellation) {
+        if (const auto valid = CheckFence(expected); valid.HasError())
+            return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
+        if (cancellation.stop_requested())
+            return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Cancelled);
+        auto document = PreparePageEdit(page);
+        if (document.HasError())
+            return Result<PartitionedWorldSnapshotLease>::Failure(document.ErrorValue());
+        auto prepared = PreparePage(page, source, true, cancellation);
+        if (prepared.HasError())
+            return Result<PartitionedWorldSnapshotLease>::Failure(prepared.ErrorValue());
+        auto candidate = std::make_shared<PartitionedWorldSnapshot>(*snapshot_);
+        auto loaded = std::ranges::find(candidate->loadedPages, page.head.sourceAsset, [](const auto &record) {
+            return record.head.sourceAsset;
+        });
+        auto replacement = std::move(prepared).Value();
+        replacement.pinned = loaded->pinned;
+        *loaded = std::move(replacement);
+        candidate->document = std::move(document).Value();
+        candidate->dirty = true;
         return Publish(std::move(candidate), cancellation);
     }
 
@@ -339,6 +423,8 @@ namespace Horo::Editor {
             }))
                 return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Conflict);
         }
+        if (!RetainsPayloads(pages, *snapshot_))
+            return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Conflict);
         if (std::ranges::equal(pages, snapshot_->openPages))
             return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);
         auto candidate = std::make_shared<PartitionedWorldSnapshot>(*snapshot_);

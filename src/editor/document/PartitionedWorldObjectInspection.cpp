@@ -67,15 +67,25 @@ namespace Horo::Editor {
             return Result<WorldObjectInspection>::Success(std::move(result));
         }
 
+        /** @brief Checks actual content membership when the selected source page has an editor payload. */
+        bool HasLoadedObject(const PartitionedWorldSnapshot &snapshot, const WS::WorldAuthoringObjectAddress address) {
+            const auto page = std::ranges::find(snapshot.loadedPages, address.page, [](const auto &loaded) {
+                return loaded.head.sourceAsset;
+            });
+            return page == snapshot.loadedPages.end() || std::ranges::any_of(page->content.Objects(), [&](const auto &object) {
+                return object.id.value == address.object;
+            });
+        }
+
         /** @brief Validates selection membership and primary against the same immutable source root. */
-        Result<void> ValidateSelection(const PartitionedWorldDocument &document,
+        Result<void> ValidateSelection(const PartitionedWorldSnapshot &snapshot,
                                        const std::span<const WS::WorldAuthoringObjectAddress> objects,
                                        const std::optional<WS::WorldAuthoringObjectAddress> &primary) {
             std::set<WS::WorldAuthoringObjectAddress> distinct;
             for (const auto &address : objects) {
                 if (!address.IsValid())
                     return Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
-                if (!distinct.insert(address).second || !FindObject(document, address))
+                if (!distinct.insert(address).second || !FindObject(snapshot.document, address) || !HasLoadedObject(snapshot, address))
                     return Result<void>::Failure(MakeError(WorldDocumentErrors::Conflict));
             }
             if (primary && !distinct.contains(*primary))
@@ -131,7 +141,7 @@ namespace Horo::Editor {
             return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Cancelled));
         if (objects.size() > limits_.maximumSelectedObjects)
             return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Capacity));
-        if (const auto valid = ValidateSelection(snapshot_->document, objects, primary); valid.HasError())
+        if (const auto valid = ValidateSelection(*snapshot_, objects, primary); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
         if (std::ranges::equal(objects, snapshot_->selectedObjects) && primary == snapshot_->primary)
             return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);

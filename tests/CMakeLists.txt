@@ -2645,6 +2645,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
             support/AllocationProbe.cpp
             unit/editor/EditorWorkspaceControllerTests.cpp
+            unit/editor/EditorWorkspaceWorldResidencyTests.cpp
             unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
             unit/editor/EditorWorkspaceControllerCollisionTests.cpp
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
@@ -3162,8 +3163,10 @@ target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroPartitionedWorldWorkspaceTests
         unit/editor/PartitionedWorldWorkspaceTests.cpp
+        unit/editor/PartitionedWorldResidencyTests.cpp
         unit/editor/PartitionedWorldObjectInspectionTests.cpp)
 target_link_libraries(HoroPartitionedWorldWorkspaceTests PRIVATE HoroEngine::EditorModel)
+target_include_directories(HoroPartitionedWorldWorkspaceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 horo_register_catch_test(HoroPartitionedWorldWorkspaceTests LABELS "unit;headless;world_document")
 
 add_executable(HoroSceneDocumentTests
