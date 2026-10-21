@@ -96,7 +96,8 @@ namespace {
         const auto retained = scene;
         REQUIRE(ClearAssetViewportPlacementPreview(scene));
         CHECK(scene.meshLeases.empty());
-        REQUIRE_FALSE(retained.meshLeases.empty());
+        // Imported mesh storage is borrowed from meshView; primitive-cache leases are not its owner.
+        CHECK(retained.meshLeases.empty());
         CHECK(retained.View().IsValid());
         CHECK(scene.instances.empty());
         CHECK(scene.instanceObjects.empty());
@@ -190,27 +191,32 @@ namespace {
                      .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}});
         auto definition = std::move(builder).Build();
         REQUIRE(definition.HasValue());
-        Runtime::PrimitiveMeshCache meshes;
-        auto geometry = PreparePrefabDropGeometry(definition.Value(), meshes);
-        REQUIRE(geometry.HasValue());
-        REQUIRE(geometry.Value().instances.size() == 2);
-        CHECK(geometry.Value().bounds.minimum.x == 1.5F);
-        CHECK(geometry.Value().bounds.maximum.x == 6.0F);
-        CHECK(geometry.Value().bounds.maximum.y == 3.0F);
-        EditorViewportSceneSnapshot scene;
-        const Math::Transform placement{.translation = {10.0F, 0.0F, 4.0F}};
-        REQUIRE(ApplyPrefabDropPreview(scene, geometry.Value(), placement).HasValue());
-        REQUIRE(scene.instances.size() == 2);
-        CHECK(scene.instances.back().localToWorld.At(0, 3) == 15.0F);
-        CHECK(scene.instancePickable == std::vector<std::uint8_t>{0U, 0U});
-        const auto retained = scene;
-        REQUIRE(ClearAssetViewportPlacementPreview(scene));
-        CHECK(scene.meshLeases.empty());
+        EditorViewportSceneSnapshot retained;
+        {
+            Runtime::PrimitiveMeshCache meshes;
+            auto geometry = PreparePrefabDropGeometry(definition.Value(), meshes);
+            REQUIRE(geometry.HasValue());
+            REQUIRE(geometry.Value().instances.size() == 2);
+            CHECK(geometry.Value().bounds.minimum.x == 1.5F);
+            CHECK(geometry.Value().bounds.maximum.x == 6.0F);
+            CHECK(geometry.Value().bounds.maximum.y == 3.0F);
+            EditorViewportSceneSnapshot scene;
+            const Math::Transform placement{.translation = {10.0F, 0.0F, 4.0F}};
+            REQUIRE(ApplyPrefabDropPreview(scene, geometry.Value(), placement).HasValue());
+            REQUIRE(scene.instances.size() == 2);
+            CHECK(scene.instances.back().localToWorld.At(0, 3) == 15.0F);
+            CHECK(scene.instancePickable == std::vector<std::uint8_t>{0U, 0U});
+            retained = scene;
+            REQUIRE(ClearAssetViewportPlacementPreview(scene));
+            CHECK(scene.meshLeases.empty());
+            CHECK(scene.instances.empty());
+            CHECK(scene.meshResources.empty());
+            CHECK_FALSE(ClearAssetViewportPlacementPreview(scene));
+        }
+        // The cache, prepared geometry and original preview have retired; the copied snapshot pins every resource it borrows.
         REQUIRE_FALSE(retained.meshLeases.empty());
+        CHECK(retained.meshLeases.front().Data().IsValid());
         CHECK(retained.View().IsValid());
-        CHECK(scene.instances.empty());
-        CHECK(scene.meshResources.empty());
-        CHECK_FALSE(ClearAssetViewportPlacementPreview(scene));
     }
 
     TEST_CASE("Prefab ghosts apply rotated nonuniform parent and placement transforms in world order", "[unit][editor][asset-drop]") {
