@@ -420,12 +420,22 @@ intents still own their fence values across frames.
 
 `horo.world_composition` is a registered persistent document-area panel, reachable
 from the workspace document rail. Enter a project-relative `.horoworld` path and
-activate **Open world source**. The workspace screen explicitly composes the retained
-project read capability and injects it into the controller. The controller captures bounded source
-through `Platform::IProjectReadFiles::SourceText`; retained root handles reject
-traversal, symlinks/reparse points, special files and multiple hardlinks. `HoroGui` and its controller test declare the narrow private
-`PlatformProjectReadFiles` dependency rather than receiving private platform headers
-through another target. File I/O
+activate **Open world source**. The executable composition root creates a retained
+`WorkspaceReadSourceFactory` and registers it for the screen lifetime. The screen
+admits its complete owner/registry/world-reader capture through
+`CaptureWorkspaceReadSources`, then injects those owned capabilities into the
+controller. Missing factories fail as unavailable; relative roots and partial
+captures fail as invalid, without selecting a backend in GUI code. Host failures
+retain their original typed error.
+
+`WorkspaceReadSources.h` belongs to `HoroEditorServices`, whose public dependency
+is the narrow `ProjectReadFilesApi`. The concrete `PlatformProjectReadFiles`
+dependency belongs privately to `HoroEditor` and native test composition roots;
+`HoroGui` consumes the supplied interface. Build
+`HoroEditorServicesPublicHeaderConsumer` after migrating host composition.
+The controller captures bounded source through
+`Platform::IProjectReadFiles::SourceText`; retained root handles reject traversal,
+symlinks/reparse points, special files and multiple hardlinks. File I/O
 and semantic admission execute in the command phase, never in panel drawing.
 
 The route uses the controller's existing `WorldDocuments()` authority. It does not

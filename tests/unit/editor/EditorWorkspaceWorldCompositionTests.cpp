@@ -1,3 +1,5 @@
+#include "Horo/Editor/NativeAssetRegistrySource.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "OwnedTestDirectory.h"
 #include "PartitionedWorldResidencyTestSupport.h"
@@ -20,11 +22,21 @@ namespace Horo::Editor::WorldCompositionTests {
                     file << WorldSource();
                 }
                 const auto owner = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000009").Value();
-                auto files = Platform::CreateNativeProjectReadFiles(directory.Path(), owner.ToString(), 1);
-                REQUIRE(files.HasValue());
-                controller = std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
-                                                                         EditorWorkspaceDependencies{.worldSourceFiles = files.Value(),
-                                                                                                     .documentSessionOwner = owner});
+                const WorkspaceReadSourceFactory factory{[owner](const std::filesystem::path &root) {
+                    auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
+                    auto files = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
+                    REQUIRE(registry.HasValue());
+                    REQUIRE(files.HasValue());
+                    return Result<WorkspaceReadSources>::Success({owner, registry.Value(), files.Value()});
+                }};
+                auto captured = CaptureWorkspaceReadSources(&factory, directory.Path());
+                REQUIRE(captured.HasValue());
+                const auto &sources = captured.Value();
+                controller =
+                    std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
+                                                                EditorWorkspaceDependencies{.assetRegistrySource = sources.registry,
+                                                                                            .worldSourceFiles = sources.world,
+                                                                                            .documentSessionOwner = sources.owner});
                 REQUIRE(controller->OpenWorldCompositionSource("world ü space.horoworld").HasValue());
             }
 

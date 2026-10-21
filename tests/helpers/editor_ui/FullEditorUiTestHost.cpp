@@ -14,16 +14,20 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
+#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/RecentProject.h"
 #include "Horo/Editor/RecentProjectInspectionService.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ExternalProcess.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
@@ -31,18 +35,34 @@
 #include "editor/renderer/EditorViewportRenderer.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <imgui.h>
 #include <imgui_test_engine/imgui_te_context.h>
 #include <nlohmann/json.hpp>
+#include <span>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
 namespace Horo::Tests {
     namespace {
+        /** @brief Supplies real retained readers from the test executable's composition root. */
+        Result<Editor::WorkspaceReadSources> CaptureNativeWorkspaceSources(const std::filesystem::path &root) {
+            std::array<std::uint8_t, 16> identityBytes{};
+            if (Platform::CreateNativeSecureRandomSource()->Fill(std::as_writable_bytes(std::span(identityBytes))).HasError())
+                throw std::runtime_error("Unable to issue UI test workspace identity.");
+            const Assets::AssetId owner = Assets::AssetId::FromBytes(identityBytes);
+            auto assetSource = Editor::CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
+            auto worldSource = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
+            if (!owner.IsValid() || assetSource.HasError() || worldSource.HasError())
+                throw std::runtime_error("Unable to compose UI test workspace read capabilities.");
+            Editor::WorkspaceReadSources sources{owner, std::move(assetSource).Value(), std::move(worldSource).Value()};
+            return Result<Editor::WorkspaceReadSources>::Success(std::move(sources));
+        }
+
         class ScopedHome final {
         public:
             explicit ScopedHome(const std::filesystem::path &home) {
@@ -188,6 +208,7 @@ namespace Horo::Tests {
             screenHost->Services().Register<Editor::EditorViewportSceneState>(viewportScene);
             screenHost->Services().Register<Runtime::RuntimeSceneService>(runtimeScene);
             screenHost->Services().Register<Assets::AssetRegistry>(assetRegistry);
+            screenHost->Services().RegisterConst<Editor::WorkspaceReadSourceFactory>(workspaceReadSources);
             screenHost->Services().Register<Editor::ProjectMutationCoordinator>(mutations);
             screenHost->Services().Register<DurableFileSystem>(files);
             screenHost->Services().Register<Application::GameplayBuildService>(gameplayBuilds);
@@ -258,6 +279,7 @@ namespace Horo::Tests {
         Editor::ThemeContext theme;
         Editor::EditorSettingsSnapshot settingsSnapshot;
         Editor::EditorGuiContext gui;
+        Editor::WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
         std::unique_ptr<Editor::GuiScreenHost> screenHost;
         std::vector<Editor::GuiRouteKind> drawnRoutes;
         std::optional<Editor::EditorMenuInvocation> pendingMenuInvocation;
