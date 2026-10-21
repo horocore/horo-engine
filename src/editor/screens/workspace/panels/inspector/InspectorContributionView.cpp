@@ -36,6 +36,7 @@ namespace Horo::Editor {
             return false;
         }
         entry.render.emplace(std::move(render).Value());
+        Ui::ApplyEditorUiInput(*entry.render, inputAdmitted_ && entry.enabled);
         for (std::size_t i = 0; i < entry.form.nodes.size(); ++i)
             entry.order[i] = i;
         std::sort(entry.order.begin(), entry.order.begin() + static_cast<std::ptrdiff_t>(entry.form.nodes.size()), [&](auto a, auto b) {
@@ -218,12 +219,12 @@ namespace Horo::Editor {
         const auto origin = ImGui::GetCursorScreenPos();
         float extra{};
         float bottom{};
+        const bool custom = RequiresEditorUiComposition(entry.form);
         for (std::size_t ordinal = 0; ordinal < entry.form.nodes.size(); ++ordinal) {
             const auto i = entry.order[ordinal];
             const auto &geometry = entry.render->nodes[i];
             ImGui::SetCursorScreenPos({origin.x + geometry.x, origin.y + geometry.y + extra});
             const auto before = ImGui::GetCursorScreenPos().y;
-            const bool custom = RequiresEditorUiComposition(entry.form);
             if (custom)
                 ImGui::PushClipRect({origin.x + geometry.x, origin.y + geometry.y},
                                     {origin.x + geometry.x + geometry.width, origin.y + geometry.y + geometry.height}, true);
@@ -246,12 +247,7 @@ namespace Horo::Editor {
         inputAdmitted_ = admitted;
         for (auto &entry : entries_)
             if (entry.render)
-                for (std::size_t i = 0; i < entry.render->nodes.size(); ++i) {
-                    entry.render->accessibility[i].enabled = admitted && entry.render->nodes[i].enabled;
-                    entry.render->accessibility[i].focusable = admitted && entry.render->nodes[i].focusable;
-                    if (!admitted)
-                        entry.render->accessibility[i].preview = false;
-                }
+                Ui::ApplyEditorUiInput(*entry.render, admitted && entry.enabled);
         if (!admitted)
             for (auto &entry : entries_)
                 for (auto &[index, state] : entry.scalars) {

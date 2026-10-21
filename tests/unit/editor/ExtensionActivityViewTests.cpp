@@ -14,6 +14,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/ExtensionActivityView.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -204,6 +205,19 @@ namespace {
         }
     }
 
+    /** @brief Reads the same live semantic hooks exposed to a host accessibility adapter. */
+    void CheckPlotAccessibility(const ExtensionActivityView &view) {
+        const auto semantic = view.Accessibility("fixture.activity");
+        REQUIRE(semantic.size() == 4);
+        const auto plot = std::ranges::find(semantic, Extensions::EditorUiAccessibleRole::Plot, &Extensions::EditorUiAccessibleNode::role);
+        REQUIRE(plot != semantic.end());
+        CHECK(plot->name.value == "fixture.label");
+        CHECK(plot->itemCount == 4);
+        CHECK(plot->focusable);
+        REQUIRE(plot->value);
+        CHECK(std::get<Extensions::EditorUiVectorValue>(*plot->value).dimension == 2);
+    }
+
     void CheckRailKeyboardFocus(ExtensionActivityView &view) {
         // ImGui applies focus API navigation results at the following NewFrame.
         ImGuiID railControl{};
@@ -339,15 +353,7 @@ namespace {
         REQUIRE(view.TakeNativePanelClear() == Extensions::EditorActivitySide::Left);
         CheckDrawerFocusAndNarrowFrames(view);
         CheckCustomPlotThemes(view);
-        const auto semantic = view.Accessibility("fixture.activity");
-        REQUIRE(semantic.size() == 4);
-        const auto plot = std::ranges::find(semantic, Extensions::EditorUiAccessibleRole::Plot, &Extensions::EditorUiAccessibleNode::role);
-        REQUIRE(plot != semantic.end());
-        CHECK(plot->name.value == "fixture.label");
-        CHECK(plot->itemCount == 4);
-        CHECK(plot->focusable);
-        REQUIRE(plot->value);
-        CHECK(std::get<Extensions::EditorUiVectorValue>(*plot->value).dimension == 2);
+        CheckPlotAccessibility(view);
         CheckRailKeyboardFocus(view);
         CHECK(renderer.creates == 1);
         CHECK(renderer.destroys == 0);

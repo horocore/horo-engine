@@ -5,6 +5,7 @@
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
 #include <array>
+#include <utility>
 
 namespace Horo::Editor {
     /** @brief Owner-lane view; host/theme outlive the panel and no provider executes in traversal. */

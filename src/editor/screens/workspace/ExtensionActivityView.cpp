@@ -203,10 +203,7 @@ namespace Horo::Editor {
         inputAdmitted_ = admitted;
         for (auto &entry : entries_)
             if (entry.render)
-                for (std::size_t i = 0; i < entry.render->nodes.size(); ++i) {
-                    entry.render->accessibility[i].enabled = admitted && entry.render->nodes[i].enabled;
-                    entry.render->accessibility[i].focusable = admitted && entry.render->nodes[i].focusable;
-                }
+                Ui::ApplyEditorUiInput(*entry.render, admitted && entry.projection.surface.activity.enabled);
         if (host_)
             host_->SetInputAdmitted(admitted);
     }
@@ -406,9 +403,10 @@ namespace Horo::Editor {
         if (entry.render && entry.render->themeRevision == theme->revision && entry.render->availableWidth == entry.offeredWidth)
             return;
         auto render = Extensions::BuildEditorUiRenderSnapshot(*entry.projection.surface.form, *theme, entry.offeredWidth / theme->uiScale);
-        if (render.HasValue())
+        if (render.HasValue()) {
             entry.render.emplace(std::move(render).Value());
-        else
+            Ui::ApplyEditorUiInput(*entry.render, inputAdmitted_ && entry.projection.surface.activity.enabled);
+        } else
             entry.render.reset();
     }
 
@@ -459,7 +457,7 @@ namespace Horo::Editor {
             ImGui::PushClipRect({origin.x + geometry.x, origin.y + geometry.y},
                                 {origin.x + geometry.x + width, origin.y + geometry.y + geometry.height}, true);
             ImGui::PushID(base.id.value.c_str());
-            const bool enabled = inputAdmitted_ && surface.activity.enabled && Extensions::IsEditorUiNodeEnabled(*surface.form, base.id);
+            const bool enabled = inputAdmitted_ && surface.activity.enabled && geometry.enabled;
             ImGui::BeginDisabled(!enabled);
             DrawFormNode(entry, index, width, enabled);
             ImGui::EndDisabled();

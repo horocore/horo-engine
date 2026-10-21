@@ -50,7 +50,9 @@ command allowlist and worker queue. It supplies no document value or document
 pointer. A scalar gesture retains a host-local preview and proposes a typed value
 only on commit. `InspectorContributionView::Queue` uses the existing approval and
 owner fences, then the workspace controller executes the canonical inspector
-document transaction. The same existing history owner performs undo/redo. Providers
+document transaction. Both inspector and custom-composition capability leases remain held and are
+rechecked through transaction publication. The same existing history owner performs
+undo/redo. Providers
 cannot replace the transaction or write authored state through presentation data.
 Native modules remain trusted native code, not a memory sandbox.
 

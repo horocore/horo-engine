@@ -20,6 +20,17 @@ namespace Horo::Editor::Ui {
         ImGui::EndDisabled();
     }
 
+    /** @copydoc ApplyEditorUiInput */
+    void ApplyEditorUiInput(Extensions::EditorUiRenderSnapshot &snapshot, bool admitted) noexcept {
+        const auto count = std::min(snapshot.nodes.size(), snapshot.accessibility.size());
+        for (std::size_t i = 0; i < count; ++i) {
+            snapshot.accessibility[i].enabled = admitted && snapshot.nodes[i].enabled;
+            snapshot.accessibility[i].focusable = admitted && snapshot.nodes[i].focusable;
+            if (!admitted)
+                snapshot.accessibility[i].preview = false;
+        }
+    }
+
     /** @copydoc EditorUiFonts */
     Theme::Fonts EditorUiFonts(const Theme::Fonts &fonts, Extensions::EditorThemeFontRole role) noexcept {
         auto result = fonts;

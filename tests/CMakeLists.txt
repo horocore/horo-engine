@@ -4443,6 +4443,7 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/EditorActivityRegistryTests.cpp
         unit/extensions/EditorCommandRegistryTests.cpp
         unit/extensions/EditorUiFormTests.cpp
+        unit/extensions/EditorUiCompositionTests.cpp
         unit/extensions/EditorPageDefinitionTests.cpp
         unit/extensions/EditorPageHostTests.cpp
         unit/extensions/EditorPageNativeTests.cpp

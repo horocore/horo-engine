@@ -16,6 +16,10 @@ namespace Horo::Editor::Ui {
         ScopedEditorUiInput &operator=(const ScopedEditorUiInput &) = delete;
     };
 
+    /** @brief Applies current host input ownership to the cached semantic hooks without allocating.
+     * @param snapshot Canonical host projection. @param admitted Current owner/modal admission.
+     */
+    void ApplyEditorUiInput(Extensions::EditorUiRenderSnapshot &snapshot, bool admitted) noexcept;
     /** @brief Borrows only existing host font resources for one resolved role.
      * @param fonts Owning editor font set. @param role Resolved semantic role. @return Frame-borrowed font-role view.
      */
