@@ -17,7 +17,7 @@ namespace Horo::Editor {
             const auto decoded = DecodePartitionedWorldDocument(source);
             REQUIRE(decoded.HasError());
             if (expected)
-                CHECK(decoded.ErrorValue().code == expected->code);
+                CHECK(decoded.ErrorValue().code.Value() == expected->code.Value());
         }
     }  // namespace
 
@@ -94,10 +94,11 @@ namespace Horo::Editor {
         auto source = WorldSource();
         std::stop_source stop;
         stop.request_stop();
-        CHECK(DecodePartitionedWorldDocument(source, stop.get_token()).ErrorValue().code == WorldDocumentErrors::Cancelled.code);
+        CHECK(DecodePartitionedWorldDocument(source, stop.get_token()).ErrorValue().code.Value() ==
+              WorldDocumentErrors::Cancelled.code.Value());
         source.assign(8 * 1024 * 1024 + 1, ' ');
-        CHECK(DecodePartitionedWorldDocument(source).ErrorValue().code == WorldDocumentErrors::Capacity.code);
+        CHECK(DecodePartitionedWorldDocument(source).ErrorValue().code.Value() == WorldDocumentErrors::Capacity.code.Value());
         source = std::string(40, '[') + "0" + std::string(40, ']');
-        CHECK(DecodePartitionedWorldDocument(source).ErrorValue().code == WorldDocumentErrors::Capacity.code);
+        CHECK(DecodePartitionedWorldDocument(source).ErrorValue().code.Value() == WorldDocumentErrors::Capacity.code.Value());
     }
 }  // namespace Horo::Editor

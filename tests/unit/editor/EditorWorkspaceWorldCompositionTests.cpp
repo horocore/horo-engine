@@ -75,7 +75,7 @@ namespace Horo::Editor::WorldCompositionTests {
         close.worldDocumentFence = edited->fence;
         controller.ProcessCommand(close);
         REQUIRE(controller.ViewModel().worldDocumentError);
-        CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Dirty.code);
+        CHECK(controller.ViewModel().worldDocumentError->code.Value() == WorldDocumentErrors::Dirty.code.Value());
         CHECK(controller.WorldDocuments().Snapshot().Value() == edited);
         REQUIRE(controller.WorldDocuments().Shutdown(WorldDocumentDisposition::Discard).HasValue());
         controller.RefreshWorldDocumentProjection();
