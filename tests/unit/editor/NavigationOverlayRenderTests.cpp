@@ -40,7 +40,7 @@ namespace Horo::Editor {
         /** @brief Uses the production neutral tile validator, with no provider or renderer-native memory. */
         std::shared_ptr<const NavigationViewportSnapshot> Cooked(const NavigationViewportSnapshot &authored) {
             Sha256Digest digest{};
-            digest.fill(1);
+            digest.bytes.fill(1);
             N::NavigationPreparedTile input{.tile = {.key = {.profile = Id<N::NavigationAgentProfileId>(1),
                                                              .surface = Id<N::SurfaceId>(10),
                                                              .scope = authored.Scenes().front().scope},
