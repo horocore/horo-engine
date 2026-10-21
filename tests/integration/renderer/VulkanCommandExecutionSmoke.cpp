@@ -118,7 +118,7 @@ namespace {
         const RenderCpuWait wait{point, RenderCpuWaitPurpose::DeterministicTest, std::chrono::seconds(5),
                                  frontend.Capabilities().support.deviceIncarnation};
         const auto completed = frontend.ObserveSubmission(wait);
-        INFO(completed.HasError() ? completed.ErrorValue().message : "native timeline observation succeeded");
+        INFO((completed.HasError() ? completed.ErrorValue().message : "native timeline observation succeeded"));
         REQUIRE(completed.HasValue());
         REQUIRE(completed.Value());
     }
@@ -132,7 +132,7 @@ namespace {
                                                   .usage = RenderBufferUsage::CopySource | RenderBufferUsage::CopyDestination,
                                                   .access = RenderBufferAccess::HostVisible},
                                                  index == 0 ? std::span<const std::byte>{bytes} : std::span<const std::byte>{});
-            INFO(created.HasError() ? created.ErrorValue().message : "native buffer admitted");
+            INFO((created.HasError() ? created.ErrorValue().message : "native buffer admitted"));
             REQUIRE(created.HasValue());
             handles[index] = created.Value().handle;
             operations[index] = created.Value().operation;
@@ -142,7 +142,7 @@ namespace {
         REQUIRE(processed.Value() == 3);
         for (const auto operation : operations) {
             const auto completed = frontend.ResourceOperationResult(operation);
-            INFO(completed.HasError() ? completed.ErrorValue().message : "native allocation published");
+            INFO((completed.HasError() ? completed.ErrorValue().message : "native allocation published"));
             REQUIRE(completed.HasValue());
         }
         auto packet = SubmissionTest::CopyGraph(handles, {1}, consumer);
@@ -151,10 +151,10 @@ namespace {
         REQUIRE(begun.HasValue());
         auto frame = std::move(begun).Value();
         const auto executed = frame.ExecuteSubmittedGraph(packet.graph, packet.workloads, submissions);
-        INFO(executed.HasError() ? executed.ErrorValue().message : "native copies recorded");
+        INFO((executed.HasError() ? executed.ErrorValue().message : "native copies recorded"));
         REQUIRE(executed.HasValue());
         const auto submitted = frame.Present();
-        INFO(submitted.HasError() ? submitted.ErrorValue().message : "native copies submitted");
+        INFO((submitted.HasError() ? submitted.ErrorValue().message : "native copies submitted"));
         REQUIRE(submitted.HasValue());
         RequireCompletion(frontend, submissions.back().submission.signal);
         for (const auto handle : handles)
@@ -169,7 +169,7 @@ namespace {
         REQUIRE(texture.HasValue());
         REQUIRE(frontend.ProcessResourceRequests().HasValue());
         const auto ready = frontend.ResourceOperationResult(texture.Value().operation);
-        INFO(ready.HasError() ? ready.ErrorValue().message : "native color image published");
+        INFO((ready.HasError() ? ready.ErrorValue().message : "native color image published"));
         REQUIRE(ready.HasValue());
         auto builder = Take(RenderGraphBuilder::Create({.maxPasses = 2, .maxResources = 1, .maxUsages = 2, .maxDependencies = 2}));
         const auto clear = Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
@@ -192,7 +192,7 @@ namespace {
         REQUIRE(begun.HasValue());
         auto frame = std::move(begun).Value();
         const auto executed = frame.ExecuteSubmittedGraph(compiled, workloads, submissions);
-        INFO(executed.HasError() ? executed.ErrorValue().message : "native clear/load recorded");
+        INFO((executed.HasError() ? executed.ErrorValue().message : "native clear/load recorded"));
         REQUIRE(executed.HasValue());
         REQUIRE(frame.Present().HasValue());
         RequireCompletion(frontend, submissions.front().submission.signal);
@@ -204,7 +204,7 @@ namespace {
               "[integration][renderer][vulkan][gpu]") {
         NativeOwner owner;
         const auto initialized = owner.Initialize(false);
-        INFO(initialized.HasError() ? initialized.ErrorValue().message : "Vulkan 1.3 native command owner admitted");
+        INFO((initialized.HasError() ? initialized.ErrorValue().message : "Vulkan 1.3 native command owner admitted"));
         REQUIRE(initialized.HasValue());
         REQUIRE(owner.frontend->Capabilities().supportsExplicitGraphSubmissions);
         REQUIRE(owner.frontend->Capabilities().supportsSubmissionObservation);
@@ -223,7 +223,7 @@ namespace {
             REQUIRE(owner.frontend == nullptr);
             SKIP("The actual driver has no separate transfer-capable queue family; cross-family native qualification is unavailable.");
         }
-        INFO(initialized.HasError() ? initialized.ErrorValue().message : "distinct native queue families admitted");
+        INFO((initialized.HasError() ? initialized.ErrorValue().message : "distinct native queue families admitted"));
         REQUIRE(initialized.HasValue());
         ExecuteCopies(*owner.frontend, {2});
         Horo::Render::Test::RequireDrainedOwner(*owner.frontend);
