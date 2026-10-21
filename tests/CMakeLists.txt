@@ -2816,7 +2816,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/UiInspectorWidgetsTests.cpp
     )
 
-    target_link_libraries(HoroInspectorEditSessionTests PRIVATE HoroUiInspectorInternal HoroEditorUiStyleHostInternal)
+    target_link_libraries(HoroInspectorEditSessionTests PRIVATE HoroUiInspectorInternal HoroEditorUiStyleHostInternal nlohmann_json::nlohmann_json)
     target_include_directories(HoroInspectorEditSessionTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(HoroInspectorEditSessionTests PRIVATE cxx_std_20)
     target_include_directories(HoroInspectorEditSessionTests PRIVATE
@@ -3869,7 +3869,7 @@ add_executable(HoroRuntimeUiAnimationIntegrationTests
         unit/runtime/ui/UiHotReloadTestFixture.cpp)
 target_compile_features(HoroRuntimeUiAnimationIntegrationTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeUiAnimationIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
-target_link_libraries(HoroRuntimeUiAnimationIntegrationTests PRIVATE HoroEngine::UiAnimationRuntimeIntegration HoroEngine::Platform HoroEngine::RuntimeUiInput)
+target_link_libraries(HoroRuntimeUiAnimationIntegrationTests PRIVATE HoroEngine::UiAnimationRuntimeIntegration HoroEngine::Platform HoroEngine::RuntimeUiInput nlohmann_json::nlohmann_json)
 add_executable(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer
         support/RuntimeUiAnimationIntegrationPublicHeaderConsumer.cpp)
 target_compile_features(HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer PRIVATE cxx_std_20)

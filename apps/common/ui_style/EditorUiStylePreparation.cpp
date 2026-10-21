@@ -2,6 +2,7 @@
 
 #include "Horo/Application/UiStyleWorkspace.h"
 #include "Horo/Platform/NativeImmutableFileStorage.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Ui/UiErrors.h"
 
 #include <new>

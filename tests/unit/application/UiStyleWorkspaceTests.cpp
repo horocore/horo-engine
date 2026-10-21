@@ -27,6 +27,7 @@ TEST_CASE("Real tracked style assets cook load and activate through the actual w
     REQUIRE(before.themes);
     REQUIRE(before.themes->size() == 1);
     CHECK(before.themes->front().id.Bytes() == project.styleAsset.Bytes());
+    CHECK(before.themes->front().label == "assets/tema_日本 style.uistyle");
     CHECK_FALSE(before.StyleGeneration().IsValid());
     project.Prepare();
     const auto first = project.resources->Capture();

@@ -106,7 +106,7 @@ namespace Horo::Application {
                     return Result<std::vector<UiStyleWorkspaceTheme>>::Failure(id.ErrorValue());
                 if (result.size() == MaximumUiStyleAssets)
                     return Result<std::vector<UiStyleWorkspaceTheme>>::Failure(MakeError(UiErrors::CapacityExceeded));
-                result.push_back({id.Value(), std::string{record.sourcePath.Value()}});
+                result.emplace_back(id.Value(), record.sourcePath.String());
             }
         return Result<std::vector<UiStyleWorkspaceTheme>>::Success(std::move(result));
     }
