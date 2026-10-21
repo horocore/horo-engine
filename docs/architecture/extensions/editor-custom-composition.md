@@ -32,7 +32,8 @@ Inspector schema1 retains its exact descriptor and field strides. Inspector
 schema2 extends the descriptor prefix with a bounded list of styles keyed by
 existing node ID; presentation nodes use the activity schema2 stride. It does not
 extend the scalar field array. Missing or duplicate style targets, unsupported
-versions/roles and incompatible presenters are rejected. Existing schema1 callers
+versions/roles and incompatible presenters are rejected. The settings/modal page profile continues to reject advanced presentations; a new
+surface requires its explicit schema and admission path. Existing schema1 callers
 require no migration; schema2 producers must pass the complete extended descriptor.
 
 Container captions and primitive field labels/descriptions now consume theme text
@@ -46,9 +47,11 @@ button; plot/scalar presenters reserve their label and readout slots explicitly.
 
 ## Admission, commands and input
 
-The application explicitly advertises native `editor.custom-composition` support
-and seals `horo.editor.custom-composition` into its UI admission policy. Declaring
-standard activity or inspector support does not imply this grant. Advanced native
+The composed GUI host advertises native `editor.custom-composition` transport and
+presenter availability. The application separately seals
+`horo.editor.custom-composition` into each surface host's admission policy. Binary
+feature availability does not grant presentation authority, and standard activity
+or inspector admission does not imply the custom grant. Advanced native
 packages must declare the feature in their module requirements; the host separately
 checks actual capability admission and exact activation generation. Registry form
 publication also checks the custom grant. Inspector discovery and drawing recheck

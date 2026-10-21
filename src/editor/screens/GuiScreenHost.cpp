@@ -159,9 +159,7 @@ namespace Horo::Editor {
         const auto uiPolicy =
             composition.extensionUiPolicy.revision ? composition.extensionUiPolicy : Extensions::ExtensionAdmissionPolicy{.revision = 1};
         editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs, uiPolicy);
-        if (std::ranges::find(composition.extensionUiPolicy.availableCapabilities, Extensions::EditorCustomCompositionCapability) !=
-            composition.extensionUiPolicy.availableCapabilities.end())
-            capabilities.emplace_back(HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY);
+        capabilities.emplace_back(HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY);
         services_.Register<Extensions::EditorActivityHost>(*editorActivityHost_);
         InitializeExtensionPages(composition, capabilities);
         InitializeExtensionInspectors(composition, capabilities);

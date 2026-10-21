@@ -82,7 +82,7 @@ namespace Horo::Extensions::Tests {
                         std::string{
                             R"("id":"fixture.second","version":"1.0.0","kind":"native","roles":["editor-presentation"],"entry":")"} +
                         std::filesystem::path{HORO_EDITOR_ACTIVITY_FIXTURE}.filename().string() +
-                        R"(","abi":{"major":1,"minimumMinor":4},"requiredCapabilities":["editor.activity"]})");
+                        R"(","abi":{"major":1,"minimumMinor":4},"requiredCapabilities":["editor.activity","editor.custom-composition"]})");
                 std::ofstream output{manifestPath};
                 output << manifest;
                 output.close();
