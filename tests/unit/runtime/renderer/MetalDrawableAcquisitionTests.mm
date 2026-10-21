@@ -6,6 +6,8 @@
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
+#include <stdexcept>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -14,6 +16,13 @@ namespace {
     using namespace Horo::Render::Detail;
     using AcquisitionClock = std::chrono::steady_clock;
 
+    enum class SourceFailure {
+        None,
+        Native,
+        StandardCpp,
+        ForeignCpp
+    };
+
     struct SourceState final {
         std::mutex mutex;
         std::condition_variable changed;
@@ -21,7 +30,7 @@ namespace {
         bool entered{};
         bool release{};
         bool unavailable{};
-        bool fail{};
+        SourceFailure failure{SourceFailure::None};
     };
 
     class ControlledSource final : public IMetalDrawableSource {
@@ -36,8 +45,12 @@ namespace {
             state_->changed.wait(lock, [this] {
                 return state_->release;
             });
-            if (state_->fail)
-                @throw [NSException exceptionWithName:@"HoroInjectedDrawableFailure" reason:nil userInfo:nil];
+            if (state_->failure == SourceFailure::Native)
+                @throw [NSException exceptionWithName:@"HoroInjectedDrawableFailure" reason:@"Injected drawable detail" userInfo:nil];
+            if (state_->failure == SourceFailure::StandardCpp)
+                throw std::runtime_error{"Injected C++ drawable detail"};
+            if (state_->failure == SourceFailure::ForeignCpp)
+                throw 42;
             // This sentinel exercises ownership/slots only; native output and drawable-texture qualification are separate.
             return state_->unavailable ? nil : (id<CAMetalDrawable>)[NSObject new];
         }
@@ -151,15 +164,18 @@ TEST_CASE("Metal worker publishes unavailable and native exception outcomes with
     for (const bool fail : {false, true}) {
         AcquisitionFixture fixture;
         fixture.source->unavailable = true;
-        fixture.source->fail = fail;
+        fixture.source->failure = fail ? SourceFailure::Native : SourceFailure::None;
         REQUIRE(fixture.Request(8, {16, 16}));
         fixture.AwaitEntered();
         fixture.Release();
         const auto result = fixture.AwaitResult(8);
         CHECK(result.progress == (fail ? MetalDrawablePoll::Failed : MetalDrawablePoll::Unavailable));
         CHECK(result.drawable == nil);
-        if (fail)
+        if (fail) {
             CHECK(std::string_view{result.failure.data()}.find("HoroInjectedDrawableFailure") != std::string_view::npos);
+            CHECK(std::string_view{result.failure.data()} ==
+                  "Metal drawable exception HoroInjectedDrawableFailure: Injected drawable detail");
+        }
         CHECK(fixture.worker->Idle());
     }
 }
@@ -199,7 +215,7 @@ TEST_CASE("Warm pending drawable polls allocate no owner-thread C++ handoff stor
 
 TEST_CASE("A failed native acquisition remains observable when cancellation races its completion", "[metal][presentation]") {
     AcquisitionFixture fixture;
-    fixture.source->fail = true;
+    fixture.source->failure = SourceFailure::Native;
     REQUIRE(fixture.Request(9, {32, 32}));
     fixture.AwaitEntered();
     REQUIRE(fixture.worker->Close());
@@ -212,6 +228,34 @@ TEST_CASE("A failed native acquisition remains observable when cancellation race
     const auto failure = fixture.worker->Poll(9);
     CHECK(failure.progress == MetalDrawablePoll::Failed);
     CHECK(std::string_view{failure.failure.data()}.find("HoroInjectedDrawableFailure") != std::string_view::npos);
+    CHECK(std::string_view{failure.failure.data()} == "Metal drawable exception HoroInjectedDrawableFailure: Injected drawable detail");
+}
+
+TEST_CASE("Metal acquisition preserves C++ failure kind and detail through ordinary and cancelled completion", "[metal][presentation]") {
+    for (const auto kind : {SourceFailure::StandardCpp, SourceFailure::ForeignCpp}) {
+        for (const bool cancel : {false, true}) {
+            AcquisitionFixture fixture;
+            fixture.source->failure = kind;
+            REQUIRE(fixture.Request(10, {32, 32}));
+            fixture.AwaitEntered();
+            if (cancel)
+                REQUIRE(fixture.worker->Close());
+            fixture.Release();
+            const auto failure = fixture.AwaitResult(10);
+            CHECK(failure.progress == MetalDrawablePoll::Failed);
+            CHECK(failure.drawable == nil);
+            CHECK(failure.generation == 10);
+            CHECK(std::string_view{failure.failure.data()} == (kind == SourceFailure::StandardCpp
+                                                                   ? "Metal drawable source failed: Injected C++ drawable detail"
+                                                                   : "Metal drawable source raised an unknown C++ exception."));
+            if (cancel) {
+                const auto deadline = AcquisitionClock::now() + std::chrono::seconds{2};
+                while (!fixture.worker->IsDrained() && AcquisitionClock::now() < deadline)
+                    std::this_thread::yield();
+                REQUIRE(fixture.worker->IsDrained());
+            }
+        }
+    }
 }
 
 TEST_CASE("Foreign Metal acquisition calls cannot consume the owner slot or close admission", "[metal][presentation][lifecycle]") {

@@ -42,6 +42,8 @@ TEST_CASE("Metal staging upload drains at shutdown", "[integration][renderer][gp
     REQUIRE(registry.Seal().HasValue());
     RenderBackendConfig config{.requirePresentation = true, .enableValidation = true};
     auto frontendResult = RenderFrontend::Create(registry, RenderBackendId{"metal"}, config);
+    INFO((frontendResult.HasError() ? frontendResult.ErrorValue().code.Value() + ": " + frontendResult.ErrorValue().message
+                                    : "Native Metal upload frontend initialized."));
     REQUIRE(frontendResult.HasValue());
     std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
 

@@ -47,20 +47,22 @@ namespace Horo::Render::Detail {
             next.generation = capturedGeneration;
             next.extent = capturedExtent;
             @autoreleasepool {
-                @try {
-                    try {
+                try {
+                    // The native handler must be innermost: on Apple's unified exception runtime,
+                    // a C++ catch-all also catches NSException and would erase its name and reason.
+                    @try {
                         next.drawable = source->Acquire(layer);
                         next.progress = next.drawable == nil ? MetalDrawablePoll::Unavailable : MetalDrawablePoll::Ready;
-                    } catch (const std::exception &exception) {
+                    } @catch (NSException *exception) {
                         next.progress = MetalDrawablePoll::Failed;
-                        std::snprintf(next.failure.data(), next.failure.size(), "Metal drawable source failed: %.440s", exception.what());
-                    } catch (...) {
-                        next.progress = MetalDrawablePoll::Failed;
-                        std::snprintf(next.failure.data(), next.failure.size(), "Metal drawable source raised an unknown C++ exception.");
+                        RecordNativeFailure(next.failure, exception);
                     }
-                } @catch (NSException *exception) {
+                } catch (const std::exception &exception) {
                     next.progress = MetalDrawablePoll::Failed;
-                    RecordNativeFailure(next.failure, exception);
+                    std::snprintf(next.failure.data(), next.failure.size(), "Metal drawable source failed: %.440s", exception.what());
+                } catch (...) {
+                    next.progress = MetalDrawablePoll::Failed;
+                    std::snprintf(next.failure.data(), next.failure.size(), "Metal drawable source raised an unknown C++ exception.");
                 }
             }
             return next;

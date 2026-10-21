@@ -1,3 +1,5 @@
+#include <catch2/generators/catch_generators.hpp>
+
 namespace {
     /** @brief Reads only the shipped block's final SPIR-V packing; no source-language matrix-order assumption. */
     MaterialBindingLayout NativeMultiviewLayout(const std::vector<std::uint8_t> &bytes) {
@@ -87,11 +89,9 @@ TEST_CASE("Vulkan native device executes the shipped view-indexed shader in mult
     const char *fragmentPath = std::getenv("HORO_MULTIVIEW_FRAGMENT");
     if (!vertexPath || !layerPath || !fragmentPath)
         SKIP("Cook the shipped multiview shader for native qualification.");
-    bool instanced = false;
-    SECTION("multipass") {}
-    SECTION("instanced") {
-        instanced = true;
-    }
+    const bool instanced = GENERATE(false, true);
+    const bool observeExplicitly = GENERATE(true, false);
+    CAPTURE(instanced, observeExplicitly);
     NativeTransformFixture fixture;
     fixture.Initialize();
     const auto capabilities = ResolveMultiviewCapabilities(fixture.backend->Capabilities().support);
@@ -180,37 +180,48 @@ TEST_CASE("Vulkan native device executes the shipped view-indexed shader in mult
         }
     } lease;
 
-    struct DrainBeforeLeaseDestruction {
-        IRenderBackend &backend;
+    {
+        RenderGraphLeaseTransfer transfer;
 
-        ~DrainBeforeLeaseDestruction() {
-            if (backend.BeginShutdown().HasError())
-                std::terminate();
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-            for (;;) {
-                const auto state = backend.PollDrain();
-                if (state.HasValue() && state.Value() == RenderBackendDrainProgress::Drained)
+        struct CompleteBeforeLeaseDestruction {
+            IRenderBackend &backend;
+            Lease &lease;
+            const RenderGraphLeaseTransfer &transfer;
+            RenderCpuWait wait;
+
+            ~CompleteBeforeLeaseDestruction() {
+                backend.AbortActiveFrame();
+                if (transfer.authority != RenderGraphLeaseAuthority::BackendCompletion || lease.releases != 0)
                     return;
-                if (std::chrono::steady_clock::now() >= deadline)
+                // Complete queued work without tearing down the device: geometry/table still own native descriptors.
+                // NativePreparationFixture closes the device after those owners have been destroyed.
+                const auto completed = backend.ObserveSubmission(wait);
+                if (completed.HasError() || !completed.Value() || lease.releases != 1)
                     std::terminate();
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
-        }
-    } drain{*fixture.backend};
+        } complete{*fixture.backend,
+                   lease,
+                   transfer,
+                   {{{1}, 1}, RenderCpuWaitPurpose::DeterministicTest, std::chrono::seconds(5), support.deviceIncarnation}};
 
-    const auto frame = SubmissionTest::Take(fixture.backend->BeginFrame({1, {8, 8}}));
-    RenderGraphLeaseTransfer transfer;
-    const auto result =
-        fixture.backend->ExecuteGraph({frame, graph.graph, workloads, resources, &lease, false, &transfer, submissions, meshes, views});
-    INFO((result.HasError() ? result.ErrorValue().message : "native multiview admitted"));
-    REQUIRE(result.HasValue());
-    REQUIRE(transfer.authority == RenderGraphLeaseAuthority::BackendCompletion);
-    REQUIRE(fixture.backend->Present(frame).HasValue());
-    const auto completed = fixture.backend->ObserveSubmission(
-        {{{1}, 1}, RenderCpuWaitPurpose::DeterministicTest, std::chrono::seconds(5), support.deviceIncarnation});
-    REQUIRE(completed.HasValue());
-    REQUIRE(completed.Value());
+        const auto frame = SubmissionTest::Take(fixture.backend->BeginFrame({1, {8, 8}}));
+        const auto result =
+            fixture.backend->ExecuteGraph({frame, graph.graph, workloads, resources, &lease, false, &transfer, submissions, meshes, views});
+        INFO((result.HasError() ? result.ErrorValue().message : "native multiview admitted"));
+        REQUIRE(result.HasValue());
+        REQUIRE(transfer.authority == RenderGraphLeaseAuthority::BackendCompletion);
+        REQUIRE(fixture.backend->Present(frame).HasValue());
+        if (observeExplicitly) {
+            const auto completed = fixture.backend->ObserveSubmission(
+                {{{1}, 1}, RenderCpuWaitPurpose::DeterministicTest, std::chrono::seconds(5), support.deviceIncarnation});
+            REQUIRE(completed.HasValue());
+            REQUIRE(completed.Value());
+            CHECK(lease.releases == 1);
+        }
+    }
     CHECK(lease.releases == 1);
+    // Completing submitted work must not retire the device while geometry still owns its descriptor/resource lease.
+    REQUIRE(fixture.backend->QueryMaterialParameterBufferSize(fixture.native, descriptor, {1}).HasValue());
     fixture.backend->DestroyTextureView(secondView.Value());
     material.reset();
     REQUIRE(table->Shutdown().HasValue());
