@@ -145,3 +145,31 @@ TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "
     REQUIRE_FALSE(Theme::GetThemeList().back().isBuiltIn);
     REQUIRE(Theme::GetActiveTokens().typography.sansBase == 16.0F);
 }
+
+TEST_CASE("Custom source roles inherit the palette and reject malformed overrides", "[unit][editor][gui][theme][source]") {
+    using namespace Horo::Editor;
+    Tests::HeadlessEditorGuiFixture imgui;
+    ScopedThemeDirectory directory;
+    directory.Write("syntax.json", R"({"name":"Source", "tokens":{"sourceSyntax":{
+        "text":"#eeeeee", "keyword":"#aabbcc", "type":"#112233", "string":"#ddeeff",
+        "number":"#445566", "comment":"#778899", "directive":123, "property":"#12345g"
+    }}})");
+    Theme::ThemeEntry entry;
+    REQUIRE(Theme::LoadThemeFromJson((directory.Path() / "syntax.json").string().c_str(), entry));
+    const auto &syntax = entry.designTokens.sourceSyntax;
+    REQUIRE(syntax.text.has_value());
+    REQUIRE(syntax.keyword.has_value());
+    REQUIRE(syntax.type.has_value());
+    REQUIRE(syntax.string.has_value());
+    REQUIRE(syntax.number.has_value());
+    REQUIRE(syntax.comment.has_value());
+    REQUIRE_FALSE(syntax.directive.has_value());
+    REQUIRE_FALSE(syntax.property.has_value());
+    REQUIRE(syntax.keyword->x == 170.0F / 255.0F);
+    Theme::RefreshThemeList(directory.Path().string().c_str());
+    Theme::SelectThemeByIndex(static_cast<int>(Theme::GetThemeList().size() - 1));
+    REQUIRE(Theme::GetActiveTokens().sourceSyntax.keyword.has_value());
+    REQUIRE(Theme::GetActiveTokens().sourceSyntax.keyword->x == syntax.keyword->x);
+    Theme::SelectThemeByIndex(0);
+    REQUIRE_FALSE(Theme::GetActiveTokens().sourceSyntax.keyword.has_value());
+}

@@ -64,6 +64,15 @@ namespace Horo::Editor {
                 sources.insert(first, source.Value());
         }
         sources.resize(index);
+        auto &history = m_viewModel.sourceHistory;
+        history.clear();
+        history.reserve(sources.size());
+        for (const auto &tab : host.DocumentTabs()) {
+            if (tab.identity.key.kind != DocumentKind::Source)
+                continue;
+            const auto state = m_sourceOpenService.Documents().History(tab.identity.instance);
+            history.push_back(state.HasValue() ? state.Value() : SourceHistoryState{});
+        }
     }
 
     /** @copydoc EditorWorkspaceController::ProcessWorkspaceDocumentCommand */
@@ -119,6 +128,11 @@ namespace Horo::Editor {
     bool EditorWorkspaceController::ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command) {
         NativeDurableFileSystem files;
         switch (command.command) {
+            case EditorWorkspaceViewCommand::SourceDocumentInteraction:
+                m_viewModel.sourceEditingResult =
+                    command.sourceInteraction ? SubmitSourceEditingCommand(m_sourceOpenService.Documents(), *command.sourceInteraction)
+                                              : Result<SourceEditingPublication>::Failure(MakeError(SourceDocumentErrors::Invalid));
+                return true;
             case EditorWorkspaceViewCommand::SaveSourceDocument:
                 if (command.sourceSave)
                     m_sourceSaveOutcome = m_sourceOpenService.Documents().Save(*command.sourceSave, files);

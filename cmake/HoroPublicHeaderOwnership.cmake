@@ -1271,6 +1271,7 @@ horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
     Horo/Editor/RecentProjectInspectionService.h
     Horo/Editor/SourceFileOpenService.h
     Horo/Editor/SourceDocumentService.h
+    Horo/Editor/SourceEditingCommands.h
     Horo/Editor/SemanticDocumentHistory.h
     Horo/Editor/DocumentRecoveryService.h
     Horo/Editor/PCGGraphDocument.h
