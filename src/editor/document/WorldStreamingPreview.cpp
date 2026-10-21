@@ -211,7 +211,7 @@ namespace Horo::Editor {
         auto rows = BuildRows(registry, cancellation);
         if (rows.HasError())
             return Result<WorldStreamingPreview>::Failure(rows.ErrorValue());
-        auto &cells = rows.Value();
+        auto cells = std::move(rows).Value();
         const auto desired = AttachDesired(cells, registry, plan, cancellation);
         if (desired.HasError())
             return Result<WorldStreamingPreview>::Failure(desired.ErrorValue());
