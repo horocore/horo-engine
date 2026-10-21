@@ -84,6 +84,7 @@ namespace Horo::Render {
                         .enableValidation = config.enableValidation,
                         .maxFramesInFlight = config.maxFramesInFlight,
                         .presentMode = config.presentMode,
+                        .output = config.presentationOutput,
                     },
                     Detail::MetalDeviceAdmissionRequest{
                         .adapter = config.adapter,
@@ -330,6 +331,31 @@ namespace Horo::Render {
                     runtime_->DestroyRenderTarget(backendInstance);
             }
 
+            /** @copydoc IRenderBackend::PollPresentationAvailability */
+            Result<bool> PollPresentationAvailability(FramebufferExtent extent) override {
+                if (!initialized_)
+                    return Result<bool>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<bool>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->PollPresentationAvailability(extent);
+            }
+
+            /** @copydoc IRenderBackend::ConfigurePresentationOutput */
+            Result<RenderPresentationOutput> ConfigurePresentationOutput(const RenderPresentationOutputRequest &request) override {
+                if (!initialized_)
+                    return Result<RenderPresentationOutput>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (frameActive_)
+                    return Result<RenderPresentationOutput>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return runtime_->ConfigurePresentationOutput(request);
+            }
+
+            /** @copydoc IRenderBackend::PresentationOutput */
+            Result<RenderPresentationOutput> PresentationOutput() const override {
+                if (!initialized_)
+                    return Result<RenderPresentationOutput>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                return runtime_->PresentationOutput();
+            }
+
             /** @copydoc IRenderBackend::BeginFrame */
             Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
                 if (!initialized_) {
@@ -549,6 +575,9 @@ namespace Horo::Render {
                     return state;
                 }
 
+                if (plan.orderedPasses.size() > 1024)
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::InvalidExecutionPlan, "Metal admits at most 1024 ordered passes before encoding."));
                 for (std::size_t index = 0; index < plan.orderedPasses.size(); ++index) {
                     const RenderPassDescriptor &pass = plan.orderedPasses[index];
                     if (!pass.id.IsValid()) {
@@ -568,6 +597,10 @@ namespace Horo::Render {
                     if (pass.primaryOutput.has_value() && !pass.primaryOutput->IsValid()) {
                         return Result<void>::Failure(
                             MakeMetalError(MetalBackendErrors::InvalidExecutionPlan, "Primary output attachment operations are invalid."));
+                    }
+                    if (pass.primaryOutput) {
+                        if (const auto admitted = runtime_->ValidatePrimaryOutput(*pass.primaryOutput); admitted.HasError())
+                            return admitted;
                     }
                 }
                 return Result<void>::Success();

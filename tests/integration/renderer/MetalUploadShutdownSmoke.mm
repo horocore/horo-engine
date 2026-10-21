@@ -31,6 +31,7 @@ namespace {
 
 TEST_CASE("Metal staging upload drains at shutdown", "[integration][renderer][gpu][shutdown]") {
     REQUIRE(SDL_Init(SDL_INIT_VIDEO));
+    REQUIRE(SDL_SetHint(SDL_HINT_VIDEO_METAL_AUTO_RESIZE_DRAWABLE, "0"));
     SDL_Window *window = SDL_CreateWindow("Horo Metal upload shutdown smoke", 64, 64, SDL_WINDOW_METAL);
     REQUIRE(window != nullptr);
 

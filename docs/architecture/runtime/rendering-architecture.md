@@ -1795,6 +1795,69 @@ the immutable request and invokes negotiation before a renderer-owned surface li
 applies the resolved value. Surface reconfiguration, pacing, HDR, and backend-native
 translation remain in their owning downstream contracts.
 
+### Metal exact output and drawable admission
+
+`RenderPresentationOutputRequest` is an exact native-free final-pixel encoding request.
+The optional backend configuration field preserves existing SDR when unset; an explicit
+request never selects another encoding. `RenderPresentationOutput` records the exact
+requested/active encoding, successful native configuration revision and current attached
+output evidence. `PrimaryOutputAttachment::outputColor` must match that encoding;
+legacy omission is admitted only for the unchanged SDR encoding. The render graph
+remains responsible for final color conversion. Presentation does not invent a tone map.
+
+`RenderOutputColorMatching::Unmanaged` is the single legacy SDR default and reads
+back a nil native color space: no color matching is claimed. An explicitly requested
+`ColorSpace` policy reads back the exact named color space. Unmanaged HDR is rejected.
+This distinction preserves actual pre-existing CAMetalLayer behavior rather than
+silently enabling sRGB matching when the host leaves output unset. Affected callers
+are backend configuration, primary-output declarations and native presentation ports;
+legacy SDR callers omit the optional fields, while new managed/HDR callers use the
+exact admitted descriptor. Native and portable regressions cover the distinction.
+
+The separately named **Metal Linear EDR** descriptor is RGBA16Float, Linear transfer,
+High range, ColorSpace matching, and sRGB or Display P3 primaries. It realizes the corresponding extended
+linear CoreGraphics color space and `wantsExtendedDynamicRangeContent`, with native
+property readback. It is not the ADR-037 HDR10/PQ descriptor or proof of cooked scene
+color-transform parity. Actual OS current headroom above one is required to claim
+physical extended-range output. Potential headroom above one admits configuration but
+never substitutes for current output evidence; neither value is luminance in nits.
+
+The explicit SDL/Cocoa attachment owner publishes fixed-size `RenderOutputDisplayFacts`
+from its actual window's screen and main-thread display/profile notifications. This is
+the currently attached-output projection, not a second global display enumerator. It
+owns no renderer or frontend callbacks. Unknown/disconnected facts remain explicit;
+headless preparation may omit output admission but cannot acquire a drawable or claim
+HDR. Required presentation and explicit output require admitted real facts.
+
+The host disables automatic Metal drawable-size mutation in the pinned SDL revision
+`f87239e71e42da91ca317a12eefb82cfbf3393eb` before creating
+its view, verifies the policy and lets the backend coalesce size changes at safe points.
+`PollPresentationAvailability` returns a pending value while acquisition/retirement is
+outstanding. The native owner preallocates one acquisition thread and one request/result
+slot at initialization. The first explicit host preparation poll starts it after frontend
+ownership is established; ordinary warm polls allocate no handoff state and never wait.
+Only this private worker calls `nextDrawable`, retaining its native layer/device parents.
+Stale generations are discarded. Layer properties cannot change until the slot drains.
+
+Canonical `BeginShutdown` closes admission, cancels unsent work and wakes the worker;
+`PollDrain` proves actual thread termination, GPU completion and zero CPU recording
+leases before native retirement. A native timeout is not completion. The editor retains
+its full presentation, window and prepared modules while finite polls/event waits continue.
+A reporting-budget expiry remains Pending; a window-close request cancels restart but
+cannot detach a worker, start another generation or destroy retained parents. Partial
+renderer initialization follows this same owning host path.
+
+Migration callers use the same canonical frontend lifecycle as other backends.
+Non-asynchronous peers retain the default ready value; output configuration/observation
+remain explicitly unsupported until implemented. Null/OpenGL reject explicit output
+configuration and primary declarations before work; offscreen color operations cannot
+carry a presentation declaration. Existing SDR passes omit the optional declaration.
+New Metal output users supply the exact admitted encoding after the graph's output
+conversion. An unavailable nonpresenting preparation owner may realize resources but
+cannot admit a drawable. Display/headroom value updates do not rebuild native color
+spaces when the encoding remains unchanged. Native failure context is owned and bounded,
+including a failure that races cancellation; it is observed before terminal parents retire.
+
 ### Host frame pacing and presentation evidence
 
 [Frames-in-Flight and Latency Policy](frames-in-flight-and-latency-policy.md)

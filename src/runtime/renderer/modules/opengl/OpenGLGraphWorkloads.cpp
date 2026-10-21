@@ -98,6 +98,9 @@ namespace Horo::Render::Detail {
             } else if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
                 if (!ValidCopy(workload, request, resources))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
+            } else if constexpr (std::is_same_v<Workload, PrimaryOutputAttachment>) {
+                if (workload.outputColor)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
             } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
                 if (!ValidColor(workload, request, resources))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));

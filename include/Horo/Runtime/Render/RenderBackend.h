@@ -15,6 +15,7 @@
 #include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/Runtime/Render/RenderMemoryTypes.h"
 #include "Horo/Runtime/Render/RenderParallelWork.h"
+#include "Horo/Runtime/Render/RenderPresentationOutput.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Render/RenderSubmission.h"
 #include "Horo/Runtime/Render/Texture.h"
@@ -119,12 +120,14 @@ namespace Horo::Render {
             });
         }
 
+        std::optional<RenderPresentationOutputRequest> presentationOutput; /**< Exact required encoding; unset preserves legacy SDR. */
+
         /** @brief Reports whether ranges and presentation policy are valid. */
         [[nodiscard]] bool IsValid() const noexcept {
             if (adapter.has_value() != (adapterDiscoveryRevision != 0) || (adapter && !adapter->IsValid())) {
                 return false;
             }
-            if (maxFramesInFlight == 0 || maxFramesInFlight > 8) {
+            if (maxFramesInFlight == 0 || maxFramesInFlight > 8 || (presentationOutput && !presentationOutput->IsValid())) {
                 return false;
             }
             if (queueAssignments.empty() || queueAssignments.size() > 3)
@@ -248,9 +251,12 @@ namespace Horo::Render {
         AttachmentLoadOperation loadOperation{AttachmentLoadOperation::Clear};
         AttachmentStoreOperation storeOperation{AttachmentStoreOperation::Store};
         ClearColor clearColor{};
+        std::optional<RenderOutputColor> outputColor; /**< Graph-owned final encoding; required for explicit non-legacy output. */
 
         /** @brief Reports whether load/store operations and the used clear value are valid. */
         [[nodiscard]] bool IsValid() const noexcept {
+            if (outputColor && !outputColor->IsValid())
+                return false;
             switch (storeOperation) {
                 case AttachmentStoreOperation::Store:
                 case AttachmentStoreOperation::DontCare:
@@ -519,6 +525,17 @@ namespace Horo::Render {
     public:
         ~IRenderBackend() override = default;
 
+        /** @brief Realizes an exact output encoding at an owner-thread safe point without an active frame.
+         * @param request Required encoding supplied by the host and consumed by the graph's final output conversion.
+         * @return Newly realized/read-back output, typed pending without changing active output, or original unsupported/failure.
+         * @details No backend fallback or tone mapping is authorized. Default implementations explicitly reject this capability.
+         */
+        [[nodiscard]] virtual Result<RenderPresentationOutput> ConfigurePresentationOutput(const RenderPresentationOutputRequest &request);
+        /** @brief Observes the last successfully realized output with current host evidence.
+         * @return Exact output, or typed unsupported/unavailable failure; never an assumed successful HDR configuration.
+         */
+        [[nodiscard]] virtual Result<RenderPresentationOutput> PresentationOutput() const;
+
         /**
          * @brief Realizes an exact cooked light-culling kernel at an owner-thread preparation boundary.
          * @param kernel Admitted artifact, stage, entry point and final-target binding evidence.
@@ -541,6 +558,15 @@ namespace Horo::Render {
 
         /** @brief Returns the immutable capability snapshot for this backend instance. */
         [[nodiscard]] virtual const RenderBackendCapabilities &Capabilities() const noexcept = 0;
+
+        /** @brief Polls presentation readiness without waiting or starting a frame.
+         * @param extent Latest coalesced host framebuffer extent.
+         * @return True when BeginFrame may consume the admitted output, false for bounded native acquisition/retirement,
+         * or a typed lifecycle/output failure. No new acquisition is admitted after BeginShutdown.
+         * @details Call on the owner outside a frame. Non-asynchronous backends return true; this does not authorize
+         * fallback, implicit recreation, GPU waits or ignoring a subsequent BeginFrame failure.
+         */
+        [[nodiscard]] virtual Result<bool> PollPresentationAvailability(FramebufferExtent extent);
 
         /** @brief Starts one frame and returns the token required by later frame operations. */
         [[nodiscard]] virtual Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) = 0;

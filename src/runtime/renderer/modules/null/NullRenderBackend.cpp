@@ -87,6 +87,9 @@ namespace Horo::Render {
                     return Result<void>::Failure(incarnation.ErrorValue());
                 capabilities_.support.deviceIncarnation = incarnation.Value();
                 ownerThread_ = std::this_thread::get_id();
+                if (config.presentationOutput)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+
                 config_ = config;
                 initialized_ = true;
                 closing_ = false;
@@ -293,6 +296,8 @@ namespace Horo::Render {
                                                                           "Execution plan contains an invalid render pass kind."));
                     }
                     if (pass.primaryOutput.has_value()) {
+                        if (pass.primaryOutput->outputColor)
+                            return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
                         if (pass.kind != Graphics) {
                             return Result<void>::Failure(MakeBackendError(NullBackendErrors::InvalidExecutionPlan,
                                                                           "Only graphics passes may bind the primary output attachment."));

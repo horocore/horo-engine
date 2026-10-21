@@ -217,6 +217,8 @@ namespace Horo::Render {
             }
 
             Result<void> Initialize(const RenderBackendConfig &config) override {
+                if (config.presentationOutput)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
                 if (Result<void> prepared = PrepareInitialization(config); prepared.HasError()) {
                     return prepared;
                 }

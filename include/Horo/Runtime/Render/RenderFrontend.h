@@ -482,6 +482,20 @@ namespace Horo::Render {
          */
         [[nodiscard]] Result<RenderFrameScope> BeginFrame(const FrameDescriptor &descriptor);
 
+        /** @brief Polls exact output readiness on the owner outside an active frame.
+         * @param extent Current coalesced framebuffer size. @return Ready, pending value, or original typed failure.
+         * @details Closing frontends reject admission. The call never starts a frame or waits for native completion.
+         */
+        [[nodiscard]] Result<bool> PollPresentationAvailability(FramebufferExtent extent);
+        /** @brief Realizes the host's exact output request outside an active frame.
+         * @param request Required graph-final output encoding. @return Read-back output or original typed failure/pending.
+         */
+        [[nodiscard]] Result<RenderPresentationOutput> ConfigurePresentationOutput(const RenderPresentationOutputRequest &request);
+        /** @brief Queries admitted output and current host evidence on the owner.
+         * @return Exact snapshot or original unavailable/unsupported/lifecycle failure.
+         */
+        [[nodiscard]] Result<RenderPresentationOutput> PresentationOutput() const;
+
         /**
          * @brief Executes and presents one ordered frame, aborting backend frame state on failure.
          * @param descriptor Host frame identity and output extent.

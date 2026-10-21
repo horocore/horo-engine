@@ -577,6 +577,43 @@ namespace Horo::Render {
         return released;
     }
 
+    /** @copydoc RenderFrontend::PollPresentationAvailability */
+    Result<bool> RenderFrontend::PollPresentationAvailability(FramebufferExtent extent) {
+        if (const auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<bool>::Failure(admission.ErrorValue());
+        if (activeFrameScope_ != nullptr)
+            return Result<bool>::Failure(MakeError(FrontendErrors::FrameAlreadyActive));
+        try {
+            return backend_->PollPresentationAvailability(extent);
+        } catch (...) {  // NOSONAR(cpp:S2738) Native exception containment boundary.
+            return Result<bool>::Failure(MakeError(FrontendErrors::FrameException));
+        }
+    }
+
+    /** @copydoc RenderFrontend::ConfigurePresentationOutput */
+    Result<RenderPresentationOutput> RenderFrontend::ConfigurePresentationOutput(const RenderPresentationOutputRequest &request) {
+        if (const auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<RenderPresentationOutput>::Failure(admission.ErrorValue());
+        if (activeFrameScope_ != nullptr)
+            return Result<RenderPresentationOutput>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
+        try {
+            return backend_->ConfigurePresentationOutput(request);
+        } catch (...) {  // NOSONAR(cpp:S2738) Native exception containment boundary.
+            return Result<RenderPresentationOutput>::Failure(MakeError(FrontendErrors::FrameException));
+        }
+    }
+
+    /** @copydoc RenderFrontend::PresentationOutput */
+    Result<RenderPresentationOutput> RenderFrontend::PresentationOutput() const {
+        if (const auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<RenderPresentationOutput>::Failure(admission.ErrorValue());
+        try {
+            return backend_->PresentationOutput();
+        } catch (...) {  // NOSONAR(cpp:S2738) Native exception containment boundary.
+            return Result<RenderPresentationOutput>::Failure(MakeError(FrontendErrors::FrameException));
+        }
+    }
+
     /** @copydoc RenderFrontend::BeginFrame */
     Result<RenderFrameScope> RenderFrontend::BeginFrame(const FrameDescriptor &descriptor) {
         if (auto admission = RequireOpenOwner(); admission.HasError())
