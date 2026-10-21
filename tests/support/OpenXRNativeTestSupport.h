@@ -2,7 +2,7 @@
 
 #include "OpenXRNativeNames.h"
 #include "OpenXRNativeSession.h"
-#include "support/TypedIdentityTestSupport.h"
+#include "TypedIdentityTestSupport.h"
 
 #include <algorithm>
 #include <array>
