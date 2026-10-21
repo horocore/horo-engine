@@ -5,7 +5,7 @@ struct MaterialPacket {
 
     explicit MaterialPacket(NativeGraphFixture &fixture, const bool layered = false) {
         fixture.resourceState.state.bufferRequirements.size = 256;
-        fixture.resourceState.state.imageRequirements.size = 8 * 8 * 4;
+        fixture.resourceState.state.imageRequirements.size = 8 * 8 * 4 * (layered ? 2 : 1);
         auto &resources = fixture.resources;
         const std::array<std::byte, sizeof(MeshVertex) * 3> bytes{};
         const auto buffer = [&](const RenderBufferUsage usage) {
@@ -27,6 +27,7 @@ struct MaterialPacket {
                                             .layerCount = layered ? 2U : 1U,
                                             .usage = RenderTextureUsage::RenderAttachment};
         const auto plan = resources.QueryTextureMemoryCost(image);
+        INFO((plan.HasError() ? plan.ErrorValue().message : "attachment memory requirements admitted"));
         REQUIRE(plan.HasValue());
         texture = SubmissionTest::Take(resources.CreateTexture(image, {}, TestSupport::PlacementFor(plan.Value(), 1)));
         view = SubmissionTest::Take(resources.CreateTextureView({.texture = {{1}, 3, 1}}, texture));

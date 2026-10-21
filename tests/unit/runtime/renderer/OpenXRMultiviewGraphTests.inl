@@ -178,8 +178,16 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
     REQUIRE(swapchain.Acquire().HasValue());
     REQUIRE(swapchain.Wait(0).Value());
     REQUIRE(swapchain.Import().HasValue());
-    auto replacementFrame = SubmissionTest::Take(frontend->BeginFrame({2, {640, 480}}));
-    CHECK(prepared.Execute(replacementFrame, active, {{1}, {2}, {}, {{1}, 2}}).HasError());
-    REQUIRE(swapchain.PollRelease().Value());
+    {
+        auto replacementFrame = SubmissionTest::Take(frontend->BeginFrame({2, {640, 480}}));
+        CHECK(prepared.Execute(replacementFrame, active, {{1}, {2}, {}, {{1}, 2}}).HasError());
+        CHECK(native.commandState.state.accepted.size() == 1);
+        CHECK(xr.releases == 1);
+    }  // Host-side stale validation leaves the frame active; abort it before changing resources.
+    const auto released = swapchain.PollRelease();
+    INFO((released.HasError() ? released.ErrorValue().message : "unrendered acquisition released"));
+    REQUIRE(released.HasValue());
+    REQUIRE(released.Value());
+    CHECK(xr.releases == 2);
     REQUIRE(swapchain.Close().Value());
 }

@@ -1,16 +1,10 @@
 """Native driver selection must follow the installed package, never silently skip."""
 
-import importlib.util
 import json
-from pathlib import Path
+from types import SimpleNamespace
 
+import dev as SELECTOR
 import pytest
-
-SPEC = importlib.util.spec_from_file_location(
-    "select_lavapipe_icd", Path(__file__).resolve().parents[2] / "scripts/select_lavapipe_icd.py"
-)
-SELECTOR = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(SELECTOR)
 
 
 @pytest.mark.parametrize("name", ["lvp_icd.json", "lvp_icd.x86_64.json"])
@@ -38,3 +32,25 @@ def test_malformed_manifest_is_rejected(tmp_path):
     path.write_text(json.dumps({"ICD": {}}))
     with pytest.raises(ValueError, match="no library path"):
         SELECTOR.select_manifest([str(path)])
+
+
+def test_dev_command_queries_installed_package_and_prints_only_manifest(monkeypatch, tmp_path, capsys):
+    manifest = tmp_path / "lvp_icd.json"
+    manifest.write_text(json.dumps({"ICD": {"library_path": "libvulkan_lvp.so"}}))
+    calls = []
+
+    def inventory(argv, **kwargs):
+        calls.append((argv, kwargs))
+        return SimpleNamespace(stdout=f"{manifest}\n")
+
+    monkeypatch.setattr(SELECTOR.subprocess, "run", inventory)
+    assert SELECTOR.main(["select-lavapipe-icd"]) == 0
+    assert calls == [(["dpkg-query", "-L", "mesa-vulkan-drivers"],
+                      {"check": True, "capture_output": True, "text": True})]
+    assert capsys.readouterr().out.strip() == str(manifest.resolve())
+
+
+def test_dev_command_reports_absent_driver_without_fallback(monkeypatch, capsys):
+    monkeypatch.setattr(SELECTOR.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=""))
+    assert SELECTOR.main(["select-lavapipe-icd"]) == 1
+    assert "found 0" in capsys.readouterr().err
