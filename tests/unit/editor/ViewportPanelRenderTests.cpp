@@ -113,6 +113,7 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     panel.OnAttach(panelContext);
 
     Input::FrameNumber inputFrame = 1;
+    ImVec2 viewportOrigin;
 
     const auto drawFrame = [&] {
         ImGui::NewFrame();
@@ -128,7 +129,8 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
         ImGui::SetNextWindowSize(ImVec2(420.0F, 320.0F));
         ImGui::Begin("ViewportRenderTest", nullptr,
                      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
-        panel.DrawPanel(ImGui::GetCursorScreenPos(), ImVec2(400.0F, 280.0F), viewModel, command, context);
+        viewportOrigin = ImGui::GetCursorScreenPos();
+        panel.DrawPanel(viewportOrigin, ImVec2(400.0F, 280.0F), viewModel, command, context);
         ImGui::End();
         ImGui::Render();
     };
@@ -264,6 +266,32 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     REQUIRE((command.command == EditorWorkspaceViewCommand::CommitObjectTransform));
     REQUIRE((command.transformPayload.has_value()));
 
+    const std::array tones{std::pair{Extensions::EditorViewportTone::Neutral, Theme::U32(Theme::Text())},
+                           std::pair{Extensions::EditorViewportTone::Accent, Theme::U32(Theme::Accent())},
+                           std::pair{Extensions::EditorViewportTone::X, Theme::U32(Theme::Err())},
+                           std::pair{Extensions::EditorViewportTone::Y, Theme::U32(Theme::Ok())},
+                           std::pair{Extensions::EditorViewportTone::Z, Theme::U32(Theme::Accent())}};
+    Extensions::EditorViewportDefinition guides;
+    for (std::size_t i = 0; i < tones.size(); ++i) {
+        const float y = 0.6F + static_cast<float>(i) * 0.04F;
+        guides.lines.emplace_back(0.1F, y, 0.3F, y, 2.0F, tones[i].first, std::int8_t{-1});
+    }
+    REQUIRE(viewportContribution.Publish(std::move(guides), "fixture.guides", true));
+    auto guideOwner = std::move(*viewportContribution.registration);
+    drawFrame();
+    const ImDrawData *guideDraw = ImGui::GetDrawData();
+    REQUIRE(guideDraw != nullptr);
+    for (std::size_t i = 0; i < tones.size(); ++i) {
+        bool found = false;
+        const float y = viewportOrigin.y + (0.6F + static_cast<float>(i) * 0.04F) * 280.0F;
+        for (int list = 0; list < guideDraw->CmdListsCount; ++list)
+            for (const ImDrawVert &vertex : guideDraw->CmdLists[list]->VtxBuffer)
+                found = found || (vertex.col == tones[i].second && std::abs(vertex.pos.y - y) < 2.0F &&
+                                  vertex.pos.x >= viewportOrigin.x + 40.0F && vertex.pos.x <= viewportOrigin.x + 120.0F);
+        CHECK(found);
+    }
+    guideOwner.Reset();
+
     // A provider handle far from the built-in gizmo must use the same captured transaction path.
     REQUIRE(viewportContribution.Publish({"horo.scene.transform",
                                           Extensions::EditorViewportTool::Move,
@@ -305,6 +333,11 @@ TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {
     command = {};
     panel.OnPresentationHidden(command);
     REQUIRE(command.command == EditorWorkspaceViewCommand::CancelObjectTransformPreview);
+    CHECK_FALSE(inputRouter.HasCapture());
+    beginContributedDrag();
+    command.command = EditorWorkspaceViewCommand::SaveScene;
+    panel.OnPresentationHidden(command);
+    CHECK(command.command == EditorWorkspaceViewCommand::SaveScene);
     CHECK_FALSE(inputRouter.HasCapture());
     beginContributedDrag();
     viewportContribution.admission->Revoke();

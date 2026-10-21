@@ -38,6 +38,20 @@ namespace Horo::Editor {
             return editable;
         }
 
+        /** @brief Resolves provider semantic tones through the active host theme without exposing rendering resources. */
+        [[nodiscard]] ImU32 ContributionLineColor(const Extensions::EditorViewportTone tone) {
+            switch (tone) {
+                case Extensions::EditorViewportTone::Neutral:
+                    return Theme::U32(Theme::Text());
+                case Extensions::EditorViewportTone::X:
+                    return Theme::U32(Theme::Err());
+                case Extensions::EditorViewportTone::Y:
+                    return Theme::U32(Theme::Ok());
+                default:
+                    return Theme::U32(Theme::Accent());
+            }
+        }
+
         [[nodiscard]] bool ResolveLightMarkerInteraction(const Result<std::optional<SceneObjectId>> &clickedLight, bool &failureReported,
                                                          EditorWorkspaceViewCommandData &command) {
             if (clickedLight.HasError()) {
@@ -101,8 +115,8 @@ namespace Horo::Editor {
         if (!activeContribution_)
             return;
         interaction_.CancelContribution();
-        EditorWorkspaceViewCommandData cancellation;
-        if (interaction_.ConsumePendingCancellation(cancellation) && command.command == EditorWorkspaceViewCommand::None)
+        if (EditorWorkspaceViewCommandData cancellation;
+            interaction_.ConsumePendingCancellation(cancellation) && command.command == EditorWorkspaceViewCommand::None)
             command = std::move(cancellation);
         activeContribution_ = {};
         contributionFrame_.count = 0;
@@ -310,13 +324,9 @@ namespace Horo::Editor {
         drawList.PushClipRect(layout.origin, {layout.origin.x + layout.width, layout.origin.y + layout.height}, true);
         for (std::size_t i = 0; i < contributionFrame_.count; ++i) {
             const auto &line = contributionFrame_.lines[i].line;
-            const auto color = line.tone == Extensions::EditorViewportTone::Neutral ? Theme::Text()
-                               : line.tone == Extensions::EditorViewportTone::X     ? Theme::Err()
-                               : line.tone == Extensions::EditorViewportTone::Y     ? Theme::Ok()
-                                                                                    : Theme::Accent();
+            const ImU32 color = ContributionLineColor(line.tone);
             drawList.AddLine({layout.origin.x + line.x0 * layout.width, layout.origin.y + line.y0 * layout.height},
-                             {layout.origin.x + line.x1 * layout.width, layout.origin.y + line.y1 * layout.height}, Theme::U32(color),
-                             line.thickness);
+                             {layout.origin.x + line.x1 * layout.width, layout.origin.y + line.y1 * layout.height}, color, line.thickness);
         }
         drawList.PopClipRect();
     }

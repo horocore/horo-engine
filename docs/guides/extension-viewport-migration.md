@@ -63,3 +63,10 @@ replaces panel presentation. Existing panels remain source-compatible; panels
 owning transient capture can override it. The viewport uses it to release only
 its provider interaction and roll back its preview, preserving an already emitted
 document command (which itself cancels transform preview at the document boundary).
+
+`EditorViewportHost::SetVisible` is a const facade over its host-owned shared
+publication state, matching the existing registry mutation facade. Owner-lane,
+activation and permission checks are unchanged; const access grants no new
+capability. Ordinary callers remain source-compatible. Consumers storing an
+exact pointer-to-member signature must add the const qualifier; the native C ABI
+is unchanged. Native host tests exercise hide/show through a const facade.

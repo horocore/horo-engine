@@ -19,8 +19,8 @@ namespace Horo::Extensions {
             return Result<EditorViewportDefinition>::Failure(MakeError(ExtensionErrors::ContributionRejected));
         for (std::uint32_t i = 0; i < input.lineCount; ++i) {
             const auto &line = input.lines[i];
-            definition.lines.push_back({line.x0, line.y0, line.x1, line.y1, line.thickness, static_cast<EditorViewportTone>(line.tone),
-                                        static_cast<std::int8_t>(line.axis)});
+            definition.lines.emplace_back(line.x0, line.y0, line.x1, line.y1, line.thickness, static_cast<EditorViewportTone>(line.tone),
+                                          static_cast<std::int8_t>(line.axis));
         }
         return Result<EditorViewportDefinition>::Success(std::move(definition));
     }

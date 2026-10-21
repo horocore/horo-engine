@@ -253,7 +253,8 @@ namespace Horo::Extensions {
     }
 
     /** @copydoc EditorViewportHost::SetVisible */
-    Result<void> EditorViewportHost::SetVisible(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, bool visible) {
+    Result<void> EditorViewportHost::SetVisible(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId,
+                                                bool visible) const {
         if (state_->shutdown || state_->owner != std::this_thread::get_id())
             return Rejected<void>();
         for (const auto &weak : state_->sessions)

@@ -78,11 +78,12 @@ namespace Horo::Extensions::Tests {
         host.viewports->Extract(frame, EditorViewportTool::Move, true, false);
         CHECK(frame.count == 0);
         const EditorSurfaceProviderIdentity provider{"fixture.package", "fixture.module", 1};
-        REQUIRE(host.viewports->SetVisible(provider, "fixture.gizmo", false).HasValue());
+        const EditorViewportHost &visibility = *host.viewports;
+        REQUIRE(visibility.SetVisible(provider, "fixture.gizmo", false).HasValue());
         CHECK_FALSE(host.viewports->IsLive(pick, EditorViewportTool::Move));
         host.viewports->Extract(frame, EditorViewportTool::Move, true, true);
         CHECK(frame.count == 0);
-        REQUIRE(host.viewports->SetVisible(provider, "fixture.gizmo", true).HasValue());
+        REQUIRE(visibility.SetVisible(provider, "fixture.gizmo", true).HasValue());
         host.viewports->Extract(frame, EditorViewportTool::Move, true, true);
         REQUIRE(frame.count == 1);
         host.manager.UnloadExtension("fixture.package");

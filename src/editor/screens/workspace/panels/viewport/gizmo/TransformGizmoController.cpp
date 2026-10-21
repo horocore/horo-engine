@@ -116,7 +116,7 @@ namespace Horo::Editor {
             geometryFailureReported_ = false;
             auto frameGeometry = std::move(geometry).Value();
             rotationCenter = frameGeometry.center;
-            if (context.hovered && context.contributedAxis)
+            if (context.hovered && context.contributedAxis.has_value())
                 frameGeometry.hoveredAxis = context.contributedAxis;
             const Result<void> begun = TryBeginDrag(frameGeometry, worldTransform, *selectedObject, context, capture);
             if (begun.HasError()) {

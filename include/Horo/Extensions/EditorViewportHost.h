@@ -135,7 +135,8 @@ namespace Horo::Extensions {
          * @param provider Exact activation. @param surfaceId Registered contribution. @param visible Visibility intent.
          * @return Success or stale/unknown failure.
          */
-        [[nodiscard]] Result<void> SetVisible(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId, bool visible);
+        [[nodiscard]] Result<void> SetVisible(const EditorSurfaceProviderIdentity &provider, std::string_view surfaceId,
+                                              bool visible) const;
         /** @brief Revokes all publications before host destruction; never waits for GPU or module code. */
         void BeginShutdown() noexcept;
 
