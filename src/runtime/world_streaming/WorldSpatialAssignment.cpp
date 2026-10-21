@@ -21,12 +21,19 @@ namespace Horo::WorldStreaming {
             return true;
         }
 
-        [[nodiscard]] bool HasLayer(const WorldPartitionDescriptor &descriptor, const StreamingLayerId layer) noexcept {
-            return std::ranges::binary_search(descriptor.Layers(), layer, {}, &WorldLayerDescriptor::id);
-        }
+        /** @brief Shared immutable source geometry with optional cooked membership enforcement. */
+        struct AssignmentDomain final {
+            WorldPartitionId partition;
+            const WorldPartitionBounds &bounds;
+            const WorldCellQuantizationPolicy &grid;
+            std::span<const WorldLayerDescriptor> layers;
+            const WorldPartitionDescriptor *cooked{};
+        };
 
-        [[nodiscard]] bool HasCell(const WorldPartitionDescriptor &descriptor, const StreamingCellId cell) noexcept {
-            return std::ranges::binary_search(descriptor.Cells(), cell, StreamingCellCanonicalLess{}, &WorldPartitionCellDescriptor::id);
+        /** @brief Source queries admit declared grid coverage; cooked queries additionally require published cells. */
+        bool HasCell(const AssignmentDomain &domain, const StreamingCellId cell) noexcept {
+            return !domain.cooked || std::ranges::binary_search(domain.cooked->Cells(), cell, StreamingCellCanonicalLess{},
+                                                                &WorldPartitionCellDescriptor::id);
         }
 
         [[nodiscard]] bool TryMultiplyWithin(const std::uint64_t left, const std::uint64_t right, const std::uint64_t limit,
@@ -51,34 +58,34 @@ namespace Horo::WorldStreaming {
         }
 
         [[nodiscard]] Result<std::array<StreamingCellId, 2>> QuantizeBounds(const WorldSpatialAssignmentCandidate &candidate,
-                                                                            const WorldPartitionDescriptor &descriptor) {
-            auto minimum = QuantizeWorldToCell(candidate.bounds.minimum, descriptor.Grid(), candidate.lod, candidate.layer);
+                                                                            const AssignmentDomain &domain) {
+            auto minimum = QuantizeWorldToCell(candidate.bounds.minimum, domain.grid, candidate.lod, candidate.layer);
             if (minimum.HasError())
                 return Result<std::array<StreamingCellId, 2>>::Failure(minimum.ErrorValue());
-            auto maximum = QuantizeWorldToCell(candidate.bounds.maximum, descriptor.Grid(), candidate.lod, candidate.layer);
+            auto maximum = QuantizeWorldToCell(candidate.bounds.maximum, domain.grid, candidate.lod, candidate.layer);
             if (maximum.HasError())
                 return Result<std::array<StreamingCellId, 2>>::Failure(maximum.ErrorValue());
             return Result<std::array<StreamingCellId, 2>>::Success({minimum.Value(), maximum.Value()});
         }
 
         [[nodiscard]] Result<void> AppendRow(const StreamingCellId minimum, const StreamingCellId maximum, const std::int64_t y,
-                                             const std::int64_t z, const WorldPartitionDescriptor &descriptor,
+                                             const std::int64_t z, const AssignmentDomain &domain,
                                              std::vector<StreamingCellId> &assignments) {
             for (std::int64_t x = minimum.x; x <= maximum.x; ++x) {
                 const StreamingCellId cell{static_cast<std::int32_t>(x), static_cast<std::int32_t>(y), static_cast<std::int32_t>(z),
                                            minimum.lod, minimum.layer};
-                if (!HasCell(descriptor, cell))
+                if (!HasCell(domain, cell))
                     return Result<void>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentCellUnavailable));
                 assignments.emplace_back(cell);
             }
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> AppendCells(const StreamingCellId minimum, const StreamingCellId maximum,
-                                               const WorldPartitionDescriptor &descriptor, std::vector<StreamingCellId> &assignments) {
+        [[nodiscard]] Result<void> AppendCells(const StreamingCellId minimum, const StreamingCellId maximum, const AssignmentDomain &domain,
+                                               std::vector<StreamingCellId> &assignments) {
             for (std::int64_t z = minimum.z; z <= maximum.z; ++z) {
                 for (std::int64_t y = minimum.y; y <= maximum.y; ++y) {
-                    if (const auto row = AppendRow(minimum, maximum, y, z, descriptor, assignments); row.HasError())
+                    if (const auto row = AppendRow(minimum, maximum, y, z, domain, assignments); row.HasError())
                         return row;
                 }
             }
@@ -89,12 +96,13 @@ namespace Horo::WorldStreaming {
             return left.address == right.address;
         }
 
-        [[nodiscard]] Result<void> ValidateCandidate(const WorldSpatialAssignmentCandidate &candidate,
-                                                     const WorldPartitionDescriptor &descriptor) {
+        [[nodiscard]] Result<void> ValidateCandidate(const WorldSpatialAssignmentCandidate &candidate, const AssignmentDomain &domain) {
             if (!candidate.address.IsValid() || !candidate.revision.IsValid() || !candidate.layer.IsValid() ||
-                !BoundsAreOrderedAndContained(candidate.bounds, descriptor.Bounds()))
+                !BoundsAreOrderedAndContained(candidate.bounds, domain.bounds))
                 return Result<void>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentInvalid));
-            if (!HasLayer(descriptor, candidate.layer))
+            if (std::ranges::none_of(domain.layers, [&](const auto &layer) {
+                return layer.id == candidate.layer;
+            }))
                 return Result<void>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentUnsupported));
             return Result<void>::Success();
         }
@@ -117,12 +125,11 @@ namespace Horo::WorldStreaming {
             std::vector<StreamingCellId> cells;
         };
 
-        [[nodiscard]] Result<void> AppendCandidate(const WorldSpatialAssignmentCandidate &candidate,
-                                                   const WorldPartitionDescriptor &descriptor, const WorldSpatialAssignmentLimits limits,
-                                                   AssignmentStorage &storage) {
-            if (const auto validity = ValidateCandidate(candidate, descriptor); validity.HasError())
+        [[nodiscard]] Result<void> AppendCandidate(const WorldSpatialAssignmentCandidate &candidate, const AssignmentDomain &domain,
+                                                   const WorldSpatialAssignmentLimits limits, AssignmentStorage &storage) {
+            if (const auto validity = ValidateCandidate(candidate, domain); validity.HasError())
                 return validity;
-            auto quantized = QuantizeBounds(candidate, descriptor);
+            auto quantized = QuantizeBounds(candidate, domain);
             if (quantized.HasError())
                 return Result<void>::Failure(quantized.ErrorValue());
             auto count = AssignmentCount(quantized.Value()[0], quantized.Value()[1], limits);
@@ -130,10 +137,59 @@ namespace Horo::WorldStreaming {
                 return Result<void>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentCapacityExceeded));
 
             const auto offset = static_cast<std::uint32_t>(storage.cells.size());
-            if (const auto appended = AppendCells(quantized.Value()[0], quantized.Value()[1], descriptor, storage.cells);
-                appended.HasError())
+            if (const auto appended = AppendCells(quantized.Value()[0], quantized.Value()[1], domain, storage.cells); appended.HasError())
                 return appended;
             storage.objects.emplace_back(candidate.address, candidate.revision, offset, count.Value());
+            return Result<void>::Success();
+        }
+
+        /** @brief Prepares complete canonical assignments before either source or cooked publication. */
+        Result<AssignmentStorage> BuildAssignments(const AssignmentDomain &domain,
+                                                   const std::span<const WorldSpatialAssignmentCandidate> candidates,
+                                                   const WorldSpatialAssignmentLimits limits) {
+            if (const auto request = ValidateRequest(candidates, limits); request.HasError())
+                return Result<AssignmentStorage>::Failure(request.ErrorValue());
+
+            std::vector<WorldSpatialAssignmentCandidate> ordered{candidates.begin(), candidates.end()};
+            std::ranges::sort(ordered, {}, &WorldSpatialAssignmentCandidate::address);
+            if (std::ranges::adjacent_find(ordered, SameObject) != ordered.end())
+                return Result<AssignmentStorage>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentIdentityConflict));
+
+            AssignmentStorage storage;
+            storage.objects.reserve(ordered.size());
+            for (const auto &candidate : ordered) {
+                if (const auto appended = AppendCandidate(candidate, domain, limits, storage); appended.HasError())
+                    return Result<AssignmentStorage>::Failure(appended.ErrorValue());
+            }
+            return Result<AssignmentStorage>::Success(std::move(storage));
+        }
+
+        /** @brief Validates finite declared source layer identities without copying their presentation data. */
+        Result<void> ValidateAuthoringLayers(const std::span<const WorldLayerDescriptor> layers) {
+            if (layers.size() > 256)
+                return Result<void>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentCapacityExceeded));
+            for (std::size_t index = 0; index < layers.size(); ++index) {
+                if (!layers[index].id.IsValid())
+                    return Result<void>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentInvalid));
+                for (std::size_t prior = 0; prior < index; ++prior) {
+                    if (layers[index].id == layers[prior].id)
+                        return Result<void>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentIdentityConflict));
+                }
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates source geometry independently of cooked topology or package availability. */
+        Result<void> ValidateAuthoringDomain(const WorldSpatialAssignmentAuthoringDomain &source) {
+            if (!source.partition.IsValid() || !BoundsAreOrderedAndContained(source.bounds, source.bounds) || source.layers.empty())
+                return Result<void>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentInvalid));
+            if (const auto valid = ValidateAuthoringLayers(source.layers); valid.HasError())
+                return valid;
+            for (const auto &coordinate : {source.bounds.minimum, source.bounds.maximum}) {
+                const auto cell = QuantizeWorldToCell(coordinate, source.grid, 0, source.layers.front().id);
+                if (cell.HasError())
+                    return Result<void>::Failure(cell.ErrorValue());
+            }
             return Result<void>::Success();
         }
     }  // namespace
@@ -147,22 +203,28 @@ namespace Horo::WorldStreaming {
     Result<WorldSpatialAssignment> WorldSpatialAssignment::Create(const WorldPartitionDescriptor &descriptor,
                                                                   const std::span<const WorldSpatialAssignmentCandidate> candidates,
                                                                   const WorldSpatialAssignmentLimits limits) {
-        if (const auto request = ValidateRequest(candidates, limits); request.HasError())
-            return Result<WorldSpatialAssignment>::Failure(request.ErrorValue());
-
-        std::vector<WorldSpatialAssignmentCandidate> ordered{candidates.begin(), candidates.end()};
-        std::ranges::sort(ordered, {}, &WorldSpatialAssignmentCandidate::address);
-        if (std::ranges::adjacent_find(ordered, SameObject) != ordered.end())
-            return Result<WorldSpatialAssignment>::Failure(MakeError(WorldStreamingErrors::SpatialAssignmentIdentityConflict));
-
-        AssignmentStorage storage;
-        storage.objects.reserve(ordered.size());
-        for (const auto &candidate : ordered) {
-            if (const auto appended = AppendCandidate(candidate, descriptor, limits, storage); appended.HasError())
-                return Result<WorldSpatialAssignment>::Failure(appended.ErrorValue());
-        }
+        const AssignmentDomain domain{descriptor.Partition(), descriptor.Bounds(), descriptor.Grid(), descriptor.Layers(), &descriptor};
+        auto prepared = BuildAssignments(domain, candidates, limits);
+        if (prepared.HasError())
+            return Result<WorldSpatialAssignment>::Failure(prepared.ErrorValue());
+        auto storage = std::move(prepared).Value();
         return Result<WorldSpatialAssignment>::Success(
-            WorldSpatialAssignment{descriptor.Partition(), std::move(storage.objects), std::move(storage.cells)});
+            WorldSpatialAssignment{domain.partition, std::move(storage.objects), std::move(storage.cells)});
+    }
+
+    /** @copydoc WorldSpatialAssignment::CreateForAuthoring */
+    Result<WorldSpatialAssignment> WorldSpatialAssignment::CreateForAuthoring(
+        const WorldSpatialAssignmentAuthoringDomain &source, const std::span<const WorldSpatialAssignmentCandidate> candidates,
+        const WorldSpatialAssignmentLimits limits) {
+        if (const auto valid = ValidateAuthoringDomain(source); valid.HasError())
+            return Result<WorldSpatialAssignment>::Failure(valid.ErrorValue());
+        const AssignmentDomain domain{source.partition, source.bounds, source.grid, source.layers};
+        auto prepared = BuildAssignments(domain, candidates, limits);
+        if (prepared.HasError())
+            return Result<WorldSpatialAssignment>::Failure(prepared.ErrorValue());
+        auto storage = std::move(prepared).Value();
+        return Result<WorldSpatialAssignment>::Success(
+            WorldSpatialAssignment{domain.partition, std::move(storage.objects), std::move(storage.cells)});
     }
 
     /** @copydoc WorldSpatialAssignment::CellsForObject */

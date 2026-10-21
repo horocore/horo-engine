@@ -14,6 +14,21 @@ namespace Horo::Render::FrontendErrors {
                                                     .retryable = false,
                                                     .userActionable = false};
 
+    const ErrorCodeDescriptor GuiAlreadyComposed{.domain = Domain,
+                                                 .code = ErrorCode{"render.frontend.gui_already_composed"},
+                                                 .defaultSeverity = ErrorSeverity::Error,
+                                                 .summary = "GUI output has already been composed for this frame.",
+                                                 .remediationHint = "Compose GUI output once after execution and before presentation.",
+                                                 .retryable = false,
+                                                 .userActionable = false};
+    const ErrorCodeDescriptor GuiCancelled{.domain = Domain,
+                                           .code = ErrorCode{"render.frontend.gui_cancelled"},
+                                           .defaultSeverity = ErrorSeverity::Error,
+                                           .summary = "GUI composition was cancelled before encoding.",
+                                           .remediationHint = "Begin a new frame after cancellation is resolved.",
+                                           .retryable = true,
+                                           .userActionable = false};
+
     const ErrorCodeDescriptor ExecutorChangeDuringFrame{.domain = Domain,
                                                         .code = ErrorCode{"render.frontend.executor_change_during_frame"},
                                                         .defaultSeverity = ErrorSeverity::Error,
