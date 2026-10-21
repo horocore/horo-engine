@@ -6,15 +6,55 @@ namespace Horo::Render::Detail {
             VkPipelineStageFlags2 stages{VK_PIPELINE_STAGE_2_NONE};
             VkAccessFlags2 access{VK_ACCESS_2_NONE};
             VkImageLayout layout{VK_IMAGE_LAYOUT_UNDEFINED};
+            RenderGraphTextureLayout expected{RenderGraphTextureLayout::NotApplicable};
         };
 
-        /** @brief Rejects unsupported scopes instead of emitting native stage masks unavailable on a queue. */
+        /** @brief Maps declared operations to exact native masks and logical image layouts. */
+        [[nodiscard]] Result<NativeState> TranslateOperation(const RenderGraphLogicalState &state, const bool read, const bool write) {
+            using enum RenderGraphSynchronizationOperation;
+            switch (state.operation) {
+                case CopySource:
+                case CopyDestination:
+                    if (state.scope != RenderGraphPipelineScope::Transfer)
+                        return Result<NativeState>::Failure(
+                            MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Copy access requires transfer scope."));
+                    return Result<NativeState>::Success(
+                        {VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                         state.operation == CopySource ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                         state.operation == CopySource ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         state.operation == CopySource ? RenderGraphTextureLayout::CopySource : RenderGraphTextureLayout::CopyDestination});
+                case ColorAttachment:
+                    return Result<NativeState>::Success(
+                        {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         (read ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : 0) | (write ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : 0),
+                         VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, RenderGraphTextureLayout::ColorAttachment});
+                case DepthStencilAttachment:
+                    return Result<NativeState>::Success(
+                        {VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
+                         (read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : 0) |
+                             (write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0),
+                         VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, RenderGraphTextureLayout::DepthStencilAttachment});
+                case Sampled:
+                case Storage:
+                    return Result<NativeState>::Success(
+                        {VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                         state.operation == Sampled
+                             ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+                             : ((read ? VK_ACCESS_2_SHADER_STORAGE_READ_BIT : 0) | (write ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : 0)),
+                         state.operation == Sampled ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL,
+                         state.operation == Sampled ? RenderGraphTextureLayout::ShaderReadOnly : RenderGraphTextureLayout::General});
+                default:
+                    return Result<NativeState>::Failure(
+                        MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Unknown native graph operation."));
+            }
+        }
+
+        /** @brief Rejects unsupported scopes instead of emitting native masks unavailable on a queue. */
         [[nodiscard]] Result<NativeState> Translate(const RenderGraphLogicalState &state, const bool texture) {
-            NativeState native;
             if (state.access == RenderGraphSynchronizationAccess::None) {
                 if (state.operation == RenderGraphSynchronizationOperation::None && state.scope == RenderGraphPipelineScope::External &&
                     state.layout == RenderGraphTextureLayout::NotApplicable && !state.queue.IsValid())
-                    return Result<NativeState>::Success(native);
+                    return Result<NativeState>::Success({});
                 return Result<NativeState>::Failure(
                     MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Malformed undefined native state."));
             }
@@ -28,54 +68,17 @@ namespace Horo::Render::Detail {
                 state.access == RenderGraphSynchronizationAccess::Write || state.access == RenderGraphSynchronizationAccess::ReadWrite;
             if (!read && !write)
                 return Result<NativeState>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Unknown native graph access."));
-            RenderGraphTextureLayout expected{RenderGraphTextureLayout::NotApplicable};
-            using enum RenderGraphSynchronizationOperation;
-            switch (state.operation) {
-                case CopySource:
-                case CopyDestination:
-                    if (state.scope != RenderGraphPipelineScope::Transfer)
-                        return Result<NativeState>::Failure(
-                            MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Copy access requires transfer scope."));
-                    native.stages = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
-                    native.access = state.operation == CopySource ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_TRANSFER_WRITE_BIT;
-                    native.layout =
-                        state.operation == CopySource ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                    expected =
-                        state.operation == CopySource ? RenderGraphTextureLayout::CopySource : RenderGraphTextureLayout::CopyDestination;
-                    break;
-                case ColorAttachment:
-                    native.stages = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
-                    native.access =
-                        (read ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : 0) | (write ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : 0);
-                    native.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-                    expected = RenderGraphTextureLayout::ColorAttachment;
-                    break;
-                case DepthStencilAttachment:
-                    native.stages = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
-                    native.access = (read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : 0) |
-                                    (write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0);
-                    native.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-                    expected = RenderGraphTextureLayout::DepthStencilAttachment;
-                    break;
-                case Sampled:
-                case Storage:
-                    native.stages = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-                    native.access =
-                        state.operation == Sampled
-                            ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
-                            : ((read ? VK_ACCESS_2_SHADER_STORAGE_READ_BIT : 0) | (write ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : 0));
-                    native.layout = state.operation == Sampled ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL;
-                    expected = state.operation == Sampled ? RenderGraphTextureLayout::ShaderReadOnly : RenderGraphTextureLayout::General;
-                    break;
-                default:
-                    return Result<NativeState>::Failure(
-                        MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Unknown native graph operation."));
-            }
-            if ((texture && state.layout != expected) || (!texture && state.layout != RenderGraphTextureLayout::NotApplicable) ||
-                (state.operation != CopySource && state.operation != CopyDestination && state.scope != RenderGraphPipelineScope::Graphics))
+            auto translated = TranslateOperation(state, read, write);
+            if (translated.HasError())
+                return translated;
+            if ((texture && state.layout != translated.Value().expected) ||
+                (!texture && state.layout != RenderGraphTextureLayout::NotApplicable) ||
+                (state.operation != RenderGraphSynchronizationOperation::CopySource &&
+                 state.operation != RenderGraphSynchronizationOperation::CopyDestination &&
+                 state.scope != RenderGraphPipelineScope::Graphics))
                 return Result<NativeState>::Failure(
                     MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Native graph layout/scope differs from declared operation."));
-            return Result<NativeState>::Success(native);
+            return translated;
         }
 
         [[nodiscard]] VkImageAspectFlags Aspects(const RenderTextureFormat format) noexcept {
@@ -89,6 +92,44 @@ namespace Horo::Render::Detail {
                 default:
                     return VK_IMAGE_ASPECT_COLOR_BIT;
             }
+        }
+
+        /** @brief Builds the whole-image dependency while retaining the matched old/new layout pair. */
+        [[nodiscard]] VkImageMemoryBarrier2 ImageBarrier(const VulkanGraphResource &resource, const NativeState &source,
+                                                         const NativeState &destination, const VkImageLayout oldLayout,
+                                                         const VkImageLayout newLayout, const std::uint32_t sourceFamily,
+                                                         const std::uint32_t destinationFamily) noexcept {
+            return {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+                    .srcStageMask = source.stages,
+                    .srcAccessMask = source.access,
+                    .dstStageMask = destination.stages,
+                    .dstAccessMask = destination.access,
+                    .oldLayout = oldLayout,
+                    .newLayout = newLayout,
+                    .srcQueueFamilyIndex = sourceFamily,
+                    .dstQueueFamilyIndex = destinationFamily,
+                    .image = resource.image,
+                    .subresourceRange = {.aspectMask = Aspects(resource.textureDescriptor.format),
+                                         .baseMipLevel = 0,
+                                         .levelCount = resource.textureDescriptor.mipCount,
+                                         .baseArrayLayer = 0,
+                                         .layerCount = resource.textureDescriptor.layerCount}};
+        }
+
+        /** @brief Builds the exact whole-buffer dependency without a temporary native allocation. */
+        [[nodiscard]] VkBufferMemoryBarrier2 BufferBarrier(const VulkanGraphResource &resource, const NativeState &source,
+                                                           const NativeState &destination, const std::uint32_t sourceFamily,
+                                                           const std::uint32_t destinationFamily) noexcept {
+            return {.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
+                    .srcStageMask = source.stages,
+                    .srcAccessMask = source.access,
+                    .dstStageMask = destination.stages,
+                    .dstAccessMask = destination.access,
+                    .srcQueueFamilyIndex = sourceFamily,
+                    .dstQueueFamilyIndex = destinationFamily,
+                    .buffer = resource.buffer,
+                    .offset = 0,
+                    .size = VK_WHOLE_SIZE};
         }
     }  // namespace
 
@@ -121,32 +162,11 @@ namespace Horo::Render::Detail {
         }
         VulkanGraphBarrier barrier;
         barrier.texture = texture;
-        if (texture) {
-            barrier.image.srcStageMask = source.stages;
-            barrier.image.srcAccessMask = source.access;
-            barrier.image.dstStageMask = destination.stages;
-            barrier.image.dstAccessMask = destination.access;
-            barrier.image.oldLayout = oldState.Value().layout;
-            barrier.image.newLayout = newState.Value().layout;
-            barrier.image.srcQueueFamilyIndex = sourceFamily;
-            barrier.image.dstQueueFamilyIndex = destinationFamily;
-            barrier.image.image = resource.image;
-            barrier.image.subresourceRange = {.aspectMask = Aspects(resource.textureDescriptor.format),
-                                              .baseMipLevel = 0,
-                                              .levelCount = resource.textureDescriptor.mipCount,
-                                              .baseArrayLayer = 0,
-                                              .layerCount = resource.textureDescriptor.layerCount};
-        } else {
-            barrier.buffer.srcStageMask = source.stages;
-            barrier.buffer.srcAccessMask = source.access;
-            barrier.buffer.dstStageMask = destination.stages;
-            barrier.buffer.dstAccessMask = destination.access;
-            barrier.buffer.srcQueueFamilyIndex = sourceFamily;
-            barrier.buffer.dstQueueFamilyIndex = destinationFamily;
-            barrier.buffer.buffer = resource.buffer;
-            barrier.buffer.offset = 0;
-            barrier.buffer.size = VK_WHOLE_SIZE;
-        }
+        if (texture)
+            barrier.image = ImageBarrier(resource, source, destination, oldState.Value().layout, newState.Value().layout, sourceFamily,
+                                         destinationFamily);
+        else
+            barrier.buffer = BufferBarrier(resource, source, destination, sourceFamily, destinationFamily);
         return Result<VulkanGraphBarrier>::Success(barrier);
     }
 }  // namespace Horo::Render::Detail
