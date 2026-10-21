@@ -37,6 +37,11 @@ namespace Horo::Editor {
         /** @brief Emits an already-queued cancellation while routed input is blocked. */
         [[nodiscard]] bool ConsumePendingCancellation(EditorWorkspaceViewCommandData &command) noexcept;
 
+        /** @brief Release transient input when no usable viewport surface can process pointer releases.
+         * @param command Receives an existing object-preview cancellation when required; collider previews remain local.
+         */
+        void CancelForUnavailableSurface(EditorWorkspaceViewCommandData &command) noexcept;
+
         void Draw(const ViewportInteractionDrawContext &context);
 
         void OnViewportCaptureCancelled(Input::CaptureCancellationReason reason) noexcept override;

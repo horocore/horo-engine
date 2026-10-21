@@ -22,6 +22,13 @@ namespace Horo::Editor {
         return colliders_.ConsumePendingCancellation() || gizmo_.ConsumePendingCancellation(command);
     }
 
+    /** @copydoc ViewportInteractionController::CancelForUnavailableSurface */
+    void ViewportInteractionController::CancelForUnavailableSurface(EditorWorkspaceViewCommandData &command) noexcept {
+        capture_.Cancel(Input::CaptureCancellationReason::Explicit);
+        OnViewportCaptureCancelled(Input::CaptureCancellationReason::Explicit);
+        static_cast<void>(ConsumePendingCancellation(command));
+    }
+
     void ViewportInteractionController::Draw(const ViewportInteractionDrawContext &context) {
         const Input::InputRouter *router = capture_.Router();
         if (router == nullptr || capture_.WorkspaceContext() == nullptr)

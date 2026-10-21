@@ -821,8 +821,9 @@ clip convention and world-distance ray limits.
 mutates Physics runtime state or authored Scene data while dragging. Release submits
 one generation-, document- and selection-fenced multi-child batch through the
 existing `SceneDocumentTransactions` port and `EditorHistory`. Escape, capture loss,
-panel detach, selection changes, reload and play transitions discard the transient
-preview. Hidden, disabled, generated or locked contributors cannot grant edit
+panel detach, unavailable/zero-size render surfaces, selection changes, reload and
+play transitions discard the transient preview. Hidden, disabled, generated or
+locked contributors cannot grant edit
 permission; an explicit body's inherited lock also protects its contributors.
 
 The additive `PhysicsInspector.h` collider contracts keep the existing owner and

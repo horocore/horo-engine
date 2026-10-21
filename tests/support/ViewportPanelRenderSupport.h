@@ -67,9 +67,10 @@ namespace Horo::Editor::Tests::ViewportRenderSupport {
         }
 
         [[nodiscard]] bool IsReady() const noexcept override {
-            return true;
+            return ready;
         }
 
+        bool ready{true};
         Horo::Editor::EditorViewportExtent requestedExtent{};
         Horo::Editor::EditorViewportGridOptions gridOptions{};
         Horo::Editor::EditorViewportLightVisualizerOptions lightVisualizerOptions{};

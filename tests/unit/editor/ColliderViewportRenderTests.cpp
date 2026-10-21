@@ -161,14 +161,16 @@ namespace {
         Modal,
         Reload,
         Escape,
-        Detach
+        Detach,
+        Unavailable
     };
 }  // namespace
 
 TEST_CASE("Collider gestures pass through the real viewport in logical pixels and cancel with capture",
           "[unit][editor][physics][collider]") {
     const auto scenario = GENERATE(ColliderViewportScenario::Normal, ColliderViewportScenario::HighDpi, ColliderViewportScenario::Modal,
-                                   ColliderViewportScenario::Reload, ColliderViewportScenario::Escape, ColliderViewportScenario::Detach);
+                                   ColliderViewportScenario::Reload, ColliderViewportScenario::Escape, ColliderViewportScenario::Detach,
+                                   ColliderViewportScenario::Unavailable);
     ColliderViewportFixture fixture;
     const float dpi = scenario == ColliderViewportScenario::HighDpi ? 2.0F : 1.0F;
     auto &io = ImGui::GetIO();
@@ -192,6 +194,12 @@ TEST_CASE("Collider gestures pass through the real viewport in logical pixels an
         case ColliderViewportScenario::Detach:
             fixture.panel.OnDetach();
             break;
+        case ColliderViewportScenario::Unavailable:
+            fixture.renderer.ready = false;
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+            fixture.Draw();
+            fixture.renderer.ready = true;
+            break;
         default:
             break;
     }
@@ -201,6 +209,8 @@ TEST_CASE("Collider gestures pass through the real viewport in logical pixels an
         fixture.CheckCommit();
     else
         CHECK(fixture.command.command == EditorWorkspaceViewCommand::None);
+    if (scenario == ColliderViewportScenario::Unavailable)
+        CHECK(fixture.router.IsContextActive(fixture.workspace));
     CHECK(fixture.renderer.requestedExtent.width == static_cast<std::uint32_t>(400 * dpi));
     CHECK(fixture.renderer.requestedExtent.height == static_cast<std::uint32_t>(280 * dpi));
 }
