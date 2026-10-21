@@ -71,6 +71,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Input::InputRouter &router;
         Input::InputContextToken context;
         Input::GameplayInputFrameBuilder gameplayFrames{Input::ActionId{kGameplayMoveAction}, {}, {}, {}};
+        std::optional<Input::InputBindingProfile> previousProfile;
     };
 
     /** @brief Borrowed contribution catalogs; application-owned panel/status registrations outlive the screen. */
@@ -85,6 +86,27 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::vector<PCGDocumentSnapshot> pcgDocuments;
         std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
         std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
+        std::optional<WorldDocumentFence> worldFence;
+    };
+
+    /** @brief Routes source document commands while fencing delayed close decisions to the workspace session. */
+    class WorkspaceSourceDocumentCommands final {
+    public:
+        /** @brief Starts the close-decision lifetime after controller preparation. */
+        void BeginSession();
+        /** @brief Expires delayed close decisions before the controller is retired. */
+        void EndSession();
+        /** @brief Routes active source Save/Undo/Redo before scene fallback; the controller may be absent. */
+        bool HandleMenuAction(EditorWorkspaceController *controller, const EditorMenuAction action);
+        /** @brief Borrows the current owner and modal services to capture an exact dirty source revision. */
+        bool OpenCloseModal(EditorWorkspaceController &controller, const EditorWorkspaceViewCommandData &command,
+                            EditorModalHost &modalHost, const EditorGuiContext &context);
+        /** @brief Routes current-frame input through the borrowed workspace owner and input context. */
+        void RouteInput(Input::InputRouter &router, const Input::InputContextToken &inputContext, EditorWorkspaceController &controller,
+                        EditorWorkspaceViewCommandData &command);
+
+    private:
+        std::shared_ptr<const void> closeLifetime_;
     };
 
     /** @brief Owns workspace presentation and controller lifetime inside the GUI host. */
@@ -108,8 +130,6 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void Draw(const GuiContentRegion &contentRegion) override;
         /** @brief Collects only currently presented panel identities. */
         void CollectActivePanelIds(std::vector<std::string_view> &output) const override;
-        /** @brief Routes active source menu mutations before the scene fallback. */
-        bool HandleSourceMenuAction(const EditorMenuAction action);
         /** @brief Routes application menu commands through the owning document controller. */
         bool HandleMenuInvocation(const EditorMenuInvocation &invocation) override;
         /** @brief Returns the current collision document session. */
@@ -150,8 +170,6 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void RestoreExtensionWorkspace();
         /** @brief Persists only an admitted extension workspace through durable file publication. */
         void SaveExtensionWorkspace();
-        /** @brief Captures a dirty source revision for an explicit close decision. */
-        bool OpenSourceCloseModal(const EditorWorkspaceViewCommandData &command);
         /** @brief Opens package preparation with the exact project capability. */
         void OpenPackagesModal();
         /** @brief Opens topology editing only while Play is idle. */
@@ -162,8 +180,6 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OpenGameplayBehaviorModal(const GameplayBehaviorKind kind, const std::string &requestedDirectory);
         /** @brief Installs the project profile while retaining the host profile for teardown. */
         void LoadProjectInputProfile(const std::filesystem::path &projectRoot);
-        /** @brief Routes workspace input using current-frame source ownership. */
-        void RouteInputAction(EditorWorkspaceViewCommandData &command);
         /** @brief Publishes only changed scene and selection revisions. */
         void PublishViewportSceneIfChanged();
         /** @brief Projects document and selection status through registered status items. */
@@ -174,7 +190,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         GuiScreenHost &host_;
         const EditorServiceRegistry &services_;
         EditorModalHost &modalHost_;
-        std::shared_ptr<const void> sourceCloseLifetime_;
+        WorkspaceSourceDocumentCommands sourceCommands_;
         const EditorGuiContext &context_;
         WorkspaceContributionRegistries contributions_;
         WorkspaceInputState input_;
@@ -188,8 +204,6 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         WorkspacePublishedRevisions publishedRevisions_{};
         std::unique_ptr<EditorWorkspaceController> controller_;
         mutable WorkspaceLeaveCapture leaveCapture_;
-        mutable std::optional<WorldDocumentFence> leaveWorldFence_;
         std::unique_ptr<EditorSnackbarHost> snackbarHost_;
-        std::optional<Input::InputBindingProfile> previousInputProfile_;
     };
 }  // namespace Horo::Editor::WorkspaceScreenDetail

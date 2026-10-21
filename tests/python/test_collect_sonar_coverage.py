@@ -270,11 +270,12 @@ def test_python_api_has_no_tool_selection_or_process_launch_authority() -> None:
     assert '--jobs 2' in host
 
 
-def test_audio_preview_host_test_sources_are_collected() -> None:
+@pytest.mark.parametrize("target_name", ["HoroAudioComponentPreviewHostTests", "HoroEditorNavigationBakeHostTests"])
+def test_executable_host_test_sources_are_collected(target_name: str) -> None:
     """Application sources exercised by the headless host must reach the report."""
     repository = SCRIPTS.parent
     cmake = (repository / "tests/CMakeLists.txt").read_text()
-    target = cmake.split("add_executable(HoroAudioComponentPreviewHostTests", 1)[1].split(")", 1)[0]
+    target = cmake.split(f"add_executable({target_name}", 1)[1].split(")", 1)[0]
     application_sources = [
         token.strip('"').removeprefix("${PROJECT_SOURCE_DIR}/")
         for token in target.split()

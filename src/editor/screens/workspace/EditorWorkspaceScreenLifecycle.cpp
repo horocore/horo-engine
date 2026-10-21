@@ -17,7 +17,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (const auto collision = CaptureLeaveCollision(); collision.HasError())
                 return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
             const auto world = controller_->WorldDocuments().Snapshot();
-            leaveWorldFence_ = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt;
+            leaveCapture_.worldFence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt;
             LeaveRequirement requirement{.kind = LeaveRequirementKind::DirtyDocument,
                                          .subject = 1,
                                          .revision = 1,
@@ -107,7 +107,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::OnLeave */
     void EditorWorkspaceScreen::OnLeave() {
         view_.ResetSourceSession();
-        sourceCloseLifetime_.reset();
+        sourceCommands_.EndSession();
         LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
         if (controller_) {
             static_cast<void>(controller_->ShutdownCollisionSettings(true));
@@ -130,11 +130,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         static_cast<void>(contributions_.statusItems.Update("horo.status.document", EditorStatusItemContent{.available = false}));
         static_cast<void>(contributions_.statusItems.Update("horo.status.selection", EditorStatusItemContent{.available = false}));
         contributions_.panels.DetachAll();
-        if (previousInputProfile_.has_value()) {
-            if (const Result<void> restored = input_.router.SetProfile(std::move(*previousInputProfile_)); restored.HasError()) {
+        if (input_.previousProfile.has_value()) {
+            if (const Result<void> restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError()) {
                 LOG_ERROR("editor.input", "Unable to restore editor input profile: %s", restored.ErrorValue().message.c_str());
             }
-            previousInputProfile_.reset();
+            input_.previousProfile.reset();
         }
         input_.context.Reset();
         viewportSceneState_.Clear();
@@ -161,7 +161,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::ValidateLeaveWorld */
     Result<void> EditorWorkspaceScreen::ValidateLeaveWorld() const {
         const auto world = controller_->WorldDocuments().Snapshot();
-        if (const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt; fence != leaveWorldFence_)
+        if (const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt; fence != leaveCapture_.worldFence)
             return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
         return Result<void>::Success();
     }

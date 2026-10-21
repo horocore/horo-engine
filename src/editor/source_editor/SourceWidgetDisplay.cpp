@@ -36,7 +36,7 @@ namespace Horo::Editor {
     void WidgetDisplay::Configure(const SourceEditorTheme &theme, const Theme::Fonts *fonts) {
         ImFont *regular = fonts && fonts->monospace ? fonts->monospace : ActiveAtlasFont();
         ImFont *emphasis = fonts && fonts->monospaceEmphasis ? fonts->monospaceEmphasis : regular;
-        const int pixels = static_cast<int>(std::lround(theme.fontPixels));
+        const auto pixels = static_cast<int>(std::lround(theme.fontPixels));
         if (regular_ != regular || fontPixels_ != pixels)
             SetLayoutDirty();
         regular_ = regular;
@@ -82,8 +82,7 @@ namespace Horo::Editor {
         const auto start = reinterpret_cast<std::uintptr_t>(gap.m_pStart);
         const auto gapStart = reinterpret_cast<std::uintptr_t>(gap.m_pGapStart);
         const auto gapEnd = reinterpret_cast<std::uintptr_t>(gap.m_pGapEnd);
-        const auto end = reinterpret_cast<std::uintptr_t>(gap.m_pEnd);
-        if (address < start || address >= end)
+        if (const auto end = reinterpret_cast<std::uintptr_t>(gap.m_pEnd); address < start || address >= end)
             return std::nullopt;
         if (address < gapStart)
             return address - start;
@@ -103,7 +102,7 @@ namespace Horo::Editor {
     /** @copydoc WidgetDisplay::DrawChars */
     void WidgetDisplay::DrawChars(Zep::ZepFont &font, const Zep::NVec2f &position, const Zep::NVec4f &color, const uint8_t *begin,
                                   const uint8_t *end) const {
-        if (const auto offset = SourceOffset(begin)) {
+        if (const auto offset = SourceOffset(begin); offset.has_value()) {
             const auto role = syntax_ ? syntax_->RoleAt(*offset) : SourceSyntaxRole::Text;
             const auto &style = theme_.styles[static_cast<std::size_t>(role)];
             Zep::ZepFont &face = style.font == SourceFontRole::MonospaceEmphasis && emphasis_ ? *emphasis_ : font;
@@ -137,7 +136,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc UpdateSourceWidgetTheme */
-    void UpdateSourceWidgetTheme(Zep::ZepEditor &editor, const SourceEditorTheme &styles) {
+    void UpdateSourceWidgetTheme(const Zep::ZepEditor &editor, const SourceEditorTheme &styles) {
         auto &theme = editor.GetTheme();
         const auto text = NativeColor(styles.styles[static_cast<std::size_t>(SourceSyntaxRole::Text)].color);
         for (int value = 1; value < static_cast<int>(Zep::ThemeColor::UniqueColor0); ++value)

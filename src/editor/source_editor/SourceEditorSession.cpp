@@ -16,8 +16,8 @@ namespace Horo::Editor {
 
     /** @copydoc SourceEditorSession::Retain */
     void SourceEditorSession::Retain(const std::span<const WorkspaceDocumentTab> tabs) {
-        std::erase_if(views_, [&](const auto &entry) {
-            return std::ranges::none_of(tabs, [&](const WorkspaceDocumentTab &candidate) {
+        std::erase_if(views_, [tabs](const auto &entry) {
+            return std::ranges::none_of(tabs, [&entry](const WorkspaceDocumentTab &candidate) {
                 return candidate.identity.key.kind == DocumentKind::Source && candidate.identity.instance.Value() == entry.first;
             });
         });

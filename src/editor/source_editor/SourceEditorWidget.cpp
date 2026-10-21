@@ -9,7 +9,10 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstddef>
+#include <format>
 #include <imgui_internal.h>
+#include <string_view>
 #include <zep/mode_standard.h>
 #include <zep/tab_window.h>
 #include <zep/window.h>
@@ -58,7 +61,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Recognizes an accepted widget publication without resetting independent interaction state. */
-        bool Matches(const SourceDocumentSnapshot &next, const std::string &display) const {
+        bool Matches(const SourceDocumentSnapshot &next, const std::string_view display) const {
             return editor && source.Revision() && source.Identity().instance == next.Identity().instance &&
                    display == buffer->GetBufferText(buffer->Begin(), buffer->End());
         }
@@ -101,7 +104,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Routes navigation only through Zep's standard selection/movement semantics. */
-        void Navigation(const std::uint32_t modifiers) {
+        void Navigation(const std::uint32_t modifiers) const {
             constexpr std::array keys{std::pair{ImGuiKey_LeftArrow, Zep::ExtKeys::LEFT},
                                       std::pair{ImGuiKey_RightArrow, Zep::ExtKeys::RIGHT},
                                       std::pair{ImGuiKey_UpArrow, Zep::ExtKeys::UP},
@@ -123,8 +126,7 @@ namespace Horo::Editor {
         /** @brief Copies exact selected document bytes, leaving empty selections and rejected clipboard data inert. */
         void Clipboard(const ImGuiKey key) {
             if (key == ImGuiKey_V) {
-                const char *bytes = ImGui::GetClipboardText();
-                if (bytes && AdmittedText(bytes))
+                if (const char *bytes = ImGui::GetClipboardText(); bytes && AdmittedText(bytes))
                     Insert(DisplayText(bytes));
                 return;
             }
@@ -173,12 +175,13 @@ namespace Horo::Editor {
             const auto text = source.Text();
             const auto before = text.substr(0, view.caret);
             const auto newline = before.find_last_of("\r\n");
-            std::size_t start = newline == std::string_view::npos ? (source.Metadata().utf8Bom ? 3 : 0) : newline + 1;
+            const std::size_t firstLineStart = source.Metadata().utf8Bom ? 3 : 0;
+            std::size_t start = newline == std::string_view::npos ? firstLineStart : newline + 1;
             std::size_t column = 0;
             for (; start < view.caret; ++start) {
                 if (text[start] == '\t')
                     column += indentationWidth - column % indentationWidth;
-                else if ((static_cast<unsigned char>(text[start]) & 0xC0U) != 0x80U)
+                else if ((static_cast<std::byte>(text[start]) & std::byte{0xC0}) != std::byte{0x80})
                     ++column;
             }
             return PlanSourceReplacement(source, view, std::string(indentationWidth - column % indentationWidth, ' '));
@@ -258,7 +261,7 @@ namespace Horo::Editor {
         WidgetDisplay &PrepareDisplay(const SourceWidgetFrame &frame, const ImVec2 origin, const ImVec2 extent, const Theme::Fonts *fonts) {
             auto &display = static_cast<WidgetDisplay &>(editor->GetDisplay());
             const float viewport = ScrollPosition();
-            const auto generation = display.fontGeneration;
+            const auto generation = display.FontGeneration();
             const bool scaleChanged = display.GetPixelScale().x != frame.dpiScale || display.GetPixelScale().y != frame.dpiScale;
             if (scaleChanged)
                 display.SetPixelScale({frame.dpiScale, frame.dpiScale});
@@ -266,10 +269,10 @@ namespace Horo::Editor {
             display.Configure(theme, fonts);
             for (int type = 0; type < static_cast<int>(Zep::ZepTextType::Count); ++type)
                 static_cast<void>(display.GetFont(static_cast<Zep::ZepTextType>(type)));
-            if (scaleChanged || generation != display.fontGeneration)
+            if (scaleChanged || generation != display.FontGeneration())
                 window->DirtyLayout();
             editor->SetDisplayRegion({origin.x, origin.y}, {origin.x + extent.x, origin.y + extent.y});
-            if (scaleChanged || generation != display.fontGeneration)
+            if (scaleChanged || generation != display.FontGeneration())
                 window->SetHoroViewportLines(viewport);
             UpdateSourceWidgetTheme(*editor, theme);
             return display;
@@ -349,7 +352,7 @@ namespace Horo::Editor {
 
         /** @brief Restores an absolute camera before this frame's new input and automatic caret reveal. */
         void RestoreViewport() {
-            if (pendingViewport) {
+            if (pendingViewport.has_value()) {
                 window->SetHoroViewportLines(*pendingViewport);
                 pendingViewport.reset();
             }
@@ -360,7 +363,7 @@ namespace Horo::Editor {
             if (focused) {
                 auto &ime = ImGui::GetCurrentContext()->PlatformImeData;
                 ime.WantVisible = true;
-                ime.InputPos = display.cursor ? Zep::toImVec2(display.cursor->topLeftPx) : origin;
+                ime.InputPos = display.Cursor().has_value() ? Zep::toImVec2(display.Cursor()->topLeftPx) : origin;
                 ime.InputLineHeight = std::round(Theme::GetActiveTokens().typography.body);
             } else if (ImGui::GetActiveID() == inputId) {
                 ImGui::ClearActiveID();
@@ -397,7 +400,7 @@ namespace Horo::Editor {
     SourceEditorWidget::SourceEditorWidget(const SourceEditingViewId viewIdentity) : storage_(std::make_unique<Storage>()) {
         assert(viewIdentity.value != 0);
         storage_->viewIdentity = viewIdentity;
-        storage_->inputName = "source-widget-" + std::to_string(viewIdentity.value);
+        storage_->inputName = std::format("source-widget-{}", viewIdentity.value);
     }
 
     SourceEditorWidget::~SourceEditorWidget() = default;
@@ -407,10 +410,11 @@ namespace Horo::Editor {
         auto &state = *storage_;
         if (snapshot.Revision() == 0) {
             const auto identity = state.viewIdentity;
-            const auto name = state.inputName;
-            storage_ = std::make_unique<Storage>();
-            storage_->viewIdentity = identity;
-            storage_->inputName = name;
+            const auto &name = state.inputName;
+            auto replacement = std::make_unique<Storage>();
+            replacement->viewIdentity = identity;
+            replacement->inputName = name;
+            storage_ = std::move(replacement);
             return;
         }
         if (!state.pending && state.source.SharesStateWith(snapshot))
@@ -457,7 +461,7 @@ namespace Horo::Editor {
             state.RestoreViewport();
             state.Input(focused, hovered);
             state.ApplyScroll(inputEnabled && hovered, origin, extent);
-            display.cursorColor = state.editor->GetTheme().GetColor(Zep::ThemeColor::CursorInsert);
+            display.SetCursorColor(state.editor->GetTheme().GetColor(Zep::ThemeColor::CursorInsert));
             display.Bind(state.buffer, state.syntax.ForMirror(state.buffer->GetUpdateCount()));
             state.editor->Display();
             display.Bind(nullptr, nullptr);

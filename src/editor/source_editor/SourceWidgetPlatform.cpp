@@ -55,7 +55,9 @@ namespace Horo::Editor {
                 return empty_;
             }
 
-            void SetWorkingDirectory(const Zep::fs::path &) override {}
+            void SetWorkingDirectory(const Zep::fs::path &) override {
+                // This isolated widget never adopts an ambient filesystem working directory.
+            }
 
             bool MakeDirectories(const Zep::fs::path &) override {
                 return false;
@@ -73,7 +75,9 @@ namespace Horo::Editor {
                 return false;
             }
 
-            void ScanDirectory(const Zep::fs::path &, std::function<bool(const Zep::fs::path &, bool &)>) const override {}
+            void ScanDirectory(const Zep::fs::path &, std::function<bool(const Zep::fs::path &, bool &)>) const override {
+                // Denied filesystem access exposes no entries and never invokes the visitor.
+            }
 
             bool Equivalent(const Zep::fs::path &a, const Zep::fs::path &b) const override {
                 return a == b;
@@ -83,7 +87,9 @@ namespace Horo::Editor {
                 return path;
             }
 
-            void SetFlags(std::uint32_t) override {}
+            void SetFlags(std::uint32_t) override {
+                // Caller flags cannot enable filesystem access for the isolated widget.
+            }
 
         private:
             Zep::fs::path empty_;

@@ -37,9 +37,20 @@ namespace Horo::Editor {
     /** @brief Uses the host font and records the insertion caret for platform IME placement. */
     class WidgetDisplay final : public Zep::ZepDisplay_ImGui {
     public:
-        Zep::NVec4f cursorColor;
-        mutable std::optional<Zep::NRectf> cursor;
-        std::uint64_t fontGeneration{};
+        /** @brief Returns the atlas generation used to invalidate Zep's layout cache. */
+        [[nodiscard]] std::uint64_t FontGeneration() const noexcept {
+            return fontGeneration;
+        }
+
+        /** @brief Returns the caret recorded by this frame's synchronous drawing. */
+        [[nodiscard]] const std::optional<Zep::NRectf> &Cursor() const noexcept {
+            return cursor;
+        }
+
+        /** @brief Sets the palette color used to identify insertion-caret rectangles. @param color Active cursor color. */
+        void SetCursorColor(const Zep::NVec4f &color) noexcept {
+            cursorColor = color;
+        }
 
         /** @brief Applies immutable active-frame styles and borrowed host-owned atlas faces.
          * @param theme Current source theme. @param fonts Optional host atlas; null uses the active GUI font.
@@ -53,13 +64,16 @@ namespace Horo::Editor {
         Zep::ZepFont &GetFont(Zep::ZepTextType type) override;
         /** @brief Draws source glyphs using semantic color/font roles; non-source chrome retains its supplied style. */
         void DrawChars(Zep::ZepFont &font, const Zep::NVec2f &position, const Zep::NVec4f &color, const uint8_t *begin,
-                       const uint8_t *end = nullptr) const override;
+                       const uint8_t *end) const override;
         /** @brief Retains the exact Zep clip for canonical ImGui glyph emission. @param rect Current private draw clip. */
         void SetClipRect(const Zep::NRectf &rect) override;
         /** @brief Records the insertion caret for the platform IME bridge. */
         void DrawRectFilled(const Zep::NRectf &rect, const Zep::NVec4f &color) const override;
 
     private:
+        Zep::NVec4f cursorColor;
+        mutable std::optional<Zep::NRectf> cursor;
+        std::uint64_t fontGeneration{};
         /** @brief Maps only pointers inside the current mirror allocation. @param begin Drawn glyph pointer. @return Normalized byte
          * offset, or no source glyph. */
         [[nodiscard]] std::optional<std::size_t> SourceOffset(const uint8_t *begin) const noexcept;
@@ -93,5 +107,5 @@ namespace Horo::Editor {
     /** @brief Refreshes the widget's private palette from the current semantic GUI style.
      * @param editor This view's private editor instance. @param theme Active semantic source styles.
      */
-    void UpdateSourceWidgetTheme(Zep::ZepEditor &editor, const SourceEditorTheme &theme);
+    void UpdateSourceWidgetTheme(const Zep::ZepEditor &editor, const SourceEditorTheme &theme);
 }  // namespace Horo::Editor

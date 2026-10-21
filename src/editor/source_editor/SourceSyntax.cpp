@@ -23,9 +23,9 @@ namespace Horo::Editor {
             std::size_t start = 0;
             while (start < words.size()) {
                 const auto end = words.find(' ', start);
-                if (words.substr(start, end == words.npos ? end : end - start) == word)
+                if (words.substr(start, end == std::string_view::npos ? end : end - start) == word)
                     return true;
-                if (end == words.npos)
+                if (end == std::string_view::npos)
                     break;
                 start = end + 1;
             }
@@ -34,6 +34,9 @@ namespace Horo::Editor {
 
         /** @brief Classifies reserved words independently for script, shader, native, and configuration text. */
         [[nodiscard]] SourceSyntaxRole WordRole(const SourceLanguage language, const std::string_view word) noexcept {
+            using enum SourceLanguage;
+            using enum SourceSyntaxRole;
+
             struct Vocabulary {
                 SourceLanguage language;
                 std::string_view words;
@@ -41,36 +44,33 @@ namespace Horo::Editor {
             };
 
             constexpr std::array vocabularies{
-                Vocabulary{SourceLanguage::HoroScript,
+                Vocabulary{HoroScript,
                            "and break do else elseif end false for function goto if in local nil not or repeat return then true until "
                            "while",
-                           SourceSyntaxRole::Keyword},
-                Vocabulary{SourceLanguage::Cpp,
+                           Keyword},
+                Vocabulary{Cpp,
                            "alignas alignof asm auto break case catch class co_await co_return co_yield concept const consteval constexpr "
                            "constinit const_cast continue default delete do dynamic_cast else enum explicit export extern false for friend "
                            "goto if inline mutable namespace new noexcept nullptr operator private protected public register "
                            "reinterpret_cast requires return sizeof static static_assert static_cast struct switch template this "
                            "thread_local throw true try typedef typeid typename union using virtual volatile while",
-                           SourceSyntaxRole::Keyword},
-                Vocabulary{SourceLanguage::Cpp,
-                           "bool char char8_t char16_t char32_t double float int long short signed unsigned void wchar_t",
-                           SourceSyntaxRole::Type},
-                Vocabulary{SourceLanguage::Shader,
-                           "cbuffer discard groupshared in inout layout out precision register sampler shared uniform varying",
-                           SourceSyntaxRole::Keyword},
-                Vocabulary{SourceLanguage::Shader,
+                           Keyword},
+                Vocabulary{Cpp, "bool char char8_t char16_t char32_t double float int long short signed unsigned void wchar_t", Type},
+                Vocabulary{Shader, "cbuffer discard groupshared in inout layout out precision register sampler shared uniform varying",
+                           Keyword},
+                Vocabulary{Shader,
                            "float2 float3 float4 float2x2 float3x3 float4x4 half half2 half3 half4 int2 int3 int4 uint uint2 uint3 uint4 "
                            "vec2 vec3 vec4 mat2 mat3 mat4 sampler2D Texture2D SamplerState",
-                           SourceSyntaxRole::Type},
-                Vocabulary{SourceLanguage::Json, "true false null", SourceSyntaxRole::Keyword},
+                           Type},
+                Vocabulary{Json, "true false null", Keyword},
             };
-            const auto family = language == SourceLanguage::Toml || language == SourceLanguage::Yaml ? SourceLanguage::Json : language;
+            const auto family = language == Toml || language == Yaml ? Json : language;
             for (const auto &vocabulary : vocabularies) {
-                const bool sharedNative = language == SourceLanguage::Shader && vocabulary.language == SourceLanguage::Cpp;
+                const bool sharedNative = language == Shader && vocabulary.language == Cpp;
                 if ((vocabulary.language == family || sharedNative) && WordIn(vocabulary.words, word))
                     return vocabulary.role;
             }
-            return SourceSyntaxRole::Text;
+            return Text;
         }
 
         /** @brief Scans one escaped single-line string, returning no end for incomplete lexical input. */
@@ -80,11 +80,11 @@ namespace Horo::Editor {
                 if (c == quote)
                     return position;
                 if (c == '\n' || c == '\r')
-                    return text.npos;
+                    return std::string_view::npos;
                 if (c == '\\' && position < text.size())
                     ++position;
             }
-            return text.npos;
+            return std::string_view::npos;
         }
 
         /** @brief Matches one bounded Lua closing delimiter. */
@@ -103,13 +103,13 @@ namespace Horo::Editor {
                 return begin;
             const auto equals = cursor - begin - 1;
             if (equals > 16)
-                return text.npos;
+                return std::string_view::npos;
             const auto delimiter = text.substr(begin, equals + 2);
             for (++cursor; cursor < text.size(); ++cursor) {
                 if (LuaClose(text, cursor, delimiter))
                     return cursor + equals + 2;
             }
-            return text.npos;
+            return std::string_view::npos;
         }
 
         /** @brief Lexical scanner with one cursor and bounded append-only storage. */
@@ -123,14 +123,14 @@ namespace Horo::Editor {
                 while (cursor_ < text_.size()) {
                     const auto begin = cursor_;
                     const auto [end, role] = Next();
-                    if (end == text_.npos)
+                    if (end == std::string_view::npos)
                         return {.language = language_, .fallback = SourceSyntaxFallback::Malformed};
                     cursor_ = end;
                     if (role == SourceSyntaxRole::Text)
                         continue;
                     if (result.spans.size() >= limits_.maximumSpans)
                         return {.language = language_, .fallback = SourceSyntaxFallback::BudgetExceeded};
-                    result.spans.push_back({begin, end, role});
+                    result.spans.emplace_back(begin, end, role);
                 }
                 return result;
             }
@@ -174,17 +174,18 @@ namespace Horo::Editor {
 
             /** @brief Configuration hash comments are independent of native preprocessor directives. */
             [[nodiscard]] bool ConfigComment() const noexcept {
-                if (language_ == SourceLanguage::Ini && text_[cursor_] == ';')
+                using enum SourceLanguage;
+
+                if (language_ == Ini && text_[cursor_] == ';')
                     return true;
-                return text_[cursor_] == '#' && (language_ == SourceLanguage::Toml || language_ == SourceLanguage::Yaml ||
-                                                 language_ == SourceLanguage::Ini || language_ == SourceLanguage::CMake);
+                return text_[cursor_] == '#' && (language_ == Toml || language_ == Yaml || language_ == Ini || language_ == CMake);
             }
 
             /** @brief Scans bounded-delimiter native raw strings without treating embedded comments as syntax. */
             [[nodiscard]] Token RawString() const noexcept {
                 const auto delimiterEnd = text_.find('(', cursor_ + 2);
-                if (delimiterEnd == text_.npos || delimiterEnd - cursor_ > 18)
-                    return {text_.npos, SourceSyntaxRole::Text};
+                if (delimiterEnd == std::string_view::npos || delimiterEnd - cursor_ > 18)
+                    return {std::string_view::npos, SourceSyntaxRole::Text};
                 const auto delimiter = text_.substr(cursor_ + 2, delimiterEnd - cursor_ - 2);
                 for (auto end = delimiterEnd + 1; end < text_.size(); ++end) {
                     if (text_[end] != ')' || text_.substr(end + 1, delimiter.size()) != delimiter)
@@ -193,22 +194,21 @@ namespace Horo::Editor {
                     if (quote < text_.size() && text_[quote] == '"')
                         return {quote + 1, SourceSyntaxRole::String};
                 }
-                return {text_.npos, SourceSyntaxRole::Text};
+                return {std::string_view::npos, SourceSyntaxRole::Text};
             }
 
             /** @brief Resolves quoted values and JSON property names; unclosed input falls back as a whole. */
             [[nodiscard]] Token String() const noexcept {
                 const char quote = text_[cursor_];
                 if (quote == '\'' && language_ == SourceLanguage::Json)
-                    return {text_.npos, SourceSyntaxRole::Text};
-                const auto tail = text_.substr(cursor_);
-                if (TripleString(tail))
+                    return {std::string_view::npos, SourceSyntaxRole::Text};
+                if (const auto tail = text_.substr(cursor_); TripleString(tail))
                     return {DelimitedEnd(tail.substr(0, 3), cursor_ + 3), SourceSyntaxRole::String};
                 const auto end = QuotedEnd(text_, cursor_ + 1, quote);
-                if (end == text_.npos)
+                if (end == std::string_view::npos)
                     return {end, SourceSyntaxRole::Text};
                 const auto next = text_.find_first_not_of(" \t\r", end);
-                const bool property = language_ == SourceLanguage::Json && next != text_.npos && text_[next] == ':';
+                const bool property = language_ == SourceLanguage::Json && next != std::string_view::npos && text_[next] == ':';
                 return {end, property ? SourceSyntaxRole::Property : SourceSyntaxRole::String};
             }
 
@@ -223,7 +223,7 @@ namespace Horo::Editor {
                     role = SourceSyntaxRole::Property;
                 if (XmlTag())
                     role = SourceSyntaxRole::Keyword;
-                if (language_ == SourceLanguage::CMake && next != text_.npos && text_[next] == '(')
+                if (language_ == SourceLanguage::CMake && next != std::string_view::npos && text_[next] == '(')
                     role = SourceSyntaxRole::Keyword;
                 return {end, role};
             }
@@ -241,11 +241,13 @@ namespace Horo::Editor {
 
             /** @brief Recognizes unquoted configuration keys independently of their values. */
             [[nodiscard]] bool IsProperty(const std::size_t next) const noexcept {
-                if (next == text_.npos)
+                using enum SourceLanguage;
+
+                if (next == std::string_view::npos)
                     return false;
-                if (language_ == SourceLanguage::Yaml)
+                if (language_ == Yaml)
                     return text_[next] == ':';
-                return text_[next] == '=' && (language_ == SourceLanguage::Ini || language_ == SourceLanguage::Toml);
+                return text_[next] == '=' && (language_ == Ini || language_ == Toml);
             }
 
             /** @brief Recognizes long-bracket strings separately from ordinary array/index operators. */
@@ -309,12 +311,12 @@ namespace Horo::Editor {
 
             [[nodiscard]] std::size_t LineEnd() const noexcept {
                 const auto end = text_.find_first_of("\r\n", cursor_);
-                return end == text_.npos ? text_.size() : end;
+                return end == std::string_view::npos ? text_.size() : end;
             }
 
             [[nodiscard]] std::size_t DelimitedEnd(const std::string_view delimiter, const std::size_t start) const noexcept {
                 const auto end = text_.find(delimiter, start);
-                return end == text_.npos ? end : end + delimiter.size();
+                return end == std::string_view::npos ? end : end + delimiter.size();
             }
 
             SourceLanguage language_;
@@ -326,9 +328,7 @@ namespace Horo::Editor {
 
     /** @copydoc SourceSyntax::RoleAt */
     SourceSyntaxRole SourceSyntax::RoleAt(const std::size_t offset) const noexcept {
-        const auto found = std::upper_bound(spans.begin(), spans.end(), offset, [](const auto byte, const auto &span) {
-            return byte < span.begin;
-        });
+        const auto found = std::ranges::upper_bound(spans, offset, {}, &SourceSyntaxSpan::begin);
         if (found == spans.begin())
             return SourceSyntaxRole::Text;
         const auto &span = *std::prev(found);
@@ -337,13 +337,15 @@ namespace Horo::Editor {
 
     /** @copydoc ClassifySourceLanguage */
     SourceLanguage ClassifySourceLanguage(const std::string_view path) noexcept {
+        using enum SourceLanguage;
+
         const auto separator = path.find_last_of("/\\");
-        const auto name = path.substr(separator == path.npos ? 0 : separator + 1);
+        const auto name = path.substr(separator == std::string_view::npos ? 0 : separator + 1);
         if (name == "CMakeLists.txt")
-            return SourceLanguage::CMake;
+            return CMake;
         const auto dot = name.rfind('.');
-        if (dot == name.npos || name.size() - dot > 16)
-            return SourceLanguage::PlainText;
+        if (dot == std::string_view::npos || name.size() - dot > 16)
+            return PlainText;
         std::array<char, 16> extension{};
         const auto size = name.size() - dot;
         for (std::size_t index = 0; index < size; ++index) {
@@ -352,34 +354,36 @@ namespace Horo::Editor {
         }
         const std::string_view ext{extension.data(), size};
         constexpr std::array extensions{
-            std::pair{".c .cc .cpp .cxx .h .hh .hpp .hxx .inl .ipp .tpp", SourceLanguage::Cpp},
-            std::pair{".horo_script .lua", SourceLanguage::HoroScript},
-            std::pair{".glsl .hlsl .metal .shader .vert .frag .geom .comp .tesc .tese", SourceLanguage::Shader},
-            std::pair{".json", SourceLanguage::Json},
-            std::pair{".toml", SourceLanguage::Toml},
-            std::pair{".yaml .yml", SourceLanguage::Yaml},
-            std::pair{".ini .cfg", SourceLanguage::Ini},
-            std::pair{".xml", SourceLanguage::Xml},
-            std::pair{".cmake", SourceLanguage::CMake},
+            std::pair{".c .cc .cpp .cxx .h .hh .hpp .hxx .inl .ipp .tpp", Cpp},
+            std::pair{".horo_script .lua", HoroScript},
+            std::pair{".glsl .hlsl .metal .shader .vert .frag .geom .comp .tesc .tese", Shader},
+            std::pair{".json", Json},
+            std::pair{".toml", Toml},
+            std::pair{".yaml .yml", Yaml},
+            std::pair{".ini .cfg", Ini},
+            std::pair{".xml", Xml},
+            std::pair{".cmake", CMake},
         };
         for (const auto &[suffixes, language] : extensions) {
             if (WordIn(suffixes, ext))
                 return language;
         }
-        return SourceLanguage::PlainText;
+        return PlainText;
     }
 
     /** @copydoc TokenizeSource */
     SourceSyntax TokenizeSource(const SourceLanguage language, const std::string_view text, const SourceSyntaxLimits limits) {
+        using enum SourceSyntaxFallback;
+
         if (language == SourceLanguage::PlainText)
-            return {.language = language, .fallback = SourceSyntaxFallback::UnknownLanguage};
+            return {.language = language, .fallback = UnknownLanguage};
         if (text.size() > limits.maximumBytes)
-            return {.language = language, .fallback = SourceSyntaxFallback::BudgetExceeded};
+            return {.language = language, .fallback = BudgetExceeded};
         std::size_t lineBytes = 0;
         for (const char c : text) {
             lineBytes = c == '\n' ? 0 : lineBytes + 1;
             if (lineBytes > limits.maximumLineBytes)
-                return {.language = language, .fallback = SourceSyntaxFallback::BudgetExceeded};
+                return {.language = language, .fallback = BudgetExceeded};
         }
         return Scanner{language, text, limits}.Run();
     }

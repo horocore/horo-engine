@@ -53,10 +53,7 @@ namespace Horo::Editor {
     void RouteWorkspaceInputAction(Input::InputRouter &router, const Input::InputContextToken &context,
                                    const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
                                    const bool activePCGDocument, const WorkspaceInputCapture capture) {
-        const auto pressed = [&](const char *id) {
-            return router.ReadAction(context, Input::ActionId{id}).pressed;
-        };
-        if (pressed(kActionSave)) {
+        if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed) {
             command.command = EditorWorkspaceViewCommand::SaveScene;
             for (const auto &source : model.sourceDocuments) {
                 if (source.Identity().instance == model.workspacePanelHost.ActiveDocument()) {

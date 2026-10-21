@@ -62,7 +62,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
         if (auto initialized = InitializeController(projectRoot); initialized.HasError())
             return initialized;
-        sourceCloseLifetime_ = std::make_shared<int>(0);
+        sourceCommands_.BeginSession();
         snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
         host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
         LoadProjectInputProfile(controller_->ViewModel().projectRoot);
@@ -157,7 +157,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         view_.Draw(controller_->ViewModel(), command, contentRegion);
 
         if (command.command == None && !command.menuInvocation.has_value()) {
-            RouteInputAction(command);
+            sourceCommands_.RouteInput(input_.router, input_.context, *controller_, command);
         }
 
         if (command.menuInvocation.has_value()) {
@@ -175,7 +175,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 const std::string requestedDirectory =
                     command.stringPayload.value_or(controller_->ViewModel().contentBrowser.absoluteCurrentPath);
                 OpenGameplayBehaviorModal(kind, requestedDirectory);
-            } else if (command.command == CloseWorkspaceDocument && OpenSourceCloseModal(command)) {
+            } else if (command.command == CloseWorkspaceDocument &&
+                       sourceCommands_.OpenCloseModal(*controller_, command, modalHost_, context_)) {
                 // The exclusive modal owns only the decision; the controller owns the document transaction.
             } else {
                 controller_->ProcessCommand(command);
@@ -225,9 +226,20 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return controller_ ? controller_->CollisionSettings() : GuiScreen::CollisionSettings();
     }
 
-    /** @copydoc EditorWorkspaceScreen::RouteInputAction */
-    void EditorWorkspaceScreen::RouteInputAction(EditorWorkspaceViewCommandData &command) {
-        RouteWorkspaceInputAction(input_.router, input_.context, controller_->ViewModel(), command, controller_->HasActivePCGDocument(),
+    /** @copydoc WorkspaceSourceDocumentCommands::BeginSession */
+    void WorkspaceSourceDocumentCommands::BeginSession() {
+        closeLifetime_ = std::make_shared<int>(0);
+    }
+
+    /** @copydoc WorkspaceSourceDocumentCommands::EndSession */
+    void WorkspaceSourceDocumentCommands::EndSession() {
+        closeLifetime_.reset();
+    }
+
+    /** @copydoc WorkspaceSourceDocumentCommands::RouteInput */
+    void WorkspaceSourceDocumentCommands::RouteInput(Input::InputRouter &router, const Input::InputContextToken &inputContext,
+                                                     EditorWorkspaceController &controller, EditorWorkspaceViewCommandData &command) {
+        RouteWorkspaceInputAction(router, inputContext, controller.ViewModel(), command, controller.HasActivePCGDocument(),
                                   {ImGui::GetIO().WantTextInput,
                                    ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)});
     }

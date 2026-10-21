@@ -3,6 +3,7 @@
 #include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
+#include <cstddef>
 
 namespace Horo::Editor::SourceWidgetText {
     namespace {
@@ -11,7 +12,7 @@ namespace Horo::Editor::SourceWidgetText {
             std::size_t count = 0;
             while (count < before.size() && count < after.size() && before[count] == after[count])
                 ++count;
-            while (count > 0 && count < after.size() && (static_cast<unsigned char>(after[count]) & 0xC0U) == 0x80U)
+            while (count > 0 && count < after.size() && (static_cast<std::byte>(after[count]) & std::byte{0xC0}) == std::byte{0x80})
                 --count;
             return count;
         }
@@ -22,7 +23,7 @@ namespace Horo::Editor::SourceWidgetText {
             while (count < after.size() - prefix && count < before.size() - prefix &&
                    after[after.size() - count - 1] == before[before.size() - count - 1])
                 ++count;
-            while (count > 0 && (static_cast<unsigned char>(after[after.size() - count]) & 0xC0U) == 0x80U)
+            while (count > 0 && (static_cast<std::byte>(after[after.size() - count]) & std::byte{0xC0}) == std::byte{0x80})
                 --count;
             return count;
         }
@@ -47,7 +48,7 @@ namespace Horo::Editor::SourceWidgetText {
         const auto text = source.Text();
         if (offset > text.size() || (source.Metadata().utf8Bom && offset < 3))
             return false;
-        if (offset < text.size() && (static_cast<unsigned char>(text[offset]) & 0xC0U) == 0x80U)
+        if (offset < text.size() && (static_cast<std::byte>(text[offset]) & std::byte{0xC0}) == std::byte{0x80})
             return false;
         return offset == 0 || offset == text.size() || text[offset - 1] != '\r' || text[offset] != '\n';
     }
@@ -56,7 +57,8 @@ namespace Horo::Editor::SourceWidgetText {
     std::string DisplayText(std::string_view text) {
         std::string result;
         result.reserve(text.size());
-        for (std::size_t i = 0; i < text.size(); ++i) {
+        std::size_t i = 0;
+        while (i < text.size()) {
             if (text[i] == '\r') {
                 result += '\n';
                 if (i + 1 < text.size() && text[i + 1] == '\n')
@@ -64,6 +66,7 @@ namespace Horo::Editor::SourceWidgetText {
             } else {
                 result += text[i];
             }
+            ++i;
         }
         return result;
     }
@@ -71,9 +74,12 @@ namespace Horo::Editor::SourceWidgetText {
     /** @copydoc RawOffset */
     std::size_t RawOffset(const std::string_view text, const bool bom, const std::size_t displayOffset) {
         std::size_t raw = bom ? 3 : 0;
-        for (std::size_t i = 0; i < displayOffset && raw < text.size(); ++i, ++raw) {
+        std::size_t i = 0;
+        while (i < displayOffset && raw < text.size()) {
             if (text[raw] == '\r' && raw + 1 < text.size() && text[raw + 1] == '\n')
                 ++raw;
+            ++i;
+            ++raw;
         }
         return raw;
     }
@@ -87,9 +93,12 @@ namespace Horo::Editor::SourceWidgetText {
     std::size_t DisplayOffset(const SourceDocumentSnapshot &source, const std::size_t rawOffset) {
         const auto text = source.Text();
         std::size_t count = 0;
-        for (std::size_t raw = source.Metadata().utf8Bom ? 3 : 0; raw < rawOffset; ++raw, ++count) {
+        std::size_t raw = source.Metadata().utf8Bom ? 3 : 0;
+        while (raw < rawOffset) {
             if (text[raw] == '\r' && raw + 1 < rawOffset && text[raw + 1] == '\n')
                 ++raw;
+            ++raw;
+            ++count;
         }
         return count;
     }

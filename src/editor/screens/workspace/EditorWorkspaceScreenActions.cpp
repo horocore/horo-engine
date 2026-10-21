@@ -75,11 +75,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
     }  // namespace
 
-    /** @copydoc EditorWorkspaceScreen::HandleSourceMenuAction */
-    bool EditorWorkspaceScreen::HandleSourceMenuAction(const EditorMenuAction action) {
-        if (controller_ &&
-            (action == EditorMenuAction::SaveScene || action == EditorMenuAction::Undo || action == EditorMenuAction::Redo)) {
-            const auto &model = controller_->ViewModel();
+    /** @copydoc WorkspaceSourceDocumentCommands::HandleMenuAction */
+    bool WorkspaceSourceDocumentCommands::HandleMenuAction(EditorWorkspaceController *controller, const EditorMenuAction action) {
+        if (controller && (action == EditorMenuAction::SaveScene || action == EditorMenuAction::Undo || action == EditorMenuAction::Redo)) {
+            const auto &model = controller->ViewModel();
             for (const auto &source : model.sourceDocuments) {
                 if (source.Identity().instance != model.workspacePanelHost.ActiveDocument())
                     continue;
@@ -93,7 +92,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                                      action == EditorMenuAction::Undo ? SourceHistoryDirection::Undo
                                                                                                       : SourceHistoryDirection::Redo};
                 }
-                controller_->ProcessCommand(command);
+                controller->ProcessCommand(command);
                 return true;
             }
         }
@@ -107,7 +106,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             OpenPackagesModal();
             return true;
         }
-        if (HandleSourceMenuAction(action))
+        if (sourceCommands_.HandleMenuAction(controller_.get(), action))
             return true;
         if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
             !controller_->CurrentScenePath().has_value())
@@ -193,15 +192,17 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return true;
     }
 
-    /** @copydoc EditorWorkspaceScreen::OpenSourceCloseModal */
-    bool EditorWorkspaceScreen::OpenSourceCloseModal(const EditorWorkspaceViewCommandData &command) {
+    /** @copydoc WorkspaceSourceDocumentCommands::OpenCloseModal */
+    bool WorkspaceSourceDocumentCommands::OpenCloseModal(EditorWorkspaceController &controller,
+                                                         const EditorWorkspaceViewCommandData &command, EditorModalHost &modalHost,
+                                                         const EditorGuiContext &context) {
         if (!command.documentInstance)
             return false;
-        const auto snapshot = controller_->SourceDocuments().Snapshot(*command.documentInstance);
+        const auto snapshot = controller.SourceDocuments().Snapshot(*command.documentInstance);
         if (snapshot.HasError() || !snapshot.Value().Dirty())
             return false;
-        static_cast<void>(modalHost_.OpenRoot(
-            std::make_unique<SourceDocumentCloseModal>(context_, *controller_, sourceCloseLifetime_,
+        static_cast<void>(modalHost.OpenRoot(
+            std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
                                                        SourceSaveRequest{*command.documentInstance, snapshot.Value().Revision(), {}},
                                                        snapshot.Value().Identity().key.source.Value())));
         return true;

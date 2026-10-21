@@ -18,11 +18,10 @@ namespace Horo::Editor {
         bool Button(const EditorGuiContext &context, const char *key, const bool enabled = true) {
             const auto &label = Text(context, key);
             const auto &metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
-            const float width = [&] {
+            if (const float width = [&context, &metrics, &label] {
                 const Theme::ScopedTextStyle style{context.theme.fonts.sans, metrics.fontSize, Theme::FontPx::Sans};
                 return ImGui::CalcTextSize(label.c_str()).x + metrics.paddingX * 2;
-            }();
-            if (ImGui::GetContentRegionAvail().x < width)
+            }(); ImGui::GetContentRegionAvail().x < width)
                 ImGui::NewLine();
             const bool clicked = Ui::Button(
                 {.label = label.c_str(), .variant = Ui::ButtonVariant::Secondary, .enabled = enabled, .font = context.theme.fonts.sans});
@@ -52,8 +51,7 @@ namespace Horo::Editor {
                                                                        const bool all) {
         auto view = widget.View();
         const auto low = std::min(view.anchor, view.caret);
-        const auto high = std::max(view.anchor, view.caret);
-        if (!all && source.Text().substr(low, high - low) != query_) {
+        if (const auto high = std::max(view.anchor, view.caret); !all && source.Text().substr(low, high - low) != query_) {
             Find(widget, source, SourceSearchDirection::Forward);
             return std::nullopt;
         }

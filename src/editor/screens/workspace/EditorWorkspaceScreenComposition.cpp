@@ -2,6 +2,7 @@
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/NativeAssetRegistrySource.h"
+#include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
@@ -71,6 +72,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
             .networkDebuggerControl = panelServices_.networkDebuggerControl,
             .extensionInspectors = services_.TryGet<Extensions::EditorInspectorHost>(),
+            .navigationOverlays = services_.TryGetConst<NavigationViewportAccess>(),
             .extensionViewport = services_.TryGet<Extensions::EditorViewportHost>(),
             .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
         };
@@ -214,7 +216,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::LoadProjectInputProfile */
     void EditorWorkspaceScreen::LoadProjectInputProfile(const std::filesystem::path &projectRoot) {
-        previousInputProfile_ = input_.router.Profile();
+        input_.previousProfile = input_.router.Profile();
         Input::InputBindingProfile merged{.profileId = "project-composed"};
         const auto mergeProfile = [&](const Input::InputBindingProfile &profile, const std::string &source) {
             Result<Input::InputBindingProfile> layered = Input::MergeBindingProfiles(merged, profile);
@@ -240,7 +242,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
         // Defaults are resolved by the action descriptors. Profile layers then
         // apply from project defaults to user-wide and project-user overrides.
-        if (!mergeFile(projectRoot / ".horo" / "input.json") || !mergeProfile(*previousInputProfile_, "editor-global")) {
+        if (!mergeFile(projectRoot / ".horo" / "input.json") || !mergeProfile(*input_.previousProfile, "editor-global")) {
             return;
         }
         if (const Result<Application::ProjectMetadata> metadata = Application::LoadProjectMetadata(projectRoot);

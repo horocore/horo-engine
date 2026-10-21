@@ -8,8 +8,10 @@ namespace Horo::Editor {
         [[nodiscard]] bool Boundary(const std::string_view text, const std::size_t offset, const std::size_t origin) noexcept {
             if (offset < origin || offset > text.size())
                 return false;
-            if (offset < text.size() && (static_cast<unsigned char>(text[offset]) & 0xC0U) == 0x80U)
-                return false;
+            if (offset < text.size()) {
+                if (const auto codeUnit = static_cast<unsigned char>(text[offset]); codeUnit >= 0x80U && codeUnit < 0xC0U)
+                    return false;
+            }
             return offset == 0 || offset == text.size() || text[offset - 1] != '\r' || text[offset] != '\n';
         }
 
