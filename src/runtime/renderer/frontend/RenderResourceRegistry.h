@@ -10,6 +10,7 @@
 #include <deque>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
 #include <thread>
@@ -17,9 +18,13 @@
 
 namespace Horo::Render {
     class RenderMemoryBudget;
-}
+    class CompiledRenderGraphExecution;
+    struct RenderGraphResourceId;
+}  // namespace Horo::Render
 
 namespace Horo::Render::Detail {
+    class IRenderExternalTextureSource;
+
     enum class RenderResourceClass : std::uint8_t {
         Buffer,
         Texture,
@@ -93,6 +98,16 @@ namespace Horo::Render::Detail {
         /** @brief Reports retained native ownership that prevents registry destruction, including failed creation without an instance. */
         [[nodiscard]] bool HasPendingNativeRetirements() const noexcept;
         [[nodiscard]] bool HasNativeLifetime(RenderResourceIdentity identity) const noexcept;
+        /** @brief Claims the same stable native lease for a borrowed allocation with no Horo memory reservation. */
+        [[nodiscard]] Result<RenderResourceNativeLifetime> PrepareExternalNativeLifetime(RenderResourceIdentity identity);
+        /** @brief Retains exact external acquisition proof before publishing a ready registry generation. */
+        [[nodiscard]] Result<void> AttachExternalSource(RenderResourceIdentity identity,
+                                                        std::shared_ptr<const IRenderExternalTextureSource> source);
+        /** @brief Checks a used external registration's mandatory final-state obligation before graph admission. */
+        [[nodiscard]] Result<void> ValidateExternalRelease(RenderResourceIdentity identity, const CompiledRenderGraphExecution &graph,
+                                                           RenderGraphResourceId resource) const;
+        /** @brief Observes exact previously issued external registration retirement, including generation advance. */
+        [[nodiscard]] Result<bool> ExternalRetirementComplete(RenderResourceIdentity identity) const;
         [[nodiscard]] Result<void> Publish(RenderResourceClass resourceClass, RenderResourceIdentity identity,
                                            std::uint64_t backendInstance,
                                            std::optional<RenderMemoryAllocationId> memoryAllocation = std::nullopt);
@@ -147,6 +162,7 @@ namespace Horo::Render::Detail {
         };
 
         struct Entry {
+            std::shared_ptr<const IRenderExternalTextureSource> externalSource;
             RenderResourceClass resourceClass{RenderResourceClass::Buffer};
             RenderResourceState state{RenderResourceState::Retired};
             std::uint32_t generation{1};

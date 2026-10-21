@@ -3,8 +3,12 @@
 #include <algorithm>
 
 namespace Horo::Render::Detail {
+#include "VulkanGraphDepthAttachment.inl"
+
     /** @brief Validates native descriptor roles and contents before recording; unsupported adjacent capabilities remain explicit. */
     Result<void> VulkanGraphRuntime::Impl::ValidateWorkload(const RenderGraphWorkload &workload, const RenderQueueId queue) {
+        if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
+            return ValidateDepthAttachment(*depth, queue);
         if (std::holds_alternative<std::monostate>(workload))
             return Result<void>::Success();
         if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
@@ -62,7 +66,9 @@ namespace Horo::Render::Detail {
 
     /** @brief Encodes only a workload already proven against exact resident descriptors. */
     void VulkanGraphRuntime::Impl::Encode(const VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept {
-        if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
+        if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
+            EncodeDepthAttachment(command, *depth);
+        } else if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
             const VkBufferCopy2 region{.sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
                                        .srcOffset = copy->sourceOffset,
                                        .dstOffset = copy->destinationOffset,
@@ -88,7 +94,7 @@ namespace Horo::Render::Detail {
                                             .renderArea = {.offset = {0, 0},
                                                            .extent = {binding.textureDescriptor.extent.width,
                                                                       binding.textureDescriptor.extent.height}},
-                                            .layerCount = 1,
+                                            .layerCount = binding.textureDescriptor.layerCount,
                                             .colorAttachmentCount = 1,
                                             .pColorAttachments = &attachment};
             native.beginRendering(command, &operation);

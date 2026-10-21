@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/RenderGraphExecution.h"
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
 #include "Horo/Runtime/Render/RenderGraphSynchronizationErrors.h"
 #include "RenderGraphTestUtils.h"
@@ -268,4 +269,77 @@ namespace Horo::Render {
         CHECK(Synthesize(compiled.graph, compiled.schedule, initial).HasError());
     }
 
+    TEST_CASE("External final states survive compilation as post-producer obligations", "[render][graph][synchronization]") {
+        using namespace Test;
+        auto builder = RequireBuilder();
+        const auto pass = RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        const auto resource = RequireResource(builder.ImportTexture(TextureHandle(), RenderGraphResourceClass::External));
+        RequireUsage(builder, {pass, resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+        const auto graph = RequireGraph(builder);
+        const auto schedule = RequireSchedule(graph);
+        const RenderGraphLogicalState state{RenderGraphSynchronizationAccess::Write,
+                                            RenderGraphSynchronizationOperation::ColorAttachment,
+                                            RenderGraphPipelineScope::External,
+                                            RenderGraphTextureLayout::ColorAttachment,
+                                            {1}};
+        const std::array initial{RenderGraphImportedState{resource, state}};
+        const std::array final{RenderGraphFinalState{resource, state}};
+        auto synchronization = SynthesizeRenderGraphSynchronization(graph, schedule, SharedQueue, initial, final);
+        REQUIRE(synchronization.HasValue());
+        REQUIRE(synchronization.Value().ExternalReleases().size() == 1);
+        const auto &release = synchronization.Value().ExternalReleases().front();
+        CHECK(release.releaseAfter == pass);
+        CHECK(release.resource == resource);
+        CHECK(release.newState == state);
+        auto execution = CompileRenderGraphExecution(graph, schedule, synchronization.Value(), SharedQueue);
+        REQUIRE(execution.HasValue());
+        REQUIRE(execution.Value().ExternalReleases().size() == 1);
+        CHECK(execution.Value().ExternalReleases().front().releaseAfter == pass);
+        auto moved = std::move(execution.Value());
+        CHECK(moved.ExternalReleases().size() == 1);
+    }
+
+    TEST_CASE("Malformed duplicate and nonexternal final states cannot produce release obligations", "[render][graph][synchronization]") {
+        using namespace Test;
+        auto builder = RequireBuilder();
+        const auto pass = RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        RenderGraphResourceClass resourceClass = RenderGraphResourceClass::External;
+        SECTION("persistent resource is not an external handoff") {
+            resourceClass = RenderGraphResourceClass::Persistent;
+        }
+        const auto resource = RequireResource(builder.ImportTexture(TextureHandle(), resourceClass));
+        RequireUsage(builder, {pass, resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+        const auto graph = RequireGraph(builder);
+        const auto schedule = RequireSchedule(graph);
+        const RenderGraphLogicalState state{RenderGraphSynchronizationAccess::Write,
+                                            RenderGraphSynchronizationOperation::ColorAttachment,
+                                            RenderGraphPipelineScope::External,
+                                            RenderGraphTextureLayout::ColorAttachment,
+                                            {1}};
+        const std::array initial{RenderGraphImportedState{resource, state}};
+        std::vector final{RenderGraphFinalState{resource, state}};
+        if (resourceClass == RenderGraphResourceClass::External) {
+            SECTION("duplicate") {
+                final.push_back(final.front());
+            }
+            SECTION("foreign resource") {
+                final.front().resource.owner = {};
+            }
+            SECTION("unknown resource") {
+                final.front().resource.value = 99;
+            }
+            SECTION("undefined required state") {
+                final.front().state.access = RenderGraphSynchronizationAccess::None;
+            }
+            SECTION("missing external scope") {
+                final.front().state.scope = RenderGraphPipelineScope::Graphics;
+            }
+            SECTION("invalid queue") {
+                final.front().state.queue = {};
+            }
+        }
+        const auto synchronization = SynthesizeRenderGraphSynchronization(graph, schedule, SharedQueue, initial, final);
+        REQUIRE(synchronization.HasError());
+        RequireError(synchronization, "render.graph.synchronization.external_release_invalid");
+    }
 }  // namespace Horo::Render

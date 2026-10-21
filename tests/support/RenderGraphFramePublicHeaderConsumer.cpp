@@ -37,3 +37,8 @@ static_assert(
                        std::declval<const Horo::Render::CompiledRenderGraphExecution &>(),
                        std::span<const Horo::Render::RenderGraphPassWorkload>{}, Horo::Render::RenderGraphTransientResourcesHandle{})),
                    Horo::Result<void>>);
+
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::CompiledRenderGraphExecution &>().ExternalReleases()),
+                             std::span<const Horo::Render::RenderGraphExternalRelease>>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::RenderGraphSynchronizationPlan &>().ExternalReleases()),
+                             std::span<const Horo::Render::RenderGraphExternalRelease>>);

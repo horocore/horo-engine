@@ -49,6 +49,7 @@ namespace Horo::Render::Detail {
 
         VulkanCommandRuntime commands;
         VulkanResourceRuntime *resources{};
+        std::uint64_t deviceIncarnation{};
         std::thread::id owner;
         std::vector<VulkanCommandQueue> queues;
         std::vector<VulkanGraphResource> bindings;
@@ -73,6 +74,13 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> PreparePass(const RenderGraphExecutionRequest &request, std::size_t index);
         [[nodiscard]] Result<void> PrepareTransitions(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                                       bool releases);
+        /** @brief Prepares native post-producer release barriers from exact external acquisition evidence. */
+        [[nodiscard]] Result<void> PrepareExternalReleases(const RenderGraphExecutionRequest &request,
+                                                           const RenderGraphExecutionPass &pass);
+        /** @brief Validates the whole-array native depth attachment before recording. */
+        [[nodiscard]] Result<void> ValidateDepthAttachment(const RenderGraphDepthAttachment &depth, RenderQueueId queue);
+        /** @brief Encodes the admitted normalized depth clear without allocation. */
+        void EncodeDepthAttachment(VkCommandBuffer command, const RenderGraphDepthAttachment &depth) const noexcept;
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphWorkload &workload, RenderQueueId queue);
         [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
         void Encode(VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept;

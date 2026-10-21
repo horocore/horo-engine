@@ -29,6 +29,7 @@ namespace Horo::Tests::OpenXR {
         std::string_view absent;
         std::string_view instanceDispatchAbsent;
         std::vector<std::string_view> calls;
+        bool depthExtension{};
         std::uint32_t extensionCount{1};
         bool malformedExtension{};
         bool advertiseLayer{};
@@ -74,6 +75,8 @@ namespace Horo::Tests::OpenXR {
                         CopyNativeLiteral(properties[index].extensionName, "XR_TEST_layer_extension");
                     else
                         CopyNativeLiteral(properties[index].extensionName, "XR_KHR_vulkan_enable2");
+                    if (!layer && active->depthExtension && index == 1)
+                        CopyNativeLiteral(properties[index].extensionName, "XR_KHR_composition_layer_depth");
                     properties[index].extensionVersion = 1;
                     if (active->malformedExtension)
                         properties[index].type = XR_TYPE_UNKNOWN;

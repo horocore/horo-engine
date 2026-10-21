@@ -76,6 +76,7 @@ namespace Horo::Render::Detail {
             return initialized;
         impl_->native = dispatch;
         impl_->resources = &resources;
+        impl_->deviceIncarnation = deviceIncarnation;
         impl_->owner = std::this_thread::get_id();
         impl_->closing = false;
         impl_->failedSubmission = false;
