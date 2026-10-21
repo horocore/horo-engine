@@ -235,8 +235,9 @@ namespace Horo::Editor {
             auto prepared = request.authoring->Command(snapshot, m_viewModel.pcgSchemas, request.fence.canEdit);
             if (prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            prepared.Value().cancellation = request.fence.cancellation;
-            return ExecutePCGDocument(instance, prepared.Value());
+            auto command = std::move(prepared).Value();
+            command.cancellation = request.fence.cancellation;
+            return ExecutePCGDocument(instance, command);
         }
         if (request.action == PCGEditorAction::Present) {
             document.canvas = request.presentation;
