@@ -11,7 +11,9 @@
 #include <fstream>
 #include <imgui.h>
 #include <imgui_internal.h>
+#include <optional>
 #include <string>
+#include <string_view>
 
 namespace {
     std::string gClipboardText;
@@ -606,6 +608,90 @@ TEST_CASE("Shared modal shell composes badge split panes and fixed footer", "[un
     REQUIRE(drewLeading);
     REQUIRE(drewContent);
     REQUIRE(preservedContentSpacing);
+}
+
+TEST_CASE("Shared modal shell keeps its actual children inside narrow and resized placement regions",
+          "[unit][editor][gui][design-system]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Ui;
+
+    ImGuiTestContext imgui{{1280.0F, 720.0F}};
+    std::optional<ModalPlacementRegion> region;
+    const auto draw = [&] {
+        ScopedModalShell modal({.id = "NarrowModalShellTest",
+                                .title = "Long localized navigation operation confirmation title",
+                                .requestedSize = {640.0F, 480.0F},
+                                .placementRegion = region},
+                               imgui.fonts);
+        ImGui::BeginChild("##Body", {0.0F, modal.BodyHeight()}, false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        Hint("Long modal content remains readable and scrolls inside its own body.", imgui.fonts);
+        ImGui::EndChild();
+        modal.BeginFooter({8.0F, 8.0F});
+        static_cast<void>(Button({.label = "Confirm", .font = imgui.fonts.sans, .style = {.width = StyleWidth::FillAvailable}}));
+        modal.EndFooter();
+    };
+    RenderImGuiFrame(draw);
+    imgui.io->DisplaySize = {320.0F, 600.0F};
+    for (int placement = 0; placement < 2; ++placement) {
+        if (placement != 0)
+            region = ModalPlacementRegion{{10.0F, 20.0F}, {300.0F, 450.0F}};
+        RenderImGuiFrame(draw);
+        RenderImGuiFrame(draw);
+        const ImVec2 minimum = region ? region->position : ImGui::GetMainViewport()->WorkPos;
+        const ImVec2 size = region ? region->size : ImGui::GetMainViewport()->WorkSize;
+        int children{};
+        for (const auto *window : ImGui::GetCurrentContext()->Windows) {
+            if (!window->Active || std::string_view{window->Name}.find("NarrowModalShellTest") != 0)
+                continue;
+            INFO(window->Name);
+            CHECK(window->Pos.x >= minimum.x);
+            CHECK(window->Pos.y >= minimum.y);
+            CHECK(window->Pos.x + window->Size.x <= minimum.x + size.x);
+            CHECK(window->Pos.y + window->Size.y <= minimum.y + size.y);
+            CHECK(window->ScrollMax.x == 0.0F);
+            if (std::string_view{window->Name}.find("##ModalHeader") != std::string_view::npos)
+                CHECK(window->ScrollMax.y == 0.0F);
+            ++children;
+        }
+        CHECK(children == 4);
+    }
+}
+
+TEST_CASE("Shared text controls keep long opaque and localized text inside narrow scrolling content",
+          "[unit][editor][gui][design-system]") {
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Ui;
+
+    ImGuiTestContext imgui{{320.0F, 600.0F}};
+    const std::array<std::string, 2> samples{
+        std::string(180, 'W'),
+        "Kaynak sinirlari: eszamanli isler / yerlesik bayt / gecici bayt ve uzun profil bilgileri",
+    };
+    const auto draw = [&] {
+        ImGui::SetNextWindowPos({0.0F, 0.0F});
+        ImGui::SetNextWindowSize({320.0F, 600.0F});
+        ImGui::Begin("NarrowTextTest", nullptr, ImGuiWindowFlags_NoDecoration);
+        ImGui::BeginChild("##Text", {280.0F, 180.0F}, false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+        const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+        for (const auto &text : samples) {
+            Hint(text.c_str(), imgui.fonts);
+            CHECK(ImGui::GetItemRectMax().x <= right);
+            ErrorText(text.c_str(), imgui.fonts);
+            CHECK(ImGui::GetItemRectMax().x <= right);
+            WrappedText(ImGui::GetContentRegionAvail().x, text, Theme::Text(), imgui.fonts);
+            CHECK(ImGui::GetItemRectMax().x <= right);
+        }
+        ImGui::EndChild();
+        ImGui::End();
+    };
+    RenderImGuiFrame(draw);
+    RenderImGuiFrame(draw);
+    for (const auto *window : ImGui::GetCurrentContext()->Windows) {
+        if (window->Active) {
+            INFO(window->Name);
+            CHECK(window->ScrollMax.x == 0.0F);
+        }
+    }
 }
 
 TEST_CASE("Shared modal shell close icon requests dismissal", "[unit][editor][gui][design-system]") {

@@ -222,7 +222,7 @@ namespace Horo::Editor {
     void NavigationTab::DrawPanel(const ImVec2 &, const ImVec2 &size, const EditorWorkspaceViewModel &, EditorWorkspaceViewCommandData &,
                                   const EditorGuiContext &context) {
         // No updates or subscriptions poll the host while this panel is hidden.
-        ImGui::BeginChild("##NavigationBake", size, false, ImGuiWindowFlags_NoSavedSettings);
+        ImGui::BeginChild("##NavigationBake", size, false, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysVerticalScrollbar);
         Ui::Hint(Text(context, "saved_source").c_str(), context.theme.fonts);
         if (Prepare() && access_.query) {
             const auto result = access_.query(root_);

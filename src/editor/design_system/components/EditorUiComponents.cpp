@@ -741,12 +741,19 @@ namespace Horo::Editor::Ui {
         ImGui::PopStyleColor();
     }
 
+    namespace {
+        /** @brief Keeps outward-rounded text item bounds inside the available content rectangle. */
+        float TextWrapWidth(const float requestedWidth) {
+            return std::max(1.0F, std::floor(std::min(requestedWidth, ImGui::GetContentRegionAvail().x)) - 1.0F);
+        }
+    }  // namespace
+
     // ── Hint ─────────────────────────────────────────────────────────────
 
     void Hint(const char *text, const Theme::Fonts &fonts) {
         Theme::ScopedTextStyle ts(fonts.sansCompact, Theme::TextPx::Caption(), Theme::FontPx::SansCompact);
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::Dim());
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + TextWrapWidth(ImGui::GetContentRegionAvail().x));
         ImGui::TextWrapped("%s", text);
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
@@ -757,7 +764,7 @@ namespace Horo::Editor::Ui {
     void ErrorText(const char *text, const Theme::Fonts &fonts) {
         Theme::ScopedTextStyle ts(fonts.sansCompact, Theme::TextPx::Caption(), Theme::FontPx::SansCompact);
         ImGui::PushStyleColor(ImGuiCol_Text, Theme::Err());
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x);
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + TextWrapWidth(ImGui::GetContentRegionAvail().x));
         ImGui::TextWrapped("%s", text);
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
@@ -1056,7 +1063,7 @@ namespace Horo::Editor::Ui {
     void WrappedText(const float width, const std::string_view text, const ImVec4 color, const Theme::Fonts &fonts) {
         Theme::ScopedTextStyle style{fonts.sans, Theme::TextPx::Body(), Theme::FontPx::Sans};
         ImGui::PushStyleColor(ImGuiCol_Text, color);
-        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + std::max(1.0F, std::min(width, ImGui::GetContentRegionAvail().x)));
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + TextWrapWidth(width));
         ImGui::TextUnformatted(text.data(), text.data() + text.size());
         ImGui::PopTextWrapPos();
         ImGui::PopStyleColor();
@@ -1783,18 +1790,43 @@ namespace Horo::Editor::Ui {
 
     // ── Modal shell ──────────────────────────────────────────────────────
 
+    namespace {
+        /** @brief Measured title chrome reserves independent space for branding and the close action. */
+        struct ModalHeaderLayout {
+            float closeRightInset{};
+            float titleWidth{};
+            float titleHeight{};
+            float height{};
+        };
+
+        /** @brief Wraps localized titles at their existing font role before allocating header and body space. */
+        ModalHeaderLayout MeasureModalHeader(const ModalShellProps &props, const Theme::Fonts &fonts, const float width) {
+            ModalHeaderLayout layout;
+            layout.closeRightInset = props.closeButtonVariant == CloseButtonVariant::Compact ? 13.0F : 22.0F;
+            const float headerPadding = ScaledLayoutValue(props.headerHorizontalPadding);
+            const float leadingWidth = props.logo != 0 || props.showBrandMark ? 20.0F + 10.0F : 0.0F;
+            const float closeWidth = props.showClose ? 28.0F + layout.closeRightInset : headerPadding;
+            layout.titleWidth = std::max(1.0F, std::floor(width - headerPadding - leadingWidth - closeWidth - 1.0F));
+            Theme::ScopedTextStyle titleStyle(fonts.sansEmphasis, props.titleFontSize, Theme::FontPx::SansEmphasis);
+            layout.titleHeight = ImGui::CalcTextSize(props.title, nullptr, false, layout.titleWidth).y;
+            layout.height = std::max(ScaledLayoutValue(props.headerHeight), layout.titleHeight + ImGui::GetStyle().ItemSpacing.y * 2.0F);
+            return layout;
+        }
+    }  // namespace
+
     /** @copydoc ScopedModalShell::ScopedModalShell */
     ScopedModalShell::ScopedModalShell(const ModalShellProps &props, const Theme::Fonts &fonts)
         : footerHeight_(ScaledLayoutValue(props.footerHeight)), foregroundBorder_(props.foregroundBorder) {
         const ImGuiViewport *viewport = ImGui::GetMainViewport();
         const ImVec2 regionPosition = props.placementRegion ? props.placementRegion->position : viewport->WorkPos;
         const ImVec2 regionSize = props.placementRegion ? props.placementRegion->size : viewport->WorkSize;
-        const float width =
-            std::min(ScaledLayoutValue(props.requestedSize.x),
-                     std::max(ScaledLayoutValue(props.minimumWidth), regionSize.x - ScaledLayoutValue(props.viewportPadding)));
-        const float height =
-            std::min(ScaledLayoutValue(props.requestedSize.y),
-                     std::max(ScaledLayoutValue(props.minimumHeight), regionSize.y - ScaledLayoutValue(props.viewportPadding)));
+        // Minimum dimensions are preferences; the usable placement region is the hard limit.
+        const float availableWidth = std::max(1.0F, regionSize.x - ScaledLayoutValue(props.viewportPadding));
+        const float availableHeight = std::max(1.0F, regionSize.y - ScaledLayoutValue(props.viewportPadding));
+        const float width = std::clamp(ScaledLayoutValue(props.requestedSize.x),
+                                       std::min(ScaledLayoutValue(props.minimumWidth), availableWidth), availableWidth);
+        const float height = std::clamp(ScaledLayoutValue(props.requestedSize.y),
+                                        std::min(ScaledLayoutValue(props.minimumHeight), availableHeight), availableHeight);
         const ImVec2 position{
             regionPosition.x + (regionSize.x - width) * 0.5F,
             regionPosition.y + (regionSize.y - height) * 0.5F,
@@ -1811,16 +1843,23 @@ namespace Horo::Editor::Ui {
                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-        const ImVec2 modalPosition = ImGui::GetWindowPos();
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{ScaledLayoutValue(props.headerHorizontalPadding), 0.0F});
+        const ImVec2 previousPosition = ImGui::GetWindowPos();
+        const ImVec2 modalPosition{
+            std::clamp(previousPosition.x, regionPosition.x, regionPosition.x + std::max(0.0F, regionSize.x - width)),
+            std::clamp(previousPosition.y, regionPosition.y, regionPosition.y + std::max(0.0F, regionSize.y - height)),
+        };
+        ImGui::SetWindowPos(modalPosition, ImGuiCond_Always);
+        const float headerPadding = ScaledLayoutValue(props.headerHorizontalPadding);
+        constexpr float iconSize = 20.0F;
+        constexpr ImVec2 closeSize{28.0F, 28.0F};
+        const auto header = MeasureModalHeader(props, fonts, width);
+        const float headerHeight = header.height;
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{headerPadding, 0.0F});
         ImGui::PushStyleColor(ImGuiCol_ChildBg, foregroundBorder_ ? ImVec4{} : Theme::Bg0());
-        const float headerHeight = ScaledLayoutValue(props.headerHeight);
         ImGui::BeginChild("##ModalHeader", {0.0F, headerHeight}, false,
                           ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-        constexpr float iconSize = 20.0F;
-        const float titleY = (headerHeight - ImGui::GetTextLineHeight()) * 0.5F;
-        ImGui::SetCursorPosY(titleY);
+        ImGui::SetCursorPosY((headerHeight - header.titleHeight) * 0.5F);
         if (props.logo != 0) {
             ImGui::Image(props.logo, {iconSize, iconSize});
             ImGui::SameLine(0.0F, 10.0F);
@@ -1834,22 +1873,22 @@ namespace Horo::Editor::Ui {
         {
             Theme::ScopedTextStyle titleStyle(fonts.sansEmphasis, props.titleFontSize, Theme::FontPx::SansEmphasis);
             ImGui::PushStyleColor(ImGuiCol_Text, Theme::Text());
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + header.titleWidth);
             ImGui::TextUnformatted(props.title);
+            ImGui::PopTextWrapPos();
             ImGui::PopStyleColor();
         }
 
         bool closeHovered = false;
         if (props.showClose) {
-            constexpr ImVec2 closeSize{28.0F, 28.0F};
-            const float closeRightInset = props.closeButtonVariant == CloseButtonVariant::Compact ? 13.0F : 22.0F;
-            ImGui::SetCursorPos({ImGui::GetWindowWidth() - closeSize.x - closeRightInset, (props.headerHeight - closeSize.y) * 0.5F});
+            ImGui::SetCursorPos({ImGui::GetWindowWidth() - closeSize.x - header.closeRightInset, (headerHeight - closeSize.y) * 0.5F});
             closeRequested_ = IconCloseButton("##ModalClose", closeSize, props.closeButtonVariant);
             closeHovered = ImGui::IsItemHovered();
         }
 
         const ImVec2 headerPosition = ImGui::GetWindowPos();
-        ImGui::GetWindowDrawList()->AddLine({headerPosition.x, headerPosition.y + props.headerHeight - 1.0F},
-                                            {headerPosition.x + ImGui::GetWindowWidth(), headerPosition.y + props.headerHeight - 1.0F},
+        ImGui::GetWindowDrawList()->AddLine({headerPosition.x, headerPosition.y + headerHeight - 1.0F},
+                                            {headerPosition.x + ImGui::GetWindowWidth(), headerPosition.y + headerHeight - 1.0F},
                                             Theme::U32(Theme::Border()), 1.0F);
         ImGui::EndChild();
         ImGui::PopStyleColor();
