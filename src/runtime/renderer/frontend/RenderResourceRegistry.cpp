@@ -1,5 +1,6 @@
 #include "RenderResourceRegistry.h"
 
+#include "Horo/Runtime/Render/RenderMemoryBudget.h"
 #include "RenderFrontendErrors.h"
 
 #include <algorithm>
@@ -31,14 +32,73 @@ namespace Horo::Render::Detail {
     }
 
     RenderResourceRegistry::RenderResourceRegistry(const RenderResourceOwnerId owner, const RenderResourceRegistryLimits &limits,
-                                                   BackendResourceRelease releaseBackendResource)
-        : owner_(owner), limits_(limits), retirementQueue_(limits.maximumSlots),
-          releaseBackendResource_(std::move(releaseBackendResource)) {
+                                                   BackendResourceRelease releaseBackendResource, RenderMemoryBudget *memoryBudget)
+        : owner_(owner), limits_(limits), retirementQueue_(limits.maximumSlots), releaseBackendResource_(std::move(releaseBackendResource)),
+          memoryBudget_(memoryBudget) {
         assert(owner_.IsValid());
         assert(limits_.IsValid());
+        // Native leases are embedded in entries: no admitted lease address may ever move.
+        entries_.reserve(static_cast<std::size_t>(limits_.maximumSlots) + 1);
         freeSlots_.reserve(limits_.maximumSlots);
         submissionPins_.reserve(limits_.maximumSubmissionPins);
         queueProgress_.reserve(limits_.maximumTrackedQueues);
+    }
+
+    RenderResourceRegistry::~RenderResourceRegistry() {
+        if (HasPendingNativeRetirements())
+            std::terminate();
+    }
+
+    bool RenderResourceRegistry::HasPendingNativeRetirements() const noexcept {
+        return std::ranges::any_of(entries_, [](const Entry &entry) {
+            return entry.nativeLease.claimed && !entry.nativeLease.released;
+        });
+    }
+
+    bool RenderResourceRegistry::HasNativeLifetime(const RenderResourceIdentity identity) const noexcept {
+        const auto *entry = FindExact(identity);
+        return entry != nullptr && entry->nativeLease.claimed;
+    }
+
+    Result<RenderResourceNativeLifetime> RenderResourceRegistry::PrepareNativeLifetime(const RenderResourceClass resourceClass,
+                                                                                       const RenderResourceIdentity identity,
+                                                                                       const RenderMemoryReservationId memoryReservation,
+                                                                                       RenderMemoryBudget *memoryBudget) {
+        auto slot = Validate(resourceClass, identity);
+        if (slot.HasError())
+            return Result<RenderResourceNativeLifetime>::Failure(std::move(slot).ErrorValue());
+        auto &entry = entries_[slot.Value()];
+        if (entry.state != RenderResourceState::Pending || entry.nativeLease.claimed)
+            return Result<RenderResourceNativeLifetime>::Failure(
+                RegistryError(FrontendErrors::ResourceNotPending,
+                              "Native lifetime transfer requires one exact unclaimed pending generation."));
+        if (memoryBudget != nullptr && memoryBudget_ != nullptr && memoryBudget_ != memoryBudget)
+            return Result<RenderResourceNativeLifetime>::Failure(
+                RegistryError(FrontendErrors::ResourceNotPending, "Native creation cannot change its registry memory ledger."));
+        if (memoryBudget != nullptr)
+            memoryBudget_ = memoryBudget;
+        entry.memoryReservation = memoryReservation;
+        if (!memoryReservation.IsValid())
+            return Result<RenderResourceNativeLifetime>::Success({});
+        return Result<RenderResourceNativeLifetime>::Success(RenderResourceNativeLifetime{entry.nativeLease});
+    }
+
+    Result<void> RenderResourceRegistry::AttachNativeCreation(const RenderResourceClass resourceClass,
+                                                              const RenderResourceIdentity identity, const std::uint64_t backendInstance,
+                                                              const std::optional<RenderMemoryAllocationId> allocation) {
+        auto slot = Validate(resourceClass, identity);
+        if (slot.HasError())
+            return Result<void>::Failure(std::move(slot).ErrorValue());
+        auto &entry = entries_[slot.Value()];
+        if (entry.state != RenderResourceState::Pending || backendInstance == 0 ||
+            (entry.backendInstance != 0 && entry.backendInstance != backendInstance))
+            return Result<void>::Failure(
+                RegistryError(FrontendErrors::ResourceNotPending, "Native creation ownership requires its exact pending generation."));
+        entry.backendInstance = backendInstance;
+        entry.memoryAllocation = allocation;
+        if (allocation.has_value())
+            entry.memoryReservation = {};
+        return Result<void>::Success();
     }
 
     Result<ResourceReservation> RenderResourceRegistry::Reserve(const RenderResourceClass resourceClass,
@@ -79,6 +139,10 @@ namespace Horo::Render::Detail {
         entry.submissionPins = 0;
         entry.backendInstance = 0;
         entry.memoryAllocation.reset();
+        entry.memoryReservation = {};
+        entry.nativeLease = {};
+        entry.nativeDestroyRequested = false;
+        entry.memoryRetirementBegun = false;
         entry.operation = ResourceOperationId{nextOperation_++};
         entry.dependencies = std::move(ownedDependencies);
         entry.retirementQueued = false;
@@ -171,6 +235,8 @@ namespace Horo::Render::Detail {
         }
         entry.backendInstance = backendInstance;
         entry.memoryAllocation = memoryAllocation;
+        if (memoryAllocation.has_value())
+            entry.memoryReservation = {};
         entry.state = RenderResourceState::Ready;
         --pendingRequests_;
         CompleteOperation(entry.operation, std::nullopt);
@@ -355,12 +421,14 @@ namespace Horo::Render::Detail {
 
     std::size_t RenderResourceRegistry::DrainRetirements(const BackendResourceReleaseMode releaseMode) noexcept {
         std::size_t retired = 0;
-        while (retired < limits_.retirementDrainBudget && retirementQueueCount_ > 0) {
+        const auto scan = std::min(static_cast<std::size_t>(limits_.retirementDrainBudget), retirementQueueCount_);
+        for (std::size_t examined = 0; examined < scan; ++examined) {
             const std::uint32_t slot = retirementQueue_[retirementQueueHead_];
             retirementQueueHead_ = (retirementQueueHead_ + 1) % retirementQueue_.size();
             --retirementQueueCount_;
-            Retire(slot, releaseMode);
-            ++retired;
+            entries_[slot].retirementQueued = false;
+            if (Retire(slot, releaseMode))
+                ++retired;
         }
         return retired;
     }
@@ -369,6 +437,8 @@ namespace Horo::Render::Detail {
         using enum RenderResourceState;
 
         if (!acceptingRequests_) {
+            while (DrainRetirements(releaseMode) != 0) {
+            }
             return;
         }
         acceptingRequests_ = false;
@@ -396,11 +466,13 @@ namespace Horo::Render::Detail {
         }
         for (std::size_t slot = 1; slot < entries_.size(); ++slot) {
             if (entries_[slot].state != Retired) {
-                Retire(slot, releaseMode);
+                (void)Retire(slot, releaseMode);
             }
         }
-        retirementQueueHead_ = 0;
-        retirementQueueCount_ = 0;
+        if (!HasPendingNativeRetirements()) {
+            retirementQueueHead_ = 0;
+            retirementQueueCount_ = 0;
+        }
     }
 
     RenderResourceOwnerId RenderResourceRegistry::Owner() const noexcept {
@@ -470,8 +542,31 @@ namespace Horo::Render::Detail {
         ++retirementQueueCount_;
     }
 
-    void RenderResourceRegistry::Retire(const std::size_t slot, const BackendResourceReleaseMode releaseMode) noexcept {
+    bool RenderResourceRegistry::Retire(const std::size_t slot, const BackendResourceReleaseMode releaseMode) noexcept {
         Entry &entry = entries_[slot];
+        if (entry.backendInstance != 0 && !entry.nativeDestroyRequested && releaseBackendResource_) {
+            releaseBackendResource_(entry.resourceClass, entry.backendInstance, entry.memoryAllocation, releaseMode);
+            entry.nativeDestroyRequested = true;
+        }
+        if (memoryBudget_ != nullptr && entry.memoryAllocation.has_value() &&
+            releaseMode != BackendResourceReleaseMode::NativeUnavailable && !entry.memoryRetirementBegun) {
+            if (memoryBudget_->BeginRetire(*entry.memoryAllocation).HasError())
+                std::terminate();
+            entry.memoryRetirementBegun = true;
+        }
+        if (entry.nativeLease.claimed && !entry.nativeLease.released) {
+            QueueRetirementIfEligible(slot);
+            return false;
+        }
+        if (memoryBudget_ != nullptr) {
+            if (entry.memoryReservation.IsValid()) {
+                if (memoryBudget_->Cancel(entry.memoryReservation).HasError())
+                    std::terminate();
+            } else if (entry.memoryAllocation.has_value() && releaseMode != BackendResourceReleaseMode::NativeUnavailable) {
+                if (memoryBudget_->AcknowledgeRetirement(*entry.memoryAllocation).HasError())
+                    std::terminate();
+            }
+        }
         for (const RenderResourceIdentity dependency : entry.dependencies) {
             if (FindExact(dependency) != nullptr) {
                 Entry &dependencyEntry = entries_[dependency.slot];
@@ -481,9 +576,6 @@ namespace Horo::Render::Detail {
             }
         }
         entry.dependencies.clear();
-        if (entry.backendInstance != 0 && releaseBackendResource_) {
-            releaseBackendResource_(entry.resourceClass, entry.backendInstance, entry.memoryAllocation, releaseMode);
-        }
         entry.backendInstance = 0;
         entry.memoryAllocation.reset();
         entry.operation = {};
@@ -495,6 +587,7 @@ namespace Horo::Render::Detail {
             ++entry.generation;
             freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
         }
+        return true;
     }
 
     Result<RenderResourceOwnerId> AcquireRenderResourceOwnerId() {

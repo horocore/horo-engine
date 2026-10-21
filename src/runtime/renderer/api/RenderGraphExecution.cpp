@@ -24,6 +24,11 @@ namespace Horo::Render {
         return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
     }
 
+    /** @copydoc IRenderBackend::ObserveSubmission */
+    Result<bool> IRenderBackend::ObserveSubmission(const RenderCpuWait &) {
+        return Result<bool>::Failure(MakeError(RenderGraphExecutionErrors::SubmissionObservationUnsupported));
+    }
+
     /** @copydoc IRenderBackend::ExecuteGraph */
     Result<void> IRenderBackend::ExecuteGraph(const RenderGraphExecutionRequest &) {
         return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
@@ -335,13 +340,15 @@ namespace Horo::Render {
     CompiledRenderGraphExecution::CompiledRenderGraphExecution(RenderGraphOwnerId owner, Storage storage) noexcept
         : owner_(owner), resources_(std::move(storage.resources)), passes_(std::move(storage.passes)), usages_(std::move(storage.usages)),
           dependencies_(std::move(storage.dependencies)), transitions_(std::move(storage.transitions)),
-          releaseTransfers_(std::move(storage.releaseTransfers)), acquireTransfers_(std::move(storage.acquireTransfers)) {}
+          releaseTransfers_(std::move(storage.releaseTransfers)), acquireTransfers_(std::move(storage.acquireTransfers)),
+          importedStates_(std::move(storage.importedStates)) {}
 
     /** @copydoc CompiledRenderGraphExecution::CompiledRenderGraphExecution */
     CompiledRenderGraphExecution::CompiledRenderGraphExecution(CompiledRenderGraphExecution &&other) noexcept
         : owner_(std::exchange(other.owner_, {})), resources_(std::move(other.resources_)), passes_(std::move(other.passes_)),
           usages_(std::move(other.usages_)), dependencies_(std::move(other.dependencies_)), transitions_(std::move(other.transitions_)),
-          releaseTransfers_(std::move(other.releaseTransfers_)), acquireTransfers_(std::move(other.acquireTransfers_)) {}
+          releaseTransfers_(std::move(other.releaseTransfers_)), acquireTransfers_(std::move(other.acquireTransfers_)),
+          importedStates_(std::move(other.importedStates_)) {}
 
     /** @copydoc CompiledRenderGraphExecution::operator= */
     CompiledRenderGraphExecution &CompiledRenderGraphExecution::operator=(CompiledRenderGraphExecution &&other) noexcept {
@@ -354,6 +361,7 @@ namespace Horo::Render {
             transitions_ = std::move(other.transitions_);
             releaseTransfers_ = std::move(other.releaseTransfers_);
             acquireTransfers_ = std::move(other.acquireTransfers_);
+            importedStates_ = std::move(other.importedStates_);
         }
         return *this;
     }
@@ -398,6 +406,11 @@ namespace Horo::Render {
         return acquireTransfers_;
     }
 
+    /** @copydoc CompiledRenderGraphExecution::ImportedStates */
+    std::span<const RenderGraphImportedState> CompiledRenderGraphExecution::ImportedStates() const noexcept {
+        return importedStates_;
+    }
+
     /** @copydoc CompileRenderGraphExecution */
     Result<CompiledRenderGraphExecution> CompileRenderGraphExecution(const RenderGraph &graph, const RenderGraphSchedule &schedule,
                                                                      const RenderGraphSynchronizationPlan &synchronization,
@@ -410,11 +423,15 @@ namespace Horo::Render {
             std::vector resources(graph.Resources().begin(), graph.Resources().end());
             return Result<CompiledRenderGraphExecution>::Success(
                 CompiledRenderGraphExecution{graph.Owner(),
-                                             CompiledRenderGraphExecution::Storage{std::move(resources), compiler.TakePasses(),
-                                                                                   compiler.TakeUsages(), compiler.TakeDependencies(),
+                                             CompiledRenderGraphExecution::Storage{std::move(resources),
+                                                                                   compiler.TakePasses(),
+                                                                                   compiler.TakeUsages(),
+                                                                                   compiler.TakeDependencies(),
                                                                                    compiler.TakeTransitions(),
                                                                                    compiler.TakeReleaseTransfers(),
-                                                                                   compiler.TakeAcquireTransfers()}});
+                                                                                   compiler.TakeAcquireTransfers(),
+                                                                                   {synchronization.ImportedStates().begin(),
+                                                                                    synchronization.ImportedStates().end()}}});
         } catch (const std::bad_alloc &) {
             return Result<CompiledRenderGraphExecution>::Failure(MakeError(RenderGraphExecutionErrors::AllocationFailed));
         }

@@ -2447,6 +2447,7 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
         runtime/renderer/api/RenderGraphLifetime.cpp
         runtime/renderer/api/RenderGraphWorkload.cpp
+        runtime/renderer/api/RenderDeviceIncarnation.cpp
         runtime/renderer/api/LightCulling.cpp
         runtime/renderer/api/LightCullingKernel.cpp
         runtime/renderer/api/LightFrameLayout.cpp
@@ -2729,6 +2730,12 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanNativeRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanResourceConversions.cpp
             runtime/renderer/modules/vulkan/VulkanResourceRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanCommandRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanCommandSubmission.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphBarriers.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackend.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.cpp
     )

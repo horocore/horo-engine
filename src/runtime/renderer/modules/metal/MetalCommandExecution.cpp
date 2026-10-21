@@ -3,6 +3,9 @@
 namespace Horo::Render::Detail {
     /** @copydoc ValidateMetalRenderGraph */
     Result<void> ValidateMetalRenderGraph(const IMetalRuntime &runtime, const RenderGraphExecutionRequest &request) {
+        if (!request.submissions.empty())
+            return Result<void>::Failure(
+                MakeError(MetalBackendErrors::UnsupportedGraphExecution, "Metal explicit graph submissions are not implemented."));
         const auto &graph = request.graph;
         if (!graph.Owner().IsValid() || request.workloads.size() != graph.Passes().size() ||
             request.resources.size() != graph.Resources().size()) {

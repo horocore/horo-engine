@@ -16,14 +16,17 @@
 #include "Horo/Runtime/Render/RenderMemoryTypes.h"
 #include "Horo/Runtime/Render/RenderParallelWork.h"
 #include "Horo/Runtime/Render/RenderScene.h"
+#include "Horo/Runtime/Render/RenderSubmission.h"
 #include "Horo/Runtime/Render/Texture.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <optional>
 #include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Horo::Render {
     struct RenderGraphExecutionRequest;
@@ -103,6 +106,18 @@ namespace Horo::Render {
         bool enableValidation{false};
         std::uint32_t maxFramesInFlight{2};
         PresentMode presentMode{PresentMode::Fifo};
+        /** @brief Frontend/host-issued effective queue identities; the default deliberately aliases graphics and transfer.
+         * @details Native backends copy this load-time topology. Distinct identities require
+         * admitted distinct native queues; they cannot silently collapse into one queue.
+         * Compute is absent until the selected backend implements its workloads. */
+        std::vector<RenderQueueAssignment> queueAssignments{{RenderQueueRole::Graphics, {1}}, {RenderQueueRole::Transfer, {1}}};
+
+        /** @brief Reports whether every requested role deliberately aliases one effective queue. */
+        [[nodiscard]] bool HasSingleEffectiveQueue() const noexcept {
+            return !queueAssignments.empty() && std::ranges::all_of(queueAssignments, [this](const RenderQueueAssignment &assignment) {
+                return assignment.queue == queueAssignments.front().queue;
+            });
+        }
 
         /** @brief Reports whether ranges and presentation policy are valid. */
         [[nodiscard]] bool IsValid() const noexcept {
@@ -111,6 +126,15 @@ namespace Horo::Render {
             }
             if (maxFramesInFlight == 0 || maxFramesInFlight > 8) {
                 return false;
+            }
+            if (queueAssignments.empty() || queueAssignments.size() > 3)
+                return false;
+            for (std::size_t index = 0; index < queueAssignments.size(); ++index) {
+                if (!queueAssignments[index].IsValid())
+                    return false;
+                for (std::size_t prior = 0; prior < index; ++prior)
+                    if (queueAssignments[prior].role == queueAssignments[index].role)
+                        return false;
             }
             switch (presentMode) {
                 case PresentMode::Fifo:
@@ -135,6 +159,9 @@ namespace Horo::Render {
         bool supportsMeshResources{false};
         bool supportsTextureResources{false};
         bool supportsRenderTargetResources{false};
+        /** @brief Consumes exact frontend-authored graph partitions, GPU waits and timeline signals. */
+        bool supportsExplicitGraphSubmissions{false};
+        bool supportsSubmissionObservation{false};
         /**
          * @brief Admits exact-descriptor transient object reuse on one effective queue.
          *
@@ -390,51 +417,64 @@ namespace Horo::Render {
          * @param descriptor Backend-neutral buffer policy validated by the frontend.
          * @param initialData Owned request bytes borrowed synchronously for this call.
          * @param placement Previously admitted native-free placement for this exact request.
+         * @param lifetime Move-only retirement authority for the existing frontend charge; native backing retains it through terminal
+         * destruction.
          * @return Non-zero backend-private instance identity, or a typed failure.
          */
         [[nodiscard]] virtual Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor,
                                                                  std::span<const std::byte> initialData,
-                                                                 const RenderMemoryPlacement &placement) = 0;
+                                                                 const RenderMemoryPlacement &placement,
+                                                                 RenderResourceNativeLifetime lifetime = {}) = 0;
 
         /**
          * @brief Realizes one validated mesh over exact ready buffer instances.
          * @param descriptor Backend-neutral immutable mesh descriptor.
          * @param vertexBuffer Backend-private instance for descriptor.vertexBuffer.
          * @param indexBuffer Backend-private instance for descriptor.indexBuffer.
+         * @param lifetime Move-only retirement authority for the existing frontend charge; native backing retains it through terminal
+         * destruction.
          * @return Non-zero backend-private mesh identity, or a typed failure.
          */
         [[nodiscard]] virtual Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertexBuffer,
-                                                               std::uint64_t indexBuffer) = 0;
+                                                               std::uint64_t indexBuffer, RenderResourceNativeLifetime lifetime = {}) = 0;
 
         /**
          * @brief Realizes one validated immutable texture allocation and optional initial upload.
          * @param descriptor Backend-neutral allocation policy validated by the frontend.
          * @param initialData Empty for undefined initial contents, or one tightly packed complete base level.
          * @param placement Previously admitted native-free placement for this exact request.
+         * @param lifetime Move-only retirement authority for the existing frontend charge; native backing retains it through terminal
+         * destruction.
          * @return Non-zero backend-private texture identity, or a typed failure.
          */
         [[nodiscard]] virtual Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor,
                                                                   std::span<const std::byte> initialData,
-                                                                  const RenderMemoryPlacement &placement) = 0;
+                                                                  const RenderMemoryPlacement &placement,
+                                                                  RenderResourceNativeLifetime lifetime = {}) = 0;
 
         /**
          * @brief Realizes one validated view over an exact ready texture instance.
          * @param descriptor Backend-neutral view policy validated by the frontend.
          * @param texture Backend-private instance for descriptor.texture.
+         * @param lifetime Move-only retirement authority for the existing frontend charge; native backing retains it through terminal
+         * destruction.
          * @return Non-zero backend-private view identity, or a typed failure.
          */
-        [[nodiscard]] virtual Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor,
-                                                                      std::uint64_t texture) = 0;
+        [[nodiscard]] virtual Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture,
+                                                                      RenderResourceNativeLifetime lifetime = {}) = 0;
 
         /**
          * @brief Realizes one validated render target over exact ready attachment views.
          * @param descriptor Backend-neutral attachment policy validated by the frontend.
          * @param colorAttachment Backend-private color view, or zero when absent.
          * @param depthAttachment Backend-private depth view, or zero when absent.
+         * @param lifetime Move-only retirement authority for the existing frontend charge; native backing retains it through terminal
+         * destruction.
          * @return Non-zero backend-private render-target identity, or a typed failure.
          */
         [[nodiscard]] virtual Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor,
-                                                                       std::uint64_t colorAttachment, std::uint64_t depthAttachment) = 0;
+                                                                       std::uint64_t colorAttachment, std::uint64_t depthAttachment,
+                                                                       RenderResourceNativeLifetime lifetime = {}) = 0;
 
         /** @brief Releases one buffer instance after frontend dependency and submission pins drain. */
         virtual void DestroyBuffer(std::uint64_t backendInstance) noexcept = 0;
@@ -461,13 +501,19 @@ namespace Horo::Render {
         virtual void DestroyRenderTarget(std::uint64_t backendInstance) noexcept = 0;
     };
 
+    /** @brief Nonblocking native-owner shutdown observation; Pending retains the complete composition. */
+    enum class RenderBackendDrainProgress : std::uint8_t {
+        Pending,
+        Drained
+    };
+
     /**
-     * @brief Coarse renderer backend interface implemented by engine-internal backend modules.
-     *
-     * Implementations own native device/context state. Calls are restricted to the
-     * host-declared render-capable thread. Implementations must release remaining
-     * resources safely from their destructor; explicit Shutdown remains the
-     * deterministic lifecycle path and must be idempotent.
+     * @brief Coarse renderer backend interface implemented by equal concrete peers.
+     * @details Native work is restricted to the initializing render owner. BeginShutdown
+     * closes admission and PollDrain proves terminal retirement without CPU waiting.
+     * A host deadline does not release native parents or leases: retain the composition
+     * and retry/recover. Destroying a pending owner is an invariant violation. Native
+     * context attachments needed by host GUI teardown may remain until final destruction.
      */
     class IRenderBackend : public IRenderResourceBackend, public IMaterialBindingBackend {
     public:
@@ -537,6 +583,14 @@ namespace Horo::Render {
         /** @brief Completes the active frame and presents when the backend supports presentation. */
         [[nodiscard]] virtual Result<void> Present(FrameToken frame) = 0;
 
+        /** @brief Observes one exact frontend-issued queue timeline without changing submission authority.
+         * @param wait Zero-time Poll, or an explicitly authorized positive finite readback/test/recovery wait.
+         * @return Completion, Pending(false), or typed unsupported/invalid/native failure.
+         * @details Owner-thread observation remains available while closing until Drained.
+         * Blocking during an active frame is rejected before any native wait. Unknown,
+         * foreign or unissued points fail; backends never synthesize completion. */
+        [[nodiscard]] virtual Result<bool> ObserveSubmission(const RenderCpuWait &wait);
+
         /** @brief Presents with exact host identity and synchronous clock calibration.
          * @param frame Active backend token.
          * @param request Borrowed host identity and monotonic clock; never retained by callbacks.
@@ -563,7 +617,23 @@ namespace Horo::Render {
         /** @brief Commits a non-zero output extent at a host-controlled frame boundary. */
         [[nodiscard]] virtual Result<void> Resize(FramebufferExtent extent) = 0;
 
-        /** @brief Releases all runtime resources; repeated calls are safe. */
-        virtual void Shutdown() noexcept = 0;
+        /**
+         * @brief Closes admission and cancels unsent work on the initializing owner thread.
+         * @return Success or the original typed lifecycle/native failure; repeated calls are safe.
+         * @details Never blocks or releases objects still referenced by CPU/GPU work.
+         * The host must retain this backend, native window, module and all dependencies
+         * until PollDrain reports Drained. A failure does not prove drain completion.
+         */
+        [[nodiscard]] virtual Result<void> BeginShutdown() = 0;
+        /**
+         * @brief Polls a finite amount of closing work without waiting.
+         * @return Pending, Drained, or the original typed failure while retaining unresolved state.
+         * @details Call after BeginShutdown, on the same owner. Pending is a normal value;
+         * the host owns its finite deadline and recovery choice. Timeouts cannot become
+         * device loss or completion. Native parents and leases are released only after
+         * terminal proof. A terminal error may be reported once before a later Drained.
+         * Destruction before Drained violates the owning lifecycle contract.
+         */
+        [[nodiscard]] virtual Result<RenderBackendDrainProgress> PollDrain() = 0;
     };
 }  // namespace Horo::Render

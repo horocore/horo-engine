@@ -3272,6 +3272,7 @@ add_executable(HoroRenderGraphTests
         unit/runtime/renderer/PostProcessGraphTests.cpp
         unit/runtime/renderer/PostProcessVolumeTests.cpp
         unit/runtime/renderer/RenderGraphExecutionTests.cpp
+        unit/runtime/renderer/RenderGraphSubmissionTests.cpp
         unit/runtime/renderer/RenderGraphTests.cpp
         unit/runtime/renderer/RenderGraphValidationTests.cpp
         unit/runtime/renderer/RenderGraphSynchronizationTests.cpp
@@ -3433,6 +3434,8 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderTransferTests.cpp
         unit/runtime/renderer/RenderResourceRegistryTests.cpp
         unit/runtime/renderer/RenderResourceRegistryRollbackTests.cpp
+        unit/runtime/renderer/RenderNativeRetirementTests.cpp
+        unit/runtime/renderer/RenderFrontendClosingTests.cpp
         unit/runtime/renderer/UiRenderCompositionTests.cpp
         unit/runtime/renderer/UiRenderSubmissionTests.cpp
 )
@@ -5003,6 +5006,7 @@ if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests
             unit/runtime/renderer/VulkanRenderBackendTests.cpp
             unit/runtime/renderer/VulkanResourceRuntimeTests.cpp
+            unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
     target_include_directories(HoroRenderVulkanTests PRIVATE
@@ -5016,6 +5020,17 @@ if (HORO_BUILD_RENDER_VULKAN)
             Vulkan::Headers
     )
     horo_register_catch_test(HoroRenderVulkanTests LABELS "native;renderer;vulkan;qualification")
+    if (HORO_ENABLE_GPU_SMOKE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_executable(HoroVulkanCommandExecutionSmoke integration/renderer/VulkanCommandExecutionSmoke.cpp)
+        target_compile_features(HoroVulkanCommandExecutionSmoke PRIVATE cxx_std_20)
+        target_include_directories(HoroVulkanCommandExecutionSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src)
+        target_link_libraries(HoroVulkanCommandExecutionSmoke PRIVATE Catch2::Catch2WithMain
+                HoroEngine::RenderFrontend HoroEngine::RenderVulkan Vulkan::Headers ${CMAKE_DL_LIBS})
+        add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)
+        set_tests_properties(HoroVulkanCommandExecutionSmoke PROPERTIES
+                LABELS "gpu;vulkan;renderer;qualification" TIMEOUT 45 RUN_SERIAL TRUE
+                FAIL_REGULAR_EXPRESSION "Validation Error;VUID-")
+    endif ()
 endif ()
 
 set(HORO_CATCH_TEST_TARGETS

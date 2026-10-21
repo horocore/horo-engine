@@ -4,6 +4,8 @@
 #include "MetalColorAttachmentEncoding.h"
 #include "MetalRenderBackendErrors.h"
 
+#include <algorithm>
+
 namespace Horo::Render::Detail {
     namespace {
         /** @brief Encodes the admitted copy on its independent buffer, never on an ambient worker context. */
@@ -134,5 +136,13 @@ namespace Horo::Render::Detail {
             complete &= operation.commands.status == MTLCommandBufferStatusCompleted;
         }
         return Result<bool>::Success(complete);
+    }
+
+    /** @copydoc MetalParallelRecording::NativeTerminal */
+    bool MetalParallelRecording::NativeTerminal() const noexcept {
+        return std::ranges::all_of(operations_, [](const MetalRecordedOperation &operation) {
+            const auto status = operation.commands.status;
+            return status == MTLCommandBufferStatusCompleted || status == MTLCommandBufferStatusError;
+        });
     }
 }  // namespace Horo::Render::Detail

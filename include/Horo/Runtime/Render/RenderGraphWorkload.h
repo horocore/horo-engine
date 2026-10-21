@@ -89,6 +89,26 @@ namespace Horo::Render {
     };
 
     /**
+     * @brief One frontend-authored queue submission over a contiguous compiled pass range.
+     * @details Records partition the complete graph in compiled order. The submission's
+     * queue must match every covered pass. Wait storage belongs to the caller's compiled
+     * plan and remains valid through synchronous admission. An ownership acquire waits
+     * on the exact producer submission signal; native backends cannot invent a signal,
+     * reorder the records or remap an effective queue. Values remain monotonic across
+     * graphs in the same frontend/device lifetime.
+     */
+    struct RenderGraphQueueSubmission {
+        RenderQueueSubmission submission;
+        RenderGraphExecutionRange passes;
+    };
+
+    /** @brief Finite submission and queue envelope admitted before native command allocation. */
+    struct RenderGraphSubmissionLimits {
+        static constexpr std::size_t MaximumSubmissions = 128;
+        static constexpr std::size_t MaximumQueues = 8;
+    };
+
+    /**
      * @brief Synchronously borrowed compiled graph execution request for an active frame.
      *
      * Every retained pass has exactly one workload in compiled order. Every graph resource
@@ -106,16 +126,22 @@ namespace Horo::Render {
             false}; /**< Frontend validated the exact realized lifetime proof and acquired its completion lease. */
         RenderGraphLeaseTransfer *transfer{
             nullptr}; /**< Immediate backends record retained ownership before any queued command; never borrowed after ExecuteGraph. */
+        std::span<const RenderGraphQueueSubmission> submissions;
+        /**< Explicit frontend-owned submission authority; empty selects only the transitional single-queue contract. */
     };
 
     /**
-     * @brief Validates a finite single-queue graph request before selected-backend native validation.
+     * @brief Validates a finite graph request before selected-backend native validation.
      * @param request Borrowed graph, exact operation/resource views and completion lease.
      * @return Success or typed malformed, unsupported-workload, queue, or transient-admission failure.
      * @details Checks exact workload/use agreement, bounds, resolved identity coverage and
      * non-overlapping intervals for actual repeated transient instances. Imported storage cannot
      * serve as a transient alias. Native namespaces are compared by resource kind. It
      * creates no native resources and proves no backend instance validity or native synchronization.
+     * Explicit submission records additionally prove exhaustive queue-consistent pass partitions,
+     * global/per-queue monotonicity and exact ownership/dependency signal-wait edges. Empty
+     * records select the transitional single-queue contract and cannot admit ownership transfer.
+     * Backends must reject unimplemented submission modes before encoding, without fallback.
      * Unused transient declarations may have no instance. Used transient declarations require
      * the frontend's explicit realized-set admission; every native backend must still validate its own objects.
      */

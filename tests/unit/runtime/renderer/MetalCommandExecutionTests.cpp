@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "MetalRenderTestSupport.h"
 #include "RenderGraphTestUtils.h"
 #include "RenderTransientGraphTestSupport.h"
@@ -340,6 +341,6 @@ namespace {
         REQUIRE(state.presentCount == 0);
         state.failure = PortFailure::None;
         REQUIRE(backend->BeginFrame({2, {64, 64}}).HasValue());
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 }  // namespace

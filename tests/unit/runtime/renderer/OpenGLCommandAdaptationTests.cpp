@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "OpenGLRenderTestSupport.h"
 
 #include <limits>
@@ -252,8 +253,8 @@ namespace Horo::Render::OpenGLBackendTests {
         fixture.backend->AbortActiveFrame();
         Check(commandState.fenceCount == 1);
         Check(fixture.backend->BeginFrame({.frameNumber = 2, .outputExtent = {640, 480}}).HasError());
-        fixture.backend->Shutdown();
-        fixture.backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*fixture.backend);
+        Horo::Render::Test::RequireDrainedOwner(*fixture.backend);
         Check(commandState.deleteFenceCount == 1);
         Check(fixture.portState.destroyCount == 1);
         Check(fixture.backend->Initialize({}).HasValue());
@@ -290,7 +291,7 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(commandState.fenceCount == 2);
         Check(commandState.deleteFenceCount == 1);
         Check(fixture.backend->Present(frame).HasError());
-        fixture.backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*fixture.backend);
         Check(commandState.deleteFenceCount == 2);
     }
 
@@ -317,7 +318,7 @@ namespace Horo::Render::OpenGLBackendTests {
             const auto presented = fixture.backend->Present(frame);
             rejected = presented.HasError() && presented.ErrorValue().code.Value() == "render.opengl.wrong_thread";
             fixture.backend->AbortFrame(frame);
-            fixture.backend->Shutdown();
+            Horo::Render::Test::RequireDrainedOwner(*fixture.backend);
         }};
         foreign.join();
         Check(rejected);

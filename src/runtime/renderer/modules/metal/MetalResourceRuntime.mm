@@ -158,7 +158,8 @@ namespace Horo::Render::Detail {
 
     Result<std::uint64_t> MetalResourceRuntime::CreateBuffer(const RenderBufferDescriptor &descriptor,
                                                              const std::span<const std::byte> initialData,
-                                                             const RenderMemoryPlacement &placement) {
+                                                             const RenderMemoryPlacement &placement,
+                                                             RenderResourceNativeLifetime lifetime) {
         const auto cost = QueryBufferMemoryCost(descriptor);
         if (!ValidBufferRequest(impl_->device != nil, descriptor, initialData, placement, cost))
             return Result<std::uint64_t>::Failure(
@@ -187,13 +188,15 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal buffer identity allocation failed."));
         }
+        if (instance != nullptr)
+            instance->lifetime = std::move(lifetime);
         return impl_->FinishResident(instance, *heap.Value(), placement, impl_->buffers, &MetalBufferInstance::buffer, [&] {
             return impl_->UploadBuffer(buffer, initialData, storage);
         }, "Metal buffer heap tracking capacity is exhausted.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
-                                                           const std::uint64_t indexBuffer) {
+                                                           const std::uint64_t indexBuffer, RenderResourceNativeLifetime lifetime) {
         MetalBufferInstance *vertex = Decode<MetalBufferInstance>(vertexBuffer);
         MetalBufferInstance *index = Decode<MetalBufferInstance>(indexBuffer);
         if (vertex == nullptr || index == nullptr || !impl_->buffers.contains(vertex) || !impl_->buffers.contains(index) ||
@@ -205,12 +208,15 @@ namespace Horo::Render::Detail {
         if (validBindings.HasError())
             return Result<std::uint64_t>::Failure(validBindings.ErrorValue());
         auto *instance = new (std::nothrow) MetalMeshInstance{.vertexBuffer = vertex->buffer, .indexBuffer = index->buffer};
+        if (instance != nullptr)
+            instance->lifetime = std::move(lifetime);
         return impl_->TrackInstance(instance, impl_->meshes, "Metal mesh identity allocation failed.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateTexture(const RenderTextureDescriptor &descriptor,
                                                               const std::span<const std::byte> initialData,
-                                                              const RenderMemoryPlacement &placement) {
+                                                              const RenderMemoryPlacement &placement,
+                                                              RenderResourceNativeLifetime lifetime) {
         const auto cost = QueryTextureMemoryCost(descriptor);
         if (!ValidTextureRequest(impl_->device != nil, descriptor, initialData, placement, cost))
             return Result<std::uint64_t>::Failure(
@@ -237,13 +243,15 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::ResourceCreationFailed, "Metal texture identity allocation failed."));
         }
+        if (instance != nullptr)
+            instance->lifetime = std::move(lifetime);
         return impl_->FinishResident(instance, *heap.Value(), placement, impl_->textures, &MetalTextureInstance::texture, [&] {
             return impl_->UploadTexture(texture, descriptor, initialData);
         }, "Metal texture heap tracking capacity is exhausted.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateTextureView(const RenderTextureViewDescriptor &descriptor,
-                                                                  const std::uint64_t texture) {
+                                                                  const std::uint64_t texture, RenderResourceNativeLifetime lifetime) {
         MetalTextureInstance *source = Decode<MetalTextureInstance>(texture);
         if (!descriptor.IsValid() || source == nullptr || !impl_->textures.contains(source) || source->use.retired) {
             return Result<std::uint64_t>::Failure(
@@ -267,12 +275,14 @@ namespace Horo::Render::Detail {
                                                                      .format = descriptor.format,
                                                                      .aspect = descriptor.aspect,
                                                                      .usage = source->descriptor.usage};
+        if (instance != nullptr)
+            instance->lifetime = std::move(lifetime);
         return impl_->TrackInstance(instance, impl_->textureViews, "Metal texture-view identity allocation failed.");
     }
 
     Result<std::uint64_t> MetalResourceRuntime::CreateRenderTarget(const RenderTargetDescriptor &descriptor,
-                                                                   const std::uint64_t colorAttachment,
-                                                                   const std::uint64_t depthAttachment) {
+                                                                   const std::uint64_t colorAttachment, const std::uint64_t depthAttachment,
+                                                                   RenderResourceNativeLifetime lifetime) {
         if (!descriptor.IsValid())
             return Result<std::uint64_t>::Failure(
                 ResourceError(MetalBackendErrors::InvalidConfig, "Metal render target descriptor is invalid."));
@@ -289,6 +299,8 @@ namespace Horo::Render::Detail {
             .colorTexture = color.Value() == nullptr ? nil : color.Value()->texture,
             .depthTexture = depth.Value() == nullptr ? nil : depth.Value()->texture,
         };
+        if (instance != nullptr)
+            instance->lifetime = std::move(lifetime);
         return impl_->TrackInstance(instance, impl_->renderTargets, "Metal render-target identity allocation failed.");
     }
 
@@ -310,6 +322,24 @@ namespace Horo::Render::Detail {
 
     void MetalResourceRuntime::DestroyRenderTarget(const std::uint64_t backendInstance) noexcept {
         DestroyTracked(impl_->renderTargets, backendInstance);
+    }
+
+    /** @copydoc MetalResourceRuntime::PollUploadDrain */
+    Result<bool> MetalResourceRuntime::PollUploadDrain() const {
+        id<MTLCommandBuffer> failed = nil;
+        for (id<MTLCommandBuffer> commands in impl_->submittedUploads) {
+            const auto status = commands.status;
+            if (status != MTLCommandBufferStatusCompleted && status != MTLCommandBufferStatusError)
+                return Result<bool>::Success(false);
+            if (status == MTLCommandBufferStatusError && failed == nil)
+                failed = commands;
+        }
+        if (failed != nil) {
+            const char *reason = failed.error.localizedDescription.UTF8String;
+            return Result<bool>::Failure(MakeError(MetalBackendErrors::CommandSubmissionFailed,
+                                                   reason == nullptr ? "Metal staging upload failed." : std::string{reason}));
+        }
+        return Result<bool>::Success(true);
     }
 
     void MetalResourceRuntime::Shutdown() noexcept {

@@ -85,6 +85,14 @@ namespace Horo::Render::NullBackendErrors {
                                             .retryable = false,
                                             .userActionable = false};
 
+    const ErrorCodeDescriptor WrongThread{.domain = Domain,
+                                          .code = ErrorCode{"render.null.wrong_thread"},
+                                          .defaultSeverity = ErrorSeverity::Error,
+                                          .summary = "Null renderer operation requires its initializing owner thread.",
+                                          .remediationHint = "Join foreign work and close the renderer on its owner thread.",
+                                          .retryable = false,
+                                          .userActionable = false};
+
     const ErrorCodeDescriptor NotInitialized{.domain = Domain,
                                              .code = ErrorCode{"render.backend.not_initialized"},
                                              .defaultSeverity = ErrorSeverity::Error,
