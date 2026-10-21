@@ -126,6 +126,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OnLeave() override;
 
     private:
+        /** @brief Queries every canonical authored owner before allowing the workspace leave workflow. */
+        bool HasDirtyDocuments() const;
+        /** @brief Validates captured leave consent against each independently owned document group. */
+        Result<void> ValidateLeaveCapture() const;
+        /** @brief Rechecks exact world consent after operations on other owners that may run host callbacks. */
+        Result<void> ValidateLeaveWorld() const;
         /** @brief Attaches built-in panels before session publication. */
         void AttachWorkspacePanels();
         /** @brief Captures the exact cached collision draft for a leave decision. */
@@ -182,6 +188,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         WorkspacePublishedRevisions publishedRevisions_{};
         std::unique_ptr<EditorWorkspaceController> controller_;
         mutable WorkspaceLeaveCapture leaveCapture_;
+        mutable std::optional<WorldDocumentFence> leaveWorldFence_;
         std::unique_ptr<EditorSnackbarHost> snackbarHost_;
         std::optional<Input::InputBindingProfile> previousInputProfile_;
     };

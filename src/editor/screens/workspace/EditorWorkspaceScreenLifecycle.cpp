@@ -7,9 +7,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     LeaveDecision EditorWorkspaceScreen::CanLeave(const LeaveTarget &) const {
         using enum LeaveAction;
         using enum LeaveDisposition;
-        if (controller_ &&
-            (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() || controller_->HasDirtyCollisionSettings() ||
-             controller_->HasDirtyNavigationDocuments() || controller_->HasDirtySourceDocuments())) {
+        if (HasDirtyDocuments()) {
             static_cast<void>(controller_->HasDirtySourceDocuments());
             leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
             auto graphs = controller_->PCGDocuments().Snapshots();
@@ -18,10 +16,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             leaveCapture_.pcgDocuments = std::move(graphs).Value();
             if (const auto collision = CaptureLeaveCollision(); collision.HasError())
                 return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
+            const auto world = controller_->WorldDocuments().Snapshot();
+            leaveWorldFence_ = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt;
             LeaveRequirement requirement{.kind = LeaveRequirementKind::DirtyDocument,
                                          .subject = 1,
                                          .revision = 1,
-                                         .allowedActions = {Save, Discard, Stay}};
+                                         .allowedActions = controller_->HasDirtyWorldDocuments() ? std::vector{Discard, Stay}
+                                                                                                 : std::vector{Save, Discard, Stay}};
             return LeaveDecision{.disposition = RequireResolution, .requirement = requirement};
         }
         return LeaveDecision{.disposition = Allow, .requirement = std::nullopt};
@@ -32,6 +33,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum LeaveDisposition;
         if (!controller_)
             return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
+        if (controller_->HasDirtyWorldDocuments())
+            return Result<LeaveDecision>::Failure(MakeError(WorldDocumentErrors::Dirty));
         if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
         if (const auto sources = controller_->SaveSourceDocuments(); sources.HasError())
@@ -61,6 +64,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(collision.ErrorValue());
         if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+        if (const auto current = ValidateLeaveWorld(); current.HasError())
+            return Result<LeaveDecision>::Failure(current.ErrorValue());
+        if (const auto world = controller_->WorldDocuments().Shutdown(WorldDocumentDisposition::Discard); world.HasError())
+            return Result<LeaveDecision>::Failure(world.ErrorValue());
         if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
         return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
@@ -82,9 +89,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                     current.Value().Identity() != captured.Identity())
                     return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             }
-            if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
-                return Result<LeaveDecision>::Failure(current.ErrorValue());
-            if (const auto current = ValidateLeaveCollision(); current.HasError())
+            if (const auto current = ValidateLeaveCapture(); current.HasError())
                 return Result<LeaveDecision>::Failure(current.ErrorValue());
         }
         switch (resolution.action) {
@@ -116,6 +121,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
                 LOG_ERROR("editor.navigation_document", "Navigation document shutdown is incomplete: %s",
                           navigation.ErrorValue().message.c_str());
+            if (const auto world = controller_->WorldDocuments().Shutdown(); world.HasError())
+                LOG_ERROR("editor.world_document", "World shutdown requires an explicit dirty decision: %s",
+                          world.ErrorValue().message.c_str());
             if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
                 LOG_ERROR("editor.pcg_document", "Graph shutdown recovery is incomplete: %s", graphs.ErrorValue().message.c_str());
         }
@@ -132,6 +140,30 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         viewportSceneState_.Clear();
         publishedRevisions_ = {};
         controller_.reset();
+    }
+
+    /** @copydoc EditorWorkspaceScreen::HasDirtyDocuments */
+    bool EditorWorkspaceScreen::HasDirtyDocuments() const {
+        return controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() ||
+                               controller_->HasDirtyCollisionSettings() || controller_->HasDirtyNavigationDocuments() ||
+                               controller_->HasDirtyWorldDocuments() || controller_->HasDirtySourceDocuments());
+    }
+
+    /** @copydoc EditorWorkspaceScreen::ValidateLeaveCapture */
+    Result<void> EditorWorkspaceScreen::ValidateLeaveCapture() const {
+        if (const auto current = ValidateLeaveWorld(); current.HasError())
+            return current;
+        if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
+            return current;
+        return ValidateLeaveCollision();
+    }
+
+    /** @copydoc EditorWorkspaceScreen::ValidateLeaveWorld */
+    Result<void> EditorWorkspaceScreen::ValidateLeaveWorld() const {
+        const auto world = controller_->WorldDocuments().Snapshot();
+        if (const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt; fence != leaveWorldFence_)
+            return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorWorkspaceScreen::CaptureLeaveCollision */

@@ -31,6 +31,14 @@ namespace Horo::WorldStreaming {
         std::uint32_t maximumTotalAssignments{}; /**< Maximum aggregate object-to-cell assignments. */
     };
 
+    /** @brief Immutable authoring topology; deliberately contains no cooked-cell/package authority. */
+    struct WorldSpatialAssignmentAuthoringDomain final {
+        WorldPartitionId partition{};
+        WorldPartitionBounds bounds{};
+        WorldCellQuantizationPolicy grid;
+        std::span<const WorldLayerDescriptor> layers; /**< At most 256 unique declared layers, borrowed for the call. */
+    };
+
     /** @brief Canonical assignment metadata for one authored-object revision. */
     struct WorldSpatialAssignmentEntry final {
         WorldAuthoringObjectAddress address{}; /**< Stable page-scoped object address. */
@@ -59,6 +67,16 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] static Result<WorldSpatialAssignment> Create(const WorldPartitionDescriptor &descriptor,
                                                                    std::span<const WorldSpatialAssignmentCandidate> candidates,
                                                                    WorldSpatialAssignmentLimits limits);
+
+        /** @brief Explains source coverage through the same quantization/count/order kernel as cooked assignment.
+         * @param domain Source world bounds, validated grid and unique declared layers; no cooked cells are fabricated.
+         * @param candidates Exact immutable authored revisions. @param limits Nonzero finite output ceilings.
+         * @return Owned canonical coverage or typed invalid, unsupported, conflict or capacity failure.
+         * @details Coverage does not prove cooked cell existence, runtime availability or residency. Tool/control path only.
+         */
+        [[nodiscard]] static Result<WorldSpatialAssignment> CreateForAuthoring(const WorldSpatialAssignmentAuthoringDomain &domain,
+                                                                               std::span<const WorldSpatialAssignmentCandidate> candidates,
+                                                                               WorldSpatialAssignmentLimits limits);
 
         /** @brief Returns the partition for which assignments were cooked. @return Stable immutable partition identity. */
         [[nodiscard]] constexpr const WorldPartitionId &Partition() const noexcept {

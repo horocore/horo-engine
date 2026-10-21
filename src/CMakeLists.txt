@@ -2817,6 +2817,9 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
     "$<BUILD_INTERFACE:${_horo_prefab_hierarchy_headers}>")
 
 add_library(HoroEditorModel STATIC
+        editor/document/PartitionedWorldWorkspace.cpp
+        editor/document/PartitionedWorldResidency.cpp
+        editor/document/PartitionedWorldObjectInspection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
@@ -2853,6 +2856,7 @@ target_include_directories(HoroEditorModel
 )
 target_link_libraries(HoroEditorModel
         PUBLIC
+        HoroEngine::WorldStreaming
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSourceModel
         HoroEngine::NavigationApi
