@@ -97,7 +97,8 @@ namespace Horo::Editor::WorldCompositionTests {
             CHECK(controller.ViewModel().activeDocumentPanelId == "horo.world_composition");
             controller.ProcessCommand(open);
             REQUIRE(controller.ViewModel().worldDocumentError);
-            CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Stale.code);
+            CHECK(controller.ViewModel().worldDocumentError->code.Value() == WorldDocumentErrors::Stale.code.Value());
+            CHECK(controller.ViewModel().worldDocumentError->domain.Value() == WorldDocumentErrors::Stale.domain.Value());
             CHECK(controller.WorldDocuments().Snapshot().Value() == reopened);
             CHECK(controller.ViewModel().worldViewport.snapshot == reopened);
         }
@@ -298,7 +299,8 @@ namespace Horo::Editor {
         command.worldDocumentFence->revision = WorldDocumentRevision::Create(previous->fence.revision.Value() + 1).Value();
         controller.ProcessCommand(command);
         REQUIRE(controller.ViewModel().worldDocumentError);
-        CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Stale.code);
+        CHECK(controller.ViewModel().worldDocumentError->code.Value() == WorldDocumentErrors::Stale.code.Value());
+        CHECK(controller.ViewModel().worldDocumentError->domain.Value() == WorldDocumentErrors::Stale.domain.Value());
         CHECK(WorldResidencyTests::Current(world) == previous);
         CHECK(controller.ViewModel().worldBakeCurrent);
     }
@@ -333,7 +335,8 @@ namespace Horo::Editor {
         ++replacement.settings.bytes.front();
         const auto rejected = controller.SetWorldBakeProject(replacement);
         REQUIRE(rejected.HasError());
-        CHECK(rejected.ErrorValue().code == Application::WorldBakeErrors::Stale.code);
+        CHECK(rejected.ErrorValue().code.Value() == Application::WorldBakeErrors::Stale.code.Value());
+        CHECK(rejected.ErrorValue().domain.Value() == Application::WorldBakeErrors::Stale.domain.Value());
         CHECK(controller.ViewModel().worldBakeOperation == accepted.Value());
         ++replacement.fence.revision;
         REQUIRE(controller.SetWorldBakeProject(replacement).HasValue());
@@ -381,7 +384,8 @@ namespace Horo::Editor {
         REQUIRE(snapshot->operations.size() == 1);
         CHECK(snapshot->operations.front().state == OperationState::Cancelled);
         REQUIRE(snapshot->operations.front().error);
-        CHECK(snapshot->operations.front().error->code == Application::WorldBakeErrors::Stale.code);
+        CHECK(snapshot->operations.front().error->code.Value() == Application::WorldBakeErrors::Stale.code.Value());
+        CHECK(snapshot->operations.front().error->domain.Value() == Application::WorldBakeErrors::Stale.domain.Value());
     }
 }  // namespace Horo::Editor
 
