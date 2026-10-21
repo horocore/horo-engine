@@ -3,6 +3,7 @@
 #include "UiTestUtils.h"
 #include "support/AllocationProbe.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
