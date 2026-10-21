@@ -17,7 +17,11 @@ namespace Horo::Editor {
         /** @brief Wraps actions from measured bounds, retaining the current editor typography at narrow widths. */
         bool Button(const EditorGuiContext &context, const char *key, const bool enabled = true) {
             const auto &label = Text(context, key);
-            const float width = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2;
+            const auto &metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
+            const float width = [&] {
+                const Theme::ScopedTextStyle style{context.theme.fonts.sans, metrics.fontSize, Theme::FontPx::Sans};
+                return ImGui::CalcTextSize(label.c_str()).x + metrics.paddingX * 2;
+            }();
             if (ImGui::GetContentRegionAvail().x < width)
                 ImGui::NewLine();
             const bool clicked = Ui::Button(
@@ -69,10 +73,12 @@ namespace Horo::Editor {
         if (!searchOpen_)
             return std::nullopt;
         const auto &fonts = context.theme.fonts;
-        static_cast<void>(
-            Ui::InputTextControl("find-query", query_, 4097, fonts, {.hint = Text(context, "workspace.source_edit.query").c_str()}));
-        static_cast<void>(Ui::InputTextControl("replacement", replacement_, 4097, fonts,
+        static_cast<void>(Ui::InputTextControl("##source-find-query", query_, 4097, fonts,
+                                               {.hint = Text(context, "workspace.source_edit.query").c_str()}));
+        ownsInput_ = ownsInput_ || ImGui::IsItemActive();
+        static_cast<void>(Ui::InputTextControl("##source-replacement", replacement_, 4097, fonts,
                                                {.hint = Text(context, "workspace.source_edit.replacement").c_str()}));
+        ownsInput_ = ownsInput_ || ImGui::IsItemActive();
         if (Button(context, "workspace.source_edit.next", !query_.empty()))
             Find(widget, source, SourceSearchDirection::Forward);
         if (Button(context, "workspace.source_edit.previous", !query_.empty()))
@@ -94,8 +100,9 @@ namespace Horo::Editor {
     void SourceEditorTools::Navigate(SourceEditorWidget &widget, const SourceDocumentSnapshot &source, const EditorGuiContext &context) {
         if (!lineOpen_)
             return;
-        static_cast<void>(Ui::InputTextControl("line-number", line_, 32, context.theme.fonts,
+        static_cast<void>(Ui::InputTextControl("##source-line-number", line_, 32, context.theme.fonts,
                                                {.hint = Text(context, "workspace.source_edit.line").c_str()}));
+        ownsInput_ = ownsInput_ || ImGui::IsItemActive();
         ImGui::PushID("navigate-apply");
         if (Button(context, "workspace.source_edit.go_to")) {
             std::size_t line = 0;
@@ -137,6 +144,7 @@ namespace Horo::Editor {
                                                                 const SourceHistoryState &history,
                                                                 const std::optional<Result<SourceEditingPublication>> &outcome,
                                                                 const EditorGuiContext &context) {
+        ownsInput_ = false;
         const auto identity = widget.Identity().value;
         ImGui::PushID(static_cast<int>(identity >> 32));
         ImGui::PushID(static_cast<int>(identity & 0xffffffffU));

@@ -1,8 +1,18 @@
 #include "SourceWidgetPlatform.h"
 
+#include "SourceEditorWidget.h"
+
+#include <cmath>
+#include <zep/filesystem.h>
 #include <zep/window.h>
 
 namespace Horo::Editor {
+    /** @copydoc ValidSourceWidgetFrame */
+    bool ValidSourceWidgetFrame(const SourceWidgetFrame &frame) noexcept {
+        return std::isfinite(frame.width) && std::isfinite(frame.height) && frame.width > 0 && frame.height > 0 &&
+               std::isfinite(frame.dpiScale) && frame.dpiScale > 0;
+    }
+
     namespace {
         /** @brief Denies every ambient filesystem path, including Zep configuration and save shortcuts. */
         class DeniedFileSystem final : public Zep::IZepFileSystem {

@@ -64,9 +64,12 @@ namespace Horo::Editor {
         if (!m_fonts[index] || fonts_[index] != font) {
             m_fonts[index] = std::make_shared<Zep::ZepFont_ImGui>(*this, font, pixels);
             fonts_[index] = font;
+            ++fontGeneration;
         }
-        if (m_fonts[index]->GetPixelHeight() != pixels)
+        if (m_fonts[index]->GetPixelHeight() != pixels) {
             m_fonts[index]->SetPixelHeight(pixels);
+            ++fontGeneration;
+        }
         return *m_fonts[index];
     }
 

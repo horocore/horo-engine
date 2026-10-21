@@ -449,6 +449,7 @@ namespace Horo::Editor {
 
     void EditorWorkspaceView::Draw(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
                                    const GuiContentRegion &contentRegion) {
+        outCommand.sourceTextInputOwned = false;
         if (!m_inputRouter.Snapshot().State(Input::PointerButton::Primary).down) {
             m_panelDragCapture.Release();
             m_panelDragContext.Reset();

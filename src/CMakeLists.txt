@@ -3286,16 +3286,21 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/source_editor/SourceWidgetPlatform.cpp
             editor/source_editor/SourceWidgetDisplay.cpp
             editor/source_editor/SourceWidgetText.cpp
+            editor/source_editor/SourceEditorSession.cpp
             editor/source_editor/SourceEditorTools.cpp
             editor/source_editor/SourceEditorWidget.cpp
             editor/source_editor/SourceSyntax.cpp
             editor/source_editor/SourceSyntaxProjection.cpp
             editor/source_editor/SourceEditorTheme.cpp
+            editor/screens/workspace/EditorWorkspaceInputRouting.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
+            editor/screens/workspace/EditorWorkspaceScreenActions.cpp
+            editor/screens/workspace/EditorWorkspaceScreenComposition.cpp
+            editor/screens/workspace/EditorWorkspaceScreenLifecycle.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
         editor/screens/EditorPageFileStore.cpp

@@ -1,4 +1,6 @@
-#include "editor/source_editor/SourceSyntaxProjection.h"
+#include "SourceSyntaxProjection.h"
+
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -58,5 +60,34 @@ namespace Horo::Editor {
             span.end = project(span.end);
         }
         return result;
+    }
+
+    /** @copydoc SourceSyntaxPresentation::Publish */
+    bool SourceSyntaxPresentation::Publish(const SourceDocumentSnapshot &source, const std::uint64_t mirrorUpdate,
+                                           const SourceSyntax &syntax) {
+        auto projected = ProjectSourceSyntaxForDisplay(source, syntax);
+        if (!projected)
+            return false;
+        syntax_ = std::move(*projected);
+        revision_ = source.Revision();
+        mirrorUpdate_ = mirrorUpdate;
+        return true;
+    }
+
+    /** @copydoc SourceSyntaxPresentation::Contains */
+    bool SourceSyntaxPresentation::Contains(const std::uint64_t revision, const std::uint64_t mirrorUpdate) const noexcept {
+        return revision_ != 0 && revision_ == revision && mirrorUpdate_ == mirrorUpdate;
+    }
+
+    /** @copydoc SourceSyntaxPresentation::ForMirror */
+    const SourceSyntax *SourceSyntaxPresentation::ForMirror(const std::uint64_t mirrorUpdate) const noexcept {
+        return Contains(revision_, mirrorUpdate) ? &syntax_ : nullptr;
+    }
+
+    /** @copydoc SourceSyntaxPresentation::Reset */
+    void SourceSyntaxPresentation::Reset() noexcept {
+        syntax_ = {};
+        revision_ = 0;
+        mirrorUpdate_ = 0;
     }
 }  // namespace Horo::Editor

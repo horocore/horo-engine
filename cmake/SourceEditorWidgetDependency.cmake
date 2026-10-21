@@ -7,6 +7,7 @@ FetchContent_Declare(zep
     SOURCE_SUBDIR horo_no_upstream_project
 )
 FetchContent_MakeAvailable(zep)
+include(${CMAKE_CURRENT_LIST_DIR}/ApplyZepViewportPatch.cmake)
 # editor.cpp includes this header even when native filesystem support is disabled.
 # Generate it privately without enabling upstream developer-root discovery.
 set(HORO_ZEP_PRIVATE_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/zep")

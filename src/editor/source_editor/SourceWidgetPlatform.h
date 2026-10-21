@@ -3,7 +3,7 @@
 /** @file SourceWidgetPlatform.h
  * @brief Target-private Zep/ImGui bridge. No third-party declarations cross SourceEditorWidget.h.
  */
-#include "editor/source_editor/SourceEditorTheme.h"
+#include "SourceEditorTheme.h"
 
 #include <array>
 #include <memory>
@@ -16,11 +16,18 @@ namespace Horo::Editor::Theme {
 }
 
 namespace Horo::Editor {
+    struct SourceWidgetFrame;
+    /** @brief Rejects invalid GUI layout geometry. @param frame Requested viewport and scale.
+     * @return Whether dimensions and scale are finite and positive.
+     */
+    [[nodiscard]] bool ValidSourceWidgetFrame(const SourceWidgetFrame &frame) noexcept;
+
     /** @brief Uses the host font and records the insertion caret for platform IME placement. */
     class WidgetDisplay final : public Zep::ZepDisplay_ImGui {
     public:
         Zep::NVec4f cursorColor;
         mutable std::optional<Zep::NRectf> cursor;
+        std::uint64_t fontGeneration{};
 
         /** @brief Applies immutable active-frame styles and borrowed host-owned atlas faces.
          * @param theme Current source theme. @param fonts Optional host atlas; null uses the active GUI font.

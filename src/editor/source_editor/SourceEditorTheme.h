@@ -2,7 +2,7 @@
  * @brief Per-frame semantic source styles, independent of the embedded widget library.
  */
 #pragma once
-#include "editor/source_editor/SourceSyntax.h"
+#include "SourceSyntax.h"
 
 #include <array>
 

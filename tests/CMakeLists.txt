@@ -226,6 +226,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
             gui/PhysicsInspectorUiScenarios.cpp
             gui/PackageModalUiTests.cpp
             gui/InspectorCharacterUiTests.cpp
+            gui/SourceEditorToolsUiTests.cpp
             helpers/editor_ui/EditorUiTestHarness.cpp
             helpers/editor_ui/EditorUiTestSurface.cpp
             helpers/editor_ui/InteractiveEditorUiTestRenderer.cpp
@@ -2742,11 +2743,15 @@ add_executable(HoroEditorViewportModelTests
 target_compile_features(HoroEditorViewportModelTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportModelTests PRIVATE HoroEngine::EditorServices)
 if (HORO_BUILD_EDITOR_GUI)
-    add_executable(HoroSourceEditorWidgetTests unit/editor/SourceEditorWidgetTests.cpp)
+    add_executable(HoroSourceEditorWidgetTests
+        unit/editor/SourceEditorWidgetTests.cpp
+        unit/editor/SourceEditorHighlightingTests.cpp
+        unit/editor/SourceEditorSessionLifecycleTests.cpp
+        unit/editor/SourceEditorWorkspaceInputTests.cpp)
     target_compile_features(HoroSourceEditorWidgetTests PRIVATE cxx_std_20)
     target_include_directories(HoroSourceEditorWidgetTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/editor/source_editor ${PROJECT_SOURCE_DIR}/tests)
-    target_link_libraries(HoroSourceEditorWidgetTests PRIVATE HoroEngine::Gui HoroThirdParty::ImGui)
+    target_link_libraries(HoroSourceEditorWidgetTests PRIVATE HoroEngine::Gui HoroEngine::Platform HoroThirdParty::ImGui)
     horo_register_catch_test(HoroSourceEditorWidgetTests LABELS "unit;editor;source;gui;ci-windows;sonar-coverage")
     add_executable(HoroSourceSyntaxTests unit/editor/SourceSyntaxTests.cpp)
     target_compile_features(HoroSourceSyntaxTests PRIVATE cxx_std_20)
@@ -3230,6 +3235,7 @@ target_link_libraries(HoroEditorViewportResourceTests
 add_library(HoroEditorTestInternals INTERFACE)
 target_include_directories(HoroEditorTestInternals INTERFACE ${PROJECT_SOURCE_DIR}/src)
 set(HORO_EDITOR_WHITE_BOX_TEST_TARGETS
+        HoroSourceEditorWidgetTests
         HoroCameraCutEditorIntegrationTests
         HoroEditorPlaySessionControllerTests
         HoroUpdateExperienceSessionTests

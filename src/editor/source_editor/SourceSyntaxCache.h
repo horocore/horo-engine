@@ -3,7 +3,7 @@
  */
 #pragma once
 #include "Horo/Editor/SourceDocumentService.h"
-#include "editor/source_editor/SourceSyntax.h"
+#include "SourceSyntax.h"
 
 namespace Horo::Editor {
     /** @brief One publication lease and its lexical spans, owned by a source view on the editor thread. */
