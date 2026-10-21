@@ -94,8 +94,8 @@ namespace Horo::Editor::Ui {
             using enum Extensions::EditorUiScalarInput;
             if (!enabled || ImGui::IsKeyPressed(ImGuiKey_Escape))
                 return Cancel;
+            const auto id = ImGui::GetCurrentContext()->LastItemData.ID;
             if (ImGui::IsItemFocused()) {
-                const auto id = ImGui::GetCurrentContext()->LastItemData.ID;
                 ImGui::SetKeyOwner(ImGuiKey_LeftArrow, id);
                 ImGui::SetKeyOwner(ImGuiKey_RightArrow, id);
                 if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow))
@@ -103,15 +103,15 @@ namespace Horo::Editor::Ui {
                 if (ImGui::IsKeyPressed(ImGuiKey_RightArrow))
                     return Increment;
             }
-            if (state.editing && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-                return ImGui::IsMouseReleased(ImGuiMouseButton_Left) && ImGui::IsItemDeactivated() ? Commit : Cancel;
-            if (state.editing && !ImGui::IsItemActive())
-                return Cancel;
-            if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            if (ImGui::IsItemActivated() && ImGui::IsMouseDown(ImGuiMouseButton_Left, id))
                 return Begin;
-            if (state.editing && ImGui::IsMouseDown(ImGuiMouseButton_Left))
-                return Preview;
-            return None;
+            if (!state.editing)
+                return None;
+            if (ImGui::IsItemDeactivated())
+                return ImGui::IsMouseReleased(ImGuiMouseButton_Left, id) ? Commit : Cancel;
+            if (!ImGui::IsItemActive() || !ImGui::IsMouseDown(ImGuiMouseButton_Left, id))
+                return Cancel;
+            return Preview;
         }
 
         /** @brief Uses semantic host tokens for every visible dial affordance, clipped to the assigned node. */

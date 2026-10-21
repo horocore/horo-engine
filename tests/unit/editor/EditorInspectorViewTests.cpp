@@ -155,6 +155,7 @@ namespace Horo::Editor::Tests {
             io.AddMousePosEvent(point.x, point.y);
             io.AddMouseButtonEvent(0, true);
             Frame(view, owner, gui, command);
+            REQUIRE(view.Accessibility("fixture.inspector").front().preview);
             REQUIRE(owner.provider.registry
                         .SetProviderStatus({"fixture.package", "fixture.module"}, Extensions::EditorSurfaceProviderStatus::Disabled)
                         .HasValue());
@@ -170,6 +171,22 @@ namespace Horo::Editor::Tests {
             CHECK(ScalarValue(owner) == 25.0);
         }
 
+        /** @brief Holds actual native pointer capture before releasing one document edit intent. */
+        void CommitScalarGesture(ImVec2 point, InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner,
+                                 const Gui &gui, EditorWorkspaceViewCommandData &command) {
+            auto &io = ImGui::GetIO();
+            io.AddMousePosEvent(point.x, point.y);
+            io.AddMouseButtonEvent(0, true);
+            Frame(view, owner, gui, command);
+            REQUIRE(command.command == EditorWorkspaceViewCommand::None);
+            REQUIRE(view.Accessibility("fixture.inspector").front().preview);
+            Frame(view, owner, gui, command);
+            REQUIRE(command.command == EditorWorkspaceViewCommand::None);
+            REQUIRE(view.Accessibility("fixture.inspector").front().preview);
+            io.AddMouseButtonEvent(0, false);
+            Frame(view, owner, gui, command);
+        }
+
         /** @brief A hidden contribution loses native pointer capture and cannot replay its abandoned preview on reopening. */
         void CheckScalarHiddenGesture(ImVec2 point, InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner,
                                       const Gui &gui, EditorWorkspaceViewCommandData &command) {
@@ -177,6 +194,7 @@ namespace Horo::Editor::Tests {
             io.AddMousePosEvent(point.x, point.y);
             io.AddMouseButtonEvent(0, true);
             Frame(view, owner, gui, command);
+            REQUIRE(view.Accessibility("fixture.inspector").front().preview);
             ImGui::NewFrame();
             ImGui::Render();
             io.AddMouseButtonEvent(0, false);
@@ -437,9 +455,9 @@ namespace Horo::Editor::Tests {
         CHECK(ScalarValue(owner) == 25.0);
         const auto before = owner.controller->ViewModel().documentRevision;
         CheckScalarPreviewCancellation(geometry.center, view, owner, gui, command);
-        CheckScalarProviderWithdrawal(geometry.center, view, owner, gui, command);
-        CheckScalarHiddenGesture(geometry.center, view, owner, gui, command);
-        Click(geometry.center, view, owner, gui, command);
+        CheckScalarProviderWithdrawal(Frame(view, owner, gui, command).center, view, owner, gui, command);
+        CheckScalarHiddenGesture(Frame(view, owner, gui, command).center, view, owner, gui, command);
+        CommitScalarGesture(Frame(view, owner, gui, command).center, view, owner, gui, command);
         REQUIRE(command.command == EditorWorkspaceViewCommand::UpdateInspectorBehaviorField);
         REQUIRE(command.inspectorEdit);
         const auto proposed = std::get<double>(command.inspectorEdit->value);

@@ -199,8 +199,8 @@ namespace Horo::Extensions::Tests {
     }
 
     void CheckInvalidCapability(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
-        RewriteFixtureManifest(package, R"("requiredCapabilities":["editor.activity"])",
-                               R"("requiredCapabilities":["editor.activity_item"])");
+        RewriteFixtureManifest(package, R"("requiredCapabilities":["editor.activity","editor.custom-composition"])",
+                               R"("requiredCapabilities":["editor.activity_item","editor.custom-composition"])");
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
                                  {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
