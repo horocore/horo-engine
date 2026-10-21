@@ -72,8 +72,6 @@ namespace Horo::Editor {
         REQUIRE(model.prefabHierarchy != nullptr);
         REQUIRE(model.prefabHierarchy->entries.size() == 3);
         const auto member = model.prefabHierarchy->entries.back().target;
-        const auto sceneDocument = model.workspacePanelHost.ActiveDocument();
-        REQUIRE(sceneDocument.has_value());
         const auto revision = model.documentRevision;
         const auto cache = model.prefabHierarchy;
         owner.ProcessCommand(Intent(model, member, PrefabHierarchyAction::Select));
@@ -94,7 +92,12 @@ namespace Horo::Editor {
         owner.ProcessCommand(Intent(model, member, PrefabHierarchyAction::LocateInstance));
         CHECK(model.prefabSelection == member);
         CHECK(model.documentRevision == revision);
-        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::FocusWorkspaceDocument, .documentInstance = sceneDocument});
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument,
+                              .documentInstance = model.prefabDocuments.front().identity.instance});
+        REQUIRE(model.prefabDocuments.empty());
+        CHECK_FALSE(model.workspacePanelHost.ActiveDocument().has_value());
+        CHECK(model.prefabSelection == member);
+        CHECK(model.documentRevision == revision);
         owner.ProcessCommand(Intent(model, member, PrefabHierarchyAction::LocateInstance));
         REQUIRE(model.prefabSelection.has_value());
         CHECK_FALSE(model.prefabSelection->member.has_value());
