@@ -2,6 +2,7 @@
 #include "editor/screens/workspace/AssetSceneDrop.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <memory>
 
 namespace {
@@ -210,5 +211,37 @@ namespace {
         CHECK(scene.instances.empty());
         CHECK(scene.meshResources.empty());
         CHECK_FALSE(ClearAssetViewportPlacementPreview(scene));
+    }
+
+    TEST_CASE("Prefab ghosts apply rotated nonuniform parent and placement transforms in world order", "[unit][editor][asset-drop]") {
+        const auto quarterTurn = Math::Quaternion::FromAxisAngle({0.0F, 0.0F, 1.0F}, 1.5707963267948966F);
+        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{9}, Runtime::SceneDefinitionRevision{1}};
+        builder.Add({.object = Runtime::SceneObjectId{1},
+                     .localTransform = {.translation = {2.0F, 0.0F, 0.0F}, .rotation = quarterTurn, .scale = {2.0F, 3.0F, 1.0F}},
+                     .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}});
+        builder.Add({.object = Runtime::SceneObjectId{2},
+                     .parent = Runtime::SceneObjectId{1},
+                     .localTransform = {.translation = {3.0F, 2.0F, 0.0F}, .scale = {2.0F, 1.0F, 1.0F}},
+                     .primitiveMesh = Runtime::PrimitiveMeshDescriptor{}});
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        Runtime::PrimitiveMeshCache meshes;
+        auto geometry = PreparePrefabDropGeometry(definition.Value(), meshes);
+        REQUIRE(geometry.HasValue());
+        REQUIRE(geometry.Value().instances.size() == 2);
+        const auto localPoint = Math::TransformAffinePoint(geometry.Value().instances.back().localToWorld, {1.0F, 1.0F, 0.0F});
+        CHECK(std::fabs(localPoint.x + 7.0F) < 0.0001F);
+        CHECK(std::fabs(localPoint.y - 10.0F) < 0.0001F);
+        CHECK(std::fabs(geometry.Value().bounds.minimum.x + 5.5F) < 0.0001F);
+        CHECK(std::fabs(geometry.Value().bounds.maximum.y - 8.0F) < 0.0001F);
+        EditorViewportSceneSnapshot scene;
+        const Math::Transform placement{.translation = {10.0F, 1.0F, 4.0F}, .rotation = quarterTurn, .scale = {1.0F, 2.0F, 1.0F}};
+        REQUIRE(ApplyPrefabDropPreview(scene, geometry.Value(), placement).HasValue());
+        REQUIRE(scene.instances.size() == 2);
+        const auto worldPoint = Math::TransformAffinePoint(scene.instances.back().localToWorld, {1.0F, 1.0F, 0.0F});
+        // Independent expected coordinates detect reversing either parent/local or placement/world composition.
+        CHECK(std::fabs(worldPoint.x + 10.0F) < 0.0001F);
+        CHECK(std::fabs(worldPoint.y + 6.0F) < 0.0001F);
+        CHECK(std::fabs(worldPoint.z - 4.0F) < 0.0001F);
     }
 }  // namespace

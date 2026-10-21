@@ -163,7 +163,7 @@ namespace Horo::Editor {
                 const auto parent = worlds.find(*entity.parent);
                 if (parent == worlds.end())
                     return Result<PrefabDropGeometry>::Failure(Error{.message = "Prefab preview parent order is invalid."});
-                world = parent->second * world;
+                world = Math::Multiply(parent->second, world);
             }
             worlds.emplace(entity.object, world);
             if (!entity.primitiveMesh)
@@ -219,7 +219,7 @@ namespace Horo::Editor {
             }
         }
         for (auto instance : geometry.instances) {
-            instance.localToWorld = placement.ToMatrix() * instance.localToWorld;
+            instance.localToWorld = Math::Multiply(placement.ToMatrix(), instance.localToWorld);
             scene.instances.push_back(instance);
             scene.instanceObjects.push_back(AssetPlacementPreviewObject);
             scene.instancePickable.push_back(0U);
