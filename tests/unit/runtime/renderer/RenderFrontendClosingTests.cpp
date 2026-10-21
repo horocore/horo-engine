@@ -20,18 +20,20 @@ namespace Horo::Tests::RenderFrontendTesting {
             ++stale.expectedDeviceIncarnation;
         REQUIRE(frontend->ObserveSubmission(stale).HasError());
         CHECK(lifecycleState.submissionObservations == 0);
-        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {16, 16}});
-        REQUIRE(begun.HasValue());
-        auto frame = std::move(begun).Value();
-        wait.purpose = RenderCpuWaitPurpose::DeterministicTest;
-        wait.timeout = std::chrono::milliseconds{1};
-        REQUIRE(frontend->ObserveSubmission(wait).HasError());
-        CHECK(lifecycleState.submissionObservations == 0);
-        wait.purpose = RenderCpuWaitPurpose::Poll;
-        wait.timeout = std::chrono::nanoseconds{0};
-        REQUIRE(frontend->ObserveSubmission(wait).HasValue());
-        CHECK(lifecycleState.submissionObservations == 1);
-        frame.Abort();
+        {
+            auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {16, 16}});
+            REQUIRE(begun.HasValue());
+            auto frame = std::move(begun).Value();
+            wait.purpose = RenderCpuWaitPurpose::DeterministicTest;
+            wait.timeout = std::chrono::milliseconds{1};
+            REQUIRE(frontend->ObserveSubmission(wait).HasError());
+            CHECK(lifecycleState.submissionObservations == 0);
+            wait.purpose = RenderCpuWaitPurpose::Poll;
+            wait.timeout = std::chrono::nanoseconds{0};
+            REQUIRE(frontend->ObserveSubmission(wait).HasValue());
+            CHECK(lifecycleState.submissionObservations == 1);
+        }
+        CHECK(lifecycleState.abortCount == 1);
         Horo::Render::Test::RequireDrainedOwner(*frontend);
     }
 
