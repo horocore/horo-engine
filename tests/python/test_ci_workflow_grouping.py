@@ -420,9 +420,18 @@ def test_vulkan_native_commands_have_a_bounded_independent_build_and_execution_c
     assert "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON" in native_job
     assert "cmake --build build/ci-vulkan-commands" in native_job
     assert "ctest --test-dir build/ci-vulkan-commands" in native_job
+    build_arguments = native_job.split("cmake --build build/ci-vulkan-commands", 1)[1].split("2>&1", 1)[0]
     for target in ("HoroRenderVulkanTests", "HoroVulkanCommandExecutionSmoke", "HoroRenderGraphTests",
-                   "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests"):
-        assert native_job.count(target) == 2, f"Native job must build and select {target}"
+                   "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
+        assert target in build_arguments, f"Native job must build {target}"
+    selection = re.search(r"-R '([^']+)'", native_job).group(1)
+    for target in ("HoroRenderVulkanTests", "HoroRenderGraphTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
+        assert re.search(selection, f"{target}::external image case"), f"Native job must select discovered {target} cases"
+    assert re.search(selection, "HoroVulkanCommandExecutionSmoke")
+    assert "-DHORO_BUILD_XR_OPENXR=ON" in native_job
+    assert "--show-only=json-v1" in native_job
+    assert "XR/Vulkan integration test is absent" in native_job
+    assert "--no-tests=error" in native_job
     assert "vulkan-validationlayers" in native_job
     assert "VK_DRIVER_FILES:" in native_job
     assert 'sha256sum "$VK_DRIVER_FILES"' in native_job
