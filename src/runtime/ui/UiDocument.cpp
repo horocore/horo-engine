@@ -573,13 +573,13 @@ namespace Horo::Runtime::Ui {
     }
 
     /** @copydoc CookedUiDocument::CookedUiDocument */
-    CookedUiDocument::CookedUiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
-                                       std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
-                                       std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes,
-                                       std::vector<UiDocumentPresentationProfiles> profiles, std::vector<std::uint8_t> payload) noexcept
-        : schemaVersion_(schemaVersion), id_(id), revision_(revision), canvases_(std::move(canvases)), elements_(std::move(elements)),
-          dependencies_(std::move(dependencies)), routes_(std::move(routes)), profiles_(std::move(profiles)), payload_(std::move(payload)) {
-    }
+    CookedUiDocument::CookedUiDocument(const UiDocument &document, std::vector<std::uint8_t> payload)
+        : schemaVersion_(document.SchemaVersion()), id_(document.Id()), revision_(document.Revision()),
+          canvases_(document.Canvases().begin(), document.Canvases().end()),
+          elements_(document.Elements().begin(), document.Elements().end()),
+          dependencies_(document.Dependencies().begin(), document.Dependencies().end()),
+          routes_(document.Routes().begin(), document.Routes().end()),
+          profiles_(document.PresentationProfiles().begin(), document.PresentationProfiles().end()), payload_(std::move(payload)) {}
 
     /** @copydoc CookedUiDocument::Create */
     Result<CookedUiDocument> CookedUiDocument::Create(const UiDocument &document, std::vector<std::uint8_t> payload) {
@@ -588,16 +588,7 @@ namespace Horo::Runtime::Ui {
         if (payload.size() > MaximumCookedUiDocumentBytes)
             return Failure<CookedUiDocument>(UiErrors::CapacityExceeded);
         try {
-            return Result<CookedUiDocument>::Success(
-                CookedUiDocument{document.SchemaVersion(),
-                                 document.Id(),
-                                 document.Revision(),
-                                 {document.Canvases().begin(), document.Canvases().end()},
-                                 {document.Elements().begin(), document.Elements().end()},
-                                 {document.Dependencies().begin(), document.Dependencies().end()},
-                                 {document.Routes().begin(), document.Routes().end()},
-                                 {document.PresentationProfiles().begin(), document.PresentationProfiles().end()},
-                                 std::move(payload)});
+            return Result<CookedUiDocument>::Success(CookedUiDocument{document, std::move(payload)});
         } catch (const std::bad_alloc &) {
             return Failure<CookedUiDocument>(UiErrors::CapacityExceeded);
         }

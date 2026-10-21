@@ -501,6 +501,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> PrepareFocusGeometry(Storage &storage);
         /** @brief Validates and selects primary attachment inputs before computed property projection. */
         [[nodiscard]] static Result<void> PrepareProfiles(Storage &storage, const UiAnimationViewport &viewport);
+        /** @brief Allocates every cache before adopting the presentation tracker and exact attachment. */
+        [[nodiscard]] static Result<UiPresentationAttachmentId> AdoptAttachment(Storage &storage, std::size_t index,
+                                                                                UiPresentationAttachmentId id, UiRenderViewId view,
+                                                                                UiAnimationViewport viewport);
+        /** @brief Rebuilds an attachment base and applies computed bindings in their established precedence. */
+        [[nodiscard]] static Result<UiPresentationProfileSelection> PrepareAttachmentStyles(Storage &storage, std::size_t index);
         /** @brief Prepares every additional derived attachment against the actual primary reservation. */
         [[nodiscard]] static Result<void> PrepareAttachments(Storage &storage);
         /** @brief Checks that a secondary view has actually published this exact admitted attachment incarnation. */
@@ -509,6 +515,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> ProjectAttachmentFocus(Storage &storage, const UiLayoutSnapshot &layout,
                                                                  const UiLayoutClipSnapshot *clipping,
                                                                  std::span<UiAnimationFocusGeometry> output);
+        /** @brief Publishes already-validated attachment reservations and metadata into the inactive preallocated frame. */
+        static void PublishAttachments(Storage &storage) noexcept;
+        /** @brief Publishes already-validated focus/control/action/capture replacements under one semantic interaction. */
+        static void PublishSemanticInteraction(Storage &storage, UiReloadCanvas &canvas, const UiLayoutSnapshot &layout) noexcept;
+        /** @brief Binds durable alternatives to the actual admitted canvas without changing semantic authority. */
+        [[nodiscard]] static Result<void> InitializeProfiles(Storage &storage, UiReloadGeneration &generation);
         /** @brief Copies optional committed evidence after ordinary publication, without affecting it. */
         static void CaptureInspection(Storage &storage) noexcept;
         /** @brief Prepares actual style, layout, clipping and focus owners without publishing any generation. */

@@ -92,7 +92,7 @@ Failed or abandoned candidates never update retained evidence.
 
 ## Public topology and validation
 
-`UiPresentationProfiles.h` and `UiLayoutInspector.h` belong to `HoroRuntimeUi` in
+`UiPresentationProfiles.h`, `UiLayoutInspector.h` and the value-only `UiLayoutWork.h` belong to `HoroRuntimeUi` in
 the public header ownership registry. The existing Runtime UI public consumer
 compiles both contracts. Regression sources exercise selector boundaries, issuer
 and root identity, source/cook roundtrips and legacy payloads, retained inspection,

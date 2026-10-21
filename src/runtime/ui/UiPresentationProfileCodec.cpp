@@ -68,6 +68,34 @@ namespace Horo::Runtime::Ui::ProfileCodec {
                 throw std::invalid_argument("profile aspect");
             return UiPresentationAspectRatio{Unsigned<std::uint32_t>(value[0]), Unsigned<std::uint32_t>(value[1])};
         }
+
+        /** @brief Decodes one complete row after the outer count/byte checks, preserving typed layout errors. */
+        Result<UiPresentationProfile> DecodeRow(const Json &row) {
+            UiPresentationProfile profile{Id<UiPresentationProfileId>(row.at("id")), Unsigned<std::uint32_t>(row.at("priority"))};
+            const auto &s = row.at("selector");
+            Fields(s, {"width", "height", "aspect", "form", "role", "required"});
+            profile.selector.width = Extent(s.at("width"));
+            profile.selector.height = Extent(s.at("height"));
+            const auto &aspect = s.at("aspect");
+            if (!aspect.is_array() || aspect.size() != 2)
+                throw std::invalid_argument("profile aspect bounds");
+            profile.selector.aspect = {Ratio(aspect[0]), Ratio(aspect[1])};
+            if (!s.at("form").is_null())
+                profile.selector.formFactor = static_cast<UiPresentationFormFactor>(Unsigned<std::uint8_t>(s.at("form")));
+            if (!s.at("role").is_null())
+                profile.selector.viewRole = static_cast<UiPresentationViewRole>(Unsigned<std::uint8_t>(s.at("role")));
+            profile.selector.required = static_cast<UiPresentationCapabilities>(Unsigned<std::uint8_t>(s.at("required")));
+            for (const auto &item : row.at("overrides")) {
+                Fields(item, {"element", "layout"});
+                auto presentation = PresentationCodec::Encode(UiElementPresentation{});
+                presentation["layout"] = item.at("layout");
+                auto parsed = PresentationCodec::Decode(Json(presentation));
+                if (parsed.HasError())
+                    return Result<UiPresentationProfile>::Failure(parsed.ErrorValue());
+                profile.overrides.push_back({Id<UiElementId>(item.at("element")), parsed.Value().layout});
+            }
+            return Result<UiPresentationProfile>::Success(std::move(profile));
+        }
     }  // namespace
 
     /** @copydoc Encode */
@@ -132,30 +160,10 @@ namespace Horo::Runtime::Ui::ProfileCodec {
                     throw std::invalid_argument("profile revision");
                 result.revision = revision.Value();
                 for (const auto &row : table.at("rows")) {
-                    UiPresentationProfile profile{Id<UiPresentationProfileId>(row.at("id")), Unsigned<std::uint32_t>(row.at("priority"))};
-                    const auto &s = row.at("selector");
-                    Fields(s, {"width", "height", "aspect", "form", "role", "required"});
-                    profile.selector.width = Extent(s.at("width"));
-                    profile.selector.height = Extent(s.at("height"));
-                    const auto &aspect = s.at("aspect");
-                    if (!aspect.is_array() || aspect.size() != 2)
-                        throw std::invalid_argument("profile aspect bounds");
-                    profile.selector.aspect = {Ratio(aspect[0]), Ratio(aspect[1])};
-                    if (!s.at("form").is_null())
-                        profile.selector.formFactor = static_cast<UiPresentationFormFactor>(Unsigned<std::uint8_t>(s.at("form")));
-                    if (!s.at("role").is_null())
-                        profile.selector.viewRole = static_cast<UiPresentationViewRole>(Unsigned<std::uint8_t>(s.at("role")));
-                    profile.selector.required = static_cast<UiPresentationCapabilities>(Unsigned<std::uint8_t>(s.at("required")));
-                    for (const auto &item : row.at("overrides")) {
-                        Fields(item, {"element", "layout"});
-                        auto presentation = PresentationCodec::Encode(UiElementPresentation{});
-                        presentation["layout"] = item.at("layout");
-                        auto parsed = PresentationCodec::Decode(Json(presentation));
-                        if (parsed.HasError())
-                            return Result<std::vector<UiDocumentPresentationProfiles>>::Failure(parsed.ErrorValue());
-                        profile.overrides.push_back({Id<UiElementId>(item.at("element")), parsed.Value().layout});
-                    }
-                    result.rows.push_back(std::move(profile));
+                    auto profile = DecodeRow(row);
+                    if (profile.HasError())
+                        return Result<std::vector<UiDocumentPresentationProfiles>>::Failure(profile.ErrorValue());
+                    result.rows.push_back(std::move(profile).Value());
                 }
                 if (auto valid = ValidateUiPresentationProfiles(result.rows); valid.HasError())
                     return Result<std::vector<UiDocumentPresentationProfiles>>::Failure(valid.ErrorValue());

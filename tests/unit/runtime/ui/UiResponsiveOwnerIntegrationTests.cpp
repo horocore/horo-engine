@@ -49,6 +49,35 @@ namespace {
                                             UiPresentationViewRole::Split, UiPresentationCapabilities::Touch};
         return viewport;
     }
+
+    /** @brief Checks actual selected, clipped and computed geometry before exercising input transitions. */
+    void CheckCompactFrame(const UiAnimationFrameLease &first) {
+        REQUIRE(first.PresentationSelection() != nullptr);
+        REQUIRE_FALSE(first.PresentationSelection()->profile.has_value());
+        REQUIRE(first.Attachments().size() == 1);
+        const auto &derived = first.Attachments().front();
+        REQUIRE(derived.selection.profile == Stable<UiPresentationProfileId>(30));
+        REQUIRE(derived.layout->Descriptor().interaction == first.Layout().Descriptor().interaction);
+        REQUIRE(derived.clipping->Descriptor().interaction == first.Layout().Descriptor().interaction);
+        REQUIRE(derived.focusGeometry.size() == derived.layout->Records().size());
+        REQUIRE(derived.focusGeometry.back().element == first.Controls().front().source.element);
+        REQUIRE(derived.focusGeometry.back().bounds.extent.width == 64);
+        const auto child = first.Controls().front().source.element;
+        REQUIRE(derived.layout->Get(child).Value().arrangement.contentBox.extent.width == 80);
+        // Complete profile height=40 is a base; the explicit computed height binding remains final at300.
+        REQUIRE(derived.layout->Get(child).Value().arrangement.contentBox.extent.height == 300);
+        REQUIRE(first.Layout().Get(child).Value().arrangement.contentBox.extent.width == 100);
+    }
+
+    /** @brief Creates the real replacement closure and resources for one owner reload boundary. */
+    Result<UiAnimationRuntimeReload> ReloadFixture(UiAnimationRuntimeParticipant &participant, UiElementSlotAllocator &allocator,
+                                                   const std::uint64_t version, const CancellationToken &cancellation = {}) {
+        auto replacement = ReloadTests::Generation(allocator, version);
+        auto resources = Resources(replacement.Canvases().front());
+        return participant.Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
+                                  std::move(resources.definition),
+                                  {UiAnimationReloadPolicy::Cancel, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands}, cancellation);
+    }
 }  // namespace
 
 TEST_CASE("Actual owner selects durable alternatives per attachment before computed bound dimensions",
@@ -64,21 +93,9 @@ TEST_CASE("Actual owner selects durable alternatives per attachment before compu
     REQUIRE(participant.ConfigureInspection(attached.Value(), {8, 8, 8, 2}, true).HasValue());
     REQUIRE(fixture.host->RunFrame().HasValue());
     const auto first = Frame(participant);
-    REQUIRE(first.PresentationSelection() != nullptr);
-    REQUIRE_FALSE(first.PresentationSelection()->profile.has_value());
-    REQUIRE(first.Attachments().size() == 1);
+    CheckCompactFrame(first);
     const auto &derived = first.Attachments().front();
-    REQUIRE(derived.selection.profile == Stable<UiPresentationProfileId>(30));
-    REQUIRE(derived.layout->Descriptor().interaction == first.Layout().Descriptor().interaction);
-    REQUIRE(derived.clipping->Descriptor().interaction == first.Layout().Descriptor().interaction);
-    REQUIRE(derived.focusGeometry.size() == derived.layout->Records().size());
-    REQUIRE(derived.focusGeometry.back().element == first.Controls().front().source.element);
-    REQUIRE(derived.focusGeometry.back().bounds.extent.width == 64);
     const auto child = first.Controls().front().source.element;
-    REQUIRE(derived.layout->Get(child).Value().arrangement.contentBox.extent.width == 80);
-    // Complete profile height=40 is a base; the explicit computed height binding remains final at300.
-    REQUIRE(derived.layout->Get(child).Value().arrangement.contentBox.extent.height == 300);
-    REQUIRE(first.Layout().Get(child).Value().arrangement.contentBox.extent.width == 100);
     REQUIRE(participant.Inspect().has_value());
     REQUIRE(participant.Inspect()->Descriptor().selection->profile == Stable<UiPresentationProfileId>(30));
     REQUIRE_FALSE(participant.InputEligible(view));
@@ -240,23 +257,11 @@ TEST_CASE("Responsive reload preserves cancelled admission and burns successful 
     REQUIRE(inspected.has_value());
     CancellationSource cancelled;
     cancelled.RequestCancellation();
-    auto replacement = ReloadTests::Generation(allocator, 100);
-    auto resources = Resources(replacement.Canvases().front());
-    REQUIRE(participant
-                .Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
-                        std::move(resources.definition),
-                        {UiAnimationReloadPolicy::Cancel, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands}, cancelled.Token())
-                .HasError());
+    REQUIRE(ReloadFixture(participant, allocator, 100, cancelled.Token()).HasError());
     REQUIRE(participant.PrimaryAttachment() == primary);
     REQUIRE(participant.Inspect()->Descriptor().layout.interaction == inspected->Descriptor().layout.interaction);
     REQUIRE(Frame(participant).Attachments().front().attachment == attached.Value());
-    replacement = ReloadTests::Generation(allocator, 101);
-    resources = Resources(replacement.Canvases().front());
-    REQUIRE(participant
-                .Reload(std::move(replacement), allocator, std::move(resources.registry), std::move(resources.styles),
-                        std::move(resources.definition),
-                        {UiAnimationReloadPolicy::Cancel, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands})
-                .HasValue());
+    REQUIRE(ReloadFixture(participant, allocator, 101).HasValue());
     REQUIRE(participant.PrimaryAttachment() != primary);
     REQUIRE_FALSE(participant.Inspect().has_value());
     REQUIRE(participant.UpdateAttachment(attached.Value(), CompactViewport()).HasError());

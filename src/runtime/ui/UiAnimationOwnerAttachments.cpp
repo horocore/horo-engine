@@ -24,6 +24,18 @@ namespace Horo::Runtime::Ui {
                     host.available};
         }
 
+        /** @brief Allocates an optional clip cache with the same finite geometry retention as its layout owner. */
+        Result<std::optional<UiLayoutClipEngine>> CreateAttachmentClipping(const UiReloadCanvas &canvas, const std::uint32_t elements,
+                                                                           const std::uint32_t slots) {
+            if (!canvas.clipping)
+                return Result<std::optional<UiLayoutClipEngine>>::Success(std::nullopt);
+            auto created = UiLayoutClipEngine::Create({canvas.tree.Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), elements,
+                                                       MaximumUiLayoutClipNodes, MaximumUiLayoutScrollContainers, slots});
+            if (created.HasError())
+                return Result<std::optional<UiLayoutClipEngine>>::Failure(created.ErrorValue());
+            return Result<std::optional<UiLayoutClipEngine>>::Success(std::move(created).Value());
+        }
+
         /** @brief Requires strictly newer explicit evidence when any admitted viewport facts change. */
         bool NewEvidence(const UiAnimationViewport &old, const UiAnimationViewport &next) noexcept {
             return old == next || !old.presentation || (next.presentation && next.presentation->revision > old.presentation->revision);
@@ -80,6 +92,14 @@ namespace Horo::Runtime::Ui {
         if (!viewport.constraints.IsValid() || !viewport.content.IsValid() || !viewport.fontScale.IsValid() ||
             !viewport.intrinsic.IsValid() || !viewport.canvas.IsValid() || !viewport.policy.IsValid() || !evidence.IsValid())
             return Result<UiPresentationAttachmentId>::Failure(MakeError(UiErrors::PresentationProfileMalformed));
+        return AdoptAttachment(owner, index, id, view, std::move(viewport));
+    }
+
+    /** @copydoc UiAnimationOwner::AdoptAttachment */
+    Result<UiPresentationAttachmentId> UiAnimationOwner::AdoptAttachment(Storage &owner, const std::size_t index,
+                                                                         const UiPresentationAttachmentId id, const UiRenderViewId view,
+                                                                         UiAnimationViewport viewport) {
+        auto *canvas = owner.publisher.Current()->Canvas(owner.definition.canvas);
         try {
             const auto slots = std::min(MaximumUiLayoutSnapshotsInFlight, std::max(2U, owner.limits.retainedSnapshots + 1));
             auto layout = UiLayoutEngine::Create({canvas->tree.Instance(), canvas->tree.Canvas(), canvas->tree.SourceDocument(),
@@ -87,15 +107,9 @@ namespace Horo::Runtime::Ui {
                                                   slots, UiInteractionRevision::Create(1).Value()});
             if (layout.HasError())
                 return Result<UiPresentationAttachmentId>::Failure(layout.ErrorValue());
-            std::optional<UiLayoutClipEngine> clipping;
-            if (canvas->clipping) {
-                auto created = UiLayoutClipEngine::Create({canvas->tree.Instance(), canvas->tree.Canvas(), canvas->tree.SourceDocument(),
-                                                           static_cast<std::uint32_t>(owner.definition.elements.size()),
-                                                           MaximumUiLayoutClipNodes, MaximumUiLayoutScrollContainers, slots});
-                if (created.HasError())
-                    return Result<UiPresentationAttachmentId>::Failure(created.ErrorValue());
-                clipping.emplace(std::move(created).Value());
-            }
+            auto clipping = CreateAttachmentClipping(*canvas, static_cast<std::uint32_t>(owner.definition.elements.size()), slots);
+            if (clipping.HasError())
+                return Result<UiPresentationAttachmentId>::Failure(clipping.ErrorValue());
             std::vector<UiAnimationFocusGeometry> focusGeometry(owner.definition.elements.size());
             if (std::ranges::find(canvas->presentations, view, &UiPresentedInteractionState::View) == canvas->presentations.end()) {
                 auto tracker = UiPresentedInteractionState::Create(view, canvas->tree.Canvas());
@@ -103,15 +117,15 @@ namespace Horo::Runtime::Ui {
                     return Result<UiPresentationAttachmentId>::Failure(tracker.ErrorValue());
                 canvas->presentations.push_back(std::move(tracker).Value());
             }
-            free->emplace(Storage::Attachment{id,
-                                              view,
-                                              std::move(viewport),
-                                              std::move(layout).Value(),
-                                              std::move(clipping),
-                                              {},
-                                              {},
-                                              {},
-                                              std::move(focusGeometry)});
+            owner.attachments[index].emplace(Storage::Attachment{id,
+                                                                 view,
+                                                                 std::move(viewport),
+                                                                 std::move(layout).Value(),
+                                                                 std::move(clipping).Value(),
+                                                                 {},
+                                                                 {},
+                                                                 {},
+                                                                 std::move(focusGeometry)});
             owner.attachmentGenerations[index] = id.generation;
             owner.attachmentDirty = true;
             ++owner.commandRevision;
@@ -205,29 +219,39 @@ namespace Horo::Runtime::Ui {
         return storage.profiles->ApplyLayouts(canvas->tree, selected.Value(), storage.work.layoutDescriptors);
     }
 
+    /** @copydoc UiAnimationOwner::PrepareAttachmentStyles */
+    Result<UiPresentationProfileSelection> UiAnimationOwner::PrepareAttachmentStyles(Storage &storage, const std::size_t index) {
+        const auto &tree = storage.publisher.Current()->Canvas(storage.definition.canvas)->tree;
+        const auto &attachment = *storage.attachments[index];
+        for (std::size_t index = 0; index < storage.work.layoutDescriptors.size(); ++index)
+            storage.work.layoutDescriptors[index] = {storage.work.elementInputs[index].element, storage.definition.elements[index].layout,
+                                                     storage.definition.elements[index].intrinsic};
+        std::ranges::sort(storage.work.layoutDescriptors, {}, &UiLayoutElementDescriptor::element);
+        auto selection = storage.profiles->Select(tree, Evidence(tree, storage.definition.canvas, attachment.id, attachment.viewport,
+                                                                 storage.candidate.presentation));
+        if (selection.HasError())
+            return Result<UiPresentationProfileSelection>::Failure(selection.ErrorValue());
+        if (auto applied = storage.profiles->ApplyLayouts(tree, selection.Value(), storage.work.layoutDescriptors); applied.HasError())
+            return Result<UiPresentationProfileSelection>::Failure(applied.ErrorValue());
+        if (auto projected = AnimationInternal::ProjectLayout(storage.candidate.styles->Candidate(), storage.work.layoutBindings,
+                                                              storage.work.layoutDescriptors);
+            projected.HasError())
+            return Result<UiPresentationProfileSelection>::Failure(projected.ErrorValue());
+        return selection;
+    }
+
     /** @copydoc UiAnimationOwner::PrepareAttachments */
     Result<void> UiAnimationOwner::PrepareAttachments(Storage &storage) {
         auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
         const auto &tree = canvas->tree;
-        for (auto &entry : storage.attachments) {
+        for (std::size_t index = 0; index < storage.attachments.size(); ++index) {
+            auto &entry = storage.attachments[index];
             if (!entry || !entry->active)
                 continue;
             auto &attachment = *entry;
-            for (std::size_t index = 0; index < storage.work.layoutDescriptors.size(); ++index)
-                storage.work.layoutDescriptors[index] = {storage.work.elementInputs[index].element,
-                                                         storage.definition.elements[index].layout,
-                                                         storage.definition.elements[index].intrinsic};
-            std::ranges::sort(storage.work.layoutDescriptors, {}, &UiLayoutElementDescriptor::element);
-            auto selection = storage.profiles->Select(tree, Evidence(tree, storage.definition.canvas, attachment.id, attachment.viewport,
-                                                                     storage.candidate.presentation));
+            auto selection = PrepareAttachmentStyles(storage, index);
             if (selection.HasError())
                 return Result<void>::Failure(selection.ErrorValue());
-            if (auto applied = storage.profiles->ApplyLayouts(tree, selection.Value(), storage.work.layoutDescriptors); applied.HasError())
-                return applied;
-            if (auto projected = AnimationInternal::ProjectLayout(storage.candidate.styles->Candidate(), storage.work.layoutBindings,
-                                                                  storage.work.layoutDescriptors);
-                projected.HasError())
-                return projected;
             auto evaluator =
                 UiDeclarativeLayoutEvaluator::Create(storage.work.layoutDescriptors, storage.definition.intrinsicProvider.get());
             if (evaluator.HasError())

@@ -148,19 +148,11 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    /** @copydoc UiLayoutInspector::Capture */
-    UiLayoutInspectionResult UiLayoutInspector::Capture(const UiElementTree &tree, const UiLayoutSnapshot &layout,
-                                                        const UiLayoutClipSnapshot *clipping,
-                                                        const UiPresentationProfileSelection *selection) noexcept {
-        if (!storage_)
-            return {UiLayoutInspectionStatus::Stopped};
-        auto &owner = *storage_;
-        if (owner.thread != std::this_thread::get_id())
-            return {UiLayoutInspectionStatus::RejectedSource, UiLayoutInspectionRejection::WrongThread};
-        if (owner.stopped)
-            return {UiLayoutInspectionStatus::Stopped};
-        if (!owner.enabled)
-            return {UiLayoutInspectionStatus::Disabled};
+    /** @copydoc UiLayoutInspector::ValidateCaptureSources */
+    UiLayoutInspectionResult UiLayoutInspector::ValidateCaptureSources(const UiElementTree &tree, const UiLayoutSnapshot &layout,
+                                                                       const UiLayoutClipSnapshot *clipping,
+                                                                       const UiPresentationProfileSelection *selection) const noexcept {
+        const auto &owner = *storage_;
         if (tree.State() != UiElementTreeState::Active || tree.IssuerPin() != owner.issuer || tree.Instance() != owner.instance ||
             tree.Canvas() != owner.runtimeCanvas || tree.SourceDocument() != owner.document ||
             tree.SourceDocumentRevision() != owner.revision)
@@ -196,19 +188,48 @@ namespace Horo::Runtime::Ui {
              selection->evidence.runtimeCanvas != source.canvas || selection->evidence.tree != source.sources.tree ||
              selection->profile.has_value() != selection->priority.has_value() || (selection->profile && !selection->profile->IsValid())))
             return {UiLayoutInspectionStatus::RejectedSource, UiLayoutInspectionRejection::SelectionLineage};
+        return {UiLayoutInspectionStatus::Captured};
+    }
+
+    /** @copydoc UiLayoutInspector::PrepareCaptureHierarchy */
+    bool UiLayoutInspector::PrepareCaptureHierarchy(const UiElementTree &tree, const std::span<const UiLayoutRecord> records) noexcept {
+        auto &owner = *storage_;
         owner.traversal.resize(records.size());
         owner.hierarchy.resize(records.size());
         const auto traversed = tree.Preorder(owner.traversal);
         if (traversed.HasError() || traversed.Value() != records.size())
-            return {UiLayoutInspectionStatus::RejectedSource, UiLayoutInspectionRejection::LayoutMembership};
+            return false;
         for (std::size_t index = 0; index < records.size(); ++index) {
             if (records[index].element != owner.traversal[index])
-                return {UiLayoutInspectionStatus::RejectedSource, UiLayoutInspectionRejection::LayoutMembership};
+                return false;
             const auto node = tree.Get(owner.traversal[index]);
             if (node.HasError())
-                return {UiLayoutInspectionStatus::RejectedSource, UiLayoutInspectionRejection::LayoutMembership};
+                return false;
             owner.hierarchy[index] = node.Value();
         }
+        return true;
+    }
+
+    /** @copydoc UiLayoutInspector::Capture */
+    UiLayoutInspectionResult UiLayoutInspector::Capture(const UiElementTree &tree, const UiLayoutSnapshot &layout,
+                                                        const UiLayoutClipSnapshot *clipping,
+                                                        const UiPresentationProfileSelection *selection) noexcept {
+        if (!storage_)
+            return {UiLayoutInspectionStatus::Stopped};
+        auto &owner = *storage_;
+        if (owner.thread != std::this_thread::get_id())
+            return {UiLayoutInspectionStatus::RejectedSource, UiLayoutInspectionRejection::WrongThread};
+        if (owner.stopped)
+            return {UiLayoutInspectionStatus::Stopped};
+        if (!owner.enabled)
+            return {UiLayoutInspectionStatus::Disabled};
+        const auto validated = ValidateCaptureSources(tree, layout, clipping, selection);
+        if (validated.status != UiLayoutInspectionStatus::Captured)
+            return validated;
+        const auto &source = layout.Descriptor();
+        const auto records = layout.Records();
+        if (!PrepareCaptureHierarchy(tree, records))
+            return {UiLayoutInspectionStatus::RejectedSource, UiLayoutInspectionRejection::LayoutMembership};
         const auto available = std::ranges::find_if(owner.slots, [](const auto &slot) {
             return slot.use_count() == 1;
         });

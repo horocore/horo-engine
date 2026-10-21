@@ -460,6 +460,27 @@ namespace Horo::Runtime::Ui {
             return {};
         }
 
+        /** @brief Validates the complete actual request before preparing any candidate state. */
+        [[nodiscard]] Result<void> ValidateRequest(const UiElementTree &tree, const UiLayoutUpdateRequest &request) const {
+            if (!request.sources.IsValid() || !request.rootConstraints.IsValid() || !request.rootContent.IsValid() ||
+                !request.fontScale.IsValid() || request.evaluator == nullptr)
+                return Failure<void>(UiErrors::LayoutInvalid);
+            if (tree.State() != UiElementTreeState::Active || tree.Instance() != descriptor.instance ||
+                tree.Canvas() != descriptor.canvas || tree.SourceDocument() != descriptor.document ||
+                tree.SourceDocumentRevision() != request.sources.document || tree.Revision() != request.sources.tree ||
+                tree.Size() > descriptor.elementCapacity)
+                return Failure<void>(UiErrors::LayoutSourceStale);
+            return Result<void>::Success();
+        }
+
+        /** @brief Distinguishes reused publications from any source, root or primary-reservation change. */
+        [[nodiscard]] bool HasSourceChanges(const UiLayoutUpdateRequest &request,
+                                            const UiInteractionRevision exactInteraction) const noexcept {
+            return !current || published.sources != request.sources || published.rootConstraints != request.rootConstraints ||
+                   published.rootContent != request.rootContent || published.fontScale != request.fontScale ||
+                   (exactInteraction.IsValid() && exactInteraction != published.interaction);
+        }
+
         [[nodiscard]] Result<std::shared_ptr<UiLayoutSnapshot::Storage>> BuildSnapshot(const UiLayoutUpdateRequest &request,
                                                                                        const UiInteractionRevision exactInteraction) {
             UiInteractionRevision publication = descriptor.initialInteractionRevision;
@@ -686,14 +707,8 @@ namespace Horo::Runtime::Ui {
         ++owner->reservationSequence;
         const auto exactInteraction = primary ? primary->Candidate().Descriptor().interaction : UiInteractionRevision{};
         Storage::Reservation reservation{*owner};
-        if (!request.sources.IsValid() || !request.rootConstraints.IsValid() || !request.rootContent.IsValid() ||
-            !request.fontScale.IsValid() || request.evaluator == nullptr)
-            return Failure<PreparedUpdate>(UiErrors::LayoutInvalid);
-        if (tree.State() != UiElementTreeState::Active || tree.Instance() != owner->descriptor.instance ||
-            tree.Canvas() != owner->descriptor.canvas || tree.SourceDocument() != owner->descriptor.document ||
-            tree.SourceDocumentRevision() != request.sources.document || tree.Revision() != request.sources.tree ||
-            tree.Size() > owner->descriptor.elementCapacity)
-            return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
+        if (auto valid = owner->ValidateRequest(tree, request); valid.HasError())
+            return Result<PreparedUpdate>::Failure(valid.ErrorValue());
 
         const auto treeIssuer = tree.IssuerPin();
         const auto admittedRoot = tree.Root();
@@ -703,10 +718,7 @@ namespace Horo::Runtime::Ui {
         const bool rootChanged =
             owner->current && (owner->published.rootConstraints != request.rootConstraints ||
                                owner->published.rootContent != request.rootContent || owner->published.fontScale != request.fontScale);
-        const bool sourcesChanged =
-            !owner->current || owner->published.sources != request.sources || owner->published.rootConstraints != request.rootConstraints ||
-            owner->published.rootContent != request.rootContent || owner->published.fontScale != request.fontScale ||
-            (exactInteraction.IsValid() && exactInteraction != owner->published.interaction);
+        const bool sourcesChanged = owner->HasSourceChanges(request, exactInteraction);
         if (!sourcesChanged && owner->invalidations.empty()) {
             owner->current->leases.fetch_add(1);
             owner->reservedInteraction = owner->published.interaction;

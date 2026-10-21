@@ -306,10 +306,7 @@ namespace Horo::Runtime::Ui {
     private:
         friend class UiRuntimeInstance;
         /** @brief Adopts validated cooked state. */
-        CookedUiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
-                         std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
-                         std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes,
-                         std::vector<UiDocumentPresentationProfiles> profiles, std::vector<std::uint8_t> payload) noexcept;
+        CookedUiDocument(const UiDocument &document, std::vector<std::uint8_t> payload);
         UiDocumentSchemaVersion schemaVersion_;                /**< Source schema represented by this cooked snapshot. */
         UiDocumentId id_;                                      /**< Stable authored identity. */
         UiDocumentRevision revision_;                          /**< Source authored revision. */

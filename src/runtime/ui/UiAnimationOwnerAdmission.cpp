@@ -51,15 +51,9 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    /** @copydoc UiAnimationOwner::InitializeBindings */
-    Result<void> UiAnimationOwner::InitializeBindings(Storage &storage, UiReloadGeneration &generation) {
-        auto *canvas = generation.Canvas(storage.definition.canvas);
-        if (const auto valid = AnimationInternal::ValidateDefinitions(storage.definition, *canvas, storage.registry, storage.limits);
-            valid.HasError())
-            return valid;
-        if (auto reserved = ReserveInteractionSources(*canvas); reserved.HasError())
-            return reserved;
-        const auto &tree = canvas->tree;
+    /** @copydoc UiAnimationOwner::InitializeProfiles */
+    Result<void> UiAnimationOwner::InitializeProfiles(Storage &storage, UiReloadGeneration &generation) {
+        const auto &tree = generation.Canvas(storage.definition.canvas)->tree;
         const auto tables = generation.Instance().PresentationProfiles();
         const auto table = std::ranges::find(tables, storage.definition.canvas, &UiDocumentPresentationProfiles::canvas);
         const auto tableRevision = table == tables.end() ? UiPresentationProfileRevision::Create(1).Value() : table->revision;
@@ -74,6 +68,20 @@ namespace Horo::Runtime::Ui {
                                          storage.limits.timelines,
                                      1};
         storage.presentation = UiLayoutPresentationRevision::Create(1).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiAnimationOwner::InitializeBindings */
+    Result<void> UiAnimationOwner::InitializeBindings(Storage &storage, UiReloadGeneration &generation) {
+        auto *canvas = generation.Canvas(storage.definition.canvas);
+        if (const auto valid = AnimationInternal::ValidateDefinitions(storage.definition, *canvas, storage.registry, storage.limits);
+            valid.HasError())
+            return valid;
+        if (auto reserved = ReserveInteractionSources(*canvas); reserved.HasError())
+            return reserved;
+        const auto &tree = canvas->tree;
+        if (auto profiles = InitializeProfiles(storage, generation); profiles.HasError())
+            return profiles;
         storage.binding.source = {tree.Instance().ownership, storage.range.FirstSlot(), 1};
         for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {
             auto &sample = storage.binding.clocks.domains[index];

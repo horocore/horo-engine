@@ -132,6 +132,12 @@ namespace Horo::Runtime::Ui {
 
     private:
         struct Storage;
+        /** @brief Validates all source lineage and capacities before any candidate slot mutation; Captured means admitted. */
+        [[nodiscard]] UiLayoutInspectionResult ValidateCaptureSources(const UiElementTree &tree, const UiLayoutSnapshot &layout,
+                                                                      const UiLayoutClipSnapshot *clipping,
+                                                                      const UiPresentationProfileSelection *selection) const noexcept;
+        /** @brief Validates exact preorder membership into preallocated private scratch without changing a snapshot slot. */
+        [[nodiscard]] bool PrepareCaptureHierarchy(const UiElementTree &tree, std::span<const UiLayoutRecord> records) noexcept;
         /** @brief Adopts fully allocated isolated observer state. */
         explicit UiLayoutInspector(std::unique_ptr<Storage> storage) noexcept;
         std::unique_ptr<Storage> storage_;
