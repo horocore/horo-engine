@@ -162,6 +162,86 @@ jobs:
             build/ci-vulkan-commands/compile_commands.json
           if-no-files-found: warn
 
+  directx-resources:
+    name: D3D12 · Windows WARP resources
+    needs: tooling
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: cl
+      CXX: cl
+      HORO_COMPILER_LAUNCHER: sccache
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Setup build tools
+        uses: ./.github/actions/setup-build-tools
+      - name: Restore dependency and compiler caches
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-tests-v1
+          mode: Debug
+          max-size: 2G
+      - name: Record exact resource qualification provenance
+        env:
+          HORO_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p build/d3d12-resource-evidence
+          python - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import subprocess
+          assert platform.system() == "Windows" and platform.machine().lower() in {"amd64", "x86_64"}
+          record = {"sourceHead": os.environ["HORO_SOURCE_HEAD"],
+                    "checkoutRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                    "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                    "runnerOS": os.environ["RUNNER_OS"], "runnerArch": os.environ["RUNNER_ARCH"],
+                    "imageVersion": os.environ.get("ImageVersion"), "adapter": "explicit test-only WARP"}
+          Path("build/d3d12-resource-evidence/provenance.json").write_text(json.dumps(record, indent=2))
+          PYTHON
+      - name: Configure native resource composition
+        run: |
+          set -o pipefail
+          cmake --preset ci-windows-debug -B build/ci-d3d12-resources -DBUILD_TESTING=ON \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DHORO_BUILD_RENDER_VULKAN=OFF \
+            -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF \
+            -DHORO_BUILD_INPUT_SDL3=OFF -DHORO_BUILD_EXAMPLES=OFF \
+            2>&1 | tee build/d3d12-resource-evidence/configure.txt
+      - name: Build actual native resource owner and startup contracts
+        run: |
+          set -o pipefail
+          cmake --build build/ci-d3d12-resources --parallel 2 --target \
+            HoroD3D12InitializationTests HoroD3D12ResourceTests \
+            2>&1 | tee build/d3d12-resource-evidence/build.txt
+      - name: Run startup lifecycle contracts
+        run: |
+          set -o pipefail
+          ctest --test-dir build/ci-d3d12-resources --output-on-failure --parallel 1 --no-tests=error \
+            -R '^HoroD3D12InitializationTests::' \
+            --output-junit "$PWD/build/d3d12-resource-evidence/initialization.xml" \
+            2>&1 | tee build/d3d12-resource-evidence/initialization.txt
+      - name: Run actual WARP byte descriptor and retirement regressions
+        run: |
+          set -o pipefail
+          build/ci-d3d12-resources/tests/HoroD3D12ResourceTests.exe '[warp]' \
+            --reporter junit --out build/d3d12-resource-evidence/warp.xml \
+            2>&1 | tee build/d3d12-resource-evidence/warp.txt
+      - name: Upload resource qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d3d12-resource-qualification
+          path: |
+            build/d3d12-resource-evidence/
+            build/ci-d3d12-resources/CMakeCache.txt
+            build/ci-d3d12-resources/compile_commands.json
+          if-no-files-found: warn
+
   test:
     name: Test · ${{ matrix.name }}
     needs: tooling

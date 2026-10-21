@@ -2756,6 +2756,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
             runtime/renderer/modules/vulkan/VulkanGraphBarriers.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackend.cpp
+        runtime/renderer/modules/vulkan/VulkanBackendAdmission.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.cpp
     )
     add_library(HoroEngine::RenderVulkan ALIAS HoroRenderVulkan)

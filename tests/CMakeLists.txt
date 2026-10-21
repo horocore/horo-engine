@@ -5006,6 +5006,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             unit/runtime/renderer/VulkanRenderBackendTests.cpp
             unit/runtime/renderer/VulkanResourceRuntimeTests.cpp
             unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
+            unit/runtime/renderer/VulkanGraphRuntimeTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
     target_include_directories(HoroRenderVulkanTests PRIVATE

@@ -103,6 +103,11 @@ This private service does not modify HORO-326's public submission/drain authorit
 
 ## Qualification
 
+The independent `D3D12 · Windows WARP resources` CI job builds only the startup
+and resource qualification closure, executes the explicit `[warp]` filter, and
+uploads source/checkout provenance, compiler commands, logs and JUnit results.
+Its Windows Server WARP result does not qualify production Windows 11 host admission.
+
 `HoroD3D12ResourceTests` runs portable bound validation on every platform and
 explicit WARP native tests on Windows x64. WARP is test-selected, with no production
 software fallback. Native resource tests construct an actual WARP device/direct

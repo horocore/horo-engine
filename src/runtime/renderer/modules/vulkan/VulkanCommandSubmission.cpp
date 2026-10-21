@@ -9,15 +9,24 @@ namespace Horo::Render::Detail {
         if (submission.signal.value - queue.observed > maximumTimelineDifference)
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::TimelineInvalid, "Signal exceeds the admitted device timeline value-difference limit."));
-        for (std::size_t index = 0; index < submission.waits.size(); ++index) {
-            const auto wait = submission.waits[index];
+        return ValidateWaits(submission.waits, {});
+    }
+
+    /** @brief Checks exact accepted or earlier-batch producer signals and rejects duplicate queue waits. */
+    Result<void> VulkanCommandRuntime::Impl::ValidateWaits(const std::span<const RenderTimelinePoint> waits,
+                                                           const std::span<const RenderGraphQueueSubmission> earlier) const {
+        for (std::size_t index = 0; index < waits.size(); ++index) {
+            const auto wait = waits[index];
             const auto *producer = FindQueue(wait.queue);
-            if (producer == nullptr || !producer->WasIssued(wait.value))
+            const bool earlierSignal = std::ranges::any_of(earlier, [&wait](const RenderGraphQueueSubmission &record) {
+                return record.submission.signal == wait;
+            });
+            if (producer == nullptr || (!earlierSignal && !producer->WasIssued(wait.value)))
                 return Result<void>::Failure(
-                    MakeError(VulkanBackendErrors::TimelineInvalid, "A GPU wait must name an already accepted exact producer point."));
-            for (std::size_t prior = 0; prior < index; ++prior)
-                if (submission.waits[prior].queue == wait.queue)
-                    return Result<void>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid));
+                    MakeError(VulkanBackendErrors::TimelineInvalid, "A GPU wait has no exact issued producer point."));
+            for (std::size_t previous = 0; previous < index; ++previous)
+                if (waits[previous].queue == wait.queue)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid, "Duplicate queue timeline wait."));
         }
         return Result<void>::Success();
     }
@@ -58,20 +67,8 @@ namespace Horo::Render::Detail {
                     MakeError(VulkanBackendErrors::TimelineInvalid, "Bounded issued-point history is exhausted by discontinuous signals."));
             if (available[index] == 0)
                 return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
-            for (std::size_t waitIndex = 0; waitIndex < value.waits.size(); ++waitIndex) {
-                const auto wait = value.waits[waitIndex];
-                const auto producer = queueIndex(wait.queue);
-                const bool earlierBatchSignal =
-                    std::ranges::any_of(records.first(recordIndex), [&wait](const RenderGraphQueueSubmission &prior) {
-                    return prior.submission.signal == wait;
-                });
-                if (producer == impl_->queues.size() || (!earlierBatchSignal && !impl_->queues[producer].WasIssued(wait.value)))
-                    return Result<void>::Failure(
-                        MakeError(VulkanBackendErrors::TimelineInvalid, "A GPU wait has no previously submitted exact queue timeline."));
-                for (std::size_t previous = 0; previous < waitIndex; ++previous)
-                    if (value.waits[previous].queue == wait.queue)
-                        return Result<void>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid, "Duplicate queue timeline wait."));
-            }
+            if (auto waits = impl_->ValidateWaits(value.waits, records.first(recordIndex)); waits.HasError())
+                return waits;
             --available[index];
             signaled[index] = value.signal.value;
             order = value.order.value;
