@@ -7,6 +7,7 @@
 #include "Horo/Editor/NavigationInspector.h"
 #include "Horo/Editor/PhysicsInspector.h"
 #include "Horo/Editor/SequenceDocument.h"
+#include "Horo/Editor/SourceEditingCommands.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Foundation/Result.h"
@@ -81,6 +82,7 @@ namespace Horo::Editor {
         UpdateSequenceTimeline,
         EditPCGGraph,
         ReturnToWelcome,
+        SourceDocumentInteraction,
         SaveSourceDocument,
         SaveSourceDocumentAs,
         SaveAllSourceDocuments,
@@ -274,6 +276,8 @@ namespace Horo::Editor {
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<DocumentInstanceId> documentMoveBefore;
+        std::optional<SourceEditingCommand> sourceInteraction;
+        bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
         std::optional<SequenceTimelineState> sequenceTimeline;
@@ -416,6 +420,8 @@ namespace Horo::Editor {
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::vector<SourceHistoryState> sourceHistory;
+        std::optional<Result<SourceEditingPublication>> sourceEditingResult;
 
         float leftPanelWidth = 268.0F;
         float rightPanelWidth = 300.0F;

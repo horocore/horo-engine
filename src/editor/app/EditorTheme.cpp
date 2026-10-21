@@ -186,6 +186,27 @@ namespace Horo::Editor::Theme {
             OverrideFloat(object, "iconSize", metrics.iconSize);
         }
 
+        /** @brief Applies optional semantic source roles without inventing a separate default palette. */
+        void ReadSourceSyntaxOverrides(const nlohmann::json &tokenJson, SourceColorTokens &tokens) {
+            const auto syntax = tokenJson.find("sourceSyntax");
+            if (syntax == tokenJson.end() || !syntax->is_object())
+                return;
+            const auto overrideColor = [&](const char *key, std::optional<ImVec4> &target) {
+                const auto found = syntax->find(key);
+                ImVec4 color;
+                if (found != syntax->end() && found->is_string() && ParseHexColor(found->get<std::string>(), color))
+                    target = color;
+            };
+            overrideColor("text", tokens.text);
+            overrideColor("keyword", tokens.keyword);
+            overrideColor("type", tokens.type);
+            overrideColor("string", tokens.string);
+            overrideColor("number", tokens.number);
+            overrideColor("comment", tokens.comment);
+            overrideColor("directive", tokens.directive);
+            overrideColor("property", tokens.property);
+        }
+
         /** @brief Reads finite bounded host motion settings from the selected user theme. */
         void ReadMotionOverrides(const nlohmann::json &root, MotionTokens &motion) {
             const auto found = root.find("motion");
@@ -233,6 +254,8 @@ namespace Horo::Editor::Theme {
             if (const auto spacingIt = tokenJson.find("layoutSpacing"); spacingIt != tokenJson.end() && spacingIt->is_object()) {
                 OverrideFloat(*spacingIt, "propertyRowGap", tokens.spacing.propertyRowGap);
             }
+
+            ReadSourceSyntaxOverrides(tokenJson, tokens.sourceSyntax);
 
             if (const auto typographyIt = tokenJson.find("typography"); typographyIt != tokenJson.end() && typographyIt->is_object()) {
                 OverrideFloat(*typographyIt, "sansBase", tokens.typography.sansBase);

@@ -37,9 +37,33 @@ namespace Horo::Editor::Detail {
 
 namespace Horo::Editor {
     struct SourceDocumentService::Storage final {
+        struct HistoryEntry final {
+            std::size_t offset{};
+            std::string removed;
+            std::string inserted;
+            SourceEditingView before;
+            SourceEditingView after;
+
+            [[nodiscard]] std::size_t Bytes() const noexcept {
+                return removed.size() + inserted.size();
+            }
+        };
+
+        struct HistoryStep final {
+            SourceTextEdit patch;
+            SourceEditingView view;
+            std::size_t position{};
+        };
+
         struct Record final {
             std::filesystem::path path;
             std::shared_ptr<const Detail::SourceDocumentRoot> root;
+            std::vector<HistoryEntry> history{};
+            std::size_t historyPosition{};
+            std::size_t historyBytes{};
+            SourceHistoryBoundary historyBoundary{SourceHistoryBoundary::None};
+            /** @brief Borrows one available replay delta without changing history. */
+            [[nodiscard]] std::optional<HistoryStep> Step(bool redo) const;
         };
 
         std::filesystem::path projectRoot;
@@ -48,6 +72,11 @@ namespace Horo::Editor {
         bool closed{};
         bool saving{};
         std::vector<Record> records;
+        /** @brief Copies and validates one history entry and reserves capacity before publication. */
+        [[nodiscard]] Result<HistoryEntry> PrepareHistory(Record &record, const SourceTextEdit &edit,
+                                                          const Detail::SourceText &after) const;
+        /** @brief Commits a prepared entry without throwing; evicts obsolete redo/oldest entries at finite caps. */
+        void CommitHistory(Record &record, HistoryEntry entry) const noexcept;
         /** @brief Validates owner-thread access, open lifecycle and project admission. */
         [[nodiscard]] Result<void> Check() const;
         /** @brief Reserves candidate bytes alongside all currently owned distinct buffers. */

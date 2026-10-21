@@ -459,4 +459,64 @@ namespace {
         DesignSystem::ApplyGlobalUiScale(baseline, 2.0F);
         CHECK(SourceDocumentCloseModal::LogicalFooterHeight(baseline) == Catch::Approx(logical));
     }
+
+    /** @brief Owns the source history scenario's filesystem for the controller lifetime. */
+    struct SourceHistoryProject final {
+        std::filesystem::path root =
+            std::filesystem::temp_directory_path() /
+            ("horo-workspace-source-history-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+        ScopedSourceProjectCleanup cleanup{root};
+
+        SourceHistoryProject() {
+            std::filesystem::create_directory(root);
+            std::ofstream file(root / "code.cpp");
+            file << "base";
+            REQUIRE(file.good());
+        }
+    };
+
+    TEST_CASE("Workspace source interactions publish exact revisions history and view restoration", "[unit][editor][source][history]") {
+        SourceHistoryProject project;
+        TestWorkspaceController controller{project.root, {}, [](const SourceOpenResult &) {
+            return true;
+        }};
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::OpenSourceFile;
+        command.sourceOpenRequest = SourceOpenRequest{.path = "code.cpp"};
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().sourceDocuments.size() == 1);
+        const auto snapshot = controller.ViewModel().sourceDocuments.front();
+        const auto id = snapshot.Identity().instance;
+        const SourceEditingView view{0, 4, -5, SourceEditingViewId{77}};
+        const auto plan = PlanSourceReplacement(snapshot, view, "edited");
+        REQUIRE(plan.HasValue());
+        command = {};
+        command.command = EditorWorkspaceViewCommand::SourceDocumentInteraction;
+        command.sourceInteraction = SourceEditSubmission{id, plan.Value()};
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().sourceEditingResult);
+        REQUIRE(controller.ViewModel().sourceEditingResult->HasValue());
+        CHECK(controller.ViewModel().sourceDocuments.front().Text() == "edited");
+        CHECK(controller.ViewModel().sourceHistory.front().undoEntries == 1);
+        CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().front().dirty);
+        command.sourceInteraction = SourceHistoryRequest{id, 2, SourceHistoryDirection::Undo};
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().sourceEditingResult->HasValue());
+        CHECK(controller.ViewModel().sourceEditingResult->Value().restoration == view);
+        CHECK(controller.ViewModel().sourceDocuments.front().Text() == "base");
+        CHECK_FALSE(controller.ViewModel().workspacePanelHost.DocumentTabs().front().dirty);
+        command.sourceInteraction = SourceHistoryRequest{id, 2, SourceHistoryDirection::Redo};
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().sourceEditingResult->HasError());
+        CHECK(controller.ViewModel().sourceDocuments.front().Text() == "base");
+        CHECK(controller.ViewModel().sourceHistory.front().redoEntries == 1);
+        command.sourceInteraction = SourceHistoryRequest{id, 3, SourceHistoryDirection::Redo};
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().sourceEditingResult->HasValue());
+        CHECK(controller.ViewModel().sourceDocuments.front().Text() == "edited");
+        command.sourceInteraction.reset();
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().sourceEditingResult->HasError());
+        CHECK(controller.ViewModel().sourceDocuments.front().Revision() == 4);
+    }
 }  // namespace
