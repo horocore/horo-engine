@@ -646,29 +646,43 @@ namespace Horo::Editor {
                 return playSceneFactory;
             }
 
+            /** @brief Compose one explicit resource lease without replacing the prior controller's capability. */
+            Result<std::unique_ptr<UiInspectorResources>> PrepareUiInspectorResources(const std::filesystem::path &root,
+                                                                                      const Assets::AssetId owner) {
+                if (const auto *factory = services_.TryGet<UiInspectorResourcesFactory>())
+                    return (*factory)(root, owner);
+                return Result<std::unique_ptr<UiInspectorResources>>::Success(nullptr);
+            }
+
+            /** @brief Allocate one secure workspace incarnation before preparing any borrowed capability. */
+            Result<Assets::AssetId> NewWorkspaceSessionOwner() {
+                std::array<std::uint8_t, 16> sessionBytes{};
+                const auto entropy = Platform::CreateNativeSecureRandomSource();
+                if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(sessionBytes))); generated.HasError())
+                    return Result<Assets::AssetId>::Failure(generated.ErrorValue());
+                const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
+                if (!sessionOwner.IsValid())
+                    return Result<Assets::AssetId>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
+                return Result<Assets::AssetId>::Success(sessionOwner);
+            }
+
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =
                     services_.TryGet<Application::GameplayBuildEnvironment>();
-                std::array<std::uint8_t, 16> sessionBytes{};
-                const auto entropy = Platform::CreateNativeSecureRandomSource();
-                if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(sessionBytes))); generated.HasError())
-                    return Result<void>::Failure(generated.ErrorValue());
-                const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
-                if (!sessionOwner.IsValid())
-                    return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
+                const auto session = NewWorkspaceSessionOwner();
+                if (session.HasError())
+                    return Result<void>::Failure(session.ErrorValue());
+                const auto sessionOwner = session.Value();
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
-                std::unique_ptr<UiInspectorResources> uiInspectorResources;
-                if (const auto *factory = services_.TryGet<UiInspectorResourcesFactory>()) {
-                    auto prepared = (*factory)(projectRoot, sessionOwner);
-                    if (prepared.HasError())
-                        return Result<void>::Failure(prepared.ErrorValue());
-                    uiInspectorResources = std::move(prepared).Value();
-                }
+                auto resources = PrepareUiInspectorResources(projectRoot, sessionOwner);
+                if (resources.HasError())
+                    return Result<void>::Failure(resources.ErrorValue());
+                auto uiInspectorResources = std::move(resources).Value();
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{

@@ -351,6 +351,23 @@ namespace Horo::Editor {
         output.uiCanvasPresentation = command;
     }
 
+    /** @copydoc UiCanvasInspectorPanel::DrawFields */
+    bool UiCanvasInspectorPanel::DrawFields(const EditorGuiContext &context, const bool stylesAvailable) {
+        Ui::FieldLabel(Label(context, "workspace.ui_inspector.title"), context.theme.fonts);
+        bool changed = UiInspectorWidgets::Layout(context, draft_.Values().layout, layoutText_);
+        changed = DrawIntrinsic(context) || changed;
+        if (!stylesAvailable)
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.registry_unavailable"), Theme::Muted(),
+                            context.theme.fonts);
+        ImGui::BeginDisabled(!stylesAvailable);
+        changed = DrawResources(context) || changed;
+        changed = DrawStyle(context) || changed;
+        ImGui::EndDisabled();
+        if (const auto *type = Runtime::Ui::UiElementCatalog::Find(sourceElement_.type.Value()))
+            changed = authoring_.Draw(context, type->kind, presentation_) || changed;
+        return changed;
+    }
+
     /** @copydoc UiCanvasInspectorPanel::Draw */
     void UiCanvasInspectorPanel::Draw(const UiCanvasWorkspaceDocument &source, const EditorGuiContext &context,
                                       EditorWorkspaceViewCommandData &output) {
@@ -377,18 +394,7 @@ namespace Horo::Editor {
             Capture(source, current);
         const auto &id = current.element.Bytes();
         ImGui::PushID(reinterpret_cast<const char *>(id.data()), reinterpret_cast<const char *>(id.data() + id.size()));
-        Ui::FieldLabel(Label(context, "workspace.ui_inspector.title"), context.theme.fonts);
-        bool changed = UiInspectorWidgets::Layout(context, draft_.Values().layout, layoutText_);
-        changed = DrawIntrinsic(context) || changed;
-        if (!source.inspectorStyles.IsValid())
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.registry_unavailable"), Theme::Muted(),
-                            context.theme.fonts);
-        ImGui::BeginDisabled(!source.inspectorStyles.IsValid());
-        changed = DrawResources(context) || changed;
-        changed = DrawStyle(context) || changed;
-        ImGui::EndDisabled();
-        if (const auto *type = Runtime::Ui::UiElementCatalog::Find(sourceElement_.type.Value()))
-            changed = authoring_.Draw(context, type->kind, presentation_) || changed;
+        const bool changed = DrawFields(context, source.inspectorStyles.IsValid());
         if (changed) {
             dirty_ = true;
             Validate();

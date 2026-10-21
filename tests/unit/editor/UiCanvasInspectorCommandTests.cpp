@@ -27,8 +27,8 @@ namespace {
 
         UiElementId selected;
 
-        explicit InspectorSource(const UiElementKind kind = UiElementKind::Canvas) {
-            selected = Id<UiElementId>(kind == UiElementKind::Canvas ? 3 : 4);
+        explicit InspectorSource(const UiElementKind kind = UiElementKind::Canvas)
+            : selected(Id<UiElementId>(kind == UiElementKind::Canvas ? 3 : 4)) {
             std::filesystem::create_directories(root);
             UiDocumentBuilder builder{Id<UiDocumentId>(1), UiDocumentRevision::Create(1).Value()};
             REQUIRE(builder.AddCanvas({.id = Id<UiCanvasId>(2), .rootElement = Id<UiElementId>(3), .referenceResolution = {800, 600}})

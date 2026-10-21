@@ -321,6 +321,23 @@ namespace Horo::Runtime::Ui::PresentationCodec {
             Array(value, 2);
             return {Identity<RuntimeStyleAssetId>(value[0]), Identity<UiStyleClassId>(value[1])};
         }
+
+        /** @brief Decode one qualified literal/token assignment using the canonical typed value codec. */
+        UiStyleAssignment Assignment(const Json &entry) {
+            Fields(entry, {"property", "source"});
+            const auto &source = entry.at("source");
+            UiStyleValueSource decoded;
+            if (source.contains("token")) {
+                Fields(source, {"token"});
+                const auto &token = source.at("token");
+                Array(token, 2);
+                decoded = UiStyleValueSource::Token({Identity<RuntimeStyleAssetId>(token[0]), Identity<UiStyleTokenId>(token[1])});
+            } else {
+                Fields(source, {"literal"});
+                decoded = UiStyleValueSource::Literal(Literal(source.at("literal")));
+            }
+            return {Identity<UiStylePropertyId>(entry.at("property")), std::move(decoded), false};
+        }
     }  // namespace
 
     /** @copydoc Encode */
@@ -376,19 +393,7 @@ namespace Horo::Runtime::Ui::PresentationCodec {
             for (const auto &entry : classes)
                 presentation.classes.push_back(Class(entry));
             for (const auto &entry : assignments) {
-                Fields(entry, {"property", "source"});
-                const auto &source = entry.at("source");
-                UiStyleValueSource decoded;
-                if (source.contains("token")) {
-                    Fields(source, {"token"});
-                    const auto &token = source.at("token");
-                    Array(token, 2);
-                    decoded = UiStyleValueSource::Token({Identity<RuntimeStyleAssetId>(token[0]), Identity<UiStyleTokenId>(token[1])});
-                } else {
-                    Fields(source, {"literal"});
-                    decoded = UiStyleValueSource::Literal(Literal(source.at("literal")));
-                }
-                presentation.inlineStyle.push_back({Identity<UiStylePropertyId>(entry.at("property")), std::move(decoded), false});
+                presentation.inlineStyle.push_back(Assignment(entry));
             }
             if (version == 2) {
                 auto authored = ReadAuthoring(value, presentation);

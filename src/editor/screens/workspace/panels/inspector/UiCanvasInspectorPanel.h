@@ -38,6 +38,10 @@ namespace Horo::Editor {
         void SelectClass(int index);
         /** @brief Cache local typed and retained-text validity on input events. */
         void Validate();
+        /** @brief Draw detached fields with actual capability availability. @param context Shared context.
+         * @param stylesAvailable Whether the real style producer is available. @return Whether any retained field changed.
+         */
+        bool DrawFields(const EditorGuiContext &context, bool stylesAvailable);
         /** @brief Draw registry namespace IDs. @param context Shared controls. @return Whether values changed. */
         bool DrawResources(const EditorGuiContext &context);
         /** @brief Draw bounded class references. @param context Shared controls. @return Whether values changed. */

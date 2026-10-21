@@ -34,6 +34,24 @@ namespace Horo::Editor {
         [[nodiscard]] auto operator<=>(const UiInspectorContext &) const noexcept = default;
     };
 
+    /** @brief Parse bounded retained numeric text without changing the last valid typed destination.
+     * @param bytes Null-terminated input, rejected when unterminated. @param value Last valid value.
+     * @return Whether the entire finite number parsed without narrowing or fallback.
+     */
+    template <typename T, std::size_t N> [[nodiscard]] bool ParseUiInspectorNumber(const std::array<char, N> &bytes, T &value) noexcept {
+        const auto end = std::find(bytes.begin(), bytes.end(), '\0');
+        const auto count = end == bytes.end() ? 0 : std::distance(bytes.begin(), end);
+        const char *last = bytes.data() + count;
+        T candidate{};
+        const auto parsed = std::from_chars(bytes.data(), last, candidate);
+        bool valid = parsed.ec == std::errc{} && parsed.ptr == last;
+        if constexpr (std::floating_point<T>)
+            valid = valid && std::isfinite(candidate);
+        if (valid)
+            value = candidate;
+        return valid;
+    }
+
     /** @brief Fixed storage for exact integers and fixed-point values, retaining invalid user input. */
     struct UiInspectorInteger final {
         std::array<char, 24> bytes{};
@@ -54,17 +72,7 @@ namespace Horo::Editor {
         template <std::integral T>
             requires(!std::same_as<T, bool>)
         [[nodiscard]] bool Parse(T &value) noexcept {
-            const auto end = std::find(bytes.begin(), bytes.end(), '\0');
-            if (end == bytes.end() || end == bytes.begin()) {
-                valid = false;
-                return false;
-            }
-            T candidate{};
-            const char *last = bytes.data() + std::distance(bytes.begin(), end);
-            const auto parsed = std::from_chars(bytes.data(), last, candidate);
-            valid = parsed.ec == std::errc{} && parsed.ptr == last;
-            if (valid)
-                value = candidate;
+            valid = ParseUiInspectorNumber(bytes, value);
             return valid;
         }
     };
@@ -86,17 +94,7 @@ namespace Horo::Editor {
          * @param value Typed destination. @return Whether complete finite text parsed.
          */
         [[nodiscard]] bool Parse(double &value) noexcept {
-            const auto end = std::find(bytes.begin(), bytes.end(), '\0');
-            if (end == bytes.end() || end == bytes.begin()) {
-                valid = false;
-                return false;
-            }
-            double candidate{};
-            const auto parsed =
-                std::from_chars(bytes.data(), bytes.data() + std::distance(bytes.begin(), end), candidate, std::chars_format::general);
-            valid = parsed.ec == std::errc{} && parsed.ptr == bytes.data() + std::distance(bytes.begin(), end) && std::isfinite(candidate);
-            if (valid)
-                value = candidate;
+            valid = ParseUiInspectorNumber(bytes, value);
             return valid;
         }
     };
