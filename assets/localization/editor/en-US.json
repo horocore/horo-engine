@@ -2466,6 +2466,12 @@
     "workspace.packages.recovery_hint": {
       "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
     },
+    "workspace.physics.compound_children": {"text": "Body collider children"},
+    "workspace.physics.edit_child": {"text": "Edit child in viewport"},
+    "workspace.physics.edit_compound": {"text": "Edit all compound children"},
+    "workspace.physics.gizmo_hint": {"text": "Collider editing · Ctrl: snap 0.1 m / 15° / 10% · Ctrl-click: toggle child · Escape: cancel"},
+    "workspace.physics.gizmo_rejected": {"text": "Collider edit rejected. Use valid positive bounds and uniform sphere/capsule scale. See diagnostics."},
+    "workspace.physics.gizmo_unsupported": {"text": "Cooked shape children require their owning source document; viewport editing is unavailable."},
     "workspace.physics.title": {
       "text": "Physics"
     },

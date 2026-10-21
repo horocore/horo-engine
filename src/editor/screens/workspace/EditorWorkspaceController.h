@@ -344,6 +344,12 @@ namespace Horo::Editor {
         /** @brief Capture descriptor publications outside Draw without inventing defaults in degraded projects. */
         void RefreshNavigationInspectorDefinitions();
         void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit collider child selection and atomic gizmo edits through this exact Scene/history owner. */
+        void ApplyColliderViewportCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Validate stable collider sub-selection without changing the document or selection. */
+        [[nodiscard]] Result<void> ValidateColliderViewportSelection(std::span<const ColliderEditTarget> selection) const;
+        /** @brief Commit an admitted collider gesture atomically and publish one canonical document event. */
+        void CommitColliderViewportEdits(const ColliderViewportRequest &request, const SceneTransactionSnapshot &snapshot);
         /** @brief Check the actual selection authority and exact owner fence before candidate preparation. */
         [[nodiscard]] Result<SceneTransactionSnapshot> CapturePhysicsInspectorSnapshot(const EditorWorkspaceViewCommandData &command) const;
         Assets::AssetId m_physicsDocumentOwner;

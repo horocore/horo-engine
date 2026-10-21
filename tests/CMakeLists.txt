@@ -2862,10 +2862,13 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/ColliderViewportRenderTests.cpp
+            support/ViewportPanelRenderSupport.h
     )
 
     target_compile_features(HoroViewportPanelRenderTests PRIVATE cxx_std_20)
     target_include_directories(HoroViewportPanelRenderTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
     )
     target_link_libraries(HoroViewportPanelRenderTests
@@ -3164,6 +3167,7 @@ add_executable(HoroSceneDocumentTests
         unit/editor/NavigationPrefabInspectorTests.cpp
         unit/editor/NavigationInspectorTests.cpp
         unit/editor/PhysicsInspectorTests.cpp
+        unit/editor/ColliderEditingTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/AudioListenerAuthoringTests.cpp
@@ -4802,6 +4806,7 @@ if (HORO_BUILD_RENDER_OPENGL)
                 HoroEngine::EditorViewportOpenGL
                 HoroEngine::RenderFrontend
                 HoroThirdParty::Glad
+                HoroThirdParty::ImGuiOpenGL
         )
 
         if (HORO_ENABLE_GPU_SMOKE_TESTS)

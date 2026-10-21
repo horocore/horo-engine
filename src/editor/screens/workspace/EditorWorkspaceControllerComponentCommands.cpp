@@ -10,6 +10,9 @@ namespace Horo::Editor {
         switch (cmd.command) {
             case EditorWorkspaceViewCommand::UpdateNavigationComponents:
                 ApplyNavigationInspectorCommand(cmd);
+            case EditorWorkspaceViewCommand::SelectPhysicsColliders:
+            case EditorWorkspaceViewCommand::CommitPhysicsColliders:
+                ApplyColliderViewportCommand(cmd);
                 break;
             case EditorWorkspaceViewCommand::UpdatePhysicsComponents:
                 ApplyPhysicsInspectorCommand(cmd);
