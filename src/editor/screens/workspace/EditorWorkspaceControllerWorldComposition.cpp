@@ -79,7 +79,7 @@ namespace Horo::Editor {
     bool EditorWorkspaceController::ProcessWorldCompositionCommand(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
         if (command.command == OpenWorldCompositionSource) {
-            const auto opened = command.stringPayload ? OpenWorldCompositionSource(*command.stringPayload, command.worldDocumentFence)
+            const auto opened = command.stringPayload ? this->OpenWorldCompositionSource(*command.stringPayload, command.worldDocumentFence)
                                                       : Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
             if (opened.HasError())
                 m_viewModel.worldDocumentError = opened.ErrorValue();

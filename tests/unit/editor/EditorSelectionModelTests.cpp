@@ -121,3 +121,27 @@ namespace Horo::Editor::WorldResidencyTests {
         static_cast<void>(subscription);
     }
 }  // namespace Horo::Editor::WorldResidencyTests
+
+namespace Horo::Editor::WorldResidencyTests {
+    TEST_CASE("World selection notification preserves a fence borrowed from the root released during publication",
+              "[editor][world_residency][lifetime]") {
+        EditorDataBus bus;
+        SceneDocument scene;
+        EditorSelectionModel selection{scene, bus};
+        PartitionedWorldWorkspace world{Asset(9)};
+        REQUIRE(world.Open(Document()).HasValue());
+        std::vector<WorldDocumentFence> events;
+        auto subscription = bus.Subscribe<WorldSelectionChangedEvent>([&](const auto &event) {
+            events.push_back(event.fence);
+        });
+        const std::array objects{WS::WorldAuthoringObjectAddress{Asset(2), 1}};
+        // Only the owner retains this root; the adapter must capture its identity before replacing it.
+        const auto &borrowedFence = world.Snapshot().Value()->fence;
+        auto selected = selection.SetWorldObjects(world, objects, objects.front(), borrowedFence);
+        REQUIRE(selected.HasValue());
+        CHECK(events == std::vector{selected.Value()->fence});
+        CHECK(Current(world)->selectedObjects == std::vector{objects.front()});
+        CHECK(Current(world)->primary == objects.front());
+        static_cast<void>(subscription);
+    }
+}  // namespace Horo::Editor::WorldResidencyTests

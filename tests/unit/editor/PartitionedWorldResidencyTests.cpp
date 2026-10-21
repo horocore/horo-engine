@@ -1,7 +1,7 @@
+#include "OwnedJobTestThread.h"
 #include "PartitionedWorldResidencyTestSupport.h"
 
 #include <stop_token>
-#include <thread>
 
 namespace Horo::Editor::WorldResidencyTests {
     TEST_CASE("Manual page loading owns actual scene content and unload releases only editor residency", "[editor][world_residency]") {
@@ -155,9 +155,9 @@ namespace Horo::Editor::WorldResidencyTests {
         SECTION("wrong thread") {
             std::optional<Result<PartitionedWorldSnapshotLease>> result;
             {
-                std::jthread thread{[&] {
+                Horo::Tests::Jobs::OwnedThread thread{Horo::Tests::Jobs::NativeThread{[&] {
                     result = workspace.LoadPage(head, Source(), baseline->fence);
-                }};
+                }}};
             }
             REQUIRE(result.has_value());
             ErrorIs(*result, "world_document.wrong_thread");

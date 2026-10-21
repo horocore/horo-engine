@@ -1765,10 +1765,10 @@ namespace Horo::Editor {
             ProjectMigrationTransactionService migrationTransactions{durableFiles, wallClock, mutationCoordinator, p.background.jobs};
             ProjectOpenPreflightService projectOpenPreflight{migrationTransactions};
             RecentProjectInspectionService recentProjectInspection{p.background.jobs, projectOpenPreflight};
+            const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
             auto capturedPolicy = CaptureEditorScenePolicy(p.options);
             if (capturedPolicy.HasError())
                 return std::nullopt;
-            const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
             auto scenePolicy = std::move(capturedPolicy).Value();
             std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
             if (scenePolicy.cooked)

@@ -80,10 +80,11 @@ namespace Horo::Editor {
             return Failure<WorldLoadedPage>(WorldDocumentErrors::Unsupported);
         if (!MatchesPage(page, decoded.Value()))
             return Failure<WorldLoadedPage>(WorldDocumentErrors::Conflict);
+        auto sourceDocument = std::move(decoded).Value();
         auto document = std::make_shared<SceneDocument>();
-        auto admitted = dirty ? document->LoadRecovered(std::move(decoded.Value().objects), std::move(decoded.Value().prefabInstances))
-                              : document->LoadSaved(std::move(decoded.Value().objects), std::move(decoded.Value().prefabInstances));
-        if (admitted.HasError())
+        if (auto admitted = dirty ? document->LoadRecovered(std::move(sourceDocument.objects), std::move(sourceDocument.prefabInstances))
+                                  : document->LoadSaved(std::move(sourceDocument.objects), std::move(sourceDocument.prefabInstances));
+            admitted.HasError())
             return Result<WorldLoadedPage>::Failure(admitted.ErrorValue());
         WorldLoadedPage prepared{.head = page.head, .sourceBytes = source.size()};
         prepared.content.document_ = std::move(document);
@@ -91,9 +92,9 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PartitionedWorldWorkspace::LoadPage */
-    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::LoadPage(const WorldStreaming::WorldAuthoringPageDescriptor page,
+    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::LoadPage(const WorldStreaming::WorldAuthoringPageDescriptor &page,
                                                                               const std::string_view source,
-                                                                              const WorldDocumentFence expected,
+                                                                              const WorldDocumentFence &expected,
                                                                               const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
@@ -123,7 +124,7 @@ namespace Horo::Editor {
 
     /** @copydoc PartitionedWorldWorkspace::UnloadPage */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::UnloadPage(const Assets::AssetId page,
-                                                                                const WorldDocumentFence expected,
+                                                                                const WorldDocumentFence &expected,
                                                                                 const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
@@ -146,7 +147,7 @@ namespace Horo::Editor {
 
     /** @copydoc PartitionedWorldWorkspace::SetPagePinned */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::SetPagePinned(const Assets::AssetId page, const bool pinned,
-                                                                                   const WorldDocumentFence expected,
+                                                                                   const WorldDocumentFence &expected,
                                                                                    const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());

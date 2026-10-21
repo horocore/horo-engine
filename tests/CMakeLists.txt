@@ -250,6 +250,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
     )
     target_link_libraries(HoroEditorUiAutomationTests PRIVATE
             HoroEngine::Gui
+            HoroEngine::PlatformProjectReadFiles
             HoroEngine::ProjectMigrations
             HoroEngine::RenderFrontend
             HoroEngine::PackageApplication
@@ -667,7 +668,7 @@ target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE HoroEngine::Edi
     HoroEngine::AudioImport HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioComponentPreviewHostTests LABELS "unit;audio;editor;headless;lifecycle")
 target_sources(HoroAudioFrontendPublicHeaderConsumer PRIVATE support/AudioFrontendPublicContract.cpp)
-target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/AudioEditorDocumentPublicContract.cpp)
+target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/AudioEditorDocumentPublicContract.cpp support/WorkspaceReadSourcesPublicContract.cpp)
 target_sources(HoroAudioDspPublicHeaderConsumer PRIVATE support/CoreStereoSpatialPublicContract.cpp)
 add_executable(HoroCoreAudioDspTests
     support/AllocationProbe.cpp
@@ -2664,6 +2665,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp
+            unit/editor/WorkspaceReadSourcesTests.cpp
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
@@ -3170,6 +3172,7 @@ add_executable(HoroPartitionedWorldWorkspaceTests
         unit/editor/WorldCompositionBrowserTests.cpp
         unit/editor/PartitionedWorldSourceTests.cpp)
 target_link_libraries(HoroPartitionedWorldWorkspaceTests PRIVATE HoroEngine::EditorModel)
+target_include_directories(HoroPartitionedWorldWorkspaceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 horo_register_catch_test(HoroPartitionedWorldWorkspaceTests LABELS "unit;headless;world_document")
 
 add_executable(HoroSceneDocumentTests

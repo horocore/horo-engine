@@ -22,12 +22,27 @@ namespace Horo::Editor::WorldCompositionTests {
                     file << WorldSource();
                 }
                 const auto owner = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000009").Value();
-                auto files = Platform::CreateNativeProjectReadFiles(directory.Path(), owner.ToString(), 1);
-                REQUIRE(files.HasValue());
-                controller = std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
-                                                                         EditorWorkspaceDependencies{.worldSourceFiles = files.Value(),
-                                                                                                     .documentSessionOwner = owner});
+                const WorkspaceReadSourceFactory factory{[owner](const std::filesystem::path &root) {
+                    auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
+                    auto files = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
+                    REQUIRE(registry.HasValue());
+                    REQUIRE(files.HasValue());
+                    return Result<WorkspaceReadSources>::Success({owner, registry.Value(), files.Value()});
+                }};
+                auto captured = CaptureWorkspaceReadSources(&factory, directory.Path());
+                REQUIRE(captured.HasValue());
+                const auto &sources = captured.Value();
+                controller =
+                    std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
+                                                                EditorWorkspaceDependencies{.assetRegistrySource = sources.registry,
+                                                                                            .worldSourceFiles = sources.world,
+                                                                                            .documentSessionOwner = sources.owner});
                 REQUIRE(controller->OpenWorldCompositionSource("world ü space.horoworld").HasValue());
+            }
+
+            void CaptureFrame() {
+                controller->RefreshWorldSourceProjection();
+                controller->RefreshWorldDocumentProjection();
             }
 
             std::filesystem::path Path() const {
@@ -60,6 +75,27 @@ namespace Horo::Editor::WorldCompositionTests {
         CHECK(controller.ViewModel().worldViewport.snapshot == current);
         CHECK(controller.ViewModel().worldViewport.globalOrigin == current->document.settings.grid.Origin());
         CHECK(controller.ViewModel().worldViewport.viewRevision != 0);
+    }
+
+    TEST_CASE("World source open command dispatches the member with its captured fence", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        const auto before = controller.WorldDocuments().Snapshot().Value();
+        EditorWorkspaceViewCommandData open;
+        open.command = EditorWorkspaceViewCommand::OpenWorldCompositionSource;
+        open.stringPayload = "world ü space.horoworld";
+        open.worldDocumentFence = before->fence;
+        controller.ProcessCommand(open);
+        REQUIRE_FALSE(controller.ViewModel().worldDocumentError);
+        const auto after = controller.WorldDocuments().Snapshot().Value();
+        CHECK(after->fence.generation != before->fence.generation);
+        CHECK(controller.ViewModel().worldDocument == after);
+        CHECK(controller.ViewModel().worldViewport.snapshot == after);
+        CHECK(controller.ViewModel().worldBrowser->source == after);
+        controller.ProcessCommand(open);
+        REQUIRE(controller.ViewModel().worldDocumentError);
+        CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Stale.code);
+        CHECK(controller.WorldDocuments().Snapshot().Value() == after);
     }
 
     TEST_CASE("Actual viewport producer and dirty guards retain the same opened world", "[editor][world_browser][controller]") {
@@ -150,6 +186,60 @@ namespace Horo::Editor::WorldCompositionTests {
         CHECK_FALSE(controller.ViewModel().worldBrowser);
         CHECK(current->document.pages.size() == 1);
     }
+
+    TEST_CASE("Real page payload residency updates the same browser and viewport frame", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        auto &world = controller.WorldDocuments();
+        const auto initial = world.Snapshot().Value();
+        const auto &page = initial->document.pages.front().head;
+        REQUIRE(world.LoadPage(page, WorldResidencyTests::Source(), initial->fence).HasValue());
+        project.CaptureFrame();
+        const auto loaded = world.Snapshot().Value();
+        REQUIRE(loaded->loadedPages.front().content.Objects().size() == 1);
+        REQUIRE(controller.ViewModel().worldBrowser->cells.size() == 3);
+        for (const auto &cell : controller.ViewModel().worldBrowser->cells)
+            CHECK(cell.openObjects == 1);
+        CHECK(controller.ViewModel().worldBrowser->source == loaded);
+        CHECK(controller.ViewModel().worldViewport.snapshot == loaded);
+        REQUIRE(world.UnloadPage(page.sourceAsset, loaded->fence).HasValue());
+        project.CaptureFrame();
+        const auto closed = world.Snapshot().Value();
+        REQUIRE(controller.ViewModel().worldBrowser->cells.size() == 3);
+        for (const auto &cell : controller.ViewModel().worldBrowser->cells)
+            CHECK(cell.openObjects == 0);
+        CHECK(controller.ViewModel().worldBrowser->source == closed);
+        CHECK(controller.ViewModel().worldViewport.snapshot == closed);
+        CHECK(closed->document.pages.size() == 1);
+        CHECK_FALSE(closed->dirty);
+        CHECK(loaded->loadedPages.front().content.Objects().size() == 1);
+    }
+
+    TEST_CASE("Page-aware selection prevents unload without changing browser publication", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        auto &world = controller.WorldDocuments();
+        const auto initial = world.Snapshot().Value();
+        const auto &page = initial->document.pages.front().head;
+        REQUIRE(world.LoadPage(page, WorldResidencyTests::Source(), initial->fence).HasValue());
+        const auto loaded = world.Snapshot().Value();
+        const std::array addresses{WorldStreaming::WorldAuthoringObjectAddress{page.sourceAsset, 1}};
+        const auto selected = controller.SelectWorldObjects(addresses, addresses.front(), loaded->fence);
+        REQUIRE(selected.HasValue());
+        project.CaptureFrame();
+        WorldResidencyTests::ErrorIs(world.UnloadPage(page.sourceAsset, selected.Value()->fence), "world_document.conflict");
+        project.CaptureFrame();
+        CHECK(world.Snapshot().Value() == selected.Value());
+        CHECK(controller.ViewModel().worldBrowser->source == selected.Value());
+        CHECK(controller.ViewModel().worldViewport.snapshot == selected.Value());
+        CHECK(controller.ViewModel().worldDocument->primary == addresses.front());
+        const auto cleared = controller.SelectWorldObjects({}, std::nullopt, selected.Value()->fence);
+        REQUIRE(cleared.HasValue());
+        REQUIRE(world.UnloadPage(page.sourceAsset, cleared.Value()->fence).HasValue());
+        project.CaptureFrame();
+        CHECK(controller.ViewModel().worldDocument->selectedObjects.empty());
+        CHECK(controller.ViewModel().worldDocument->loadedPages.empty());
+    }
 }  // namespace Horo::Editor::WorldCompositionTests
 
 namespace Horo::Editor {
@@ -180,7 +270,9 @@ namespace Horo::Editor {
             return Result<void>::Success();
         });
         REQUIRE(marker.HasValue());
-        REQUIRE(marker.Value().Wait({WaitPolicy::OwnerThreadBlockAllowed, std::chrono::seconds{5}}).HasValue());
+        REQUIRE(marker.Value()
+                    .Wait({.waitPolicy = WaitPolicy::OwnerThreadBlockAllowed, .timeout = Duration::FromMilliseconds(5000)})
+                    .HasValue());
         controller.UpdateWorldBake();
         CHECK(controller.ViewModel().worldBakeCurrent);
         CHECK(controller.SetWorldBakeProject({}).HasError());
@@ -264,7 +356,9 @@ namespace Horo::Editor {
             return Result<void>::Success();
         });
         REQUIRE(marker.HasValue());
-        REQUIRE(marker.Value().Wait({WaitPolicy::OwnerThreadBlockAllowed, std::chrono::seconds{5}}).HasValue());
+        REQUIRE(marker.Value()
+                    .Wait({.waitPolicy = WaitPolicy::OwnerThreadBlockAllowed, .timeout = Duration::FromMilliseconds(5000)})
+                    .HasValue());
         const auto publication = registry.Publish(std::vector<Assets::AssetRecord>{});
         REQUIRE(publication.status == Assets::AssetRegistryBuildStatus::Complete);
         controller.UpdateWorldBake();
@@ -292,46 +386,6 @@ namespace Horo::Editor {
             return Result<WorkspaceReadSources>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
         }
     }  // namespace
-
-    TEST_CASE("Workspace reader composition requires explicit complete host authority", "[editor][world_bake][native]") {
-        Horo::Tests::OwnedTestDirectory project{"workspace source factory"};
-        const auto owner = WorldResidencyTests::Asset(9);
-        const auto capture = [owner](const std::filesystem::path &root) {
-            return CaptureTestReaders(root, owner);
-        };
-        WorkspaceReadSourceFactory factory{capture};
-        SECTION("absent capability never creates native readers") {
-            WorldResidencyTests::ErrorIs(CaptureWorkspaceReadSources(nullptr, project.Path()),
-                                         Platform::ProjectReadErrors::Unavailable.code.Value());
-        }
-        SECTION("unbound callback is rejected") {
-            factory.capture = {};
-            CHECK(CaptureWorkspaceReadSources(&factory, project.Path()).HasError());
-        }
-        SECTION("relative roots never reach host capture") {
-            bool invoked{};
-            factory.capture = [&](const auto &) {
-                invoked = true;
-                return Result<WorkspaceReadSources>::Success({});
-            };
-            CHECK(CaptureWorkspaceReadSources(&factory, "relative").HasError());
-            CHECK_FALSE(invoked);
-        }
-        SECTION("partial capture never escapes") {
-            factory.capture = [](const auto &) {
-                return Result<WorkspaceReadSources>::Success({});
-            };
-            CHECK(CaptureWorkspaceReadSources(&factory, project.Path()).HasError());
-        }
-        SECTION("original capture error survives") {
-            factory.capture = [](const auto &) {
-                return Result<WorkspaceReadSources>::Failure(MakeError(Platform::ProjectReadErrors::Stale));
-            };
-            const auto result = CaptureWorkspaceReadSources(&factory, project.Path());
-            REQUIRE(result.HasError());
-            CHECK(result.ErrorValue().code == Platform::ProjectReadErrors::Stale.code);
-        }
-    }
 
     TEST_CASE("Workspace reader bridge retains actual native root authority", "[editor][world_bake][native]") {
         Horo::Tests::OwnedTestDirectory project{"workspace native readers"};

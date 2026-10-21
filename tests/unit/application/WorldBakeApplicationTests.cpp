@@ -38,7 +38,9 @@ namespace Horo::Application {
                 return Result<void>::Success();
             });
             REQUIRE(marker.HasValue());
-            REQUIRE(marker.Value().Wait({WaitPolicy::OwnerThreadBlockAllowed, std::chrono::seconds{5}}).HasValue());
+            REQUIRE(marker.Value()
+                        .Wait({.waitPolicy = WaitPolicy::OwnerThreadBlockAllowed, .timeout = Duration::FromMilliseconds(5000)})
+                        .HasValue());
         }
 
         /** @brief Prevents worker execution until cancellation/replacement/source edits have been deterministically installed. */
@@ -62,7 +64,7 @@ namespace Horo::Application {
 
             ~Gate() {
                 Release();
-                (void)job.Wait({WaitPolicy::OwnerThreadBlockAllowed, std::chrono::seconds{5}});
+                (void)job.Wait({.waitPolicy = WaitPolicy::OwnerThreadBlockAllowed, .timeout = Duration::FromMilliseconds(5000)});
             }
 
             void Release() {

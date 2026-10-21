@@ -388,17 +388,54 @@ resolves localized failure copy. The layer controller regression target exercise
 real loaded Scene content, page pinning, the single selection/primary root, stale
 command rejection and loaded-page dirty/history isolation.
 
+The selection/query entry points synchronously borrow `WorldDocumentFence` and the
+optional primary address by const reference. These larger input values are never
+retained by reference; publications copy their owned state before returning.
+Ordinary calls, including temporary/null primary values, are unchanged. Consumers
+storing member-function pointers must use the const-reference parameter types;
+the standalone public consumer asserts those exact signatures. Rebuild consumers
+with this in-memory API evolution; no source-file or serialized identity changes.
+
+The new LoadPage, CommitLoadedPage, UnloadPage and SetPagePinned methods borrow
+their page descriptors and world fences by const reference for the synchronous call.
+Selection adapters likewise borrow the optional primary and fence. Consumers rebuild against
+the updated declarations; ordinary value and temporary arguments remain supported,
+and no borrowed reference is stored. The selection adapter captures an owned fence
+before publication because the argument may alias the immutable root being replaced.
+The public-header consumer checks the exact manual load/unload signatures, and the
+selection regression exercises a fence backed solely by that owner root. Decoded Scene
+source is transferred out of its successful Result before moving its vectors into
+the actual document; moving from the immutable lvalue Result view would copy instead.
+
+Layer command, name-only creation and replay entry points likewise borrow the exact
+fence for the synchronous operation. They never retain it or access it after root
+publication. The layer consumer asserts the exact const-reference member signatures,
+in addition to the canonical selection/query/manual-page signatures. Existing value
+and temporary arguments continue working; consumers storing member pointers rebuild
+against these updated in-memory declarations. Modal drafts and queued presentation
+intents still own their fence values across frames.
+
 
 ## World Composition source route and browser (HORO-1630)
 
 `horo.world_composition` is a registered persistent document-area panel, reachable
 from the workspace document rail. Enter a project-relative `.horoworld` path and
-activate **Open world source**. The workspace screen explicitly composes the retained
-project read capability and injects it into the controller. The controller captures bounded source
-through `Platform::IProjectReadFiles::SourceText`; retained root handles reject
-traversal, symlinks/reparse points, special files and multiple hardlinks. `HoroGui` and its controller test declare the narrow private
-`PlatformProjectReadFiles` dependency rather than receiving private platform headers
-through another target. File I/O
+activate **Open world source**. The executable composition root creates a retained
+`WorkspaceReadSourceFactory` and registers it for the screen lifetime. The screen
+admits its complete owner/registry/world-reader capture through
+`CaptureWorkspaceReadSources`, then injects those owned capabilities into the
+controller. Missing factories fail as unavailable; relative roots and partial
+captures fail as invalid, without selecting a backend in GUI code. Host failures
+retain their original typed error.
+
+`WorkspaceReadSources.h` belongs to `HoroEditorServices`, whose public dependency
+is the narrow `ProjectReadFilesApi`. The concrete `PlatformProjectReadFiles`
+dependency belongs privately to `HoroEditor` and native test composition roots;
+`HoroGui` consumes the supplied interface. Build
+`HoroEditorServicesPublicHeaderConsumer` after migrating host composition.
+The controller captures bounded source through
+`Platform::IProjectReadFiles::SourceText`; retained root handles reject traversal,
+symlinks/reparse points, special files and multiple hardlinks. File I/O
 and semantic admission execute in the command phase, never in panel drawing.
 
 The route uses the controller's existing `WorldDocuments()` authority. It does not
@@ -474,3 +511,11 @@ reuses shared controls and refreshes text colors from the active theme. All visi
 copy is paired in en-US and tr-TR. Public-header consumer coverage protects the
 new typed query signature, and focused model/controller tests cover real source
 admission, query boundaries, replacement and teardown.
+
+
+The browser query retains its by-value `WorldDocumentFence` input and one immutable
+source lease; it never publishes authored state. The consumer checks that exact
+query signature alongside the borrowed layer/manual-page/selection signatures.
+Controller integration regressions open a real `.horoworld` source, load and
+release actual Scene payloads, capture the shared browser/viewport frame, and verify
+that a selected page cannot unload or silently replace the displayed source root.
