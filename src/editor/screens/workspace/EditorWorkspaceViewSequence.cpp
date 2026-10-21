@@ -98,21 +98,22 @@ namespace Horo::Editor {
         m_lastPresentedDocument = active;
     }
 
+    /** @copydoc EditorWorkspaceView::ResetSourceSession */
+    void EditorWorkspaceView::ResetSourceSession() noexcept {
+        m_sourceSession.Reset();
+    }
+
     /** @copydoc EditorWorkspaceView::DrawSourceDocument */
     bool EditorWorkspaceView::DrawSourceDocument(const EditorWorkspaceViewModel &viewModel,
                                                  EditorWorkspaceViewCommandData &outCommand) const {
         const auto active = viewModel.workspacePanelHost.ActiveDocument();
         const auto tabs = viewModel.workspacePanelHost.DocumentTabs();
-        std::erase_if(m_sourceWidgets, [&](const auto &entry) {
-            return std::ranges::none_of(tabs, [&](const WorkspaceDocumentTab &candidate) {
-                return candidate.identity.key.kind == DocumentKind::Source && candidate.identity.instance.Value() == entry.first;
-            });
-        });
+        m_sourceSession.Retain(tabs);
         const auto tab = std::ranges::find_if(tabs, [active](const WorkspaceDocumentTab &candidate) {
             return candidate.identity.instance == active;
         });
         if (tab == tabs.end() || tab->identity.key.kind != DocumentKind::Source) {
-            m_focusedSource.reset();
+            m_sourceSession.ClearFocus();
             return false;
         }
         const auto index = static_cast<std::size_t>(std::count_if(tabs.begin(), tab, [](const WorkspaceDocumentTab &candidate) {
@@ -130,33 +131,31 @@ namespace Horo::Editor {
             outCommand.sourceSave = SourceSaveRequest{tab->identity.instance, source.Revision(), {}};
         }
         const auto history = index < viewModel.sourceHistory.size() ? viewModel.sourceHistory[index] : SourceHistoryState{};
-        DrawSourceEditor(source, history, viewModel, outCommand);
+        DrawSourceEditor(tab->identity.instance, source, history, viewModel, outCommand);
         return true;
     }
 
     /** @copydoc EditorWorkspaceView::DrawSourceEditor */
-    void EditorWorkspaceView::DrawSourceEditor(const SourceDocumentSnapshot &source, const SourceHistoryState &history,
-                                               const EditorWorkspaceViewModel &viewModel,
+    void EditorWorkspaceView::DrawSourceEditor(const DocumentInstanceId instance, const SourceDocumentSnapshot &source,
+                                               const SourceHistoryState &history, const EditorWorkspaceViewModel &viewModel,
                                                EditorWorkspaceViewCommandData &outCommand) const {
-        auto found = m_sourceWidgets.find(source.Identity().instance.Value());
-        if (found == m_sourceWidgets.end()) {
-            if (m_nextSourceWidgetViewId == 0) {
-                Ui::ErrorText(m_context.localization.Get("editor", "workspace.source_open.unavailable").c_str(), m_context.theme.fonts);
-                return;
-            }
-            found = m_sourceWidgets.try_emplace(source.Identity().instance.Value(), SourceEditingViewId{m_nextSourceWidgetViewId++}).first;
+        auto *presentation = m_sourceSession.Acquire(instance);
+        if (!presentation) {
+            Ui::ErrorText(m_context.localization.Get("editor", "workspace.source_open.unavailable").c_str(), m_context.theme.fonts);
+            return;
         }
-        auto &widget = found->second.widget;
+        auto &widget = presentation->widget;
         widget.Publish(source);
         if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
             static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
-        auto toolIntent = found->second.tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
-        const bool focus = m_focusedSource != source.Identity().instance || (!toolIntent && found->second.tools.TakeFocusRequest());
+        auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
+        const bool focus = m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();
         ImGui::PushFont(m_context.theme.fonts.sans);
         auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent});
         ImGui::PopFont();
-        m_focusedSource = source.Identity().instance;
+        outCommand.sourceTextInputOwned = widget.OwnsInput() || presentation->tools.OwnsInput();
+        m_sourceSession.Presented(instance);
         if (toolIntent)
             intent = std::move(toolIntent);
         if (intent) {

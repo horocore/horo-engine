@@ -17,6 +17,7 @@ namespace Horo::Editor {
     public:
         Zep::NVec4f cursorColor;
         mutable std::optional<Zep::NRectf> cursor;
+        std::uint64_t fontGeneration{};
 
         Zep::ZepFont &GetFont(const Zep::ZepTextType type) override {
             const auto index = static_cast<std::size_t>(type);
@@ -31,6 +32,7 @@ namespace Horo::Editor {
             if (!m_fonts[index] || fonts_[index] != font) {
                 m_fonts[index] = std::make_shared<Zep::ZepFont_ImGui>(*this, font, std::max(1, static_cast<int>(pixels)));
                 fonts_[index] = font;
+                ++fontGeneration;
             }
             return *m_fonts[index];
         }

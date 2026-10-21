@@ -3,7 +3,9 @@
 `SourceDocumentService` remains the canonical owner of exact source bytes,
 revisions, persistence and document history. The workspace owns view lifetime and
 issues nonzero view identities monotonically; closing and reopening a view never
-reuses an identity during that project session.
+reuses an identity during the view host lifetime. `SourceEditorSession` clears
+widgets, tools and focus before owner teardown/replacement, including failed-route
+rollback. A document rekey such as Save As retains its live view state.
 
 `src/editor/source_editor/SourceEditorWidget.h` is the replaceable, GUI-private
 boundary. `Publish` accepts an immutable authoritative source lease. `Draw`
@@ -49,18 +51,31 @@ a deliberate private GUI ABI evolution and requires rebuilding those consumers.
 filesystem, selection-mode and frame-theme bridge. The rendered insertion-caret
 rectangle anchors native IME composition. Input
 ownership follows the focused child surface; disabled scopes and popups suspend
-editing, and changing tabs hands focus to the newly selected source view.
+editing, and changing tabs hands focus to the newly selected source view. Current-frame
+widget/tool ownership is carried explicitly to workspace shortcut routing, so
+no-op Delete and navigation cannot reach scene commands before ImGui publishes
+its next-frame capture flags. Application Save keeps priority. Collapsed Tab
+inserts to the next indentation stop at the caret; selections and Shift-Tab use
+the canonical line indentation planner.
 
 Decorations are externally supplied, revision-fenced document byte ranges. The
 adapter does not own language selection, parsing, semantic intelligence or theme
 resources. Syntax/theme delivery can replace the private presentation bridge
 without changing document or history contracts.
 
+A checked-in, idempotent patch exposes the pinned private Zep viewport in logical
+display lines. History captures the actual camera after keyboard reveal and
+layout; restoration, wheel scrolling and font/scale changes use that same camera.
+Restoration is bounded by document geometry rather than an arbitrary line limit.
+
 ## Qualification
 
 `HoroSourceEditorWidgetTests` drives the actual adapter and document service with
 headless ImGui frames for independent views, Unicode/IME commits, clipboard,
 focus, disabled input, scale changes, rejection reconciliation, decorations and
-teardown. Platform IME composition windows, native clipboard integrations and
+teardown, first-frame workspace routing, Save As, route rollback and viewport
+restoration beyond 1000 lines. `HoroEditorUiAutomationTests` also drives the real
+localized search/replacement/history/navigation controls at narrow width. These
+cases must run in hosted qualification; source inspection alone is not a pass. Platform IME composition windows, native clipboard integrations and
 interactive mouse/keyboard behavior additionally require a desktop smoke run.
 Headless test results do not claim those native checks passed.

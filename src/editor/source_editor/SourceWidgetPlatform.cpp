@@ -1,5 +1,6 @@
 #include "SourceWidgetPlatform.h"
 
+#include <zep/filesystem.h>
 #include <zep/window.h>
 
 namespace Horo::Editor {

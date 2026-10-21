@@ -1,3 +1,4 @@
+#include "EditorWorkspaceInputRouting.h"
 #include "EditorWorkspaceView.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/NetworkDebugger.h"
@@ -553,6 +554,7 @@ namespace Horo::Editor {
             }
 
             void OnLeave() override {
+                view_.ResetSourceSession();
                 sourceCloseLifetime_.reset();
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
                 if (controller_) {
@@ -690,6 +692,7 @@ namespace Horo::Editor {
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
+                view_.ResetSourceSession();
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -982,47 +985,9 @@ namespace Horo::Editor {
             }
 
             void RouteInputAction(EditorWorkspaceViewCommandData &command) {
-                const auto pressed = [this](const char *id) {
-                    return input_.router.ReadAction(input_.context, Input::ActionId{id}).pressed;
-                };
-                if (pressed(kActionSave)) {
-                    command.command = EditorWorkspaceViewCommand::SaveScene;
-                    const auto &model = controller_->ViewModel();
-                    for (const auto &source : model.sourceDocuments) {
-                        if (source.Identity().instance == model.workspacePanelHost.ActiveDocument()) {
-                            command.command = EditorWorkspaceViewCommand::SaveSourceDocument;
-                            command.sourceSave = SourceSaveRequest{source.Identity().instance, source.Revision(), {}};
-                            break;
-                        }
-                    }
-                    return;
-                }
-                // Text owners route their own edit shortcuts; application save remains available above.
-                if (ImGui::GetIO().WantTextInput)
-                    return;
-                if (pressed(kActionRedo)) {
-                    command.command = EditorWorkspaceViewCommand::RedoScene;
-                } else if (pressed(kActionUndo)) {
-                    command.command = EditorWorkspaceViewCommand::UndoScene;
-                } else if (pressed(kActionToolSelect)) {
-                    command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
-                    command.transformToolPayload = EditorTransformTool::Select;
-                } else if (pressed(kActionToolMove)) {
-                    command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
-                    command.transformToolPayload = EditorTransformTool::Move;
-                } else if (pressed(kActionToolRotate)) {
-                    command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
-                    command.transformToolPayload = EditorTransformTool::Rotate;
-                } else if (pressed(kActionToolScale)) {
-                    command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
-                    command.transformToolPayload = EditorTransformTool::Scale;
-                } else if (controller_->ViewModel().primarySelection.has_value() && pressed(kActionDuplicate)) {
-                    command.command = EditorWorkspaceViewCommand::DuplicateObject;
-                    command.objectPayload = controller_->ViewModel().primarySelection;
-                } else if (controller_->ViewModel().primarySelection.has_value() && pressed(kActionDelete)) {
-                    command.command = EditorWorkspaceViewCommand::DeleteObject;
-                    command.objectPayload = controller_->ViewModel().primarySelection;
-                }
+                RouteWorkspaceInputAction(input_.router, input_.context, controller_->ViewModel(), command,
+                                          {ImGui::GetIO().WantTextInput,
+                                           ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)});
             }
 
             /** @brief Publishes document, selection, or viewport changes to the composition-owned render

@@ -3285,8 +3285,10 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/source_editor/SourceWidgetPlatform.cpp
             editor/source_editor/SourceWidgetText.cpp
+            editor/source_editor/SourceEditorSession.cpp
             editor/source_editor/SourceEditorTools.cpp
             editor/source_editor/SourceEditorWidget.cpp
+            editor/screens/workspace/EditorWorkspaceInputRouting.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp

@@ -22,6 +22,11 @@ namespace Horo::Editor {
         /** @brief Consumes a one-frame focus handoff after navigation. @return Whether to focus the source surface. */
         [[nodiscard]] bool TakeFocusRequest() noexcept;
 
+        /** @brief Reports current-frame ownership of a source search/navigation text field. @return True for an active field. */
+        [[nodiscard]] bool OwnsInput() const noexcept {
+            return ownsInput_;
+        }
+
     private:
         enum class Status {
             None,
@@ -34,6 +39,7 @@ namespace Horo::Editor {
         bool searchOpen_{};
         bool lineOpen_{};
         bool focusSource_{};
+        bool ownsInput_{};
         Status status_{Status::None};
         void Find(SourceEditorWidget &widget, const SourceDocumentSnapshot &source, SourceSearchDirection direction);
         [[nodiscard]] std::optional<SourceEditingCommand> Replacement(SourceEditorWidget &widget, const SourceDocumentSnapshot &source,

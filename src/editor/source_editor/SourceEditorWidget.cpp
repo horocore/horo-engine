@@ -43,8 +43,8 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @brief One editor and callback lease per view; Zep owns its display and denied filesystem. */
-    struct SourceEditorWidget::Storage final : Zep::IZepComponent {
+    /** @brief One editor per view; Zep owns its components, callbacks, display and denied filesystem. */
+    struct SourceEditorWidget::Storage final {
         SourceDocumentSnapshot source;
         std::unique_ptr<Zep::ZepEditor> editor;
         Zep::ZepBuffer *buffer{};
@@ -56,32 +56,17 @@ namespace Horo::Editor {
         std::uint64_t restoredRevision{};
         ImGuiID inputId{};
         float scroll{};
-        float scrollLines{};
+        std::optional<float> pendingViewport;
+        bool ownsInput{};
         SourceEditingView beforeView;
         std::optional<SourceHistoryRequest> history;
         std::optional<SourceEditSubmission> planned;
         SourceEditingViewId viewIdentity{};
         std::string inputName;
 
-        ~Storage() override {
-            if (editor)
-                editor->UnRegisterCallback(this);
-        }
-
-        Zep::ZepEditor &GetEditor() const override {
-            return *editor;
-        }
-
-        void Notify(std::shared_ptr<Zep::ZepMessage> message) override {
-            if (message->messageId == Zep::Msg::GetClipBoard) {
-                const char *text = ImGui::GetClipboardText();
-                const std::string_view bytes = text ? text : "";
-                message->str = AdmittedText(bytes) ? DisplayText(bytes) : std::string{};
-                message->handled = true;
-            } else if (message->messageId == Zep::Msg::SetClipBoard) {
-                ImGui::SetClipboardText(message->str.c_str());
-                message->handled = true;
-            }
+        /** @brief Captures the actual camera after keyboard reveal/layout, not an accumulated input delta. */
+        float ScrollPosition() const {
+            return window ? window->GetHoroViewportLines() : 0.0F;
         }
 
         /** @brief Retains presentation state only for the same live document instance. */
@@ -89,7 +74,7 @@ namespace Horo::Editor {
             if (!source.Revision() || source.Identity().instance != next.Identity().instance)
                 return std::nullopt;
             const auto selected = CaptureSelection();
-            return SourceEditingView{selected.anchor, selected.caret, scrollLines, viewIdentity};
+            return SourceEditingView{selected.anchor, selected.caret, ScrollPosition(), viewIdentity};
         }
 
         /** @brief Recognizes an accepted widget publication without resetting independent interaction state. */
@@ -100,16 +85,16 @@ namespace Horo::Editor {
 
         /** @brief Rebuilds only for a new identity or an authoritative replacement/rejection. */
         void Reset(const std::string &text) {
-            if (editor)
-                editor->UnRegisterCallback(this);
-            editor = MakeSourceWidgetEditor();
-            editor->RegisterCallback(this);
-            editor->RegisterGlobalMode(std::make_shared<WidgetMode>(*editor));
-            editor->SetGlobalMode(Zep::ZepMode_Standard::StaticName());
+            auto candidate = MakeSourceWidgetEditor();
+            candidate->RegisterGlobalMode(std::make_shared<WidgetMode>(*candidate));
+            candidate->SetGlobalMode(Zep::ZepMode_Standard::StaticName());
             // A fixed extension-free name never chooses a language service or syntax provider.
-            buffer = editor->InitWithText("source", text);
-            buffer->SetSyntax({});
-            window = editor->GetActiveTabWindow()->GetActiveWindow();
+            auto *nextBuffer = candidate->InitWithText("source", text);
+            nextBuffer->SetSyntax({});
+            auto *nextWindow = candidate->GetActiveTabWindow()->GetActiveWindow();
+            editor = std::move(candidate);
+            buffer = nextBuffer;
+            window = nextWindow;
             update = buffer->GetUpdateCount();
         }
 
@@ -198,17 +183,36 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Inserts to the next four-column stop at a caret; selections and Shift-Tab use line indentation. */
+        Result<SourceEditingPlan> TabPlan(const SourceEditingView &view, const bool outdent) const {
+            constexpr unsigned indentationWidth = 4;
+            if (outdent || view.anchor != view.caret)
+                return PlanSourceIndentation(source, view, indentationWidth, outdent);
+            const auto text = source.Text();
+            const auto before = text.substr(0, view.caret);
+            const auto newline = before.find_last_of("\r\n");
+            std::size_t start = newline == std::string_view::npos ? (source.Metadata().utf8Bom ? 3 : 0) : newline + 1;
+            std::size_t column = 0;
+            for (; start < view.caret; ++start) {
+                if (text[start] == '\t')
+                    column += indentationWidth - column % indentationWidth;
+                else if ((static_cast<unsigned char>(text[start]) & 0xC0U) != 0x80U)
+                    ++column;
+            }
+            return PlanSourceReplacement(source, view, std::string(indentationWidth - column % indentationWidth, ' '));
+        }
+
         /** @brief Routes newline and indentation through the canonical source planners. */
         void SemanticKeys() {
             const auto &io = ImGui::GetIO();
             if (io.InputQueueCharacters.Size == 0 && (ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_Tab))) {
                 const auto selection = CaptureSelection();
-                const SourceEditingView view{selection.anchor, selection.caret, scrollLines, viewIdentity};
+                const SourceEditingView view{selection.anchor, selection.caret, ScrollPosition(), viewIdentity};
                 if (ImGui::IsKeyPressed(ImGuiKey_Enter)) {
                     if (auto plan = PlanSourceNewline(source, view); plan.HasValue())
                         planned = SourceEditSubmission{source.Identity().instance, std::move(plan).Value()};
                 } else if (ImGui::IsKeyPressed(ImGuiKey_Tab)) {
-                    if (auto plan = PlanSourceIndentation(source, view, 4, io.KeyShift); plan.HasValue())
+                    if (auto plan = TabPlan(view, io.KeyShift); plan.HasValue())
                         planned = SourceEditSubmission{source.Identity().instance, std::move(plan).Value()};
                 }
             }
@@ -271,15 +275,26 @@ namespace Horo::Editor {
         /** @brief Keeps font-cache invalidation bounded to actual font or DPI changes. */
         WidgetDisplay &PrepareDisplay(const SourceWidgetFrame &frame, const ImVec2 origin, const ImVec2 extent) {
             auto &display = static_cast<WidgetDisplay &>(editor->GetDisplay());
-            if (display.GetPixelScale().x != frame.dpiScale || display.GetPixelScale().y != frame.dpiScale)
+            const float viewport = ScrollPosition();
+            const auto generation = display.fontGeneration;
+            bool changed = false;
+            if (display.GetPixelScale().x != frame.dpiScale || display.GetPixelScale().y != frame.dpiScale) {
                 display.SetPixelScale({frame.dpiScale, frame.dpiScale});
+                changed = true;
+            }
             const int fontPixels = static_cast<int>(ImGui::GetFontSize());
             for (int type = 0; type < static_cast<int>(Zep::ZepTextType::Count); ++type) {
                 auto &font = display.GetFont(static_cast<Zep::ZepTextType>(type));
-                if (font.GetPixelHeight() != fontPixels)
+                if (font.GetPixelHeight() != fontPixels) {
                     font.SetPixelHeight(fontPixels);
+                    changed = true;
+                }
             }
             editor->SetDisplayRegion({origin.x, origin.y}, {origin.x + extent.x, origin.y + extent.y});
+            if (changed || generation != display.fontGeneration) {
+                window->DirtyLayout();
+                window->SetHoroViewportLines(viewport);
+            }
             UpdateSourceWidgetTheme(*editor);
             return display;
         }
@@ -322,6 +337,7 @@ namespace Horo::Editor {
 
         /** @brief Captures only focused text/navigation input and claims the owning host's text-input channel. */
         void Input(const bool focused, const bool hovered) {
+            ownsInput = focused;
             if (focused) {
                 ImGui::SetActiveID(inputId, ImGui::GetCurrentWindow());
                 ImGui::KeepAliveID(inputId);
@@ -329,7 +345,7 @@ namespace Horo::Editor {
                 ImGui::SetNextFrameWantCaptureKeyboard(true);
                 if (HasTextInput()) {
                     const auto selected = CaptureSelection();
-                    beforeView = {selected.anchor, selected.caret, scrollLines, viewIdentity};
+                    beforeView = {selected.anchor, selected.caret, ScrollPosition(), viewIdentity};
                 }
                 Keyboard();
             }
@@ -337,13 +353,21 @@ namespace Horo::Editor {
         }
 
         /** @brief Applies this view's bounded scroll intent without transferring ownership to the document. */
-        void ApplyScroll(const bool hovered, const ImVec2 origin, const ImVec2 extent) {
+        void ApplyScroll(const bool hovered, const ImVec2, const ImVec2) {
+            constexpr float wheelLines = 5.0F;
             if (hovered)
-                scroll += ImGui::GetIO().MouseWheel;
+                scroll -= ImGui::GetIO().MouseWheel * wheelLines;
             if (scroll != 0) {
-                editor->OnMouseWheel({origin.x + extent.x / 2, origin.y + extent.y / 2}, scroll);
-                scrollLines += scroll;
+                window->SetHoroViewportLines(ScrollPosition() + scroll);
                 scroll = 0;
+            }
+        }
+
+        /** @brief Restores an absolute camera before this frame's new input and automatic caret reveal. */
+        void RestoreViewport() {
+            if (pendingViewport) {
+                window->SetHoroViewportLines(*pendingViewport);
+                pendingViewport.reset();
             }
         }
 
@@ -380,7 +404,7 @@ namespace Horo::Editor {
             std::string candidate{source.Text()};
             candidate.replace(begin, end - begin, plan.insert);
             const auto caret = RawOffset(candidate, source.Metadata().utf8Bom, static_cast<std::size_t>(window->GetBufferCursor().Index()));
-            plan.after = {caret, caret, scrollLines, viewIdentity};
+            plan.after = {caret, caret, ScrollPosition(), viewIdentity};
             return SourceEditSubmission{source.Identity().instance, std::move(plan)};
         }
     };
@@ -413,8 +437,8 @@ namespace Horo::Editor {
         const bool accepted = state.Matches(snapshot, display);
         if (!accepted) {
             state.Reset(display);
-            state.scrollLines = 0;
-            state.scroll = previous ? previous->scrollLines : 0;
+            state.scroll = 0;
+            state.pendingViewport = previous ? std::optional<float>{previous->scrollLines} : std::nullopt;
         }
         // This path runs only on a publication change or a rejected edit; external decorations must be refreshed.
         state.buffer->ClearRangeMarkers(Zep::RangeMarkerType::All);
@@ -431,6 +455,7 @@ namespace Horo::Editor {
     /** @copydoc SourceEditorWidget::Draw */
     std::optional<SourceEditingCommand> SourceEditorWidget::Draw(const SourceWidgetFrame &frame) {
         auto &state = *storage_;
+        state.ownsInput = false;
         if (!state.editor || !ValidFrame(frame))
             return std::nullopt;
         ImGui::PushID(state.inputName.c_str());
@@ -445,6 +470,7 @@ namespace Horo::Editor {
             const auto origin = ImGui::GetCursorScreenPos();
             const auto extent = ImGui::GetContentRegionAvail();
             auto &display = state.PrepareDisplay(frame, origin, extent);
+            state.RestoreViewport();
             state.Input(focused, hovered);
             state.ApplyScroll(inputEnabled && hovered, origin, extent);
             display.cursorColor = state.editor->GetTheme().GetColor(Zep::ThemeColor::CursorInsert);
@@ -477,10 +503,15 @@ namespace Horo::Editor {
         return storage_->viewIdentity;
     }
 
+    /** @copydoc SourceEditorWidget::OwnsInput */
+    bool SourceEditorWidget::OwnsInput() const noexcept {
+        return storage_->ownsInput;
+    }
+
     /** @copydoc SourceEditorWidget::View */
     SourceEditingView SourceEditorWidget::View() const {
         const auto selected = Selection();
-        return {selected.anchor, selected.caret, storage_->scrollLines, storage_->viewIdentity};
+        return {selected.anchor, selected.caret, storage_->ScrollPosition(), storage_->viewIdentity};
     }
 
     /** @copydoc SourceEditorWidget::Select */
@@ -497,22 +528,23 @@ namespace Horo::Editor {
     /** @copydoc SourceEditorWidget::Restore */
     bool SourceEditorWidget::Restore(const SourceEditingPublication &publication) {
         auto &state = *storage_;
-        if (!state.buffer || !publication.restoration || publication.snapshot.Identity().instance != state.source.Identity().instance ||
+        if (!state.buffer || !publication.restoration || publication.restoration->viewId != state.viewIdentity ||
             publication.snapshot.Revision() != state.source.Revision() || state.restoredRevision == publication.snapshot.Revision())
             return false;
         const auto &restoration = *publication.restoration;
-        if (restoration.viewId != state.viewIdentity || !std::isfinite(restoration.scrollLines) ||
+        if (publication.snapshot.Identity().instance != state.source.Identity().instance || !std::isfinite(restoration.scrollLines) ||
             !Select({restoration.anchor, restoration.caret}))
             return false;
-        Scroll(restoration.scrollLines - state.scrollLines);
+        state.pendingViewport = restoration.scrollLines;
+        state.scroll = 0;
         state.restoredRevision = publication.snapshot.Revision();
         return true;
     }
 
     /** @copydoc SourceEditorWidget::Scroll */
     void SourceEditorWidget::Scroll(const float lines) {
-        if (std::isfinite(lines))
-            storage_->scroll = std::clamp(storage_->scroll + lines, -1000.0F, 1000.0F);
+        if (std::isfinite(lines) && std::isfinite(storage_->scroll + lines))
+            storage_->scroll += lines;
     }
 
     /** @copydoc SourceEditorWidget::Decorate */

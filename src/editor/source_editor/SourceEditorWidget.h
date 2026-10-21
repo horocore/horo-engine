@@ -72,6 +72,10 @@ namespace Horo::Editor {
         [[nodiscard]] SourceEditingView View() const;
         /** @brief Returns the host-issued presentation identity without inspecting source bytes. @return Session-unique view ID. */
         [[nodiscard]] SourceEditingViewId Identity() const noexcept;
+        /** @brief Reports current-frame keyboard/text ownership, including no-op input on a newly focused view.
+         * @return True only when the actual enabled surface owns this frame's input.
+         */
+        [[nodiscard]] bool OwnsInput() const noexcept;
         /** @brief Selects a validated document range. @param selection UTF-8/BOM/newline-aligned boundaries.
          * @return False without mutation for an invalid range or a detached widget.
          */
@@ -80,9 +84,10 @@ namespace Horo::Editor {
          * @param publication Authoritative history result with originating view metadata. @return True only when consumed by this view.
          */
         [[nodiscard]] bool Restore(const SourceEditingPublication &publication);
-        /** @brief Scrolls this instance through the same path as a mouse wheel. @param lines Signed wheel delta. */
+        /** @brief Scrolls this instance through the same path as a mouse wheel. @param lines Signed logical display-line delta; positive
+         * scrolls down. */
         void Scroll(float lines);
-        /** @brief Replaces external decorations atomically for the exact current revision.
+        /** @brief Validates a complete external decoration projection before replacing it for the exact current revision.
          * @param revision Published document revision. @param decorations At most 4096 valid document ranges.
          * @return False without mutation for stale, invalid or oversized input.
          */

@@ -1,9 +1,12 @@
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Foundation/Platform.h"
+#include "SourceEditorSession.h"
 #include "SourceEditorWidget.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "support/OwnedTestDirectory.h"
 
 #include <array>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
 #include <imgui_internal.h>
@@ -294,4 +297,140 @@ TEST_CASE("Reversed selections retain their orientation and invalid clipboard by
     CHECK_FALSE(fixture.Shortcut(fixture.first, ImGuiKey_V));
     CHECK(fixture.first.Selection() == SourceWidgetSelection{4, 1});
     CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().Text() == "abcdef");
+}
+
+TEST_CASE("An open workspace popup blocks the actual source input and IME focus", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    const auto source = fixture.Open("code.cpp", "unchanged");
+    fixture.first.Publish(source);
+    static_cast<void>(fixture.Frame(fixture.first));
+    ImGui::GetIO().AddInputCharactersUTF8("blocked");
+    fixture.gui.BeginFrame();
+    ImGui::Begin("Popup owner");
+    ImGui::OpenPopup("workspace popup");
+    if (ImGui::BeginPopup("workspace popup")) {
+        ImGui::TextUnformatted("popup");
+        ImGui::EndPopup();
+    }
+    const auto intent = fixture.first.Draw({620, 400, 1, true, true});
+    ImGui::End();
+    fixture.gui.EndFrame();
+    CHECK_FALSE(intent);
+    CHECK_FALSE(ImGui::GetCurrentContext()->PlatformImeData.WantVisible);
+    CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().Text() == "unchanged");
+}
+
+TEST_CASE("First focused frame owns no-op Delete and navigation without relying on next-frame IME flags", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    const auto source = fixture.Open("empty.cpp", "");
+    fixture.first.Publish(source);
+    ImGui::GetIO().WantTextInput = false;
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Delete, true);
+    CHECK_FALSE(fixture.Frame(fixture.first));
+    CHECK(fixture.first.OwnsInput());
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Delete, false);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_LeftArrow, true);
+    CHECK_FALSE(fixture.Frame(fixture.first));
+    CHECK(fixture.first.OwnsInput());
+    CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().Revision() == source.Revision());
+}
+
+TEST_CASE("Collapsed midline Tab inserts at the caret to the next indentation stop", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    const auto source = fixture.Open("code.cpp", "abcd\r\n");
+    fixture.first.Publish(source);
+    static_cast<void>(fixture.Frame(fixture.first));
+    REQUIRE(fixture.first.Select({1, 1}));
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Tab, true);
+    const auto intent = fixture.Frame(fixture.first);
+    REQUIRE(intent);
+    const auto edited = fixture.Apply(*intent);
+    CHECK(edited.Text() == "a   bcd\r\n");
+    const auto &plan = std::get<SourceEditSubmission>(*intent).plan;
+    CHECK(plan.offset == 1);
+    CHECK(plan.after.caret == 4);
+}
+
+TEST_CASE("Actual source viewport captures keyboard scrolling and restores more than one thousand lines", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    std::string text;
+    for (unsigned line = 0; line < 5000; ++line)
+        text += "line\n";
+    const auto source = fixture.Open("long.cpp", text);
+    fixture.first.Publish(source);
+    static_cast<void>(fixture.Frame(fixture.first));
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_PageDown, true);
+    static_cast<void>(fixture.Frame(fixture.first));
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_PageDown, false);
+    static_cast<void>(fixture.Frame(fixture.first));
+    const auto keyboard = fixture.first.View();
+    CHECK(keyboard.scrollLines > 0);
+    fixture.first.Scroll(2000);
+    static_cast<void>(fixture.Frame(fixture.first));
+    CHECK(fixture.first.View().scrollLines == Catch::Approx(keyboard.scrollLines + 2000));
+    SourceEditingPublication restored{source, SourceEditingView{0, 0, 2111, fixture.first.Identity()}, {}};
+    REQUIRE(fixture.first.Restore(restored));
+    static_cast<void>(fixture.Frame(fixture.first));
+    CHECK(fixture.first.View().scrollLines == Catch::Approx(2111));
+    static_cast<void>(fixture.Frame(fixture.first, true, 2));
+    CHECK(fixture.first.View().scrollLines == Catch::Approx(2111));
+    ImGui::GetIO().AddMousePosEvent(200, 120);
+    static_cast<void>(fixture.Frame(fixture.first, true, 2));
+    ImGui::GetIO().AddMouseWheelEvent(0, -2);
+    static_cast<void>(fixture.Frame(fixture.first, true, 2));
+    CHECK(fixture.first.View().scrollLines == Catch::Approx(2121));
+    CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().Revision() == source.Revision());
+}
+
+TEST_CASE("Source presentation owner fences reused document IDs while retaining view state across Save As", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    const auto first = fixture.Open("first.cpp", "first");
+    SourceEditorSession session;
+    auto *view = session.Acquire(first.Identity().instance);
+    REQUIRE(view);
+    view->widget.Publish(first);
+    static_cast<void>(fixture.Frame(view->widget));
+    REQUIRE(view->widget.Select({1, 3}));
+    const auto oldViewId = view->widget.Identity();
+    NativeDurableFileSystem files;
+    const auto saved = fixture.documents.SaveAs({first.Identity().instance, first.Revision(), {}}, "renamed.cpp", files);
+    REQUIRE(saved.HasValue());
+    view->widget.Publish(saved.Value().snapshot);
+    CHECK(view->widget.Identity() == oldViewId);
+    CHECK(view->widget.Selection() == SourceWidgetSelection{1, 3});
+    fixture.Open("second.cpp", "second");
+    SourceFileOpenService replacement{fixture.directory.Path()};
+    const auto reopened = replacement.Open({.path = "second.cpp", .mode = SourceOpenMode::EmbeddedOnly});
+    REQUIRE(reopened.HasValue());
+    REQUIRE(reopened.Value().sourceSnapshot);
+    const auto next = *reopened.Value().sourceSnapshot;
+    REQUIRE(next.Identity().instance == first.Identity().instance);
+    session.Reset();
+    auto *fresh = session.Acquire(next.Identity().instance);
+    REQUIRE(fresh);
+    fresh->widget.Publish(next);
+    CHECK(fresh->widget.Identity().value > oldViewId.value);
+    CHECK(fresh->widget.Selection() == SourceWidgetSelection{0, 0});
+    CHECK(session.NeedsFocus(next.Identity().instance));
+}
+
+TEST_CASE("Native Backspace and Delete emit scalar aligned document edits", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    const auto source = fixture.Open("code.cpp", "a😀b");
+    fixture.first.Publish(source);
+    static_cast<void>(fixture.Frame(fixture.first));
+    REQUIRE(fixture.first.Select({6, 6}));
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Backspace, true);
+    const auto backspace = fixture.Frame(fixture.first);
+    REQUIRE(backspace);
+    const auto edited = fixture.Apply(*backspace);
+    CHECK(edited.Text() == "a😀");
+    fixture.first.Publish(edited);
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Backspace, false);
+    static_cast<void>(fixture.Frame(fixture.first));
+    REQUIRE(fixture.first.Select({1, 1}));
+    ImGui::GetIO().AddKeyEvent(ImGuiKey_Delete, true);
+    const auto erase = fixture.Frame(fixture.first);
+    REQUIRE(erase);
+    CHECK(fixture.Apply(*erase).Text() == "a");
 }
