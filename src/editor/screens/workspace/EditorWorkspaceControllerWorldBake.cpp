@@ -2,6 +2,27 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Captures exact registry spelling and navigable page origins from one immutable project publication. */
+        std::vector<Application::WorldBakePageSource> CapturePageSources(const PartitionedWorldSnapshot &current,
+                                                                         const Assets::AssetRegistrySnapshot &registry,
+                                                                         const std::filesystem::path &root,
+                                                                         const std::string &documentSource) {
+            std::vector<Application::WorldBakePageSource> sources;
+            for (const auto &page : current.document.pages) {
+                if (const auto *record = registry.Find(page.head.sourceAsset)) {
+                    const auto relative = record->sourcePath.String();
+                    const auto absolute = (root / relative).lexically_normal();
+                    sources.push_back({page.head, {absolute.string(), 1, 1}, relative});
+                } else if (!documentSource.empty()) {
+                    const auto absolute = (root / documentSource).lexically_normal();
+                    sources.push_back({page.head, {absolute.string(), 1, 1}, {}});
+                }
+            }
+            return sources;
+        }
+    }  // namespace
+
     /** @copydoc EditorWorkspaceController::InitializeWorldBake */
     void EditorWorkspaceController::InitializeWorldBake(const EditorWorkspaceDependencies &dependencies) {
         m_worldBakeOperations = dependencies.worldBakeOperations;
@@ -16,6 +37,7 @@ namespace Horo::Editor {
             m_worldBakeProject.fence = {dependencies.documentSessionOwner, 1, digest};
             m_worldBakeProject.settings = digest;
             m_worldBakeProject.triggers = dependencies.triggerBinding;
+            m_worldBakeProject.dependencySource = dependencies.worldBakeDependencies;
         }
         m_viewModel.worldBakeAvailable = m_worldBake != nullptr;
     }
@@ -24,9 +46,29 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::SetWorldBakeProject(Application::WorldBakeProjectCapture capture) {
         if (auto admitted = Application::ValidateWorldBakeProjectCapture(capture); admitted.HasError())
             return admitted;
+        if (capture.fence.project == m_worldBakeProject.fence.project && capture.fence.revision <= m_worldBakeProject.fence.revision)
+            return Result<void>::Failure(MakeError(Application::WorldBakeErrors::Stale));
         m_worldBakeProject = std::move(capture);
         UpdateWorldBake();
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::ReserveWorldBakeSources */
+    Result<std::shared_ptr<const ProjectMutationLease>> EditorWorkspaceController::ReserveWorldBakeSources(
+        const Application::WorldBakeRequest &request) {
+        if (!request.sourceAuthority.files && !request.project.dependencySource)
+            return Result<std::shared_ptr<const ProjectMutationLease>>::Success({});
+        if (auto existing = m_worldBakeSourceReservation.lock())
+            return Result<std::shared_ptr<const ProjectMutationLease>>::Success(std::move(existing));
+        if (!m_mutations)
+            return Result<std::shared_ptr<const ProjectMutationLease>>::Failure(MakeError(Application::WorldBakeErrors::Dependency));
+        auto lease = m_mutations->TryAcquire(
+            {std::filesystem::path{m_viewModel.projectRoot}, ProjectMutationOwner::Asset, "world.bake.source.capture"});
+        if (lease.HasError())
+            return Result<std::shared_ptr<const ProjectMutationLease>>::Failure(lease.ErrorValue());
+        auto retained = std::make_shared<const ProjectMutationLease>(std::move(lease).Value());
+        m_worldBakeSourceReservation = retained;
+        return Result<std::shared_ptr<const ProjectMutationLease>>::Success(std::move(retained));
     }
 
     /** @copydoc EditorWorkspaceController::StartWorldBake */
@@ -40,26 +82,23 @@ namespace Horo::Editor {
             return Result<OperationId>::Failure(current.ErrorValue());
         if (current.Value()->fence != expected)
             return Result<OperationId>::Failure(MakeError(WorldDocumentErrors::Stale));
+        const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
         auto project = m_worldBakeProject;
-        project.fence.registryRevision = m_assetRegistry.Revision().value;
+        project.fence.registryRevision = registry.Revision().value;
         Application::WorldBakeRequest request{.document = current.Value(),
                                               .project = std::move(project),
-                                              .files = m_worldSourceFiles,
+                                              .registry = registry,
+                                              .sourceAuthority = {m_worldSourceFiles, m_workspaceSession, 1},
                                               .mode = mode};
+        auto reserved = ReserveWorldBakeSources(request);
+        if (reserved.HasError())
+            return Result<OperationId>::Failure(reserved.ErrorValue());
+        request.sourceAuthority.reservation = std::move(reserved).Value();
         if (m_localization)
             request.title = m_localization->Get("editor", mode == Application::WorldBakeMode::Bake ? "workspace.world.bake"
                                                                                                    : "workspace.world.validate");
-        for (const auto &page : current.Value()->document.pages) {
-            const auto *record = m_assetRegistry.Find(page.head.sourceAsset);
-            if (record) {
-                const auto relative = record->sourcePath.String();
-                const auto absolute = (std::filesystem::path{m_viewModel.projectRoot} / relative).lexically_normal();
-                request.sources.push_back({page.head, {absolute.string(), 1, 1}, relative});
-            } else if (!m_viewModel.worldDocumentSource.empty()) {
-                const auto absolute = (std::filesystem::path{m_viewModel.projectRoot} / m_viewModel.worldDocumentSource).lexically_normal();
-                request.sources.push_back({page.head, {absolute.string(), 1, 1}, {}});
-            }
-        }
+        request.sources =
+            CapturePageSources(*current.Value(), registry, std::filesystem::path{m_viewModel.projectRoot}, m_viewModel.worldDocumentSource);
         const auto accepted = m_worldBake->Submit(std::move(request));
         UpdateWorldBake();
         return accepted;
@@ -71,7 +110,7 @@ namespace Horo::Editor {
             return;
         const auto current = (m_partitionedWorld ? *m_partitionedWorld : WorldDocuments()).Snapshot();
         auto project = m_worldBakeProject.fence;
-        project.registryRevision = m_assetRegistry.Revision().value;
+        project.registryRevision = (m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry).Revision().value;
         const auto lease = current.HasValue() ? current.Value() : PartitionedWorldSnapshotLease{};
         m_worldBake->Pump(lease, project);
         m_viewModel.worldBakeOperation = m_worldBake->ActiveOperation();

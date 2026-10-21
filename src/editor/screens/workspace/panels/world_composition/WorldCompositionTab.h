@@ -40,6 +40,15 @@ namespace Horo::Editor {
         /** @brief Projects application-owned bake availability and sends exact revision/operation-fenced intents.
          * @param vm Immutable controller projection. @param command One frame's selected command. @param context Theme/localization. */
         void DrawBakeControls(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+        /** @brief Presents source admission and failure state; returns whether a canonical document is available. */
+        [[nodiscard]] bool DrawAdmission(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                         const EditorGuiContext &context);
+        /** @brief Emits one close/filter intent from the currently displayed immutable document. */
+        void DrawFilters(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                         const EditorGuiContext &context);
+        /** @brief Presents cached source rows and the canonical layer outliner. */
+        void DrawTables(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                        const EditorGuiContext &context);
         /** @brief Rebuilds tables only after a publication/filter/locale change; draw frames reuse bounded rows. */
         void RefreshRows(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context);
         std::string path_;

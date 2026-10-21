@@ -34,6 +34,11 @@ namespace Horo::Application::WorldBakeDetail {
         const Runtime::WorldBuildValidationLimits &limits);
     [[nodiscard]] Result<void> Encode(const WorldBakeRequest &request, WorldBakeOutput &output, const CancellationToken &cancellation,
                                       const std::function<void(float)> &progress);
+    [[nodiscard]] Result<std::optional<Assets::AssetCookGeneration>> ResolveDependencies(WorldBakeRequest &request,
+                                                                                         const CancellationToken &cancellation);
+    [[nodiscard]] Result<void> VerifyDependencies(const WorldBakeRequest &request,
+                                                  const std::optional<Assets::AssetCookGeneration> &generation,
+                                                  const CancellationToken &cancellation);
     [[nodiscard]] std::uint64_t ObjectId(Assets::AssetId page, std::uint64_t object);
     [[nodiscard]] Assets::AssetId ChunkId(const W::WorldPartitionId &world, W::StreamingCellId cell);
     void Remap(Runtime::RuntimeEntityDefinition &entity, Assets::AssetId page);

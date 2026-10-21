@@ -60,17 +60,42 @@ namespace Horo::Application::WorldBakeDetail {
                    document->fence.revision.IsValid();
         }
 
+        /** @brief Root capability identity is independent from the mutable project/schema publication. */
+        bool ValidSourceAuthority(const WorldBakeSourceAuthority &authority) {
+            return !authority.files || (authority.owner.IsValid() && authority.generation != 0);
+        }
+
         /** @brief Checks one exact verified asset identity; graph traversal remains with the existing Scene cache owner. */
         bool ValidDependency(const WorldBakeDependency &dependency) {
             return dependency.asset.id.IsValid() && !dependency.asset.expectedType.Value().empty() && dependency.revision != 0 &&
                    dependency.digest != Sha256Digest{};
         }
 
+        /** @brief Validates inert schema identities without narrowing the owning cooker's supported-version set. */
+        bool ValidSchemas(const WorldBakeProjectCapture &project) {
+            return std::ranges::all_of(project.components, [](const auto &schema) {
+                return !schema.type.Value().empty() && schema.version != 0;
+            }) && std::ranges::all_of(project.behaviors, [](const auto &schema) {
+                return !schema.type.Value().empty() && schema.version != 0;
+            });
+        }
+
+        /** @brief Admits one explicit dependency authority; selection and already captured evidence cannot compete. */
+        bool ValidDependencySource(const WorldBakeProjectCapture &project) {
+            return !project.dependencySource ||
+                   (project.dependencies.empty() && project.dependencySource->files && project.dependencySource->targetRoot.is_absolute() &&
+                    project.dependencySource->target.IsValid());
+        }
+
         /** @brief Admits complete dependency identities and finite graph storage without resolving provider state. */
         Result<void> AdmitProject(const WorldBakeProjectCapture &project, const WorldBakeLimits &limits) {
             if (project.dependencies.size() > limits.cache.maximumDependencies || project.components.size() > limits.cache.maximumSchemas ||
-                project.behaviors.size() > limits.cache.maximumSchemas)
+                project.behaviors.size() > limits.cache.maximumSchemas - project.components.size())
                 return Result<void>::Failure(MakeError(WorldBakeErrors::Capacity));
+            if (!ValidDependencySource(project))
+                return Result<void>::Failure(MakeError(WorldBakeErrors::Dependency));
+            if (!ValidSchemas(project))
+                return Result<void>::Failure(MakeError(WorldBakeErrors::Invalid));
             std::set<Assets::AssetId> dependencies;
             std::size_t edges{};
             for (const auto &dependency : project.dependencies) {
@@ -106,10 +131,14 @@ namespace Horo::Application::WorldBakeDetail {
     Result<void> Admit(const WorldBakeRequest &request) {
         if (!ValidDocument(request.document) || (request.mode != WorldBakeMode::Bake && request.mode != WorldBakeMode::Validate))
             return Result<void>::Failure(MakeError(WorldBakeErrors::Invalid));
+        if (!ValidSourceAuthority(request.sourceAuthority))
+            return Result<void>::Failure(MakeError(WorldBakeErrors::Invalid));
         if (!ValidLimits(request.limits) || request.document->document.pages.size() > 4096)
             return Result<void>::Failure(MakeError(WorldBakeErrors::Capacity));
         if (auto project = ValidateWorldBakeProjectCapture(request.project, request.limits); project.HasError())
             return project;
+        if (request.project.dependencySource && request.registry.Revision().value != request.project.fence.registryRevision)
+            return Result<void>::Failure(MakeError(WorldBakeErrors::Stale));
         return AdmitSources(request);
     }
 

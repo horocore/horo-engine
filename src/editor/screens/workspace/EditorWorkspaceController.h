@@ -80,6 +80,7 @@ namespace Horo::Editor {
         OperationStore *worldBakeOperations{};
         BuildOutputStore *worldBakeOutput{};
         std::optional<Application::WorldBakeProjectCapture> worldBakeProject;
+        std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
         SourceOpenNavigator sourceOpenNavigator{};
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
         EditorWorkspaceGameplayServices gameplay{};
@@ -220,7 +221,8 @@ namespace Horo::Editor {
         /** @brief Polls application-owned work and refreshes immutable presentation without blocking. */
         void UpdateWorldBake();
         /** @brief Installs explicit complete project/schema/dependency capture from the host.
-         * @param capture Owned verified inputs; publication fences invalidate older work.
+         * @param capture Owned verified inputs; the same project requires a strictly newer non-wrapping revision.
+         * Publication fences invalidate older work.
          * @return Success or typed rejection retaining the previous capture and accepted operation. */
         [[nodiscard]] Result<void> SetWorldBakeProject(Application::WorldBakeProjectCapture capture);
         /** @brief Requests cancellation only for the exact operation captured by presentation. @param expected Captured operation.
@@ -354,6 +356,11 @@ namespace Horo::Editor {
         /** @brief Composes the explicit controller-owned operation from host-borrowed process capabilities.
          * @param dependencies Frozen workspace composition inputs. */
         void InitializeWorldBake(const EditorWorkspaceDependencies &dependencies);
+        /** @brief Reserves the existing project mutation guard without waiting; replacements share only this owner's active lease.
+         * @param request Captured source capabilities; in-memory-only work needs no writer reservation.
+         * @return Retained application operation proof or typed busy/unavailable failure, without cancelling accepted work. */
+        [[nodiscard]] Result<std::shared_ptr<const ProjectMutationLease>> ReserveWorldBakeSources(
+            const Application::WorldBakeRequest &request);
         /** @brief Opens/focuses the exact registered persistent definition asset route. */
         void OpenNavigationDefinitionTab(Assets::AssetId asset);
         /** @brief Projects constant-time dirty/focus/close state without copying Scene roots per frame. */
@@ -422,6 +429,7 @@ namespace Horo::Editor {
         std::unique_ptr<Application::WorldBakeApplication> m_worldBake;
         Application::WorldBakeProjectCapture m_worldBakeProject;
         OperationStore *m_worldBakeOperations{};
+        std::weak_ptr<const ProjectMutationLease> m_worldBakeSourceReservation;
         SceneDocument m_document;
         EditorHistory m_history;
         std::optional<SceneDocumentTransactions> m_physicsTransactions;

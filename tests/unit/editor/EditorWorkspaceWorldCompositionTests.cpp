@@ -8,23 +8,47 @@
 #include <fstream>
 
 namespace Horo::Editor::WorldCompositionTests {
-    TEST_CASE("Actual world source route binds canonical owner and persistent tab atomically", "[editor][world_browser][controller]") {
-        Horo::Tests::OwnedTestDirectory project{"world composition ü space"};
-        const auto path = project.Path() / "world ü space.horoworld";
-        {
-            std::ofstream file{path};
-            file << WorldSource();
+    namespace {
+        struct WorldProject final {
+            Horo::Tests::OwnedTestDirectory directory{"world composition"};
+            Runtime::RuntimeSceneService runtime;
+            std::unique_ptr<EditorWorkspaceController> controller;
+
+            WorldProject() {
+                {
+                    std::ofstream file{Path()};
+                    file << WorldSource();
+                }
+                const auto owner = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000009").Value();
+                auto files = Platform::CreateNativeProjectReadFiles(directory.Path(), owner.ToString(), 1);
+                REQUIRE(files.HasValue());
+                controller = std::make_unique<EditorWorkspaceController>(directory.Path(), runtime, Assets::AssetRegistrySnapshot{},
+                                                                         EditorWorkspaceDependencies{.worldSourceFiles = files.Value(),
+                                                                                                     .documentSessionOwner = owner});
+                REQUIRE(controller->OpenWorldCompositionSource("world ü space.horoworld").HasValue());
+            }
+
+            std::filesystem::path Path() const {
+                return directory.Path() / std::filesystem::path{u8"world ü space.horoworld"};
+            }
+        };
+
+        EditorWorkspaceViewCommandData CreateSource(const WorldViewportBinding &binding) {
+            PartitionedWorldSource source{.shape = WorldStreaming::StreamingSourceSphere{binding.globalOrigin, 1000},
+                                          .priority = WorldStreaming::StreamingSourcePriority::Create(1).Value()};
+            EditorWorkspaceViewCommandData command;
+            command.command = EditorWorkspaceViewCommand::WorldSourceTool;
+            command.worldSource = WorldSourceToolCommand{.action = WorldSourceToolAction::Create,
+                                                         .edit = {.expected = binding.snapshot->fence, .value = source},
+                                                         .globalOrigin = binding.globalOrigin,
+                                                         .viewRevision = binding.viewRevision};
+            return command;
         }
-        Runtime::RuntimeSceneService runtime;
-        const auto owner = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000009").Value();
-        auto readFiles = Platform::CreateNativeProjectReadFiles(project.Path(), owner.ToString(), 1);
-        REQUIRE(readFiles.HasValue());
-        EditorWorkspaceController controller{project.Path(),
-                                             runtime,
-                                             {},
-                                             EditorWorkspaceDependencies{.worldSourceFiles = readFiles.Value(),
-                                                                         .documentSessionOwner = owner}};
-        REQUIRE(controller.OpenWorldCompositionSource("world ü space.horoworld").HasValue());
+    }  // namespace
+
+    TEST_CASE("Actual world source route binds canonical owner and persistent tab atomically", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
         const auto current = controller.WorldDocuments().Snapshot().Value();
         REQUIRE(controller.ViewModel().worldDocument == current);
         REQUIRE(controller.ViewModel().worldBrowser);
@@ -34,89 +58,95 @@ namespace Horo::Editor::WorldCompositionTests {
         CHECK(controller.ViewModel().worldViewport.snapshot == current);
         CHECK(controller.ViewModel().worldViewport.globalOrigin == current->document.settings.grid.Origin());
         CHECK(controller.ViewModel().worldViewport.viewRevision != 0);
-        SECTION("actual viewport source producer commits into the same opened owner") {
-            EditorWorkspaceViewCommandData create;
-            create.command = EditorWorkspaceViewCommand::WorldSourceTool;
-            const auto binding = controller.ViewModel().worldViewport;
-            create.worldSource =
-                WorldSourceToolCommand{.action = WorldSourceToolAction::Create,
-                                       .edit = {.expected = current->fence,
-                                                .value =
-                                                    PartitionedWorldSource{.shape =
-                                                                               WorldStreaming::StreamingSourceSphere{binding.globalOrigin,
-                                                                                                                     1000},
-                                                                           .priority =
-                                                                               WorldStreaming::StreamingSourcePriority::Create(1).Value()}},
-                                       .globalOrigin = binding.globalOrigin,
-                                       .viewRevision = binding.viewRevision};
-            controller.ProcessCommand(create);
-            const auto edited = controller.WorldDocuments().Snapshot().Value();
-            REQUIRE(edited->document.sources.size() == 1);
-            CHECK(controller.ViewModel().worldDocument == edited);
-            CHECK(controller.ViewModel().worldViewport.snapshot == edited);
-            CHECK(controller.ViewModel().worldBrowser->source == edited);
-            REQUIRE(controller.OpenWorldCompositionSource("world ü space.horoworld", edited->fence).HasError());
-            CHECK(controller.WorldDocuments().Snapshot().Value() == edited);
-            EditorWorkspaceViewCommandData close;
-            close.command = EditorWorkspaceViewCommand::CloseWorldComposition;
-            close.worldDocumentFence = edited->fence;
-            controller.ProcessCommand(close);
-            CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Dirty.code);
-            CHECK(controller.WorldDocuments().Snapshot().Value() == edited);
-            REQUIRE(controller.WorldDocuments().Shutdown(WorldDocumentDisposition::Discard).HasValue());
-            controller.RefreshWorldDocumentProjection();
-            CHECK_FALSE(controller.ViewModel().worldDocument);
-            CHECK_FALSE(controller.ViewModel().worldViewport.snapshot);
-        }
-        SECTION("content browser source-open uses the same owned world route") {
-            EditorWorkspaceViewCommandData sourceOpen;
-            sourceOpen.command = EditorWorkspaceViewCommand::OpenSourceFile;
-            sourceOpen.sourceOpenRequest = SourceOpenRequest{.path = path};
-            controller.ProcessCommand(sourceOpen);
-            const auto reopened = controller.WorldDocuments().Snapshot().Value();
-            CHECK(reopened->fence.generation != current->fence.generation);
-            CHECK(controller.ViewModel().worldViewport.snapshot == reopened);
-            CHECK(controller.ViewModel().worldViewport.viewRevision > 1);
-            CHECK(controller.ViewModel().activeDocumentPanelId == "horo.world_composition");
-        }
-        SECTION("failed replacement preserves owner and tab") {
+    }
+
+    TEST_CASE("Actual viewport producer and dirty guards retain the same opened world", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        controller.ProcessCommand(CreateSource(controller.ViewModel().worldViewport));
+        const auto edited = controller.WorldDocuments().Snapshot().Value();
+        REQUIRE(edited->document.sources.size() == 1);
+        CHECK(controller.ViewModel().worldDocument == edited);
+        CHECK(controller.ViewModel().worldViewport.snapshot == edited);
+        CHECK(controller.ViewModel().worldBrowser->source == edited);
+        REQUIRE(controller.OpenWorldCompositionSource("world ü space.horoworld", edited->fence).HasError());
+        CHECK(controller.WorldDocuments().Snapshot().Value() == edited);
+        EditorWorkspaceViewCommandData close;
+        close.command = EditorWorkspaceViewCommand::CloseWorldComposition;
+        close.worldDocumentFence = edited->fence;
+        controller.ProcessCommand(close);
+        REQUIRE(controller.ViewModel().worldDocumentError);
+        CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Dirty.code);
+        CHECK(controller.WorldDocuments().Snapshot().Value() == edited);
+        REQUIRE(controller.WorldDocuments().Shutdown(WorldDocumentDisposition::Discard).HasValue());
+        controller.RefreshWorldDocumentProjection();
+        CHECK_FALSE(controller.ViewModel().worldDocument);
+        CHECK_FALSE(controller.ViewModel().worldViewport.snapshot);
+    }
+
+    TEST_CASE("Content browser source navigation rebinds the same canonical world owner", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        const auto current = controller.WorldDocuments().Snapshot().Value();
+        EditorWorkspaceViewCommandData sourceOpen;
+        sourceOpen.command = EditorWorkspaceViewCommand::OpenSourceFile;
+        sourceOpen.sourceOpenRequest = SourceOpenRequest{.path = project.Path()};
+        controller.ProcessCommand(sourceOpen);
+        const auto reopened = controller.WorldDocuments().Snapshot().Value();
+        CHECK(reopened->fence.generation != current->fence.generation);
+        CHECK(controller.ViewModel().worldViewport.snapshot == reopened);
+        CHECK(controller.ViewModel().worldViewport.viewRevision > 1);
+        CHECK(controller.ViewModel().activeDocumentPanelId == "horo.world_composition");
+    }
+
+    TEST_CASE("Failed malformed stale and unsafe world source replacement preserve owner and focus",
+              "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        const auto current = controller.WorldDocuments().Snapshot().Value();
+        SECTION("malformed") {
             {
-                std::ofstream file{path};
+                std::ofstream file{project.Path()};
                 file << "{invalid";
             }
             REQUIRE(controller.OpenWorldCompositionSource("world ü space.horoworld", current->fence).HasError());
-            REQUIRE(controller.WorldDocuments().Snapshot().Value() == current);
         }
-        SECTION("stale open command cannot replace current source") {
+        SECTION("stale") {
             REQUIRE(controller.OpenWorldCompositionSource("world ü space.horoworld").HasError());
-            REQUIRE(controller.WorldDocuments().Snapshot().Value() == current);
         }
-        SECTION("portable containment and missing file failures") {
+        SECTION("containment") {
             REQUIRE(controller.OpenWorldCompositionSource("../world.horoworld", current->fence).HasError());
+        }
+        SECTION("missing") {
             REQUIRE(controller.OpenWorldCompositionSource("missing.horoworld", current->fence).HasError());
-            REQUIRE(controller.WorldDocuments().Snapshot().Value() == current);
         }
-        SECTION("filter and close route preserve typed revision fencing") {
-            EditorWorkspaceViewCommandData query;
-            query.command = EditorWorkspaceViewCommand::QueryWorldComposition;
-            query.worldDocumentFence = current->fence;
-            query.worldBrowserQuery = WorldBrowserQuery{.search = "missing"};
-            controller.ProcessCommand(query);
-            REQUIRE(controller.ViewModel().worldBrowser->cells.empty());
-            query.worldBrowserQuery = WorldBrowserQuery{.maximumCells = 1};
-            controller.ProcessCommand(query);
-            REQUIRE(controller.ViewModel().worldDocumentError);
-            REQUIRE(controller.ViewModel().worldBrowserQuery.search == "missing");
-            const auto replaced = controller.WorldDocuments().Replace(current->document, current->fence).Value();
-            query.command = EditorWorkspaceViewCommand::CloseWorldComposition;
-            controller.ProcessCommand(query);
-            REQUIRE(controller.WorldDocuments().Snapshot().Value() == replaced);
-            query.worldDocumentFence = replaced->fence;
-            controller.ProcessCommand(query);
-            CHECK_FALSE(controller.ViewModel().worldDocument);
-            CHECK_FALSE(controller.ViewModel().worldBrowser);
-            CHECK(current->document.pages.size() == 1);
-        }
+        CHECK(controller.WorldDocuments().Snapshot().Value() == current);
+        CHECK(controller.ViewModel().activeDocumentPanelId == "horo.world_composition");
+    }
+
+    TEST_CASE("World browser filter and close commands enforce exact revision fences", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        const auto current = controller.WorldDocuments().Snapshot().Value();
+        EditorWorkspaceViewCommandData query;
+        query.command = EditorWorkspaceViewCommand::QueryWorldComposition;
+        query.worldDocumentFence = current->fence;
+        query.worldBrowserQuery = WorldBrowserQuery{.search = "missing"};
+        controller.ProcessCommand(query);
+        REQUIRE(controller.ViewModel().worldBrowser->cells.empty());
+        query.worldBrowserQuery = WorldBrowserQuery{.maximumCells = 1};
+        controller.ProcessCommand(query);
+        REQUIRE(controller.ViewModel().worldDocumentError);
+        REQUIRE(controller.ViewModel().worldBrowserQuery.search == "missing");
+        const auto replaced = controller.WorldDocuments().Replace(current->document, current->fence).Value();
+        query.command = EditorWorkspaceViewCommand::CloseWorldComposition;
+        controller.ProcessCommand(query);
+        REQUIRE(controller.WorldDocuments().Snapshot().Value() == replaced);
+        query.worldDocumentFence = replaced->fence;
+        controller.ProcessCommand(query);
+        CHECK_FALSE(controller.ViewModel().worldDocument);
+        CHECK_FALSE(controller.ViewModel().worldBrowser);
+        CHECK(current->document.pages.size() == 1);
     }
 }  // namespace Horo::Editor::WorldCompositionTests
 
@@ -165,5 +195,84 @@ namespace Horo::Editor {
         CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Stale.code);
         CHECK(WorldResidencyTests::Current(world) == previous);
         CHECK(controller.ViewModel().worldBakeCurrent);
+    }
+}  // namespace Horo::Editor
+
+namespace Horo::Editor {
+    TEST_CASE("World bake project replacement cannot reuse a source publication fence", "[editor][world_bake][controller]") {
+        Horo::Tests::OwnedTestDirectory project{"world bake project fence"};
+        JobSystem jobs{{.workerCount = 0}};
+        OperationStore operations{8, 16};
+        BuildOutputStore output{32};
+        Runtime::RuntimeSceneService runtime;
+        Application::WorldBakeProjectCapture capture;
+        capture.fence = {WorldResidencyTests::Asset(12), 7, {}};
+        capture.fence.schemas.bytes.front() = 1;
+        capture.settings.bytes.front() = 2;
+        EditorWorkspaceController controller{project.Path(),
+                                             runtime,
+                                             {},
+                                             EditorWorkspaceDependencies{.jobs = &jobs,
+                                                                         .worldBakeOperations = &operations,
+                                                                         .worldBakeOutput = &output,
+                                                                         .worldBakeProject = capture,
+                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+        auto &world = controller.WorldDocuments();
+        REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
+        for (const auto &page : WorldResidencyTests::Document().pages)
+            REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        const auto accepted = controller.StartWorldBake(Application::WorldBakeMode::Bake, world.Snapshot().Value()->fence);
+        REQUIRE(accepted.HasValue());
+        auto replacement = capture;
+        ++replacement.settings.bytes.front();
+        const auto rejected = controller.SetWorldBakeProject(replacement);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code == Application::WorldBakeErrors::Stale.code);
+        CHECK(controller.ViewModel().worldBakeOperation == accepted.Value());
+        ++replacement.fence.revision;
+        REQUIRE(controller.SetWorldBakeProject(replacement).HasValue());
+        CHECK_FALSE(controller.ViewModel().worldBakeOperation);
+        CHECK_FALSE(controller.ViewModel().worldBakeCurrent);
+        CHECK_FALSE(output.SnapshotIfChanged(0));
+    }
+}  // namespace Horo::Editor
+
+namespace Horo::Editor {
+    TEST_CASE("World bake publication fences the registry owner before a presentation snapshot refresh",
+              "[editor][world_bake][controller]") {
+        Horo::Tests::OwnedTestDirectory project{"world bake registry fence"};
+        JobSystem jobs{{.workerCount = 1}};
+        OperationStore operations{8, 16};
+        BuildOutputStore output{32};
+        Assets::AssetRegistry registry;
+        Runtime::RuntimeSceneService runtime;
+        EditorWorkspaceController controller{project.Path(), runtime, registry.Snapshot(),
+                                             EditorWorkspaceDependencies{.mutableAssetRegistry = &registry,
+                                                                         .jobs = &jobs,
+                                                                         .worldBakeOperations = &operations,
+                                                                         .worldBakeOutput = &output,
+                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+        auto &world = controller.WorldDocuments();
+        REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
+        for (const auto &page : WorldResidencyTests::Document().pages)
+            REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        const auto accepted = controller.StartWorldBake(Application::WorldBakeMode::Bake, world.Snapshot().Value()->fence);
+        REQUIRE(accepted.HasValue());
+        auto marker = jobs.SubmitResult({}, [](const CancellationToken &) {
+            return Result<void>::Success();
+        });
+        REQUIRE(marker.HasValue());
+        REQUIRE(marker.Value().Wait({WaitPolicy::OwnerThreadBlockAllowed, std::chrono::seconds{5}}).HasValue());
+        const auto publication = registry.Publish(std::vector<Assets::AssetRecord>{});
+        REQUIRE(publication.status == Assets::AssetRegistryBuildStatus::Complete);
+        controller.UpdateWorldBake();
+        CHECK_FALSE(controller.ViewModel().worldBakeCurrent);
+        CHECK_FALSE(output.SnapshotIfChanged(0));
+        const auto snapshot = operations.SnapshotIfChanged(0);
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->operations.size() == 1);
+        CHECK(snapshot->operations.front().state == OperationState::Cancelled);
+        REQUIRE(snapshot->operations.front().error);
+        CHECK(snapshot->operations.front().error->code == Application::WorldBakeErrors::Stale.code);
     }
 }  // namespace Horo::Editor

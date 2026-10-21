@@ -48,6 +48,15 @@ namespace Horo::Application {
     }  // namespace WorldBakeDetail
 
     namespace {
+        /** @brief Requires the existing project writer reservation for every application request that can read files. */
+        Result<void> AdmitApplicationRequest(const WorldBakeRequest &request) {
+            if (auto valid = WorldBakeDetail::Admit(request); valid.HasError())
+                return valid;
+            if ((request.sourceAuthority.files || request.project.dependencySource) && !request.sourceAuthority.reservation)
+                return Result<void>::Failure(MakeError(WorldBakeErrors::Dependency));
+            return Result<void>::Success();
+        }
+
         /** @brief Checks the exact typed cancellation domain rather than matching arbitrary code text. */
         bool Cancelled(const Error &error) {
             const auto matches = [&](const ErrorCodeDescriptor &descriptor) {
@@ -92,7 +101,7 @@ namespace Horo::Application {
     Result<OperationId> WorldBakeApplication::Submit(WorldBakeRequest request) {
         if (closed_ || std::this_thread::get_id() != thread_)
             return Result<OperationId>::Failure(MakeError(WorldBakeErrors::Closed));
-        if (auto admitted = WorldBakeDetail::Admit(request); admitted.HasError())
+        if (auto admitted = AdmitApplicationRequest(request); admitted.HasError())
             return Result<OperationId>::Failure(admitted.ErrorValue());
         auto attempt = std::make_shared<WorldBakeDetail::Attempt>();
         attempt->request = std::move(request);
@@ -128,10 +137,13 @@ namespace Horo::Application {
         if (!pending_ || active_ || closed_)
             return;
         const auto candidate = pending_;
-        auto accepted = jobs_.SubmitContext({.parentCancellation = candidate->cancellation.Token(),
-                                             .operationId = candidate->operation,
-                                             .resource = candidate->request.files ? JobResource::Io : JobResource::Cpu},
-                                            [attempt = candidate](const JobExecutionContext &job) {
+        auto accepted =
+            jobs_.SubmitContext({.parentCancellation = candidate->cancellation.Token(),
+                                 .operationId = candidate->operation,
+                                 .resource = (candidate->request.sourceAuthority.files || candidate->request.project.dependencySource)
+                                                 ? JobResource::Io
+                                                 : JobResource::Cpu},
+                                [attempt = candidate](const JobExecutionContext &job) {
             return Execute(attempt, job);
         });
         if (accepted.HasError()) {
@@ -287,6 +299,8 @@ namespace Horo::Application {
             // Cancellation already fenced every publisher. Teardown cannot propagate allocation/history-sink failures.
         }
         pending_.reset();
+        active_.reset();
+        job_ = JobHandle{};
     }
 
     /** @copydoc WorldBakeApplication::ActiveOperation */

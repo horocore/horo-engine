@@ -78,6 +78,109 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc WorldCompositionTab::DrawAdmission */
+    bool WorldCompositionTab::DrawAdmission(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command,
+                                            const EditorGuiContext &context) {
+        const auto text = [&](const char *key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        const auto &fonts = context.theme.fonts;
+        Ui::SectionTitle(text("workspace.panel.world_composition").c_str(), fonts);
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.source_hint"), Theme::Muted(), fonts);
+        static_cast<void>(Ui::InputTextControl("##world_source", path_, 4096, fonts,
+                                               {.hint = text("workspace.world.path").c_str(), .componentSize = Ui::ComponentSize::Medium}));
+        if (Ui::Button({.label = text("workspace.world.open_source").c_str(), .enabled = !path_.empty(), .font = fonts.sans})) {
+            command.command = EditorWorkspaceViewCommand::OpenWorldCompositionSource;
+            command.stringPayload = path_;
+            command.worldDocumentFence = vm.worldDocument ? std::optional{vm.worldDocument->fence} : std::nullopt;
+        }
+        if (vm.worldDocumentError) {
+            Ui::ErrorText(text("workspace.world.error").c_str(), fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, vm.worldDocumentError->code.Value(), Theme::Text(), fonts);
+        }
+        if (!vm.worldDocument) {
+            source_.reset();
+            layers_.clear();
+            cells_.clear();
+            layerLabels_.clear();
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.no_document"), Theme::Muted(), fonts);
+            return false;
+        }
+        return true;
+    }
+
+    /** @copydoc WorldCompositionTab::DrawFilters */
+    void WorldCompositionTab::DrawFilters(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command,
+                                          const EditorGuiContext &context) {
+        const auto text = [&](const char *key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        const auto &fonts = context.theme.fonts;
+        ImGui::BeginDisabled(command.command != EditorWorkspaceViewCommand::None);
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, vm.worldDocumentSource, Theme::Text(), fonts);
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.authoring_status"), Theme::Muted(), fonts);
+        if (Ui::Button({.label = text("workspace.world.close_source").c_str(), .font = fonts.sans})) {
+            command.command = EditorWorkspaceViewCommand::CloseWorldComposition;
+            command.worldDocumentFence = vm.worldDocument->fence;
+        }
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(command.command != EditorWorkspaceViewCommand::None);
+        RefreshRows(vm, context);
+        draft_ = vm.worldBrowserQuery;
+        auto &query = draft_;
+        static_cast<void>(
+            Ui::InputTextControl("##world_search", query.search, 257, fonts,
+                                 {.hint = text("workspace.world.search").c_str(), .componentSize = Ui::ComponentSize::Medium}));
+        const std::array<const char *, 4> labels{text("workspace.world.all").c_str(), text("workspace.world.open").c_str(),
+                                                 text("workspace.world.closed").c_str(), text("workspace.world.mixed").c_str()};
+        int status = static_cast<int>(query.status);
+        if (Ui::ComboControl("##world_status", &status, labels.data(), static_cast<int>(labels.size()), fonts))
+            query.status = static_cast<WorldBrowserStatus>(status);
+        int layerIndex{};
+        for (std::size_t index = 0; index < vm.worldDocument->document.layers.size(); ++index)
+            if (query.layer == vm.worldDocument->document.layers[index].id)
+                layerIndex = static_cast<int>(index + 1);
+        if (Ui::ComboControl("##world_layer", &layerIndex, layerLabels_.data(), static_cast<int>(layerLabels_.size()), fonts))
+            query.layer = layerIndex == 0 ? std::nullopt
+                                          : std::optional{vm.worldDocument->document.layers[static_cast<std::size_t>(layerIndex - 1)].id};
+        if (query != vm.worldBrowserQuery) {
+            command.command = EditorWorkspaceViewCommand::QueryWorldComposition;
+            command.worldBrowserQuery = query;
+            command.worldDocumentFence = vm.worldDocument->fence;
+        }
+        ImGui::EndDisabled();
+    }
+
+    /** @copydoc WorldCompositionTab::DrawTables */
+    void WorldCompositionTab::DrawTables(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command,
+                                         const EditorGuiContext &context) {
+        const auto text = [&](const char *key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        const auto &fonts = context.theme.fonts;
+        const auto color = Theme::Text();
+        if (textColor_.x != color.x || textColor_.y != color.y || textColor_.z != color.z || textColor_.w != color.w) {
+            textColor_ = color;
+            for (auto *rows : {&layers_, &cells_})
+                for (auto &row : *rows)
+                    for (auto &cell : row.cells)
+                        cell.color = color;
+        }
+        ImGui::BeginDisabled(command.command != EditorWorkspaceViewCommand::None);
+        RouteWorldLayerOutlinerIntent(DrawWorldLayerOutliner(*vm.worldDocument, context), command);
+        ImGui::EndDisabled();
+        if (vm.worldLayerFailure)
+            Ui::ErrorText(text("workspace.world.error").c_str(), fonts);
+        Ui::SectionTitle(text("workspace.world.layers").c_str(), fonts);
+        static_cast<void>(Ui::DrawTable({.id = "##world_layers", .componentSize = Ui::ComponentSize::Medium, .selectableCells = false},
+                                        layerColumns_, layers_, fonts));
+        Ui::SectionTitle(text("workspace.world.cells").c_str(), fonts);
+        static_cast<void>(Ui::DrawTable({.id = "##world_cells", .componentSize = Ui::ComponentSize::Medium, .selectableCells = false},
+                                        cellColumns_, cells_, fonts));
+        if (!vm.worldDocumentError && layers_.empty() && cells_.empty())
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.no_matches"), Theme::Muted(), fonts);
+    }
+
     /** @copydoc WorldCompositionTab::DrawBakeControls */
     void WorldCompositionTab::DrawBakeControls(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command,
                                                const EditorGuiContext &context) {
@@ -114,81 +217,10 @@ namespace Horo::Editor {
     /** @copydoc WorldCompositionTab::DrawPanel */
     void WorldCompositionTab::DrawPanel(const ImVec2 &, const ImVec2 &, const EditorWorkspaceViewModel &vm,
                                         EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        const auto text = [&](const char *key) -> const std::string & {
-            return context.localization.Get("editor", key);
-        };
-        const auto &fonts = context.theme.fonts;
-        Ui::SectionTitle(text("workspace.panel.world_composition").c_str(), fonts);
-        Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.source_hint"), Theme::Muted(), fonts);
-        static_cast<void>(Ui::InputTextControl("##world_source", path_, 4096, fonts,
-                                               {.hint = text("workspace.world.path").c_str(), .componentSize = Ui::ComponentSize::Medium}));
-        if (Ui::Button({.label = text("workspace.world.open_source").c_str(), .enabled = !path_.empty(), .font = fonts.sans})) {
-            command.command = EditorWorkspaceViewCommand::OpenWorldCompositionSource;
-            command.stringPayload = path_;
-            command.worldDocumentFence = vm.worldDocument ? std::optional{vm.worldDocument->fence} : std::nullopt;
-        }
-        if (vm.worldDocumentError) {
-            Ui::ErrorText(text("workspace.world.error").c_str(), fonts);
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, vm.worldDocumentError->code.Value(), Theme::Text(), fonts);
-        }
-        if (!vm.worldDocument) {
-            source_.reset();
-            layers_.clear();
-            cells_.clear();
-            layerLabels_.clear();
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.no_document"), Theme::Muted(), fonts);
+        if (!DrawAdmission(vm, command, context))
             return;
-        }
-        Ui::WrappedText(ImGui::GetContentRegionAvail().x, vm.worldDocumentSource, Theme::Text(), fonts);
-        Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.authoring_status"), Theme::Muted(), fonts);
-        if (Ui::Button({.label = text("workspace.world.close_source").c_str(), .font = fonts.sans})) {
-            command.command = EditorWorkspaceViewCommand::CloseWorldComposition;
-            command.worldDocumentFence = vm.worldDocument->fence;
-        }
+        DrawFilters(vm, command, context);
         DrawBakeControls(vm, command, context);
-        RefreshRows(vm, context);
-        draft_ = vm.worldBrowserQuery;
-        auto &query = draft_;
-        static_cast<void>(
-            Ui::InputTextControl("##world_search", query.search, 257, fonts,
-                                 {.hint = text("workspace.world.search").c_str(), .componentSize = Ui::ComponentSize::Medium}));
-        const std::array<const char *, 4> labels{text("workspace.world.all").c_str(), text("workspace.world.open").c_str(),
-                                                 text("workspace.world.closed").c_str(), text("workspace.world.mixed").c_str()};
-        int status = static_cast<int>(query.status);
-        if (Ui::ComboControl("##world_status", &status, labels.data(), static_cast<int>(labels.size()), fonts))
-            query.status = static_cast<WorldBrowserStatus>(status);
-        int layerIndex{};
-        for (std::size_t index = 0; index < vm.worldDocument->document.layers.size(); ++index)
-            if (query.layer == vm.worldDocument->document.layers[index].id)
-                layerIndex = static_cast<int>(index + 1);
-        if (Ui::ComboControl("##world_layer", &layerIndex, layerLabels_.data(), static_cast<int>(layerLabels_.size()), fonts))
-            query.layer = layerIndex == 0 ? std::nullopt
-                                          : std::optional{vm.worldDocument->document.layers[static_cast<std::size_t>(layerIndex - 1)].id};
-        if (query != vm.worldBrowserQuery) {
-            command.command = EditorWorkspaceViewCommand::QueryWorldComposition;
-            command.worldBrowserQuery = query;
-            command.worldDocumentFence = vm.worldDocument->fence;
-        }
-        const auto color = Theme::Text();
-        if (textColor_.x != color.x || textColor_.y != color.y || textColor_.z != color.z || textColor_.w != color.w) {
-            textColor_ = color;
-            for (auto *rows : {&layers_, &cells_})
-                for (auto &row : *rows)
-                    for (auto &cell : row.cells)
-                        cell.color = color;
-        }
-        ImGui::BeginDisabled(command.command != EditorWorkspaceViewCommand::None);
-        RouteWorldLayerOutlinerIntent(DrawWorldLayerOutliner(*vm.worldDocument, context), command);
-        ImGui::EndDisabled();
-        if (vm.worldLayerFailure)
-            Ui::ErrorText(text("workspace.world.error").c_str(), fonts);
-        Ui::SectionTitle(text("workspace.world.layers").c_str(), fonts);
-        static_cast<void>(Ui::DrawTable({.id = "##world_layers", .componentSize = Ui::ComponentSize::Medium, .selectableCells = false},
-                                        layerColumns_, layers_, fonts));
-        Ui::SectionTitle(text("workspace.world.cells").c_str(), fonts);
-        static_cast<void>(Ui::DrawTable({.id = "##world_cells", .componentSize = Ui::ComponentSize::Medium, .selectableCells = false},
-                                        cellColumns_, cells_, fonts));
-        if (!vm.worldDocumentError && layers_.empty() && cells_.empty())
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.no_matches"), Theme::Muted(), fonts);
+        DrawTables(vm, command, context);
     }
 }  // namespace Horo::Editor

@@ -9,14 +9,14 @@ namespace Horo::Application::WorldBakeDetail {
                                                           const CancellationToken &cancellation, std::size_t &sourceBytes,
                                                           WorldBakeOutput &output) {
             const auto origin = std::ranges::find(request.sources, page.head, &WorldBakePageSource::page);
-            if (!request.files || origin == request.sources.end() || origin->relativePath.empty())
+            if (!request.sourceAuthority.files || origin == request.sources.end() || origin->relativePath.empty())
                 return Result<SceneSource::SceneSourceDocument>::Failure(
                     MakeError(WorldBakeErrors::MissingPage, page.head.sourceAsset.ToString()));
-            const Platform::ProjectReadContext context{.projectIdentity = request.project.fence.project.ToString(),
-                                                       .projectGeneration = request.project.fence.revision,
+            const Platform::ProjectReadContext context{.projectIdentity = request.sourceAuthority.owner.ToString(),
+                                                       .projectGeneration = request.sourceAuthority.generation,
                                                        .cancellation = cancellation,
                                                        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30)};
-            const auto bytes = request.files->SourceText(origin->relativePath, context, {});
+            const auto bytes = request.sourceAuthority.files->SourceText(origin->relativePath, context, {});
             if (bytes.HasError())
                 return Result<SceneSource::SceneSourceDocument>::Failure(bytes.ErrorValue());
             if (!bytes.Value().text || bytes.Value().text->size() > request.limits.maximumSourceBytes - sourceBytes)

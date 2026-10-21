@@ -12,6 +12,13 @@ namespace Horo::Editor {
             REQUIRE(position != std::string::npos);
             source.replace(position, from.size(), to);
         }
+
+        void RequireSourceFailure(const std::string_view source, const ErrorCodeDescriptor *expected) {
+            const auto decoded = DecodePartitionedWorldDocument(source);
+            REQUIRE(decoded.HasError());
+            if (expected)
+                CHECK(decoded.ErrorValue().code == expected->code);
+        }
     }  // namespace
 
     TEST_CASE("Partitioned world source opens real metadata and source coverage without cooked payloads", "[editor][world_source]") {
@@ -26,7 +33,7 @@ namespace Horo::Editor {
         CHECK_FALSE(current->dirty);
     }
 
-    TEST_CASE("Partitioned world source rejects malformed duplicate skewed and lossy representations", "[editor][world_source]") {
+    TEST_CASE("Partitioned world source rejects malformed duplicate missing and version-skewed fields", "[editor][world_source]") {
         auto source = WorldSource();
         const ErrorCodeDescriptor *error = &WorldDocumentErrors::Invalid;
         SECTION("malformed") {
@@ -48,6 +55,12 @@ namespace Horo::Editor {
         SECTION("missing world") {
             ReplaceSource(source, "\"world\"", "\"missing\"");
         }
+        RequireSourceFailure(source, error);
+    }
+
+    TEST_CASE("Partitioned world source rejects lossy numerics and invalid identity membership", "[editor][world_source]") {
+        auto source = WorldSource();
+        const ErrorCodeDescriptor *error = &WorldDocumentErrors::Invalid;
         SECTION("coordinate float") {
             ReplaceSource(source, "[-1,0,0]", "[-1.5,0,0]");
         }
@@ -74,10 +87,7 @@ namespace Horo::Editor {
             ReplaceSource(source, "\"placement\":0", "\"placement\":255");
             error = nullptr;
         }
-        const auto decoded = DecodePartitionedWorldDocument(source);
-        REQUIRE(decoded.HasError());
-        if (error)
-            CHECK(decoded.ErrorValue().code == error->code);
+        RequireSourceFailure(source, error);
     }
 
     TEST_CASE("Partitioned world source capacity and cancellation reject without admitting a document", "[editor][world_source]") {

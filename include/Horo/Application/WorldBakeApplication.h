@@ -4,6 +4,7 @@
  */
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Editor/PartitionedWorldWorkspace.h"
+#include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Platform/ProjectReadFiles.h"
@@ -53,6 +54,13 @@ namespace Horo::Application {
         std::vector<Assets::AssetId> dependencies;
     };
 
+    /** @brief Explicit host-selected committed Assets source; no path, target or provider is inferred by feature code. */
+    struct WorldBakeDependencySource final {
+        std::filesystem::path targetRoot;
+        Assets::AssetCookTargetId target;
+        std::shared_ptr<const DurableFileSystem> files;
+    };
+
     /** @brief Owned exact project inputs; no service locator, native handles or lazy provider lookup. */
     struct WorldBakeProjectCapture final {
         WorldBakeProjectFence fence;
@@ -60,6 +68,8 @@ namespace Horo::Application {
         std::vector<Runtime::SceneCellComponentSchema> components;
         std::vector<Runtime::SceneCellBehaviorSchema> behaviors;
         std::vector<WorldBakeDependency> dependencies;
+        std::optional<WorldBakeDependencySource>
+            dependencySource; /**< Alternative to already captured evidence; resolved on the I/O lane. */
         std::optional<SceneSource::TriggerVolumeConversionContext> triggers;
         std::shared_ptr<const Prefab::PrefabSourceResolverSnapshot> prefabs;
         std::shared_ptr<const Prefab::PrefabValueSchemaSnapshot> prefabSchemas;
@@ -69,11 +79,13 @@ namespace Horo::Application {
     /** @brief Captures actual verified cooked generation envelopes, rather than trusting caller-provided digest strings.
      * @param files Explicit read-only durable filesystem. @param generation Exact Assets generation lease.
      * @param revision Positive host source publication. @param maximumBytes Bounded aggregate read budget.
+     * @param maximumAssets Bounded complete generation inventory count, at most 4096.
      * @return Complete verified dependency evidence or original Assets failure; no partial table escapes.
      */
     [[nodiscard]] Result<std::vector<WorldBakeDependency>> CaptureWorldBakeDependencies(const DurableFileSystem &files,
                                                                                         const Assets::AssetCookGeneration &generation,
-                                                                                        std::uint64_t revision, std::size_t maximumBytes);
+                                                                                        std::uint64_t revision, std::size_t maximumBytes,
+                                                                                        std::size_t maximumAssets = 4096);
 
     /** @brief Mandatory bounded tooling ceilings, independent of runtime residency. */
     struct WorldBakeLimits final {
@@ -105,12 +117,22 @@ namespace Horo::Application {
         std::string relativePath; /**< Exact registry-resolved root-relative source spelling for an unloaded page. */
     };
 
-    /** @brief Retained canonical document lease plus owned project inputs; source pages must actually be loaded. */
+    /** @brief Exact retained root-reader authority, independent from mutable project/schema publication revisions. */
+    struct WorldBakeSourceAuthority final {
+        std::shared_ptr<const Platform::IProjectReadFiles> files;
+        Assets::AssetId owner;
+        std::uint64_t generation{};
+        std::shared_ptr<const Editor::ProjectMutationLease>
+            reservation; /**< Application requests retain the existing project writer fence through adoption. */
+    };
+
+    /** @brief Retained canonical document lease plus owned project inputs and explicit source capabilities. */
     struct WorldBakeRequest final {
         Editor::PartitionedWorldSnapshotLease document;
         WorldBakeProjectCapture project;
         std::vector<WorldBakePageSource> sources;
-        std::shared_ptr<const Platform::IProjectReadFiles> files; /**< Root-bound reader retained by workers for unloaded sources. */
+        Assets::AssetRegistrySnapshot registry;   /**< Exact catalog publication used for source paths and known artifact type fences. */
+        WorldBakeSourceAuthority sourceAuthority; /**< Exact root-bound reader and its independent authority fence. */
         WorldBakeLimits limits;
         WorldBakeMode mode{WorldBakeMode::Bake};
         std::string title; /**< Host-localized user-facing operation title. */
@@ -125,7 +147,9 @@ namespace Horo::Application {
         std::vector<std::shared_ptr<const Runtime::RuntimeSceneCellPayload>> cells;
         std::vector<WorldStreaming::EncodedStreamingCell> artifacts;
         std::vector<std::pair<Assets::AssetId, std::string>>
-            sourceRevisions;                                       /**< Exact root-reader content revisions, rechecked before return. */
+            sourceRevisions; /**< Exact root-reader content revisions, rechecked before return. */
+        std::optional<Assets::AssetCookGeneration>
+            dependencyGeneration; /**< Exact verified committed resource generation, never a fabricated digest table. */
         std::vector<Runtime::RuntimeSceneDefinition> sourceScenes; /**< Complete converted sources retain explicit base content. */
     };
 

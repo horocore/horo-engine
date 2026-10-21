@@ -132,6 +132,8 @@ namespace Horo::Editor {
             return Result<PartitionedWorldSource>::Failure(points.ErrorValue());
         if (handle >= points.Value().Points().size())
             return Result<PartitionedWorldSource>::Failure(MakeError(WorldDocumentErrors::Invalid));
+        if (points.Value().Points()[handle] == position)
+            return Result<PartitionedWorldSource>::Success(source);
         auto candidate = source;
         const auto changed = std::visit([&](auto &shape) -> Result<void> {
             using T = std::decay_t<decltype(shape)>;

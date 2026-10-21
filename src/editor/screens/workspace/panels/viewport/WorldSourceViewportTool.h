@@ -39,6 +39,7 @@ namespace Horo::Editor {
         bool DrawHandles(ImDrawList &draw, ImVec2 origin, ImVec2 size, const EditorWorkspaceViewModel &view,
                          EditorWorkspaceViewCommandData &command, Math::ClipDepthRange depth, bool eligible);
         std::optional<PartitionedWorldSource> draft_;
+        std::optional<PartitionedWorldSource> dragOriginal_;
         std::optional<Error> previewError_;
         WorldDocumentFence fence_;
         Math::WorldCoordinate64 origin_;

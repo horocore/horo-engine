@@ -2,7 +2,7 @@
 
 `HoroWorldBakeApplication` is a non-installed host composition above EditorModel,
 SceneRuntimeConversion, SceneCellPayload, WorldStreaming, Assets and the root-bound
-Platform read capability. It is deliberately separate from HoroApplication and
+Platform read capability and existing ProjectMutationGuard. It is deliberately separate from HoroApplication and
 from the editor model. No lower owner depends on this target. Its public header is
 owned by this target alone, with an independent public consumer. The controller
 owns the service; detaching World Composition or Global Dock presentation does not
@@ -13,8 +13,13 @@ cancel accepted work or release its captures.
 The controller captures the canonical `WorldDocuments()` immutable root, including
 owner, generation, publication and exact page heads. Loaded pages retain actual
 immutable SceneDocument leases. Unloaded pages resolve their source AssetIds through
-the captured registry to safe relative paths; workers read actual bytes through the
-retained root authority, reject unknown component owners and pass the real authored
+the captured registry to safe relative paths. Application admission retains the
+existing `ProjectMutationLease` through result adoption, preventing cooperating
+save/import/package writers from changing captured project state. Replacements
+share only this controller's live lease; rejected admission preserves older work.
+Workers read actual bytes through the
+retained root authority, whose owner/generation remain separate from project and
+schema revisions, reject unknown component owners and pass the real authored
 values through `ConvertSceneSourceToRuntime`. The source SHA-256 values are retained
 and re-read after cooking. These reads do not load or pin pages in the editable
 working set. Missing payloads, paths, provider/schema evidence or dependencies fail
@@ -23,13 +28,24 @@ with typed diagnostics; no empty substitute is cooked.
 `WorldBakeProjectCapture` owns its independent project revision, schema digest,
 asset registry revision, byte-affecting settings, inert supported schemas, optional
 prefab/trigger captures, and verified dependency evidence. Hosts may supply a richer
-capture through `SetWorldBakeProject`; changing it fences accepted work. The default
+capture through `SetWorldBakeProject`; the same project requires a strictly newer,
+non-wrapping revision. Reusing a revision rejects the whole capture without changing
+accepted work; valid replacement fences older publication. The default
 GUI capture admits built-in source content without opaque project schemas or
 unverified external artifacts. `CaptureWorldBakeDependencies` reads the actual
 pinned Assets generation, verifies its complete manifest/envelopes through Assets,
 and returns real identity/type/digest evidence. Hosts retain responsibility for
 supplying provider-owned dependency edges and source publication revisions; this
 adapter never invents them or discovers/activates providers.
+
+The editor host also carries its explicit `--cooked-root` / `--cook-target` selection
+into `WorldBakeDependencySource`, with an owned filesystem capability. The I/O worker
+resolves the real committed generation, verifies every envelope and known registry
+type, and rechecks the current pointer after cooking. Its complete manifest digest
+joins the cache settings hash, conservatively invalidating all resource inventory
+changes when provider-private graph edges are opaque. Output retains the exact
+Assets generation receipt. Supplying both a selection and captured evidence rejects
+admission; feature code never guesses a root, target or fallback generation.
 
 Placement uses the same `CreateForAuthoring` and `WorldSpanningObjectPlan` contracts
 as the cell browser and inspector. Each actual Scene entity must have exact authored

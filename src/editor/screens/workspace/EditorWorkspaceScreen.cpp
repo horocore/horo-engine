@@ -668,25 +668,35 @@ namespace Horo::Editor {
                 return playSceneFactory;
             }
 
+            /** @brief Issues a fresh nonzero workspace incarnation from host-composed native entropy. */
+            static Result<Assets::AssetId> CreateSessionOwner() {
+                std::array<std::uint8_t, 16> bytes{};
+                const auto entropy = Platform::CreateNativeSecureRandomSource();
+                if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(bytes))); generated.HasError())
+                    return Result<Assets::AssetId>::Failure(generated.ErrorValue());
+                const auto owner = Assets::AssetId::FromBytes(bytes);
+                if (!owner.IsValid())
+                    return Result<Assets::AssetId>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
+                return Result<Assets::AssetId>::Success(owner);
+            }
+
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =
                     services_.TryGet<Application::GameplayBuildEnvironment>();
-                std::array<std::uint8_t, 16> sessionBytes{};
-                const auto entropy = Platform::CreateNativeSecureRandomSource();
-                if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(sessionBytes))); generated.HasError())
-                    return Result<void>::Failure(generated.ErrorValue());
-                const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
-                if (!sessionOwner.IsValid())
-                    return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
+                const auto identity = CreateSessionOwner();
+                if (identity.HasError())
+                    return Result<void>::Failure(identity.ErrorValue());
+                const auto sessionOwner = identity.Value();
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
                 auto worldSources = Platform::CreateNativeProjectReadFiles(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
                 if (worldSources.HasError())
                     return Result<void>::Failure(worldSources.ErrorValue());
+                const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -701,6 +711,8 @@ namespace Horo::Editor {
                                                    .jobs = &services_.Get<JobSystem>(),
                                                    .worldBakeOperations = services_.TryGet<OperationStore>(),
                                                    .worldBakeOutput = services_.TryGet<BuildOutputStore>(),
+                                                   .worldBakeDependencies =
+                                                       bakeDependencies ? std::optional{*bakeDependencies} : std::nullopt,
                                                    .gameplay = {.builds = services_.TryGet<Application::GameplayBuildService>(),
                                                                 .environment = gameplayEnvironment != nullptr
                                                                                    ? *gameplayEnvironment

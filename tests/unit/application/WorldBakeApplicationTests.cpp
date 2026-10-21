@@ -2,6 +2,7 @@
 #include "../editor/PartitionedWorldResidencyTestSupport.h"
 #include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
+#include "assets/AssetCookOutputFixture.h"
 
 #include <algorithm>
 #include <condition_variable>
@@ -14,10 +15,13 @@ namespace Horo::Application {
         namespace W = WorldStreaming;
 
         /** @brief Captures two actual page documents with equal local IDs and distinct immutable page identities. */
-        WorldBakeRequest Request(Editor::PartitionedWorldWorkspace &workspace) {
+        WorldBakeRequest Request(Editor::PartitionedWorldWorkspace &workspace, const std::optional<Assets::AssetId> mesh = {}) {
             REQUIRE(workspace.Open(T::Document()).HasValue());
+            auto source = T::Source();
+            if (mesh)
+                source.insert(source.find("\"primitiveMesh\""), "\"meshAsset\":\"" + mesh->ToString() + "\",");
             for (const auto &page : T::Document().pages)
-                REQUIRE(workspace.LoadPage(page.head, T::Source(), T::Current(workspace)->fence).HasValue());
+                REQUIRE(workspace.LoadPage(page.head, source, T::Current(workspace)->fence).HasValue());
             WorldBakeRequest request{.document = T::Current(workspace), .title = "Bake streaming cells"};
             request.project.fence = {T::Asset(12), 1, {}};
             request.project.fence.schemas.bytes.front() = 1;
@@ -29,8 +33,8 @@ namespace Horo::Application {
         }
 
         /** @brief Single-worker FIFO marker joins all earlier queued callbacks under an explicit finite policy. */
-        void Drain(JobSystem &jobs) {
-            auto marker = jobs.SubmitResult({}, [](const CancellationToken &) {
+        void Drain(JobSystem &jobs, const JobResource lane = JobResource::Cpu) {
+            auto marker = jobs.SubmitResult({.resource = lane}, [](const CancellationToken &) {
                 return Result<void>::Success();
             });
             REQUIRE(marker.HasValue());
@@ -44,8 +48,8 @@ namespace Horo::Application {
             bool open{};
             JobHandle job;
 
-            explicit Gate(JobSystem &jobs) {
-                auto accepted = jobs.SubmitResult({}, [this](const CancellationToken &) {
+            explicit Gate(JobSystem &jobs, const JobResource lane = JobResource::Cpu) {
+                auto accepted = jobs.SubmitResult({.resource = lane}, [this](const CancellationToken &) {
                     std::unique_lock lock(mutex);
                     changed.wait(lock, [&] {
                         return open;
@@ -110,6 +114,55 @@ namespace Horo::Application {
         CHECK(repeated.Value().artifacts.front().bytes == output.artifacts.front().bytes);
     }
 
+    TEST_CASE("World bake consumes actual selected committed resource bytes and rejects generation drift", "[world_bake][native]") {
+        namespace A = Assets::OutputTestSupport;
+        A::TempDir directory;
+        const auto target = A::Target("headless-null");
+        const auto mesh = T::Asset(24);
+        const std::vector<std::vector<std::uint8_t>> payloads{A::MakePayload(mesh, 32)};
+        const std::vector entries{A::Entry(mesh, payloads.front())};
+        auto published = A::PublishFixture(directory.path, target, entries, payloads);
+        REQUIRE(published.HasValue());
+        Editor::PartitionedWorldWorkspace workspace{T::Asset(9)};
+        auto request = Request(workspace, mesh);
+        request.project.dependencySource = WorldBakeDependencySource{directory.path, target, std::make_shared<NativeDurableFileSystem>()};
+        SECTION("complete manifest and real envelope evidence admit actual imported mesh sources") {
+            const auto output = CookWorldPages(request);
+            REQUIRE(output.HasValue());
+            REQUIRE(output.Value().dependencyGeneration);
+            CHECK(output.Value().dependencyGeneration->manifestDigest == published.Value().manifestDigest);
+            REQUIRE(output.Value().cells.size() == 1);
+            REQUIRE(output.Value().cells.front()->Definition().AssetDependencies().size() == 1);
+            CHECK(output.Value().cells.front()->Definition().AssetDependencies().front().id == mesh);
+            CHECK_FALSE(output.Value().artifacts.front().bytes.empty());
+        }
+        SECTION("missing selected dependency remains an error") {
+            REQUIRE(A::PublishFixture(directory.path, target, {}, {}).HasValue());
+            T::ErrorIs(CookWorldPages(request), "world.bake.dependency");
+        }
+        SECTION("a real pointer replacement after conversion rejects the whole candidate") {
+            const auto output = CookWorldPages(request, {}, [&](const float progress) {
+                if (progress == 0.25F)
+                    REQUIRE(A::PublishFixture(directory.path, target, {}, {}).HasValue());
+            });
+            T::ErrorIs(output, "world.bake.stale");
+        }
+        SECTION("selected target cannot be inferred from published data") {
+            request.project.dependencySource->target = A::Target("different-target");
+            T::ErrorIs(CookWorldPages(request), "world.bake.dependency");
+        }
+        SECTION("mixed dependency authorities are rejected") {
+            auto evidence = CaptureWorldBakeDependencies(*request.project.dependencySource->files, published.Value(), 1, 1024 * 1024);
+            REQUIRE(evidence.HasValue());
+            request.project.dependencies = std::move(evidence).Value();
+            T::ErrorIs(CookWorldPages(request), "world.bake.dependency");
+        }
+        SECTION("stale registry capture is rejected before reading") {
+            request.project.fence.registryRevision = request.registry.Revision().value + 1;
+            T::ErrorIs(CookWorldPages(request), "world.bake.stale");
+        }
+    }
+
     TEST_CASE("World bake preserves canonical errors and returns no partial outputs on boundary failures", "[world_bake]") {
         Editor::PartitionedWorldWorkspace workspace{T::Asset(9)};
         auto request = Request(workspace);
@@ -125,6 +178,10 @@ namespace Horo::Application {
         SECTION("aggregate entity capacity") {
             request.limits.maximumObjects = 1;
             T::ErrorIs(CookWorldPages(request), "world.bake.capacity");
+        }
+        SECTION("malformed captured schema is rejected even when source content does not require it") {
+            request.project.components.push_back({Gameplay::ComponentTypeId::Parse("game.component").Value(), 0});
+            T::ErrorIs(CookWorldPages(request), "world.bake.invalid");
         }
         SECTION("missing exact schema authority") {
             request.project.fence.schemas = {};
@@ -263,25 +320,40 @@ namespace Horo::Application {
 }  // namespace Horo::Application
 
 namespace Horo::Application {
+    namespace {
+        /** @brief Owns actual native source files, root authority and real source-page metadata in destruction-safe order. */
+        struct NativeSources final {
+            Editor::PartitionedWorldWorkspace workspace{T::Asset(9)};
+            Tests::OwnedTestDirectory directory{"world bake ü space"};
+            WorldBakeRequest request;
+
+            NativeSources() : request(Request(workspace)) {
+                for (std::size_t index = 0; index < request.sources.size(); ++index) {
+                    const auto path = "page ü " + std::to_string(index) + ".scene";
+                    request.sources[index].relativePath = path;
+                    request.sources[index].source.absolutePath = (directory.Path() / path).string();
+                    std::ofstream stream{directory.Path() / path};
+                    stream << T::Source();
+                    REQUIRE(stream.good());
+                    REQUIRE(workspace.UnloadPage(request.sources[index].page.sourceAsset, T::Current(workspace)->fence).HasValue());
+                }
+                request.document = T::Current(workspace);
+                request.project.fence.revision = 7;
+                request.sourceAuthority.owner = request.project.fence.project;
+                request.sourceAuthority.generation = 1;
+                const auto reader = Platform::CreateNativeProjectReadFiles(directory.Path(), request.sourceAuthority.owner.ToString(),
+                                                                           request.sourceAuthority.generation);
+                REQUIRE(reader.HasValue());
+                request.sourceAuthority.files = reader.Value();
+            }
+        };
+    }  // namespace
+
     TEST_CASE("World bake reads actual unloaded source pages through the native root authority and fences byte changes",
               "[world_bake][native]") {
-        Editor::PartitionedWorldWorkspace workspace{T::Asset(9)};
-        auto request = Request(workspace);
-        Tests::OwnedTestDirectory directory{"world bake ü space"};
-        for (std::size_t index = 0; index < request.sources.size(); ++index) {
-            const auto path = "page ü " + std::to_string(index) + ".scene";
-            request.sources[index].relativePath = path;
-            request.sources[index].source.absolutePath = (directory.Path() / path).string();
-            std::ofstream stream{directory.Path() / path};
-            stream << T::Source();
-            REQUIRE(stream.good());
-            REQUIRE(workspace.UnloadPage(request.sources[index].page.sourceAsset, T::Current(workspace)->fence).HasValue());
-        }
-        request.document = T::Current(workspace);
-        const auto reader = Platform::CreateNativeProjectReadFiles(directory.Path(), request.project.fence.project.ToString(),
-                                                                   request.project.fence.revision);
-        REQUIRE(reader.HasValue());
-        request.files = reader.Value();
+        NativeSources fixture;
+        auto &request = fixture.request;
+        auto &workspace = fixture.workspace;
         SECTION("real canonical source bytes cook without mutating manual residency") {
             const auto result = CookWorldPages(request);
             REQUIRE(result.HasValue());
@@ -300,9 +372,51 @@ namespace Horo::Application {
             });
             T::ErrorIs(result, "world.bake.stale");
         }
+
+        SECTION("invalid source authority generation is rejected before reading") {
+            request.sourceAuthority.generation = 0;
+            T::ErrorIs(CookWorldPages(request), "world.bake.invalid");
+        }
         SECTION("aggregate source capacity includes unloaded sources") {
             request.limits.maximumSourceBytes = 1;
             T::ErrorIs(CookWorldPages(request), "world.bake.capacity");
+        }
+    }
+
+    TEST_CASE("World bake publication and close retire source reservations without retaining writer authority in output",
+              "[world_bake][native]") {
+        NativeSources fixture;
+        auto &request = fixture.request;
+        auto &directory = fixture.directory;
+
+        std::filesystem::create_directories(directory.Path() / ".horo/local");
+        NativeDurableFileSystem files;
+        Editor::ProjectMutationCoordinator mutations{files};
+        auto reserved = mutations.TryAcquire({directory.Path(), Editor::ProjectMutationOwner::Asset, "world.bake.test"});
+        REQUIRE(reserved.HasValue());
+        request.sourceAuthority.reservation = std::make_shared<const Editor::ProjectMutationLease>(std::move(reserved).Value());
+        JobSystem jobs{{.workerCount = 1, .ioWorkerCount = 1}};
+        OperationStore operations{4, 8};
+        BuildOutputStore output{16};
+        WorldBakeApplication application{jobs, operations, output};
+        Gate gate{jobs, JobResource::Io};
+        REQUIRE(application.Submit(request).HasValue());
+        request.sourceAuthority.reservation.reset();
+        CHECK(mutations.TryAcquire({directory.Path(), Editor::ProjectMutationOwner::Save, "blocked"}).HasError());
+        SECTION("successful real I/O bake releases the writer reservation while output remains leased") {
+            gate.Release();
+            Drain(jobs, JobResource::Io);
+            application.Pump(request.document, request.project.fence);
+            REQUIRE(application.Published());
+            CHECK(application.Published()->cells.front()->Definition().Entities().size() == 2);
+            CHECK(mutations.TryAcquire({directory.Path(), Editor::ProjectMutationOwner::Save, "published"}).HasValue());
+        }
+        SECTION("close cancels queued work and releases its writer reservation") {
+            application.Close();
+            gate.Release();
+            Drain(jobs, JobResource::Io);
+            CHECK(mutations.TryAcquire({directory.Path(), Editor::ProjectMutationOwner::Save, "released"}).HasValue());
+            CHECK_FALSE(output.SnapshotIfChanged(0));
         }
     }
 }  // namespace Horo::Application

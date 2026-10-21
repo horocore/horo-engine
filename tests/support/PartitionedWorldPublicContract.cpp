@@ -62,3 +62,5 @@ static_assert(
     std::is_same_v<decltype(std::declval<const PartitionedWorldWorkspace &>().Browse(
                        std::declval<const Horo::Editor::WorldBrowserQuery &>(), std::declval<Horo::Editor::WorldDocumentFence>())),
                    Horo::Result<Horo::Editor::WorldBrowserSnapshot>>);
+static_assert(std::is_same_v<decltype(Horo::Editor::WorldSourceGizmoPoints(Horo::Editor::PartitionedWorldSource{})),
+                             Horo::Result<Horo::Editor::WorldSourceGizmoPointSet>>);

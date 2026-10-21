@@ -13,13 +13,13 @@ namespace Horo::Application {
             const auto source = std::ranges::find(request.sources, page, [](const auto &value) {
                 return value.page.sourceAsset;
             });
-            if (!request.files || source == request.sources.end())
+            if (!request.sourceAuthority.files || source == request.sources.end())
                 return Result<void>::Failure(MakeError(WorldBakeErrors::Stale));
-            const Platform::ProjectReadContext context{.projectIdentity = request.project.fence.project.ToString(),
-                                                       .projectGeneration = request.project.fence.revision,
+            const Platform::ProjectReadContext context{.projectIdentity = request.sourceAuthority.owner.ToString(),
+                                                       .projectGeneration = request.sourceAuthority.generation,
                                                        .cancellation = cancellation,
                                                        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30)};
-            auto current = request.files->SourceText(source->relativePath, context, {});
+            auto current = request.sourceAuthority.files->SourceText(source->relativePath, context, {});
             if (current.HasError())
                 return Result<void>::Failure(current.ErrorValue());
             if (!current.Value().text)
@@ -34,10 +34,17 @@ namespace Horo::Application {
     /** @copydoc CaptureWorldBakeDependencies */
     Result<std::vector<WorldBakeDependency>> CaptureWorldBakeDependencies(const DurableFileSystem &files,
                                                                           const Assets::AssetCookGeneration &generation,
-                                                                          const std::uint64_t revision, const std::size_t maximumBytes) {
+                                                                          const std::uint64_t revision, const std::size_t maximumBytes,
+                                                                          const std::size_t maximumAssets) {
         if (!revision || !maximumBytes)
             return Result<std::vector<WorldBakeDependency>>::Failure(MakeError(WorldBakeErrors::Invalid));
-        auto contents = Assets::ReadCookGenerationContents(files, generation, maximumBytes);
+        if (!maximumAssets || maximumAssets > 4096 || maximumBytes > 64 * 1024 * 1024)
+            return Result<std::vector<WorldBakeDependency>>::Failure(MakeError(WorldBakeErrors::Capacity));
+        const Assets::AssetCookLimits limits{.maximumSourceBytes = maximumBytes,
+                                             .maximumArtifactBytes = maximumBytes,
+                                             .maximumAssets = maximumAssets,
+                                             .maximumConcurrentCooks = 1};
+        auto contents = Assets::ReadCookGenerationContents(files, generation, maximumBytes, limits);
         if (contents.HasError())
             return Result<std::vector<WorldBakeDependency>>::Failure(contents.ErrorValue());
         std::vector<WorldBakeDependency> result;
@@ -51,6 +58,16 @@ namespace Horo::Application {
     }
 
     namespace {
+        /** @brief Rechecks every mutable input authority together before an owned offline candidate can escape. */
+        Result<void> VerifyCapturedInputs(const WorldBakeRequest &request, const WorldBakeOutput &output,
+                                          const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(WorldBakeErrors::Cancelled));
+            if (auto source = VerifySources(request, output, cancellation); source.HasError())
+                return source;
+            return WorldBakeDetail::VerifyDependencies(request, output.dependencyGeneration, cancellation);
+        }
+
         /** @brief Orchestrates semantic cell cooking and complete build qualification before any encoded result can be adopted. */
         Result<void> CookPrepared(const WorldBakeRequest &request, WorldBakeDetail::PreparedWorld &prepared,
                                   const CancellationToken &cancellation, const std::function<void(float)> &progress) {
@@ -89,18 +106,23 @@ namespace Horo::Application {
     }  // namespace
 
     /** @copydoc CookWorldPages */
-    Result<WorldBakeOutput> CookWorldPages(const WorldBakeRequest &request, const CancellationToken &cancellation,
+    Result<WorldBakeOutput> CookWorldPages(const WorldBakeRequest &capture, const CancellationToken &cancellation,
                                            const std::function<void(float)> &progress) {
         if (progress)
             progress(0.0F);
-        if (auto valid = WorldBakeDetail::Admit(request); valid.HasError())
+        if (auto valid = WorldBakeDetail::Admit(capture); valid.HasError())
             return Result<WorldBakeOutput>::Failure(valid.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<WorldBakeOutput>::Failure(MakeError(WorldBakeErrors::Cancelled));
+        auto request = capture;
+        auto dependencies = WorldBakeDetail::ResolveDependencies(request, cancellation);
+        if (dependencies.HasError())
+            return Result<WorldBakeOutput>::Failure(dependencies.ErrorValue());
         auto converted = WorldBakeDetail::Convert(request, cancellation);
         if (converted.HasError())
             return Result<WorldBakeOutput>::Failure(converted.ErrorValue());
         auto prepared = std::move(converted).Value();
+        prepared.output.dependencyGeneration = std::move(dependencies).Value();
         if (progress)
             progress(0.25F);
         const auto revision = request.document->fence.revision.Value();
@@ -108,9 +130,7 @@ namespace Horo::Application {
         if (!prepared.topology.empty())
             if (auto cooked = CookPrepared(request, prepared, cancellation, progress); cooked.HasError())
                 return Result<WorldBakeOutput>::Failure(cooked.ErrorValue());
-        if (cancellation.IsCancellationRequested())
-            return Result<WorldBakeOutput>::Failure(MakeError(WorldBakeErrors::Cancelled));
-        if (auto verified = VerifySources(request, prepared.output, cancellation); verified.HasError())
+        if (auto verified = VerifyCapturedInputs(request, prepared.output, cancellation); verified.HasError())
             return Result<WorldBakeOutput>::Failure(verified.ErrorValue());
         return Result<WorldBakeOutput>::Success(std::move(prepared.output));
     }
