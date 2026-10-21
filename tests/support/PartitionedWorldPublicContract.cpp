@@ -54,3 +54,30 @@ static_assert(std::is_same_v<decltype(Horo::WorldStreaming::WorldSpatialAssignme
 
 static_assert(std::is_same_v<decltype(std::declval<PartitionedWorldWorkspace &>().CreateLayer(std::string{}, WorldDocumentFence{})),
                              Horo::Result<PartitionedWorldSnapshotLease>>);
+
+using WorldSelectionMethod = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(
+    std::span<const Horo::WorldStreaming::WorldAuthoringObjectAddress>,
+    const std::optional<Horo::WorldStreaming::WorldAuthoringObjectAddress> &, const WorldDocumentFence &, std::stop_token);
+using WorldInspectionMethod = Horo::Result<Horo::Editor::WorldObjectInspectionLease> (PartitionedWorldWorkspace::*)(
+    const WorldDocumentFence &, Horo::Editor::WorldObjectInspectionLimits, std::stop_token) const;
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::SetSelection), WorldSelectionMethod>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::InspectSelectedObjects), WorldInspectionMethod>);
+
+using ManualPageLoad = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(
+    const Horo::WorldStreaming::WorldAuthoringPageDescriptor &, std::string_view, const WorldDocumentFence &, std::stop_token);
+using ManualPageUnload = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(Horo::Assets::AssetId,
+                                                                                                    const WorldDocumentFence &,
+                                                                                                    std::stop_token);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::LoadPage), ManualPageLoad>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::UnloadPage), ManualPageUnload>);
+
+using LayerExecuteMethod = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(
+    const Horo::Editor::WorldLayerCommand &, const WorldDocumentFence &, std::stop_token);
+using LayerCreateMethod = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(std::string,
+                                                                                                     const WorldDocumentFence &,
+                                                                                                     std::stop_token);
+using LayerReplayMethod = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(bool, const WorldDocumentFence &,
+                                                                                                     std::stop_token);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::ExecuteLayerCommand), LayerExecuteMethod>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::CreateLayer), LayerCreateMethod>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::ReplayLayerCommand), LayerReplayMethod>);

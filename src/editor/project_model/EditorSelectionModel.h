@@ -76,7 +76,7 @@ namespace Horo::Editor {
          * @return Atomic document/selection lease or typed failure; notification follows successful changed publication only. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetWorldObjects(
             PartitionedWorldWorkspace &world, std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
-            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected,
+            const std::optional<WorldStreaming::WorldAuthoringObjectAddress> &primary, const WorldDocumentFence &expected,
             std::stop_token cancellation = {});
 
         /** @brief Removes identities no longer present in the authoritative document. */

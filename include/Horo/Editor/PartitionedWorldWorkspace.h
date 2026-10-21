@@ -208,6 +208,7 @@ namespace Horo::Editor {
         std::vector<WorldObjectInspection> objects; /**< Stable selection order. Empty selection is valid. */
     };
 
+    /** @brief Shared immutable Inspector result; no source, runtime or widget mutation capability. */
     using WorldObjectInspectionLease = std::shared_ptr<const WorldObjectSelectionInspection>;
 
     /** @brief Explicit dirty-state disposition; Cancel is never equivalent to discard. */
@@ -257,19 +258,19 @@ namespace Horo::Editor {
          * @param cancellation Cancellation checked before publication. @return New snapshot or typed atomic rejection.
          */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> ExecuteLayerCommand(const WorldLayerCommand &command,
-                                                                                WorldDocumentFence expected,
+                                                                                const WorldDocumentFence &expected,
                                                                                 std::stop_token cancellation = {});
         /** @brief Creates a named layer with an owner-selected unused stable identity, appended in authored order.
          * @param name Complete UTF-8 layer name. @param expected Exact current fence.
          * @param cancellation Cancellation checked before publication. @return One undoable source command result or typed failure.
          */
-        [[nodiscard]] Result<PartitionedWorldSnapshotLease> CreateLayer(std::string name, WorldDocumentFence expected,
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> CreateLayer(std::string name, const WorldDocumentFence &expected,
                                                                         std::stop_token cancellation = {});
         /** @brief Replays the next exact semantic layer transaction without changing pages or working-set state.
          * @param redo False for undo, true for redo. @param expected Exact current fence.
          * @param cancellation Cancellation checked before publication. @return New snapshot or typed rejection; empty history is Conflict.
          */
-        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ReplayLayerCommand(bool redo, WorldDocumentFence expected,
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ReplayLayerCommand(bool redo, const WorldDocumentFence &expected,
                                                                                std::stop_token cancellation = {});
         /** @brief Projects visible stable IDs in authored order from the canonical filter.
          * @return Complete owned rows or typed lifecycle/thread rejection; current layer may be filtered out.
@@ -287,8 +288,8 @@ namespace Horo::Editor {
          * @param page Exact current authored page head. @param source Canonical source, copied before publication.
          * @param expected Current owner fence. @param cancellation Cancellation fence.
          * @return New lease or typed rejection preserving every existing payload, selection, pin and dirty value. */
-        [[nodiscard]] Result<PartitionedWorldSnapshotLease> LoadPage(WorldStreaming::WorldAuthoringPageDescriptor page,
-                                                                     std::string_view source, WorldDocumentFence expected,
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> LoadPage(const WorldStreaming::WorldAuthoringPageDescriptor &page,
+                                                                     std::string_view source, const WorldDocumentFence &expected,
                                                                      std::stop_token cancellation = {});
         /** @brief Publishes edited page metadata and actual Scene content together; creates a dirty immutable successor.
          * Selected objects cannot disappear; clear their selection explicitly first. Metadata-only Commit cannot change loaded pages.
@@ -296,29 +297,30 @@ namespace Horo::Editor {
          * @param expected Current owner fence. @param cancellation Cancellation fence.
          * @return Atomic successor or typed rejection; old leases remain valid. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> CommitLoadedPage(const PartitionedWorldPage &page, std::string_view source,
-                                                                             WorldDocumentFence expected,
+                                                                             const WorldDocumentFence &expected,
                                                                              std::stop_token cancellation = {});
         /** @brief Releases one clean, unselected, unpinned payload and its open-page slot, retaining source metadata.
          * Dirty payloads require document-level explicit discard or a future durable save, never silent eviction.
          * @param page Admitted page asset. @param expected Current fence. @param cancellation Cancellation fence.
          * @return Atomic release or typed dirty/conflict/lifecycle rejection. */
-        [[nodiscard]] Result<PartitionedWorldSnapshotLease> UnloadPage(Assets::AssetId page, WorldDocumentFence expected,
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> UnloadPage(Assets::AssetId page, const WorldDocumentFence &expected,
                                                                        std::stop_token cancellation = {});
         /** @brief Changes an explicit editor pin on a loaded page without changing content or runtime demands.
          * @param page Loaded page asset. @param pinned Requested pin. @param expected Current fence.
          * @param cancellation Cancellation fence. @return Successor, unchanged lease for no-op, or typed rejection. */
-        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetPagePinned(Assets::AssetId page, bool pinned, WorldDocumentFence expected,
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetPagePinned(Assets::AssetId page, bool pinned,
+                                                                          const WorldDocumentFence &expected,
                                                                           std::stop_token cancellation = {});
         /** @brief Atomically selects distinct source addresses; opening geometry is not required.
          * @param objects Existing page-scoped addresses in presentation order. @param primary Optional address within that selection.
-         * @param expected Exact source/selection fence.
+         * @param expected Exact source/selection fence, borrowed only for this call.
          * @param cancellation Checked before publication. @return Immutable selection root or typed zero-mutation rejection.
          * @details Loaded addresses also require membership in their actual payload; unload retains selected dependencies.
          * No-op retains its revision. Explicit unloaded source removal prunes selection in the same commit. Replace clears it.
          */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetSelection(
             std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
-            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected,
+            const std::optional<WorldStreaming::WorldAuthoringObjectAddress> &primary, const WorldDocumentFence &expected,
             std::stop_token cancellation = {});
         /** @brief Explains the current selected objects through canonical WorldStreaming assignment/spanning kernels.
          * @param expected Exact source/selection publication. @param limits Bounded owned output ceilings, no larger than defaults.
@@ -327,7 +329,7 @@ namespace Horo::Editor {
          * become per-object diagnostics; stale requests, unsupported policy, resource exhaustion and cancellation reject the whole query.
          * Retained results survive source replacement, selection changes, close and shutdown. No I/O, runtime activation or mutation.
          */
-        [[nodiscard]] Result<WorldObjectInspectionLease> InspectSelectedObjects(WorldDocumentFence expected,
+        [[nodiscard]] Result<WorldObjectInspectionLease> InspectSelectedObjects(const WorldDocumentFence &expected,
                                                                                 WorldObjectInspectionLimits limits = {},
                                                                                 std::stop_token cancellation = {}) const;
 
