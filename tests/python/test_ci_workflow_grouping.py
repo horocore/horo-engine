@@ -424,10 +424,6 @@ def test_vulkan_native_commands_have_a_bounded_independent_build_and_execution_c
     for target in ("HoroRenderVulkanTests", "HoroVulkanCommandExecutionSmoke", "HoroRenderGraphTests",
                    "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
         assert target in build_arguments, f"Native job must build {target}"
-    selection = re.search(r"-R '([^']+)'", native_job).group(1)
-    for target in ("HoroRenderVulkanTests", "HoroRenderGraphTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
-        assert re.search(selection, f"{target}::external image case"), f"Native job must select discovered {target} cases"
-    assert re.search(selection, "HoroVulkanCommandExecutionSmoke")
     assert "-DHORO_BUILD_XR_OPENXR=ON" in native_job
     assert "--show-only=json-v1" in native_job
     assert "XR/Vulkan integration test is absent" in native_job
@@ -437,6 +433,17 @@ def test_vulkan_native_commands_have_a_bounded_independent_build_and_execution_c
     assert 'sha256sum "$VK_DRIVER_FILES"' in native_job
     assert "vulkaninfo --summary" in native_job
     assert "--output-junit" in native_job
+    selection = re.search(r"-R '([^']+)'", native_job)
+    assert selection is not None
+    selected = re.compile(selection.group(1))
+    for target in ("HoroRenderVulkanTests", "HoroRenderGraphTests", "HoroRenderFrontendTests",
+                   "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
+        assert selected.fullmatch(target)
+        assert selected.fullmatch(f"{target}::representative case [tag]")
+        assert not selected.fullmatch(f"{target}Unrelated::case")
+    assert selected.fullmatch("HoroVulkanCommandExecutionSmoke")
+    assert not selected.fullmatch("HoroVulkanCommandExecutionSmoke::unregistered case")
+    assert not selected.fullmatch("UnrelatedTests::case")
     assert "continue-on-error" not in native_job
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
