@@ -29,8 +29,7 @@ namespace Horo::Editor {
                 command.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
                 auto selection =
                     ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper ? view.selectedColliders : std::vector<ColliderEditTarget>{};
-                const auto selected = std::ranges::find(selection, child.target);
-                if (selected == selection.end())
+                if (const auto selected = std::ranges::find(selection, child.target); selected == selection.end())
                     selection.push_back(child.target);
                 else
                     selection.erase(selected);
@@ -38,6 +37,18 @@ namespace Horo::Editor {
                     ColliderViewportRequest{view.physicsContext, view.colliderSelectionRevision, std::move(selection), {}};
             }
             ImGui::PopID();
+        }
+
+        /** @brief Build a compound selection only after its action has been activated. */
+        void SelectCompoundChildren(const Runtime::PhysicsBodyReference body, const EditorWorkspaceViewModel &view,
+                                    EditorWorkspaceViewCommandData &command, const std::size_t editableCount) {
+            std::vector<ColliderEditTarget> children;
+            children.reserve(editableCount);
+            for (const auto &child : view.viewportColliders)
+                if (child.body == body && child.editable && child.visible)
+                    children.push_back(child.target);
+            command.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
+            command.colliderPayload = ColliderViewportRequest{view.physicsContext, view.colliderSelectionRevision, std::move(children), {}};
         }
 
         /** @brief Select an explicit body's real contributors; allocate a selection batch only for an actual action. */
@@ -58,16 +69,8 @@ namespace Horo::Editor {
                     if (child.editable && child.visible)
                         ++editableCount;
                 }
-                if (Action(context, "workspace.physics.edit_compound", editableCount != 0)) {
-                    std::vector<ColliderEditTarget> children;
-                    children.reserve(editableCount);
-                    for (const auto &child : view.viewportColliders)
-                        if (child.body == body && child.editable && child.visible)
-                            children.push_back(child.target);
-                    command.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
-                    command.colliderPayload =
-                        ColliderViewportRequest{view.physicsContext, view.colliderSelectionRevision, std::move(children), {}};
-                }
+                if (Action(context, "workspace.physics.edit_compound", editableCount != 0))
+                    SelectCompoundChildren(body, view, command, editableCount);
             }
             card.Finish();
         }

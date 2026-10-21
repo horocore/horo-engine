@@ -75,8 +75,8 @@ namespace Horo::Editor {
         else
             m_viewModel.physicsEditError = colliders.ErrorValue().message;
         const auto oldColliderCount = m_viewModel.selectedColliders.size();
-        std::erase_if(m_viewModel.selectedColliders, [&](const auto target) {
-            return std::ranges::none_of(m_viewModel.viewportColliders, [&](const auto &value) {
+        std::erase_if(m_viewModel.selectedColliders, [this](const auto target) {
+            return std::ranges::none_of(m_viewModel.viewportColliders, [target](const auto &value) {
                 return value.target == target;
             });
         });

@@ -17,6 +17,29 @@ namespace Horo::Editor {
             return view.primarySelection &&
                    (collider.target.object == *view.primarySelection || collider.body.object.value == view.primarySelection->value);
         }
+
+        /** @brief Project one guide endpoint using the active backend's clip convention and logical viewport bounds. */
+        std::optional<Math::Vec2> ProjectGuidePoint(const TransformGizmoDrawContext &context, const Math::Vec3 point) {
+            const auto projected =
+                ProjectEditorViewportPoint(context.viewModel.viewportCamera, point, context.width / context.height, context.depthRange);
+            if (projected.HasError() || !projected.Value())
+                return std::nullopt;
+            const auto pixels =
+                MapEditorViewportPointToPixels(*projected.Value(), {context.origin.x, context.origin.y}, {context.width, context.height});
+            return pixels.HasValue() ? std::optional{pixels.Value()} : std::nullopt;
+        }
+
+        /** @brief Draw a fixed world wireframe, omitting segments whose endpoints cannot be projected. */
+        void DrawGuideWire(ImDrawList &drawList, const TransformGizmoDrawContext &context, const ColliderWireframe &wire,
+                           const bool selected) {
+            const ImU32 color = Theme::U32(selected ? Theme::Accent() : Theme::Muted());
+            for (std::size_t index = 0; index < wire.count; ++index) {
+                const auto first = ProjectGuidePoint(context, wire.segments[index].first);
+                const auto second = ProjectGuidePoint(context, wire.segments[index].second);
+                if (first && second)
+                    drawList.AddLine({first->x, first->y}, {second->x, second->y}, color, selected ? 2.0F : 1.0F);
+            }
+        }
     }  // namespace
 
     /** @copydoc ColliderGizmoController::Reset */
@@ -82,22 +105,7 @@ namespace Horo::Editor {
                 continue;
             const bool selected =
                 std::ranges::find(context.viewModel.selectedColliders, collider.target) != context.viewModel.selectedColliders.end();
-            const ImU32 color = Theme::U32(selected ? Theme::Accent() : Theme::Muted());
-            for (std::size_t index = 0; index < wire.Value().count; ++index) {
-                const auto project = [&](const Math::Vec3 point) -> std::optional<Math::Vec2> {
-                    const auto projected = ProjectEditorViewportPoint(context.viewModel.viewportCamera, point,
-                                                                      context.width / context.height, context.depthRange);
-                    if (projected.HasError() || !projected.Value())
-                        return std::nullopt;
-                    const auto pixels = MapEditorViewportPointToPixels(*projected.Value(), {context.origin.x, context.origin.y},
-                                                                       {context.width, context.height});
-                    return pixels.HasValue() ? std::optional{pixels.Value()} : std::nullopt;
-                };
-                const auto first = project(wire.Value().segments[index].first);
-                const auto second = project(wire.Value().segments[index].second);
-                if (first && second)
-                    drawList.AddLine({first->x, first->y}, {second->x, second->y}, color, selected ? 2.0F : 1.0F);
-            }
+            DrawGuideWire(drawList, context, wire.Value(), selected);
         }
         drawList.PopClipRect();
     }

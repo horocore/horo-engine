@@ -2826,6 +2826,8 @@ add_library(HoroEditorModel STATIC
         editor/document/InspectorBehaviorBinding.cpp
         editor/document/PhysicsInspector.cpp
         editor/document/ColliderEditing.cpp
+        editor/document/ColliderGeometry.cpp
+        editor/document/ColliderGeometryInternal.h
         editor/document/SceneDocumentTransactionErrors.cpp
         editor/navigation/NavigationDefinitionDocument.cpp
         editor/navigation/NavigationSettingsWorkflow.cpp
