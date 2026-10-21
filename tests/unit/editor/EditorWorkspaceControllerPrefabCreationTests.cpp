@@ -75,7 +75,8 @@ namespace Horo::Editor {
                                                                                             .mutations = &mutations,
                                                                                             .durableFiles = &files,
                                                                                             .documentSessionOwner = PrefabAsset(9).Asset(),
-                                                                                            .prefabSources = SourceCapture(release.value)});
+                                                                                            .prefab = {.sources =
+                                                                                                           SourceCapture(release.value)}});
                 REQUIRE_FALSE(controller->InitializationError());
                 if (untitled)
                     selected = controller->ViewModel().objects.front().id;
@@ -148,8 +149,11 @@ namespace Horo::Editor {
             owner.ProcessCommand(rename);
             REQUIRE(owner.ViewModel().isDirty);
         }
+        const auto sceneFocus = owner.ViewModel().workspacePanelHost.ActiveDocument();
         fixture.Create();
         const auto &view = owner.ViewModel();
+        CHECK(view.workspacePanelHost.ActiveDocument() == sceneFocus);
+        CHECK(view.prefabDocuments.empty());
         REQUIRE(view.prefabCreationOutcome);
         INFO((view.prefabCreationOutcome->error ? view.prefabCreationOutcome->error->message : "committed"));
         REQUIRE(view.prefabCreationOutcome->committed);
@@ -173,6 +177,36 @@ namespace Horo::Editor {
         CHECK(view.objects.empty());
         CHECK(view.prefabHierarchy->sources->instances.size() == 1);
         CHECK(std::filesystem::exists(fixture.root / "assets/Created.prefab"));
+    }
+
+    TEST_CASE("Workspace prefab focus rejects Scene creation capture and an earlier Scene confirmation",
+              "[editor][prefab][creation][native]") {
+        CreationWorkspace fixture;
+        auto &owner = *fixture.controller;
+        fixture.Create();
+        REQUIRE(owner.ViewModel().prefabCreationOutcome->committed);
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::UndoScene});
+        auto captured = owner.CapturePrefabCreationIntent(fixture.selected);
+        REQUIRE(captured.HasValue());
+        auto intent = std::move(captured).Value();
+        intent.destination = fixture.root / "assets/RejectedWhilePrefabFocused.prefab";
+        owner.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::OpenSourceFile,
+             .sourceOpenRequest = SourceOpenRequest{.path = fixture.root / "assets/Created.prefab", .origin = SourceOpenOrigin::Command}});
+        REQUIRE(owner.ViewModel().prefabDocuments.size() == 1);
+        const auto &prefab = owner.ViewModel().prefabDocuments.front();
+        REQUIRE(owner.ViewModel().workspacePanelHost.ActiveDocument() == prefab.identity.instance);
+        CHECK(owner.CapturePrefabCreationIntent(fixture.selected).HasError());
+        const auto sceneRevision = owner.ViewModel().documentRevision;
+        const auto prefabRevision = prefab.fence.revision;
+        const auto priorOutcome = owner.ViewModel().prefabCreationOutcome;
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::CreatePrefabFromSelection, .prefabCreation = intent});
+        CHECK(owner.ViewModel().prefabCreationOutcome == priorOutcome);
+        CHECK(owner.ViewModel().documentRevision == sceneRevision);
+        CHECK(owner.ViewModel().prefabDocuments.front().fence.revision == prefabRevision);
+        CHECK(owner.ViewModel().objects.size() == 1);
+        CHECK_FALSE(std::filesystem::exists(intent.destination));
+        CHECK_FALSE(std::filesystem::exists(intent.destination.string() + ".horo"));
     }
 
     TEST_CASE("Workspace creation revalidates protected objects and project metadata before writing any source",

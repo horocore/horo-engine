@@ -28,7 +28,7 @@ namespace {
                                                      .mutations = &project.mutations,
                                                      .durableFiles = &project.files,
                                                      .documentSessionOwner = Asset(9)};
-            dependencies.prefabSources = [this](const auto &registry, const auto roots, const auto &limits, const auto &cancellation) {
+            dependencies.prefab.sources = [this](const auto &registry, const auto roots, const auto &limits, const auto &cancellation) {
                 ++captures;
                 auto lease = project.mutations.TryAcquire({project.root, ProjectMutationOwner::Asset, "navigation.inspector.test"});
                 if (lease.HasError())

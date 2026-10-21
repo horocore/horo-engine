@@ -2828,6 +2828,9 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
     "$<BUILD_INTERFACE:${_horo_prefab_hierarchy_headers}>")
 
 add_library(HoroEditorModel STATIC
+        editor/document/PartitionedWorldWorkspace.cpp
+        editor/document/PartitionedWorldResidency.cpp
+        editor/document/PartitionedWorldObjectInspection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
@@ -2865,6 +2868,7 @@ target_include_directories(HoroEditorModel
 )
 target_link_libraries(HoroEditorModel
         PUBLIC
+        HoroEngine::WorldStreaming
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSourceModel
         HoroEngine::NavigationApi
@@ -2970,10 +2974,21 @@ add_library(HoroEditorPlaySceneHostInternal INTERFACE)
 target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_INTERFACE:${_horo_editor_play_host_headers}>")
 target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
 
+add_library(HoroPrefabDocumentSessionInternal INTERFACE)
+set(_horo_prefab_document_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_document_internal")
+file(MAKE_DIRECTORY "${_horo_prefab_document_headers}/editor/screens/workspace/prefab")
+configure_file(editor/screens/workspace/prefab/PrefabDocumentSession.h
+    "${_horo_prefab_document_headers}/editor/screens/workspace/prefab/PrefabDocumentSession.h" COPYONLY)
+target_include_directories(HoroPrefabDocumentSessionInternal INTERFACE "$<BUILD_INTERFACE:${_horo_prefab_document_headers}>")
+target_link_libraries(HoroPrefabDocumentSessionInternal INTERFACE HoroEditorPlaySceneHostInternal)
+
 add_library(HoroEditorServices STATIC
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/screens/workspace/prefab/PrefabCreation.cpp
         editor/screens/workspace/prefab/PrefabCreationPublication.cpp
+        editor/screens/workspace/prefab/PrefabDocumentSession.cpp
+        editor/screens/workspace/prefab/PrefabDocumentPersistence.cpp
+        editor/screens/workspace/prefab/PrefabDocumentStage.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
         editor/physics/CollisionIdentityGeneration.cpp
@@ -3066,6 +3081,7 @@ target_include_directories(HoroEditorServices
 target_link_libraries(HoroEditorServices
         PUBLIC
         HoroPrefabHierarchyInternal
+        HoroPrefabDocumentSessionInternal
         HoroEngine::ProjectCollisionSettings
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSource
@@ -3220,6 +3236,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabRows.cpp
@@ -3305,6 +3322,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/PCGWorkspace.cpp
+            editor/screens/workspace/PCGEditorCatalog.cpp
+            editor/screens/workspace/EditorWorkspaceViewPCG.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp

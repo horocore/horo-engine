@@ -107,7 +107,11 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::CapturePrefabCreationIntent */
     Result<PrefabCreationIntent> EditorWorkspaceController::CapturePrefabCreationIntent(const SceneObjectId root) const {
         const auto object = std::ranges::find(m_document.Objects(), root, &SceneObjectSnapshot::id);
-        if (object == m_document.Objects().end() || m_viewModel.sceneExternalConflict || m_viewModel.recoveryAvailable ||
+        const auto activeDocument = m_viewModel.workspacePanelHost.ActiveDocument();
+        const bool prefabFocused = m_activePrefabDocument || std::ranges::any_of(m_prefabDocuments, [activeDocument](const auto &document) {
+            return document->Instance() == activeDocument;
+        });
+        if (prefabFocused || object == m_document.Objects().end() || m_viewModel.sceneExternalConflict || m_viewModel.recoveryAvailable ||
             m_playSession.IsActive() || !m_durableFiles || !m_mutations || !m_mutableAssetRegistry || !m_prefabSourceCapture ||
             !m_collisionSceneOwner.IsValid() || m_defaultScenePath.has_value() != m_sceneFingerprint.has_value())
             return Result<PrefabCreationIntent>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));

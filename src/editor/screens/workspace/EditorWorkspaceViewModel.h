@@ -18,7 +18,9 @@
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
+#include "editor/screens/workspace/PCGWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabCreation.h"
+#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
 
 #include <filesystem>
@@ -71,14 +73,28 @@ namespace Horo::Editor {
         Render::RenderLight light;
     };
 
+    /** @brief Closed prefab application intents; destructive decisions are explicit. */
+    enum class PrefabDocumentAction {
+        Save,
+        Undo,
+        Redo,
+        Reload,
+        DiscardAndReload,
+        Recover,
+        DiscardRecovery,
+        DiscardAndClose
+    };
+
     enum class EditorWorkspaceViewCommand {
         None,
+        PrefabDocument,
         FocusWorkspaceDocument,
         CloseWorkspaceDocument,
         MoveWorkspaceDocument,
         FocusSequenceDocument,
         CloseSequenceDocument,
         UpdateSequenceTimeline,
+        EditPCGGraph,
         ReturnToWelcome,
         SaveSourceDocument,
         SaveSourceDocumentAs,
@@ -274,9 +290,14 @@ namespace Horo::Editor {
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<DocumentInstanceId> documentMoveBefore;
+        std::optional<PrefabDocumentFence> prefabFence;
+        std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
+        std::optional<PrefabSourceEdit> prefabEdit;
+        PrefabDocumentAction prefabAction{PrefabDocumentAction::Save};
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
         std::optional<SequenceTimelineState> sequenceTimeline;
+        std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;
         std::optional<PrefabHierarchyCommand> prefabHierarchy;
@@ -413,7 +434,13 @@ namespace Horo::Editor {
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
+        std::vector<PCGWorkspaceDocument> pcgDocuments;
+        std::vector<PCGPaletteEntry> pcgPalette;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::vector<PrefabDocumentSnapshot> prefabDocuments;
+        std::optional<Error> prefabDocumentError;
+        bool prefabRecoveryAvailable{};
+        std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
 
         float leftPanelWidth = 268.0F;
         float rightPanelWidth = 300.0F;

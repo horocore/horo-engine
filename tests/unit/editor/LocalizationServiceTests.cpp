@@ -249,6 +249,10 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Project asset dock"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "This folder is empty."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
+        CHECK(service.Get("editor", "workspace.prefab_document.undo") == "Undo source edit");
+        CHECK(service.Get("editor", "workspace.prefab_document.discard_recovery").find("keep source edits") != std::string::npos);
+        CHECK(service.Get("editor", "workspace.prefab_document.source_controls").find("Scene viewport") != std::string::npos);
+        CHECK(service.Get("editor", "workspace.prefab_document.preview_unavailable").find("isolated runtime") != std::string::npos);
         CHECK(service.Get("editor", "render_graph.title") == "Render Graph");
         CHECK(service.Get("editor", "render_graph.unavailable") == "Unavailable");
         CHECK(service.Get("editor", "render_graph.next") == "Next page");
@@ -342,6 +346,68 @@ namespace {
                 CHECK_FALSE(service.Get("editor", key).empty());
                 CHECK(service.Get("editor", key) != key);
             }
+        }
+    }
+
+    constexpr std::array PCGCanvasKeys{
+        "workspace.pcg.undo",
+        "workspace.pcg.redo",
+        "workspace.pcg.reset_view",
+        "workspace.pcg.focus",
+        "workspace.pcg.zoom",
+        "workspace.pcg.navigation_hint",
+        "workspace.pcg.palette",
+        "workspace.pcg.filter",
+        "workspace.pcg.no_catalog",
+        "workspace.pcg.unknown",
+        "workspace.pcg.input",
+        "workspace.pcg.output",
+        "workspace.pcg.inspector",
+        "workspace.pcg.select_hint",
+        "workspace.pcg.remove",
+        "workspace.pcg.identity",
+        "workspace.pcg.version",
+        "workspace.pcg.payload",
+        "workspace.pcg.connections",
+        "workspace.pcg.disconnect",
+        "workspace.pcg.cancel_connection",
+        "workspace.pcg.rejected",
+        "workspace.pcg.nodes.grid",
+        "workspace.pcg.nodes.density_filter",
+        "workspace.pcg.nodes.merge",
+        "workspace.pcg.nodes.forward",
+        "workspace.pcg.nodes.jitter",
+        "workspace.pcg.nodes.stratified",
+        "workspace.pcg.nodes.poisson",
+        "workspace.pcg.nodes.density_range",
+        "workspace.pcg.nodes.bounds",
+        "workspace.pcg.nodes.slope",
+        "workspace.pcg.nodes.distance",
+        "workspace.pcg.nodes.attribute",
+        "workspace.pcg.nodes.transform",
+        "workspace.pcg.nodes.alignment",
+        "workspace.pcg.nodes.offset",
+        "workspace.pcg.nodes.perlin",
+        "workspace.pcg.nodes.simplex",
+        "workspace.pcg.types.points",
+        "workspace.pcg.types.boolean",
+        "workspace.pcg.types.signed",
+        "workspace.pcg.types.unsigned",
+        "workspace.pcg.types.scalar",
+        "workspace.pcg.types.vector2",
+        "workspace.pcg.types.vector3",
+        "workspace.pcg.types.vector4",
+    };
+
+    TEST_CASE("PCG canvas and built-in palette copy resolves in both shipped locales", "[unit][editor][pcg][localization]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json")));
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}));
+            REQUIRE(service.ActivatePrepared());
+            RequireCatalogKeys(service, PCGCanvasKeys);
         }
     }
 }  // namespace
