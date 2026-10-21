@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
 #include "OpenGLBackendModule.h"
+#include "editor/renderer/opengl/EditorGuiRendererOpenGL.h"
 #include "editor/renderer/opengl/EditorViewportRendererOpenGL.h"
 #include "editor/renderer/opengl/SdlOpenGLPresentationPort.h"
 
@@ -9,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <glad/gl.h>
+#include <imgui.h>
 #include <memory>
 #include <vector>
 
@@ -290,6 +292,51 @@ namespace Horo::Render::OpenGLSmokeTests {
         Check(pixels[center] < 150 && pixels[center + 1] > 130 && pixels[center + 2] > 150);
     }
 
+    /** @brief Checks actual ImGui sampling into the primary backbuffer despite retained offscreen bindings. */
+    void CheckGuiComposition(Editor::EditorGuiRendererOpenGL &gui, RenderFrameScope &frame, const EditorViewportTextureView view,
+                             const CallerOpenGLState &callerState) {
+        REQUIRE(gui.BeginFrame().HasValue());
+        ImGui::NewFrame();
+        ImGui::GetForegroundDrawList()->AddImage(static_cast<ImTextureID>(view.textureId), {0, 0}, {512, 384}, {view.u0, view.v0},
+                                                 {view.u1, view.v1});
+        ImGui::Render();
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+        glDrawBuffer(GL_NONE);
+        ConfigureCallerOpenGLState(callerState);
+        REQUIRE(frame.ComposeGui(gui).HasValue());
+        CheckCallerOpenGLState(callerState);
+        RestoreDefaultOpenGLState();
+        GLint restoredDrawBuffer = 0;
+        glGetIntegerv(GL_DRAW_BUFFER, &restoredDrawBuffer);
+        CHECK(restoredDrawBuffer == GL_NONE);
+        glDrawBuffer(GL_BACK);
+        glReadBuffer(GL_BACK);
+        std::array<std::uint8_t, 4> pixel{};
+        glReadPixels(256, 480 - 192, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        CHECK(pixel[0] < 150);
+        CHECK(pixel[1] > 130);
+        CHECK(pixel[2] > 150);
+        CHECK(glGetError() == GL_NO_ERROR);
+    }
+
+    /** @brief Covers initialization, invalid input and lost-current-context rejection before native drawing. */
+    void InitializeGui(Editor::EditorGuiRendererOpenGL &gui, SDL_Window &window, HeadlessOpenGLPresentationPort &presentationPort) {
+        CHECK(gui.BeginFrame().HasError());
+        CHECK(gui.RenderDrawData().HasError());
+        REQUIRE(gui.Initialize().HasValue());
+        CHECK(gui.Initialize().HasError());
+        CHECK(gui.CreateTexture({}).HasError());
+        const std::array<std::uint8_t, 4> white{255, 255, 255, 255};
+        const auto uploaded = gui.CreateTexture({1, 1, white});
+        REQUIRE(uploaded.HasValue());
+        gui.DestroyTexture(uploaded.Value());
+        gui.DestroyTexture(uploaded.Value());
+        REQUIRE(SDL_GL_MakeCurrent(&window, nullptr));
+        CHECK(gui.BeginFrame().HasError());
+        // Restore the borrowed context through the presentation owner after rejection.
+        REQUIRE(presentationPort.MakeCurrent().HasValue());
+    }
+
     TEST_CASE("Editor Viewport Open GL Smoke", "[integration][renderer][gpu]") {
         constexpr EditorViewportExtent extent{512, 384};
         Check(SDL_Init(SDL_INIT_VIDEO));
@@ -311,6 +358,10 @@ namespace Horo::Render::OpenGLSmokeTests {
         std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
         Check(gladLoadGL(SDL_GL_GetProcAddress) != 0);
 
+        ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        Editor::EditorGuiRendererOpenGL gui{*window, SDL_GL_GetCurrentContext(), *frontend};
+        InitializeGui(gui, *window, presentationPort);
         const CallerOpenGLState callerState = CreateCallerOpenGLState();
         EditorViewportRendererOpenGL viewport{*frontend};
         Check(viewport.Initialize().HasValue());
@@ -328,11 +379,15 @@ namespace Horo::Render::OpenGLSmokeTests {
         Check(textureView.IsValid());
         Check(textureView.v0 == 1.0F && textureView.v1 == 0.0F);
         CheckViewportPixels(textureView, extent.width, extent.height);
+        CheckGuiComposition(gui, frame, textureView, callerState);
         Check(frame.Present().HasValue());
         CheckSeamlessResourceTransition(viewport, *frontend, scene, target, textureView);
 
         frontend->DetachStaticMeshPassExecutor(viewport);
         viewport.Shutdown();
+        gui.Shutdown();
+        gui.Shutdown();
+        ImGui::DestroyContext();
         DestroyCallerOpenGLState(callerState);
         frontend.reset();
         SDL_DestroyWindow(window);
