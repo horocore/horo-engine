@@ -79,6 +79,26 @@ namespace Horo::Editor {
         sources.resize(index);
     }
 
+    /** @copydoc EditorWorkspaceController::CloseUiCanvasSource */
+    void EditorWorkspaceController::CloseUiCanvasSource(const DocumentInstanceId instance) {
+        const auto canvas = std::ranges::find_if(m_uiCanvasDocuments, [instance](const auto &entry) {
+            return entry.Identity().instance == instance;
+        });
+        if (canvas == m_uiCanvasDocuments.end())
+            return;
+        auto &host = m_viewModel.workspacePanelHost;
+        const auto closed = canvas->Close();
+        if (closed.HasValue() && host.CloseDocument(instance, WorkspaceDocumentClosePolicy::DiscardChanges).HasValue())
+            m_uiCanvasDocuments.erase(canvas);
+        else if (closed.HasError()) {
+            const auto projection = std::ranges::find_if(m_viewModel.uiCanvasDocuments, [instance](const auto &entry) {
+                return entry.identity.instance == instance;
+            });
+            if (projection != m_viewModel.uiCanvasDocuments.end())
+                projection->diagnostic = closed.ErrorValue();
+        }
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessWorkspaceDocumentCommand */
     bool EditorWorkspaceController::ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
@@ -117,16 +137,7 @@ namespace Horo::Editor {
             return entry.Identity().instance == instance;
         });
                    canvas != m_uiCanvasDocuments.end()) {
-            const auto closed = canvas->Close();
-            if (closed.HasValue() && host.CloseDocument(instance, WorkspaceDocumentClosePolicy::DiscardChanges).HasValue())
-                m_uiCanvasDocuments.erase(canvas);
-            else if (closed.HasError()) {
-                const auto projection = std::ranges::find_if(m_viewModel.uiCanvasDocuments, [instance](const auto &entry) {
-                    return entry.identity.instance == instance;
-                });
-                if (projection != m_viewModel.uiCanvasDocuments.end())
-                    projection->diagnostic = closed.ErrorValue();
-            }
+            CloseUiCanvasSource(instance);
         } else {
             // Navigation's owner processes its request at the existing settings safe point.
             for (const auto &tab : m_viewModel.navigationDocuments)

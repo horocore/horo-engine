@@ -45,6 +45,139 @@ namespace Horo::Editor {
                 }
             }
         }
+
+        /** @brief Resolves canvas copy through the host localization service. */
+        std::string Text(const EditorGuiContext &context, const char *key) {
+            return context.localization.Get("editor", key);
+        }
+
+        /** @brief Emits one typed canvas toolbar gesture using the shared button. */
+        void ToolbarButton(const EditorGuiContext &context, const char *key, const EditorWorkspaceViewCommand command, const bool enabled,
+                           EditorWorkspaceViewCommandData &output) {
+            if (Ui::Button({.label = Text(context, key).c_str(), .enabled = enabled, .font = context.theme.fonts.sans}))
+                output.command = command;
+        }
+
+        /** @brief Presents persistence/history actions and the bounded transient search draft. */
+        void DrawToolbar(const EditorGuiContext &context, const UiCanvasWorkspaceDocument &document,
+                         EditorWorkspaceViewCommandData &output) {
+            using enum EditorWorkspaceViewCommand;
+            ToolbarButton(context, "workspace.documents.save", UiCanvasSave, document.dirty, output);
+            ImGui::SameLine();
+            ToolbarButton(context, "workspace.ui_canvas.undo", UiCanvasUndo, document.canUndo, output);
+            ImGui::SameLine();
+            ToolbarButton(context, "workspace.ui_canvas.redo", UiCanvasRedo, document.canRedo, output);
+            ToolbarButton(context, "workspace.ui_canvas.reload", UiCanvasReload, !document.dirty, output);
+            if (document.diagnostic)
+                Ui::ErrorText(Text(context, "workspace.ui_canvas.command_failed").c_str(), context.theme.fonts);
+            std::array<char, 257> search{};
+            std::copy_n(document.search.begin(), std::min(document.search.size(), search.size() - 1), search.begin());
+            const auto hint = Text(context, "workspace.ui_canvas.search");
+            if (Ui::InputTextControl("search", search.data(), search.size(), context.theme.fonts, {.hint = hint.c_str()})) {
+                output.command = UiCanvasSearch;
+                output.stringPayload = search.data();
+            }
+        }
+
+        /** @brief Enumerates the canonical descriptor palette and emits stable-neighbor ordering gestures. */
+        void DrawPalette(const EditorGuiContext &context, const UiCanvasWorkspaceDocument &document,
+                         EditorWorkspaceViewCommandData &output) {
+            const auto selected = std::ranges::find(document.rows, document.selection, &UiCanvasHierarchyRow::element);
+            const auto *parentType = selected == document.rows.end() ? nullptr : Runtime::Ui::UiElementCatalog::Find(selected->label);
+            const bool canCreate = !document.selection.IsValid() || (parentType && parentType->admitsChildren);
+            if (Ui::Button(
+                    {.label = Text(context, "workspace.ui_canvas.create").c_str(), .enabled = canCreate, .font = context.theme.fonts.sans}))
+                ImGui::OpenPopup("palette");
+            if (Ui::BeginMenuPopup("palette")) {
+                for (const auto &descriptor : Runtime::Ui::UiElementCatalog::All()) {
+                    if (descriptor.kind == Runtime::Ui::UiElementKind::Canvas)
+                        continue;
+                    const auto label = context.localization.Get("editor", descriptor.localizationKey);
+                    if (Ui::ContextMenuItem(label.c_str(), nullptr, context.theme.fonts)) {
+                        output.command = EditorWorkspaceViewCommand::UiCanvasCreate;
+                        output.uiCanvasKind = descriptor.kind;
+                        output.uiCanvasElement = document.selection.IsValid() ? document.selection : document.root;
+                    }
+                }
+                Ui::EndMenuPopup();
+            }
+            const bool movable = selected != document.rows.end() && selected->parent.IsValid() && document.search.empty();
+            if (Ui::Button(
+                    {.label = Text(context, "workspace.ui_canvas.move_up").c_str(), .enabled = movable, .font = context.theme.fonts.sans}))
+                Reorder(document, true, output);
+            ImGui::SameLine();
+            if (Ui::Button({.label = Text(context, "workspace.ui_canvas.move_down").c_str(),
+                            .enabled = movable,
+                            .font = context.theme.fonts.sans}))
+                Reorder(document, false, output);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, "workspace.ui_canvas.reparent_hint"), Theme::Muted(),
+                            context.theme.fonts);
+        }
+
+        /** @brief Copies exact drag evidence and emits a reparent gesture only within its unchanged source session. */
+        void DrawDrag(const EditorGuiContext &context, const UiCanvasWorkspaceDocument &document, const UiCanvasHierarchyRow &row,
+                      const Runtime::Ui::UiElementTypeDescriptor *type, const std::string &label, EditorWorkspaceViewCommandData &output) {
+            if (row.parent.IsValid() && ImGui::BeginDragDropSource()) {
+                const CanvasDrag payload{document.identity.instance, document.state, row.element};
+                ImGui::SetDragDropPayload("HORO_UI_CANVAS_ELEMENT", &payload, sizeof(payload));
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, label, Theme::Text(), context.theme.fonts);
+                ImGui::EndDragDropSource();
+            }
+            if (type && type->admitsChildren && ImGui::BeginDragDropTarget()) {
+                if (const auto *payload = ImGui::AcceptDragDropPayload("HORO_UI_CANVAS_ELEMENT");
+                    payload && payload->DataSize == static_cast<int>(sizeof(CanvasDrag))) {
+                    CanvasDrag drag;
+                    std::memcpy(&drag, payload->Data, sizeof(drag));
+                    if (drag.instance == document.identity.instance && drag.state == document.state) {
+                        output.command = EditorWorkspaceViewCommand::UiCanvasMove;
+                        output.uiCanvasMove = UiCanvasMoveElement{drag.element, row.element, {}};
+                    }
+                }
+                ImGui::EndDragDropTarget();
+            }
+        }
+
+        /** @brief Draws one visible hierarchy row, leaving mutations with its typed command receiver. */
+        void DrawRow(const EditorGuiContext &context, const UiCanvasWorkspaceDocument &document, const UiCanvasHierarchyRow &row,
+                     const float rowHeight, EditorWorkspaceViewCommandData &output) {
+            const auto &bytes = row.element.Bytes();
+            const auto *id = reinterpret_cast<const char *>(bytes.data());
+            ImGui::PushID(id, id + bytes.size());
+            const float indent = std::min(static_cast<float>(row.depth) * Theme::GetActiveTokens().spacing.propertyRowGap,
+                                          std::max(0.0F, ImGui::GetContentRegionAvail().x * 0.5F));
+            ImGui::Indent(indent);
+            const auto *type = Runtime::Ui::UiElementCatalog::Find(row.label);
+            const auto label = type ? context.localization.Get("editor", type->localizationKey) : row.label;
+            if (Ui::Button({.label = label.c_str(),
+                            .size = {ImGui::GetContentRegionAvail().x, rowHeight - ImGui::GetStyle().ItemSpacing.y},
+                            .variant = row.element == document.selection ? Ui::ButtonVariant::Primary : Ui::ButtonVariant::Secondary,
+                            .font = context.theme.fonts.sans})) {
+                output.command = EditorWorkspaceViewCommand::UiCanvasSelect;
+                output.uiCanvasElement = row.element;
+            }
+            DrawDrag(context, document, row, type, label, output);
+            ImGui::Unindent(indent);
+            ImGui::PopID();
+        }
+
+        /** @brief Clips cached rows to the visible region without rebuilding source topology during draw work. */
+        void DrawHierarchy(const EditorGuiContext &context, const UiCanvasWorkspaceDocument &document,
+                           EditorWorkspaceViewCommandData &output) {
+            const auto &tokens = Theme::GetActiveTokens();
+            const float rowHeight =
+                DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Medium).minimumHeight + ImGui::GetStyle().ItemSpacing.y;
+            if (ImGui::BeginChild("hierarchy", {0, 0})) {
+                ImGuiListClipper clipper;
+                clipper.Begin(static_cast<int>(document.rows.size()), rowHeight);
+                while (clipper.Step())
+                    for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index)
+                        DrawRow(context, document, document.rows[static_cast<std::size_t>(index)], rowHeight, output);
+                if (document.rows.empty())
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, "workspace.ui_canvas.no_results"), Theme::Muted(),
+                                    context.theme.fonts);
+            }
+            ImGui::EndChild();
+        }
     }  // namespace
 
     /** @copydoc EditorWorkspaceView::DrawUiCanvasDocument */
@@ -55,105 +188,10 @@ namespace Horo::Editor {
         });
         if (document == viewModel.uiCanvasDocuments.end())
             return false;
-        const auto text = [&](const char *key) {
-            return m_context.localization.Get("editor", key);
-        };
-        const auto button = [&](const char *key, const EditorWorkspaceViewCommand command, const bool enabled) {
-            if (Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = m_context.theme.fonts.sans}))
-                outCommand.command = command;
-        };
-        // Commands carry no document pointers; the controller validates this exact session and state after drawing.
         ImGui::PushID(static_cast<int>(document->identity.instance.Value()));
-        button("workspace.documents.save", EditorWorkspaceViewCommand::UiCanvasSave, document->dirty);
-        ImGui::SameLine();
-        button("workspace.ui_canvas.undo", EditorWorkspaceViewCommand::UiCanvasUndo, document->canUndo);
-        ImGui::SameLine();
-        button("workspace.ui_canvas.redo", EditorWorkspaceViewCommand::UiCanvasRedo, document->canRedo);
-        button("workspace.ui_canvas.reload", EditorWorkspaceViewCommand::UiCanvasReload, !document->dirty);
-        if (document->diagnostic)
-            Ui::ErrorText(text("workspace.ui_canvas.command_failed").c_str(), m_context.theme.fonts);
-        std::array<char, 257> search{};
-        std::copy_n(document->search.begin(), std::min(document->search.size(), search.size() - 1), search.begin());
-        const auto hint = text("workspace.ui_canvas.search");
-        if (Ui::InputTextControl("search", search.data(), search.size(), m_context.theme.fonts, {.hint = hint.c_str()})) {
-            outCommand.command = EditorWorkspaceViewCommand::UiCanvasSearch;
-            outCommand.stringPayload = search.data();
-        }
-        const auto selected = std::ranges::find(document->rows, document->selection, &UiCanvasHierarchyRow::element);
-        const auto *parentType = selected == document->rows.end() ? nullptr : Runtime::Ui::UiElementCatalog::Find(selected->label);
-        const bool canCreate = !document->selection.IsValid() || (parentType && parentType->admitsChildren);
-        if (Ui::Button({.label = text("workspace.ui_canvas.create").c_str(), .enabled = canCreate, .font = m_context.theme.fonts.sans}))
-            ImGui::OpenPopup("palette");
-        if (Ui::BeginMenuPopup("palette")) {
-            for (const auto &descriptor : Runtime::Ui::UiElementCatalog::All()) {
-                if (descriptor.kind == Runtime::Ui::UiElementKind::Canvas)
-                    continue;
-                const auto label = m_context.localization.Get("editor", descriptor.localizationKey);
-                if (Ui::ContextMenuItem(label.c_str(), nullptr, m_context.theme.fonts)) {
-                    outCommand.command = EditorWorkspaceViewCommand::UiCanvasCreate;
-                    outCommand.uiCanvasKind = descriptor.kind;
-                    outCommand.uiCanvasElement = document->selection.IsValid() ? document->selection : document->root;
-                }
-            }
-            Ui::EndMenuPopup();
-        }
-        const bool movable = selected != document->rows.end() && selected->parent.IsValid() && document->search.empty();
-        if (Ui::Button({.label = text("workspace.ui_canvas.move_up").c_str(), .enabled = movable, .font = m_context.theme.fonts.sans}))
-            Reorder(*document, true, outCommand);
-        ImGui::SameLine();
-        if (Ui::Button({.label = text("workspace.ui_canvas.move_down").c_str(), .enabled = movable, .font = m_context.theme.fonts.sans}))
-            Reorder(*document, false, outCommand);
-        Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.ui_canvas.reparent_hint"), Theme::Muted(), m_context.theme.fonts);
-        const auto &tokens = Theme::GetActiveTokens();
-        const float rowHeight = DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Medium).minimumHeight + ImGui::GetStyle().ItemSpacing.y;
-        if (ImGui::BeginChild("hierarchy", {0, 0})) {
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(document->rows.size()), rowHeight);
-            while (clipper.Step())
-                for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
-                    const auto &row = document->rows[static_cast<std::size_t>(index)];
-                    const auto &bytes = row.element.Bytes();
-                    const auto *id = reinterpret_cast<const char *>(bytes.data());
-                    ImGui::PushID(id, id + bytes.size());
-                    const float indent = std::min(static_cast<float>(row.depth) * tokens.spacing.propertyRowGap,
-                                                  std::max(0.0F, ImGui::GetContentRegionAvail().x * 0.5F));
-                    ImGui::Indent(indent);
-                    const auto *type = Runtime::Ui::UiElementCatalog::Find(row.label);
-                    const auto label = type ? m_context.localization.Get("editor", type->localizationKey) : row.label;
-                    if (Ui::Button(
-                            {.label = label.c_str(),
-                             .size = {ImGui::GetContentRegionAvail().x, rowHeight - ImGui::GetStyle().ItemSpacing.y},
-                             .variant = row.element == document->selection ? Ui::ButtonVariant::Primary : Ui::ButtonVariant::Secondary,
-                             .font = m_context.theme.fonts.sans})) {
-                        outCommand.command = EditorWorkspaceViewCommand::UiCanvasSelect;
-                        outCommand.uiCanvasElement = row.element;
-                    }
-                    if (row.parent.IsValid() && ImGui::BeginDragDropSource()) {
-                        const CanvasDrag payload{document->identity.instance, document->state, row.element};
-                        ImGui::SetDragDropPayload("HORO_UI_CANVAS_ELEMENT", &payload, sizeof(payload));
-                        Ui::WrappedText(ImGui::GetContentRegionAvail().x, label, Theme::Text(), m_context.theme.fonts);
-                        ImGui::EndDragDropSource();
-                    }
-                    if (type && type->admitsChildren && ImGui::BeginDragDropTarget()) {
-                        if (const auto *payload = ImGui::AcceptDragDropPayload("HORO_UI_CANVAS_ELEMENT");
-                            payload && payload->DataSize == static_cast<int>(sizeof(CanvasDrag))) {
-                            CanvasDrag drag;
-                            std::memcpy(&drag, payload->Data, sizeof(drag));
-                            if (drag.instance == document->identity.instance && drag.state == document->state) {
-                                outCommand.command = EditorWorkspaceViewCommand::UiCanvasMove;
-                                outCommand.uiCanvasMove = UiCanvasMoveElement{drag.element, row.element, {}};
-                            }
-                        }
-                        ImGui::EndDragDropTarget();
-                    }
-                    ImGui::Unindent(indent);
-                    ImGui::PopID();
-                }
-            if (document->rows.empty())
-                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.ui_canvas.no_results"), Theme::Muted(),
-                                m_context.theme.fonts);
-        }
-        ImGui::EndChild();
+        DrawToolbar(m_context, *document, outCommand);
+        DrawPalette(m_context, *document, outCommand);
+        DrawHierarchy(m_context, *document, outCommand);
         ImGui::PopID();
         if (outCommand.command >= EditorWorkspaceViewCommand::UiCanvasSelect &&
             outCommand.command <= EditorWorkspaceViewCommand::UiCanvasReload) {

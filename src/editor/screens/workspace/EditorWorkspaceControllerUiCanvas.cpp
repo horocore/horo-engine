@@ -30,6 +30,40 @@ namespace Horo::Editor {
             }
             return Result<UiElementId>::Failure(MakeError(UiErrors::CapacityExceeded));
         }
+
+        /** @brief Routes detached hierarchy/search gestures to the canonical owner after its session fence is checked. */
+        Result<void> ApplyHierarchy(UiCanvasDocument &owner, UiCanvasWorkspaceDocument &projection,
+                                    const EditorWorkspaceViewCommandData &command) {
+            using enum EditorWorkspaceViewCommand;
+            switch (command.command) {
+                case UiCanvasSelect:
+                    return owner.Select(command.uiCanvasState, command.uiCanvasElement);
+                case UiCanvasCreate: {
+                    auto id = NewElementId(owner);
+                    if (id.HasError())
+                        return Result<void>::Failure(id.ErrorValue());
+                    return owner.Execute(command.uiCanvasState,
+                                         UiCanvasCreateElement{id.Value(), command.uiCanvasElement, {}, command.uiCanvasKind});
+                }
+                case UiCanvasMove:
+                    return command.uiCanvasMove ? owner.Execute(command.uiCanvasState, *command.uiCanvasMove)
+                                                : Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
+                case UiCanvasSearch: {
+                    auto rows = owner.Hierarchy(command.stringPayload.value_or(""));
+                    if (rows.HasError())
+                        return Result<void>::Failure(rows.ErrorValue());
+                    projection.search = command.stringPayload.value_or("");
+                    projection.rows = std::move(rows).Value();
+                    return Result<void>::Success();
+                }
+                case UiCanvasUndo:
+                    return owner.Undo(command.uiCanvasState);
+                case UiCanvasRedo:
+                    return owner.Redo(command.uiCanvasState);
+                default:
+                    return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
+            }
+        }
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::RefreshUiCanvasProjection */
@@ -69,6 +103,19 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorWorkspaceController::SaveUiCanvasSource */
+    Result<void> EditorWorkspaceController::SaveUiCanvasSource(UiCanvasDocument &owner) {
+        if (!m_mutations)
+            return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
+        NativeDurableFileSystem files;
+        const auto saved = owner.Save(m_viewModel.projectRoot, *m_mutations, files);
+        if (saved.HasError())
+            return Result<void>::Failure(saved.ErrorValue());
+        if (saved.Value().status != UiCanvasDocumentSaveStatus::Saved)
+            return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessUiCanvasCommand */
     bool EditorWorkspaceController::ProcessUiCanvasCommand(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
@@ -88,59 +135,12 @@ namespace Horo::Editor {
         Result<void> result = Result<void>::Success();
         if (command.uiCanvasState != owner->CurrentState()) {
             result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+        } else if (command.command == UiCanvasSave) {
+            result = SaveUiCanvasSource(*owner);
+        } else if (command.command == UiCanvasReload) {
+            result = owner->Reload();
         } else {
-            switch (command.command) {
-                case UiCanvasSelect:
-                    result = owner->Select(command.uiCanvasState, command.uiCanvasElement);
-                    break;
-                case UiCanvasCreate: {
-                    auto id = NewElementId(*owner);
-                    if (id.HasError())
-                        result = Result<void>::Failure(id.ErrorValue());
-                    else
-                        result = owner->Execute(command.uiCanvasState,
-                                                UiCanvasCreateElement{id.Value(), command.uiCanvasElement, {}, command.uiCanvasKind});
-                    break;
-                }
-                case UiCanvasMove:
-                    result = command.uiCanvasMove ? owner->Execute(command.uiCanvasState, *command.uiCanvasMove)
-                                                  : Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
-                    break;
-                case UiCanvasSearch: {
-                    auto rows = owner->Hierarchy(command.stringPayload.value_or(""));
-                    if (rows.HasError())
-                        result = Result<void>::Failure(rows.ErrorValue());
-                    else {
-                        projection->search = command.stringPayload.value_or("");
-                        projection->rows = std::move(rows).Value();
-                    }
-                    break;
-                }
-                case UiCanvasUndo:
-                    result = owner->Undo(command.uiCanvasState);
-                    break;
-                case UiCanvasRedo:
-                    result = owner->Redo(command.uiCanvasState);
-                    break;
-                case UiCanvasReload:
-                    result = owner->Reload();
-                    break;
-                case UiCanvasSave: {
-                    if (!m_mutations) {
-                        result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
-                        break;
-                    }
-                    NativeDurableFileSystem files;
-                    const auto saved = owner->Save(m_viewModel.projectRoot, *m_mutations, files);
-                    if (saved.HasError())
-                        result = Result<void>::Failure(saved.ErrorValue());
-                    else if (saved.Value().status != UiCanvasDocumentSaveStatus::Saved)
-                        result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
-                    break;
-                }
-                default:
-                    break;
-            }
+            result = ApplyHierarchy(*owner, *projection, command);
         }
         projection->diagnostic = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
         RefreshUiCanvasProjection();

@@ -169,6 +169,23 @@ namespace Horo::Runtime::Ui::PresentationCodec {
                        {"grid", Out::array({style.grid.column, style.grid.row, style.grid.columnSpan, style.grid.rowSpan})}};
         }
 
+        /** @brief Decodes the canonical direct-child layout policy independently of element geometry. */
+        UiLayoutContainerStyle Container(const Json &container) {
+            UiLayoutContainerStyle result;
+            Fields(container, {"kind", "orientation", "wrap", "gap", "main", "cross", "columns", "rows", "columnCount", "rowCount"});
+            result.kind = static_cast<UiLayoutContainerKind>(Integer<std::uint8_t>(container.at("kind")));
+            result.orientation = static_cast<UiLayoutOrientation>(Integer<std::uint8_t>(container.at("orientation")));
+            result.wrap = static_cast<UiLayoutWrapMode>(Integer<std::uint8_t>(container.at("wrap")));
+            result.gap = Integer<UiScalar>(container.at("gap"));
+            result.mainAlignment = static_cast<UiLayoutDistribution>(Integer<std::uint8_t>(container.at("main")));
+            result.crossAlignment = static_cast<UiLayoutAlignment>(Integer<std::uint8_t>(container.at("cross")));
+            result.columns = Tracks(container.at("columns"));
+            result.rows = Tracks(container.at("rows"));
+            result.columnCount = Integer<std::uint16_t>(container.at("columnCount"));
+            result.rowCount = Integer<std::uint16_t>(container.at("rowCount"));
+            return result;
+        }
+
         /** @brief Decodes typed fields with exact shape and integer-width validation. */
         UiLayoutStyle Layout(const Json &value) {
             Fields(value, {"lengths", "aspect", "margin", "padding", "border", "offsets", "anchors", "pivot", "alignment", "positioning",
@@ -200,18 +217,7 @@ namespace Horo::Runtime::Ui::PresentationCodec {
             style.horizontalAlignment = static_cast<UiLayoutAlignment>(Integer<std::uint8_t>(alignment[0]));
             style.verticalAlignment = static_cast<UiLayoutAlignment>(Integer<std::uint8_t>(alignment[1]));
             style.positioning = static_cast<UiLayoutPositioning>(Integer<std::uint8_t>(value.at("positioning")));
-            const auto &container = value.at("container");
-            Fields(container, {"kind", "orientation", "wrap", "gap", "main", "cross", "columns", "rows", "columnCount", "rowCount"});
-            style.container.kind = static_cast<UiLayoutContainerKind>(Integer<std::uint8_t>(container.at("kind")));
-            style.container.orientation = static_cast<UiLayoutOrientation>(Integer<std::uint8_t>(container.at("orientation")));
-            style.container.wrap = static_cast<UiLayoutWrapMode>(Integer<std::uint8_t>(container.at("wrap")));
-            style.container.gap = Integer<UiScalar>(container.at("gap"));
-            style.container.mainAlignment = static_cast<UiLayoutDistribution>(Integer<std::uint8_t>(container.at("main")));
-            style.container.crossAlignment = static_cast<UiLayoutAlignment>(Integer<std::uint8_t>(container.at("cross")));
-            style.container.columns = Tracks(container.at("columns"));
-            style.container.rows = Tracks(container.at("rows"));
-            style.container.columnCount = Integer<std::uint16_t>(container.at("columnCount"));
-            style.container.rowCount = Integer<std::uint16_t>(container.at("rowCount"));
+            style.container = Container(value.at("container"));
             const auto &flex = value.at("flex");
             Array(flex, 2);
             style.flex = {Integer<std::uint32_t>(flex[0]), Integer<std::uint32_t>(flex[1])};

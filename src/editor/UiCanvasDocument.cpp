@@ -100,6 +100,14 @@ namespace Horo::Editor {
                 bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(character)));
             return bytes;
         }
+
+        /** @brief Validates and serializes a detached snapshot before admitting any filesystem mutation. */
+        Result<std::string> SerializeSnapshot(const UiCanvasDocumentSnapshot &snapshot) {
+            if (!snapshot.state.IsValid() || !snapshot.document.Id().IsValid() || !snapshot.document.Revision().IsValid() ||
+                snapshot.document.Canvases().empty())
+                return Failure<std::string>(UiCanvasDocumentErrors::InvalidDocument);
+            return UiCanvasDocumentSerialization::Serialize(snapshot.document);
+        }
     }  // namespace
 
     namespace UiCanvasDocumentErrors {
@@ -223,9 +231,10 @@ namespace Horo::Editor {
         const Result<std::filesystem::path> destination = ValidateProjectPath(absoluteProjectRoot, absolutePath);
         if (destination.HasError())
             return Result<UiCanvasDocumentSaveResult>::Failure(destination.ErrorValue());
-        if (!snapshot.state.IsValid() || !snapshot.document.Id().IsValid() || !snapshot.document.Revision().IsValid() ||
-            snapshot.document.Canvases().empty())
-            return Failure<UiCanvasDocumentSaveResult>(UiCanvasDocumentErrors::InvalidDocument);
+        const auto encoded = SerializeSnapshot(snapshot);
+        if (encoded.HasError())
+            return Result<UiCanvasDocumentSaveResult>::Failure(encoded.ErrorValue());
+        const std::string &serialized = encoded.Value();
 
         const Result<ProjectMutationLease> lease = mutations.TryAcquire(ProjectMutationRequest{
             .projectRoot = absoluteProjectRoot,
@@ -235,10 +244,6 @@ namespace Horo::Editor {
         if (lease.HasError())
             return Result<UiCanvasDocumentSaveResult>::Failure(lease.ErrorValue());
 
-        const auto encoded = UiCanvasDocumentSerialization::Serialize(snapshot.document);
-        if (encoded.HasError())
-            return Result<UiCanvasDocumentSaveResult>::Failure(encoded.ErrorValue());
-        const std::string &serialized = encoded.Value();
         const Result<UiCanvasFileFingerprint> current = InspectUiCanvasDocumentFingerprint(destination.Value());
         if (current.HasError())
             return Result<UiCanvasDocumentSaveResult>::Failure(current.ErrorValue());
