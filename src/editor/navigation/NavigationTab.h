@@ -38,7 +38,9 @@ namespace Horo::Editor {
 
     private:
         void DrawChoices(const NavigationBakeCatalog &catalog, const EditorGuiContext &context);
-        void DrawOperation(const NavigationBakeWorkspaceSnapshot &view, const EditorGuiContext &context);
+        /** @brief Renders exact authored surface selection without submitting an application command. */
+        void DrawSurfaceChoices(const NavigationBakeCatalog &catalog, const EditorGuiContext &context);
+        void DrawOperation(const NavigationBakeWorkspaceSnapshot &view, const EditorGuiContext &context) const;
         [[nodiscard]] bool Prepare();
         void StartBake(Navigation::NavigationBakeExecutionMode mode);
         void DrawReloadAction(const NavigationBakeWorkspaceSnapshot &view, const EditorGuiContext &context);

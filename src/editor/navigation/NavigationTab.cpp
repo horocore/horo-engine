@@ -24,19 +24,20 @@ namespace Horo::Editor {
         /** @brief Maps actual operation state without deriving terminal status from logs or progress. */
         const char *StateKey(OperationState state) {
             switch (state) {
-                case OperationState::Queued:
+                using enum OperationState;
+                case Queued:
                     return "queued";
-                case OperationState::Running:
+                case Running:
                     return "running";
-                case OperationState::Waiting:
+                case Waiting:
                     return "waiting";
-                case OperationState::Cancelling:
+                case Cancelling:
                     return "cancelling";
-                case OperationState::Succeeded:
+                case Succeeded:
                     return "succeeded";
-                case OperationState::Failed:
+                case Failed:
                     return "failed";
-                case OperationState::Cancelled:
+                case Cancelled:
                     return "cancelled";
             }
             return "unavailable";
@@ -78,38 +79,43 @@ namespace Horo::Editor {
         Ui::Hint(Text(context, "profiles_hint").c_str(), fonts);
         (void)Ui::CheckboxControl(Text(context, "selection_mode").c_str(), &selectedOnly_, fonts);
         Ui::Hint(Text(context, "selected_only").c_str(), fonts);
-        if (selectedOnly_) {
-            for (const auto &surface : catalog.surfaces) {
-                bool selected = std::ranges::find(selected_, surface) != selected_.end();
-                const auto label =
-                    std::format("{} / {}", Assets::AssetId::FromBytes(surface.scope.SceneBytes()).ToString(), surface.surface.Value());
-                ImGui::PushID(label.c_str());
-                Ui::Hint(label.c_str(), fonts);
-                if (Ui::CheckboxControl(Text(context, "surface_selected").c_str(), &selected, fonts)) {
-                    if (selected)
-                        selected_.push_back(surface);
-                    else
-                        std::erase(selected_, surface);
-                }
-                ImGui::PopID();
+        if (selectedOnly_)
+            DrawSurfaceChoices(catalog, context);
+    }
+
+    /** @copydoc NavigationTab::DrawSurfaceChoices */
+    void NavigationTab::DrawSurfaceChoices(const NavigationBakeCatalog &catalog, const EditorGuiContext &context) {
+        const auto &fonts = context.theme.fonts;
+        for (const auto &surface : catalog.surfaces) {
+            bool selected = std::ranges::find(selected_, surface) != selected_.end();
+            const auto label =
+                std::format("{} / {}", Assets::AssetId::FromBytes(surface.scope.SceneBytes()).ToString(), surface.surface.Value());
+            ImGui::PushID(label.c_str());
+            Ui::Hint(label.c_str(), fonts);
+            if (Ui::CheckboxControl(Text(context, "surface_selected").c_str(), &selected, fonts)) {
+                if (selected)
+                    selected_.push_back(surface);
+                else
+                    std::erase(selected_, surface);
             }
-            if (selected_.empty())
-                Ui::Hint(Text(context, "selection_required").c_str(), fonts);
+            ImGui::PopID();
         }
+        if (selected_.empty())
+            Ui::Hint(Text(context, "selection_required").c_str(), fonts);
     }
 
     /** @brief Displays bounded owner projection and explicit resource limits, never invented live memory measurements. */
-    void NavigationTab::DrawOperation(const NavigationBakeWorkspaceSnapshot &view, const EditorGuiContext &context) {
+    void NavigationTab::DrawOperation(const NavigationBakeWorkspaceSnapshot &view, const EditorGuiContext &context) const {
         if (!view.operation)
             return;
         const auto &operation = *view.operation;
         Ui::SectionTitle(Text(context, "operation").c_str(), context.theme.fonts);
         Value(context, "identity", std::format("{} / {}", view.opening, operation.id));
-        if (operation.bakeOperation)
+        if (operation.bakeOperation.has_value())
             Value(context, "shared_operation", std::to_string(*operation.bakeOperation));
         Ui::Hint(Text(context, StateKey(operation.state)).c_str(), context.theme.fonts);
         Value(context, "stage", operation.phase);
-        if (operation.progress)
+        if (operation.progress.has_value())
             Value(context, "progress", std::format("{:.0f}%", *operation.progress * 100.0F));
         else
             Ui::Hint(Text(context, "indeterminate").c_str(), context.theme.fonts);
@@ -208,8 +214,7 @@ namespace Horo::Editor {
             return true;
         if (!access_.prepare)
             return false;
-        const auto result = access_.prepare(root_);
-        if (result.HasError()) {
+        if (const auto result = access_.prepare(root_); result.HasError()) {
             error_ = result.ErrorValue();
             return false;
         }

@@ -1794,8 +1794,7 @@ namespace Horo::Editor::Ui {
         /** @brief Applies placement and dragging before Begin initializes the window's content and clipping rectangles. */
         ImVec2 ResolveModalPosition(const char *id, const ImVec2 regionPosition, const ImVec2 regionSize, const ImVec2 size) {
             ImVec2 position{regionPosition.x + (regionSize.x - size.x) * 0.5F, regionPosition.y + (regionSize.y - size.y) * 0.5F};
-            const ImGuiWindow *window = ImGui::FindWindowByName(id);
-            if (window != nullptr && window->WasActive) {
+            if (const ImGuiWindow *window = ImGui::FindWindowByName(id); window != nullptr && window->WasActive) {
                 position = window->Pos;
                 const ImGuiID draggingStateId = ImHashStr("##ModalHeaderDragging", 0, window->ID);
                 if (window->StateStorage.GetBool(draggingStateId) && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {

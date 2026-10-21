@@ -1014,7 +1014,7 @@ namespace Horo::Editor {
             Render::FramebufferExtent committedOutputExtent{};
         };
 
-        /** @brief Borrowed lifecycle authorities; both remain bound until participant shutdown completes. */
+        /** @brief Borrowed lifecycle authorities; all remain bound until participant shutdown completes. */
         struct EditorRuntimeAuthorities final {
             Runtime::RuntimeHost *runtime;
             Application::Internal::PackageProjectHost *packages;
@@ -1026,9 +1026,9 @@ namespace Horo::Editor {
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
                                      EditorViewportSceneState &viewportSceneState, EditorSettingsSnapshot &settingsSnapshot,
                                      std::optional<EditorRendererRestartRequest> &rendererRestart, Clock &clock,
-                                     Application::Internal::PackageProjectHost &packages, EditorNavigationBakeHost &navigation) noexcept
+                                     const EditorRuntimeAuthorities &authorities) noexcept
                 : p_(&params), screenHost_(&screenHost), viewportSceneState_(&viewportSceneState), settingsSnapshot_(&settingsSnapshot),
-                  rendererRestart_(&rendererRestart), authorities_{nullptr, &packages, &navigation}, pacing_{clock}
+                  rendererRestart_(&rendererRestart), authorities_(authorities), pacing_{clock}
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                   ,
                   qualification_{params.options.qualifySurfaceLifecycle}
@@ -1902,8 +1902,9 @@ namespace Horo::Editor {
                 screenHost.Shutdown();
                 return std::nullopt;
             }
-            auto participant = std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot,
-                                                                          rendererRestart, clock, *packages, navigationBakes);
+            auto participant =
+                std::make_unique<EditorRuntimeParticipant>(p, screenHost, viewportSceneState, settingsSnapshot, rendererRestart, clock,
+                                                           EditorRuntimeAuthorities{nullptr, &*packages, &navigationBakes});
             participant->BindHost(*runtime);
             EditorRuntimeParticipant *pacingParticipant = participant.get();
             Result<void> startup = runtime->AddParticipant(std::move(participant));

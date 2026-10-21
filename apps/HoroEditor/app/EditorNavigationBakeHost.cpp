@@ -44,11 +44,11 @@ namespace Horo::Editor {
                     return CatalogResult::Failure(scope.ErrorValue());
                 for (const auto &object : scene.document.objects) {
                     const auto &surface = object.components.navigationSurface;
-                    if (surface && surface->definition == definition) {
-                        if (catalog->surfaces.size() >= 4096)
-                            return CatalogResult::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
-                        catalog->surfaces.push_back({surface->id, scope.Value()});
-                    }
+                    if (!surface || surface->definition != definition)
+                        continue;
+                    if (catalog->surfaces.size() >= 4096)
+                        return CatalogResult::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+                    catalog->surfaces.emplace_back(surface->id, scope.Value());
                 }
             }
             std::ranges::sort(catalog->surfaces);
@@ -87,8 +87,7 @@ namespace Horo::Editor {
                 return Return::Failure(config.ErrorValue());
             auto composed = std::move(config).Value();
             auto initialOverlays = overlays.Value();
-            const auto publication = ResolveNavigationBakePublication(composed.service);
-            if (publication.HasValue()) {
+            if (const auto publication = ResolveNavigationBakePublication(composed.service); publication.HasValue()) {
                 auto cooked = NavigationViewportSnapshot::WithCooked(*overlays.Value(), publication.Value()->tiles);
                 if (cooked.HasValue())
                     initialOverlays = std::move(cooked).Value();
@@ -148,14 +147,13 @@ namespace Horo::Editor {
             if (job.HasError())
                 return Result<void>::Failure(job.ErrorValue());
             session.preparation = std::move(job).Value();
-            sessions.emplace(root, std::move(session));
+            sessions.try_emplace(root, std::move(session));
             return Result<void>::Success();
         }
 
         /** @brief Explicitly refreshes saved choices only after accepted work has drained; old opening keys remain invalid. */
         Result<void> Reload(const std::filesystem::path &root) {
-            const auto found = sessions.find(root);
-            if (found != sessions.end()) {
+            if (const auto found = sessions.find(root); found != sessions.end()) {
                 auto &session = found->second;
                 if (session.preparation || (session.view.operation && !session.view.operation->IsTerminal()))
                     return Result<void>::Failure(MakeError(Nav::NavigationErrors::BakeJobAdmissionRejected));
@@ -202,38 +200,39 @@ namespace Horo::Editor {
 
         /** @brief Adopts a drained worker result on the construction lane, retaining every preparation error. */
         void CompletePreparation(Session &session) {
-            if (session.preparation) {
-                const auto state = session.preparation->Snapshot();
-                if (!state || !state->terminalResult)
-                    return;
-                session.preparation.reset();
-                if (state->error || !session.prepared || !session.prepared->has_value()) {
-                    session.view.diagnostic = state->error.value_or(MakeError(Nav::NavigationErrors::BakeInputInvalid));
-                } else {
-                    auto prepared = std::move(session.prepared->value());
-                    if (prepared.HasError())
-                        session.view.diagnostic = prepared.ErrorValue();
-                    else {
-                        session.view.budget = prepared.Value().config.service.budget;
-                        auto application =
-                            Application::NavigationBakeApplication::Create(std::move(prepared.Value().config), operations, jobs);
-                        if (application.HasError())
-                            session.view.diagnostic = application.ErrorValue();
-                        else {
-                            session.application = std::move(application).Value();
-                            session.view.catalog = std::move(prepared.Value().catalog);
-                            session.authoredOverlays = std::move(prepared.Value().overlays);
-                            session.overlayMailbox = std::move(prepared.Value().mailbox);
-                            session.view.overlays = std::move(prepared.Value().initialOverlays);
-                        }
-                    }
-                }
+            if (!session.preparation)
+                return;
+            const auto state = session.preparation->Snapshot();
+            if (!state || !state->terminalResult)
+                return;
+            session.preparation.reset();
+            if (state->error || !session.prepared || !session.prepared->has_value()) {
+                session.view.diagnostic = state->error.value_or(MakeError(Nav::NavigationErrors::BakeInputInvalid));
                 session.prepared.reset();
+                return;
             }
+            auto result = std::move(session.prepared->value());
+            session.prepared.reset();
+            if (result.HasError()) {
+                session.view.diagnostic = result.ErrorValue();
+                return;
+            }
+            auto prepared = std::move(result).Value();
+            session.view.budget = prepared.config.service.budget;
+            auto application = Application::NavigationBakeApplication::Create(std::move(prepared.config), operations, jobs);
+            if (application.HasError()) {
+                session.view.diagnostic = application.ErrorValue();
+                return;
+            }
+            session.application = std::move(application).Value();
+            session.view.catalog = std::move(prepared.catalog);
+            session.authoredOverlays = std::move(prepared.overlays);
+            session.overlayMailbox = std::move(prepared.mailbox);
+            session.view.overlays = std::move(prepared.initialOverlays);
         }
 
         /** @brief Projects actual owner state and freezes elapsed time at terminal observation. */
-        void Observe(Session &session) {
+        void Observe(Session &session) const {
             if (!session.view.operation || session.view.operation->IsTerminal())
                 return;
             static_cast<void>(session.application->Pump());
@@ -293,33 +292,23 @@ namespace Horo::Editor {
 
     /** @copydoc EditorNavigationBakeHost::Access */
     NavigationBakeWorkspaceAccess EditorNavigationBakeHost::Access() {
-        return {.prepare =
-                    [this](const auto &root) {
+        return {.prepare = [this](const auto &root) {
             return impl_->PrepareProject(root);
-        },
-                .overlays = [this](const std::filesystem::path &root) -> std::shared_ptr<const NavigationViewportSnapshot> {
+        }, .overlays = [this](const std::filesystem::path &root) {
             const auto found = impl_->sessions.find(root);
             return found == impl_->sessions.end() ? nullptr : found->second.view.overlays;
-        },
-                .reload =
-                    [this](const auto &root) {
+        }, .reload = [this](const auto &root) {
             return impl_->Reload(root);
-        },
-                .query = [this](const std::filesystem::path &root) -> Result<NavigationBakeWorkspaceSnapshot> {
+        }, .query = [this](const std::filesystem::path &root) {
             const auto found = impl_->sessions.find(root);
             return found == impl_->sessions.end()
                        ? Result<NavigationBakeWorkspaceSnapshot>::Failure(MakeError(Nav::NavigationErrors::InvalidHandle))
                        : Result<NavigationBakeWorkspaceSnapshot>::Success(found->second.view);
-        },
-                .start =
-                    [this](const auto &root, auto request) {
+        }, .start = [this](const auto &root, auto request) {
             return impl_->Start(root, std::move(request));
-        },
-                .retry = [this](const std::filesystem::path &root,
-                                NavigationBakeOperationIdentity id) -> Result<NavigationBakeOperationIdentity> {
+        }, .retry = [this](const std::filesystem::path &root, NavigationBakeOperationIdentity id) {
             return impl_->Retry(root, id);
-        },
-                .cancel = [this](const std::filesystem::path &root, NavigationBakeOperationIdentity id) -> Result<void> {
+        }, .cancel = [this](const std::filesystem::path &root, NavigationBakeOperationIdentity id) {
             const auto found = impl_->sessions.find(root);
             if (found == impl_->sessions.end() || !found->second.application || found->second.view.opening != id.opening)
                 return Result<void>::Failure(MakeError(Nav::NavigationErrors::InvalidHandle));

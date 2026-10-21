@@ -77,15 +77,16 @@ namespace Horo::Editor {
             if (primitive.validity == NavigationOverlayValidity::Unvalidated)
                 return Theme::U32(Theme::Warn());
             switch (primitive.kind) {
-                case NavigationOverlayKind::Surface:
+                using enum NavigationOverlayKind;
+                case Surface:
                     return Theme::U32(Theme::Accent());
-                case NavigationOverlayKind::Walkable:
+                case Walkable:
                     return Theme::U32(Theme::Mix(Theme::Ok(), Theme::Text(), 0.15F));
-                case NavigationOverlayKind::Tile:
+                case Tile:
                     return Theme::U32(Theme::Text());
-                case NavigationOverlayKind::Modifier:
+                case Modifier:
                     return Theme::U32(Theme::Warn());
-                case NavigationOverlayKind::Link:
+                case Link:
                     return Theme::U32(Theme::Accent());
             }
             return Theme::U32(Theme::Text());
@@ -144,8 +145,8 @@ namespace Horo::Editor {
 
         /** @brief Applies independent inspection/draw bounds even when every primitive is filtered out. */
         bool DrawScene(const NavigationOverlayScene &scene, const NavigationOverlayFilter &filter, const NavigationOverlayFrame &frame) {
-            const auto matrix = BuildEditorViewportViewProjection(frame.camera, frame.size.x / frame.size.y, frame.depthRange);
-            if (matrix.HasValue()) {
+            if (const auto matrix = BuildEditorViewportViewProjection(frame.camera, frame.size.x / frame.size.y, frame.depthRange);
+                matrix.HasValue()) {
                 auto &draw = *ImGui::GetWindowDrawList();
                 draw.PushClipRect(frame.origin, {frame.origin.x + frame.size.x, frame.origin.y + frame.size.y}, true);
                 std::size_t inspected{};
@@ -209,11 +210,7 @@ namespace Horo::Editor {
         }
         for (auto &choices : choices_) {
             std::ranges::sort(choices, {}, &Choice::value);
-            choices.erase(std::unique(choices.begin(), choices.end(),
-                                      [](const Choice &a, const Choice &b) {
-                return a.value == b.value;
-            }),
-                          choices.end());
+            choices.erase(std::ranges::unique(choices, {}, &Choice::value).begin(), choices.end());
             for (auto &choice : choices)
                 choice.label = std::to_string(choice.value);
         }
@@ -223,26 +220,35 @@ namespace Horo::Editor {
         filter_.surface.reset();
     }
 
+    /** @copydoc NavigationOverlayLayer::ApplyIdentityFilter */
+    void NavigationOverlayLayer::ApplyIdentityFilter(const std::size_t field) {
+        const auto value = selected_[field] ? choices_[field][selected_[field] - 1].value : 0;
+        if (field == 0)
+            filter_.profile = value ? std::optional{Navigation::NavigationAgentProfileId::Create(value).Value()} : std::nullopt;
+        else if (field == 1)
+            filter_.area = value ? std::optional{Navigation::NavigationAreaId::Create(value).Value()} : std::nullopt;
+        else
+            filter_.surface = value ? std::optional{Navigation::SurfaceId::Create(value).Value()} : std::nullopt;
+    }
+
+    /** @copydoc NavigationOverlayLayer::IdentityControl */
+    void NavigationOverlayLayer::IdentityControl(const EditorGuiContext &context, const std::size_t field, const char *key) {
+        Ui::Hint(Text(context, key).c_str(), context.theme.fonts);
+        ImGui::PushID(static_cast<int>(field));
+        if (const Ui::ComboItemSource source{.label =
+                                                 [this, &context, field](const int row) {
+            return row == 0 ? Text(context, "all").c_str() : choices_[field][row - 1].label.c_str();
+        }};
+            Ui::ComboControl("##Filter", &selected_[field], static_cast<int>(choices_[field].size() + 1), source, context.theme.fonts))
+            ApplyIdentityFilter(field);
+        ImGui::PopID();
+    }
+
     /** @copydoc NavigationOverlayLayer::Controls */
     void NavigationOverlayLayer::Controls(const EditorGuiContext &context) {
         constexpr std::array keys{"profile", "area", "surface"};
-        for (std::size_t i = 0; i < keys.size(); ++i) {
-            Ui::Hint(Text(context, keys[i]).c_str(), context.theme.fonts);
-            ImGui::PushID(static_cast<int>(i));
-            const Ui::ComboItemSource source{.label = [&, i](const int row) {
-                return row == 0 ? Text(context, "all").c_str() : choices_[i][row - 1].label.c_str();
-            }};
-            if (Ui::ComboControl("##Filter", &selected_[i], static_cast<int>(choices_[i].size() + 1), source, context.theme.fonts)) {
-                const auto value = selected_[i] ? choices_[i][selected_[i] - 1].value : 0;
-                if (i == 0)
-                    filter_.profile = value ? std::optional{Navigation::NavigationAgentProfileId::Create(value).Value()} : std::nullopt;
-                if (i == 1)
-                    filter_.area = value ? std::optional{Navigation::NavigationAreaId::Create(value).Value()} : std::nullopt;
-                if (i == 2)
-                    filter_.surface = value ? std::optional{Navigation::SurfaceId::Create(value).Value()} : std::nullopt;
-            }
-            ImGui::PopID();
-        }
+        for (std::size_t i = 0; i < keys.size(); ++i)
+            IdentityControl(context, i, keys[i]);
         const std::array validity{Text(context, "all").c_str(), Text(context, "authored").c_str(), Text(context, "cooked").c_str(),
                                   Text(context, "disabled").c_str(), Text(context, "unvalidated").c_str()};
         int selected = filter_.validity ? static_cast<int>(*filter_.validity) + 1 : 0;

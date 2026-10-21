@@ -69,6 +69,14 @@ namespace Horo::Editor {
         void Choices(const NavigationOverlayScene &scene);
         /** @brief Draws shared localized filter controls. @param context Current presentation tokens. */
         void Controls(const EditorGuiContext &context);
+        /** @brief Applies the selected stable identity to its typed presentation filter.
+         * @param field Identity field index in the bounded profile/area/surface choice arrays.
+         */
+        void ApplyIdentityFilter(std::size_t field);
+        /** @brief Renders one localized identity choice and commits only its presentation filter.
+         * @param context Current GUI services. @param field Bounded identity field index. @param key Localized field key.
+         */
+        void IdentityControl(const EditorGuiContext &context, std::size_t field, const char *key);
         /** @brief Draws localized geometry-interest choices without retaining snapshot leases.
          * @param access Explicit owner capability. @param snapshot Current independent geometry.
          * @param scene Matched Scene or absence. @param frame Current immutable presentation inputs.

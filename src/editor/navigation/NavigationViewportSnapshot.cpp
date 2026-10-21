@@ -36,7 +36,7 @@ namespace Horo::Editor {
             }
 
             /** @brief Copies finite geometry under the shared byte/count-equivalent primitive cap. */
-            bool Add(NavigationOverlayScene &scene, Nav primitive) {
+            bool Add(NavigationOverlayScene &scene, const Nav &primitive) {
                 if (!Step())
                     return false;
                 for (const auto point : primitive.points)
@@ -59,13 +59,15 @@ namespace Horo::Editor {
                 corners[i] = Math::TransformAffinePoint(matrix, {(i & 1) ? bounds.maximum.x : bounds.minimum.x,
                                                                  (i & 2) ? bounds.maximum.y : bounds.minimum.y,
                                                                  (i & 4) ? bounds.maximum.z : bounds.minimum.z});
-            for (std::size_t i = 0; i < corners.size(); ++i)
-                for (const std::size_t axis : {1U, 2U, 4U})
-                    if (!(i & axis)) {
-                        primitive.points = {corners[i], corners[i | axis], {}};
-                        if (!writer.Add(scene, primitive))
-                            return;
-                    }
+            for (std::size_t i = 0; i < corners.size(); ++i) {
+                for (const std::size_t axis : {1U, 2U, 4U}) {
+                    if (i & axis)
+                        continue;
+                    primitive.points = {corners[i], corners[i | axis], {}};
+                    if (!writer.Add(scene, primitive))
+                        return;
+                }
+            }
         }
 
         /** @brief Bounds work independently from graph ordering; cycles, missing parents and excess depth fail closed. */
@@ -157,44 +159,56 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Projects a definition-owned surface's bounds separately for every authored grounded profile. */
+        void AuthoredSurface(Writer &writer, NavigationOverlayScene &scene, const SceneSource::SceneObjectSnapshot &object,
+                             const Math::Mat4 &world, const Assets::AssetId definition) {
+            const auto &surface = *object.components.navigationSurface;
+            if (surface.definition != definition || !surface.localBounds)
+                return;
+            const auto &bounds = *surface.localBounds;
+            for (const auto profile : surface.profiles) {
+                Box(writer, scene,
+                    {.kind = NavigationOverlayKind::Surface,
+                     .validity = surface.enabled ? NavigationOverlayValidity::Authored : NavigationOverlayValidity::Disabled,
+                     .profile = profile,
+                     .surface = surface.id,
+                     .object = object.id},
+                    {bounds.center - bounds.halfExtents, bounds.center + bounds.halfExtents}, world);
+            }
+        }
+
+        /** @brief Resolves modifier membership before emitting its exact typed volume for each surface profile. */
+        void AuthoredModifier(Writer &writer, NavigationOverlayScene &scene, const SceneSource::SceneObjectSnapshot &object,
+                              const Math::Mat4 &world, const std::map<N::SurfaceId, const Runtime::NavigationSurfaceComponent *> &surfaces,
+                              const Assets::AssetId definition) {
+            const auto &modifier = *object.components.navigationModifier;
+            const auto found = surfaces.find(modifier.surface);
+            if (found == surfaces.end() || found->second->definition != definition)
+                return;
+            for (const auto profile : found->second->profiles) {
+                Nav primitive{.kind = NavigationOverlayKind::Modifier,
+                              .validity = modifier.enabled && found->second->enabled ? NavigationOverlayValidity::Authored
+                                                                                     : NavigationOverlayValidity::Disabled,
+                              .profile = profile,
+                              .surface = modifier.surface,
+                              .area = modifier.area.value_or(N::NavigationAreaId{}),
+                              .object = object.id,
+                              .modifier = modifier.id};
+                if (const auto *box = std::get_if<Runtime::NavigationLocalBounds>(&modifier.volume))
+                    Box(writer, scene, primitive, {box->center - box->halfExtents, box->center + box->halfExtents}, world);
+                else
+                    Cylinder(writer, scene, primitive, std::get<Runtime::NavigationCylinderVolume>(modifier.volume), world);
+            }
+        }
+
         /** @brief Projects saved authored intent; enabled links have no implied validation evidence. */
         void Authored(Writer &writer, NavigationOverlayScene &scene, const SceneSource::SceneObjectSnapshot &object,
                       const Math::Mat4 &world, const std::map<N::SurfaceId, const Runtime::NavigationSurfaceComponent *> &surfaces,
                       const Assets::AssetId definition) {
-            const auto &components = object.components;
-            if (components.navigationSurface) {
-                const auto &surface = *components.navigationSurface;
-                if (surface.definition == definition && surface.localBounds)
-                    for (const auto profile : surface.profiles) {
-                        const auto &bounds = *surface.localBounds;
-                        Box(writer, scene,
-                            {.kind = NavigationOverlayKind::Surface,
-                             .validity = surface.enabled ? NavigationOverlayValidity::Authored : NavigationOverlayValidity::Disabled,
-                             .profile = profile,
-                             .surface = surface.id,
-                             .object = object.id},
-                            {bounds.center - bounds.halfExtents, bounds.center + bounds.halfExtents}, world);
-                    }
-            }
-            if (components.navigationModifier) {
-                const auto &modifier = *components.navigationModifier;
-                const auto found = surfaces.find(modifier.surface);
-                if (found != surfaces.end() && found->second->definition == definition)
-                    for (const auto profile : found->second->profiles) {
-                        Nav primitive{.kind = NavigationOverlayKind::Modifier,
-                                      .validity = modifier.enabled && found->second->enabled ? NavigationOverlayValidity::Authored
-                                                                                             : NavigationOverlayValidity::Disabled,
-                                      .profile = profile,
-                                      .surface = modifier.surface,
-                                      .area = modifier.area.value_or(N::NavigationAreaId{}),
-                                      .object = object.id,
-                                      .modifier = modifier.id};
-                        if (const auto *box = std::get_if<Runtime::NavigationLocalBounds>(&modifier.volume))
-                            Box(writer, scene, primitive, {box->center - box->halfExtents, box->center + box->halfExtents}, world);
-                        else
-                            Cylinder(writer, scene, primitive, std::get<Runtime::NavigationCylinderVolume>(modifier.volume), world);
-                    }
-            }
+            if (object.components.navigationSurface)
+                AuthoredSurface(writer, scene, object, world, definition);
+            if (object.components.navigationModifier)
+                AuthoredModifier(writer, scene, object, world, surfaces, definition);
             AuthoredLink(writer, scene, object, world, surfaces, definition);
         }
 
@@ -226,10 +240,10 @@ namespace Horo::Editor {
                     if (valid.HasError())
                         return Result<Graph>::Failure(valid.ErrorValue());
                 }
-                if (!graph.objects.emplace(object.id, &object).second)
+                if (!graph.objects.try_emplace(object.id, &object).second)
                     return Result<Graph>::Failure(MakeError(N::NavigationErrors::SourceDuplicateIdentity));
                 if (object.components.navigationSurface &&
-                    !graph.surfaces.emplace(object.components.navigationSurface->id, &*object.components.navigationSurface).second)
+                    !graph.surfaces.try_emplace(object.components.navigationSurface->id, &*object.components.navigationSurface).second)
                     return Result<Graph>::Failure(MakeError(N::NavigationErrors::SourceDuplicateIdentity));
             }
             return Result<Graph>::Success(std::move(graph));
@@ -241,19 +255,17 @@ namespace Horo::Editor {
             const auto graph = CaptureGraph(document, writer);
             if (graph.HasError())
                 return Result<void>::Failure(graph.ErrorValue());
-            if (!writer.truncated)
-                for (const auto &[id, object] : graph.Value().objects) {
-                    static_cast<void>(id);
-                    if (!writer.Step())
-                        break;
-                    auto world = World(*object, graph.Value().objects, writer);
-                    if (world.HasError()) {
-                        if (writer.truncated)
-                            break;
-                        return Result<void>::Failure(world.ErrorValue());
-                    }
-                    Authored(writer, scene, *object, world.Value(), graph.Value().surfaces, definition);
-                }
+            if (writer.truncated)
+                return Result<void>::Success();
+            for (const auto &[id, object] : graph.Value().objects) {
+                static_cast<void>(id);
+                if (!writer.Step())
+                    break;
+                auto world = World(*object, graph.Value().objects, writer);
+                if (world.HasError())
+                    return writer.truncated ? Result<void>::Success() : Result<void>::Failure(world.ErrorValue());
+                Authored(writer, scene, *object, world.Value(), graph.Value().surfaces, definition);
+            }
             return Result<void>::Success();
         }
 
@@ -269,7 +281,7 @@ namespace Horo::Editor {
                 auto key = tile->Key();
                 key.tile = {};
                 const auto bounds = tile->Topology().bounds;
-                auto [entry, inserted] = surfaceBounds.emplace(key, bounds);
+                auto [entry, inserted] = surfaceBounds.try_emplace(key, bounds);
                 if (!inserted) {
                     auto &current = entry->second;
                     current.minimum = {std::min(current.minimum.x, bounds.minimum.x), std::min(current.minimum.y, bounds.minimum.y),
@@ -309,13 +321,13 @@ namespace Horo::Editor {
                 for (std::size_t corner = 1; corner + 1 < count; ++corner) {
                     const std::array indices{topology.polygonVertexIndices[first], topology.polygonVertexIndices[first + corner],
                                              topology.polygonVertexIndices[first + corner + 1]};
-                    for (std::size_t i = 0; i < indices.size(); ++i) {
-                        if (indices[i] >= topology.vertices.size())
-                            return Result<void>::Failure(MakeError(N::NavigationErrors::BakeInputInvalid));
-                        primitive.points[i] = topology.vertices[indices[i]];
-                    }
+                    if (std::ranges::any_of(indices, [&topology](const auto index) {
+                        return index >= topology.vertices.size();
+                    }))
+                        return Result<void>::Failure(MakeError(N::NavigationErrors::BakeInputInvalid));
+                    primitive.points = {topology.vertices[indices[0]], topology.vertices[indices[1]], topology.vertices[indices[2]]};
                     if (!writer.Add(scene, primitive))
-                        break;
+                        return Result<void>::Success();
                 }
             }
             return Result<void>::Success();
@@ -331,8 +343,7 @@ namespace Horo::Editor {
                           .surface = key.surface,
                           .tile = key.tile};
             Box(writer, scene, primitive, topology.bounds, Math::Mat4::Identity());
-            const auto walkable = WalkableFaces(writer, scene, primitive, topology);
-            if (walkable.HasError())
+            if (const auto walkable = WalkableFaces(writer, scene, primitive, topology); walkable.HasError())
                 return walkable;
             primitive.kind = NavigationOverlayKind::Link;
             primitive.triangle = false;
@@ -371,8 +382,7 @@ namespace Horo::Editor {
             if (scope.HasError())
                 return SnapshotResult::Failure(scope.ErrorValue());
             NavigationOverlayScene scene{.path = input.path.String(), .scope = scope.Value(), .sourceDigest = input.digest};
-            const auto captured = CaptureAuthoredScene(writer, scene, input.document, definition);
-            if (captured.HasError())
+            if (const auto captured = CaptureAuthoredScene(writer, scene, input.document, definition); captured.HasError())
                 return SnapshotResult::Failure(captured.ErrorValue());
             result->scenes_.push_back(std::move(scene));
         }
@@ -396,8 +406,7 @@ namespace Horo::Editor {
                     break;
             result->scenes_.push_back(std::move(scene));
         }
-        const auto bounds = CookedSurfaceBounds(writer, result->scenes_, tiles);
-        if (bounds.HasError())
+        if (const auto bounds = CookedSurfaceBounds(writer, result->scenes_, tiles); bounds.HasError())
             return SnapshotResult::Failure(bounds.ErrorValue());
         for (const auto &tile : tiles.tiles) {
             if (!writer.Step())
