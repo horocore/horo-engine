@@ -2831,6 +2831,23 @@ target_link_libraries(HoroEditorModel
         PRIVATE nlohmann_json::nlohmann_json HoroSceneSourceCodecInternal HoroPrefabHierarchyInternal
 )
 
+# Application composition above immutable editor metadata and canonical Scene cook owners.
+add_library(HoroWorldBakeApplication STATIC
+        application/world_bake/WorldBakeApplication.cpp
+        application/world_bake/WorldBakeCapture.cpp
+        application/world_bake/WorldBakePlacement.cpp
+        application/world_bake/WorldBakeAdmission.cpp
+        application/world_bake/WorldBakeSources.cpp
+        application/world_bake/WorldBakeCook.cpp
+        application/world_bake/WorldBakeCells.cpp
+        application/world_bake/WorldBakeReferences.cpp
+        application/world_bake/WorldBakeEncoding.cpp)
+add_library(HoroEngine::WorldBakeApplication ALIAS HoroWorldBakeApplication)
+target_compile_features(HoroWorldBakeApplication PUBLIC cxx_std_20)
+target_link_libraries(HoroWorldBakeApplication PUBLIC
+        HoroEngine::EditorModel HoroEngine::SceneCellPayload HoroEngine::WorldStreaming
+        HoroEngine::SceneRuntimeConversion HoroEngine::Foundation HoroEngine::Assets HoroEngine::PlatformProjectReadFiles)
+
 add_library(HoroEditorViewportScene STATIC
         editor/renderer/EditorViewportScene.cpp
         editor/renderer/grid/EditorViewportGridGeometry.cpp
@@ -3015,6 +3032,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::WorldBakeApplication
         HoroPrefabHierarchyInternal
         HoroEngine::ProjectCollisionSettings
         HoroEngine::SceneRuntimeConversion
@@ -3253,6 +3271,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldBake.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/WorldLayerOutliner.cpp
             editor/modals/world_layer/CreateWorldLayerModal.cpp

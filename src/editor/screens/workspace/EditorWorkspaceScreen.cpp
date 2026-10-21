@@ -283,6 +283,7 @@ namespace Horo::Editor {
                     if (projectServices_.assetRegistry != nullptr) {
                         controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
                     }
+                    controller_->UpdateWorldBake();
                     controller_->UpdateContentBrowser();
                     controller_->SynchronizeRuntimeScenePreview();
                     controller_->UpdateFps(ImGui::GetIO().Framerate);
@@ -698,6 +699,8 @@ namespace Horo::Editor {
                                                    .assetRegistrySource = std::move(registrySource).Value(),
                                                    .importerCatalog = projectServices_.importerCatalog,
                                                    .jobs = &services_.Get<JobSystem>(),
+                                                   .worldBakeOperations = services_.TryGet<OperationStore>(),
+                                                   .worldBakeOutput = services_.TryGet<BuildOutputStore>(),
                                                    .gameplay = {.builds = services_.TryGet<Application::GameplayBuildService>(),
                                                                 .environment = gameplayEnvironment != nullptr
                                                                                    ? *gameplayEnvironment

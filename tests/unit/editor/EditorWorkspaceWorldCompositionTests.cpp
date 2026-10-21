@@ -1,5 +1,6 @@
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "OwnedTestDirectory.h"
+#include "PartitionedWorldResidencyTestSupport.h"
 #include "WorldCompositionSourceTestSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -118,3 +119,51 @@ namespace Horo::Editor::WorldCompositionTests {
         }
     }
 }  // namespace Horo::Editor::WorldCompositionTests
+
+namespace Horo::Editor {
+    TEST_CASE("World Composition bake command uses the application-owned real cell producer and shared diagnostic stores",
+              "[editor][world_bake][controller]") {
+        Horo::Tests::OwnedTestDirectory project{"world bake controller"};
+        JobSystem jobs{{.workerCount = 1}};
+        OperationStore operations{8, 16};
+        BuildOutputStore diagnostics{32};
+        Runtime::RuntimeSceneService runtime;
+        EditorWorkspaceController controller{project.Path(),
+                                             runtime,
+                                             {},
+                                             EditorWorkspaceDependencies{.jobs = &jobs,
+                                                                         .worldBakeOperations = &operations,
+                                                                         .worldBakeOutput = &diagnostics,
+                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+        auto &world = controller.WorldDocuments();
+        REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
+        for (const auto &page : WorldResidencyTests::Document().pages)
+            REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::BakeWorldCells;
+        command.worldDocumentFence = WorldResidencyTests::Current(world)->fence;
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().worldBakeOperation);
+        auto marker = jobs.SubmitResult({}, [](const CancellationToken &) {
+            return Result<void>::Success();
+        });
+        REQUIRE(marker.HasValue());
+        REQUIRE(marker.Value().Wait({WaitPolicy::OwnerThreadBlockAllowed, std::chrono::seconds{5}}).HasValue());
+        controller.UpdateWorldBake();
+        CHECK(controller.ViewModel().worldBakeCurrent);
+        CHECK(controller.SetWorldBakeProject({}).HasError());
+        CHECK(controller.ViewModel().worldBakeCurrent);
+        CHECK_FALSE(controller.ViewModel().worldBakeOperation);
+        const auto output = diagnostics.SnapshotIfChanged(0);
+        REQUIRE(output);
+        REQUIRE_FALSE(output->records.empty());
+        CHECK(output->records.back().result == BuildOutputResult::Succeeded);
+        const auto previous = WorldResidencyTests::Current(world);
+        command.worldDocumentFence->revision = WorldDocumentRevision::Create(previous->fence.revision.Value() + 1).Value();
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().worldDocumentError);
+        CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Stale.code);
+        CHECK(WorldResidencyTests::Current(world) == previous);
+        CHECK(controller.ViewModel().worldBakeCurrent);
+    }
+}  // namespace Horo::Editor

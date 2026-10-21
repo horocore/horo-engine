@@ -96,6 +96,9 @@ namespace Horo::Editor {
         OpenWorldCompositionSource,
         QueryWorldComposition,
         CloseWorldComposition,
+        BakeWorldCells,
+        ValidateWorldCells,
+        CancelWorldBake,
         FocusSequenceDocument,
         CloseSequenceDocument,
         UpdateSequenceTimeline,
@@ -271,6 +274,7 @@ namespace Horo::Editor {
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<WorldBrowserQuery> worldBrowserQuery;
         std::optional<WorldDocumentFence> worldDocumentFence;
+        std::optional<OperationId> worldBakeOperation; /**< Exact accepted operation targeted by a cancellation intent. */
         std::optional<WorldSourceToolCommand> worldSource;
         std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
@@ -351,6 +355,9 @@ namespace Horo::Editor {
         WorldBrowserQuery worldBrowserQuery;
         std::optional<Error> worldDocumentError;
         std::string worldDocumentSource;
+        bool worldBakeAvailable{};
+        std::optional<OperationId> worldBakeOperation;
+        bool worldBakeCurrent{}; /**< Exact published output matches current source and project capture. */
         bool audioPreviewAvailable{};
         std::optional<AudioComponentPreviewSnapshot> audioPreview;
         std::optional<Error> audioPreviewFailure;

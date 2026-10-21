@@ -3093,6 +3093,12 @@
     "workspace.world_layers.name_hint": {"text": "Boş olmayan bir katman adı girin."},
     "workspace.world_layers.cancel": {"text": "İptal"},
     "workspace.world_layers.stale": {"text": "Dünya değişti veya kapatıldı. İptal edip bu iletişim kutusunu yeniden açın."},
+    "workspace.world.bake": {"text": "Akış hücrelerini pişir"},
+    "workspace.world.validate": {"text": "Akış hücrelerini doğrula"},
+    "workspace.world.cancel_bake": {"text": "Pişirmeyi iptal et"},
+    "workspace.world.bake_running": {"text": "Dünya hücreleri işleniyor. İlerlemeyi İşlemler, tanıları Derleme Çıktısı bölümünde izleyin."},
+    "workspace.world.bake_current": {"text": "Pişirilen hücreler bu dünya ve proje revizyonuyla eşleşiyor."},
+    "workspace.world.bake_needed": {"text": "Dünyanın tamamını pişirin veya doğrulayın. Tanılar Derleme Çıktısı bölümünde görünür."},
     "workspace.world_layers.rejected": {"text": "Katman oluşturma reddedildi. Adı ve belge sınırlarını kontrol edin."}
   }
 }

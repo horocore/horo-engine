@@ -1394,3 +1394,5 @@ horo_configure_target_header_boundary(HoroMcpNavigationAdapters PUBLIC_HEADERS H
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")
+
+horo_configure_target_header_boundary(HoroWorldBakeApplication PUBLIC_HEADERS Horo/Application/WorldBakeApplication.h)

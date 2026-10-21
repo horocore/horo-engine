@@ -38,12 +38,13 @@ namespace Horo::Editor {
             RefreshWorldDocumentProjection();
             return;
         }
-        static_cast<void>(ProcessWorldCompositionCommand(cmd) || ProcessWorldSourceCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
-                          ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
-                          ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
-                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
-                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        static_cast<void>(ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) || ProcessWorldSourceCommand(cmd) ||
+                          ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
+                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
+                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
+                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
         RefreshWorldDocumentProjection();
+        UpdateWorldBake();
     }
 
     /** @copydoc EditorWorkspaceController::ApplyWorldLayerIntent */
