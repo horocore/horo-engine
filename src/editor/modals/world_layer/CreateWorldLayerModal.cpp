@@ -81,8 +81,8 @@ namespace Horo::Editor {
             const auto result = create_(name_, expected_);
             if (result.HasValue())
                 return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
-            const auto code = result.ErrorValue().code;
-            failureKey_ = code == WorldDocumentErrors::Stale.code || code == WorldDocumentErrors::Lifecycle.code
+            const auto &code = result.ErrorValue().code.Value();
+            failureKey_ = code == WorldDocumentErrors::Stale.code.Value() || code == WorldDocumentErrors::Lifecycle.code.Value()
                               ? "workspace.world_layers.stale"
                               : "workspace.world_layers.rejected";
         }
