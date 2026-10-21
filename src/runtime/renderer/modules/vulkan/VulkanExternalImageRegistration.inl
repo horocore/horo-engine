@@ -44,11 +44,12 @@ Result<std::uint64_t> VulkanResourceRuntime::ImportExternalTexture(const IRender
     texture->graphState = {.logical = acquired, .hasNativeState = true, .contentsDefined = false};
     texture->lifetime = std::move(lifetime);
     texture->destroyView = impl_->dispatch.destroyImageView;
+    const VkImageAspectFlags aspectMask = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
     const VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                      .image = texture->handle,
                                      .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
                                      .format = VulkanResourceConversion::TextureFormat(descriptor.format),
-                                     .subresourceRange = {.aspectMask = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
+                                     .subresourceRange = {.aspectMask = aspectMask,
                                                           .baseMipLevel = 0,
                                                           .levelCount = 1,
                                                           .baseArrayLayer = 0,

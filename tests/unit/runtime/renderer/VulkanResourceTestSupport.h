@@ -32,6 +32,7 @@ namespace Horo::Render::VulkanResourceTest {
         int createImageCount{0};
         int destroyImageCount{0};
         int createViewCount{0};
+        VkImageAspectFlags lastViewAspectMask{};
         int destroyViewCount{0};
         int allocateCount{0};
         int freeCount{0};
@@ -123,9 +124,10 @@ namespace Horo::Render::VulkanResourceTest {
 
     inline VKAPI_ATTR void VKAPI_CALL FakeUnmapMemory(VkDevice, VkDeviceMemory) {}
 
-    inline VKAPI_ATTR VkResult VKAPI_CALL FakeCreateImageView(VkDevice, const VkImageViewCreateInfo *, const VkAllocationCallbacks *,
+    inline VKAPI_ATTR VkResult VKAPI_CALL FakeCreateImageView(VkDevice, const VkImageViewCreateInfo *info, const VkAllocationCallbacks *,
                                                               VkImageView *view) {
         ++nativeResources->createViewCount;
+        nativeResources->lastViewAspectMask = info->subresourceRange.aspectMask;
         if (nativeResources->createViewResult != VK_SUCCESS)
             return nativeResources->createViewResult;
         *view = NativeHandle<VkImageView>(14);
