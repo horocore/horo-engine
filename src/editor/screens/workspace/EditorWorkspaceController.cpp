@@ -258,8 +258,14 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::UpdateGameplaySources(const float elapsedSeconds) {
-        if (m_prefabStagePending)
-            RefreshPrefabDocuments();
+        if (m_prefabStagePending) {
+            m_prefabStagePending = false;
+            for (const auto &entry : m_prefabDocuments)
+                if (entry->Instance() == m_activePrefabDocument)
+                    ExtractPrefabStage(*entry);
+            if (!m_prefabStagePending)
+                RefreshPrefabDocuments();
+        }
         RefreshSourceDocumentProjection();
         (void)m_gameplayRetirements->Drain();
         UpdateGameplayBuild(elapsedSeconds);

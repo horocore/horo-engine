@@ -34,11 +34,15 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
+            ProcessSourceDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
+            ProcessLayoutCommand(cmd))
+            return;
         if (m_activePrefabDocument) {
             using enum EditorWorkspaceViewCommand;
             if (cmd.command == SaveScene || cmd.command == UndoScene || cmd.command == RedoScene) {
                 for (const auto &entry : m_prefabDocuments) {
-                    if (entry->Snapshot().identity.instance != m_activePrefabDocument)
+                    if (entry->Instance() != m_activePrefabDocument)
                         continue;
                     EditorWorkspaceViewCommandData request;
                     request.command = PrefabDocument;
@@ -48,29 +52,15 @@ namespace Horo::Editor {
                                                                       : PrefabDocumentAction::Redo;
                     static_cast<void>(ProcessPrefabDocumentCommand(request));
                 }
-                return;
-            }
-            switch (cmd.command) {
-                case None:
-                case PrefabDocument:
-                case FocusWorkspaceDocument:
-                case CloseWorkspaceDocument:
-                case MoveWorkspaceDocument:
-                case ReturnToWelcome:
-                case DiscardSceneRecovery:
-                case StopPlay:
-                case OpenSourceFile:
-                case ChangeActivePanel:
-                    break;
-                default:
-                    return;
-            }
+            } else if (cmd.command == DiscardSceneRecovery)
+                static_cast<void>(ProcessDocumentCommand(cmd));
+            else if (cmd.command == StopPlay || cmd.command == PausePlay || cmd.command == ResumePlay || cmd.command == StepPlay)
+                static_cast<void>(ProcessPlayCommand(cmd));
+            return;
         }
-        static_cast<void>(ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) ||
-                          ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
-                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
-                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
-                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        static_cast<void>(ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) ||
+                          ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) ||
+                          ProcessComponentCommand(cmd));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

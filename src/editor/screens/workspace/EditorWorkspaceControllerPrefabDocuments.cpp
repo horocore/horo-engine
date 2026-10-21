@@ -68,6 +68,11 @@ namespace Horo::Editor {
                                                          Runtime::SceneRuntimeId{m_nextPrefabRuntime++}, m_prefabStageFactory);
                  activated.HasError())
             m_viewModel.prefabDocumentError = activated.ErrorValue();
+        RefreshPrefabRecovery(snapshot);
+    }
+
+    /** @copydoc EditorWorkspaceController::RefreshPrefabRecovery */
+    void EditorWorkspaceController::RefreshPrefabRecovery(const PrefabDocumentSnapshot &snapshot) {
         m_viewModel.prefabRecoveryAvailable = false;
         m_viewModel.prefabRecovery.reset();
         if (!m_mutations || !m_durableFiles)
@@ -215,6 +220,10 @@ namespace Horo::Editor {
             if (!command.prefabEdit &&
                 (command.prefabAction == PrefabDocumentAction::Reload || command.prefabAction == PrefabDocumentAction::DiscardAndReload))
                 ScheduleContentBrowserPreviews();
+            if (command.prefabAction == PrefabDocumentAction::DiscardRecovery) {
+                m_viewModel.prefabRecovery.reset();
+                m_viewModel.prefabRecoveryAvailable = false;
+            }
         }
         return true;
     }
@@ -247,11 +256,14 @@ namespace Horo::Editor {
                            : Result<void>::Failure(*saved.Value().durabilityError);
             }
             case Recover:
+            case DiscardRecovery:
                 if (!m_mutations || !m_durableFiles)
                     return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
                 if (!command.prefabRecovery)
                     return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
-                return document.Recover(fence, *command.prefabRecovery, *m_mutations, *m_durableFiles);
+                return command.prefabAction == Recover
+                           ? document.Recover(fence, *command.prefabRecovery, *m_mutations, *m_durableFiles)
+                           : document.DiscardRecoveryCandidate(fence, *command.prefabRecovery, *m_mutations, *m_durableFiles);
         }
         return Result<void>::Failure(MakeError(SourceDocumentErrors::Invalid));
     }
@@ -309,6 +321,12 @@ namespace Horo::Editor {
         for (const auto &entry : m_prefabDocuments) {
             if (auto result = entry->Autosave(*m_mutations, *m_durableFiles); result.HasError())
                 m_viewModel.prefabDocumentError = result.ErrorValue();
+            const auto snapshot = entry->Snapshot();
+            for (auto &published : m_viewModel.prefabDocuments)
+                if (published.identity.instance == snapshot.identity.instance)
+                    published = snapshot;
+            if (snapshot.identity.instance == m_activePrefabDocument)
+                RefreshPrefabRecovery(snapshot);
         }
     }
 

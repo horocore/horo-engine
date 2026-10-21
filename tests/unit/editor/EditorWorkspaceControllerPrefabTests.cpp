@@ -374,4 +374,36 @@ namespace Horo::Editor {
         CHECK(owner.ViewModel().documentRevision == sceneRevision);
         CHECK_FALSE(owner.ViewModel().isDirty);
     }
+
+    TEST_CASE("Switching prefab documents retires preview without losing source history or granting Scene edits",
+              "[editor][prefab][native]") {
+        Workspace workspace;
+        auto &owner = *workspace.controller;
+        const auto scene = owner.ViewModel().documentRevision;
+        owner.ProcessCommand(
+            Intent(owner.ViewModel(), owner.ViewModel().prefabHierarchy->entries.front().target, PrefabHierarchyAction::OpenSource));
+        REQUIRE(owner.ViewModel().prefabDocuments.size() == 1);
+        const auto initial = owner.ViewModel().prefabDocuments.front();
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
+                              .prefabFence = initial.fence,
+                              .prefabEdit = RenamePrefabObject{{0}, "Retained source"}});
+        REQUIRE(owner.ViewModel().prefabDocuments.front().dirty);
+        owner.ProcessCommand(
+            Intent(owner.ViewModel(), owner.ViewModel().prefabHierarchy->entries.front().target, PrefabHierarchyAction::DeleteInstance));
+        CHECK(owner.ViewModel().documentRevision == scene);
+        REQUIRE(owner.ViewModel().prefabHierarchy->entries.size() == 3);
+        const auto preview = owner.ViewModel().prefabDocuments.front().previewRevision;
+        const auto code = workspace.project.directory.path / "note.cpp";
+        std::ofstream(code) << "int value;\n";
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile, .sourceOpenRequest = SourceOpenRequest{.path = code}});
+        CHECK_FALSE(owner.ViewModel().prefabDocuments.front().stageActive);
+        CHECK(owner.ViewModel().prefabDocuments.front().dirty);
+        owner.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::FocusWorkspaceDocument, .documentInstance = initial.identity.instance});
+        CHECK(owner.ViewModel().prefabDocuments.front().stageActive);
+        CHECK(owner.ViewModel().prefabDocuments.front().previewRevision > preview);
+        CHECK(owner.ViewModel().prefabDocuments.front().dirty);
+        CHECK(owner.ViewModel().prefabDocuments.front().canUndo);
+        CHECK(owner.ViewModel().documentRevision == scene);
+    }
 }  // namespace Horo::Editor

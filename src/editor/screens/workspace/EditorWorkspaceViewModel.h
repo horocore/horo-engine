@@ -78,6 +78,7 @@ namespace Horo::Editor {
         Reload,
         DiscardAndReload,
         Recover,
+        DiscardRecovery,
         DiscardAndClose
     };
 

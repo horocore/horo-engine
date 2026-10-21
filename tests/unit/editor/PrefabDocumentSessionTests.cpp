@@ -105,6 +105,23 @@ namespace Horo::Editor {
         CHECK_FALSE(fixture.document->Execute(initial.fence, RenamePrefabObject{{0}, "Stale"}).HasValue());
     }
 
+    TEST_CASE("Prefab source accepts its full UTF8 byte boundary and keeps no-op edits out of history", "[editor][prefab][session]") {
+        Fixture fixture;
+        std::string boundary;
+        while (boundary.size() + 2 <= Prefab::MaximumPrefabObjectNameBytes)
+            boundary += "\xc5\x9f";
+        boundary.append(Prefab::MaximumPrefabObjectNameBytes - boundary.size(), 'x');
+        fixture.Rename(boundary);
+        const auto accepted = fixture.document->Snapshot();
+        CHECK(accepted.source->Data().objects.front().name.size() == Prefab::MaximumPrefabObjectNameBytes);
+        fixture.Rename(accepted.source->Data().objects.front().name);
+        CHECK(fixture.document->Snapshot().fence.revision == accepted.fence.revision);
+        auto saved = fixture.document->Save(accepted.fence, fixture.project.mutations, fixture.project.files);
+        REQUIRE(saved.HasValue());
+        REQUIRE(fixture.document->Reload(fixture.document->Snapshot().fence, false).HasValue());
+        CHECK(fixture.document->Snapshot().source->Data().objects.front().name == boundary);
+    }
+
     TEST_CASE("Prefab malformed and foreign edits publish no state or history", "[editor][prefab][session]") {
         Fixture fixture;
         const auto before = fixture.document->Snapshot();
@@ -287,6 +304,52 @@ namespace Horo::Editor {
                                          Prefab::PrefabHardLimits::SourceDocumentBytes)
                   .Value()
                   .identity != Assets::AssetSourceIdentity{});
+    }
+
+    TEST_CASE("Explicit prefab recovery discard preserves edits and refuses a replaced candidate", "[editor][prefab][session]") {
+        Fixture fixture;
+        const auto original = fixture.document->Snapshot();
+        fixture.Rename("Old recovered intent");
+        REQUIRE(fixture.document->Autosave(fixture.project.mutations, fixture.project.files).HasValue());
+        DocumentRecoveryService recovery(fixture.project.directory.path, fixture.project.mutations, fixture.project.files);
+        auto inspected = recovery.Inspect(fixture.project.asset, original.identity.key);
+        REQUIRE(inspected.HasValue());
+        REQUIRE(inspected.Value().has_value());
+        const auto oldRecord = *inspected.Value();
+        fixture.document.reset();
+        auto reopened = PrefabDocumentSession::Open(fixture.project.directory.path, fixture.project.source, fixture.project.asset,
+                                                    original.identity, PrefabAsset(10).Asset(), fixture.limits);
+        REQUIRE(reopened.HasValue());
+        fixture.document = std::move(reopened).Value();
+        fixture.Rename("Current local intent");
+        const auto edited = fixture.document->Snapshot();
+        REQUIRE(fixture.document->Autosave(fixture.project.mutations, fixture.project.files).HasError());
+        REQUIRE(fixture.document->DiscardRecoveryCandidate(edited.fence, oldRecord, fixture.project.mutations, fixture.project.files)
+                    .HasValue());
+        const auto discarded = fixture.document->Snapshot();
+        CHECK(discarded.source == edited.source);
+        CHECK(discarded.fence.revision == edited.fence.revision);
+        CHECK(discarded.acceptedSource == edited.acceptedSource);
+        CHECK(discarded.savedState == edited.savedState);
+        CHECK(discarded.dirty);
+        CHECK(discarded.canUndo);
+        REQUIRE(fixture.document->Autosave(fixture.project.mutations, fixture.project.files).HasValue());
+        auto current = recovery.Inspect(fixture.project.asset, original.identity.key);
+        REQUIRE(current.HasValue());
+        REQUIRE(current.Value().has_value());
+        CHECK(current.Value()->sessionOwner != oldRecord.sessionOwner);
+        CHECK(fixture.document->DiscardRecoveryCandidate(edited.fence, oldRecord, fixture.project.mutations, fixture.project.files)
+                  .HasError());
+        auto retained = recovery.Inspect(fixture.project.asset, original.identity.key);
+        REQUIRE(retained.HasValue());
+        CHECK(retained.Value() == current.Value());
+        CHECK(fixture.document->Snapshot().recoveryRevision == edited.fence.revision);
+        auto canonical = Assets::CaptureAssetSource(fixture.project.directory.path, fixture.project.source,
+                                                    Prefab::PrefabHardLimits::SourceDocumentBytes);
+        REQUIRE(canonical.HasValue());
+        CHECK(canonical.Value().identity == original.acceptedSource);
+        REQUIRE(fixture.document->Replay(edited.fence, false).HasValue());
+        CHECK_FALSE(fixture.document->Snapshot().dirty);
     }
 
     TEST_CASE("Prefab reload validates a complete replacement before retiring source and runtime", "[editor][prefab][session]") {

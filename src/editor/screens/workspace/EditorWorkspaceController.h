@@ -663,6 +663,8 @@ namespace Horo::Editor {
         void RefreshPrefabDocuments();
         /** @brief Captures source closure/recovery and queues one isolated stage. */
         void PreparePrefabStage(PrefabDocumentSession &document);
+        /** @brief Publishes the exact durable recovery candidate for an active prefab source. */
+        void RefreshPrefabRecovery(const PrefabDocumentSnapshot &snapshot);
         /** @brief Advances bounded preparation and extracts only a newly ready generation. */
         void ExtractPrefabStage(PrefabDocumentSession &document);
         /** @brief Executes an admitted durable or history action on its sole source owner. */

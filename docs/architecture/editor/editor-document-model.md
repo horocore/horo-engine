@@ -339,7 +339,10 @@ The workspace routes durable source edits and persistence through typed commands
 A native replacement whose directory durability cannot be confirmed keeps the
 source dirty and requires reconciliation. External changes reject saves; malformed
 reload and rejected dirty close retain the complete source/history/stage. Recovery
-acceptance requires the exact inspected record and unchanged source base.
+acceptance requires the exact inspected record and unchanged source base. An explicit
+discard-candidate command can remove a foreign or obsolete record while preserving
+current source edits and history; exact-record comparison prevents a stale UI command
+from deleting a newer candidate. Autosave then publishes a new owned recovery record.
 
 The authoring stage replaces the captured resolver root with the current immutable
 in-memory source, then uses canonical resolution, identity remapping, built-in
@@ -348,7 +351,11 @@ scene. It never changes the Scene document or starts gameplay callbacks. The
 reserved `0x4000000000000000` runtime identity namespace is separate from ordinary
 scene previews and Play; a workspace advances identities for each attempt. Stage resources and
 renderer extraction leases retire on edit, switch, reload, close and shutdown.
-Retained immutable source snapshots remain readable. Failed required component or
+Retained immutable source snapshots remain readable. Source widgets retain bounded
+transient name buffers per publication rather than copying/resizing strings on every
+draw. Scene hierarchy/inspector controls are inactive while the isolated source stage
+is focused; navigation, document switching and workspace layout remain available.
+Failed required component or
 asset preparation produces an explicit unavailable preview, preserving source and
 recovery rather than publishing a partial hierarchy. The application explicitly
 injects the same project/native/committed-asset composition used by Scene into a

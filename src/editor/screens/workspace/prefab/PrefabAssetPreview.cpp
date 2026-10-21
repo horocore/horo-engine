@@ -9,6 +9,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -203,17 +204,18 @@ namespace Horo::Editor {
                                                                const std::uint32_t height, const CancellationToken &cancellation) {
         if (width < 16 || height < 16 || width > 256 || height > 256)
             return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
-        auto triangles = Collect(candidate, cancellation);
-        if (triangles.HasError())
-            return PreviewResult::Failure(triangles.ErrorValue());
-        if (triangles.Value().empty())
+        auto collected = Collect(candidate, cancellation);
+        if (collected.HasError())
+            return PreviewResult::Failure(collected.ErrorValue());
+        auto triangles = std::move(collected).Value();
+        if (triangles.empty())
             return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-        if (auto fit = Fit(triangles.Value(), width, height); fit.HasError())
+        if (auto fit = Fit(triangles, width, height); fit.HasError())
             return PreviewResult::Failure(fit.ErrorValue());
         Assets::AssetPreviewImage image{width, height, std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height * 4)};
         std::vector<float> depth(static_cast<std::size_t>(width) * height, std::numeric_limits<float>::infinity());
         std::size_t samples{};
-        for (const auto &triangle : triangles.Value()) {
+        for (const auto &triangle : triangles) {
             if (auto rendered = Rasterize(triangle, image, depth, samples, cancellation); rendered.HasError())
                 return PreviewResult::Failure(rendered.ErrorValue());
         }
