@@ -1323,3 +1323,11 @@ to `HoroEditorServices`; its staged consumer coverage extends the existing sourc
 consumer target. Existing `SourceTextEdit` callers migrate incrementally through
 optional view metadata; they already participate in the same document history.
 The private widget retains no competing undo authority and performs no save I/O.
+
+The editing planners borrow `SourceEditingView` by const reference during the
+call; `SourceDocumentService` similarly borrows its constructor limits and copies
+them into its owned storage. Plans and history still own their captured view
+metadata. Existing value/temporary call sites need no source migration, but
+consumers must rebuild for the changed C++ signatures; function-pointer adapters
+must use const-reference parameters. The staged public-header consumer exercises
+all five planners alongside the existing source service consumers.

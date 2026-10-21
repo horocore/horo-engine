@@ -43,4 +43,8 @@ void QualifySourceHistoryPublicContract(Horo::Editor::SourceDocumentService &doc
     static_cast<void>(documents.Redo(instance, snapshot.Revision()));
     static_cast<void>(Horo::Editor::NavigateSourceLine(snapshot, 1));
     static_cast<void>(Horo::Editor::PlanSourceReplacement(snapshot, {}, "text"));
+    static_cast<void>(Horo::Editor::PlanSourceNewline(snapshot, {}));
+    static_cast<void>(Horo::Editor::PlanSourceIndentation(snapshot, {}, 4, false));
+    static_cast<void>(Horo::Editor::FindSourceText(snapshot, {}, "text", Horo::Editor::SourceSearchDirection::Forward, true));
+    static_cast<void>(Horo::Editor::PlanSourceReplaceAll(snapshot, {}, "text", "replacement"));
 }

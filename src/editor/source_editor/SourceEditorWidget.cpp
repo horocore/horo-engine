@@ -83,9 +83,10 @@ namespace Horo::Editor {
         void Reset(const std::string &text) {
             auto candidate = MakeSourceWidgetEditor();
             candidate->RegisterGlobalMode(std::make_shared<WidgetMode>(*candidate));
-            candidate->SetGlobalMode(Zep::ZepMode_Standard::StaticName());
+            // Create the initial window before switching modes: Zep transfers the previous mode's bound window.
             // A fixed extension-free name never chooses a language service or syntax provider.
             auto *nextBuffer = candidate->InitWithText("source", text);
+            candidate->SetGlobalMode(Zep::ZepMode_Standard::StaticName());
             nextBuffer->SetSyntax({});
             auto *nextWindow = candidate->GetActiveTabWindow()->GetActiveWindow();
             editor = std::move(candidate);
