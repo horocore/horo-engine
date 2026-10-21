@@ -176,8 +176,8 @@ namespace Horo::Editor::UiInspectorWidgets {
             ImGui::PushID(key);
             Ui::FieldLabel(Label(context, key), context.theme.fonts);
             for (std::size_t track = 0; track < tracks.size(); ++track) {
-                auto &value = tracks[track];
                 if (track < count) {
+                    auto &value = tracks[track];
                     ImGui::PushID(static_cast<int>(track));
                     changed = Enum(context, "workspace.ui_inspector.track_kind", value.kind,
                                    std::array{"workspace.ui_inspector.auto", "workspace.ui_inspector.dip", "workspace.ui_inspector.percent",

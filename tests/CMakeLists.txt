@@ -2231,6 +2231,7 @@ if (HORO_BUILD_EDITOR_GUI)
 endif ()
 add_executable(HoroEditorLocalizationServiceTests
         unit/editor/LocalizationServiceTests.cpp
+        unit/editor/UiInspectorLocalizationTests.cpp
         unit/editor/PhysicsInspectorLocalizationTests.cpp
 )
 

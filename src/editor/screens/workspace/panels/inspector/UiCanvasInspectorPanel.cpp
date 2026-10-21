@@ -252,6 +252,43 @@ namespace Horo::Editor {
         return changed;
     }
 
+    /** @copydoc UiCanvasInspectorPanel::DrawStyleValue */
+    bool UiCanvasInspectorPanel::DrawStyleValue(const EditorGuiContext &context) {
+        bool changed{};
+        auto &value = draft_.Values().style->value;
+        bool token = value.referencesToken;
+        if (Ui::CheckboxControl(Label(context, "workspace.ui_inspector.use_token"), &token, context.theme.fonts)) {
+            value = token ? Runtime::Ui::UiStyleValueSource::Token({}) : Runtime::Ui::UiStyleValueSource::Literal(value.literal);
+            tokenAsset_ = {};
+            tokenId_ = {};
+            styleText_ = {};
+            UiInspectorWidgets::CaptureStyle(value.literal, styleText_);
+            changed = true;
+        }
+        if (token) {
+            changed = Identity(context, "workspace.ui_inspector.token_asset", value.token.asset, tokenAsset_) || changed;
+            changed = Identity(context, "workspace.ui_inspector.token_id", value.token.id, tokenId_) || changed;
+        } else {
+            const char *categories[]{Label(context, "workspace.ui_inspector.category_color"),
+                                     Label(context, "workspace.ui_inspector.category_dimension"),
+                                     Label(context, "workspace.ui_inspector.category_typography"),
+                                     Label(context, "workspace.ui_inspector.category_imagery"),
+                                     Label(context, "workspace.ui_inspector.category_shape"),
+                                     Label(context, "workspace.ui_inspector.category_scalar"),
+                                     Label(context, "workspace.ui_inspector.category_enum"),
+                                     Label(context, "workspace.ui_inspector.category_motion")};
+            int category = static_cast<int>(value.literal.index());
+            if (Ui::DrawComboPropRow(Label(context, "workspace.ui_inspector.category"), "category", category, categories,
+                                     context.theme.fonts)) {
+                value = Runtime::Ui::UiStyleValueSource::Literal(Literal(category));
+                UiInspectorWidgets::CaptureStyle(value.literal, styleText_);
+                changed = true;
+            }
+            changed = UiInspectorWidgets::Style(context, value.literal, styleText_) || changed;
+        }
+        return changed;
+    }
+
     /** @copydoc UiCanvasInspectorPanel::DrawStyle */
     bool UiCanvasInspectorPanel::DrawStyle(const EditorGuiContext &context) {
         bool changed{};
@@ -261,37 +298,7 @@ namespace Horo::Editor {
             if (Select(context, "workspace.ui_inspector.overrides", selected, propertyLabels_))
                 SelectProperty(selected);
             ImGui::EndDisabled();
-            auto &value = draft_.Values().style->value;
-            bool token = value.referencesToken;
-            if (Ui::CheckboxControl(Label(context, "workspace.ui_inspector.use_token"), &token, context.theme.fonts)) {
-                value = token ? Runtime::Ui::UiStyleValueSource::Token({}) : Runtime::Ui::UiStyleValueSource::Literal(value.literal);
-                tokenAsset_ = {};
-                tokenId_ = {};
-                styleText_ = {};
-                UiInspectorWidgets::CaptureStyle(value.literal, styleText_);
-                changed = true;
-            }
-            if (token) {
-                changed = Identity(context, "workspace.ui_inspector.token_asset", value.token.asset, tokenAsset_) || changed;
-                changed = Identity(context, "workspace.ui_inspector.token_id", value.token.id, tokenId_) || changed;
-            } else {
-                const char *categories[]{Label(context, "workspace.ui_inspector.category_color"),
-                                         Label(context, "workspace.ui_inspector.category_dimension"),
-                                         Label(context, "workspace.ui_inspector.category_typography"),
-                                         Label(context, "workspace.ui_inspector.category_imagery"),
-                                         Label(context, "workspace.ui_inspector.category_shape"),
-                                         Label(context, "workspace.ui_inspector.category_scalar"),
-                                         Label(context, "workspace.ui_inspector.category_enum"),
-                                         Label(context, "workspace.ui_inspector.category_motion")};
-                int category = static_cast<int>(value.literal.index());
-                if (Ui::DrawComboPropRow(Label(context, "workspace.ui_inspector.category"), "category", category, categories,
-                                         context.theme.fonts)) {
-                    value = Runtime::Ui::UiStyleValueSource::Literal(Literal(category));
-                    UiInspectorWidgets::CaptureStyle(value.literal, styleText_);
-                    changed = true;
-                }
-                changed = UiInspectorWidgets::Style(context, value.literal, styleText_) || changed;
-            }
+            changed = DrawStyleValue(context) || changed;
             if (Action(context, "workspace.ui_inspector.remove_override")) {
                 presentation_.inlineStyle.erase(presentation_.inlineStyle.begin() + propertyIndex_);
                 propertyLabels_.erase(propertyLabels_.begin() + propertyIndex_);

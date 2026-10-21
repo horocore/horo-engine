@@ -43,6 +43,8 @@ namespace Horo::Editor {
         bool DrawClasses(const EditorGuiContext &context);
         /** @brief Draw typed literal/token overrides. @param context Shared controls. @return Whether values changed. */
         bool DrawStyle(const EditorGuiContext &context);
+        /** @brief Edit the selected literal/token value. @param context Shared controls. @return Whether values changed. */
+        bool DrawStyleValue(const EditorGuiContext &context);
         /** @brief Draw intrinsic sizing policy. @param context Shared controls. @return Whether values changed. */
         bool DrawIntrinsic(const EditorGuiContext &context);
         /** @brief Emit an owned fenced request. @param command Canonical command. @param output Host receiver. */
