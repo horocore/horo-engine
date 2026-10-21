@@ -1,0 +1,50 @@
+--- a/include/zep/window.h
++++ b/include/zep/window.h
+@@ -148,6 +148,10 @@
+
+     virtual long GetMaxDisplayLines();
+     virtual long GetNumDisplayedLines();
++
++    // Horo private adapter bridge: logical display-line viewport, independent of wheel intent.
++    float GetHoroViewportLines();
++    void SetHoroViewportLines(float lines);
+
+     virtual ZepBuffer& GetBuffer() const;
+     virtual void SetBuffer(ZepBuffer* pBuffer);
+--- a/src/window.cpp
++++ b/src/window.cpp
+@@ -1,3 +1,5 @@
++#include <algorithm>
++
+ #include <cctype>
+ #include <cmath>
+ #include <sstream>
+@@ -1442,6 +1444,28 @@
+     GetEditor().GetDisplay().SetClipRect(m_bufferRegion->rect);
+ }
+
++// Modified by Horo Engine: expose bounded viewport state only to its private adapter.
++float ZepWindow::GetHoroViewportLines()
++{
++    UpdateLayout();
++    ScrollToCursor();
++    return m_textOffsetPx / float(std::max(1, m_defaultLineSize));
++}
++
++void ZepWindow::SetHoroViewportLines(float lines)
++{
++    if (!std::isfinite(lines))
++        return;
++    UpdateLayout();
++    const double pixels = double(lines) * double(std::max(1, m_defaultLineSize));
++    const double maximum = std::max(0.0, double(m_textSizePx.y) - double(m_textRegion->rect.Height()));
++    m_textOffsetPx = float(std::clamp(pixels, 0.0, maximum));
++    // A restored viewport is authoritative for this view, including when its caret is outside the visible region.
++    m_cursorMoved = false;
++    UpdateVisibleLineRange();
++    UpdateScrollers();
++}
++
+ void ZepWindow::DirtyLayout()
+ {
+     m_layoutDirty = true;

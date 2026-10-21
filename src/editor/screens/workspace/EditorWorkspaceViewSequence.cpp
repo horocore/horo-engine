@@ -100,16 +100,24 @@ namespace Horo::Editor {
         m_lastPresentedDocument = active;
     }
 
+    /** @copydoc EditorWorkspaceView::ResetSourceSession */
+    void EditorWorkspaceView::ResetSourceSession() noexcept {
+        m_sourceSession.Reset();
+    }
+
     /** @copydoc EditorWorkspaceView::DrawSourceDocument */
     bool EditorWorkspaceView::DrawSourceDocument(const EditorWorkspaceViewModel &viewModel,
                                                  EditorWorkspaceViewCommandData &outCommand) const {
         const auto active = viewModel.workspacePanelHost.ActiveDocument();
         const auto tabs = viewModel.workspacePanelHost.DocumentTabs();
+        m_sourceSession.Retain(tabs);
         const auto tab = std::ranges::find_if(tabs, [active](const WorkspaceDocumentTab &candidate) {
             return candidate.identity.instance == active;
         });
-        if (tab == tabs.end() || tab->identity.key.kind != DocumentKind::Source)
+        if (tab == tabs.end() || tab->identity.key.kind != DocumentKind::Source) {
+            m_sourceSession.ClearFocus();
             return false;
+        }
         const auto index = static_cast<std::size_t>(std::count_if(tabs.begin(), tab, [](const WorkspaceDocumentTab &candidate) {
             return candidate.identity.key.kind == DocumentKind::Source;
         }));
@@ -124,20 +132,38 @@ namespace Horo::Editor {
             outCommand.command = EditorWorkspaceViewCommand::SaveSourceDocument;
             outCommand.sourceSave = SourceSaveRequest{tab->identity.instance, source.Revision(), {}};
         }
-        Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.documents.preview"),
-                        Theme::Muted(), m_context.theme.fonts);
-        // The document host provides a bounded preview; the adjacent source-widget ticket owns editing and large-file virtualization.
-        constexpr std::size_t maximumPreviewBytes = 65'536;
-        const auto text = source.Text();
-        std::size_t bytes = std::min(text.size(), maximumPreviewBytes);
-        const auto previewBytes = std::as_bytes(std::span{text.data(), text.size()});
-        while (bytes < text.size() && bytes > 0 && (previewBytes[bytes] & std::byte{0xC0}) == std::byte{0x80})
-            --bytes;
-        Ui::WrappedText(ImGui::GetContentRegionAvail().x, text.substr(0, bytes), Theme::Text(), m_context.theme.fonts);
-        if (bytes < text.size())
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.documents.preview_limit"),
-                            Theme::Muted(), m_context.theme.fonts);
+        const auto history = index < viewModel.sourceHistory.size() ? viewModel.sourceHistory[index] : SourceHistoryState{};
+        DrawSourceEditor(tab->identity.instance, source, history, viewModel, outCommand);
         return true;
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawSourceEditor */
+    void EditorWorkspaceView::DrawSourceEditor(const DocumentInstanceId instance, const SourceDocumentSnapshot &source,
+                                               const SourceHistoryState &history, const EditorWorkspaceViewModel &viewModel,
+                                               EditorWorkspaceViewCommandData &outCommand) const {
+        auto *presentation = m_sourceSession.Acquire(instance);
+        if (!presentation) {
+            Ui::ErrorText(m_context.localization.Get("editor", "workspace.source_open.unavailable").c_str(), m_context.theme.fonts);
+            return;
+        }
+        auto &widget = presentation->widget;
+        widget.Publish(source);
+        if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
+            static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
+        auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
+        const bool focus = m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
+        const auto available = ImGui::GetContentRegionAvail();
+        ImGui::PushFont(m_context.theme.fonts.sans);
+        auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent});
+        ImGui::PopFont();
+        outCommand.sourceTextInputOwned = widget.OwnsInput() || presentation->tools.OwnsInput();
+        m_sourceSession.Presented(instance);
+        if (toolIntent)
+            intent = std::move(toolIntent);
+        if (intent) {
+            outCommand.command = EditorWorkspaceViewCommand::SourceDocumentInteraction;
+            outCommand.sourceInteraction = std::move(intent);
+        }
     }
 
     /** @copydoc EditorWorkspaceView::DrawSequenceDocument */

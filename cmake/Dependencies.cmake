@@ -461,6 +461,7 @@ if(HORO_BUILD_EDITOR_GUI)
         GIT_TAG "${HORO_IMGUI_REVISION}"
     )
     FetchContent_MakeAvailable(imgui)
+    include(${CMAKE_CURRENT_LIST_DIR}/SourceEditorWidgetDependency.cmake)
 
     if(HORO_ENABLE_IMGUI_UI_TESTS)
         set(HORO_IMGUI_TEST_ENGINE_REVISION
@@ -502,6 +503,8 @@ if(HORO_BUILD_EDITOR_GUI)
     add_library(HoroThirdParty::ImGui ALIAS HoroThirdPartyImGui)
 
     target_compile_features(HoroThirdPartyImGui PUBLIC cxx_std_20)
+    # Committed IME input must retain Unicode scalars above U+FFFF in every ImGui consumer.
+    target_compile_definitions(HoroThirdPartyImGui PUBLIC IMGUI_USE_WCHAR32)
     target_include_directories(HoroThirdPartyImGui
         PUBLIC
             ${imgui_SOURCE_DIR}

@@ -3291,6 +3291,12 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/source_editor/SourceWidgetPlatform.cpp
+            editor/source_editor/SourceWidgetText.cpp
+            editor/source_editor/SourceEditorSession.cpp
+            editor/source_editor/SourceEditorTools.cpp
+            editor/source_editor/SourceEditorWidget.cpp
+            editor/screens/workspace/EditorWorkspaceInputRouting.cpp
             editor/screens/workspace/PCGWorkspace.cpp
             editor/screens/workspace/PCGEditorCatalog.cpp
             editor/screens/workspace/EditorWorkspaceViewPCG.cpp
@@ -3299,6 +3305,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
+            editor/screens/workspace/EditorWorkspaceScreenActions.cpp
+            editor/screens/workspace/EditorWorkspaceScreenComposition.cpp
+            editor/screens/workspace/EditorWorkspaceScreenLifecycle.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
         editor/screens/EditorPageFileStore.cpp
@@ -3324,7 +3333,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication HoroThirdParty::Zep)
     target_link_libraries(HoroGui
             PUBLIC
             HoroEngine::EditorServices
