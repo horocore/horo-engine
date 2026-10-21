@@ -89,7 +89,7 @@ namespace Horo::Editor {
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
-        PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        PCGEditorCatalog pcg{.document = {.revision = 1}}; /**< One host-composed source-support and creation-recipe generation. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -186,6 +186,10 @@ namespace Horo::Editor {
         [[nodiscard]] const std::optional<Result<bool>> &SourceCloseOutcome() const noexcept {
             return m_sourceCloseOutcome;
         }
+
+        /** @brief Reports whether common workspace input belongs to a live PCG document.
+         * @return True only when the active instance has a canonical graph projection. */
+        [[nodiscard]] bool HasActivePCGDocument() const noexcept;
 
         /** @brief Queries workspace-owned PCG source without lending mutable roots. @return Owner-thread immutable query service. */
         [[nodiscard]] const PCGGraphDocumentService &PCGDocuments() const noexcept {
@@ -720,6 +724,15 @@ namespace Horo::Editor {
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
         /** @brief Admits a sequence source into the persistent workspace document host. */
         void OpenEmbeddedPCGSource(const SourceOpenResult &result);
+        /** @brief Routes exact-frame canvas intents through canonical document commands. */
+        bool ProcessPCGDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Translates common undo/redo/save intents only when the active document is PCG. */
+        bool ProcessPCGDocumentShortcut(const EditorWorkspaceViewCommandData &command);
+        /** @brief Validates one active-session fence and finite presentation before any edit. */
+        Result<void> ApplyPCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request);
+        /** @brief Dispatches an admitted request to the one canonical document executor or workspace presentation. */
+        Result<void> ExecutePCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request,
+                                             const PCGDocumentSnapshot &snapshot);
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
         void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);

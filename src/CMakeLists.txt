@@ -3307,6 +3307,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
+            editor/screens/workspace/PCGWorkspace.cpp
+            editor/screens/workspace/PCGEditorCatalog.cpp
+            editor/screens/workspace/EditorWorkspaceViewPCG.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/WorldLayerOutliner.cpp
             editor/modals/world_layer/CreateWorldLayerModal.cpp
