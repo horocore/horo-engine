@@ -220,8 +220,9 @@ namespace Horo::Editor {
                         viewRevision_ != view.worldViewport.viewRevision)) ||
             view.playState != EditorPlayState::Idle || (!eligible && dragged_))
             Cancel();
+        const bool canEdit = eligible && view.playState == EditorPlayState::Idle;
         ImGui::SetCursorScreenPos({origin.x + Theme::Layout::BodyPadX, origin.y + size.y - ImGui::GetFrameHeightWithSpacing()});
-        ImGui::BeginDisabled(!eligible);
+        ImGui::BeginDisabled(!canEdit);
         if (Ui::Button({.label = context.localization.Get("editor", "workspace.world_sources.title").c_str(),
                         .variant = Ui::ButtonVariant::Secondary}))
             ImGui::OpenPopup("##WorldSources");
@@ -234,7 +235,7 @@ namespace Horo::Editor {
             ImGui::EndPopup();
         }
         const bool handles =
-            view.worldViewport.snapshot && DrawHandles(draw, origin, size, view, command, depth, eligible && !popup && !toolbarHovered);
+            view.worldViewport.snapshot && DrawHandles(draw, origin, size, view, command, depth, canEdit && !popup && !toolbarHovered);
         return popup || toolbarHovered || handles;
     }
 
@@ -287,7 +288,7 @@ namespace Horo::Editor {
             const ImVec2 mouse = ImGui::GetMousePos();
             const float dx = mouse.x - pixel.x;
             const float dy = mouse.y - pixel.y;
-            const bool hovered = dx * dx + dy * dy <= 64;
+            const bool hovered = frame.eligible && dx * dx + dy * dy <= 64;
             frame.draw.AddCircleFilled(pixel, hovered ? 6 : 4, color);
             if (frame.eligible && hovered && !dragged_ && (!draft_ || draft_->id == authored.id) &&
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left))

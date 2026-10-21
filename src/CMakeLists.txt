@@ -2778,6 +2778,7 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
 add_library(HoroEditorModel STATIC
         editor/document/PartitionedWorldWorkspace.cpp
         editor/document/PartitionedWorldSourceAuthoring.cpp
+        editor/document/WorldSourceValidation.cpp
         editor/document/WorldSourceGizmo.cpp
         editor/document/WorldLayerCommands.cpp
         editor/document/PartitionedWorldResidency.cpp
