@@ -2680,6 +2680,8 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
             unit/editor/EditorWorkspaceControllerPrefabTests.cpp
+            unit/editor/EditorWorkspaceControllerPrefabAssetDropTests.cpp
+            unit/editor/EditorWorkspaceControllerPrefabAuthoringTests.cpp
             unit/editor/EditorWorkspaceControllerPrefabCreationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
@@ -3222,6 +3224,7 @@ add_executable(HoroSceneDocumentTests
         unit/editor/PrefabCreationTests.cpp
         unit/editor/PrefabCreationSchemaTests.cpp
         unit/editor/PrefabDocumentSessionTests.cpp
+        unit/editor/PrefabDocumentSessionByteBoundaryTests.cpp
         unit/editor/PrefabAssetPreviewTests.cpp
 )
 
