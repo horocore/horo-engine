@@ -1114,7 +1114,7 @@ The opt-in `android-debug` / `android-release` presets and
 `HORO_ANDROID_PACKAGE_QUALIFICATION` provide the PLT-001.6 assembly qualification
 composition. `android/toolchain-lock.json` owns the pinned API/tool tuple;
 `android/package-profiles.json` owns admitted ABIs, native libraries, assets and
-manifest capabilities. `scripts/android_package.py` performs preflight, explicit
+manifest capabilities. `scripts/project.py` performs preflight, explicit
 composition, native closure validation, signing/alignment and portable package
 inspection. This does not qualify an interactive runtime or renderer. See
 [Android package qualification](../../guides/android-packages.md) for the actual

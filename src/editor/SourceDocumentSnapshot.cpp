@@ -9,6 +9,11 @@ namespace Horo::Editor {
         return root_ ? root_->identity : DocumentIdentity{};
     }
 
+    /** @copydoc SourceDocumentSnapshot::SharesStateWith */
+    bool SourceDocumentSnapshot::SharesStateWith(const SourceDocumentSnapshot &other) const noexcept {
+        return root_ == other.root_;
+    }
+
     /** @copydoc SourceDocumentSnapshot::Revision */
     std::uint64_t SourceDocumentSnapshot::Revision() const noexcept {
         return root_ ? root_->revision : 0;

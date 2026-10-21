@@ -18,6 +18,17 @@ previous API, persisted project version or file format changes. Header ownership
 standalone-header compilation, typed consumer assertions and the dependency allowlist
 are updated together.
 
+## Synchronous input borrowing
+
+The constructor takes `const WorldDocumentLimits &` and copies its ceilings into
+workspace-owned storage. `Commit`, `SetWorkingSet`, `Replace`, `Close` and the private
+fence validator take `const WorldDocumentFence &` to avoid copying the full fence.
+No reference is retained after the call, and algorithm callbacks complete within
+the call. Existing value, const-value and temporary arguments remain valid.
+Consumers must rebuild and update explicit member-function pointer types to the
+const-reference signatures; the public consumer asserts those exact types.
+The metadata format, publication rules and immutable reader ownership are unchanged.
+
 ## Source metadata, not cooked state
 
 - Settings own the stable `WorldPartitionId`, ordered canonical millimeter content

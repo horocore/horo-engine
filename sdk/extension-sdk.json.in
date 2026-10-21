@@ -27,8 +27,7 @@
     "bin/horo-extension-validate@CMAKE_EXECUTABLE_SUFFIX@",
     "bin/horo-extension-conformance@CMAKE_EXECUTABLE_SUFFIX@",
     "bin/horo-package@CMAKE_EXECUTABLE_SUFFIX@",
-    "bin/horo-scaffold-extension.py",
-    "bin/horo-extension-author-ci.py"
+    "bin/project.py"
   ],
   "ciTemplate": "share/horo/extension-sdk/ci/extension-author-ci.yml",
   "compatibilityMatrix": "share/horo/extension-sdk/CompatibilityMatrix.json",

@@ -7,34 +7,6 @@ namespace Horo::Prefab {
     namespace {
         using namespace ValueDetail;
 
-        template <class T, class Target> std::vector<const T *> Ordered(const std::vector<T> &items, Target target) {
-            std::vector<const T *> ordered;
-            ordered.reserve(items.size());
-            for (const auto &item : items)
-                ordered.push_back(&item);
-            std::ranges::sort(ordered, [&target](const T *left, const T *right) {
-                return TargetLess(target(*left), target(*right));
-            });
-            return ordered;
-        }
-
-        /** @brief Preserve exact conflict source evidence alongside the original owned operation. */
-        Wire EncodeConflict(const PrefabValueOverrideConflict &conflict) {
-            return Wire{{"record", EncodeRecord(conflict.original)},
-                        {"authoredAgainst", EncodeRevision(conflict.authoredAgainst)},
-                        {"schemaRevision", FormatSha256(conflict.schemaRevision)},
-                        {"actualSourceValue", FormatSha256(conflict.actualSourceValue)},
-                        {"observedSource", EncodeRevision(conflict.observedSource)}};
-        }
-
-        /** @brief Preserve unapplied intent with a closed typed unavailability reason. */
-        Wire EncodeOrphan(const PrefabValueOverrideOrphan &orphan) {
-            return Wire{{"record", EncodeRecord(orphan.original)},
-                        {"authoredAgainst", EncodeRevision(orphan.authoredAgainst)},
-                        {"schemaRevision", FormatSha256(orphan.schemaRevision)},
-                        {"reason", static_cast<unsigned>(orphan.reason)}};
-        }
-
         /** @brief Encode metadata independently so exact array lengths can be admitted before the complete writer is allocated. */
         Wire EncodeSet(const PrefabValueOverrideSet &set, Wire records = Wire::array(), Wire conflicts = Wire::array(),
                        Wire orphans = Wire::array()) {
@@ -82,11 +54,7 @@ namespace Horo::Prefab {
         Result<void> ValidateSetShape(const PrefabValueOverrideSet &set, const PrefabProjectPolicy &policy) {
             if (!set.sourcePrefab.IsValid() || !Detail::IsCanonicalProjectVersion(set.authoredAgainst.projectVersion))
                 return Invalid<void>();
-            if (set.records.size() > policy.maximumOverrideRecords || set.conflicts.size() > policy.maximumConflictAndOrphanRecords ||
-                set.orphans.size() > policy.maximumConflictAndOrphanRecords - set.conflicts.size() ||
-                set.conflicts.size() + set.orphans.size() > policy.maximumOverrideRecords - set.records.size())
-                return Result<void>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
-            return Result<void>::Success();
+            return ValidateOverrideCounts(set, policy);
         }
 
         /** @brief Admit every preserved record before encoding the whole authoring set. */
@@ -109,7 +77,7 @@ namespace Horo::Prefab {
                     return valid;
                 if (!Detail::IsCanonicalProjectVersion(conflict.observedSource.projectVersion))
                     return Invalid<void>();
-                if (auto charged = Charge(EncodeConflict(conflict), bytes, policy, false); charged.HasError())
+                if (auto charged = Charge(EncodeValueConflict(conflict), bytes, policy, false); charged.HasError())
                     return charged;
                 all.push_back(&conflict.original);
             }
@@ -118,10 +86,12 @@ namespace Horo::Prefab {
                     return valid;
                 if (orphan.reason > PrefabValueOverrideIssue::SchemaChanged)
                     return Invalid<void>();
-                if (auto charged = Charge(EncodeOrphan(orphan), bytes, policy, false); charged.HasError())
+                if (auto charged = Charge(EncodeValueOrphan(orphan), bytes, policy, false); charged.HasError())
                     return charged;
                 all.push_back(&orphan.original);
             }
+            if (auto valid = ValidateComponentRecords(set, policy, bytes); valid.HasError())
+                return valid;
             std::ranges::sort(all, [](const auto *left, const auto *right) {
                 return TargetLess(left->target, right->target);
             });
@@ -143,6 +113,10 @@ namespace Horo::Prefab {
             for (const char *field : {"records", "conflicts", "orphans"})
                 if (!value[field].is_array() || value[field].size() > policy.maximumOverrideRecords)
                     return Invalid<PrefabValueOverrideSet>();
+            if (const auto issues = value["conflicts"].size() + value["orphans"].size();
+                issues > policy.maximumConflictAndOrphanRecords || issues > policy.maximumOverrideRecords ||
+                value["records"].size() > policy.maximumOverrideRecords - issues)
+                return Result<PrefabValueOverrideSet>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
             auto asset = Assets::AssetId::Parse(value["sourcePrefab"].get_ref<const std::string &>());
             auto source = Detail::ParseRevision(value["authoredAgainst"]);
             auto schema = ParseSha256(value["schemaRevision"].get_ref<const std::string &>());
@@ -151,24 +125,45 @@ namespace Horo::Prefab {
             return Result<PrefabValueOverrideSet>::Success({asset.Value(), std::move(source).Value(), schema.Value(), {}, {}, {}});
         }
 
+        /** @brief Preserve all authored and observed value-conflict identities together after validating the complete entry. */
+        Result<void> DecodeValueConflict(const Json &entry, PrefabValueOverrideSet &set) {
+            if (!Foundation::HasAllowedFields(entry,
+                                              {"record", "authoredAgainst", "schemaRevision", "actualSourceValue", "observedSource"}) ||
+                !entry["actualSourceValue"].is_string() || !entry["schemaRevision"].is_string())
+                return Invalid<void>();
+            auto record = DecodeRecord(entry["record"]);
+            auto source = Detail::ParseRevision(entry["observedSource"]);
+            auto digest = ParseSha256(entry["actualSourceValue"].get_ref<const std::string &>());
+            auto authored = Detail::ParseRevision(entry["authoredAgainst"]);
+            auto schema = ParseSha256(entry["schemaRevision"].get_ref<const std::string &>());
+            if (record.HasError() || source.HasError() || digest.HasError() || authored.HasError() || schema.HasError())
+                return Invalid<void>();
+            set.conflicts.emplace_back(std::move(record).Value(), std::move(authored).Value(), schema.Value(), digest.Value(),
+                                       std::move(source).Value());
+            return Result<void>::Success();
+        }
+
         /** @brief Decode preserved evidence without discarding its exact original typed operation. */
         Result<void> DecodeIssues(const Json &value, PrefabValueOverrideSet &set) {
             for (const auto &entry : value["conflicts"]) {
-                if (!Foundation::HasAllowedFields(entry,
-                                                  {"record", "authoredAgainst", "schemaRevision", "actualSourceValue", "observedSource"}) ||
-                    !entry["actualSourceValue"].is_string() || !entry["schemaRevision"].is_string())
-                    return Invalid<void>();
-                auto record = DecodeRecord(entry["record"]);
-                auto source = Detail::ParseRevision(entry["observedSource"]);
-                auto digest = ParseSha256(entry["actualSourceValue"].get_ref<const std::string &>());
-                auto authored = Detail::ParseRevision(entry["authoredAgainst"]);
-                auto schema = ParseSha256(entry["schemaRevision"].get_ref<const std::string &>());
-                if (record.HasError() || source.HasError() || digest.HasError() || authored.HasError() || schema.HasError())
-                    return Invalid<void>();
-                set.conflicts.emplace_back(std::move(record).Value(), std::move(authored).Value(), schema.Value(), digest.Value(),
-                                           std::move(source).Value());
+                if (const auto record = entry.find("record"); record != entry.end() && IsComponentRecord(*record)) {
+                    auto decoded = DecodeComponentConflict(entry);
+                    if (decoded.HasError())
+                        return Result<void>::Failure(decoded.ErrorValue());
+                    set.componentConflicts.emplace_back(std::move(decoded).Value());
+                    continue;
+                }
+                if (auto decoded = DecodeValueConflict(entry, set); decoded.HasError())
+                    return decoded;
             }
             for (const auto &entry : value["orphans"]) {
+                if (const auto record = entry.find("record"); record != entry.end() && IsComponentRecord(*record)) {
+                    auto decoded = DecodeComponentOrphan(entry);
+                    if (decoded.HasError())
+                        return Result<void>::Failure(decoded.ErrorValue());
+                    set.componentOrphans.emplace_back(std::move(decoded).Value());
+                    continue;
+                }
                 if (!Foundation::HasAllowedFields(entry, {"record", "authoredAgainst", "schemaRevision", "reason"}) ||
                     !entry["schemaRevision"].is_string())
                     return Invalid<void>();
@@ -202,21 +197,9 @@ namespace Horo::Prefab {
         try {
             if (auto valid = ValidateSet(set, limits); valid.HasError())
                 return Result<std::string>::Failure(valid.ErrorValue());
-            auto records = Wire::array();
-            auto conflicts = Wire::array();
-            auto orphans = Wire::array();
-            for (const auto *record : Ordered(set.records, [](const auto &item) -> const auto & {
-                return item.target;
-            }))
-                records.push_back(EncodeRecord(*record));
-            for (const auto *conflict : Ordered(set.conflicts, [](const auto &item) -> const auto & {
-                return item.original.target;
-            }))
-                conflicts.push_back(EncodeConflict(*conflict));
-            for (const auto *orphan : Ordered(set.orphans, [](const auto &item) -> const auto & {
-                return item.original.target;
-            }))
-                orphans.push_back(EncodeOrphan(*orphan));
+            auto records = EncodeCombinedRecords(set);
+            auto conflicts = EncodeCombinedConflicts(set);
+            auto orphans = EncodeCombinedOrphans(set);
             auto bytes = EncodeSet(set, std::move(records), std::move(conflicts), std::move(orphans)).dump(0);
             if (bytes.size() > limits.Policy().maximumOverrideSetBytes)
                 return Result<std::string>::Failure(MakeError(PrefabErrors::WorkBudgetExceeded));
@@ -240,6 +223,13 @@ namespace Horo::Prefab {
                 return decoded;
             auto set = std::move(decoded).Value();
             for (const auto &record : value["records"]) {
+                if (IsComponentRecord(record)) {
+                    auto parsed = DecodeComponentRecord(record);
+                    if (parsed.HasError())
+                        return Result<PrefabValueOverrideSet>::Failure(parsed.ErrorValue());
+                    set.componentRecords.emplace_back(std::move(parsed).Value());
+                    continue;
+                }
                 auto parsed = DecodeRecord(record);
                 if (parsed.HasError())
                     return Invalid<PrefabValueOverrideSet>();

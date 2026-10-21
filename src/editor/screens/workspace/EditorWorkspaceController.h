@@ -138,6 +138,12 @@ namespace Horo::Editor {
             return m_sourceOpenService.Documents();
         }
 
+        /** @brief Refreshes current source roots and checks the workspace leave guard. @return True for any dirty source. */
+        [[nodiscard]] bool HasDirtySourceDocuments();
+        /** @brief Saves all dirty sources through their owner; uncertain durability keeps navigation blocked.
+         * @return Success only after every source is durably clean. */
+        [[nodiscard]] Result<void> SaveSourceDocuments();
+
         /** @brief Last typed single-source save/Save As outcome from the actual workspace command route. */
         [[nodiscard]] const std::optional<Result<SourceSaveResult>> &SourceSaveOutcome() const noexcept {
             return m_sourceSaveOutcome;
@@ -316,6 +322,13 @@ namespace Horo::Editor {
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;
+        std::optional<Prefab::PrefabValueSchemaSnapshot> m_navigationPrefabSchemas;
+        /** @brief Explicitly compose inert built-in navigation topology metadata once for source and edit resolution. */
+        [[nodiscard]] Result<void> EnsureNavigationPrefabSchemas(const Prefab::PrefabLimitProfile &limits);
+        /** @brief Prepare and commit one exact Prefab-member gesture with canonical runtime graph validation. */
+        void ApplyPrefabNavigationInspector(const NavigationInspectorRequest &request);
+        /** @brief Commit one admitted Prefab gesture while its fresh source capture and mutation lease stay pinned. */
+        [[nodiscard]] Result<SceneCommandResult> CommitPrefabNavigationInspector(const NavigationInspectorRequest &request);
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
@@ -350,7 +363,19 @@ namespace Horo::Editor {
         /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
         void RefreshPhysicsInspectorPort();
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
+        /** @brief Admit one atomic navigation gesture through existing document/history owners. */
+        void ApplyNavigationInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit the complete ordinary selection and publish one canonical Scene transaction. */
+        void ApplySceneNavigationInspector(const NavigationInspectorRequest &request);
+        /** @brief Capture descriptor publications outside Draw without inventing defaults in degraded projects. */
+        void RefreshNavigationInspectorDefinitions();
         void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit collider child selection and atomic gizmo edits through this exact Scene/history owner. */
+        void ApplyColliderViewportCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Validate stable collider sub-selection without changing the document or selection. */
+        [[nodiscard]] Result<void> ValidateColliderViewportSelection(std::span<const ColliderEditTarget> selection) const;
+        /** @brief Commit an admitted collider gesture atomically and publish one canonical document event. */
+        void CommitColliderViewportEdits(const ColliderViewportRequest &request, const SceneTransactionSnapshot &snapshot);
         /** @brief Check the actual selection authority and exact owner fence before candidate preparation. */
         [[nodiscard]] Result<SceneTransactionSnapshot> CapturePhysicsInspectorSnapshot(const EditorWorkspaceViewCommandData &command) const;
         Assets::AssetId m_physicsDocumentOwner;
@@ -545,6 +570,10 @@ namespace Horo::Editor {
          * success. */
         /** @brief Routes typed source publication/close intent through workspace-owned document services. */
         bool ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Routes document tabs to their owning lifecycle and publishes detached source snapshots. */
+        bool ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Refreshes source presentation and dirty flags without disk I/O or document mutation. */
+        void RefreshSourceDocumentProjection();
         void SaveScene(bool overwriteConflict = false);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);

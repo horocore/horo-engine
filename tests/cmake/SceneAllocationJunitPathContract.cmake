@@ -43,12 +43,12 @@ message(STATUS "CTest JUnit path contract: ${actual_count} positive cases at ${r
 
 # Exercise the actual reader at the caller's working directory: a bare basename
 # must fail, while the producer's resolved test-directory path must qualify.
-execute_process(COMMAND "${PYTHON_EXECUTABLE}" "${VERIFIER}" --output-junit "scene-allocation-ctest.xml"
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" "${VERIFIER}" qualify-scene --output-junit "scene-allocation-ctest.xml"
     WORKING_DIRECTORY "${TEST_ROOT}" RESULT_VARIABLE misplaced OUTPUT_QUIET ERROR_QUIET)
 if(misplaced EQUAL 0)
     message(FATAL_ERROR "The reader incorrectly accepted an invocation-relative basename")
 endif()
-execute_process(COMMAND "${PYTHON_EXECUTABLE}" "${VERIFIER}" --output-junit "${report}"
+execute_process(COMMAND "${PYTHON_EXECUTABLE}" "${VERIFIER}" qualify-scene --output-junit "${report}"
     WORKING_DIRECTORY "${TEST_ROOT}" RESULT_VARIABLE verified OUTPUT_VARIABLE verification ERROR_VARIABLE verification_error)
 if(NOT verified EQUAL 0)
     message(FATAL_ERROR "Actual strict Scene reader failed: ${verification} ${verification_error}")

@@ -4,6 +4,7 @@
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
+#include "Horo/Editor/NavigationInspector.h"
 #include "Horo/Editor/PhysicsInspector.h"
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceFileOpenService.h"
@@ -71,6 +72,9 @@ namespace Horo::Editor {
 
     enum class EditorWorkspaceViewCommand {
         None,
+        FocusWorkspaceDocument,
+        CloseWorkspaceDocument,
+        MoveWorkspaceDocument,
         FocusSequenceDocument,
         CloseSequenceDocument,
         UpdateSequenceTimeline,
@@ -120,6 +124,9 @@ namespace Horo::Editor {
         UpdateLightComponent,
         UpdateTriggerVolumeComponent,
         UpdatePhysicsComponents,
+        UpdateNavigationComponents,
+        SelectPhysicsColliders,
+        CommitPhysicsColliders,
         UpdateAudioSourceComponent,
         UpdateCharacterComponent,
         StartAudioComponentPreview,
@@ -242,9 +249,29 @@ namespace Horo::Editor {
         PhysicsInspectorValues values;
     };
 
+    /** @brief Detached complete navigation gesture; host proves exact owner, descriptors, sources and selection before publication. */
+    struct NavigationInspectorRequest final {
+        SceneTransactionContext context;
+        std::uint64_t selectionRevision{};
+        std::vector<SceneObjectId> objects;
+        std::optional<PrefabHierarchyTarget> prefab;
+        std::shared_ptr<const PrefabHierarchyProjection> publication;
+        std::vector<NavigationDefinitionSnapshot> definitions;
+        std::vector<NavigationInspectorEdit> edits;
+    };
+
+    /** @brief Detached collider gesture tied to one exact document and collider-selection generation. */
+    struct ColliderViewportRequest final {
+        SceneTransactionContext context;
+        std::uint64_t selectionRevision{};
+        std::vector<ColliderEditTarget> selection;
+        std::vector<ColliderTransformEdit> edits;
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
+        std::optional<DocumentInstanceId> documentMoveBefore;
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
         std::optional<SequenceTimelineState> sequenceTimeline;
@@ -264,6 +291,8 @@ namespace Horo::Editor {
         std::optional<Runtime::LightComponent> lightPayload = std::nullopt;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
         std::optional<PhysicsInspectorRequest> physicsPayload;
+        std::optional<NavigationInspectorRequest> navigationPayload;
+        std::optional<ColliderViewportRequest> colliderPayload;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
         std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
         std::optional<Runtime::AudioListenerComponent> audioListenerPayload;
@@ -331,8 +360,13 @@ namespace Horo::Editor {
         std::uint64_t selectionRevision{};
         std::vector<InspectorProviderApproval> inspectorApprovals;
         SceneTransactionContext physicsContext;
+        std::vector<NavigationDefinitionSnapshot> navigationDefinitions;
+        std::string navigationEditError;
         std::uint64_t physicsSelectionRevision{};
         std::string physicsEditError;
+        std::vector<ColliderPresentation> viewportColliders;
+        std::vector<ColliderEditTarget> selectedColliders;
+        std::uint64_t colliderSelectionRevision{};
         std::vector<SceneObject> objects;
         std::shared_ptr<const PrefabHierarchyProjection> prefabHierarchy; /**< Owner-published bounded cache; no Draw I/O. */
         std::optional<PrefabHierarchyTarget> prefabSelection;
@@ -374,6 +408,7 @@ namespace Horo::Editor {
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
+        std::vector<SourceDocumentSnapshot> sourceDocuments;
 
         float leftPanelWidth = 268.0F;
         float rightPanelWidth = 300.0F;

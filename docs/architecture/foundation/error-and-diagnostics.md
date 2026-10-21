@@ -547,7 +547,7 @@ registered summary and the identical canonical payload in `data`; the transport
 adds request identity and the JSON-RPC outer envelope. Protocol parse/admission
 errors remain separate from these valid-request application failures.
 
-The Python edge `scripts/horo_errors.py::raise_application_error` consumes the
+The Python edge `scripts/dev.py::raise_application_error` consumes the
 version-one CLI envelope and raises one `HoroError` subclass. Exit mappings are
 stable: `2` → `HoroUsageError`, `3` → `HoroValidationError`, `4` →
 `HoroCapabilityError`, `5` → `HoroOperationError`, `6` → `HoroPermissionError`,

@@ -55,16 +55,8 @@ function(horo_configure_extension_sdk)
         "${package_root}/LICENSE"
         COPYONLY)
     configure_file(
-        "${PROJECT_SOURCE_DIR}/scripts/scaffold_extension.py"
-        "${package_root}/bin/horo-scaffold-extension.py"
-        COPYONLY)
-    configure_file(
-        "${PROJECT_SOURCE_DIR}/scripts/run_extension_author_ci.py"
-        "${package_root}/bin/horo-extension-author-ci.py"
-        COPYONLY)
-    configure_file(
-        "${PROJECT_SOURCE_DIR}/scripts/bootstrap_extension_ci.py"
-        "${package_root}/share/horo/extension-sdk/ci/bootstrap.py"
+        "${PROJECT_SOURCE_DIR}/scripts/project.py"
+        "${package_root}/bin/project.py"
         COPYONLY)
     configure_file(
         "${PROJECT_SOURCE_DIR}/sdk/ci/extension-author-ci.yml"

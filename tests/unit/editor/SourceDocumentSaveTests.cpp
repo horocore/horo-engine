@@ -197,6 +197,8 @@ TEST_CASE("Source visible unconfirmed replacement never reports rollback or clea
     CHECK(result.Value().disposition == SourceSaveDisposition::VisibleDurabilityUnconfirmed);
     REQUIRE(result.Value().diagnostic);
     CHECK(result.Value().snapshot.Dirty());
+    CHECK_FALSE(result.Value().snapshot.SharesStateWith(edited));
+    CHECK(result.Value().snapshot.SharesStateWith(open.Documents().Snapshot(edited.Identity().instance).Value()));
     CHECK(result.Value().snapshot.DiskBase() == "base");
     CHECK(project.Read("code.cpp") == edited.Text());
     CHECK(open.ResolveClose(Request(result.Value().snapshot), SourceCloseDecision::Save, files).HasError());

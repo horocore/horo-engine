@@ -25,9 +25,9 @@ def load_script(name):
     return module
 
 
-BOOTSTRAP = load_script("bootstrap_extension_ci.py")
-AUTHOR_CI = load_script("run_extension_author_ci.py")
-SCAFFOLDER = load_script("scaffold_extension.py")
+BOOTSTRAP = load_script('project.py')
+AUTHOR_CI = load_script('project.py')
+SCAFFOLDER = load_script('project.py')
 
 
 def archive(entries):
@@ -79,9 +79,9 @@ def test_bootstrap_reconstructs_only_bounded_repository_identity():
 
 def test_scaffold_carries_versioned_ci_contract_without_source_path(tmp_path):
     output = tmp_path / "author"
-    SCAFFOLDER.write_project(output, "com.example.author", "Author", "1.0.0", "backend")
+    SCAFFOLDER.scaffold_write_project(output, "com.example.author", "Author", "1.0.0", "backend")
     assert (output / ".github/workflows/extension-ci.yml").is_file()
-    assert (output / ".horo/ci/bootstrap.py").is_file()
+    assert (output / ".horo/ci/project.py").is_file()
     assert (output / ".horo/extension-ci.lock.json").is_file()
     assert (output / "horo-package.toml").is_file()
     assert "horo-package.toml" in (output / "CMakeLists.txt").read_text(encoding="utf-8")
@@ -156,7 +156,7 @@ def test_sdk_download_digest_and_safe_extraction(monkeypatch, tmp_path):
         def geturl(self):
             return "https://example.test/sdk.zip"
 
-    monkeypatch.setattr(BOOTSTRAP.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(content))
+    monkeypatch.setattr(BOOTSTRAP.urllib.request, 'urlopen', lambda *_args, **_kwargs: Response(content))
     digest = hashlib.sha256(content).hexdigest()
     BOOTSTRAP.extract_sdk(BOOTSTRAP.fetch_archive("https://example.test/sdk.zip", digest), tmp_path)
     assert (tmp_path / "bin/tool").read_text(encoding="utf-8") == "safe"
@@ -195,7 +195,7 @@ def test_sdk_archive_rejects_unsafe_paths(entry, tmp_path):
 
 def test_runner_rejects_missing_and_unsafe_module_entries(tmp_path):
     with pytest.raises(ValueError, match="unsupported extension CI tool"):
-        AUTHOR_CI.run(tmp_path, "sh", "-c", "exit 0")
+        AUTHOR_CI.author_run(tmp_path, "sh", "-c", "exit 0")
     stage = tmp_path / "stage"
     stage.mkdir()
     manifest = {"id": "com.example.author", "modules": [{"entry": "../outside"}]}
@@ -247,7 +247,7 @@ def test_runner_rejects_empty_test_report_and_mismatched_package_identity(tmp_pa
 def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_path):
     sdk = archive({
         "share/horo/extension-sdk/extension-sdk.json": json.dumps({"sdk": {"version": "1.2.3"}}),
-        "bin/horo-extension-author-ci.py": "print('fixture')",
+        "bin/project.py": "print('fixture')",
         "bin/untrusted-alternative.py": "print('not the runner')",
     })
     digest = hashlib.sha256(sdk).hexdigest()
@@ -261,26 +261,27 @@ def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_
         def geturl(self):
             return "https://example.test/sdk.zip"
 
-    monkeypatch.setattr(BOOTSTRAP.urllib.request, "urlopen", lambda *_args, **_kwargs: Response(sdk))
-    monkeypatch.setattr(BOOTSTRAP.host_platform, "system", lambda: "Linux")
-    monkeypatch.setattr(BOOTSTRAP.host_platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(BOOTSTRAP.urllib.request, 'urlopen', lambda *_args, **_kwargs: Response(sdk))
+    monkeypatch.setattr(BOOTSTRAP.host_platform, 'system', lambda: "Linux")
+    monkeypatch.setattr(BOOTSTRAP.host_platform, 'machine', lambda: "x86_64")
     launched = []
 
     def record(command, check, shell):
         launched.append((command, check, shell))
         return type("Exit", (), {"returncode": 0})()
 
-    monkeypatch.setattr(BOOTSTRAP.subprocess, "run", record)
+    monkeypatch.setattr(BOOTSTRAP.subprocess, 'run', record)
     monkeypatch.setattr(sys, "argv", ["bootstrap.py", "--lock", str(lock_path), "--platform", "linux-x64",
                                        "--project", str(tmp_path), "--output", str(tmp_path / "ci-artifacts"),
                                        "--repository", "example/author", "--commit", "a" * 40])
-    assert BOOTSTRAP.main() == 0
+    assert BOOTSTRAP.bootstrap_main() == 0
     assert len(launched) == 1
     assert launched[0][2] is False
     assert launched[0][0][0] == sys.executable
-    assert Path(launched[0][0][1]).name == "horo-extension-author-ci.py"
+    assert Path(launched[0][0][1]).name == "project.py"
+    assert launched[0][0][2] == "extension-ci"
     sdk_root = Path(launched[0][0][launched[0][0].index("--sdk") + 1])
-    assert Path(launched[0][0][1]) == sdk_root / "bin/horo-extension-author-ci.py"
+    assert Path(launched[0][0][1]) == sdk_root / "bin/project.py"
     assert launched[0][0][launched[0][0].index("--platform") + 1] == "linux-x64"
     assert launched[0][0][launched[0][0].index("--commit") + 1] == "a" * 40
     assert launched[0][0][launched[0][0].index("--repository") + 1] == "example/author"
@@ -288,18 +289,18 @@ def test_bootstrap_checks_downloaded_sdk_version_before_runner(monkeypatch, tmp_
     assert digest in launched[0][0]
 
     sys.argv[sys.argv.index("--commit") + 1] = "a" * 39 + ";"
-    assert BOOTSTRAP.main() == 2
+    assert BOOTSTRAP.bootstrap_main() == 2
     assert len(launched) == 1
     sys.argv[sys.argv.index("--commit") + 1] = "a" * 40
 
     sys.argv[sys.argv.index("--repository") + 1] = "--output /outside"
-    assert BOOTSTRAP.main() == 2
+    assert BOOTSTRAP.bootstrap_main() == 2
     assert len(launched) == 1
     sys.argv[sys.argv.index("--repository") + 1] = "example/author"
 
     lock["sdkVersion"] = "9.9.9"
     lock_path.write_text(json.dumps(lock), encoding="utf-8")
-    assert BOOTSTRAP.main() == 2
+    assert BOOTSTRAP.bootstrap_main() == 2
     assert len(launched) == 1
 
 
@@ -314,7 +315,7 @@ def test_runner_build_stage_requires_a_real_executed_test(monkeypatch, tmp_path)
             junit = Path(arguments[arguments.index("--output-junit") + 1])
             junit.write_text('<testsuite><testcase name="contract"/></testsuite>', encoding="utf-8")
 
-    monkeypatch.setattr(AUTHOR_CI, "run", record)
+    monkeypatch.setattr(AUTHOR_CI, 'author_run', record)
     stage = AUTHOR_CI.build_and_stage(tmp_path / "sdk", tmp_path / "project", scratch)
     assert stage == scratch / "stage"
     assert [tool for tool, _args in commands] == ["cmake", "cmake", "ctest", "cmake"]
@@ -337,7 +338,7 @@ def test_runner_packages_and_publishes_attributable_artifacts(monkeypatch, tmp_p
         if tool == "horo-package" and arguments[0] == "pack":
             Path(arguments[2]).write_bytes(b"canonical package")
 
-    monkeypatch.setattr(AUTHOR_CI, "run", record)
+    monkeypatch.setattr(AUTHOR_CI, 'author_run', record)
     output = tmp_path / "project/ci-artifacts"
     args = SimpleNamespace(repository="example/author", commit="a" * 40, platform="linux-x64",
                            sdk_sha256="b" * 64)
@@ -364,7 +365,7 @@ def test_runner_main_rejects_traversal_and_accepts_fixed_artifact_path(monkeypat
                  str(tmp_path / "outside"), "--platform", "linux-x64", "--repository", "example/author",
                  "--commit", "a" * 40, "--sdk-sha256", "b" * 64]
     monkeypatch.setattr(sys, "argv", arguments)
-    assert AUTHOR_CI.main() == 2
+    assert AUTHOR_CI.author_main() == 2
     redirected = tmp_path / "redirected"
     redirected.mkdir()
     try:
@@ -373,11 +374,11 @@ def test_runner_main_rejects_traversal_and_accepts_fixed_artifact_path(monkeypat
         pass
     else:
         arguments[arguments.index("--output") + 1] = str(project / "ci-artifacts")
-        assert AUTHOR_CI.main() == 2
+        assert AUTHOR_CI.author_main() == 2
         (project / "ci-artifacts").unlink()
     arguments[arguments.index("--output") + 1] = str(project / "ci-artifacts")
     called = []
-    monkeypatch.setattr(AUTHOR_CI, "build_and_stage", lambda *_args: called.append("build") or tmp_path / "stage")
-    monkeypatch.setattr(AUTHOR_CI, "package_and_publish", lambda *_args: called.append("package"))
-    assert AUTHOR_CI.main() == 0
+    monkeypatch.setattr(AUTHOR_CI, 'build_and_stage', lambda *_args: called.append("build") or tmp_path / "stage")
+    monkeypatch.setattr(AUTHOR_CI, 'package_and_publish', lambda *_args: called.append("package"))
+    assert AUTHOR_CI.author_main() == 0
     assert called == ["build", "package"]

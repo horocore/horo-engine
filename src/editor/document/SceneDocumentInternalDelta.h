@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ScenePrefabOverrideHistoryMemory.h"
 #include "editor/document/SceneDocumentCharacterDefaults.h"
 #include "editor/document/SceneDocumentInternalCore.h"
 
@@ -44,30 +45,6 @@ namespace Horo::Editor::SceneDocumentDetail {
                             EstimateSerializedComponentMemoryBytes(components.gameplayComponents);
         for (const Runtime::ColliderComponent &collider : components.colliders)
             bytes += collider.materials.size() * sizeof(Runtime::PhysicsColliderMaterialBinding);
-        return bytes;
-    }
-
-    /** @brief Account for owned payload strings and vector storage retained by semantic history. */
-    [[nodiscard]] inline std::size_t EstimateOverrideMemoryBytes(const std::optional<Prefab::PrefabValueOverrideSet> &set) noexcept {
-        if (!set)
-            return 0;
-        const auto recordBytes = [](const Prefab::PrefabValueOverrideRecord &record) {
-            std::size_t bytes = std::holds_alternative<std::string>(record.value) ? std::get<std::string>(record.value).size() : 0;
-            if (const auto *property = std::get_if<Prefab::PrefabPropertyAddress>(&record.target))
-                bytes += property->ComponentType().Value().size();
-            return bytes;
-        };
-        std::size_t bytes = set->records.capacity() * sizeof(Prefab::PrefabValueOverrideRecord) +
-                            set->conflicts.capacity() * sizeof(Prefab::PrefabValueOverrideConflict) +
-                            set->orphans.capacity() * sizeof(Prefab::PrefabValueOverrideOrphan);
-        for (const auto &record : set->records)
-            bytes += recordBytes(record);
-        bytes += set->authoredAgainst.projectVersion.prerelease.size();
-        for (const auto &conflict : set->conflicts)
-            bytes += recordBytes(conflict.original) + conflict.authoredAgainst.projectVersion.prerelease.size() +
-                     conflict.observedSource.projectVersion.prerelease.size();
-        for (const auto &orphan : set->orphans)
-            bytes += recordBytes(orphan.original) + orphan.authoredAgainst.projectVersion.prerelease.size();
         return bytes;
     }
 
