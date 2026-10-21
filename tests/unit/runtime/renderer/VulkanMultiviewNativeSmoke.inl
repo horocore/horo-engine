@@ -170,6 +170,24 @@ TEST_CASE("Vulkan native device executes the shipped view-indexed shader in mult
         }
     } lease;
 
+    struct DrainBeforeLeaseDestruction {
+        IRenderBackend &backend;
+
+        ~DrainBeforeLeaseDestruction() {
+            if (backend.BeginShutdown().HasError())
+                std::terminate();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            for (;;) {
+                const auto state = backend.PollDrain();
+                if (state.HasValue() && state.Value() == RenderBackendDrainProgress::Drained)
+                    return;
+                if (std::chrono::steady_clock::now() >= deadline)
+                    std::terminate();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+    } drain{*fixture.backend};
+
     const auto frame = SubmissionTest::Take(fixture.backend->BeginFrame({1, {8, 8}}));
     RenderGraphLeaseTransfer transfer;
     const auto result =
