@@ -790,3 +790,15 @@ Required tests cover:
 - [Cinematic Sequencer](../runtime/cinematic-sequencer-architecture.md)
 - [VFX And Particles](../runtime/vfx-and-particles-architecture.md)
 - [Terrain And Foliage](../runtime/terrain-and-foliage-architecture.md)
+
+### Partitioned-world selected object inspection
+
+`PartitionedWorldWorkspace` owns transient page-scoped object selection alongside
+its immutable source root. Selection and source currentness use one exact
+`WorldDocumentFence`; removal prunes selection atomically and replacement clears
+it. `InspectSelectedObjects` returns a bounded immutable bounds/coverage/override
+explanation using WorldStreaming's source assignment and spanning kernels. It
+neither loads pages nor mutates runtime demand. Presentation retains the result
+lease and queries only after an owner revision changes. See the
+[world document migration guide](../../guides/partitioned-world-document-migration.md#object-assignment-and-bounds-inspection-wst-0095)
+for diagnostics, budgets, lifecycle and consumer migration.
