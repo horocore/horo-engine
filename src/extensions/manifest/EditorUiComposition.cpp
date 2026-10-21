@@ -152,16 +152,17 @@ namespace Horo::Extensions {
     std::optional<double> UpdateEditorUiScalar(const EditorUiNumberNode &node, EditorUiScalarState &state, const EditorUiScalarInput input,
                                                const double normalizedValue, const bool admitted, const EditorThemeFrame &theme,
                                                const float elapsedSeconds) noexcept {
+        using enum EditorUiScalarInput;
         if (!node.base.custom || node.base.custom->widget != EditorUiCustomWidget::ScalarDial || !node.minimum.has_value() ||
             !node.maximum.has_value() || !std::holds_alternative<double>(node.value)) {
             state = {};
             return {};
         }
         const double current = std::get<double>(node.value);
-        if (!admitted || !node.base.enabled || node.base.readOnly || input == EditorUiScalarInput::Cancel) {
+        if (!admitted || !node.base.enabled || node.base.readOnly || input == Cancel) {
             state.preview = current;
             state.editing = false;
-        } else if ((input == EditorUiScalarInput::Begin || input == EditorUiScalarInput::Preview) && std::isfinite(normalizedValue)) {
+        } else if ((input == Begin || input == Preview) && std::isfinite(normalizedValue)) {
             state.preview = std::lerp(*node.minimum, *node.maximum, std::clamp(normalizedValue, 0.0, 1.0));
             state.editing = true;
         }
