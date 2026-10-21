@@ -202,7 +202,7 @@ TEST_CASE("Vulkan native device executes the shipped view-indexed shader in mult
     RenderGraphLeaseTransfer transfer;
     const auto result =
         fixture.backend->ExecuteGraph({frame, graph.graph, workloads, resources, &lease, false, &transfer, submissions, meshes, views});
-    INFO(result.HasError() ? result.ErrorValue().message : "native multiview admitted");
+    INFO((result.HasError() ? result.ErrorValue().message : "native multiview admitted"));
     REQUIRE(result.HasValue());
     REQUIRE(transfer.authority == RenderGraphLeaseAuthority::BackendCompletion);
     REQUIRE(fixture.backend->Present(frame).HasValue());

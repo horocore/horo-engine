@@ -154,7 +154,7 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
     CHECK(prepared.Graph().ExternalReleases().size() == 1);
     auto frame = SubmissionTest::Take(frontend->BeginFrame({1, {640, 480}}));
     const auto result = prepared.Execute(frame, active, {{1}, {1}, {}, {{1}, 1}});
-    INFO(result.HasError() ? result.ErrorValue().message : "actual acquired images rendered");
+    INFO((result.HasError() ? result.ErrorValue().message : "actual acquired images rendered"));
     REQUIRE(result.HasValue());
     REQUIRE(frame.Present().HasValue());
     CHECK(native.encoded.renderingBegins == 2);

@@ -525,9 +525,10 @@ namespace Horo::Render::Detail {
                                              .image = texture->handle,
                                              .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
                                              .format = VulkanResourceConversion::TextureFormat(descriptor.format),
-                                             .subresourceRange = {VulkanResourceConversion::IsDepthFormat(descriptor.format)
-                                                                      ? VK_IMAGE_ASPECT_DEPTH_BIT
-                                                                      : VK_IMAGE_ASPECT_COLOR_BIT,
+                                             .subresourceRange = {VulkanResourceConversion::Aspect(
+                                                                      VulkanResourceConversion::IsDepthFormat(descriptor.format)
+                                                                          ? RenderTextureAspect::Depth
+                                                                          : RenderTextureAspect::Color),
                                                                   0, 1, 0, descriptor.layerCount}};
             if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(

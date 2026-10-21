@@ -80,7 +80,7 @@ TEST_CASE("Vulkan multiview emits real indexed multipass and instanced view indi
     RenderGraphLeaseTransfer transfer;
     REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
     const auto result = fixture.graph.ExecuteGraph(packet.Request(fixture, transfer));
-    INFO(result.HasError() ? result.ErrorValue().message : "multiview recorded");
+    INFO((result.HasError() ? result.ErrorValue().message : "multiview recorded"));
     REQUIRE(result.HasValue());
     REQUIRE(fixture.encoded.drawCalls.size() == (instanced ? 1 : 2));
     CHECK(fixture.encoded.drawCalls[0].firstView == 0);
