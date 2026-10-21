@@ -281,3 +281,27 @@ TEST_CASE("UI Canvas loading rejects malformed presentation policy", "[unit][edi
     REQUIRE(loaded.HasError());
     REQUIRE(ErrorCodeText(loaded.ErrorValue()) == "runtime_ui.document.serialization_invalid");
 }
+
+TEST_CASE("UI Canvas envelope rejects duplicate fields before canonical source decoding", "[unit][editor][ui_canvas]") {
+    TemporaryProject project;
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+    SaveInitialDocument(project, MakeDocument(1), mutations, files);
+    std::ifstream input(project.DocumentPath(), std::ios::binary);
+    const std::string encoded{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    input.close();
+    REQUIRE(LoadUiCanvasDocument(project.DocumentPath()).HasValue());
+    for (const auto field : {"document", "revision"}) {
+        auto duplicate = encoded;
+        const auto marker = std::string{"\""} + field + "\":";
+        const auto position = duplicate.find(marker);
+        REQUIRE(position != std::string::npos);
+        duplicate.insert(position, marker + (std::string_view{field} == "document" ? "{}," : "999,"));
+        project.Write(duplicate);
+        const auto rejected = LoadUiCanvasDocument(project.DocumentPath());
+        REQUIRE(rejected.HasError());
+        REQUIRE(ErrorCodeText(rejected.ErrorValue()) == "editor.ui_canvas_document.malformed");
+    }
+    project.Write(encoded);
+    REQUIRE(LoadUiCanvasDocument(project.DocumentPath()).HasValue());
+}

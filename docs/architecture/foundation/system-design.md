@@ -803,6 +803,16 @@ Detailed ownership and scheduling rules are defined by
 - Public headers compile independently.
 - CI rejects forbidden target and include dependency directions.
 
+The editor source-document implementation may privately consume
+`HoroFoundationJsonInternal` for bounded JSON parsing and duplicate-field rejection
+at the `.uicanvas` persistence envelope. This is the existing non-installed source
+codec interface: its only include directory is `src/foundation/json`, and it
+carries the JSON library privately through the consuming implementation target.
+`HoroEditorServices` declares that direct dependency in the dependency policy;
+consumers of its public document headers receive no JSON implementation headers
+or repository-wide source roots through this edge. Runtime UI retains ownership
+of the authored document schema and its canonical source/cooked codecs.
+
 See [Observability Architecture](../observability/observability.md) for shared C++/Python record
 contracts, CPU/memory metrics, profiler captures, context propagation, and
 storage policy.
