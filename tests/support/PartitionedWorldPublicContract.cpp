@@ -87,3 +87,15 @@ using LayerReplayMethod = Horo::Result<PartitionedWorldSnapshotLease> (Partition
 static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::ExecuteLayerCommand), LayerExecuteMethod>);
 static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::CreateLayer), LayerCreateMethod>);
 static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::ReplayLayerCommand), LayerReplayMethod>);
+
+using SourceReplayMethod = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(const WorldDocumentFence &, bool,
+                                                                                                      std::stop_token);
+using SourceViewportPointMethod = Horo::Result<Horo::Math::Vec3> (*)(const Horo::Math::WorldCoordinate64 &,
+                                                                     const Horo::Math::WorldCoordinate64 &);
+using SourceViewportGlobalMethod = Horo::Result<Horo::Math::WorldCoordinate64> (*)(const Horo::Math::WorldCoordinate64 &, Horo::Math::Vec3);
+using SourceGizmoMoveMethod = Horo::Result<Horo::Editor::PartitionedWorldSource> (*)(const Horo::Editor::PartitionedWorldSource &,
+                                                                                     std::size_t, const Horo::Math::WorldCoordinate64 &);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::ReplaySources), SourceReplayMethod>);
+static_assert(std::is_same_v<decltype(&Horo::Editor::WorldSourceViewportPoint), SourceViewportPointMethod>);
+static_assert(std::is_same_v<decltype(&Horo::Editor::WorldSourceViewportGlobal), SourceViewportGlobalMethod>);
+static_assert(std::is_same_v<decltype(&Horo::Editor::MoveWorldSourceGizmo), SourceGizmoMoveMethod>);

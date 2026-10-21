@@ -8,18 +8,19 @@ namespace Horo::Editor {
         /** @brief Executes an existing source/history intent without manufacturing a missing value or identity. */
         Result<PartitionedWorldSnapshotLease> ExecuteExistingSource(PartitionedWorldWorkspace &owner,
                                                                     const WorldSourceToolCommand &request) {
+            using enum WorldSourceToolAction;
             switch (request.action) {
-                case WorldSourceToolAction::Edit:
+                case Edit:
                     if (request.edit.value)
                         return owner.EditSource(request.edit);
                     return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
-                case WorldSourceToolAction::Remove: {
+                case Remove: {
                     auto edit = request.edit;
                     edit.value.reset();
                     return owner.EditSource(edit);
                 }
-                case WorldSourceToolAction::Undo:
-                case WorldSourceToolAction::Redo:
+                case Undo:
+                case Redo:
                     return owner.ReplaySources(request.edit.expected, request.action == WorldSourceToolAction::Redo);
                 default:
                     return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Unsupported));
@@ -52,10 +53,10 @@ namespace Horo::Editor {
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
         const auto &previous = m_viewModel.worldViewport;
-        const bool replaced =
-            previous.viewRevision != 0 && (!previous.snapshot || previous.snapshot->fence.owner != binding.snapshot->fence.owner ||
-                                           previous.snapshot->fence.generation != binding.snapshot->fence.generation);
-        if (binding.snapshot != current.Value() || binding.viewRevision < previous.viewRevision ||
+        if (const bool replaced =
+                previous.viewRevision != 0 && (!previous.snapshot || previous.snapshot->fence.owner != binding.snapshot->fence.owner ||
+                                               previous.snapshot->fence.generation != binding.snapshot->fence.generation);
+            binding.snapshot != current.Value() || binding.viewRevision < previous.viewRevision ||
             (binding.viewRevision == previous.viewRevision && (binding.globalOrigin != previous.globalOrigin || replaced)))
             return Result<void>::Failure(MakeError(WorldDocumentErrors::Stale));
         m_partitionedWorld = &canonicalOwner;
@@ -75,9 +76,8 @@ namespace Horo::Editor {
             m_viewModel.worldViewport.snapshot.reset();
             return;
         }
-        const auto previous = m_viewModel.worldViewport.snapshot;
-        if (!previous || previous->fence.owner != snapshot.Value()->fence.owner ||
-            previous->fence.generation != snapshot.Value()->fence.generation) {
+        if (const auto previous = m_viewModel.worldViewport.snapshot; !previous || previous->fence.owner != snapshot.Value()->fence.owner ||
+                                                                      previous->fence.generation != snapshot.Value()->fence.generation) {
             m_viewModel.worldViewport.snapshot.reset();
             return;
         }

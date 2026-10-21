@@ -122,9 +122,9 @@ namespace Horo::Editor {
     [[nodiscard]] Result<WorldSourceGizmoPointSet> WorldSourceGizmoPoints(const PartitionedWorldSource &source);
     /** @brief Applies a viewport handle draft; the workspace command remains the sole publication path.
      * @param source Original authored value. @param handle Index from WorldSourceGizmoPoints.
-     * @param position Exact millimeter position. @return Complete valid source draft or typed rejection. */
+     * @param position Exact millimeter position, borrowed only for this call. @return Complete valid source draft or typed rejection. */
     [[nodiscard]] Result<PartitionedWorldSource> MoveWorldSourceGizmo(const PartitionedWorldSource &source, std::size_t handle,
-                                                                      Math::WorldCoordinate64 position);
+                                                                      const Math::WorldCoordinate64 &position);
 
     /** @brief One atomic source insert/replace/remove command against the exact document publication. */
     struct WorldSourceEdit final {
@@ -238,13 +238,13 @@ namespace Horo::Editor {
     };
 
     /** @brief Converts an exact global point into a bounded, millimeter-resolvable viewport position.
-     * @param point Canonical source point. @param origin Exact origin captured by the active world view.
+     * @param point Canonical source point, borrowed for this call. @param origin Exact view origin, borrowed for this call.
      * @return Local meters, or Unsupported outside the +/-8000 meter local precision window. */
-    [[nodiscard]] Result<Math::Vec3> WorldSourceViewportPoint(Math::WorldCoordinate64 point, Math::WorldCoordinate64 origin);
+    [[nodiscard]] Result<Math::Vec3> WorldSourceViewportPoint(const Math::WorldCoordinate64 &point, const Math::WorldCoordinate64 &origin);
     /** @brief Adds a bounded local meter position to an exact global origin without converting absolute coordinates to float.
-     * @param origin Exact view origin. @param local Local meters, quantized to the nearest millimeter.
+     * @param origin Exact view origin, borrowed for this call. @param local Local meters, quantized to the nearest millimeter.
      * @return Canonical global point or typed invalid/arithmetic rejection. */
-    [[nodiscard]] Result<Math::WorldCoordinate64> WorldSourceViewportGlobal(Math::WorldCoordinate64 origin, Math::Vec3 local);
+    [[nodiscard]] Result<Math::WorldCoordinate64> WorldSourceViewportGlobal(const Math::WorldCoordinate64 &origin, Math::Vec3 local);
 
     /** @brief Finite query budgets; automatic plus effective cell lists share the aggregate ceiling. */
     struct WorldObjectInspectionLimits final {
@@ -324,9 +324,9 @@ namespace Horo::Editor {
          * @return Committed snapshot or typed rejection; no-op commands consume no history or revision. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> EditSource(const WorldSourceEdit &edit, std::stop_token cancellation = {});
         /** @brief Replays one source-history step with fresh monotonic revisions; other metadata remains unchanged.
-         * @param expected Exact current document fence. @param redo Selects redo instead of undo.
+         * @param expected Exact current document fence, borrowed for this call. @param redo Selects redo instead of undo.
          * @param cancellation Cancellation fence. @return Snapshot or typed unavailable/stale/cancelled rejection. */
-        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ReplaySources(WorldDocumentFence expected, bool redo,
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ReplaySources(const WorldDocumentFence &expected, bool redo,
                                                                           std::stop_token cancellation = {});
         /** @brief Applies one undoable layer command atomically on the owning thread.
          * Source creates/reorders mark dirty; filter/context commands remain transient. No-ops retain revision/history.

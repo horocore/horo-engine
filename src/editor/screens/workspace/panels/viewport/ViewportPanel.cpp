@@ -271,9 +271,13 @@ namespace Horo::Editor {
             CancelAssetPlacementPreview(command);
         const bool assetDragActive =
             inputEligible && surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, context, depthRange);
-        const bool sourceToolActive =
-            worldSourceTool_.Draw(drawList, layout.origin, {layout.width, layout.height}, viewModel, command, context, depthRange,
-                                  inputEligible && !interaction_.IsActive() && !assetDragActive);
+        const WorldSourceViewportTool::Frame sourceFrame{drawList,
+                                                         layout.origin,
+                                                         ImVec2(layout.width, layout.height),
+                                                         viewModel,
+                                                         depthRange,
+                                                         inputEligible && !interaction_.IsActive() && !assetDragActive};
+        const bool sourceToolActive = worldSourceTool_.Draw(sourceFrame, command, context);
         const Result<std::optional<SceneObjectId>> clickedLight =
             DrawViewportLightMarkers({.drawList = drawList,
                                       .origin = layout.origin,

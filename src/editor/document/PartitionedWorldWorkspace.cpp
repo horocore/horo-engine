@@ -410,8 +410,8 @@ namespace Horo::Editor {
         if (published.HasValue()) {
             ClearLayerHistory();
             ClearSourceHistory();
-            for (const auto &source : snapshot_->document.sources)
-                sourceRevision_ = std::max(sourceRevision_, source.revision.Value());
+            for (const auto &authoredSource : snapshot_->document.sources)
+                sourceRevision_ = std::max(sourceRevision_, authoredSource.revision.Value());
         }
         return published;
     }

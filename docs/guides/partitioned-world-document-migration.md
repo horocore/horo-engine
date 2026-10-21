@@ -414,3 +414,16 @@ in addition to the canonical selection/query/manual-page signatures. Existing va
 and temporary arguments continue working; consumers storing member pointers rebuild
 against these updated in-memory declarations. Modal drafts and queued presentation
 intents still own their fence values across frames.
+
+### Synchronous source-tool input borrowing
+
+`WorldSourceViewportPoint`, `WorldSourceViewportGlobal`, `MoveWorldSourceGizmo`
+and `ReplaySources` borrow their coordinate/fence inputs through `const&` for the
+synchronous call. This avoids copying the large canonical values while preserving
+ordinary call syntax. Callers storing exact function/member pointers must use the
+new reference signatures; the public-header consumer asserts these exact types.
+No input reference is retained: emitted commands own their fence/source values,
+and gestures copy their global origin, start point and projection capture. Source
+history publication passes its expected fence by value into the canonical commit
+before releasing the old immutable root. No callback or cross-frame borrow is
+introduced by this signature migration.
