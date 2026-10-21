@@ -13,8 +13,10 @@ namespace Horo::Editor {
     namespace {
         namespace Nav = Navigation;
         using namespace Application;
-        /** @brief Worker publishes immutable geometry; owner lane only loads it. Workers drain before mailbox destruction. */
-        using OverlayMailbox = std::atomic<std::shared_ptr<const NavigationViewportSnapshot>>;
+        /** @brief Worker publishes immutable geometry via atomic shared-pointer access; owner lane only loads it.
+         * All concurrent accesses use atomic free functions; workers drain before mailbox destruction.
+         */
+        using OverlayMailbox = std::shared_ptr<const NavigationViewportSnapshot>;
 
         /** @brief Complete unpublished worker result; facade construction remains on its owner lane. */
         struct Prepared final {
@@ -97,9 +99,9 @@ namespace Horo::Editor {
                 auto source = capture(invocation);
                 if (source.HasValue()) {
                     auto snapshot = NavigationViewportSnapshot::Capture(source.Value()->Scenes(), definition);
-                    mailbox->store(snapshot.HasValue() ? std::move(snapshot).Value() : nullptr);
+                    std::atomic_store(mailbox.get(), snapshot.HasValue() ? std::move(snapshot).Value() : nullptr);
                 } else
-                    mailbox->store(nullptr);
+                    std::atomic_store(mailbox.get(), OverlayMailbox{});
                 return source;
             };
             return Return::Success({std::move(composed), std::move(catalog).Value(), std::move(overlays).Value(), std::move(mailbox),
@@ -236,7 +238,7 @@ namespace Horo::Editor {
                 return;
             static_cast<void>(session.application->Pump());
             if (session.overlayMailbox) {
-                auto authored = session.overlayMailbox->load();
+                auto authored = std::atomic_load(session.overlayMailbox.get());
                 if (authored != session.authoredOverlays) {
                     session.authoredOverlays = std::move(authored);
                     session.view.overlays = session.authoredOverlays;
