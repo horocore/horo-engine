@@ -1678,14 +1678,38 @@
     "workspace.value.on": {"text": "Açık"},
     "workspace.value.off": {"text": "Kapalı"},
     "workspace.value.static": {"text": "✓ Statik"},
+    "workspace.world_sources.radius": {
+      "text": "Yarıçap (mm)"
+    },
+    "workspace.world_sources.maximum_extent": {
+      "text": "Azami kapsam (mm)"
+    },
+    "workspace.world_sources.half_extent": {
+      "text": "Yarı kapsam (mm)"
+    },
+    "workspace.world_sources.plane_normal": {
+      "text": "Düzlem normali"
+    },
+    "workspace.world_sources.plane_distance": {
+      "text": "Düzlem uzaklığı (mm)"
+    },
+    "workspace.world_sources.normalize": {
+      "text": "Normali birimleştir"
+    },
+    "workspace.world_sources.add_point": {
+      "text": "Yol noktası ekle"
+    },
+    "workspace.world_sources.remove_point": {
+      "text": "Son noktayı kaldır"
+    },
     "workspace.world_sources.title": {
       "text": "Akış kaynakları"
     },
     "workspace.world_sources.unavailable": {
-      "text": "Kaynakları düzenlemek için dünya belge sunucusunda bölümlenmiş bir dünya açın."
+      "text": "Akış kaynaklarını düzenlemek için bölümlenmiş bir dünya açın."
     },
     "workspace.world_sources.authoring_only": {
-      "text": "Kaynak metadata düzenleme. Tutamaçlar editör sahne başlangıcını kullanır; uzak global noktalar dünya viewport bağlantısı gerektirir."
+      "text": "Kaynak şekillerini ve akış taleplerini düzenleyin. Konum ve boyutları değiştirmek için tutamaçları sürükleyin."
     },
     "workspace.world_sources.sphere": {
       "text": "Küre oluştur"

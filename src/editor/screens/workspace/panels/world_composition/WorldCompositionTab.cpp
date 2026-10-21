@@ -78,9 +78,9 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc WorldCompositionTab::DrawPanel */
-    void WorldCompositionTab::DrawPanel(const ImVec2 &, const ImVec2 &, const EditorWorkspaceViewModel &vm,
-                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+    /** @copydoc WorldCompositionTab::DrawAdmission */
+    bool WorldCompositionTab::DrawAdmission(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command,
+                                            const EditorGuiContext &context) {
         const auto text = [&](const char *key) -> const std::string & {
             return context.localization.Get("editor", key);
         };
@@ -104,14 +104,27 @@ namespace Horo::Editor {
             cells_.clear();
             layerLabels_.clear();
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.no_document"), Theme::Muted(), fonts);
-            return;
+            return false;
         }
+        return true;
+    }
+
+    /** @copydoc WorldCompositionTab::DrawFilters */
+    void WorldCompositionTab::DrawFilters(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command,
+                                          const EditorGuiContext &context) {
+        const auto text = [&](const char *key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        const auto &fonts = context.theme.fonts;
+        ImGui::BeginDisabled(command.command != EditorWorkspaceViewCommand::None);
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, vm.worldDocumentSource, Theme::Text(), fonts);
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.authoring_status"), Theme::Muted(), fonts);
         if (Ui::Button({.label = text("workspace.world.close_source").c_str(), .font = fonts.sans})) {
             command.command = EditorWorkspaceViewCommand::CloseWorldComposition;
             command.worldDocumentFence = vm.worldDocument->fence;
         }
+        ImGui::EndDisabled();
+        ImGui::BeginDisabled(command.command != EditorWorkspaceViewCommand::None);
         RefreshRows(vm, context);
         draft_ = vm.worldBrowserQuery;
         auto &query = draft_;
@@ -135,6 +148,16 @@ namespace Horo::Editor {
             command.worldBrowserQuery = query;
             command.worldDocumentFence = vm.worldDocument->fence;
         }
+        ImGui::EndDisabled();
+    }
+
+    /** @copydoc WorldCompositionTab::DrawTables */
+    void WorldCompositionTab::DrawTables(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command,
+                                         const EditorGuiContext &context) {
+        const auto text = [&](const char *key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        const auto &fonts = context.theme.fonts;
         const auto color = Theme::Text();
         if (textColor_.x != color.x || textColor_.y != color.y || textColor_.z != color.z || textColor_.w != color.w) {
             textColor_ = color;
@@ -156,5 +179,14 @@ namespace Horo::Editor {
                                         cellColumns_, cells_, fonts));
         if (!vm.worldDocumentError && layers_.empty() && cells_.empty())
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.no_matches"), Theme::Muted(), fonts);
+    }
+
+    /** @copydoc WorldCompositionTab::DrawPanel */
+    void WorldCompositionTab::DrawPanel(const ImVec2 &, const ImVec2 &, const EditorWorkspaceViewModel &vm,
+                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+        if (!DrawAdmission(vm, command, context))
+            return;
+        DrawFilters(vm, command, context);
+        DrawTables(vm, command, context);
     }
 }  // namespace Horo::Editor
