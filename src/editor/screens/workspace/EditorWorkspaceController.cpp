@@ -258,6 +258,7 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::UpdateGameplaySources(const float elapsedSeconds) {
+        RefreshSourceDocumentProjection();
         (void)m_gameplayRetirements->Drain();
         UpdateGameplayBuild(elapsedSeconds);
         if (m_nativeGameplayReloadQuarantined || m_gameplayRegistry == nullptr || !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0.0F)

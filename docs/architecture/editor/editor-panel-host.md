@@ -146,6 +146,35 @@ commands for tab activation, panel docking, activity-bar reordering, and seam
 resizing. `WorkspaceDockArea` remains placement metadata and a command boundary;
 it is not the authoritative layout representation.
 
+The central document strip renders `WorkspacePanelHost::DocumentTabs()` in its
+host-owned order. Source, sequence and navigation instances share focus, close and
+move commands rather than keeping per-kind tab lists in the view. Viewport stays
+pinned; Game continues to be composed by the Play lifecycle. Moving a document
+updates the persisted open-key order without changing its instance, owner, dirty
+state or focus. Closing the active instance selects its next neighbor, then its
+previous neighbor when it was last. A scrollable strip, bounded title widths and
+full-path tooltips retain access to long and same-named source documents.
+
+Embedded source opens now attach to that strip after source-owner admission.
+The host presents a read-only UTF-8-safe preview of at most 64 KiB; editing and
+large-file text virtualization remain the source widget adapter's responsibility.
+Save, Save As and revision-fenced Save/Discard/Keep-open close choices execute in
+the source controller, including conflict and uncertain-durability failures. The
+exclusive close workflow belongs to `EditorModalHost`. Leaving the workspace also
+captures source revisions and requires Save/Discard/Stay; a stale decision cannot
+discard a newer root. Retained snapshots survive owner close.
+
+The additive host APIs `MoveDocument` and `RefreshDocuments` preserve existing
+callers. `RefreshDocuments` follows shared registry retarget/close decisions and
+does not save, close or reconstruct a document. The owning public-header target
+remains `HoroEditorServices`; its consumer is required validation for this change.
+The same owner also exposes allocation-free `DocumentIdentityRegistry::IsCurrent`
+and exact-publication `SourceDocumentSnapshot::SharesStateWith`. Retained snapshot
+leases prevent publication-address reuse during comparison. Unchanged frame
+updates retain the existing source projection and canonical tab dirty flags;
+path ownership copies and source-byte dirty comparisons occur only when a
+publication or registry identity changes. Reordering moves existing leases.
+
 Layout persistence validates the node tree before activation and falls back to
 the versioned default layout on structural failure. Splitter and panel drag
 gestures acquire central input-router capture, so modal opening, focus loss, or
@@ -772,6 +801,39 @@ translation handles between visible axis pairs. Pointer hit testing covers the
 shaft, tip, and plane handles while leaving the hub clear of axis capture. Plane
 drags project the pointer ray onto the selected world-space plane and convert
 the resulting displacement through the parent inverse before previewing it.
+
+Physics collider editing uses the same routed pointer-capture and transform-gizmo
+geometry. PhysicsInspector exposes the explicit body's contributor hierarchy by
+stable object/component identity, including contributors stored on other objects.
+Guides follow the selected body/contributor or explicit child selection, keeping
+normal scene drawing free of unrelated collider geometry. Edit Child selects one
+contributor; Edit All selects the admitted flat compound.
+Ctrl/Command-click toggles children in the viewport. Move, Rotate and Scale edit
+body-local poses and positive authored bounds; Ctrl snaps relative to the captured
+primary (0.1 m in the active Local/World axes, 15 degrees, 10 percent).
+The group evaluator takes the explicit world orientation of those axes; an identity
+orientation selects the world grid. Screen input and overlay widths use logical
+pixels; framebuffer scale affects the render-target extent only. Picking intersects
+actual oriented boxes, spheres, capsules and plane equations, using the renderer's
+clip convention and world-distance ray limits.
+
+`ColliderGizmoController` retains a detached baseline and preview only. It never
+mutates Physics runtime state or authored Scene data while dragging. Release submits
+one generation-, document- and selection-fenced multi-child batch through the
+existing `SceneDocumentTransactions` port and `EditorHistory`. Escape, capture loss,
+panel detach, unavailable/zero-size render surfaces, selection changes, reload and
+play transitions discard the transient preview. Hidden, disabled, generated or
+locked contributors cannot grant edit
+permission; an explicit body's inherited lock also protects its contributors.
+
+The additive `PhysicsInspector.h` collider contracts keep the existing owner and
+callers intact; no persisted schema or public-header ownership migration is needed.
+Existing Inspector callers continue using `PreparePhysicsInspectorEdit`; viewport
+callers prepare `ColliderTransformEdit` batches against that same document owner.
+Cooked asset interiors have no editable source document in this composition and
+return `physics.operation.unsupported`; no mesh-derived or fabricated children are
+substituted. Nonuniform sphere/capsule scale, unsupported body scale and affine
+shear reject explicitly. Native solver handles never enter the editor contract.
 
 Content Browser assets that support scene instantiation follow the same preview
 boundary. While the primary pointer remains held over the viewport, the editor

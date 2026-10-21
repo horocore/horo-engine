@@ -143,17 +143,44 @@ configure_file(platform/code_query/ProjectReadNative.h
     "${_horo_rooted_file_headers}/ProjectReadNative.h" COPYONLY)
 target_include_directories(HoroRootedFileNativeInternal INTERFACE "${_horo_rooted_file_headers}")
 
+# Native composition builders share handles through a narrow, non-installed contract only.
+add_library(HoroRootedProjectOwnersInternal INTERFACE)
+set(_horo_project_owner_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/project-owners")
+file(MAKE_DIRECTORY "${_horo_project_owner_headers}")
+configure_file(platform/RootedProjectOwnersInternal.h
+    "${_horo_project_owner_headers}/RootedProjectOwnersInternal.h" COPYONLY)
+target_include_directories(HoroRootedProjectOwnersInternal INTERFACE "${_horo_project_owner_headers}")
+target_link_libraries(HoroRootedProjectOwnersInternal INTERFACE HoroEngine::ProjectReadFilesApi HoroRootedFileNativeInternal)
+target_link_libraries(HoroPlatformProjectReadFiles PRIVATE HoroRootedProjectOwnersInternal)
+
+add_library(HoroPlatformProjectIo STATIC platform/NativeProjectIoOwners.cpp)
+add_library(HoroEngine::PlatformProjectIo ALIAS HoroPlatformProjectIo)
+target_compile_features(HoroPlatformProjectIo PUBLIC cxx_std_20)
+target_link_libraries(HoroPlatformProjectIo PUBLIC HoroEngine::ProjectReadFilesApi
+    PRIVATE HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage HoroEngine::PlatformProjectReadFiles
+        HoroRootedProjectOwnersInternal)
+
 add_library(HoroPlatformImmutableFileStorage STATIC
     platform/file_storage/NativeImmutableFileStorage.cpp)
 add_library(HoroEngine::PlatformImmutableFileStorage ALIAS HoroPlatformImmutableFileStorage)
 target_compile_features(HoroPlatformImmutableFileStorage PUBLIC cxx_std_20)
 target_link_libraries(HoroPlatformImmutableFileStorage PUBLIC HoroEngine::Foundation
-    PRIVATE HoroEngine::PlatformProjectReadFiles HoroRootedFileNativeInternal)
+    PRIVATE HoroRootedStorageNativeInternal HoroRootedProjectOwnersInternal)
+
+# Both concrete storage capabilities share only these non-installed root-relative native primitives.
+add_library(HoroRootedStorageNativeInternal STATIC)
+set(_horo_rooted_storage_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/rooted-storage")
+file(MAKE_DIRECTORY "${_horo_rooted_storage_headers}")
+configure_file(platform/file_storage/ImmutableFileNative.h
+    "${_horo_rooted_storage_headers}/ImmutableFileNative.h" COPYONLY)
+target_include_directories(HoroRootedStorageNativeInternal PUBLIC "${_horo_rooted_storage_headers}")
+target_link_libraries(HoroRootedStorageNativeInternal PUBLIC HoroEngine::PlatformProjectReadFiles HoroRootedFileNativeInternal)
+target_compile_features(HoroRootedStorageNativeInternal PUBLIC cxx_std_20)
 if (WIN32)
-    target_sources(HoroPlatformImmutableFileStorage PRIVATE platform/file_storage/ImmutableFileNativeWindows.cpp)
-    target_compile_definitions(HoroPlatformImmutableFileStorage PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_sources(HoroRootedStorageNativeInternal PRIVATE platform/file_storage/ImmutableFileNativeWindows.cpp)
+    target_compile_definitions(HoroRootedStorageNativeInternal PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
 else ()
-    target_sources(HoroPlatformImmutableFileStorage PRIVATE platform/file_storage/ImmutableFileNativePosix.cpp)
+    target_sources(HoroRootedStorageNativeInternal PRIVATE platform/file_storage/ImmutableFileNativePosix.cpp)
 endif ()
 
 add_library(HoroProjectCodeQuery STATIC
@@ -224,6 +251,7 @@ add_library(HoroPlatform STATIC
         platform/ProductProbeLease.cpp
         platform/PlatformErrors.cpp
         platform/ConfigurationFileStore.cpp
+        platform/file_storage/NativePublicationFileSystem.cpp
         platform/android/AndroidLifecycle.cpp
         platform/android/AndroidLifecycleAdapter.cpp
         platform/android/AndroidStorage.cpp
@@ -231,12 +259,15 @@ add_library(HoroPlatform STATIC
 
 if (WIN32)
     target_sources(HoroPlatform PRIVATE
+            platform/file_storage/PublicationFileNativeWindows.cpp
             platform/windows/DynamicLibrary_Windows.cpp
             platform/windows/ExternalProcess_Windows.cpp
             platform/windows/SecureRandom_Windows.cpp)
+    target_compile_definitions(HoroPlatform PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
     target_link_libraries(HoroPlatform PRIVATE bcrypt)
 else ()
     target_sources(HoroPlatform PRIVATE
+            platform/file_storage/PublicationFileNativePosix.cpp
             platform/posix/DynamicLibrary_Posix.cpp
             platform/posix/ExternalProcess_Posix.cpp
             platform/posix/SecureRandom_Posix.cpp)
@@ -251,6 +282,7 @@ if (ANDROID)
 endif ()
 
 add_library(HoroEngine::Platform ALIAS HoroPlatform)
+target_link_libraries(HoroPlatform PRIVATE HoroRootedProjectOwnersInternal)
 
 target_compile_features(HoroPlatform PUBLIC cxx_std_20)
 target_include_directories(HoroPlatform
@@ -258,6 +290,7 @@ target_include_directories(HoroPlatform
         ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(HoroPlatform PUBLIC HoroEngine::Foundation HoroEngine::Security)
+target_link_libraries(HoroPlatform PRIVATE HoroRootedStorageNativeInternal)
 target_include_directories(HoroPlatform PRIVATE
         "$<TARGET_PROPERTY:HoroPublicationLockInternal,INTERFACE_INCLUDE_DIRECTORIES>")
 
@@ -2314,6 +2347,12 @@ target_compile_features(HoroPrefabOverrideModel INTERFACE cxx_std_20)
 target_link_libraries(HoroPrefabOverrideModel INTERFACE HoroEngine::Prefab HoroEngine::Application)
 
 add_library(HoroPrefabAuthoring STATIC
+        runtime/prefab/PrefabComponentOverrideResolution.cpp
+        runtime/prefab/PrefabComponentEdits.cpp
+        runtime/prefab/PrefabComponentOverrideCodec.cpp
+        runtime/prefab/PrefabComponentOverrideValidation.cpp
+        runtime/prefab/PrefabOverrideRecordOrdering.cpp
+        runtime/prefab/PrefabComponentSchemas.cpp
         runtime/prefab/PrefabAssetDependencyClosure.cpp
         runtime/prefab/PrefabDependencyGraph.cpp
         runtime/prefab/PrefabExpansionCache.cpp
@@ -2642,6 +2681,8 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalResourceFormats.mm
             runtime/renderer/modules/metal/MetalResourcePolicy.cpp
             runtime/renderer/modules/metal/MetalResourceRuntime.mm
+            runtime/renderer/modules/metal/MetalShaderResources.mm
+            runtime/renderer/modules/metal/MetalMaterialResources.mm
             runtime/renderer/modules/metal/MetalParallelRecording.mm
             runtime/renderer/modules/metal/MetalDeviceDiscovery.mm
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
@@ -2787,7 +2828,11 @@ add_library(HoroEditorModel STATIC
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentTransaction.cpp
         editor/document/InspectorBehaviorBinding.cpp
+        editor/document/NavigationInspector.cpp
         editor/document/PhysicsInspector.cpp
+        editor/document/ColliderEditing.cpp
+        editor/document/ColliderGeometry.cpp
+        editor/document/ColliderGeometryInternal.h
         editor/document/SceneDocumentTransactionErrors.cpp
         editor/navigation/NavigationDefinitionDocument.cpp
         editor/navigation/NavigationSettingsWorkflow.cpp
@@ -3154,6 +3199,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/modals/asset_import/AssetImportModalPresentation.cpp
             editor/modals/asset_import/AssetImportModalPresentationDetails.cpp
             editor/modals/play_topology/PlayTopologyModal.cpp
+            editor/modals/source_document/SourceDocumentCloseModal.cpp
             editor/modals/packages/PackageModal.cpp
             editor/modals/scene_compare/SceneConflictCompareModal.cpp
             editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.cpp
@@ -3178,6 +3224,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelCharacterWidgets.cpp
+            editor/screens/workspace/panels/inspector/NavigationInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelNavigation.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
@@ -3192,6 +3240,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
+        editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoMath.cpp
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.cpp
@@ -3237,6 +3286,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorContributions.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorApproval.cpp
+        editor/screens/workspace/EditorWorkspaceControllerNavigationInspector.cpp
         editor/screens/workspace/EditorWorkspaceControllerPhysics.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp

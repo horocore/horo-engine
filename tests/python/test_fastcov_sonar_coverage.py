@@ -10,8 +10,9 @@ element_tree = pytest.importorskip("defusedxml.ElementTree")
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 try:
-    SPEC = importlib.util.spec_from_file_location("fastcov_sonar_coverage", SCRIPTS / "fastcov_sonar_coverage.py")
+    SPEC = importlib.util.spec_from_file_location("fastcov_sonar_coverage", SCRIPTS / 'analyze.py')
     converter = importlib.util.module_from_spec(SPEC)
+    sys.modules[SPEC.name] = converter
     SPEC.loader.exec_module(converter)
 finally:
     sys.path.pop(0)
@@ -83,7 +84,7 @@ def test_cli_outputs_line_xml(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     report.write_text(json.dumps({"sources": {str(tmp_path / "source.cpp"): {"": {"lines": {"1": 1}}}}}))
     output = tmp_path / "coverage.xml"
     monkeypatch.setattr(sys, "argv", ["converter", "--input", str(report), "--output", str(output)])
-    assert converter.main() == 0
+    assert converter.fastcov_main() == 0
     document = element_tree.parse(output).getroot()
     assert document.get("version") == "1"
     assert document.find("file/lineToCover").get("covered") == "true"
@@ -96,7 +97,7 @@ def test_cli_output_traversal_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     outside = tmp_path / "outside.xml"
     monkeypatch.setattr(sys, "argv", ["converter", "--input", "missing.json", "--output", str(outside)])
     with pytest.raises(SystemExit) as error:
-        converter.main()
+        converter.fastcov_main()
     assert error.value.code == 2
     assert not outside.exists()
 

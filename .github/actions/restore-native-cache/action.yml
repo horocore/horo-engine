@@ -54,7 +54,7 @@ runs:
         cc_version=$(compiler_version "$CC")
         cxx_version=$(compiler_version "$CXX")
         cmake_version=$(cmake --version)
-        python3 scripts/ci_cache_identity.py --github-output "$GITHUB_OUTPUT" \
+        python3 scripts/dev.py ci-cache-identity --github-output "$GITHUB_OUTPUT" \
           --cc "$CC" --cxx "$CXX" --cc-version "$cc_version" \
           --cxx-version "$cxx_version" --cmake-version "$cmake_version"
 

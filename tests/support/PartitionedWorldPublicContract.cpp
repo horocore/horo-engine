@@ -81,3 +81,18 @@ using LayerReplayMethod = Horo::Result<PartitionedWorldSnapshotLease> (Partition
 static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::ExecuteLayerCommand), LayerExecuteMethod>);
 static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::CreateLayer), LayerCreateMethod>);
 static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::ReplayLayerCommand), LayerReplayMethod>);
+using CommitSignature = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(const PartitionedWorldDocument &,
+                                                                                                   const WorldDocumentFence &,
+                                                                                                   std::stop_token);
+using WorkingSetSignature = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(
+    std::span<const Horo::Assets::AssetId>, const WorldDocumentFence &, std::stop_token);
+using ReplaceSignature = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(const PartitionedWorldDocument &,
+                                                                                                    const WorldDocumentFence &,
+                                                                                                    Horo::Editor::WorldDocumentDisposition,
+                                                                                                    std::stop_token);
+using CloseSignature = Horo::Result<void> (PartitionedWorldWorkspace::*)(const WorldDocumentFence &,
+                                                                         Horo::Editor::WorldDocumentDisposition);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::Commit), CommitSignature>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::SetWorkingSet), WorkingSetSignature>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::Replace), ReplaceSignature>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::Close), CloseSignature>);

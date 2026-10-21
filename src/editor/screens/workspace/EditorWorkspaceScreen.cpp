@@ -35,6 +35,7 @@
 #include "editor/modals/packages/PackageModal.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
+#include "editor/modals/source_document/SourceDocumentCloseModal.h"
 #include "editor/modals/world_layer/CreateWorldLayerModal.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/renderer/EditorViewportRenderer.h"
@@ -178,6 +179,7 @@ namespace Horo::Editor {
 
         /** @brief Exact pending leave decision captures; borrowed collision authority never extends project lifetime. */
         struct WorkspaceLeaveCapture final {
+            std::vector<SourceDocumentSnapshot> sourceDocuments;
             std::vector<PCGDocumentSnapshot> pcgDocuments;
             std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
             std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
@@ -234,6 +236,7 @@ namespace Horo::Editor {
 
                 if (auto initialized = InitializeController(projectRoot); initialized.HasError())
                     return initialized;
+                sourceCloseLifetime_ = std::make_shared<int>(0);
                 snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
                 host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
                 LoadProjectInputProfile(controller_->ViewModel().projectRoot);
@@ -343,6 +346,8 @@ namespace Horo::Editor {
                         const std::string requestedDirectory =
                             command.stringPayload.value_or(controller_->ViewModel().contentBrowser.absoluteCurrentPath);
                         OpenGameplayBehaviorModal(kind, requestedDirectory);
+                    } else if (command.command == CloseWorkspaceDocument && OpenSourceCloseModal(command)) {
+                        // The exclusive modal owns only the decision; the controller owns the document transaction.
                     } else {
                         controller_->ProcessCommand(command);
                     }
@@ -432,6 +437,8 @@ namespace Horo::Editor {
                 using enum LeaveAction;
                 using enum LeaveDisposition;
                 if (HasDirtyDocuments()) {
+                    static_cast<void>(controller_->HasDirtySourceDocuments());
+                    leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
                     auto graphs = controller_->PCGDocuments().Snapshots();
                     if (graphs.HasError())
                         return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
@@ -460,6 +467,8 @@ namespace Horo::Editor {
                     return Result<LeaveDecision>::Failure(MakeError(WorldDocumentErrors::Dirty));
                 if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
                     return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+                if (const auto sources = controller_->SaveSourceDocuments(); sources.HasError())
+                    return Result<LeaveDecision>::Failure(sources.ErrorValue());
                 EditorWorkspaceViewCommandData command;
                 command.command = EditorWorkspaceViewCommand::SaveScene;
                 controller_->ProcessCommand(command);
@@ -500,6 +509,15 @@ namespace Horo::Editor {
                 if (resolution.subject != 1 || resolution.revision != 1)
                     return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 if (controller_ && resolution.action != Stay) {
+                    static_cast<void>(controller_->HasDirtySourceDocuments());
+                    if (controller_->ViewModel().sourceDocuments.size() != leaveCapture_.sourceDocuments.size())
+                        return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                    for (const auto &captured : leaveCapture_.sourceDocuments) {
+                        const auto current = controller_->SourceDocuments().Snapshot(captured.Identity().instance);
+                        if (current.HasError() || current.Value().Revision() != captured.Revision() ||
+                            current.Value().Identity() != captured.Identity())
+                            return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+                    }
                     if (const auto current = ValidateLeaveCapture(); current.HasError())
                         return Result<LeaveDecision>::Failure(current.ErrorValue());
                 }
@@ -516,6 +534,7 @@ namespace Horo::Editor {
             }
 
             void OnLeave() override {
+                sourceCloseLifetime_.reset();
                 LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
                 if (controller_) {
                     static_cast<void>(controller_->ShutdownCollisionSettings(true));
@@ -555,7 +574,7 @@ namespace Horo::Editor {
             bool HasDirtyDocuments() const {
                 return controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() ||
                                        controller_->HasDirtyCollisionSettings() || controller_->HasDirtyNavigationDocuments() ||
-                                       controller_->HasDirtyWorldDocuments());
+                                       controller_->HasDirtyWorldDocuments() || controller_->HasDirtySourceDocuments());
             }
 
             /** @brief Validates captured leave consent against each independently owned document group. */
@@ -833,6 +852,22 @@ namespace Horo::Editor {
                 workspacePersistenceAdmitted_ = false;
             }
 
+            /** @brief Opens a close decision only for a current dirty source; other document owners use normal routing. */
+            bool OpenSourceCloseModal(const EditorWorkspaceViewCommandData &command) {
+                if (!command.documentInstance)
+                    return false;
+                const auto snapshot = controller_->SourceDocuments().Snapshot(*command.documentInstance);
+                if (snapshot.HasError() || !snapshot.Value().Dirty())
+                    return false;
+                static_cast<void>(
+                    modalHost_.OpenRoot(std::make_unique<SourceDocumentCloseModal>(context_, *controller_, sourceCloseLifetime_,
+                                                                                   SourceSaveRequest{*command.documentInstance,
+                                                                                                     snapshot.Value().Revision(),
+                                                                                                     {}},
+                                                                                   snapshot.Value().Identity().key.source.Value())));
+                return true;
+            }
+
             /** @brief Opens transient presentation over the exact root-owned project capability; unavailable preparation is recoverable. */
             void OpenPackagesModal() {
                 if (!controller_ || !packages_.acquire)
@@ -1047,6 +1082,7 @@ namespace Horo::Editor {
             GuiScreenHost &host_;
             const EditorServiceRegistry &services_;
             EditorModalHost &modalHost_;
+            std::shared_ptr<const void> sourceCloseLifetime_;
             const EditorGuiContext &context_;
             WorkspaceContributionRegistries contributions_;
             WorkspaceInputState input_;

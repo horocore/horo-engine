@@ -184,31 +184,103 @@ jobs:
         id: debug_build
         run: cmake --build --preset "${{ matrix.preset }}"
 
-      - name: Run Metal graph smoke when a device is available
+      - name: Qualify OpenGL editor GUI composition with Mesa
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+        run: >-
+          xvfb-run --auto-servernum --server-args="-screen 0 640x480x24"
+          build/ci/tests/HoroEditorViewportOpenGLSmoke
+          --reporter junit --out build/ci/opengl-editor-composition.xml
+
+      - name: Cook Metal fixture and run native smoke when a device is available
         if: ${{ !cancelled() && runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
+        env:
+          HORO_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          probe_source="$RUNNER_TEMP/horo-metal-device-probe.m"
-          probe_binary="$RUNNER_TEMP/horo-metal-device-probe"
-          cat > "$probe_source" <<'OBJC'
-          #import <Metal/Metal.h>
-          int main(void) {
-            @autoreleasepool {
-              return MTLCreateSystemDefaultDevice() == nil ? 77 : 0;
-            }
-          }
-          OBJC
-          xcrun clang -fobjc-arc "$probe_source" -framework Metal -framework Foundation -o "$probe_binary"
-          if "$probe_binary"; then
-            build/ci/tests/HoroMetalGraphExecutionSmoke
-          else
-            probe_status=$?
-            if [ "$probe_status" -eq 77 ]; then
-              echo "::notice::Metal graph GPU smoke skipped: this macOS runner exposes no Metal device."
-              echo "Metal graph GPU smoke: skipped (no Metal device)." >> "$GITHUB_STEP_SUMMARY"
-            else
-              exit "$probe_status"
-            fi
-          fi
+          "$HORO_QUALIFICATION_PYTHON" - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          build = Path("build/ci-metal-shader")
+          build.mkdir(parents=True, exist_ok=True)
+          fixture = build / "tests/MetalPreparationFixture.metallib"
+          record = {"sourceHead": os.environ["HORO_SOURCE_HEAD"],
+                    "checkoutRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                    "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                    "runnerOS": os.environ["RUNNER_OS"], "runnerArch": os.environ["RUNNER_ARCH"],
+                    "imageVersion": os.environ.get("ImageVersion"),
+                    "nativeStatus": "not_run", "commands": [], "tools": {}, "sourceSha256": {}}
+
+          def digest(path):
+              return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+          def run(command, *, capture=False):
+              record["commands"].append(command)
+              return subprocess.run(command, check=True, text=True,
+                                    stdout=subprocess.PIPE if capture else None).stdout
+
+          try:
+              for source in ["tests/integration/renderer/MetalPreparationFixture.metal",
+                             "tests/integration/renderer/MetalShaderPreparationSmoke.mm"]:
+                  record["sourceSha256"][source] = digest(source)
+              # Fail before cooking if the selected Xcode lacks the offline tools.
+              for name in ["metal", "metallib", "clang"]:
+                  path = run(["xcrun", "-sdk", "macosx", "--find", name], capture=True).strip()
+                  record["tools"][name] = {"path": path, "sha256": digest(path)}
+              record["xcodeVersion"] = run(["xcodebuild", "-version"], capture=True).strip()
+              record["sdkVersion"] = run(["xcrun", "-sdk", "macosx", "--show-sdk-version"], capture=True).strip()
+              run(["cmake", "--preset", "ci-macos-debug", "-B", str(build),
+                   "-DPython3_EXECUTABLE=" + os.environ["HORO_QUALIFICATION_PYTHON"],
+                   "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON", "-DHORO_BUILD_EDITOR_GUI=OFF",
+                   "-DHORO_BUILD_RENDER_OPENGL=OFF", "-DHORO_BUILD_PHYSICS_NATIVE=OFF",
+                   "-DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF"])
+              commands = run(["ninja", "-C", str(build), "-t", "commands", "HoroMetalShaderPreparationSmoke"], capture=True).splitlines()
+              fixture_markers = ["integration/renderer/MetalPreparationFixture.metal",
+                                 "integration/renderer/MetalShaderPreparationSmoke.mm",
+                                 " -o tests/HoroMetalShaderPreparationSmoke "]
+              record["fixtureBuildCommands"] = [command for command in commands
+                                                if any(marker in command for marker in fixture_markers)]
+              assert all(any(marker in command for command in record["fixtureBuildCommands"])
+                         for marker in fixture_markers), "Missing fixture cook, compile or link command"
+              run(["cmake", "--build", str(build), "--target", "HoroMetalShaderPreparationSmoke", "--parallel", "2"])
+              record["fixtureSha256"] = digest(fixture)
+              probe_source = Path(os.environ["RUNNER_TEMP"]) / "horo-metal-device-probe.m"
+              probe_binary = probe_source.with_suffix("")
+              probe_source.write_text("#import <Metal/Metal.h>\nint main(void) { @autoreleasepool { return MTLCreateSystemDefaultDevice() == nil ? 77 : 0; } }\n")
+              run(["xcrun", "clang", "-fobjc-arc", str(probe_source), "-framework", "Metal",
+                   "-framework", "Foundation", "-o", str(probe_binary)])
+              probe = subprocess.run([str(probe_binary)], check=False).returncode
+              record["deviceProbeExit"] = probe
+              if probe == 77:
+                  record["nativeStatus"] = "skipped_no_device"
+                  print("::notice::Metal graph and shader preparation GPU smoke skipped: no Metal device.")
+              elif probe != 0:
+                  raise RuntimeError("Metal device probe failed: " + str(probe))
+              else:
+                  # Keep the existing graph smoke and isolate this opt-in fixture's test registration.
+                  graph = subprocess.run(["build/ci/tests/HoroMetalGraphExecutionSmoke"], check=False).returncode
+                  record["graphSmokeExit"] = graph
+                  record["nativeStatus"] = "failed"
+                  run(["ctest", "--test-dir", str(build), "--parallel", "1", "--output-on-failure",
+                       "--no-tests=error", "-R", "^HoroMetalShaderPreparationSmoke$",
+                       "--output-junit", str(build.resolve() / "ctest.xml")])
+                  record["nativeStatus"] = "passed"
+                  if graph != 0:
+                      raise RuntimeError("Metal graph smoke failed: " + str(graph))
+          except Exception as error:
+              record["error"] = str(error)
+              raise
+          finally:
+              (build / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write("Metal shader preparation native smoke: " + record["nativeStatus"] + ".\n")
+          PYTHON
 
       # Debug audio is already in the build above. Release verifies NDEBUG
       # behavior using only the real-time audio group, on this same runner.
@@ -429,7 +501,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/scene-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --discovery "$root/scene-allocation-discovery.json" --regex-output "$root/scene-allocation-regex.txt"
+          python scripts/dev.py qualify-scene --discovery "$root/scene-allocation-discovery.json" --regex-output "$root/scene-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/scene-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/scene-allocation-ctest.xml") {
@@ -437,7 +509,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "scene-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --output-junit "$root/scene-allocation-ctest.xml"
+          python scripts/dev.py qualify-scene --output-junit "$root/scene-allocation-ctest.xml"
 
       - name: Test Windows Release extension allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -446,7 +518,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/extension-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_extension_allocation_qualification.py --discovery "$root/extension-allocation-discovery.json" --regex-output "$root/extension-allocation-regex.txt"
+          python scripts/dev.py qualify-extension --discovery "$root/extension-allocation-discovery.json" --regex-output "$root/extension-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/extension-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/extension-allocation-ctest.xml") {
@@ -454,7 +526,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 --test-output-size-passed 65536 -R $pattern --output-junit "extension-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_extension_allocation_qualification.py --output-junit "$root/extension-allocation-ctest.xml"
+          python scripts/dev.py qualify-extension --output-junit "$root/extension-allocation-ctest.xml"
 
       - name: Test Windows Release Navigation settings allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -463,7 +535,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/navigation-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --family navigation --discovery "$root/navigation-allocation-discovery.json" --regex-output "$root/navigation-allocation-regex.txt"
+          python scripts/dev.py qualify-scene --family navigation --discovery "$root/navigation-allocation-discovery.json" --regex-output "$root/navigation-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/navigation-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/navigation-allocation-ctest.xml") {
@@ -471,7 +543,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --test-output-size-passed 16384 --output-junit "navigation-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --family navigation --output-junit "$root/navigation-allocation-ctest.xml"
+          python scripts/dev.py qualify-scene --family navigation --output-junit "$root/navigation-allocation-ctest.xml"
 
       - name: Test Windows Release Collision settings allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -480,7 +552,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/collision-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --family collision --discovery "$root/collision-allocation-discovery.json" --regex-output "$root/collision-allocation-regex.txt"
+          python scripts/dev.py qualify-scene --family collision --discovery "$root/collision-allocation-discovery.json" --regex-output "$root/collision-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/collision-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/collision-allocation-ctest.xml") {
@@ -488,7 +560,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 --test-output-size-passed 16384 -R $pattern --output-junit "collision-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_scene_allocation_qualification.py --family collision --output-junit "$root/collision-allocation-ctest.xml"
+          python scripts/dev.py qualify-scene --family collision --output-junit "$root/collision-allocation-ctest.xml"
 
       - name: Test Windows Release Character allocation qualification
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.mcp_release_build.outcome == 'success' }}
@@ -498,7 +570,7 @@ jobs:
           $root = 'build/ci-audio-release'
           ctest --test-dir $root --show-only=json-v1 | Set-Content -LiteralPath "$root/character-allocation-discovery.json" -Encoding utf8
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_character_allocation_qualification.py --discovery "$root/character-allocation-discovery.json" --regex-output "$root/character-allocation-regex.txt"
+          python scripts/dev.py qualify-character --discovery "$root/character-allocation-discovery.json" --regex-output "$root/character-allocation-regex.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $pattern = Get-Content -Raw -LiteralPath "$root/character-allocation-regex.txt"
           if (Test-Path -LiteralPath "$root/character-allocation-ctest.xml") {
@@ -506,7 +578,7 @@ jobs:
           }
           ctest --test-dir $root --parallel 1 --output-on-failure --no-tests=error --timeout 90 -R $pattern --output-junit "character-allocation-ctest.xml"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python scripts/ci/run_character_allocation_qualification.py --output-junit "$root/character-allocation-ctest.xml"
+          python scripts/dev.py qualify-character --output-junit "$root/character-allocation-ctest.xml"
 
       - name: Test Windows Release Save lifecycle allocation qualification
         id: save_allocation_release_tests
@@ -525,7 +597,7 @@ jobs:
 
       - name: Verify Windows Release Save allocation variants
         if: ${{ !cancelled() && runner.os == 'Windows' && steps.save_allocation_release_tests.outcome == 'success' }}
-        run: python scripts/verify_save_allocation_qualification.py build/ci-audio-release/save-allocation-ctest.xml
+        run: python scripts/dev.py qualify-save build/ci-audio-release/save-allocation-ctest.xml
 
       - name: Test navigation without Recast Detour
         if: ${{ !cancelled() && runner.os == 'Linux' && steps.navigation_build.outcome == 'success' }}
@@ -598,6 +670,9 @@ jobs:
           name: test-results-${{ runner.os }}
           path: |
             build/ci*/ctest.xml
+            build/ci-metal-shader/provenance.json
+            build/ci-metal-shader/tests/MetalPreparationFixture.metallib
+            build/ci-metal-shader/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
             build/ci-audio-release/collision-allocation-ctest.xml

@@ -256,6 +256,9 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<DocumentIdentity> Find(const DocumentOpenKey &key) const;
         /** @brief Finds the current identity for an instance, if open. */
         [[nodiscard]] std::optional<DocumentIdentity> Find(DocumentInstanceId instance) const;
+        /** @brief Compares an existing identity with canonical registry state without creating owned path copies.
+         * @param identity Exact instance and persistent key to check. @return False after close or retarget, or for invalid identity. */
+        [[nodiscard]] bool IsCurrent(const DocumentIdentity &identity) const noexcept;
         /** @brief Returns the number of currently open document instances. */
         [[nodiscard]] std::size_t Size() const noexcept;
 
