@@ -2,6 +2,9 @@
 /** @file PCGNodeCatalog.h
  * @brief Explicit host-owned built-in node schemas and immutable executable catalog generations. */
 #include "Horo/PCG/PCGGraphAsset.h"
+#include "Horo/PCG/PCGPointFiltering.h"
+#include "Horo/PCG/PCGPointGeneration.h"
+#include "Horo/PCG/PCGPointTransformation.h"
 #include "Horo/PCG/PCGRegistry.h"
 
 #include <array>
@@ -60,6 +63,15 @@ namespace Horo::PCG {
         SimplexNoiseV1 = 14
     };
 
+    /** @brief Owned typed authoring values; monostate means the descriptor has no payload.
+     * @details Decoding and encoding use the executable catalog's exact schemas and codecs.
+     * Unknown/malformed payloads are failures, never default-initialized replacements. */
+    using PCGNodeAuthoringSettings =
+        std::variant<std::monostate, PCGGridGenerationSettings, PCGJitterGenerationSettings, PCGStratifiedGenerationSettings,
+                     PCGPoissonGenerationSettings, PCGDensityRangeFilterSettings, PCGBoundsFilterSettings, PCGSlopeFilterSettings,
+                     PCGDistanceFilterSettings, PCGAttributeFilterSettings, PCGPointTransformSettings, PCGPointAlignmentSettings,
+                     PCGPointRandomOffsetSettings, PCGPointNoiseSettings>;
+
     /** @brief One semantic pin slot; authored pin identities remain graph-owned. */
     struct PCGNodePinSchema final {
         PCGPinDirection direction{};
@@ -113,6 +125,15 @@ namespace Horo::PCG {
         /** @brief Validates exact cooked schema, version and product requirements. @param node Detached node.
          * @return Success or a stable node-located diagnostic; never invokes executable code. */
         [[nodiscard]] Result<void> Validate(const PCGCookedNode &node) const;
+        /** @brief Decodes source settings through exact catalog version, pin, capability and payload validation.
+         * @param node Immutable authored node; never interpreted as an executable plan.
+         * @return Owned typed settings or stable unsupported/malformed diagnostic. */
+        [[nodiscard]] Result<PCGNodeAuthoringSettings> DecodeSettings(const PCGGraphNode &node) const;
+        /** @brief Encodes an exact typed replacement without changing source identity, pins or version.
+         * @param node Current authored node. @param settings Exact descriptor-owned settings alternative.
+         * @return Detached replacement or zero-mutation schema/value/capability failure. */
+        [[nodiscard]] Result<PCGGraphNode> EncodeSettings(const PCGGraphNode &node, const PCGNodeAuthoringSettings &settings) const;
+
         /** @brief Computes checked declared work before execution. @param node Exact validated cooked settings and descriptor.
          * @param maximumPoints Admitted input/output point ceiling.
          * @param maximumSnapshotElements Complete admitted grid/volume lookup ceiling. @return Bounded work or overflow failure. */

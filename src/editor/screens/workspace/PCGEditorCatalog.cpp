@@ -50,15 +50,16 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @copydoc CreatePCGEditorCatalog */
+    /** @copydoc CreatePCGEditorCatalog() */
     Result<PCGEditorCatalog> CreatePCGEditorCatalog() {
+        const std::array grants{PCG::PCGCapability::Validation};
+        return CreatePCGEditorCatalog(PCG::PCGCapabilitySet::Create(grants).Value());
+    }
+
+    /** @copydoc CreatePCGEditorCatalog(PCG::PCGCapabilitySet) */
+    Result<PCGEditorCatalog> CreatePCGEditorCatalog(const PCG::PCGCapabilitySet grantedCapabilities) {
         using Return = Result<PCGEditorCatalog>;
-        const std::array grants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview, PCG::PCGCapability::OfflineBake,
-                                PCG::PCGCapability::RuntimeEvaluation, PCG::PCGCapability::HybridEvaluation};
-        const auto capabilities = PCG::PCGCapabilitySet::Create(grants);
-        if (capabilities.HasError())
-            return Return::Failure(capabilities.ErrorValue());
-        auto created = PCG::PCGNodeCatalog::Create({PCG::PCGHostProfile::Interactive, capabilities.Value()});
+        auto created = PCG::PCGNodeCatalog::Create({PCG::PCGHostProfile::Interactive, grantedCapabilities});
         if (created.HasError())
             return Return::Failure(created.ErrorValue());
         auto owner = std::move(created).Value();
@@ -74,7 +75,8 @@ namespace Horo::Editor {
         if (captured.HasError())
             return Return::Failure(captured.ErrorValue());
         PCGEditorCatalog result;
-        result.executable = captured.Value();
+        result.schemas = captured.Value();
+
         result.document.revision = captured.Value().Generation();
         for (const auto &descriptor : captured.Value().Nodes()) {
             const auto payload = InitialSettings(descriptor.kind);

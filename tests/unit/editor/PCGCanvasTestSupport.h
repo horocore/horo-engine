@@ -22,10 +22,13 @@ namespace Horo::Editor::PCGCanvasTestSupport {
         std::unique_ptr<JobSystem> jobs;
         std::unique_ptr<EditorWorkspaceController> controller;
 
-        explicit CanvasWorkspace(bool preview = false) {
+        explicit CanvasWorkspace(bool preview = false, bool grantPreview = true) {
             PublishGraphAsset(registry);
             REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
-            auto composed = CreatePCGEditorCatalog();
+            const std::array grants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview, PCG::PCGCapability::OfflineBake,
+                                    PCG::PCGCapability::RuntimeEvaluation, PCG::PCGCapability::HybridEvaluation};
+            auto composed =
+                preview && grantPreview ? CreatePCGEditorCatalog(PCG::PCGCapabilitySet::Create(grants).Value()) : CreatePCGEditorCatalog();
             REQUIRE(composed.HasValue());
             auto catalog = std::move(composed).Value();
             // The existing durable fixture contains one synthetic source type; preserve it alongside built-ins.

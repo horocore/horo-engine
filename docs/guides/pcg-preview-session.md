@@ -62,3 +62,17 @@ isolation, coalescing, cancellation, stale/reopened source/provider fences, fail
 queued shutdown, owner-thread admission and actual bounded ImGui drawing at narrow
 and wide sizes in both themes/locales. Compilation, execution and interactive
 visual qualification must be reported separately from source-only checks.
+
+## Authoring stack integration
+
+The merge order is schema/property authoring (PR #3510), then preview (PR #3509).
+`PCGEditorCatalog.schemas` is the only executable catalog publication consumed by
+source support, inspector drafts and preview capture. Default catalog composition
+grants validation only; the interactive preview host passes its execution grants
+explicitly. Validation-only hosts can author source but cannot admit evaluation.
+
+Preview always captures the applied immutable document root. An unapplied inspector
+draft never enters a request. Apply, undo and redo all use the canonical document
+executor and revoke the old overlay; refresh evaluates the resulting revision. A
+cancelled Apply preserves the current root/overlay, and preview Cancel clears only
+the disposable overlay. Integration regression cases protect those boundaries.

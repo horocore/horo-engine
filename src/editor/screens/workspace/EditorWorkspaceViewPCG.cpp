@@ -1,5 +1,6 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/pcg/PCGAuthoringInspector.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
 #include "editor/screens/workspace/PCGPreviewView.h"
 
@@ -17,6 +18,8 @@ namespace Horo::Editor {
             const ILocalizationService &localization;
             const Theme::Fonts &fonts;
             std::optional<PCGEditorRequest> request;
+            const PCG::PCGNodeCatalogSnapshot *schemas{};
+            PCGAuthoringInspectorState *inspector{};
 
             std::string Text(const char *key) const {
                 return localization.Get("editor", key);
@@ -255,8 +258,27 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Forwards one explicit property Apply while retaining presentation-only buffers in the panel. */
+        bool DrawAuthoringControls(CanvasFrame &frame) {
+            if (frame.schemas && frame.inspector) {
+                ImGui::BeginDisabled(frame.request && frame.request->action != PCGEditorAction::Present);
+                const bool submitted = DrawPCGAuthoringInspector(*frame.inspector, frame.document.snapshot, *frame.schemas,
+                                                                 frame.State().selection, true, frame.localization, frame.fonts)
+                                           .has_value();
+                if (submitted) {
+                    frame.Edit().action = PCGEditorAction::ApplyProperties;
+                    frame.Edit().authoring = frame.inspector->draft;
+                }
+                ImGui::EndDisabled();
+                return submitted;
+            }
+            return false;
+        }
+
         /** @brief Composes selection inspection and reference-aware removal without decoding node-owned payloads. */
         void DrawInspector(CanvasFrame &frame) {
+            if (DrawAuthoringControls(frame))
+                return;
             Ui::SectionTitle(frame.Text("workspace.pcg.inspector").c_str(), frame.fonts);
             if (frame.State().selection.empty()) {
                 Ui::Hint(frame.Text("workspace.pcg.select_hint").c_str(), frame.fonts);
@@ -325,6 +347,7 @@ namespace Horo::Editor {
             /** @copydoc IWorkspacePanel::OnDetach */
             void OnDetach() override {
                 attached_ = false;
+                inspector_ = {};
             }
 
             /** @copydoc IWorkspacePanel::DrawIcon */
@@ -343,7 +366,8 @@ namespace Horo::Editor {
                 });
                 if (found == workspace.pcgDocuments.end())
                     return;
-                if (auto request = DrawPCGGraphEditor(*found, workspace.pcgPalette, context.localization, context.theme.fonts)) {
+                if (auto request = DrawPCGGraphEditor(*found, workspace.pcgPalette, context.localization, context.theme.fonts,
+                                                      &workspace.pcgSchemas, &inspector_)) {
                     command.command = EditorWorkspaceViewCommand::EditPCGGraph;
                     command.documentInstance = found->snapshot.identity.instance;
                     command.pcgRequest = std::move(request);
@@ -352,13 +376,15 @@ namespace Horo::Editor {
 
         private:
             bool attached_{};
+            PCGAuthoringInspectorState inspector_;
         };
     }  // namespace
 
     /** @copydoc DrawPCGGraphEditor */
     std::optional<PCGEditorRequest> DrawPCGGraphEditor(const PCGWorkspaceDocument &document, std::span<const PCGPaletteEntry> palette,
-                                                       const ILocalizationService &localization, const Theme::Fonts &fonts) {
-        CanvasFrame frame{document, palette, localization, fonts, {}};
+                                                       const ILocalizationService &localization, const Theme::Fonts &fonts,
+                                                       const PCG::PCGNodeCatalogSnapshot *schemas, PCGAuthoringInspectorState *inspector) {
+        CanvasFrame frame{document, palette, localization, fonts, {}, schemas, inspector};
         ImGui::PushID(std::to_string(document.snapshot.identity.instance.Value()).c_str());
         if ((frame.State().draggingNode || frame.State().connectingPin) &&
             (ImGui::GetIO().AppFocusLost || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)))
@@ -392,7 +418,7 @@ namespace Horo::Editor {
         if (wide)
             ImGui::SameLine(0, gap);
         {
-            Ui::ScopedCard inspector("##pcg_inspector", {side, height});
+            Ui::ScopedCard inspectorCard("##pcg_inspector", {side, height});
             DrawInspector(frame);
         }
         ImGui::PopID();

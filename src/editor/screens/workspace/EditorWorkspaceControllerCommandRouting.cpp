@@ -28,6 +28,17 @@ namespace Horo::Editor {
         if (cmd.command != EditorWorkspaceViewCommand::None && cmd.command != EditorWorkspaceViewCommand::EditPCGGraph)
             for (auto &document : m_viewModel.pcgDocuments)
                 CancelPCGCanvasGesture(document.canvas);
+        if (!m_viewModel.selectedColliders.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
+            cmd.command != EditorWorkspaceViewCommand::SelectPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::CommitPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::NavigateViewport && cmd.command != EditorWorkspaceViewCommand::AlignViewportToAxis &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeViewportProjection &&
+            cmd.command != EditorWorkspaceViewCommand::FocusViewportSelection &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformTool &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformSpace) {
+            m_viewModel.selectedColliders.clear();
+            ++m_viewModel.colliderSelectionRevision;
+        }
         DispatchWorkspaceCommand(cmd);
         RefreshSourceDocumentProjection();
     }

@@ -4,10 +4,17 @@
 #include <limits>
 
 namespace Horo::Editor {
+    /** @copydoc EditorWorkspaceController::HasPCGPreviewGrant */
+    bool EditorWorkspaceController::HasPCGPreviewGrant() const noexcept {
+        return m_pcgPreviewCatalog.IsValid() && m_pcgPreviewCatalog.Capabilities().granted.Contains(PCG::PCGCapability::EditorPreview);
+    }
+
     /** @copydoc EditorWorkspaceController::RequestPCGPreview */
     Result<void> EditorWorkspaceController::RequestPCGPreview(DocumentInstanceId instance, CancellationToken cancellation) {
-        if (m_pcgDocumentsShutdown || !m_pcgPreviewJobs || !m_pcgPreviewInputs || !m_pcgPreviewCatalog.IsValid())
+        if (m_pcgDocumentsShutdown || !m_pcgPreviewJobs || !m_pcgPreviewInputs)
             return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Closed)));
+        if (!HasPCGPreviewGrant())
+            return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
         auto document = m_pcgDocuments.Snapshot(instance);
         if (document.HasError())
             return Result<void>::Failure(document.ErrorValue());
@@ -66,7 +73,7 @@ namespace Horo::Editor {
             static_cast<void>(owner.session->Cancel());
         m_pcgPreviewInputs = std::move(inputs);
         for (auto &projection : m_viewModel.pcgDocuments)
-            projection.previewAvailable = m_pcgPreviewJobs && m_pcgPreviewCatalog.IsValid();
+            projection.previewAvailable = m_pcgPreviewJobs && HasPCGPreviewGrant();
         UpdatePCGPreviews();
         return Result<void>::Success();
     }

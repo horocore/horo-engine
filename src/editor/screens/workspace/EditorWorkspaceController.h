@@ -84,8 +84,9 @@ namespace Horo::Editor {
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
-        PCGEditorCatalog pcg{.document = {.revision = 1}}; /**< One host-composed source-support and creation-recipe generation. */
-        std::optional<PCGPreviewInputs> pcgPreviewInputs;  /**< Explicit detached provider; absent rejects preview. */
+        PCGEditorCatalog pcg{
+            .document = {.revision = 1}};                 /**< One host-composed source support, executable schemas and creation recipes. */
+        std::optional<PCGPreviewInputs> pcgPreviewInputs; /**< Explicit detached provider; absent rejects preview. */
 
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
@@ -319,6 +320,13 @@ namespace Horo::Editor {
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;
+        std::optional<Prefab::PrefabValueSchemaSnapshot> m_navigationPrefabSchemas;
+        /** @brief Explicitly compose inert built-in navigation topology metadata once for source and edit resolution. */
+        [[nodiscard]] Result<void> EnsureNavigationPrefabSchemas(const Prefab::PrefabLimitProfile &limits);
+        /** @brief Prepare and commit one exact Prefab-member gesture with canonical runtime graph validation. */
+        void ApplyPrefabNavigationInspector(const NavigationInspectorRequest &request);
+        /** @brief Commit one admitted Prefab gesture while its fresh source capture and mutation lease stay pinned. */
+        [[nodiscard]] Result<SceneCommandResult> CommitPrefabNavigationInspector(const NavigationInspectorRequest &request);
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
@@ -353,7 +361,19 @@ namespace Horo::Editor {
         /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
         void RefreshPhysicsInspectorPort();
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
+        /** @brief Admit one atomic navigation gesture through existing document/history owners. */
+        void ApplyNavigationInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit the complete ordinary selection and publish one canonical Scene transaction. */
+        void ApplySceneNavigationInspector(const NavigationInspectorRequest &request);
+        /** @brief Capture descriptor publications outside Draw without inventing defaults in degraded projects. */
+        void RefreshNavigationInspectorDefinitions();
         void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit collider child selection and atomic gizmo edits through this exact Scene/history owner. */
+        void ApplyColliderViewportCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Validate stable collider sub-selection without changing the document or selection. */
+        [[nodiscard]] Result<void> ValidateColliderViewportSelection(std::span<const ColliderEditTarget> selection) const;
+        /** @brief Commit an admitted collider gesture atomically and publish one canonical document event. */
+        void CommitColliderViewportEdits(const ColliderViewportRequest &request, const SceneTransactionSnapshot &snapshot);
         /** @brief Check the actual selection authority and exact owner fence before candidate preparation. */
         [[nodiscard]] Result<SceneTransactionSnapshot> CapturePhysicsInspectorSnapshot(const EditorWorkspaceViewCommandData &command) const;
         Assets::AssetId m_physicsDocumentOwner;
@@ -668,6 +688,8 @@ namespace Horo::Editor {
                                              const PCGDocumentSnapshot &snapshot);
         /** @brief Captures the current canonical source into its isolated preview owner. */
         [[nodiscard]] Result<void> RequestPCGPreview(DocumentInstanceId instance, CancellationToken cancellation);
+        /** @brief Checks the canonical catalog's explicit preview grant without granting or composing capabilities. */
+        [[nodiscard]] bool HasPCGPreviewGrant() const noexcept;
         /** @brief Cancels one session and synchronously retires only on explicit canonical close/shutdown. */
         void RetirePCGPreview(DocumentInstanceId instance);
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);

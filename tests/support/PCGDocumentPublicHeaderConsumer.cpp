@@ -11,6 +11,12 @@ static_assert(!std::is_copy_constructible_v<Horo::Editor::PCGGraphDocument>);
 static_assert(!std::is_copy_constructible_v<Horo::Editor::PCGGraphDocumentService>);
 static_assert(std::is_nothrow_move_constructible_v<Horo::Editor::PCGGraphDocument>);
 
+static_assert(std::is_copy_constructible_v<Horo::Editor::PCGGraphAuthoringDraft>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Editor::PCGGraphAuthoringDraft &>().Command(
+                                 std::declval<const Horo::Editor::PCGDocumentSnapshot &>(),
+                                 std::declval<const Horo::PCG::PCGNodeCatalogSnapshot &>(), true)),
+                             Horo::Result<Horo::Editor::PCGDocumentCommand>>);
+
 int main() {
     const auto parsed = Horo::Editor::ParseDocumentKind("pcg_graph");
     return parsed.HasValue() && parsed.Value() == Horo::Editor::DocumentKind::PCGGraph ? 0 : 1;

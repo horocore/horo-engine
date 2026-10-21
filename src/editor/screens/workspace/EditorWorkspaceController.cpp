@@ -74,7 +74,7 @@ namespace Horo::Editor {
           m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcg.document,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
-          m_pcgPreviewJobs(dependencies.jobs), m_pcgPreviewCatalog(dependencies.pcg.executable),
+          m_pcgPreviewJobs(dependencies.jobs), m_pcgPreviewCatalog(dependencies.pcg.schemas),
           m_pcgPreviewInputs(dependencies.pcgPreviewInputs), m_prefabSourceCapture(dependencies.prefabSources),
           m_workspaceSession(dependencies.documentSessionOwner), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
           m_collisionInventory(dependencies.collision.inventory), m_collisionActivation(dependencies.collision.activation),
@@ -89,6 +89,7 @@ namespace Horo::Editor {
           m_playSession(dependencies.networkDebugger), m_audioPreview(dependencies.audioPreview),
           m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
         m_viewModel.pcgPalette = dependencies.pcg.palette;
+        m_viewModel.pcgSchemas = dependencies.pcg.schemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;

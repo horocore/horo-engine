@@ -65,7 +65,7 @@ namespace Horo::Editor {
             found = std::prev(documents.end());
         }
         RefreshPCGCanvas(*found, snapshot.Value());
-        found->previewAvailable = m_pcgPreviewJobs && m_pcgPreviewInputs && m_pcgPreviewCatalog.IsValid();
+        found->previewAvailable = m_pcgPreviewJobs && m_pcgPreviewInputs && HasPCGPreviewGrant();
         UpdatePCGPreviews();
     }
 
@@ -236,6 +236,16 @@ namespace Horo::Editor {
                                                                     const PCGDocumentSnapshot &snapshot) {
         using enum PCGEditorAction;
         const auto instance = snapshot.identity.instance;
+        if (request.action == ApplyProperties) {
+            if (!request.authoring)
+                return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Invalid)));
+            auto prepared = request.authoring->Command(snapshot, m_viewModel.pcgSchemas, request.fence.canEdit);
+            if (prepared.HasError())
+                return Result<void>::Failure(prepared.ErrorValue());
+            auto command = std::move(prepared).Value();
+            command.cancellation = request.fence.cancellation;
+            return ExecutePCGDocument(instance, command);
+        }
         if (request.action == Present) {
             document.canvas = request.presentation;
             return Result<void>::Success();

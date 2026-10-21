@@ -671,7 +671,10 @@ namespace Horo::Editor {
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, session.Value().ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
-                auto pcgComposition = CreatePCGEditorCatalog();
+                const std::array previewGrants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview,
+                                               PCG::PCGCapability::OfflineBake, PCG::PCGCapability::RuntimeEvaluation,
+                                               PCG::PCGCapability::HybridEvaluation};
+                auto pcgComposition = CreatePCGEditorCatalog(PCG::PCGCapabilitySet::Create(previewGrants).Value());
                 if (pcgComposition.HasError())
                     return Result<void>::Failure(pcgComposition.ErrorValue());
                 auto pcgCatalog = std::move(pcgComposition).Value();

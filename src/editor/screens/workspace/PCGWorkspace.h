@@ -24,12 +24,16 @@ namespace Horo::Editor {
     struct PCGEditorCatalog final {
         PCGDocumentCatalog document;
         std::vector<PCGPaletteEntry> palette;
-        PCG::PCGNodeCatalogSnapshot executable;
+        PCG::PCGNodeCatalogSnapshot schemas;
     };
 
-    /** @brief Composes repository-owned schemas without activating evaluators or selecting a backend.
+    /** @brief Composes validation-only repository schemas without activating evaluators or selecting a backend.
      * @return Catalog and canonical payload recipes, or a typed composition failure. */
     [[nodiscard]] Result<PCGEditorCatalog> CreatePCGEditorCatalog();
+    /** @brief Composes the same canonical schemas with explicit host execution grants.
+     * @param grantedCapabilities Exact interactive-host grants; no execution capability is inferred or added.
+     * @return Source support, palette and immutable schemas from one catalog publication, or composition failure. */
+    [[nodiscard]] Result<PCGEditorCatalog> CreatePCGEditorCatalog(PCG::PCGCapabilitySet grantedCapabilities);
 
     /** @brief Presentation position in unscaled graph coordinates; never serialized in source. */
     struct PCGNodePlacement final {
@@ -69,6 +73,7 @@ namespace Horo::Editor {
         Undo,
         Redo,
         Save,
+        ApplyProperties,
         PreviewRefresh,
         PreviewCancel
     };
@@ -84,6 +89,7 @@ namespace Horo::Editor {
         PCG::PinId sourcePin;
         PCG::PinId targetPin;
         PCG::EdgeId edge;
+        std::optional<PCGGraphAuthoringDraft> authoring;
     };
 
     /** @brief Synchronizes presentation after an immutable publication, dropping stale semantic references.
@@ -93,6 +99,7 @@ namespace Horo::Editor {
      * @param state Workspace-owned gesture state. */
     void CancelPCGCanvasGesture(PCGCanvasState &state);
     class ILocalizationService;
+    struct PCGAuthoringInspectorState;
 
     namespace Theme {
         struct Fonts;
@@ -101,10 +108,13 @@ namespace Horo::Editor {
     /** @brief Draws the real graph surface from immutable source using shared controls and localized labels.
      * @param document Exact source projection. @param palette Host creation recipes.
      * @param localization Shared catalog. @param fonts Shared typography.
+     * @param schemas Optional exact host schemas. @param inspector Optional workspace presentation buffers.
      * @return Fenced input intent, or no change for an idle frame. */
     [[nodiscard]] std::optional<PCGEditorRequest> DrawPCGGraphEditor(const PCGWorkspaceDocument &document,
                                                                      std::span<const PCGPaletteEntry> palette,
-                                                                     const ILocalizationService &localization, const Theme::Fonts &fonts);
+                                                                     const ILocalizationService &localization, const Theme::Fonts &fonts,
+                                                                     const PCG::PCGNodeCatalogSnapshot *schemas = nullptr,
+                                                                     PCGAuthoringInspectorState *inspector = nullptr);
     /** @brief Checks finite, bounded presentation against one source without mutating either.
      * @param state Detached presentation intent. @param source Exact immutable source.
      * @return Zero-mutation validation result. */
