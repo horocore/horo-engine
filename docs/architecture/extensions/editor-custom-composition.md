@@ -35,6 +35,15 @@ extend the scalar field array. Missing or duplicate style targets, unsupported
 versions/roles and incompatible presenters are rejected. Existing schema1 callers
 require no migration; schema2 producers must pass the complete extended descriptor.
 
+Container captions and primitive field labels/descriptions now consume theme text
+slots in the canonical render bounds. This corrects the old control-only geometry,
+which let standard field labels overlap clipped Row/Grid neighbors. Affected
+callers are the common snapshot builder and page, inspector and activity adapters.
+Adapters must treat a node rectangle as its complete outer allocation and must not
+add a second container-header offset. Nested Row/Grid and empty-container tests
+record the new caption-inclusive geometry. Action labels remain inside their Horo
+button; plot/scalar presenters reserve their label and readout slots explicitly.
+
 ## Admission, commands and input
 
 The application explicitly advertises native `editor.custom-composition` support

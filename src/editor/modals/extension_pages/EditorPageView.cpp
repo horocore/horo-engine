@@ -159,7 +159,7 @@ namespace Horo::Editor {
         if (page.focused == base.id && ImGui::IsWindowAppearing())
             ImGui::SetKeyboardFocusHere();
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + render_->nodes[index].width);
-        if (!base.label.value.empty())
+        if (!base.label.value.empty() && !std::holds_alternative<EditorUiActionNode>(node.payload))
             Ui::FieldLabel(Text(base.label.value), context_.theme.fonts);
         ImGui::SetNextItemWidth(render_->nodes[index].width);
         DrawValue(node, page, index);

@@ -21,6 +21,9 @@ static const HoroEditorUiCustomPresentation plotStyle = {sizeof(HoroEditorUiCust
                                                          3};
 /* Real native-package reference: standard Horo text/action and specialized plot share one surface. */
 static const HoroEditorActivityNodeV2 nodes[] = {{.node = {.structSize = sizeof(HoroEditorActivityNode),
+                                                           .kind = HORO_EDITOR_ACTIVITY_ROW,
+                                                           .id = TEXT("fixture.controls")}},
+                                                 {.node = {.structSize = sizeof(HoroEditorActivityNode),
                                                            .kind = HORO_EDITOR_ACTIVITY_TEXT,
                                                            .flags = HORO_EDITOR_ACTIVITY_TEXT_TECHNICAL,
                                                            .id = TEXT("fixture.output"),
@@ -39,10 +42,7 @@ static const HoroEditorActivityNodeV2 nodes[] = {{.node = {.structSize = sizeof(
                                                            .actionId = TEXT("fixture.inspect")},
                                                   .samples = samples,
                                                   .sampleCount = 4,
-                                                  .presentation = &plotStyle},
-                                                 {.node = {.structSize = sizeof(HoroEditorActivityNode),
-                                                           .kind = HORO_EDITOR_ACTIVITY_ROW,
-                                                           .id = TEXT("fixture.controls")}}};
+                                                  .presentation = &plotStyle}};
 
 static HoroExtensionStatus Invoke(void *context, const HoroEditorActivityAction *action, const HoroEditorActivitySnapshotSink *sink) {
     (void)context;

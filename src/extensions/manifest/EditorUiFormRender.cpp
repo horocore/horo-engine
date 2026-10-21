@@ -116,6 +116,25 @@ namespace Horo::Extensions {
             }
         }
 
+        /** @brief Reserves visible caption slots in the same geometry consumed by every adapter. */
+        float CaptionHeight(const EditorUiNodeBase &base, const EditorUiThemeMetrics &metrics, const bool includeLabel = true) noexcept {
+            const int lines = (includeLabel && !base.label.value.empty() ? 1 : 0) + (!base.description.value.empty() ? 1 : 0);
+            return static_cast<float>(lines) * (metrics.textLineHeight + metrics.rowGap);
+        }
+
+        /** @brief Measures complete primitive bounds, so labels and custom content cannot overlap adjacent Row/Grid cells. */
+        float PrimitiveHeight(const EditorUiNode &node, const EditorUiThemeMetrics &metrics) noexcept {
+            const auto &base = BaseOf(node);
+            const auto kind = EditorUiNodeKindOf(node);
+            const bool scalar = base.custom && base.custom->widget == EditorUiCustomWidget::ScalarDial;
+            const bool specialized = scalar || kind == EditorUiNodeKind::Plot;
+            const float content = specialized ? metrics.largeControlHeight *
+                                                        static_cast<float>(base.custom.value_or(EditorUiCustomPresentation{}).controlRows) +
+                                                    2.0F * (metrics.textLineHeight + metrics.rowGap)
+                                              : NodeHeight(kind, base.size, metrics);
+            return content + CaptionHeight(base, metrics, !specialized && kind != EditorUiNodeKind::Action);
+        }
+
         struct ResolvedStyle final {
             EditorUiThemeToken foreground{EditorUiThemeToken::TextPrimary};
             EditorUiThemeToken background{EditorUiThemeToken::None};
@@ -275,9 +294,9 @@ namespace Horo::Extensions {
 
             [[nodiscard]] float MeasureContainer(const EditorUiContainerNode &container, const float width) {
                 using enum EditorUiLayoutKind;
+                const float header = CaptionHeight(container.base, metrics_);
                 if (ChildCount(container.base.id) == 0)
-                    return metrics_.textLineHeight;
-                const float header = container.base.label.value.empty() ? 0.0F : metrics_.textLineHeight + metrics_.rowGap;
+                    return std::max(metrics_.textLineHeight, header);
                 switch (container.layout) {
                     case Group:
                     case Stack:
@@ -295,16 +314,7 @@ namespace Horo::Extensions {
                 const EditorUiNode &node = nodes_[index];
                 const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
                 const EditorUiNodeBase &base = BaseOf(node);
-                const float baseHeight = NodeHeight(kind, base.size, metrics_);
-                const float customHeight = base.custom && base.custom->widget == EditorUiCustomWidget::ScalarDial
-                                               ? metrics_.largeControlHeight * static_cast<float>(base.custom->controlRows) +
-                                                     2.0F * (metrics_.textLineHeight + metrics_.rowGap)
-                                               : baseHeight;
-                float height = customHeight;
-                if (kind == EditorUiNodeKind::Plot)
-                    height =
-                        metrics_.largeControlHeight * static_cast<float>(base.custom.value_or(EditorUiCustomPresentation{}).controlRows) +
-                        (metrics_.textLineHeight + metrics_.rowGap) * 2.0F;
+                float height = PrimitiveHeight(node, metrics_);
                 if (IsContainer(kind))
                     height = MeasureContainer(std::get<EditorUiContainerNode>(node.payload), width);
                 else if (ChildCount(base.id) != 0)
@@ -372,7 +382,7 @@ namespace Horo::Extensions {
                 const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
                 const EditorUiNodeBase &base = BaseOf(node);
                 if (!IsContainer(kind)) {
-                    float cursorY = y + NodeHeight(kind, base.size, metrics_);
+                    float cursorY = y + PrimitiveHeight(node, metrics_);
                     if (ChildCount(base.id) != 0) {
                         cursorY += metrics_.rowGap;
                         ForEachChild(base.id, [this, &cursorY, x, width](const std::size_t childIndex) {
@@ -384,7 +394,7 @@ namespace Horo::Extensions {
                 }
                 const auto &container = std::get<EditorUiContainerNode>(node.payload);
                 using enum EditorUiLayoutKind;
-                const float contentY = y + (container.base.label.value.empty() ? 0.0F : metrics_.textLineHeight + metrics_.rowGap);
+                const float contentY = y + CaptionHeight(container.base, metrics_);
                 switch (container.layout) {
                     case Group:
                     case Stack:

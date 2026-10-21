@@ -157,4 +157,27 @@ namespace Horo::Extensions {
         CHECK(state.preview == *number.maximum);
     }
 
+    TEST_CASE("Custom and standard fields share caption-inclusive Row allocations", "[Extensions][Composition][Layout]") {
+        auto form = ScalarForm();
+        std::get<EditorUiNumberNode>(form.nodes.front().payload).base.parent = {"row"};
+        form.nodes.emplace(form.nodes.begin(), EditorUiContainerNode{.base = {.id = {"row"}, .focusPolicy = EditorUiFocusPolicy::Never},
+                                                                     .layout = EditorUiLayoutKind::Row});
+        form.nodes.emplace_back(EditorUiBooleanNode{.base = {.id = {"enabled"},
+                                                             .parent = {"row"},
+                                                             .label = {EditorUiTextKind::LocalizationKey, "enabled.label"}},
+                                                    .binding = {"enabled"},
+                                                    .value = true});
+        auto rendered = BuildEditorUiRenderSnapshot(form, {}, 400);
+        REQUIRE(rendered.HasValue());
+        const auto &nodes = rendered.Value().nodes;
+        REQUIRE(nodes.size() == 3);
+        CHECK(nodes[1].y == nodes[2].y);
+        CHECK(nodes[2].width == 200.0F);
+        CHECK(nodes[2].height == 60.0F);
+        CHECK(nodes[0].height >= nodes[1].height);
+        CHECK(nodes[0].height >= nodes[2].height);
+        CHECK(rendered.Value().accessibility[1].role == EditorUiAccessibleRole::ScalarDial);
+        CHECK(rendered.Value().accessibility[2].role == EditorUiAccessibleRole::Field);
+    }
+
 }  // namespace Horo::Extensions

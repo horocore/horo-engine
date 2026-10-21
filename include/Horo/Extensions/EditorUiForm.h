@@ -582,7 +582,10 @@ namespace Horo::Extensions {
      */
     [[nodiscard]] Result<void> ValidateEditorUiComposition(const EditorUiForm &form, const EditorUiCompositionBudget &budget = {});
 
-    /** @brief One backend-neutral render record shared by editor and headless adapters. */
+    /** @brief One backend-neutral render record shared by editor and headless adapters.
+     * @details Bounds allocate the complete node, including field captions and container headers;
+     * action labels are inside their control. Adapters clip content to this allocation.
+     */
     struct EditorUiRenderNode final {
         EditorUiId id;
         EditorUiId parent;
