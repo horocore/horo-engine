@@ -148,6 +148,18 @@ namespace Horo::Editor::DesignSystem {
         float propertyRowGap; /**< Vertical separation between adjacent Inspector property controls. */
     };
 
+    /** @brief Host theme motion policy; extension presentation cannot override reduced motion. */
+    struct MotionTokens {
+        float fast{0.10F};
+        float normal{0.18F};
+        float slow{0.30F};
+        float hover{0.12F};
+        float press{0.08F};
+        float focus{0.15F};
+        float modal{0.22F};
+        bool reduceMotion{};
+    };
+
     /** @brief Resolved immutable editor design tokens for one rendered frame. */
     struct DesignTokens {
         ColorTokens colors;
@@ -156,6 +168,7 @@ namespace Horo::Editor::DesignSystem {
         SizeTokens sizes;
         SpacingTokens spacing;
         ComponentTokens components;
+        MotionTokens motion;
     };
 
     /**
@@ -297,6 +310,7 @@ namespace Horo::Editor::DesignSystem {
                 },
                 std::array{0.0F, 4.0F, 8.0F, 12.0F, 16.0F, 24.0F},
             },
+            MotionTokens{},
         };
     }
 

@@ -1,4 +1,5 @@
 #include "../extensions/ScriptInvocationTestSupport.h"
+#include "EditorActivityPackageSupport.h"
 #include "PackageLifecycleTestSupport.h"
 
 using namespace Horo::Packages::Tests::Support;
@@ -28,7 +29,7 @@ namespace {
                                      {"roles", {"editor-presentation"}},
                                      {"entry", "gui" + suffix},
                                      {"abi", {{"major", incompatibleGui ? 99 : 1}, {"minimumMinor", 4}}},
-                                     {"requiredCapabilities", {"editor.activity"}}}}},
+                                     {"requiredCapabilities", {"editor.activity", "editor.custom-composition"}}}}},
                                   {"contributions",
                                    {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", "fixture.backend"}},
                                     {{"type", "editor.activity_item"}, {"id", "fixture.activity"}, {"module", "fixture.module"}},
@@ -48,7 +49,8 @@ namespace {
         Extensions::ScriptCapabilityScope runtime{Extensions::ScriptCapabilityScopeKind::Runtime};
         Extensions::ScriptCapabilityScope scene{Extensions::ScriptCapabilityScopeKind::Scene};
         Extensions::ScriptCapabilityScope operation{Extensions::ScriptCapabilityScopeKind::Operation};
-        std::shared_ptr<Extensions::EditorActivityHost> editor{std::make_shared<Extensions::EditorActivityHost>(jobs)};
+        std::shared_ptr<Extensions::EditorActivityHost> editor{
+            std::make_shared<Extensions::EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy())};
         std::shared_ptr<Extensions::ScriptInvocationRegistry> scripts{std::make_shared<Extensions::ScriptInvocationRegistry>()};
         std::shared_ptr<PackageModuleRetirementQueue> retirement{std::make_shared<PackageModuleRetirementQueue>(4)};
         unsigned nativeLoads{};
@@ -65,11 +67,12 @@ namespace {
 
         explicit HybridFixture(const bool headless = false) {
             base.service.reset();
-            base.trust.capabilities = {{"editor.activity"}, {"com.example.service"}};
+            base.trust.capabilities = {{"editor.activity"}, {"editor.custom-composition"}, {"com.example.service"}};
             PackageLifecycleConfiguration configuration{.temporaryRoot = std::filesystem::canonical(base.temporary.Path()),
                                                         .profile = headless ? Extensions::ExtensionHostProfile::Headless
                                                                             : Extensions::ExtensionHostProfile::Interactive,
-                                                        .capabilities = {"editor.activity", "com.example.service"},
+                                                        .capabilities = {"editor.activity", "editor.custom-composition",
+                                                                         "com.example.service"},
                                                         .artifactGate = ::Horo::Tests::CreateAcceptingArtifactGate()};
             configuration.libraryLoader = [this](const std::string &path) -> Result<std::unique_ptr<Platform::DynamicLibrary>> {
                 if (++nativeLoads == failNativeAt)

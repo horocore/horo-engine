@@ -319,7 +319,7 @@ namespace {
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 
-    TEST_CASE("GUI inventory activation uses explicit artifact authority and revokes package surfaces on shutdown",
+    TEST_CASE("GUI inventory activation requires artifact authority and custom grants before publishing surfaces",
               "[unit][editor][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
         const Horo::Tests::OwnedTestDirectory inventoryDirectory{"horo107 GUI inventory"};
@@ -342,8 +342,9 @@ namespace {
         RendererAvailabilitySnapshot renderers{{RendererBackendAvailability{"opengl", "OpenGL", RendererAvailabilityState::Active, {}}},
                                                "opengl"};
         std::shared_ptr<const Security::NativeArtifactGate> gate;
-        const bool admitted = GENERATE(false, true);
-        if (admitted)
+        const bool artifactTrusted = GENERATE(false, true);
+        const bool compositionGranted = GENERATE(false, true);
+        if (artifactTrusted)
             gate = Horo::Tests::CreateAcceptingArtifactGate();
         GuiScreenHost host{gui, GuiScreenHostComposition{.modalHost = modals,
                                                          .settingsService = settings,
@@ -356,8 +357,10 @@ namespace {
                                                          .screenRegistry = {},
                                                          .workspacePanelRegistry = {},
                                                          .extensionInventory = &inventory,
-                                                         .extensionArtifactGate = std::move(gate)}};
-        CheckInventoryActivityShutdown(host, inventory, admitted);
+                                                         .extensionArtifactGate = std::move(gate),
+                                                         .extensionUiPolicy = compositionGranted ? Horo::Tests::EditorCompositionPolicy()
+                                                                                                 : Extensions::ExtensionAdmissionPolicy{}}};
+        CheckInventoryActivityShutdown(host, inventory, artifactTrusted && compositionGranted);
         jobs.Shutdown(ShutdownPolicy::Cancel);
     }
 

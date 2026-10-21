@@ -9,6 +9,11 @@ namespace {
         const Horo::Extensions::EditorSurfaceProviderIdentity &, std::string_view, std::string_view, std::string_view, std::uint64_t) const;
     static_assert(std::is_same_v<decltype(&Horo::Extensions::EditorActivityHost::QueueAction), ActionCommand>);
 
+    static_assert(std::is_standard_layout_v<HoroEditorActivityNodeV2>);
+    static_assert(std::is_trivially_copyable_v<HoroEditorActivityNodeV2>);
+    static_assert(offsetof(HoroEditorActivityNodeV2, node) == 0);
+    static_assert(HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION != HORO_EDITOR_ACTIVITY_SCHEMA_VERSION);
+
     // C++ tag names and the C11 typedef spelling expose the same append-only transport contract.
     static_assert(std::is_standard_layout_v<HoroEditorActivityNode> && std::is_trivially_copyable_v<HoroEditorActivityNode>);
     static_assert(std::is_standard_layout_v<HoroEditorActivitySnapshot> && std::is_trivially_copyable_v<HoroEditorActivitySnapshot>);

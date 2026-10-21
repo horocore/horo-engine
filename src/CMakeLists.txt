@@ -3169,6 +3169,7 @@ endif ()
 if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
+            editor/design_system/components/EditorUiCustomResources.cpp
             editor/design_system/components/SequenceTimelineControl.cpp
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
@@ -3301,6 +3302,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
+            editor/screens/workspace/ExtensionActivityPlot.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
@@ -3366,6 +3368,9 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorActivitySession.cpp
         extensions/host/EditorActivityAction.cpp
         extensions/host/EditorPageHost.cpp
+        extensions/manifest/EditorViewportDefinition.cpp
+        extensions/host/EditorViewportHost.cpp
+        extensions/host/EditorViewportNativeSession.cpp
         extensions/host/EditorInspectorHost.cpp
         extensions/host/EditorInspectorNativeSession.cpp
         extensions/host/EditorInspectorAbiConversion.cpp
@@ -3405,6 +3410,8 @@ add_library(HoroExtensions STATIC
         extensions/manifest/EditorSvgIcon.cpp
     extensions/manifest/EditorUiForm.cpp
     extensions/manifest/EditorUiFormBuilder.cpp
+    extensions/manifest/EditorUiComposition.cpp
+    extensions/manifest/EditorUiPlot.cpp
     extensions/manifest/EditorUiFormRender.cpp
         extensions/manifest/ScriptExportDescriptor.cpp
         extensions/manifest/ScriptExportDescriptorInternal.h

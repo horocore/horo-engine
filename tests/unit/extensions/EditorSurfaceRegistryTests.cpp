@@ -409,13 +409,31 @@ namespace Horo::Extensions::Tests {
         RequireErrorCode(registry.Register(std::move(context).Value()), "editor_surface_registry_invalid");
     }
 
+    TEST_CASE("External viewport surfaces register transiently without workspace persistence", "[Extensions][EditorSurface][Registry]") {
+        auto admission = Admission();
+        EditorSurfaceContextProvider provider;
+        EditorSurfaceRegistry registry;
+        for (const auto kind : {EditorSurfaceKind::ViewportOverlay, EditorSurfaceKind::Gizmo}) {
+            auto descriptor = ContextDescriptor("com.example.tools.viewport");
+            descriptor.surface.kind = kind;
+            descriptor.surface.placement.kind = EditorSurfacePlacementKind::Viewport;
+            descriptor.surface.persistence = EditorSurfacePersistence::None;
+            const auto identity = descriptor.surface.provider;
+            auto registration = RegisterSurface(registry, provider, admission, std::move(descriptor));
+            CHECK(registry.IsAvailable(identity, registration.Id()));
+            CHECK(registry.Save().surfaces.empty());
+            registration.Reset();
+            CHECK_FALSE(registry.IsAvailable(identity, "com.example.tools.viewport"));
+        }
+    }
+
     TEST_CASE("External editor surface registry rejects unsupported surfaces and closes deterministically",
               "[Extensions][EditorSurface][Registry]") {
         auto admission = Admission();
         EditorSurfaceContextProvider provider;
         EditorSurfaceRegistry registry;
         auto descriptor = ContextDescriptor("com.example.tools.modal");
-        descriptor.surface.kind = EditorSurfaceKind::ViewportOverlay;
+        descriptor.surface.kind = EditorSurfaceKind::AssetPreview;
         descriptor.surface.placement.kind = EditorSurfacePlacementKind::Viewport;
         descriptor.surface.persistence = EditorSurfacePersistence::None;
         auto attached = provider.Attach(std::move(descriptor), admission.ActivationLease());

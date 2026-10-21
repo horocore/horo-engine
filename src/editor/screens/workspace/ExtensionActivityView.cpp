@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/design_system/components/EditorUiCustomResources.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 
 #include <algorithm>
@@ -76,6 +77,28 @@ namespace Horo::Editor {
         host_->Update();
     }
 
+    /** @copydoc ExtensionActivityView::PreparePlots */
+    void ExtensionActivityView::PreparePlots(Entry &entry, const Entry *previous) const {
+        const auto &form = entry.projection.surface.form;
+        if (!form)
+            return;
+        for (std::size_t i = 0; i < form->nodes.size(); ++i) {
+            if (!std::holds_alternative<Extensions::EditorUiPlotNode>(form->nodes[i].payload))
+                continue;
+            Extensions::EditorUiPlotState state;
+            if (previous && previous->projection.surface.form) {
+                const auto &oldNodes = previous->projection.surface.form->nodes;
+                const auto &id = Extensions::EditorUiNodeBaseOf(form->nodes[i]).id;
+                const auto old = std::ranges::find_if(previous->plots, [&](const auto &candidate) {
+                    return Extensions::EditorUiNodeBaseOf(oldNodes[candidate.first]).id == id;
+                });
+                if (old != previous->plots.end())
+                    state = old->second;
+            }
+            entry.plots.emplace_back(i, state);
+        }
+    }
+
     /** @copydoc ExtensionActivityView::PrepareEntry */
     ExtensionActivityView::Entry ExtensionActivityView::PrepareEntry(const Extensions::EditorActivityProjection &projection,
                                                                      const std::string &locale) {
@@ -84,11 +107,15 @@ namespace Horo::Editor {
                    entry.projection.surface.descriptor.provider == projection.surface.descriptor.provider;
         });
         Entry entry{.projection = projection};
+        if (previous != entries_.end())
+            entry.offeredWidth = previous->offeredWidth;
+        PreparePlots(entry, previous != entries_.end() ? std::to_address(previous) : nullptr);
         const auto &descriptor = projection.surface.descriptor;
         entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
         entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
         PrepareNodeText(entry, locale);
         PrepareResources(entry, previous != entries_.end() ? std::to_address(previous) : nullptr);
+        PrepareLayout(entry);
         return entry;
     }
 
@@ -130,6 +157,8 @@ namespace Horo::Editor {
                                 : std::string{host_->LocalizedText(entry.projection.surface.descriptor.provider, typed.text.value, locale)};
                     }
                 }, node.payload);
+                if (std::holds_alternative<Extensions::EditorUiActionNode>(node.payload))
+                    text += "###action";
                 entry.nodeText.push_back(std::move(text));
             }
         }
@@ -171,23 +200,37 @@ namespace Horo::Editor {
                 if ((surface.descriptor.activity->side == Extensions::EditorActivitySide::Right) != right)
                     continue;
                 bool visible = surface.activity.visible;
-                ImGui::PushID(surface.descriptor.id.c_str());
+                const Ui::ScopedEditorUiIdentity identity{surface.descriptor.provider, surface.descriptor.id, entry.token};
                 if (Ui::CheckboxControl(entry.label.c_str(), &visible, context_.theme.fonts))
                     static_cast<void>(host_->Registry().SetActivityVisibility(surface.descriptor.id, visible));
-                ImGui::PopID();
             }
             ImGui::EndPopup();
         }
     }
 
+    /** @copydoc ExtensionActivityView::SetInputAdmitted */
+    void ExtensionActivityView::SetInputAdmitted(const bool admitted) noexcept {
+        inputAdmitted_ = admitted;
+        for (auto &entry : entries_)
+            if (entry.render)
+                Ui::ApplyEditorUiInput(*entry.render, admitted && entry.projection.surface.activity.enabled);
+        if (host_)
+            host_->SetInputAdmitted(admitted);
+    }
+
     void ExtensionActivityView::Update() {
         if (!host_)
             return;
+        if (ImGui::GetCurrentContext())
+            static_cast<void>(themeCapture_.Update(context_));
         ApplyPendingMove();
         const auto revision = host_->Registry().Revision();
         const auto &locale = context_.settings.settings.languageTag;
-        if (revision == revision_ && locale == locale_)
+        if (revision == revision_ && locale == locale_) {
+            for (auto &entry : entries_)
+                PrepareLayout(entry);
             return;
+        }
         std::vector<Entry> next;
         next.reserve(host_->Prepared().size());
         for (const auto &projection : host_->Prepared()) {
@@ -302,6 +345,7 @@ namespace Horo::Editor {
     }
 
     bool ExtensionActivityView::DrawItems(const bool right, const std::size_t group, ImVec2 origin, const float width, const float bottom) {
+        const Ui::ScopedEditorUiInput inputScope{inputAdmitted_};
         bool changed{};
         for (const auto &entry : entries_) {
             const auto &surface = entry.projection.surface;
@@ -313,7 +357,7 @@ namespace Horo::Editor {
             if (origin.y + 30.0F > bottom)
                 break;
             ImGui::SetCursorScreenPos(origin);
-            ImGui::PushID(surface.descriptor.id.c_str());
+            const Ui::ScopedEditorUiIdentity identity{surface.descriptor.provider, surface.descriptor.id, entry.token};
             if (Ui::ActivityButton({.tooltip = entry.tooltip.c_str(),
                                     .texture = entry.texture.Id(),
                                     .size = {width, 30.0F},
@@ -332,7 +376,6 @@ namespace Horo::Editor {
             }
             AcceptMove({surface.descriptor.activity->side, static_cast<std::uint8_t>(group), entry.ordinal});
             DrawPlacementMenu(entry, group);
-            ImGui::PopID();
             origin.y += 32.0F;
         }
         if (ImGui::GetDragDropPayload() && origin.y + 4.0F <= bottom) {
@@ -362,29 +405,82 @@ namespace Horo::Editor {
                 static_cast<void>(host_->Registry().Close(entry.projection.surface.descriptor.id));
     }
 
-    /** @copydoc ExtensionActivityView::DrawForm */
-    void ExtensionActivityView::DrawForm(const Entry &entry) const {
-        const auto &surface = entry.projection.surface;
-        if (!surface.form)
+    /** @copydoc ExtensionActivityView::PrepareLayout */
+    void ExtensionActivityView::PrepareLayout(Entry &entry) const {
+        const auto theme = themeCapture_.Frame();
+        if (!theme || !entry.projection.surface.form)
             return;
+        if (entry.render && entry.render->themeRevision == theme->revision && entry.preparedWidth == entry.offeredWidth)
+            return;
+        auto render = Extensions::BuildEditorUiRenderSnapshot(*entry.projection.surface.form, *theme, entry.offeredWidth / theme->uiScale);
+        if (render.HasValue()) {
+            entry.render.emplace(std::move(render).Value());
+            entry.preparedWidth = entry.offeredWidth;
+            Ui::ApplyEditorUiInput(*entry.render, inputAdmitted_ && entry.projection.surface.activity.enabled);
+        } else
+            entry.render.reset();
+    }
+
+    /** @copydoc ExtensionActivityView::Accessibility */
+    std::span<const Extensions::EditorUiAccessibleNode> ExtensionActivityView::Accessibility(std::string_view surface) const noexcept {
+        for (const auto &entry : entries_)
+            if (entry.render && entry.projection.surface.descriptor.id == surface && host_ &&
+                host_->IsLive(entry.projection.surface.descriptor.provider))
+                return entry.render->accessibility;
+        return {};
+    }
+
+    /** @copydoc ExtensionActivityView::DrawFormNode */
+    void ExtensionActivityView::DrawFormNode(Entry &entry, std::size_t index, float width, bool enabled) const {
+        const auto &surface = entry.projection.surface;
+        const auto &node = surface.form->nodes[index];
+        const auto &base = Extensions::EditorUiNodeBaseOf(node);
+        const auto &geometry = entry.render->nodes[index];
+        const auto fonts = Ui::EditorUiFonts(context_.theme.fonts, geometry.font);
+        std::visit([&]<class T>(const T &typed) {
+            if constexpr (std::is_same_v<T, Extensions::EditorUiPlotNode>) {
+                DrawPlot(entry, typed, index, enabled);
+            } else if constexpr (std::is_same_v<T, Extensions::EditorUiActionNode>) {
+                if (Ui::Button({.label = entry.nodeText[index].c_str(),
+                                .size = {width / entry.render->uiScale, geometry.height / entry.render->uiScale},
+                                .enabled = enabled,
+                                .font = fonts.sans}))
+                    static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
+                                                         typed.action.value, entry.projection.revision));
+            } else if constexpr (std::is_same_v<T, Extensions::EditorUiContainerNode>) {
+                if (!entry.nodeText[index].empty())
+                    Ui::SectionTitle(entry.nodeText[index].c_str(), fonts);
+            } else
+                Ui::Hint(entry.nodeText[index].c_str(), fonts);
+        }, node.payload);
+    }
+
+    /** @copydoc ExtensionActivityView::DrawForm */
+    void ExtensionActivityView::DrawForm(Entry &entry) const {
+        const auto &surface = entry.projection.surface;
+        if (!surface.form || !entry.render)
+            return;
+        entry.offeredWidth = std::max(ImGui::GetContentRegionAvail().x, 1.0F);
+        const auto origin = ImGui::GetCursorScreenPos();
+        float bottom{};
         for (std::size_t index = 0; index < surface.form->nodes.size(); ++index) {
             const auto &node = surface.form->nodes[index];
             const auto &base = Extensions::EditorUiNodeBaseOf(node);
+            const auto &geometry = entry.render->nodes[index];
+            const float width = std::max(1.0F, std::min(geometry.width, entry.offeredWidth - geometry.x));
+            ImGui::SetCursorScreenPos({origin.x + geometry.x, origin.y + geometry.y});
+            ImGui::PushClipRect({origin.x + geometry.x, origin.y + geometry.y},
+                                {origin.x + geometry.x + width, origin.y + geometry.y + geometry.height}, true);
             ImGui::PushID(base.id.value.c_str());
-            if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
-                if (Ui::Button({.label = entry.nodeText[index].c_str(),
-                                .enabled = base.enabled,
-                                .font = context_.theme.fonts.sans,
-                                .style = {.width = Ui::StyleWidth::FillAvailable}}))
-                    static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
-                                                         action->action.value, entry.projection.revision));
-            } else if (std::holds_alternative<Extensions::EditorUiContainerNode>(node.payload)) {
-                if (!entry.nodeText[index].empty())
-                    Ui::SectionTitle(entry.nodeText[index].c_str(), context_.theme.fonts);
-            } else
-                Ui::Hint(entry.nodeText[index].c_str(), context_.theme.fonts);
+            const bool enabled = inputAdmitted_ && surface.activity.enabled && geometry.enabled;
+            ImGui::BeginDisabled(!enabled);
+            DrawFormNode(entry, index, width, enabled);
+            ImGui::EndDisabled();
             ImGui::PopID();
+            ImGui::PopClipRect();
+            bottom = std::max(bottom, geometry.y + geometry.height);
         }
+        ImGui::SetCursorScreenPos({origin.x, origin.y + bottom});
     }
 
     void ExtensionActivityView::DrawDrawer(const Extensions::EditorActivitySide side, const ImVec2 position, const ImVec2 size) {
@@ -398,11 +494,10 @@ namespace Horo::Editor {
             }
             ImGui::SetNextWindowPos(position);
             ImGui::SetNextWindowSize(size);
-            if (entry.focusPending) {
+            if (entry.focusPending && inputAdmitted_) {
                 ImGui::SetNextWindowFocus();
                 entry.focusPending = false;
             }
-            ImGui::PushID(surface.descriptor.id.c_str());
             const char *window = "##ExtensionBottomDrawer";
             if (side == Extensions::EditorActivitySide::Left)
                 window = "##ExtensionLeftDrawer";
@@ -410,14 +505,17 @@ namespace Horo::Editor {
                 window = "##ExtensionRightDrawer";
             ImGui::Begin(window, nullptr,
                          ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                             ImGuiWindowFlags_NoSavedSettings);
-            Ui::SectionTitle(entry.label.c_str(), context_.theme.fonts);
-            ImGui::SameLine((std::max)(0.0F, ImGui::GetWindowContentRegionMax().x - Ui::ScaledLayoutValue(28.0F)));
-            if (Ui::IconCloseButton("##CloseDrawer", {24, 24}))
-                static_cast<void>(host_->Registry().Close(surface.descriptor.id));
-            DrawForm(entry);
+                             ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing);
+            {
+                const Ui::ScopedEditorUiInput inputScope{inputAdmitted_};
+                const Ui::ScopedEditorUiIdentity identity{surface.descriptor.provider, surface.descriptor.id, entry.token};
+                Ui::SectionTitle(entry.label.c_str(), context_.theme.fonts);
+                ImGui::SameLine((std::max)(0.0F, ImGui::GetWindowContentRegionMax().x - Ui::ScaledLayoutValue(28.0F)));
+                if (Ui::IconCloseButton("##CloseDrawer", {24, 24}))
+                    static_cast<void>(host_->Registry().Close(surface.descriptor.id));
+                DrawForm(entry);
+            }
             ImGui::End();
-            ImGui::PopID();
         }
     }
 }  // namespace Horo::Editor

@@ -14,7 +14,7 @@ namespace Horo::Extensions {
         }
 
         /** @brief Checks sealed policy and exact activation capability before exposing a declaration or admitting edits. */
-        Result<void> Permission(const ExtensionAdmissionPolicy &policy, const EditorSurfaceContext &context) {
+        Result<void> Permission(const ExtensionAdmissionPolicy &policy, const EditorSurfaceContext &context, const EditorUiForm &form) {
             const bool inspector = context.Surface().kind == EditorSurfaceKind::Inspector;
             const auto &capability = inspector ? EditorInspectorCapability : EditorPropertyDrawerCapability;
             if (const ExtensionPermissionId permission{inspector ? "editor.inspector" : "editor.property-drawer"};
@@ -24,6 +24,16 @@ namespace Horo::Extensions {
                 std::ranges::find(policy.availableCapabilities, capability) == policy.availableCapabilities.end() ||
                 std::ranges::find(context.Surface().requiredPermissions, permission) == context.Surface().requiredPermissions.end())
                 return Rejected<void>(ExtensionErrors::CapabilityUnavailable);
+            if (RequiresEditorUiComposition(form)) {
+                if (std::ranges::find(policy.availableCapabilities, EditorCustomCompositionCapability) ==
+                        policy.availableCapabilities.end() ||
+                    std::ranges::find(context.Surface().requiredCapabilities, EditorCustomCompositionCapability) ==
+                        context.Surface().requiredCapabilities.end())
+                    return Rejected<void>(ExtensionErrors::CapabilityUnavailable);
+                auto custom = context.AcquireCapabilityUse(EditorCustomCompositionCapability);
+                if (custom.HasError())
+                    return Result<void>::Failure(custom.ErrorValue());
+            }
             auto lease = context.AcquireCapabilityUse(capability);
             return lease.HasError() ? Result<void>::Failure(lease.ErrorValue()) : Result<void>::Success();
         }
@@ -136,7 +146,7 @@ namespace Horo::Extensions {
             return Rejected<EditorInspectorRegistration>();
         if (auto valid = ValidateEditorInspectorDefinition(context.Context().Surface(), definition); valid.HasError())
             return Result<EditorInspectorRegistration>::Failure(valid.ErrorValue());
-        if (auto admitted = Permission(state_->policy, context.Context()); admitted.HasError())
+        if (auto admitted = Permission(state_->policy, context.Context(), definition.form); admitted.HasError())
             return Result<EditorInspectorRegistration>::Failure(admitted.ErrorValue());
         std::erase_if(state_->sessions, [](const auto &weak) {
             const auto live = weak.lock();
@@ -203,13 +213,31 @@ namespace Horo::Extensions {
         for (const auto &weak : state_->sessions) {
             const auto live = weak.lock();
             if (live && !live->revoked && live->definition->behaviorType == behaviorType &&
-                live->definition->behaviorSchemaVersion == schemaVersion && Permission(state_->policy, live->context).HasValue())
+                live->definition->behaviorSchemaVersion == schemaVersion &&
+                Permission(state_->policy, live->context, live->definition->form).HasValue())
                 result.emplace_back(live->context, live->definition);
         }
         std::ranges::sort(result, [](const auto &left, const auto &right) {
             return left.context.Surface().id < right.context.Surface().id;
         });
         return Result<std::vector<EditorInspectorContribution>>::Success(std::move(result));
+    }
+
+    /** @copydoc EditorInspectorHost::IsAvailable */
+    bool EditorInspectorHost::IsAvailable(const EditorInspectorContribution &contribution) const noexcept {
+        if (state_->owner != std::this_thread::get_id() || state_->shutdown || state_->catalog->exhausted || !contribution.definition)
+            return false;
+        for (const auto &weak : state_->sessions) {
+            const auto live = weak.lock();
+            if (live && !live->revoked && live->definition == contribution.definition &&
+                live->context.Provider() == contribution.context.Provider() &&
+                live->context.Surface().id == contribution.context.Surface().id)
+                return state_->registry.IsAvailable(live->context.Provider(), live->context.Surface().id) && live->context.IsUsable() &&
+                       std::ranges::all_of(live->context.Surface().requiredCapabilities, [&](const auto &capability) {
+                    return live->context.HasUsableCapability(capability);
+                });
+        }
+        return false;
     }
 
     /** @copydoc EditorInspectorHost::LocalizedText */

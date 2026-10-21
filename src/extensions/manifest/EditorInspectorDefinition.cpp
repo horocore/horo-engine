@@ -41,7 +41,7 @@ namespace Horo::Extensions {
                 return false;
             return std::visit([&]<class T>(const T &typed) {
                 if constexpr (std::is_same_v<T, EditorUiContainerNode>)
-                    return typed.layout == EditorUiLayoutKind::Stack || typed.layout == EditorUiLayoutKind::Group;
+                    return typed.layout <= EditorUiLayoutKind::Grid;
                 else if constexpr (std::is_same_v<T, EditorUiTextNode> || std::is_same_v<T, EditorUiLabelNode>)
                     return base.focusPolicy == Automatic || base.focusPolicy == Never;
                 else if constexpr (requires { typed.binding; }) {
