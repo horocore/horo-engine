@@ -123,6 +123,15 @@ namespace {
             panel.DrawPanel(ImGui::GetCursorScreenPos(), {400, 280}, view, command, *gui);
             ImGui::End();
             ImGui::Render();
+            router.EndFrame();
+        }
+
+        /** @brief Losing the surface releases capture immediately while the pointer button is still held. */
+        void LoseSurface() {
+            renderer.ready = false;
+            Draw();
+            CHECK_FALSE(router.HasCapture());
+            renderer.ready = true;
         }
 
         /** @brief Begin and advance a real axis drag, verifying preview does not become authored state. */
@@ -195,10 +204,7 @@ TEST_CASE("Collider gestures pass through the real viewport in logical pixels an
             fixture.panel.OnDetach();
             break;
         case ColliderViewportScenario::Unavailable:
-            fixture.renderer.ready = false;
-            io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
-            fixture.Draw();
-            fixture.renderer.ready = true;
+            fixture.LoseSurface();
             break;
         default:
             break;
