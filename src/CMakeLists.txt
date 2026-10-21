@@ -728,6 +728,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiDocument.cpp
         runtime/ui/UiRuntimeInstance.cpp
         runtime/ui/UiDocumentCook.cpp
+        runtime/ui/UiPresentationProfiles.cpp
+        runtime/ui/UiPresentationProfileCodec.cpp
+        runtime/ui/UiLayoutInspector.cpp
         runtime/ui/UiAssetLoading.cpp
         runtime/ui/UiAssetLoadingService.cpp
         runtime/ui/UiDocumentSerialization.cpp
@@ -818,6 +821,7 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiAnimationOwnerClocks.cpp
         runtime/ui/UiAnimationOwnerFocusGeometry.cpp
         runtime/ui/UiAnimationOwnerPreparation.cpp
+        runtime/ui/UiAnimationOwnerAttachments.cpp
         runtime/ui/UiAnimationOwnerSampling.cpp
         runtime/ui/UiAnimationOwnerPresentation.cpp
         runtime/ui/UiAnimationOwnerPublication.cpp

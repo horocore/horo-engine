@@ -28,6 +28,10 @@ namespace Horo::Runtime::Ui {
         /** @brief Requires the complete typed cooked-asset, clock and animation error surface to stay in the registry. */
         void RequireRegisteredErrors(const std::span<const ErrorCodeDescriptor *const> descriptors) {
             const std::array newlyRegistered{
+                &UiErrors::PresentationProfileMalformed,
+                &UiErrors::PresentationProfileSourceStale,
+                &UiErrors::PresentationProfileUnsupported,
+                &UiErrors::PresentationProfileForeignIdentity,
                 &UiErrors::CookedFormatUnsupported,
                 &UiErrors::CookedPayloadMalformed,
                 &UiErrors::AssetMissing,
@@ -76,7 +80,7 @@ namespace Horo::Runtime::Ui {
 
         TEST_CASE("Runtime UI diagnostic records map every canonical error and reject invented sources", "[runtime_ui][diagnostics]") {
             const auto descriptors = UiDiagnosticErrorDescriptors();
-            REQUIRE(descriptors.size() == 209);
+            REQUIRE(descriptors.size() == 213);
             RequireRegisteredErrors(descriptors);
             for (std::size_t index = 0; index < descriptors.size(); ++index) {
                 const ErrorCodeDescriptor *descriptor = descriptors[index];

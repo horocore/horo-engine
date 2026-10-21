@@ -8,11 +8,13 @@
 
 namespace Horo::Runtime::Ui {
     struct UiAnimationFrameLease::Storage final {
-        explicit Storage(const UiAnimationLimits &limits, const std::size_t controlCapacity) {
+        explicit Storage(const UiAnimationLimits &limits, const std::size_t controlCapacity, const std::size_t elementCapacity) {
             timelines.reserve(limits.timelines);
             controls.reserve(controlCapacity);
             routes.reserve(MaximumUiScreenStackRoutes);
             markers.reserve(limits.markerCrossingsPerUpdate);
+            attachments.reserve(MaximumUiAnimationAttachments - 1);
+            focusGeometry.reserve((MaximumUiAnimationAttachments - 1) * elementCapacity);
         }
 
         UiClockSnapshot clocks;
@@ -20,6 +22,9 @@ namespace Horo::Runtime::Ui {
         std::optional<UiLayoutSnapshot> layout;
         std::optional<UiLayoutClipSnapshot> clipped;
         UiReloadLease generation;
+        std::optional<UiPresentationProfileSelection> selection;
+        std::vector<UiAnimationAttachmentFrame> attachments;
+        std::vector<UiAnimationFocusGeometry> focusGeometry;
         std::vector<UiAnimationTimelineRecord> timelines;
         std::vector<UiAnimationControlRecord> controls;
         std::vector<UiRouteInstance> routes;
@@ -66,8 +71,24 @@ namespace Horo::Runtime::Ui {
             std::optional<UiAnimationRouteRecord> record;
         };
 
+        struct Attachment final {
+            UiPresentationAttachmentId id;
+            UiRenderViewId view;
+            UiAnimationViewport viewport;
+            UiLayoutEngine layout;
+            std::optional<UiLayoutClipEngine> clipping;
+            std::optional<UiLayoutEngine::PreparedUpdate> preparedLayout;
+            std::optional<UiLayoutClipEngine::PreparedUpdate> preparedClipping;
+            std::optional<UiPresentationProfileSelection> selection;
+            std::vector<UiAnimationFocusGeometry> focusGeometry;
+            bool active{true};
+        };
+
         struct Candidate final {
             UiReloadLease source;
+            UiLayoutPresentationRevision presentation;
+            std::optional<UiPresentationProfileSelection> selection;
+            std::optional<UiAnimationViewport> viewport;
             std::optional<UiStyleResolver::PreparedUpdate> styles;
             std::optional<UiLayoutEngine::PreparedUpdate> layout;
             std::optional<UiLayoutClipEngine::PreparedUpdate> clipping;
@@ -94,7 +115,8 @@ namespace Horo::Runtime::Ui {
               route(limits.timelines) {
             frames.reserve(limits.retainedSnapshots);
             for (std::uint32_t index = 0; index < limits.retainedSnapshots; ++index)
-                frames.push_back(std::make_shared<UiAnimationFrameLease::Storage>(limits, controlCapacity));
+                frames.push_back(
+                    std::make_shared<UiAnimationFrameLease::Storage>(limits, controlCapacity, this->definition.elements.size()));
             candidate.timelines.resize(limits.timelines);
             candidate.controls.reserve(controlCapacity);
             work.elementInputs.resize(this->definition.elements.size());
@@ -116,6 +138,16 @@ namespace Horo::Runtime::Ui {
         UiElementSlotRange range;
         std::vector<Timeline> timelines;
         std::vector<std::shared_ptr<UiAnimationFrameLease::Storage>> frames;
+
+        std::optional<UiPresentationProfileTable> profiles;
+        UiPresentationAttachmentId primaryAttachment;
+        std::array<std::optional<Attachment>, MaximumUiAnimationAttachments - 1> attachments;
+        std::array<std::uint32_t, MaximumUiAnimationAttachments - 1> attachmentGenerations{};
+        UiLayoutPresentationRevision presentation;
+        std::optional<UiAnimationViewport> publishedViewport;
+        bool attachmentDirty{};
+        std::optional<UiLayoutInspector> inspector;
+        UiPresentationAttachmentId inspectedAttachment;
 
         struct WorkBuffers final {
             std::vector<UiStyleElementInput> elementInputs;

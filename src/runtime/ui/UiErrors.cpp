@@ -284,6 +284,39 @@ namespace Horo::Runtime::Ui::UiErrors {
                                             "Provide finite bounded geometry, current handles, and one valid evaluator result per element.",
                                             false,
                                             false};
+    /** @copydoc PresentationProfileMalformed */
+    const ErrorCodeDescriptor PresentationProfileMalformed{UiDomain,
+                                                           ErrorCode{"runtime_ui.presentation_profile.malformed"},
+                                                           ErrorSeverity::Error,
+                                                           "Responsive profile values or selector intervals are malformed.",
+                                                           "Provide bounded canonical typed layout alternatives.",
+                                                           false,
+                                                           true};
+    /** @copydoc PresentationProfileSourceStale */
+    const ErrorCodeDescriptor
+        PresentationProfileSourceStale{UiDomain,
+                                       ErrorCode{"runtime_ui.presentation_profile.source_stale"},
+                                       ErrorSeverity::Error,
+                                       "Responsive profile revision evidence is stale.",
+                                       "Prepare selection from current document, table, tree and attachment evidence.",
+                                       false,
+                                       true};
+    /** @copydoc PresentationProfileUnsupported */
+    const ErrorCodeDescriptor PresentationProfileUnsupported{UiDomain,
+                                                             ErrorCode{"runtime_ui.presentation_profile.unsupported"},
+                                                             ErrorSeverity::Error,
+                                                             "Responsive profile capability bits are unsupported.",
+                                                             "Use only the admitted interaction capability vocabulary.",
+                                                             false,
+                                                             true};
+    /** @copydoc PresentationProfileForeignIdentity */
+    const ErrorCodeDescriptor PresentationProfileForeignIdentity{UiDomain,
+                                                                 ErrorCode{"runtime_ui.presentation_profile.foreign_identity"},
+                                                                 ErrorSeverity::Error,
+                                                                 "Responsive profile identity belongs to another canvas or owner.",
+                                                                 "Use the exact admitted document, canvas, tree and attachment.",
+                                                                 false,
+                                                                 true};
     /** @copydoc LayoutSourceStale */
     const ErrorCodeDescriptor LayoutSourceStale{UiDomain,
                                                 ErrorCode{"runtime_ui.layout.source_stale"},

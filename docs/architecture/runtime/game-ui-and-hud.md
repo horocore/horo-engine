@@ -352,8 +352,12 @@ deterministic aspect/form-factor/input/split-view selection and neutral fallback
 It owns that decision's limits, per-attachment publication, errors and source/cook
 migration; this document does not duplicate its selector or precedence rules.
 Profiles preserve the existing semantic tree and ownership and supply effective
-layout styles to the ordinary layout engine. The proposal does not claim profile
-selection or the complete RuntimeUiService is implemented on current main.
+layout styles to the ordinary layout engine. The bounded `UiAnimationOwner` implementation
+admits document profile tables, applies attachment-local bases before computed
+property bindings, and publishes geometry under one primary interaction reservation.
+The proposal and ADR status remain Proposed; this does not imply the complete
+RuntimeUiService exists. See the [implementation and migration guide](../../guides/runtime-ui-layout-inspection.md)
+for source 1.4/cooked 4, legacy neutral decoding, immutable inspection and host lifecycle.
 
 ## Element Tree And Layout
 

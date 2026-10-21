@@ -126,11 +126,29 @@ namespace Horo::Runtime::Ui::AnimationTests {
         return {std::move(registry).Value(), std::move(styles).Value(), std::move(definition)};
     }
 
-    inline UiAnimationOwner OwnerAggregate(UiElementSlotAllocator &allocator, const bool routeMotion = false,
-                                           const std::int64_t deadline = 1000000000, UiActionRouter **attachedActions = nullptr,
-                                           WriteAttachment *writes = nullptr, UiActionRouter **routeActions = nullptr,
-                                           const std::uint64_t version = 1, UiFocusGraph **attachedFocus = nullptr) {
-        auto initial = Generation(allocator, version, 32, false, 0, 0, 4);
+    /** @brief Explicit load-time choices for the real host and owned UI integration fixture. */
+    struct HostOptions final {
+        bool routeMotion{};
+        std::int64_t deadline{1000000000};
+        bool actions{};
+        bool writes{};
+        bool routeActions{};
+        UiElementSlotAllocator *allocator{};
+        std::uint64_t version{1};
+        UiAnimationApplication application{UiAnimationApplication::Runtime};
+        std::vector<UiDocumentPresentationProfiles> profiles;
+        std::shared_ptr<const UiLayoutIntrinsicProvider> intrinsicProvider;
+        bool boundWidth{};
+        bool accessibilityWidth{};
+        bool focusAccess{}; /**< Test-only quiescent borrow; never exposed by a production owner contract. */
+    };
+
+    inline UiAnimationOwner OwnerAggregate(UiElementSlotAllocator &allocator, const HostOptions &options,
+                                           UiActionRouter **attachedActions = nullptr, WriteAttachment *writes = nullptr,
+                                           UiActionRouter **routeActions = nullptr, UiFocusGraph **attachedFocus = nullptr) {
+        ReloadTests::LayerOptions layer;
+        layer.profiles = options.profiles;
+        auto initial = Generation(allocator, options.version, 32, false, 0, 0, 4, layer);
         const auto &canvas = initial.Canvases().front();
         if (attachedFocus)
             *attachedFocus = initial.Canvas(canvas.id)->focus ? &*initial.Canvas(canvas.id)->focus : nullptr;
@@ -145,7 +163,16 @@ namespace Horo::Runtime::Ui::AnimationTests {
         }
         auto *routeStack = routeActions ? &*initial.Canvas(canvas.id)->routes : nullptr;
         const auto routeOwner = canvas.controls.front().control.Owner();
-        auto resources = Resources(canvas, routeMotion, deadline);
+        auto resources = Resources(canvas, options.routeMotion, options.deadline);
+        if (options.boundWidth)
+            resources.definition.layoutBindings.front().field = UiAnimationLayoutField::Width;
+        if (options.accessibilityWidth)
+            resources.definition.elements.back().policyProperties.push_back(
+                {Stable<UiStylePropertyId>(1), UiStyleValueSource::Literal(UiStyleDimension{64}), false});
+        if (options.intrinsicProvider) {
+            resources.definition.intrinsicProvider = options.intrinsicProvider;
+            resources.definition.elements.back().intrinsic = {UiLayoutIntrinsicKind::Text, true, {}};
+        }
         auto owner = UiAnimationOwner::Create(std::move(initial), allocator, std::move(resources.registry), std::move(resources.styles),
                                               std::move(resources.definition));
         REQUIRE(owner.HasValue());
@@ -173,19 +200,6 @@ namespace Horo::Runtime::Ui::AnimationTests {
         return config;
     }
 
-    /** @brief Explicit load-time choices for the real host and owned UI integration fixture. */
-    struct HostOptions final {
-        bool routeMotion{};
-        std::int64_t deadline{1000000000};
-        bool actions{};
-        bool writes{};
-        bool routeActions{};
-        UiElementSlotAllocator *allocator{};
-        std::uint64_t version{1};
-        UiAnimationApplication application{UiAnimationApplication::Runtime};
-        bool focusAccess{}; /**< Test-only quiescent borrow; never exposed by a production owner contract. */
-    };
-
     /** @brief Owns the actual lifecycle host, animation participant and source issuer. */
     class HostFixture final {
     public:
@@ -203,13 +217,12 @@ namespace Horo::Runtime::Ui::AnimationTests {
             }
             auto config = Config();
             config.application = options.application;
-            auto composed =
-                UiAnimationRuntimeParticipant::Compose(OwnerAggregate(*externalIssuer, options.routeMotion, options.deadline,
-                                                                      options.actions ? &attachedActions : nullptr,
-                                                                      options.writes ? &attachedWrites : nullptr,
-                                                                      options.routeActions ? &attachedRouteActions : nullptr,
-                                                                      options.version, options.focusAccess ? &attachedFocus : nullptr),
-                                                       host->DispatchSource(), config);
+            auto composed = UiAnimationRuntimeParticipant::Compose(OwnerAggregate(*externalIssuer, options,
+                                                                                  options.actions ? &attachedActions : nullptr,
+                                                                                  options.writes ? &attachedWrites : nullptr,
+                                                                                  options.routeActions ? &attachedRouteActions : nullptr,
+                                                                                  options.focusAccess ? &attachedFocus : nullptr),
+                                                                   host->DispatchSource(), config);
             REQUIRE(composed.HasValue());
             auto composition = std::move(composed).Value();
             participant = composition.participant.get();

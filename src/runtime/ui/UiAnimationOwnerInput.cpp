@@ -8,7 +8,7 @@ namespace Horo::Runtime::Ui {
                                                                        const UiActionSource &source) {
         if (storage.ownerThread != std::this_thread::get_id() || storage.lifecycle.stopped || storage.lifecycle.draining ||
             storage.candidate.admitted || storage.route.gate || !storage.currentFrame.has_value() ||
-            !storage.publisher.InputEligible(storage.definition.canvas, view))
+            !AttachmentInputEligible(storage, view) || !storage.publisher.InputEligible(storage.definition.canvas, view))
             return Result<UiControlStateMachine *>::Failure(MakeError(UiErrors::ControlSourceStale));
         const auto &frame = *storage.frames[*storage.currentFrame];
         const auto record = std::ranges::find(frame.controls, source, &UiAnimationControlRecord::source);
@@ -27,7 +27,8 @@ namespace Horo::Runtime::Ui {
             storage_->lifecycle.draining || storage_->candidate.admitted || !storage_->currentFrame.has_value())
             return Result<UiPointerCaptureToken>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         if (storage_->route.gate || !RouteTargetEligible(*storage_, request.route.target) ||
-            !storage_->publisher.InputEligible(storage_->definition.canvas, request.view))
+            (!AttachmentInputEligible(*storage_, request.view) ||
+             !storage_->publisher.InputEligible(storage_->definition.canvas, request.view)))
             return Result<UiPointerCaptureToken>::Failure(MakeError(UiErrors::PointerCaptureInteractionStale));
         auto *canvas = storage_->publisher.Current()->Canvas(storage_->definition.canvas);
         if (!canvas->captures)

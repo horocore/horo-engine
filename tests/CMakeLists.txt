@@ -140,6 +140,7 @@ target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderGrap
 target_sources(HoroRenderApiPublicHeaderConsumer PRIVATE support/RenderParallelWorkPublicHeaderConsumer.cpp)
 target_sources(HoroRenderFrontendPublicHeaderConsumer PRIVATE support/RenderParallelFrontendPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiUnicodePublicContract.cpp)
+target_sources(HoroRuntimeUiPublicHeaderConsumer PRIVATE support/RuntimeUiInspectionPublicContract.cpp)
 target_sources(HoroCharacterInputPublicHeaderConsumer PRIVATE support/DesiredMotionPublicContract.cpp)
 target_sources(HoroGameplayApiPublicHeaderConsumer PRIVATE support/PersistenceInstallationPublicHeaderConsumer.cpp)
 target_sources(HoroRuntimePublicHeaderConsumer PRIVATE support/SaveSceneCanonicalPublicHeaderConsumer.cpp)
@@ -3854,6 +3855,10 @@ target_include_directories(HoroRuntimeUiAnimationTests PRIVATE ${PROJECT_SOURCE_
 target_link_libraries(HoroRuntimeUiAnimationTests PRIVATE HoroEngine::RuntimeUi HoroRationalDurationInternal)
 add_executable(HoroRuntimeUiAnimationIntegrationTests
         unit/runtime/ui/UiAnimationOwnerIntegrationTests.cpp
+        unit/runtime/ui/UiPresentationProfilesTests.cpp
+        unit/runtime/ui/UiPresentationProfileDocumentTests.cpp
+        unit/runtime/ui/UiLayoutInspectorTests.cpp
+        unit/runtime/ui/UiResponsiveOwnerIntegrationTests.cpp
         unit/runtime/ui/UiPointerInputIntegrationTests.cpp
         unit/runtime/ui/UiAnimationOwnerIntegrationFixture.h
         unit/runtime/ui/UiAnimationRouteIntegrationTests.cpp
