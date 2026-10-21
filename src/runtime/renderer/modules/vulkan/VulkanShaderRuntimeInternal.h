@@ -30,6 +30,7 @@ namespace Horo::Render::Detail {
             VkShaderModule handle{VK_NULL_HANDLE};
             RenderShaderModuleDescriptor descriptor;
             std::size_t bytes{0};
+            bool writesLayer{false};
         };
 
         struct Pipeline {
@@ -88,6 +89,7 @@ namespace Horo::Render::Detail {
         VkPhysicalDeviceProperties properties{};
         RenderPipelineDeviceIdentity identity;
         std::uint64_t deviceIncarnation{0};
+        bool vertexLayerEnabled{false};
         IssueIdentity issue;
         ResolveResource resolve;
         std::thread::id owner;
@@ -241,6 +243,9 @@ namespace Horo::Render::Detail {
 
         /** @brief Validates a complete cooked layout within guaranteed Vulkan 1.3 baseline bounds. */
         Result<void> ValidateLayout(const RenderGraphicsPipelineDescriptor &descriptor) const {
+            if (descriptor.state.viewRouting == RenderViewRouting::VertexLayer && !vertexLayerEnabled)
+                return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
+                                                       "Vertex layer routing was not enabled on the selected Vulkan device."));
             if (!descriptor.manifest.inlineConstants.empty())
                 return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
                                                        "Inline constants require an explicit material value submission contract."));

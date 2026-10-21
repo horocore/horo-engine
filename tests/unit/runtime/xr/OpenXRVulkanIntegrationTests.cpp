@@ -1,7 +1,10 @@
+#include "../../../support/renderer/MultiviewTestSupport.h"
 #include "../renderer/VulkanExternalGraphTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "OpenXRMultiviewGraph.h"
 #include "OpenXRSwapchainTestSupport.h"
 #include "OpenXRVulkanSwapchain.h"
+#include "TypedIdentityTestSupport.h"
 #include "runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.h"
 
 namespace {
@@ -17,6 +20,18 @@ namespace {
         explicit ExternalGraphBackend(NativeGraphFixture &fixture) : fixture_(&fixture) {
             capabilities_.backend = RenderBackendId{"xr-bridge-test"};
             capabilities_.support.deviceIncarnation = 11;
+            capabilities_.support.capabilityRevision = 1;
+            capabilities_.support.features.Enable(RenderCapability::BufferResources);
+            capabilities_.support.features.Enable(RenderCapability::MeshResources);
+            capabilities_.support.features.Enable(RenderCapability::TextureResources);
+            capabilities_.support.features.Enable(RenderCapability::RenderTargetResources);
+            capabilities_.support.features.Enable(RenderCapability::ViewIndexedShaders);
+            capabilities_.support.limits = {65536, 2048, 1, 3, 2, 2};
+            capabilities_.support.formats.sampleCountMask = 2;
+            capabilities_.support.formats.usages.fill(RenderTextureUsage::RenderAttachment);
+            capabilities_.supportsBufferResources = true;
+            capabilities_.supportsMeshResources = true;
+            capabilities_.supportsRenderTargetResources = true;
             capabilities_.supportsTextureResources = true;
             capabilities_.supportsExplicitGraphSubmissions = true;
             capabilities_.supportsSubmissionObservation = true;
@@ -335,4 +350,5 @@ namespace {
         CHECK(fixture.xr.destroys == 1);
     }
 
+#include "../renderer/OpenXRMultiviewGraphTests.inl"
 }  // namespace

@@ -25,7 +25,10 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Initialize(VkDevice device, std::span<const VulkanCommandQueue> queues, std::uint32_t frames,
                                               std::uint64_t timelineDifference, std::uint64_t deviceIncarnation,
                                               VulkanResourceRuntime &resources,
-                                              const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver);
+                                              const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver,
+                                              bool vertexLayerEnabled = false);
+        /** @brief Returns effective indexed draw and explicitly enabled layer routing facts for this device. */
+        [[nodiscard]] MultiviewCapabilities MultiviewSupport() const noexcept;
         [[nodiscard]] Result<void> BeginFrame(FrameToken frame);
         [[nodiscard]] Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request);
         /** @brief Records one bounded reflected material pass using this runtime's existing submission owner.

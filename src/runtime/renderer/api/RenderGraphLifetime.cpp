@@ -61,6 +61,12 @@ namespace Horo::Render {
 
         [[nodiscard]] bool BufferDescriptorSupports(const RenderBufferDescriptor &descriptor, const RenderGraphUsageKind usage) noexcept {
             switch (usage) {
+                case RenderGraphUsageKind::VertexBuffer:
+                    return HasBufferUsage(descriptor.usage, RenderBufferUsage::Vertex);
+                case RenderGraphUsageKind::IndexBuffer:
+                    return HasBufferUsage(descriptor.usage, RenderBufferUsage::Index);
+                case RenderGraphUsageKind::UniformBuffer:
+                    return HasBufferUsage(descriptor.usage, RenderBufferUsage::Uniform);
                 case RenderGraphUsageKind::Storage:
                     return HasBufferUsage(descriptor.usage, RenderBufferUsage::Storage);
                 case RenderGraphUsageKind::CopySource:

@@ -4,6 +4,7 @@
  * @brief Typed workloads bound to one immutable compiled render graph.
  */
 #include "Horo/Runtime/Render/LightCullingKernel.h"
+#include "Horo/Runtime/Render/MultiviewGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 #include "Horo/Runtime/Render/VfxGraphWorkload.h"
 
@@ -49,7 +50,7 @@ namespace Horo::Render {
 
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
     using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy,
-                                             RenderGraphLightCulling, RenderGraphVfx, RenderGraphDepthAttachment>;
+                                             RenderGraphLightCulling, RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {
@@ -134,6 +135,9 @@ namespace Horo::Render {
             nullptr}; /**< Immediate backends record retained ownership before any queued command; never borrowed after ExecuteGraph. */
         std::span<const RenderGraphQueueSubmission> submissions;
         /**< Explicit frontend-owned submission authority; empty selects only the transitional single-queue contract. */
+        std::span<const RenderGraphMeshInstance> meshes;
+        /**< Exact frontend-resolved mesh instances used by typed multiview geometry; never native API handles. */
+        std::span<const RenderGraphTextureViewInstance> views;
     };
 
     /**

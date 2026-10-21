@@ -3,7 +3,7 @@ struct MaterialPacket {
     std::uint64_t vertex{}, index{}, mesh{}, texture{}, view{}, target{};
     Detail::VulkanPreparedMaterialBinding material;
 
-    explicit MaterialPacket(NativeGraphFixture &fixture) {
+    explicit MaterialPacket(NativeGraphFixture &fixture, const bool layered = false) {
         fixture.resourceState.state.bufferRequirements.size = 256;
         auto &resources = fixture.resources;
         const std::array<std::byte, sizeof(MeshVertex) * 3> bytes{};
@@ -22,7 +22,9 @@ struct MaterialPacket {
                                               .indexCount = 3,
                                               .localBounds = {{-1, -1, 0}, {1, 1, 0}}};
         mesh = SubmissionTest::Take(resources.CreateMesh(descriptor, vertex, index));
-        const RenderTextureDescriptor image{.extent = {8, 8}, .usage = RenderTextureUsage::RenderAttachment};
+        const RenderTextureDescriptor image{.extent = {8, 8},
+                                            .layerCount = layered ? 2U : 1U,
+                                            .usage = RenderTextureUsage::RenderAttachment};
         const auto plan = resources.QueryTextureMemoryCost(image);
         REQUIRE(plan.HasValue());
         texture = SubmissionTest::Take(resources.CreateTexture(image, {}, TestSupport::PlacementFor(plan.Value(), 1)));

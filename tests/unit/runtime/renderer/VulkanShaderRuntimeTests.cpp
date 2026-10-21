@@ -1,3 +1,4 @@
+#include "../../../support/renderer/MultiviewTestSupport.h"
 #include "RenderMemoryTestSupport.h"
 #include "VulkanShaderDispatchFixture.h"
 #include "runtime/renderer/modules/vulkan/VulkanBackendInternal.h"
@@ -474,6 +475,30 @@ TEST_CASE("Vulkan material failure and incompatible cache inputs remain unpublis
     CHECK(f.state.destroyedPools == f.state.pools);
     f.descriptor.compatibility.driverVersion = "stale";
     CHECK(f.runtime.QueryGraphicsPipelineMemoryCost(f.descriptor, f.vertex, f.fragment).HasError());
+}
+
+TEST_CASE("Vulkan layer routing rejects mismatched cooked output and disabled device features", "[vulkan][shader][multiview]") {
+    Fixture f;
+    f.Prepare();
+    SECTION("declared routing requires actual Layer output") {
+        f.descriptor.state.viewRouting = RenderViewRouting::VertexLayer;
+        f.descriptor.compatibility.pipelineDescriptorDigest =
+            ComputeRenderGraphicsPipelineDescriptorDigest(f.descriptor.state, f.descriptor.specializationValues).Value();
+        CHECK(f.runtime.QueryGraphicsPipelineMemoryCost(f.descriptor, f.vertex, f.fragment).HasError());
+        CHECK(f.state.pipelines == 0);
+    }
+    SECTION("actual Layer output requires enabled device support") {
+        auto bytes = f.Code(ShaderStage::Vertex);
+        const std::array<std::uint32_t, 4> decorate{(4U << 16) | 71U, 1, 11, 9};
+        for (auto byte : std::as_bytes(std::span{decorate}))
+            bytes.push_back(std::to_integer<std::uint8_t>(byte));
+        RenderShaderModuleDescriptor descriptor{f.target, ShaderStage::Vertex, "main", f.artifact, f.reflection.interfaceCompatibility};
+        const auto cost = f.runtime.QueryShaderModuleMemoryCost(descriptor, bytes.size());
+        REQUIRE(cost.HasValue());
+        const auto calls = f.state.shaders;
+        CHECK(f.runtime.CreateShaderModule(descriptor, bytes, TestSupport::PlacementFor(cost.Value(), 99)).HasError());
+        CHECK(f.state.shaders == calls);
+    }
 }
 
 TEST_CASE("Vulkan shader lifecycle rejects incomplete dispatch and foreign-thread admission", "[vulkan][shader][lifecycle]") {

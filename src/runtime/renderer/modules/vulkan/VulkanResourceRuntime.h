@@ -46,6 +46,13 @@ namespace Horo::Render::Detail {
         RenderMeshDescriptor descriptor;
     };
 
+    /** @brief Exact device-private image-view provenance, including its immutable subresource range. */
+    struct VulkanDrawViewBinding {
+        VkImageView view{VK_NULL_HANDLE};
+        VkImage image{VK_NULL_HANDLE};
+        RenderTextureViewDescriptor descriptor;
+    };
+
     /** @brief Device-owned Vulkan resource allocator and identity registry. */
     class VulkanResourceRuntime final : public IRenderResourceBackend,
                                         public IMaterialBindingBackend,
@@ -64,7 +71,8 @@ namespace Horo::Render::Detail {
                                               const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver);
         /** @brief Attaches the shader owner to this registry after native device creation. */
         [[nodiscard]] Result<void> InitializeShaders(const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
-                                                     const VulkanShaderRuntime::Resolver &resolver, std::uint64_t deviceIncarnation = 0);
+                                                     const VulkanShaderRuntime::Resolver &resolver, std::uint64_t deviceIncarnation = 0,
+                                                     bool vertexLayerEnabled = false);
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &,
                                                                                std::size_t) const override;
@@ -128,6 +136,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> CaptureGraphResources(const RenderGraphExecutionRequest &request,
                                                          std::span<VulkanGraphResource> destination,
                                                          VulkanCommandRetention &retention) const;
+        /** @brief Resolves exact image-view source and subresource metadata without native calls or allocation on success. */
+        [[nodiscard]] Result<VulkanDrawViewBinding> ResolveDrawView(std::uint64_t view) const;
 
     private:
         struct Impl;

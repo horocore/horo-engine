@@ -1,6 +1,7 @@
 #pragma once
 
 #include "VulkanGraphRuntime.h"
+#include "VulkanMultiviewRuntime.h"
 #include "VulkanRenderBackendErrors.h"
 
 #include <array>
@@ -22,6 +23,9 @@ namespace Horo::Render::Detail {
                                                                          bool discardPriorAccess);
 
     struct VulkanGraphRuntime::Impl {
+        /** @brief Reserves the fixed graph and canonical retention envelope before any frame admission. */
+        [[nodiscard]] Result<void> ReserveStorage(std::span<const VulkanCommandQueue> queues, std::uint32_t frames);
+
         struct Pass {
             RenderGraphExecutionRange before;
             RenderGraphExecutionRange after;
@@ -63,6 +67,7 @@ namespace Horo::Render::Detail {
         VulkanMaterialTarget materialTarget;
         std::uint64_t deviceIncarnation{};
         VulkanCommandRuntime commands;
+        VulkanMultiviewRecorder multiview;
         VulkanResourceRuntime *resources{};
         std::thread::id owner;
         std::vector<VulkanCommandQueue> queues;
@@ -84,9 +89,10 @@ namespace Horo::Render::Detail {
         void LoadMaterialDispatch(VkDevice device, const VulkanShaderRuntime::Resolver &resolver);
         [[nodiscard]] Result<void> Access(bool admission = true) const;
         [[nodiscard]] const VulkanCommandQueue *Queue(RenderQueueId id) const noexcept;
-        [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request);
+        [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request, VulkanCommandRetention &retention);
         [[nodiscard]] Result<void> InitialStates(const RenderGraphExecutionRequest &request);
-        [[nodiscard]] Result<void> PreparePass(const RenderGraphExecutionRequest &request, std::size_t index);
+        [[nodiscard]] Result<void> PreparePass(const RenderGraphExecutionRequest &request, std::size_t index,
+                                               VulkanCommandRetention &retention);
         [[nodiscard]] Result<void> PrepareTransitions(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                                       bool releases);
         /** @brief Validates exact foreign acquisition/final-state obligations before generic state initialization. */

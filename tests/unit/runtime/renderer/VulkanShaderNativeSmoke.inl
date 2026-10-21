@@ -95,7 +95,10 @@ namespace {
         }
 
         std::uint64_t Shader(ShaderStage stage, const std::vector<std::uint8_t> &bytes) {
-            RenderShaderModuleDescriptor d{metadata.target, stage, "main", metadata.artifact, metadata.reflection.interfaceCompatibility};
+            const auto entry = std::ranges::find(metadata.manifest.entryPoints, stage, &ShaderEntryPoint::stage);
+            REQUIRE(entry != metadata.manifest.entryPoints.end());
+            RenderShaderModuleDescriptor d{metadata.target, stage, entry->name, metadata.artifact,
+                                           metadata.reflection.interfaceCompatibility};
             auto cost = backend->QueryShaderModuleMemoryCost(d, bytes.size());
             REQUIRE(cost.HasValue());
             auto result = backend->CreateShaderModule(d, bytes, TestSupport::PlacementFor(cost.Value(), 1));
@@ -116,7 +119,7 @@ namespace {
             fragment = Shader(ShaderStage::Fragment, fragmentBytes);
         }
 
-        void PreparePipeline() {
+        void PreparePipeline(const RenderViewRouting routing = RenderViewRouting::SingleView) {
             const auto identity = backend->QueryPipelineDeviceIdentity();
             REQUIRE(identity.HasValue());
             RenderGraphicsPipelineDescriptor pipeline{.vertex = {{1}, 1, 1},
@@ -130,6 +133,7 @@ namespace {
                 pipeline.state.depthWrite = false;
                 pipeline.state.cull = RenderCullMode::None;
             }
+            pipeline.state.viewRouting = routing;
             pipeline.compatibility = {.schemaVersion = 1,
                                       .backend = identity.Value().backend,
                                       .backendModuleVersion = identity.Value().backendModuleVersion,
@@ -142,7 +146,8 @@ namespace {
                                       .shaderArtifactKey = metadata.artifact,
                                       .shaderInterface = metadata.reflection.interfaceCompatibility,
                                       .pipelineDescriptorDigest = ComputeRenderGraphicsPipelineStateDigest(pipeline.state).Value()};
-            pipeline.specializationValues = {{{7}, ShaderValueType::Uint32, 13}};
+            if (!metadata.manifest.specializationInputs.empty())
+                pipeline.specializationValues = {{{7}, ShaderValueType::Uint32, 13}};
             pipeline.compatibility.pipelineDescriptorDigest =
                 ComputeRenderGraphicsPipelineDescriptorDigest(pipeline.state, pipeline.specializationValues).Value();
             const auto cost = backend->QueryGraphicsPipelineMemoryCost(pipeline, vertex, fragment);
@@ -224,6 +229,7 @@ TEST_CASE("Vulkan native device consumes compiled SPIR-V pipeline and material d
     fixture.PrepareMaterialAndShutdown();
 }
 
+#include "VulkanMultiviewNativeSmoke.inl"
 #include "VulkanTransformNativeSmoke.inl"
 
 #endif

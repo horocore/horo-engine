@@ -61,7 +61,7 @@ namespace Horo::Render::Detail {
         /** @brief Attaches exact selected-device facts and borrowed registry callbacks; rolls back on missing dispatch. */
         [[nodiscard]] Result<void> Initialize(VkDevice device, const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
                                               const Resolver &resolver, IssueIdentity issue, ResolveResource resolve,
-                                              std::uint64_t deviceIncarnation = 0);
+                                              std::uint64_t deviceIncarnation = 0, bool vertexLayerEnabled = false);
         /** @brief Releases pipeline/layout/cache/shader/sampler objects after host-owned queue drain and lease release. */
         void Shutdown() noexcept;
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;

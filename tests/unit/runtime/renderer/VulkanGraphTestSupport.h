@@ -1,5 +1,4 @@
 #pragma once
-
 #include "../../../support/renderer/RenderGraphSubmissionFixture.h"
 #include "VulkanCommandTestSupport.h"
 #include "VulkanResourceTestSupport.h"
@@ -20,9 +19,15 @@ namespace Horo::Render::VulkanGraphTest {
         std::vector<EncodedCopy> copies;
         std::vector<VkBufferMemoryBarrier2> barriers;
         std::vector<VkImageMemoryBarrier2> imageBarriers;
-        std::vector<std::string_view> operations;
+        std::vector<std::string> operations;
         std::uint32_t layers{};
         bool depthAttachment{};
+
+        struct DrawCall {
+            std::uint32_t indices{}, instances{}, firstView{};
+        };
+
+        std::vector<DrawCall> drawCalls;
         int renderingBegins{};
         int renderingEnds{};
         int pipelineBinds{}, descriptorBinds{}, vertexBinds{}, indexBinds{}, draws{};
@@ -31,13 +36,13 @@ namespace Horo::Render::VulkanGraphTest {
     inline EncodedGraph *encodedGraph{};
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureBarrier(VkCommandBuffer, const VkDependencyInfo *info) {
-        encodedGraph->operations.push_back("barrier");
-        if (info->imageMemoryBarrierCount != 0)
-            encodedGraph->imageBarriers.insert(encodedGraph->imageBarriers.end(), info->pImageMemoryBarriers,
-                                               info->pImageMemoryBarriers + info->imageMemoryBarrierCount);
+        encodedGraph->operations.emplace_back("barrier");
         if (info->bufferMemoryBarrierCount != 0)
             encodedGraph->barriers.insert(encodedGraph->barriers.end(), info->pBufferMemoryBarriers,
                                           info->pBufferMemoryBarriers + info->bufferMemoryBarrierCount);
+        if (info->imageMemoryBarrierCount != 0)
+            encodedGraph->imageBarriers.insert(encodedGraph->imageBarriers.end(), info->pImageMemoryBarriers,
+                                               info->pImageMemoryBarriers + info->imageMemoryBarrierCount);
     }
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureCopy(VkCommandBuffer, const VkCopyBufferInfo2 *info) {
@@ -46,14 +51,14 @@ namespace Horo::Render::VulkanGraphTest {
     }
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureBeginRendering(VkCommandBuffer, const VkRenderingInfo *info) {
-        encodedGraph->operations.push_back("begin-rendering");
+        encodedGraph->operations.emplace_back("begin-rendering");
         encodedGraph->layers = info->layerCount;
         encodedGraph->depthAttachment = info->pDepthAttachment != nullptr;
         ++encodedGraph->renderingBegins;
     }
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureEndRendering(VkCommandBuffer) {
-        encodedGraph->operations.push_back("end-rendering");
+        encodedGraph->operations.emplace_back("end-rendering");
         ++encodedGraph->renderingEnds;
     }
 
@@ -80,9 +85,11 @@ namespace Horo::Render::VulkanGraphTest {
     inline VKAPI_ATTR void VKAPI_CALL CaptureScissor(VkCommandBuffer, std::uint32_t, std::uint32_t, const VkRect2D *) {}
 
     inline VKAPI_ATTR void VKAPI_CALL CaptureDraw(VkCommandBuffer, std::uint32_t count, std::uint32_t instances, std::uint32_t,
-                                                  std::int32_t, std::uint32_t) {
+                                                  std::int32_t, std::uint32_t firstView) {
         CHECK(count == 3);
-        CHECK(instances == 1);
+        CHECK(instances > 0);
+        CHECK(instances <= MultiviewExtractionLimits::HardMaximumViews);
+        encodedGraph->drawCalls.push_back({count, instances, firstView});
         ++encodedGraph->draws;
     }
 
@@ -126,10 +133,11 @@ namespace Horo::Render::VulkanGraphTest {
         EncodedGraph encoded;
         Detail::VulkanGraphRuntime graph;
 
-        NativeGraphFixture() {
+        explicit NativeGraphFixture(const bool vertexLayers = false) {
             encodedGraph = &encoded;
             InitializeNativeResourceRuntime(resources);
-            REQUIRE(graph.Initialize(NativeHandle<VkDevice>(1), commandState.queues, 2, 1024, 11, resources, GraphResolver).HasValue());
+            REQUIRE(graph.Initialize(NativeHandle<VkDevice>(1), commandState.queues, 2, 1024, 11, resources, GraphResolver, vertexLayers)
+                        .HasValue());
         }
 
         ~NativeGraphFixture() {

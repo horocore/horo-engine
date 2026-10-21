@@ -1,8 +1,15 @@
-name: Vulkan shader qualification
+name: Vulkan shader and XR multiview qualification
 on:
   pull_request:
     paths:
       - 'src/runtime/renderer/modules/vulkan/**'
+      - 'assets/shaders/runtime/multiview_mesh.hlsl'
+      - 'include/Horo/Runtime/Render/Multiview*'
+      - 'include/Horo/XR/XRMultiviewScene.h'
+      - 'src/runtime/xr/**'
+      - 'src/runtime/renderer/api/Multiview*'
+      - 'tests/unit/runtime/renderer/Multiview*'
+      - 'tests/unit/runtime/xr/XRViewRenderPlanTests.cpp'
       - 'include/Horo/Runtime/Render/MaterialBinding.h'
       - 'include/Horo/Runtime/Render/RenderShaderResources.h'
       - 'src/runtime/renderer/api/MaterialBindingValidation.cpp'
@@ -25,7 +32,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   qualification:
-    name: Vulkan shaders / ${{ matrix.os }}
+    name: XR multiview / ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
@@ -64,13 +71,13 @@ jobs:
       - name: Configure focused headless Vulkan composition
         run: >-
           cmake --preset "${{ matrix.preset }}"
-          -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=OFF
+          -DHORO_BUILD_XR_OPENXR=ON -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_EDITOR_GUI=OFF
           -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
           -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
       - name: Build native Vulkan contracts
-        run: cmake --build build/ci --target HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingTests HoroMaterialBindingPublicHeaderConsumer --parallel 2
+        run: cmake --build build/ci --target HoroMultiviewSceneExtractionTests HoroMultiviewSceneExtractionPublicHeaderConsumer HoroXRApiTests HoroXROpenXRTests HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingTests HoroMaterialBindingPublicHeaderConsumer --parallel 2
       - name: Run Vulkan native-call and lifecycle regressions
-        run: ctest --test-dir build/ci --no-tests=error -R '^(HoroRenderVulkanTests::|HoroPipelineCacheTests::|HoroShaderPermutationTests::|HoroMaterialBindingTests::|HoroMaterialBindingPublicHeaderConsumer$)' --output-on-failure
+        run: ctest --test-dir build/ci --no-tests=error -R '^(HoroMultiviewSceneExtractionTests::|HoroMultiviewSceneExtractionPublicHeaderConsumer$|HoroXRApiTests::|HoroXROpenXRTests::|HoroRenderVulkanTests::|HoroPipelineCacheTests::|HoroShaderPermutationTests::|HoroMaterialBindingTests::|HoroMaterialBindingPublicHeaderConsumer$)' --output-on-failure
       - name: Cook final SPIR-V and qualify real Linux native device preparation
         if: runner.os == 'Linux'
         run: |
@@ -78,6 +85,12 @@ jobs:
           glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanPreparation.frag -o "$RUNNER_TEMP/preparation.frag.spv"
           glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanTransform.vert -o "$RUNNER_TEMP/transform.vert.spv"
           glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanTransform.frag -o "$RUNNER_TEMP/transform.frag.spv"
+          glslangValidator --target-env vulkan1.3 -V -D -S vert -e VSMain assets/shaders/runtime/multiview_mesh.hlsl -o "$RUNNER_TEMP/multiview.vert.spv"
+          glslangValidator --target-env vulkan1.3 -V -D -DHORO_MULTIVIEW_LAYER_ROUTING=1 -S vert -e VSMain assets/shaders/runtime/multiview_mesh.hlsl -o "$RUNNER_TEMP/multiview-layer.vert.spv"
+          glslangValidator --target-env vulkan1.3 -V -D -S frag -e PSMain assets/shaders/runtime/multiview_mesh.hlsl -o "$RUNNER_TEMP/multiview.frag.spv"
+          HORO_MULTIVIEW_VERTEX="$RUNNER_TEMP/multiview.vert.spv" \
+          HORO_MULTIVIEW_LAYER_VERTEX="$RUNNER_TEMP/multiview-layer.vert.spv" \
+          HORO_MULTIVIEW_FRAGMENT="$RUNNER_TEMP/multiview.frag.spv" \
           HORO_VULKAN_TRANSFORM_VERTEX="$RUNNER_TEMP/transform.vert.spv" \
           HORO_VULKAN_TRANSFORM_FRAGMENT="$RUNNER_TEMP/transform.frag.spv" \
           HORO_VULKAN_VERTEX_FIXTURE="$RUNNER_TEMP/preparation.vert.spv" \

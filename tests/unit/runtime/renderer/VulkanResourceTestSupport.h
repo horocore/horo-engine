@@ -26,7 +26,7 @@ namespace Horo::Render::VulkanResourceTest {
     struct NativeResourceState {
         VkMemoryRequirements bufferRequirements{.size = 64, .alignment = 16, .memoryTypeBits = 1};
         VkMemoryRequirements imageRequirements{.size = 256, .alignment = 16, .memoryTypeBits = 1};
-        std::array<std::byte, 256> mapped{};
+        std::array<std::byte, 4096> mapped{};
         int createBufferCount{0};
         int destroyBufferCount{0};
         int createImageCount{0};

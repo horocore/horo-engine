@@ -5,6 +5,7 @@
  */
 
 #include "Horo/Runtime/Render/MaterialBindingBackend.h"
+#include "Horo/Runtime/Render/MaterialBindingIdentity.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/StandardPbrMaterial.h"
 
@@ -13,18 +14,6 @@
 #include <variant>
 
 namespace Horo::Render {
-    /** @brief Exact renderer-owned material table generation. */
-    struct MaterialBindingGenerationId {
-        RenderResourceOwnerId owner;
-        std::uint64_t value{0};
-
-        [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return owner.IsValid() && value != 0;
-        }
-
-        [[nodiscard]] constexpr auto operator<=>(const MaterialBindingGenerationId &) const noexcept = default;
-    };
-
     /** @brief Exact buffer generation and admitted byte range. */
     struct MaterialBufferBinding {
         RenderBufferHandle buffer;

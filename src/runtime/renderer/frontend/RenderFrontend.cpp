@@ -7,6 +7,7 @@
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
 #include "RenderGraphTransientResourcePool.h"
+#include "RenderMultiviewResources.h"
 #include "RenderParallelWorkErrors.h"
 #include "RenderParallelWorkInternal.h"
 #include "RenderResourceOperations.h"
@@ -245,7 +246,12 @@ namespace Horo::Render {
                 Abort();
                 return Result<void>::Failure(resolved.ErrorValue());
             }
-            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient);
+            const auto multiview = Detail::ResolveMultiviewResources(workloads, *owner_->resourceRegistry_);
+            if (multiview.HasError()) {
+                Abort();
+                return Result<void>::Failure(multiview.ErrorValue());
+            }
+            const auto leased = owner_->graphResourceLeases_->Acquire(graph.Resources(), ui, transient, workloads);
             if (leased.HasError()) {
                 Abort();
                 return Result<void>::Failure(leased.ErrorValue());
@@ -256,8 +262,10 @@ namespace Horo::Render {
                     lease->Release();
             };
             std::unique_ptr<IRenderGraphResourceLease, decltype(releaseLease)> lease{leased.Value(), releaseLease};
-            if (const auto result = backend_->ExecuteGraph(
-                    {frame_, graph, workloads, resolved.Value().View(), lease.get(), transient != nullptr, &transfer, submissions});
+            if (const auto result =
+                    backend_->ExecuteGraph({frame_, graph, workloads, resolved.Value().View(), lease.get(), transient != nullptr, &transfer,
+                                            submissions, std::span{multiview.Value().meshes}.first(multiview.Value().meshCount),
+                                            std::span{multiview.Value().views}.first(multiview.Value().viewCount)});
                 result.HasError()) {
                 Abort();
                 return result;

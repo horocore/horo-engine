@@ -3,6 +3,8 @@
 #include "VulkanBackendModule.h"
 
 namespace Horo::Render::Detail::VulkanResourceConversion {
+    /** @brief Classifies native depth/depth-stencil attachment formats. */
+    [[nodiscard]] bool IsDepthFormat(RenderTextureFormat format) noexcept;
     [[nodiscard]] VkBufferUsageFlags BufferUsage(RenderBufferUsage usage) noexcept;
     [[nodiscard]] VkFormat TextureFormat(RenderTextureFormat format) noexcept;
     [[nodiscard]] VkImageUsageFlags ImageUsage(const RenderTextureDescriptor &descriptor) noexcept;

@@ -37,7 +37,7 @@ namespace {
             return std::move(packed).Value();
         }
 
-        void PrepareDraw() {
+        void PrepareDraw(const bool layered = false) {
             const std::array<MeshVertex, 3> vertexData{{{{-1, -1, 0}}, {{1, -1, 0}}, {{0, 1, 0}}}};
             const std::array<std::uint32_t, 3> indexData{0, 1, 2};
             vertices = Buffer(std::as_bytes(std::span{vertexData}), RenderBufferUsage::Vertex);
@@ -53,6 +53,7 @@ namespace {
             mesh = createdMesh.Value();
             const RenderTextureDescriptor color{.extent = {8, 8},
                                                 .format = RenderTextureFormat::Rgba8Unorm,
+                                                .layerCount = layered ? 2U : 1U,
                                                 .usage = RenderTextureUsage::RenderAttachment};
             const auto cost = backend->QueryTextureMemoryCost(color);
             REQUIRE(cost.HasValue());

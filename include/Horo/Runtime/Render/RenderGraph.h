@@ -104,6 +104,9 @@ namespace Horo::Render {
         DepthStencilAttachment,
         CopySource,
         CopyDestination,
+        VertexBuffer,  /**< Read-only vertex fetch in a graphics pass. */
+        IndexBuffer,   /**< Read-only indexed-primitive fetch in a graphics pass. */
+        UniformBuffer, /**< Read-only shader parameter access in a graphics pass. */
     };
 
     /** @brief Explicit reason for an authored pass dependency. */

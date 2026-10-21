@@ -28,6 +28,8 @@ namespace Horo::Render {
             [[nodiscard]] virtual std::uint64_t DeviceIncarnation() const noexcept = 0;
             /** @brief Returns the exact immutable physical allocation descriptor. */
             [[nodiscard]] virtual const RenderTextureDescriptor &Descriptor() const noexcept = 0;
+            /** @brief Returns actual acquisition ownership/layout evidence from the same qualified source. */
+            [[nodiscard]] virtual RenderGraphLogicalState AcquiredState() const noexcept = 0;
             /** @brief Returns the selected native adapter's qualified required external release state. */
             [[nodiscard]] virtual RenderGraphLogicalState RequiredFinalState() const noexcept = 0;
         };
@@ -45,6 +47,14 @@ namespace Horo::Render {
                                                                               RenderResourceNativeLifetime lifetime) = 0;
         };
 
+        /** @brief Read-only copied facts issued by the exact current external image source. */
+        struct RenderExternalTextureFacts final {
+            RenderTextureDescriptor descriptor;
+            RenderGraphLogicalState acquired;
+            RenderGraphLogicalState requiredFinal;
+            std::uint64_t deviceIncarnation{};
+        };
+
         /** @brief Explicit host adapter access to the existing frontend registry; never a second resource registry. */
         class RenderExternalTextureAccess final {
         public:
@@ -57,6 +67,8 @@ namespace Horo::Render {
              * @param frontend Original frontend. @param texture Handle issued by this bridge, retained by its native owner.
              * @return True after native backing/queued references are terminal; false while still ready or retiring. */
             [[nodiscard]] static Result<bool> RetirementComplete(const RenderFrontend &frontend, RenderTextureHandle texture);
+            /** @brief Reads exact current source/allocation/state facts without adopting an image or retaining a native source pointer. */
+            [[nodiscard]] static Result<RenderExternalTextureFacts> Describe(const RenderFrontend &frontend, RenderTextureHandle texture);
 
         private:
             /** @brief Validates thread, lifecycle, device, source and native backend admission before reserving a registry slot. */

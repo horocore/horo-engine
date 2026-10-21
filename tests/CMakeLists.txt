@@ -3385,6 +3385,20 @@ set_tests_properties(HoroMaterialBindingPublicHeaderConsumer PROPERTIES LABELS "
 add_executable(HoroStandardPbrMaterialTests
         unit/runtime/renderer/StandardPbrMaterialTests.cpp
 )
+add_executable(HoroMultiviewSceneExtractionTests
+        unit/runtime/renderer/MultiviewSceneExtractionTests.cpp
+        unit/runtime/renderer/MultiviewShaderParameterTests.cpp
+        support/AllocationProbe.cpp
+)
+target_compile_features(HoroMultiviewSceneExtractionTests PRIVATE cxx_std_20)
+target_include_directories(HoroMultiviewSceneExtractionTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroMultiviewSceneExtractionTests PRIVATE HoroEngine::RenderApi)
+horo_register_catch_test(HoroMultiviewSceneExtractionTests LABELS "unit;renderer;xr;headless")
+add_executable(HoroMultiviewSceneExtractionPublicHeaderConsumer public_headers/MultiviewSceneExtractionConsumer.cpp)
+target_compile_features(HoroMultiviewSceneExtractionPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroMultiviewSceneExtractionPublicHeaderConsumer PRIVATE HoroEngine::RenderApi)
+add_test(NAME HoroMultiviewSceneExtractionPublicHeaderConsumer COMMAND HoroMultiviewSceneExtractionPublicHeaderConsumer)
+set_tests_properties(HoroMultiviewSceneExtractionPublicHeaderConsumer PROPERTIES LABELS "unit;renderer;xr;headless;ci-windows")
 target_compile_features(HoroStandardPbrMaterialTests PRIVATE cxx_std_20)
 target_include_directories(HoroStandardPbrMaterialTests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(HoroStandardPbrMaterialTests PRIVATE HoroEngine::RenderApi)

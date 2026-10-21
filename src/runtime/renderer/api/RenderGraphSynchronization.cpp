@@ -44,6 +44,9 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] constexpr RenderGraphSynchronizationOperation OperationFor(const RenderGraphUsageKind usage) noexcept {
+            if (usage == RenderGraphUsageKind::VertexBuffer || usage == RenderGraphUsageKind::IndexBuffer ||
+                usage == RenderGraphUsageKind::UniformBuffer)
+                return RenderGraphSynchronizationOperation::GraphicsInputBuffer;
             return static_cast<RenderGraphSynchronizationOperation>(static_cast<std::uint8_t>(usage) + 1);
         }
 

@@ -50,6 +50,12 @@ namespace Horo::Render {
         Additive
     };
 
+    /** @brief Explicit cooked vertex-shader output routing; device support is admitted before pipeline creation. */
+    enum class RenderViewRouting : std::uint8_t {
+        SingleView,
+        VertexLayer
+    };
+
     /**
      * @brief Immutable graphics state for the established MeshVertex triangle layout.
      * @details Pipeline creation neither chooses a frame recipe nor changes active rendering state. Output formats and
@@ -66,6 +72,7 @@ namespace Horo::Render {
         RenderTextureFormat colorFormat{RenderTextureFormat::Rgba8Unorm};
         std::optional<RenderTextureFormat> depthFormat{RenderTextureFormat::Depth24Stencil8};
         std::uint32_t sampleCount{1};
+        RenderViewRouting viewRouting{RenderViewRouting::SingleView};
         [[nodiscard]] bool operator==(const RenderGraphicsPipelineState &) const noexcept = default;
     };
 

@@ -84,6 +84,7 @@ namespace Horo::Render {
         bool standardApiVariant{true};
         bool portabilitySubset{false};
         bool driverAllowed{true};
+        bool vertexLayerRouting{false}; /**< Queried optional shaderOutputLayer feature; never part of baseline admission. */
     };
 
     /** @brief One bounded physical-device enumeration and its non-zero revision. */
@@ -118,6 +119,7 @@ namespace Horo::Render {
         std::vector<std::string> enabledExtensions;
         std::vector<RenderQueueAssignment> queueAssignments;
         std::uint32_t maxFramesInFlight{2};
+        bool enableVertexLayerRouting{false}; /**< Exact optional feature request captured before VkDevice creation. */
     };
 
     /**

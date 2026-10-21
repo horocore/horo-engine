@@ -228,6 +228,7 @@ namespace Horo::Render {
                     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                     .pNext = &features13,
                     .timelineSemaphore = request.enabledFeatures.timelineSemaphore,
+                    .shaderOutputLayer = request.enableVertexLayerRouting,
                 };
                 const VkDeviceCreateInfo createInfo{
                     .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -274,12 +275,12 @@ namespace Horo::Render {
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError())
                     return Result<void>::Failure(incarnation.ErrorValue());
-                auto shaders =
-                    resources_.InitializeShaders(properties.properties, request.adapter, getDeviceProcAddr_, incarnation.Value());
+                auto shaders = resources_.InitializeShaders(properties.properties, request.adapter, getDeviceProcAddr_, incarnation.Value(),
+                                                            request.enableVertexLayerRouting);
                 if (shaders.HasError())
                     return shaders;
                 auto prepared = graph_.Initialize(device_, queues, request.maxFramesInFlight, timeline.maxTimelineSemaphoreValueDifference,
-                                                  incarnation.Value(), resources_, getDeviceProcAddr_);
+                                                  incarnation.Value(), resources_, getDeviceProcAddr_, request.enableVertexLayerRouting);
                 if (prepared.HasError())
                     return prepared;
                 return PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
@@ -381,6 +382,18 @@ namespace Horo::Render {
                 VkPhysicalDevice device{VK_NULL_HANDLE};
             };
 
+            /** @brief Intersects actual enabled draw/layer dispatch with the selected device's framebuffer layer limit. */
+            void PublishMultiviewCapabilities(const VkPhysicalDeviceProperties &properties) {
+                auto &snapshot = resourceCapabilities_;
+                const auto multiview = graph_.MultiviewSupport();
+                if (multiview.indexedShaders) {
+                    snapshot.features.Enable(RenderCapability::ViewIndexedShaders);
+                    snapshot.limits.maxMultiviewViews = std::min(multiview.maximumViews, properties.limits.maxFramebufferLayers);
+                }
+                if (multiview.instancedTargetRouting)
+                    snapshot.features.Enable(RenderCapability::InstancedViewRouting);
+            }
+
             /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
             Result<void> PublishResourceCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties,
                                                      const VkDeviceSize allocationLimit, const std::uint64_t incarnation) {
@@ -400,6 +413,7 @@ namespace Horo::Render {
                      {RenderCapability::BufferResources, RenderCapability::MeshResources, RenderCapability::TextureResources,
                       RenderCapability::RenderTargetResources, RenderCapability::OffscreenTargets})
                     snapshot.features.Enable(capability);
+                PublishMultiviewCapabilities(properties);
                 const auto query = LoadInstanceFunction<PFN_vkGetPhysicalDeviceFormatProperties>(getInstanceProcAddr_, instance_,
                                                                                                  "vkGetPhysicalDeviceFormatProperties");
                 if (query == nullptr) {
@@ -534,6 +548,7 @@ namespace Horo::Render {
                     .standardApiVariant = VK_API_VERSION_VARIANT(properties.properties.apiVersion) == 0,
                     .portabilitySubset = portabilitySubset,
                     .driverAllowed = driverAllowed.Value(),
+                    .vertexLayerRouting = features12.shaderOutputLayer == VK_TRUE,
                 });
             }
 

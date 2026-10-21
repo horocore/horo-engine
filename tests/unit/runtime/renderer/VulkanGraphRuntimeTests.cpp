@@ -1,3 +1,4 @@
+#include "../../../support/renderer/MultiviewTestSupport.h"
 #include "VulkanGraphTestSupport.h"
 
 namespace {
@@ -6,6 +7,7 @@ namespace {
     using namespace Horo::Render::VulkanGraphTest;
 
 #include "VulkanMaterialCommandTests.inl"
+#include "VulkanMultiviewCommandTests.inl"
 
     TEST_CASE("Vulkan graph encoding emits real copy commands and matched family ownership barriers",
               "[unit][runtime][renderer][vulkan][graph]") {
@@ -84,4 +86,5 @@ namespace {
         CHECK(fixture.commandState.state.accepted.empty());
         fixture.graph.AbortFrame({1});
     }
+
 }  // namespace

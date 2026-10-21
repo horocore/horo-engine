@@ -520,14 +520,16 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(Impl::AllocationError(allocation, "Texture"));
         }
         if (descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
-            descriptor.layerCount == 1 && descriptor.sampleCount == 1 && descriptor.format == RenderTextureFormat::Rgba8Unorm &&
-            HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment)) {
-            const VkImageAspectFlags colorAspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            descriptor.sampleCount == 1 && HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment)) {
             const VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                              .image = texture->handle,
-                                             .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                                             .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
                                              .format = VulkanResourceConversion::TextureFormat(descriptor.format),
-                                             .subresourceRange = {colorAspectMask, 0, 1, 0, 1}};
+                                             .subresourceRange = {VulkanResourceConversion::Aspect(
+                                                                      VulkanResourceConversion::IsDepthFormat(descriptor.format)
+                                                                          ? RenderTextureAspect::Depth
+                                                                          : RenderTextureAspect::Color),
+                                                                  0, 1, 0, descriptor.layerCount}};
             if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(
                     ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing a native graph color attachment view failed."));
@@ -671,5 +673,14 @@ namespace Horo::Render::Detail {
             }
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanResourceRuntime::ResolveDrawView */
+    Result<VulkanDrawViewBinding> VulkanResourceRuntime::ResolveDrawView(const std::uint64_t identity) const {
+        const auto *view = Impl::Find(impl_->views, identity);
+        if (!view || !view->texture)
+            return Result<VulkanDrawViewBinding>::Failure(
+                ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "Draw attachment view is foreign or retired."));
+        return Result<VulkanDrawViewBinding>::Success({view->handle, view->texture->handle, view->descriptor});
     }
 }  // namespace Horo::Render::Detail

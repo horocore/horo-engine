@@ -147,7 +147,8 @@ namespace Horo::Render {
         if (state.cull > RenderCullMode::Back || state.frontFace > RenderFrontFace::Clockwise || state.blend > RenderBlendMode::Additive ||
             state.depthCompare > RenderCompareFunction::Always || !ColorFormatValid(state.colorFormat) ||
             !DepthFormatValid(state.depthFormat) || (state.depthTest && !state.depthFormat) || (state.depthWrite && !state.depthFormat) ||
-            state.sampleCount == 0 || state.sampleCount > 64 || (state.sampleCount & (state.sampleCount - 1U)) != 0)
+            state.sampleCount == 0 || state.sampleCount > 64 || (state.sampleCount & (state.sampleCount - 1U)) != 0 ||
+            state.viewRouting > RenderViewRouting::VertexLayer)
             return Result<Sha256Digest>::Failure(MakeError(RenderShaderResourceErrors::InvalidPipeline));
         // Version one encodes the established MeshVertex triangle layout plus every fixed-state dimension.
         const std::array<std::uint8_t, 13> bytes{1,
@@ -162,7 +163,7 @@ namespace Horo::Render {
                                                  static_cast<std::uint8_t>(state.depthFormat.has_value()),
                                                  static_cast<std::uint8_t>(state.depthFormat.value_or(RenderTextureFormat::Rgba8Unorm)),
                                                  static_cast<std::uint8_t>(state.sampleCount),
-                                                 0};
+                                                 static_cast<std::uint8_t>(state.viewRouting)};
         return Result<Sha256Digest>::Success(ComputeSha256(std::as_bytes(std::span{bytes})));
     }
 

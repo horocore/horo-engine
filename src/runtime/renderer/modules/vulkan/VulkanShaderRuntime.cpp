@@ -117,6 +117,20 @@ namespace Horo::Render::Detail {
             }
             return found;
         }
+
+        /** @brief Detects Layer built-ins, including interface-block members, in a structurally validated module. */
+        bool WritesLayer(std::span<const std::uint32_t> words) {
+            for (std::size_t offset = 5; offset < words.size();) {
+                const auto count = words[offset] >> 16;
+                const auto opcode = words[offset] & 0xffffU;
+                const auto instruction = words.subspan(offset, count);
+                if ((opcode == 71 && count >= 4 && instruction[2] == 11 && instruction[3] == 9) ||
+                    (opcode == 72 && count >= 5 && instruction[3] == 11 && instruction[4] == 9))
+                    return true;
+                offset += count;
+            }
+            return false;
+        }
     }  // namespace VulkanShaderDetail
 
     VulkanShaderRuntime::VulkanShaderRuntime() : impl_(std::make_unique<Impl>()) {}
@@ -174,7 +188,7 @@ namespace Horo::Render::Detail {
     /** @copydoc VulkanShaderRuntime::Initialize */
     Result<void> VulkanShaderRuntime::Initialize(VkDevice device, const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
                                                  const Resolver &resolver, IssueIdentity issue, ResolveResource resolve,
-                                                 const std::uint64_t deviceIncarnation) {
+                                                 const std::uint64_t deviceIncarnation, const bool vertexLayerEnabled) {
         if (impl_->device || !device || !resolver || !issue || !resolve || !adapter.IsValid())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidConfig));
         impl_->owner = std::this_thread::get_id();
@@ -183,6 +197,7 @@ namespace Horo::Render::Detail {
                 MakeError(VulkanBackendErrors::EntryPointMissing, "Vulkan shader/material dispatch is incomplete."));
         impl_->properties = properties;
         impl_->deviceIncarnation = deviceIncarnation;
+        impl_->vertexLayerEnabled = vertexLayerEnabled;
         impl_->issue = std::move(issue);
         impl_->resolve = std::move(resolve);
         Sha256Builder hash;
@@ -268,7 +283,10 @@ namespace Horo::Render::Detail {
                 return Result<std::uint64_t>::Failure(
                     MakeError(VulkanBackendErrors::ResourceRequestInvalid,
                               "SPIR-V header, instruction bounds or exact stage entry point is invalid; recook the artifact."));
-            Impl::Shader shader{.descriptor = descriptor, .bytes = code.size()};
+            Impl::Shader shader{.descriptor = descriptor, .bytes = code.size(), .writesLayer = WritesLayer(words)};
+            if (shader.writesLayer && (!impl_->vertexLayerEnabled || descriptor.stage != ShaderStage::Vertex))
+                return Result<std::uint64_t>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceUnsupported, "Layer output requires explicitly enabled vertex layer routing."));
             const auto id = impl_->issue();
             if (!id)
                 return Result<std::uint64_t>::Failure(
@@ -298,6 +316,9 @@ namespace Horo::Render::Detail {
         const auto f = shaders.find(fragment);
         if (v == shaders.end() || f == shaders.end())
             return Result<std::size_t>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        if (v->second.writesLayer != (descriptor.state.viewRouting == RenderViewRouting::VertexLayer))
+            return Result<std::size_t>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid,
+                                                          "Cooked vertex Layer output and pipeline routing contract disagree."));
         const auto targetFacts = [](const ShaderTargetRequirement &t) {
             return std::tie(t.backend, t.payloadFormat, t.descriptorVersion, t.interfaceSchemaVersion, t.maximumBindings,
                             t.maximumInlineConstantBytes, t.supportsCompute, t.supportsStorageResources);
