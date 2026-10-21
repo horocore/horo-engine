@@ -2852,7 +2852,9 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/PCGAuthoringInspectorRenderTests.cpp
     )
 
-    target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE "${PROJECT_SOURCE_DIR}/src/editor/pcg")
+    target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/editor/pcg"
+            "${PROJECT_SOURCE_DIR}/src/editor/screens/workspace")
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
     target_link_libraries(HoroEditorUiComponentsRenderTests
             PRIVATE

@@ -1,22 +1,48 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "PCGAuthoringInspector.h"
 #include "PCGDocumentTestSupport.h"
+#include "PCGWorkspace.h"
 
+#include <algorithm>
 #include <cmath>
 #include <imgui.h>
 #include <limits>
+#include <map>
+#include <memory>
 
 namespace Horo::Editor {
     namespace {
         class LongLabels final : public ILocalizationService {
         public:
-            const std::string &Get(std::string_view, std::string_view) const override {
-                return value;
+            const std::string &Get(std::string_view, std::string_view key) const override {
+                return labels.try_emplace(std::string{key}, value + " " + std::string{key}).first->second;
             }
 
             std::string value{"Uzun yerelleştirilmiş şema özellikleri ve belirlenimci varsayılan değerler"};
+            mutable std::map<std::string, std::string> labels;
         };
 
+        /** @brief Owns the real headless ImGui context even if a regression assertion aborts a scenario. */
+        struct GuiFixture final {
+            std::unique_ptr<ImGuiContext, void (*)(ImGuiContext *)> context{ImGui::CreateContext(), &ImGui::DestroyContext};
+            Theme::Fonts fonts;
+
+            GuiFixture() {
+                auto &io = ImGui::GetIO();
+                io.IniFilename = nullptr;
+                io.DisplaySize = {1200, 900};
+                io.DeltaTime = 1.0F / 60.0F;
+                auto *font = io.Fonts->AddFontDefault();
+                REQUIRE(io.Fonts->Build());
+                fonts = {.sans = font, .sansCompact = font, .sansEmphasis = font, .icon = font};
+            }
+
+            ~GuiFixture() {
+                Theme::SetThemePreset(Theme::Preset::HoroDark);
+            }
+        };
+
+        /** @brief Captures a real jitter schema for repeated numeric-buffer and replacement assertions. */
         PCGDocumentSnapshot JitterSnapshot(const PCG::PCGNodeCatalogSnapshot &catalog) {
             using namespace PCGDocumentTestSupport;
             const auto &descriptor = catalog.Nodes().front();
@@ -42,6 +68,7 @@ namespace Horo::Editor {
                                        .source = std::make_shared<const PCG::PCGGraphAsset>(std::move(graph).Value())};
         }
 
+        /** @brief Rejects non-finite control/canvas geometry in real generated ImGui draw data. */
         void RequireFiniteVertices() {
             const auto *draw = ImGui::GetDrawData();
             REQUIRE(draw);
@@ -94,18 +121,102 @@ namespace Horo::Editor {
                 CHECK(state.draft->values.deterministicSeed == snapshot.source->Data().deterministicSeed);
             }
         };
+
+        /** @brief Adds every exact exposed-value alternative to one unavailable but losslessly retained node. */
+        void AddExposedDefaults(PCG::PCGGraphSourceData &data, std::uint64_t &nextPin) {
+            using namespace PCGDocumentTestSupport;
+            const std::array<PCG::PCGGraphValue, 7> values{true,
+                                                           std::numeric_limits<std::int64_t>::min(),
+                                                           std::numeric_limits<std::uint64_t>::max(),
+                                                           0.25,
+                                                           Math::Vec2{0.25F, 0.5F},
+                                                           Math::Vec3{0.25F, 0.5F, 0.75F},
+                                                           Math::Vec4{0.25F, 0.5F, 0.75F, 1.0F}};
+            constexpr std::array types{PCG::PCGPinType::Boolean, PCG::PCGPinType::SignedInteger, PCG::PCGPinType::UnsignedInteger,
+                                       PCG::PCGPinType::Scalar,  PCG::PCGPinType::Vector2,       PCG::PCGPinType::Vector3,
+                                       PCG::PCGPinType::Vector4};
+            PCG::PCGGraphNode node{.id = Id<PCG::NodeId>(data.nodes.size() + 1),
+                                   .type = Id<PCG::NodeTypeId>(1),
+                                   .version = {1, 0},
+                                   .payload = {1, 2}};
+            for (std::size_t index = 0; index < values.size(); ++index) {
+                const auto pin = Id<PCG::PinId>(++nextPin);
+                node.pins.push_back({pin, PCG::PCGPinDirection::Input, types[index], PCG::PCGPinCardinality::Single, values[index]});
+                data.exposedInputs.push_back(
+                    {Id<PCG::ExposedInputId>(index + 1), "graph.value_" + std::to_string(index + 1), node.id, pin, values[index]});
+            }
+            data.nodes.push_back(std::move(node));
+        }
+
+        /** @brief Uses production creation recipes and the canonical source validator for every built-in. */
+        PCGDocumentSnapshot FullSchemaSnapshot(const PCGEditorCatalog &catalog) {
+            using namespace PCGDocumentTestSupport;
+            auto data = Graph();
+            data.nodes.clear();
+            data.edges.clear();
+            data.exposedInputs.clear();
+            std::uint64_t nextPin{};
+            for (const auto &entry : catalog.palette) {
+                auto node = entry.prototype;
+                node.id = Id<PCG::NodeId>(data.nodes.size() + 1);
+                for (auto &pin : node.pins)
+                    pin.id = Id<PCG::PinId>(++nextPin);
+                data.nodes.push_back(std::move(node));
+            }
+            AddExposedDefaults(data, nextPin);
+            auto graph = PCG::PCGGraphAsset::Create(std::move(data), {.unknownNodePolicy = PCG::PCGUnknownNodePolicy::PreserveInert,
+                                                                      .supportedNodeTypes = catalog.document.types});
+            REQUIRE(graph.HasValue());
+            return {.asset = Asset(),
+                    .identity = Identity(),
+                    .session = {Asset(9), 1},
+                    .revision = 1,
+                    .catalogRevision = catalog.document.revision,
+                    .source = std::make_shared<const PCG::PCGGraphAsset>(std::move(graph).Value())};
+        }
+
+        /** @brief Renders the actual graph surface with the same schema and inspector arguments as its registered presenter. */
+        void DrawFullSchemaFrame(const PCGWorkspaceDocument &document, const PCGEditorCatalog &catalog, PCGAuthoringInspectorState &state,
+                                 const ILocalizationService &labels, const Theme::Fonts &fonts, float width) {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({width, 800});
+            ImGui::Begin("All PCG schemas", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            CHECK_FALSE(DrawPCGGraphEditor(document, catalog.palette, labels, fonts, &catalog.schemas, &state));
+            ImGui::End();
+            ImGui::Render();
+        }
+
+        /** @brief Confirms the rendered form owns every closed settings alternative without repairing unsupported source. */
+        void CheckFullSchemaDraft(const PCGAuthoringInspectorState &state, const PCGDocumentSnapshot &snapshot) {
+            REQUIRE(state.draft);
+            CHECK(state.invalid.empty());
+            CHECK(state.draft->values == snapshot.source->Data());
+            std::array<bool, std::variant_size_v<PCG::PCGNodeAuthoringSettings>> alternatives{};
+            std::size_t supported{}, unsupported{};
+            for (const auto &property : state.draft->properties) {
+                if (property.settings) {
+                    alternatives[property.settings->index()] = true;
+                    ++supported;
+                } else {
+                    CHECK(property.diagnostic.has_value());
+                    ++unsupported;
+                }
+            }
+            CHECK(supported == 17);
+            CHECK(unsupported == 1);
+            CHECK(std::ranges::all_of(alternatives, [](bool covered) {
+                return covered;
+            }));
+            CHECK(state.text.at("input.2.default") == "-9223372036854775808");
+            CHECK(state.text.at("input.3.default") == "18446744073709551615");
+        }
     }  // namespace
 
     TEST_CASE("PCG schema inspector renders narrow localized and disabled controls in both themes", "[editor][pcg][render]") {
         using namespace PCGDocumentTestSupport;
-        ImGui::CreateContext();
-        auto &io = ImGui::GetIO();
-        io.IniFilename = nullptr;
-        io.DisplaySize = {1200, 900};
-        io.DeltaTime = 1.0F / 60.0F;
-        auto *font = io.Fonts->AddFontDefault();
-        REQUIRE(io.Fonts->Build());
-        const Theme::Fonts fonts{.sans = font, .sansCompact = font, .sansEmphasis = font, .icon = font};
+        GuiFixture gui;
+        const auto &fonts = gui.fonts;
         const std::array grants{PCG::PCGCapability::Validation};
         auto owner = PCG::PCGNodeCatalog::Create({PCG::PCGHostProfile::Interactive, PCG::PCGCapabilitySet::Create(grants).Value()}).Value();
         REQUIRE(owner.Register(PCG::PCGCpuNodeKind::GridJitter).HasValue());
@@ -130,7 +241,32 @@ namespace Horo::Editor {
                     context.CheckReplacement(state, canEdit);
                 }
         }
-        Theme::SetThemePreset(Theme::Preset::HoroDark);
-        ImGui::DestroyContext();
+    }
+
+    TEST_CASE("PCG graph surface renders all catalog schemas and exposed value types without source mutation",
+              "[editor][pcg][render][schema]") {
+        GuiFixture gui;
+        LongLabels labels;
+        const auto created = CreatePCGEditorCatalog();
+        REQUIRE(created.HasValue());
+        const auto &catalog = created.Value();
+        const auto snapshot = FullSchemaSnapshot(catalog);
+        PCGWorkspaceDocument document;
+        RefreshPCGCanvas(document, snapshot);
+        for (const auto &node : snapshot.source->Data().nodes)
+            document.canvas.selection.push_back(node.id);
+        for (const auto preset : {Theme::Preset::HoroDark, Theme::Preset::Light}) {
+            Theme::SetThemePreset(preset);
+            Theme::ApplyCurrentTheme();
+            for (const float width : {240.0F, 1100.0F}) {
+                PCGAuthoringInspectorState state;
+                for (int frame = 0; frame < 2; ++frame)
+                    DrawFullSchemaFrame(document, catalog, state, labels, gui.fonts, width);
+                RequireFiniteVertices();
+                CheckFullSchemaDraft(state, snapshot);
+            }
+        }
+        CHECK(snapshot.source->UnknownNodeCount() == 1);
+        CHECK_FALSE(snapshot.dirty);
     }
 }  // namespace Horo::Editor
