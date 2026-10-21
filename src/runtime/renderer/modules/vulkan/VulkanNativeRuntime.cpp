@@ -427,18 +427,19 @@ namespace Horo::Render {
                 }
                 snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
                 for (const auto format : {Rgba8Unorm, Depth24Stencil8, Depth32Float}) {
+                    using enum RenderTextureUsage;
                     VkFormatProperties native{};
                     query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);
-                    auto usage = RenderTextureUsage::None;
+                    auto usage = None;
                     if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0)
-                        usage = usage | RenderTextureUsage::Sampled;
+                        usage = usage | Sampled;
                     if ((native.optimalTilingFeatures &
                          (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0)
-                        usage = usage | RenderTextureUsage::RenderAttachment;
+                        usage = usage | RenderAttachment;
                     if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) != 0)
-                        usage = usage | RenderTextureUsage::CopySource;
+                        usage = usage | CopySource;
                     if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0)
-                        usage = usage | RenderTextureUsage::CopyDestination;
+                        usage = usage | CopyDestination;
                     snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
                 }
                 return Result<void>::Success();
