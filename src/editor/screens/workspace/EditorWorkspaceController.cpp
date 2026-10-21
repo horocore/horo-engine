@@ -74,20 +74,24 @@ namespace Horo::Editor {
           m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcg.document,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
-          m_prefabStageFactory(dependencies.prefab.stageFactory), m_prefabSourceCapture(dependencies.prefab.sources),
-          m_workspaceSession(dependencies.documentSessionOwner), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
-          m_collisionInventory(dependencies.collision.inventory), m_collisionActivation(dependencies.collision.activation),
-          m_previewCollisionReceipt(dependencies.collision.previewReceipt), m_collisionSceneOwner(dependencies.documentSessionOwner),
-          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles),
-          m_assetRegistrySource(dependencies.assetRegistrySource), m_importerCatalog(dependencies.importerCatalog),
+          m_prefabStageFactory(dependencies.prefab.stageFactory), m_pcgPreviewJobs(dependencies.jobs),
+          m_pcgPreviewCatalog(dependencies.pcg.schemas), m_pcgPreviewInputs(dependencies.pcgPreviewInputs),
+          m_prefabSourceCapture(dependencies.prefab.sources), m_workspaceSession(dependencies.documentSessionOwner),
+          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collision.inventory),
+          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
+          m_collisionSceneOwner(dependencies.documentSessionOwner), m_mutations(dependencies.mutations),
+          m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assetRegistrySource),
+          m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
-          m_sourceOpenNavigator(dependencies.sourceOpenNavigator), m_diagnosticSourceNavigator(dependencies.diagnosticSourceNavigator),
+          m_sourceOpenNavigator(dependencies.sourceNavigation.sourceOpenNavigator),
+          m_diagnosticSourceNavigator(dependencies.sourceNavigation.diagnosticSourceNavigator),
           m_gameplayBuilds(dependencies.gameplay.builds), m_gameplayBuildEnvironment(dependencies.gameplay.environment),
           m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
           m_worldDocuments(dependencies.documentSessionOwner), m_playSession(dependencies.networkDebugger),
           m_audioPreview(dependencies.audioPreview), m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
         m_viewModel.pcgPalette = dependencies.pcg.palette;
+        m_viewModel.pcgSchemas = dependencies.pcg.schemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;

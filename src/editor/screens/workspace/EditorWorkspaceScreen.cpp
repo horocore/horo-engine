@@ -772,10 +772,16 @@ namespace Horo::Editor {
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, session.Value().ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
-                auto pcgComposition = CreatePCGEditorCatalog();
+                const std::array previewGrants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview,
+                                               PCG::PCGCapability::OfflineBake, PCG::PCGCapability::RuntimeEvaluation,
+                                               PCG::PCGCapability::HybridEvaluation};
+                auto pcgComposition = CreatePCGEditorCatalog(PCG::PCGCapabilitySet::Create(previewGrants).Value());
                 if (pcgComposition.HasError())
                     return Result<void>::Failure(pcgComposition.ErrorValue());
                 auto pcgCatalog = std::move(pcgComposition).Value();
+                auto pcgPreview = CreatePCGPreviewSandbox();
+                if (pcgPreview.HasError())
+                    return Result<void>::Failure(pcgPreview.ErrorValue());
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -803,6 +809,8 @@ namespace Horo::Editor {
                                                    .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
                                                               .stageFactory = BindPrefabStageFactory(projectRoot)},
                                                    .pcg = std::move(pcgCatalog),
+                                                   .pcgPreviewInputs = std::move(pcgPreview).Value(),
+
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
