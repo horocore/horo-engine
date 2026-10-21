@@ -122,7 +122,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
 target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp)
-target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PhysicsInspectorPublicContract.cpp)
+target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/NavigationInspectorPublicContract.cpp support/PhysicsInspectorPublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
@@ -2237,6 +2237,7 @@ if (HORO_BUILD_EDITOR_GUI)
 endif ()
 add_executable(HoroEditorLocalizationServiceTests
         unit/editor/LocalizationServiceTests.cpp
+        unit/editor/NavigationInspectorLocalizationTests.cpp
         unit/editor/PhysicsInspectorLocalizationTests.cpp
 )
 
@@ -2668,6 +2669,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabCreationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
+            unit/editor/EditorWorkspaceNavigationInspectorTests.cpp
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
@@ -2779,6 +2781,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroInspectorPanelRenderTests
             unit/editor/InspectorPanelRenderTests.cpp
+            unit/editor/NavigationInspectorRenderTests.cpp
             unit/editor/PhysicsInspectorRenderTests.cpp
     )
 
@@ -2795,6 +2798,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/InspectorEditSessionTests.cpp
             unit/editor/InspectorCharacterEditSessionTests.cpp
             unit/editor/InspectorAudioComponentTests.cpp
+            unit/editor/NavigationInspectorSessionTests.cpp
             unit/editor/PhysicsInspectorSessionTests.cpp
     )
 
@@ -2866,10 +2870,13 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/ColliderViewportRenderTests.cpp
+            support/ViewportPanelRenderSupport.h
     )
 
     target_compile_features(HoroViewportPanelRenderTests PRIVATE cxx_std_20)
     target_include_directories(HoroViewportPanelRenderTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
     )
     target_link_libraries(HoroViewportPanelRenderTests
@@ -3165,7 +3172,10 @@ add_executable(HoroSceneDocumentTests
         unit/editor/NavigationSettingsSceneReloadTests.cpp
         unit/editor/SceneDocumentTests.cpp
         unit/editor/CharacterAuthoringTests.cpp
+        unit/editor/NavigationPrefabInspectorTests.cpp
+        unit/editor/NavigationInspectorTests.cpp
         unit/editor/PhysicsInspectorTests.cpp
+        unit/editor/ColliderEditingTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/AudioListenerAuthoringTests.cpp
@@ -4810,6 +4820,7 @@ if (HORO_BUILD_RENDER_OPENGL)
                 HoroEngine::EditorViewportOpenGL
                 HoroEngine::RenderFrontend
                 HoroThirdParty::Glad
+                HoroThirdParty::ImGuiOpenGL
         )
 
         if (HORO_ENABLE_GPU_SMOKE_TESTS)
