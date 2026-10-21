@@ -39,6 +39,14 @@ namespace Horo::Editor {
     /** @brief Panel-owned visibility and identity choices; no provider memory survives a draw. */
     class NavigationOverlayLayer final {
     public:
+        /** @brief Starts with no geometry interest until the viewport owner enables it. */
+        NavigationOverlayLayer() = default;
+
+        /** @brief Captures explicit initial viewport interest without granting runtime or bake authority.
+         * @param visible Whether this viewport initially requests geometry.
+         */
+        explicit NavigationOverlayLayer(bool visible) : visible_(visible) {}
+
         /** @brief Queries memory-only owner projection, then draws clipped geometry and shared controls.
          * @param access Explicit host capability, outliving attachment.
          * @param frame Current immutable inputs; no reference is retained after return.

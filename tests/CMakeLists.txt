@@ -2871,11 +2871,14 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/NavigationOverlayRenderTests.cpp
     )
 
     target_compile_features(HoroViewportPanelRenderTests PRIVATE cxx_std_20)
     target_include_directories(HoroViewportPanelRenderTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
+            ${PROJECT_SOURCE_DIR}/tests/helpers
+            ${PROJECT_SOURCE_DIR}/tests/support
     )
     target_link_libraries(HoroViewportPanelRenderTests
             PRIVATE
