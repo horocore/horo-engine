@@ -43,6 +43,20 @@ namespace Horo::Editor {
             return view;
         }
 
+        /** @brief Validates the retry fixture's rejected scope tuple before producing fresh bounded authored evidence. */
+        SceneSource::SceneObjectSnapshot RetryObject() {
+            auto object = Project::Object();
+            object.components.navigationSurface->id = Navigation::TestSupport::Id<Navigation::SurfaceId>(99);
+            object.components.navigationSurface->localBounds = Runtime::NavigationLocalBounds{{4, 0, 4}, {4, 1, 4}};
+            const auto invalidScope = Runtime::ValidateNavigationSurfaceComponent(*object.components.navigationSurface);
+            REQUIRE(invalidScope.HasError());
+            CHECK(invalidScope.ErrorValue().code.Value() == Navigation::NavigationErrors::SceneComponentInvalid.code.Value());
+            object.components.navigationSurface->bakeScope = Runtime::NavigationBakeScope::LocalBounds;
+            REQUIRE(Runtime::ValidateNavigationSurfaceComponent(*object.components.navigationSurface).HasValue());
+            object.components.navigationSources.front().surface = object.components.navigationSurface->id;
+            return object;
+        }
+
         /** @brief Waits for the actual application terminal projection rather than inferring completion from a log. */
         NavigationBakeWorkspaceSnapshot Finished(EditorNavigationBakeHost &host, const NavigationBakeWorkspaceAccess &access,
                                                  const std::filesystem::path &root) {
@@ -305,16 +319,7 @@ namespace Horo::Editor {
         REQUIRE(failed.operation->diagnostic);
         CHECK_FALSE(failed.overlays);
         CHECK_FALSE(access.overlays(root));
-        auto object = Project::Object();
-        object.components.navigationSurface->id = Navigation::TestSupport::Id<Navigation::SurfaceId>(99);
-        object.components.navigationSurface->localBounds = Runtime::NavigationLocalBounds{{4, 0, 4}, {4, 1, 4}};
-        const auto invalidScope = Runtime::ValidateNavigationSurfaceComponent(*object.components.navigationSurface);
-        REQUIRE(invalidScope.HasError());
-        CHECK(invalidScope.ErrorValue().code.Value() == Navigation::NavigationErrors::SceneComponentInvalid.code.Value());
-        object.components.navigationSurface->bakeScope = Runtime::NavigationBakeScope::LocalBounds;
-        REQUIRE(Runtime::ValidateNavigationSurfaceComponent(*object.components.navigationSurface).HasValue());
-        object.components.navigationSources.front().surface = object.components.navigationSurface->id;
-        project.Scenes(object);
+        project.Scenes(RetryObject());
         const auto retried = access.retry(root, first.Value());
         REQUIRE(retried.HasValue());
         CHECK(retried.Value() != first.Value());
