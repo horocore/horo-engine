@@ -3,6 +3,7 @@
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/prefab/PrefabAssetPreview.h"
 
+#include <algorithm>
 #include <atomic>
 #include <thread>
 
@@ -98,7 +99,8 @@ namespace Horo::Editor {
         stopped.RequestCancellation();
         auto cancelled = RenderPrefabAssetPreview(candidate, 128, 128, stopped.Token());
         REQUIRE(cancelled.HasError());
-        CHECK(cancelled.ErrorValue().code == Prefab::PrefabErrors::Cancelled.code);
+        CHECK(cancelled.ErrorValue().code.Value() == Prefab::PrefabErrors::Cancelled.code.Value());
+        CHECK(cancelled.ErrorValue().domain.Value() == Prefab::PrefabErrors::Cancelled.domain.Value());
     }
 
     TEST_CASE("Prefab thumbnails inherit parent transforms without activating a Scene", "[editor][prefab][preview]") {
@@ -149,7 +151,8 @@ namespace Horo::Editor {
         REQUIRE(candidate.HasValue());
         auto image = RenderPrefabAssetPreview(candidate.Value(), 128, 128);
         REQUIRE(image.HasError());
-        CHECK(image.ErrorValue().code == Prefab::PrefabErrors::CorruptedPayload.code);
+        CHECK(image.ErrorValue().code.Value() == Prefab::PrefabErrors::CorruptedPayload.code.Value());
+        CHECK(image.ErrorValue().domain.Value() == Prefab::PrefabErrors::CorruptedPayload.domain.Value());
     }
 
     TEST_CASE("Prefab provider rejects source drift and malformed captured sources", "[editor][prefab][preview][native]") {
@@ -194,7 +197,8 @@ namespace Horo::Editor {
         auto result = provider->GeneratePreview(input, {});
         REQUIRE(result.HasError());
         CHECK(captures == 2);
-        CHECK(result.ErrorValue().code == Prefab::PrefabErrors::ResolutionStale.code);
+        CHECK(result.ErrorValue().code.Value() == Prefab::PrefabErrors::ResolutionStale.code.Value());
+        CHECK(result.ErrorValue().domain.Value() == Prefab::PrefabErrors::ResolutionStale.domain.Value());
     }
 
     TEST_CASE("Prefab source jobs join before borrowed project services retire", "[editor][prefab][preview][lifecycle]") {

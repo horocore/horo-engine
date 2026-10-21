@@ -5,6 +5,7 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserCards.h"
 #include "editor/screens/workspace/prefab/PrefabAssetPreview.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 

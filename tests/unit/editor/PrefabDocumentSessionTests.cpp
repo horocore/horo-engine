@@ -2,6 +2,7 @@
 #include "PrefabHierarchyTestSupport.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 
+#include <string_view>
 #include <thread>
 
 namespace Horo::Editor {
@@ -49,6 +50,12 @@ namespace Horo::Editor {
             std::unique_ptr<PrefabDocumentSession> document;
 
             Fixture() {
+                // Native publication leases require canonical parent spellings, including Windows short-name aliases.
+                std::error_code error;
+                project.directory.path = std::filesystem::canonical(project.directory.path, error);
+                REQUIRE_FALSE(error);
+                project.source = std::filesystem::canonical(project.source, error);
+                REQUIRE_FALSE(error);
                 auto key = DocumentOpenKey{DocumentKind::Prefab, SourceDocumentId::Parse(project.record.sourcePath.String()).Value()};
                 auto opened = identities.Open(key);
                 REQUIRE(opened.HasValue());
@@ -60,6 +67,13 @@ namespace Horo::Editor {
 
             void Rename(const std::string &name) {
                 REQUIRE(document->Execute(document->Snapshot().fence, RenamePrefabObject{{0}, name}).HasValue());
+            }
+
+            void Autosave() {
+                const auto saved = document->Autosave(project.mutations, project.files);
+                INFO("autosave code: " << (saved.HasError() ? saved.ErrorValue().code.Value() : std::string_view{}));
+                INFO("autosave detail: " << (saved.HasError() ? saved.ErrorValue().message : std::string{}));
+                REQUIRE(saved.HasValue());
             }
 
             auto Capture() {
@@ -117,6 +131,8 @@ namespace Horo::Editor {
         fixture.Rename(accepted.source->Data().objects.front().name);
         CHECK(fixture.document->Snapshot().fence.revision == accepted.fence.revision);
         auto saved = fixture.document->Save(accepted.fence, fixture.project.mutations, fixture.project.files);
+        INFO("save code: " << (saved.HasError() ? saved.ErrorValue().code.Value() : std::string_view{}));
+        INFO("save detail: " << (saved.HasError() ? saved.ErrorValue().message : std::string{}));
         REQUIRE(saved.HasValue());
         REQUIRE(fixture.document->Reload(fixture.document->Snapshot().fence, false).HasValue());
         CHECK(fixture.document->Snapshot().source->Data().objects.front().name == boundary);
@@ -248,6 +264,8 @@ namespace Horo::Editor {
         Fixture fixture;
         fixture.Rename("Saved");
         auto saved = fixture.document->Save(fixture.document->Snapshot().fence, fixture.project.mutations, fixture.project.files);
+        INFO("save code: " << (saved.HasError() ? saved.ErrorValue().code.Value() : std::string_view{}));
+        INFO("save detail: " << (saved.HasError() ? saved.ErrorValue().message : std::string{}));
         REQUIRE(saved.HasValue());
         CHECK(saved.Value().status == Assets::AssetSourcePublicationStatus::Durable);
         CHECK_FALSE(fixture.document->Snapshot().dirty);
@@ -270,7 +288,7 @@ namespace Horo::Editor {
         Fixture fixture;
         const auto original = fixture.document->Snapshot();
         fixture.Rename("Recovered intent");
-        REQUIRE(fixture.document->Autosave(fixture.project.mutations, fixture.project.files).HasValue());
+        fixture.Autosave();
         auto captured = fixture.document->Snapshot();
         CHECK(captured.dirty);
         CHECK(captured.acceptedSource == original.acceptedSource);
@@ -310,7 +328,7 @@ namespace Horo::Editor {
         Fixture fixture;
         const auto original = fixture.document->Snapshot();
         fixture.Rename("Old recovered intent");
-        REQUIRE(fixture.document->Autosave(fixture.project.mutations, fixture.project.files).HasValue());
+        fixture.Autosave();
         DocumentRecoveryService recovery(fixture.project.directory.path, fixture.project.mutations, fixture.project.files);
         auto inspected = recovery.Inspect(fixture.project.asset, original.identity.key);
         REQUIRE(inspected.HasValue());
@@ -333,7 +351,7 @@ namespace Horo::Editor {
         CHECK(discarded.savedState == edited.savedState);
         CHECK(discarded.dirty);
         CHECK(discarded.canUndo);
-        REQUIRE(fixture.document->Autosave(fixture.project.mutations, fixture.project.files).HasValue());
+        fixture.Autosave();
         auto current = recovery.Inspect(fixture.project.asset, original.identity.key);
         REQUIRE(current.HasValue());
         REQUIRE(current.Value().has_value());

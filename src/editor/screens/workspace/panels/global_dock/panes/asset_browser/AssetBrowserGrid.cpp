@@ -152,9 +152,11 @@ namespace Horo::Editor {
                 return std::format("{} {}", entry.containedItemCount, unit);
             }
             if (entry.previewError) {
-                return localization.Get("editor", entry.previewError->code == Prefab::PrefabErrors::MigrationRequired.code
-                                                      ? "workspace.content_browser.prefab.migration_required"
-                                                      : "workspace.content_browser.preview.unavailable");
+                const auto &migration = Prefab::PrefabErrors::MigrationRequired;
+                const bool needsMigration = entry.previewError->domain.Value() == migration.domain.Value() &&
+                                            entry.previewError->code.Value() == migration.code.Value();
+                return localization.Get("editor", needsMigration ? "workspace.content_browser.prefab.migration_required"
+                                                                 : "workspace.content_browser.preview.unavailable");
             }
             if (entry.previewState == ContentBrowserPreviewState::Queued)
                 return localization.Get("editor", "workspace.content_browser.preview.queued");
