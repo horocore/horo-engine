@@ -26,12 +26,14 @@ namespace Horo::Extensions {
     class EditorActivityHost;
     class EditorPageHost;
     class EditorInspectorHost;
+    class EditorViewportHost;
 
     /** @brief Explicit editor publication authorities supplied by application composition. */
     struct ExtensionEditorHosts final {
         std::shared_ptr<EditorActivityHost> activities;  /**< Activity contribution authority; absent denies publication. */
         std::shared_ptr<EditorPageHost> pages;           /**< Page contribution authority; absent denies publication. */
         std::shared_ptr<EditorInspectorHost> inspectors; /**< Inspector contribution authority; absent denies publication. */
+        std::shared_ptr<EditorViewportHost> viewports;   /**< Restricted viewport contribution host. */
     };
 
     /** @brief Represents a loaded extension instance. */

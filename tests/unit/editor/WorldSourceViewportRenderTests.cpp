@@ -3,7 +3,9 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/DataBus.h"
+#include "ViewportPanelRenderSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
 #include "editor/screens/workspace/panels/viewport/WorldSourceShapeControls.h"
 #include "editor/screens/workspace/panels/viewport/WorldSourceViewportTool.h"
 
@@ -139,6 +141,44 @@ namespace {
         }
     };
 
+    /** @brief Reuses source-tool ImGui frames with the actual panel's routed input and presentation lifecycle. */
+    struct PanelHarness : Harness {
+        Horo::Editor::Tests::ViewportRenderSupport::FakeViewportRenderer renderer;
+        Input::RawInputCollector collector;
+        Input::InputRouter router;
+        Input::InputContextToken workspace =
+            router.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
+        ViewportPanel panel;
+        Input::FrameNumber frame{1};
+
+        PanelHarness() {
+            PanelContext binding{.dataBus = editor,
+                                 .viewportRenderer = &renderer,
+                                 .inputRouter = &router,
+                                 .workspaceInputContext = &workspace};
+            panel.OnAttach(binding);
+        }
+
+        ~PanelHarness() {
+            panel.OnDetach();
+        }
+
+        EditorWorkspaceViewCommandData StepPanel(const EditorWorkspaceViewModel &view, ImVec2 mouse, bool down) {
+            auto &io = ImGui::GetIO();
+            io.AddMousePosEvent(mouse.x, mouse.y);
+            io.AddMouseButtonEvent(ImGuiMouseButton_Left, down);
+            Begin({640, 480});
+            collector.BeginFrame(frame++);
+            collector.SetPointerPosition(io.MousePos.x, io.MousePos.y);
+            collector.SetPointerButton(Input::PointerButton::Primary, io.MouseDown[ImGuiMouseButton_Left]);
+            router.BeginFrame(collector.Commit());
+            EditorWorkspaceViewCommandData command;
+            panel.DrawPanel({0, 0}, {640, 480}, view, command, context);
+            End();
+            return command;
+        }
+    };
+
     Assets::AssetId Owner() {
         std::array<std::uint8_t, 16> bytes{};
         bytes[0] = 42;
@@ -210,6 +250,27 @@ namespace {
         const auto undone = world.ReplaySources(committed.Value()->fence, false);
         REQUIRE(undone.HasValue());
         CHECK(std::get<WS::StreamingSourceSphere>(undone.Value()->document.sources[0].shape).center == Point{});
+    }
+
+    TEST_CASE("Hiding the actual viewport cancels a source drag before the same document is shown again",
+              "[unit][editor][gui][world_document]") {
+        PartitionedWorldWorkspace world{Owner()};
+        const auto original = world.Open(Document()).Value();
+        EditorWorkspaceViewModel view{.worldViewport = {original, {}, 1}};
+        for (const bool hide : {false, true}) {
+            PanelHarness harness;
+            static_cast<void>(harness.StepPanel(view, {320, 240}, false));
+            static_cast<void>(harness.StepPanel(view, {320, 240}, true));
+            static_cast<void>(harness.StepPanel(view, {340, 240}, true));
+            if (hide) {
+                EditorWorkspaceViewCommandData route{.command = EditorWorkspaceViewCommand::SaveScene};
+                harness.panel.OnPresentationHidden(route);
+                CHECK(route.command == EditorWorkspaceViewCommand::SaveScene);
+            }
+            const auto released = harness.StepPanel(view, {340, 240}, false);
+            CHECK(released.worldSource.has_value() == !hide);
+            CHECK(world.Snapshot().Value() == original);
+        }
     }
 
     TEST_CASE("Viewport play and revoked input never capture source gestures", "[unit][editor][gui][world_document]") {

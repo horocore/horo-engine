@@ -98,6 +98,110 @@ namespace Horo::Editor::Tests {
             io.AddMouseButtonEvent(0, false);
             Frame(view, owner, gui, command, 640, snapshot);
         }
+
+        /** @brief Reads the actual canonical numeric owner value for GUI/history assertions. */
+        double ScalarValue(const InspectorControllerSupport::Fixture &owner) {
+            return std::get<double>(owner.controller->ViewModel().objects.front().components.behaviors.front().fields.front().value);
+        }
+
+        /** @brief Uses the existing controller's history commands after a custom scalar commit. */
+        void CheckScalarHistory(InspectorControllerSupport::Fixture &owner, double proposed) {
+            EditorWorkspaceViewCommandData command;
+            command.command = EditorWorkspaceViewCommand::UndoScene;
+            owner.Process(command);
+            CHECK(ScalarValue(owner) == 25.0);
+            command.command = EditorWorkspaceViewCommand::RedoScene;
+            owner.Process(command);
+            CHECK(ScalarValue(owner) == proposed);
+        }
+
+        /** @brief Declares a custom scalar presenter over the real inspector numeric field. */
+        Extensions::EditorInspectorDefinition ScalarDefinition() {
+            using namespace Extensions;
+            auto definition = InspectorControllerSupport::Presentation(EditorInspectorFieldKind::Number);
+            definition.fields.front().minimumNumber = 0.0;
+            definition.fields.front().maximumNumber = 100.0;
+            auto &number = std::get<EditorUiNumberNode>(definition.form.nodes.front().payload);
+            number.minimum = 0.0;
+            number.maximum = 100.0;
+            number.base.custom = EditorUiCustomPresentation{.widget = EditorUiCustomWidget::ScalarDial,
+                                                            .font = EditorThemeFontRole::SansEmphasis,
+                                                            .icon = EditorThemeIconRole::Info};
+            return definition;
+        }
+
+        /** @brief Withdraws real view input between pointer down and release; a preview cannot become a document command. */
+        void CheckScalarPreviewCancellation(ImVec2 point, InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner,
+                                            const Gui &gui, EditorWorkspaceViewCommandData &command) {
+            auto &io = ImGui::GetIO();
+            io.AddMousePosEvent(point.x, point.y);
+            io.AddMouseButtonEvent(0, true);
+            Frame(view, owner, gui, command);
+            CHECK(command.command == EditorWorkspaceViewCommand::None);
+            CHECK(view.Accessibility("fixture.inspector").front().preview);
+            view.SetInputAdmitted(false);
+            io.AddMouseButtonEvent(0, false);
+            Frame(view, owner, gui, command);
+            CHECK(command.command == EditorWorkspaceViewCommand::None);
+            CHECK_FALSE(view.Accessibility("fixture.inspector").front().preview);
+            view.SetInputAdmitted(true);
+            Frame(view, owner, gui, command);
+        }
+
+        /** @brief A disabled contribution drops an active drag; reactivation cannot commit that abandoned gesture. */
+        void CheckScalarProviderWithdrawal(ImVec2 point, InspectorContributionView &view, InspectorControllerSupport::Fixture &owner,
+                                           const Gui &gui, EditorWorkspaceViewCommandData &command) {
+            auto &io = ImGui::GetIO();
+            io.AddMousePosEvent(point.x, point.y);
+            io.AddMouseButtonEvent(0, true);
+            Frame(view, owner, gui, command);
+            REQUIRE(view.Accessibility("fixture.inspector").front().preview);
+            REQUIRE(owner.provider.registry
+                        .SetProviderStatus({"fixture.package", "fixture.module"}, Extensions::EditorSurfaceProviderStatus::Disabled)
+                        .HasValue());
+            Frame(view, owner, gui, command);
+            CHECK(view.Accessibility("fixture.inspector").empty());
+            REQUIRE(owner.provider.registry
+                        .SetProviderStatus({"fixture.package", "fixture.module"}, Extensions::EditorSurfaceProviderStatus::Active)
+                        .HasValue());
+            Frame(view, owner, gui, command);
+            io.AddMouseButtonEvent(0, false);
+            Frame(view, owner, gui, command);
+            CHECK(command.command == EditorWorkspaceViewCommand::None);
+            CHECK(ScalarValue(owner) == 25.0);
+        }
+
+        /** @brief Holds actual native pointer capture before releasing one document edit intent. */
+        void CommitScalarGesture(ImVec2 point, InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner,
+                                 const Gui &gui, EditorWorkspaceViewCommandData &command) {
+            auto &io = ImGui::GetIO();
+            io.AddMousePosEvent(point.x, point.y);
+            io.AddMouseButtonEvent(0, true);
+            Frame(view, owner, gui, command);
+            REQUIRE(command.command == EditorWorkspaceViewCommand::None);
+            REQUIRE(view.Accessibility("fixture.inspector").front().preview);
+            Frame(view, owner, gui, command);
+            REQUIRE(command.command == EditorWorkspaceViewCommand::None);
+            REQUIRE(view.Accessibility("fixture.inspector").front().preview);
+            io.AddMouseButtonEvent(0, false);
+            Frame(view, owner, gui, command);
+        }
+
+        /** @brief A hidden contribution loses native pointer capture and cannot replay its abandoned preview on reopening. */
+        void CheckScalarHiddenGesture(ImVec2 point, InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner,
+                                      const Gui &gui, EditorWorkspaceViewCommandData &command) {
+            auto &io = ImGui::GetIO();
+            io.AddMousePosEvent(point.x, point.y);
+            io.AddMouseButtonEvent(0, true);
+            Frame(view, owner, gui, command);
+            REQUIRE(view.Accessibility("fixture.inspector").front().preview);
+            ImGui::NewFrame();
+            ImGui::Render();
+            io.AddMouseButtonEvent(0, false);
+            Frame(view, owner, gui, command);
+            CHECK(command.command == EditorWorkspaceViewCommand::None);
+            CHECK(ScalarValue(owner) == 25.0);
+        }
     }  // namespace
 
     TEST_CASE("Actual inspector button admits exact owner approval before custom controls replace generic fields",
@@ -333,6 +437,49 @@ namespace Horo::Editor::Tests {
         theme.revision = 0;
         CHECK(Frame(view, owner, gui, command).covered == 0);
         CHECK(owner.Value() == 9007199254740993LL);
+    }
+
+    TEST_CASE("Custom scalar native gesture uses the approved document transaction with undo redo and retirement",
+              "[editor][inspector][composition][undo]") {
+        using namespace Extensions;
+        InspectorControllerSupport::Fixture owner{ScalarDefinition(), "25.0"};
+        owner.Approve();
+        Gui gui;
+        InspectorContributionView view{owner.provider.host, *gui.capture.Frame()};
+        EditorWorkspaceViewCommandData command;
+        Frame(view, owner, gui, command);
+        const auto geometry = Frame(view, owner, gui, command);
+        const auto semantic = view.Accessibility("fixture.inspector");
+        REQUIRE(semantic.size() == 1);
+        CHECK(semantic.front().role == EditorUiAccessibleRole::ScalarDial);
+        CHECK(ScalarValue(owner) == 25.0);
+        const auto before = owner.controller->ViewModel().documentRevision;
+        CheckScalarPreviewCancellation(geometry.center, view, owner, gui, command);
+        CheckScalarProviderWithdrawal(Frame(view, owner, gui, command).center, view, owner, gui, command);
+        CheckScalarHiddenGesture(Frame(view, owner, gui, command).center, view, owner, gui, command);
+        CommitScalarGesture(Frame(view, owner, gui, command).center, view, owner, gui, command);
+        REQUIRE(command.command == EditorWorkspaceViewCommand::UpdateInspectorBehaviorField);
+        REQUIRE(command.inspectorEdit);
+        const auto proposed = std::get<double>(command.inspectorEdit->value);
+        CHECK(proposed > 40.0);
+        CHECK(proposed < 60.0);
+        CHECK(ScalarValue(owner) == 25.0);
+        owner.Process(command);
+        CHECK(ScalarValue(owner) == proposed);
+        CHECK(owner.controller->ViewModel().documentRevision.value == before.value + 1);
+        CheckScalarHistory(owner, proposed);
+        auto revoked = owner.Request();
+        revoked.value = proposed + 0.1;
+        owner.provider.admission->Revoke();
+        command.command = EditorWorkspaceViewCommand::UpdateInspectorBehaviorField;
+        command.inspectorEdit = std::move(revoked);
+        owner.Process(command);
+        CHECK(ScalarValue(owner) == proposed);
+        owner.provider.registration->Reset();
+        command = {};
+        Frame(view, owner, gui, command);
+        CHECK(view.Accessibility("fixture.inspector").empty());
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
     }
 
 }  // namespace Horo::Editor::Tests

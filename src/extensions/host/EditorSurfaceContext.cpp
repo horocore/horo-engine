@@ -182,6 +182,14 @@ namespace Horo::Extensions {
         return state_ == nullptr ? std::span<const EditorSurfaceDiagnosticCode>{} : state_->descriptor.diagnostics;
     }
 
+    /** @copydoc EditorSurfaceContext::HasUsableCapability */
+    bool EditorSurfaceContext::HasUsableCapability(const ExtensionCapabilityId &capability) const noexcept {
+        if (!IsUsable())
+            return false;
+        const auto found = std::ranges::find(state_->capabilities, capability, &ExtensionCapabilityHandle::Capability);
+        return found != state_->capabilities.end() && found->IsUsable();
+    }
+
     /** @copydoc EditorSurfaceContext::AcquireCapabilityUse */
     Result<ExtensionCapabilityUseLease> EditorSurfaceContext::AcquireCapabilityUse(const ExtensionCapabilityId &capability) const {
         if (!IsUsable())

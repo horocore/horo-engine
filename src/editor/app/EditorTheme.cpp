@@ -186,6 +186,30 @@ namespace Horo::Editor::Theme {
             OverrideFloat(object, "iconSize", metrics.iconSize);
         }
 
+        /** @brief Reads finite bounded host motion settings from the selected user theme. */
+        void ReadMotionOverrides(const nlohmann::json &root, MotionTokens &motion) {
+            const auto found = root.find("motion");
+            if (found == root.end() || !found->is_object())
+                return;
+            const auto duration = [&](const char *name, float &value) {
+                const auto field = found->find(name);
+                if (field != found->end() && field->is_number()) {
+                    const float candidate = field->get<float>();
+                    if (std::isfinite(candidate) && candidate >= 0 && candidate <= 2)
+                        value = candidate;
+                }
+            };
+            duration("fast", motion.fast);
+            duration("normal", motion.normal);
+            duration("slow", motion.slow);
+            duration("hover", motion.hover);
+            duration("press", motion.press);
+            duration("focus", motion.focus);
+            duration("modal", motion.modal);
+            if (const auto field = found->find("reduceMotion"); field != found->end() && field->is_boolean())
+                motion.reduceMotion = field->get<bool>();
+        }
+
         void ReadDesignTokenOverrides(const nlohmann::json &root, DesignTokens &tokens) {
             const auto tokenIt = root.find("tokens");
             if (tokenIt == root.end() || !tokenIt->is_object())
@@ -227,6 +251,7 @@ namespace Horo::Editor::Theme {
                 OverrideFloat(*radiiIt, "card", tokens.radii.card);
                 OverrideFloat(*radiiIt, "modal", tokens.radii.modal);
             }
+            ReadMotionOverrides(tokenJson, tokens.motion);
             NormalizeDesignTokens(tokens);
         }
 

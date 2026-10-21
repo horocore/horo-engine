@@ -28,7 +28,7 @@
 
 enum {  // NOSONAR(cpp:S3642) C ABI constant group
     HORO_EXTENSION_ABI_VERSION = 1,
-    HORO_EXTENSION_ABI_MINOR_VERSION = 6,
+    HORO_EXTENSION_ABI_MINOR_VERSION = 7,
     HORO_ASSET_IMPORTER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION = 1,
     HORO_PLATFORM_SERVICES_PROVIDER_ABI_VERSION_2 = 2,
@@ -418,6 +418,14 @@ using HoroRegisterEditorInspectorFunc = HoroExtensionStatus (*)(void *hostContex
 typedef HoroExtensionStatus (*HoroRegisterEditorInspectorFunc)(void *hostContext, const struct HoroEditorInspectorDescriptor *descriptor);
 #endif
 
+/** @brief ABI1.7 copied viewport declaration registration, requiring explicit negotiated permissioned host support. */
+struct HoroEditorViewportDescriptor;
+#ifdef __cplusplus
+using HoroRegisterEditorViewportFunc = HoroExtensionStatus (*)(void *, const struct HoroEditorViewportDescriptor *);
+#else
+typedef HoroExtensionStatus (*HoroRegisterEditorViewportFunc)(void *, const struct HoroEditorViewportDescriptor *);
+#endif
+
 struct HoroExtensionHostApi {
     /** @brief Size of this struct for append-only ABI negotiation. */
     uint32_t structSize;
@@ -437,6 +445,8 @@ struct HoroExtensionHostApi {
     HoroRegisterEditorPageFunc registerEditorPage;
     /** @brief Appended in1.6; check complete prefix and editor.inspector host capability before reading. */
     HoroRegisterEditorInspectorFunc registerEditorInspector;
+    /** @brief Appended in1.7; test the complete prefix before accessing. */
+    HoroRegisterEditorViewportFunc registerEditorViewport;
 };
 typedef struct HoroExtensionHostApi HoroExtensionHostApi;  // NOSONAR(cpp:S5416) Shared C11 ABI requires typedef.
 
@@ -448,6 +458,14 @@ typedef struct HoroExtensionHostApi HoroExtensionHostApi;  // NOSONAR(cpp:S5416)
 static inline int HoroExtensionHasEditorInspectorTransport(const HoroExtensionHostApi *host) {
     return host && host->structSize >= offsetof(HoroExtensionHostApi, registerEditorInspector) + sizeof(host->registerEditorInspector) &&
            host->abiVersion == HORO_EXTENSION_ABI_VERSION && host->abiMinorVersion >= 6 && host->registerEditorInspector;
+}
+
+/** @brief Tests the full1.7 viewport prefix without granting any surface authority.
+ * @param host Borrowed table covering its declared prefix. @return Nonzero for available viewport transport.
+ */
+static inline int HoroExtensionHasEditorViewportTransport(const HoroExtensionHostApi *host) {
+    return host && host->structSize >= offsetof(HoroExtensionHostApi, registerEditorViewport) + sizeof(host->registerEditorViewport) &&
+           host->abiVersion == HORO_EXTENSION_ABI_VERSION && host->abiMinorVersion >= 7 && host->registerEditorViewport;
 }
 
 struct HoroExtensionModuleApi {
@@ -465,6 +483,7 @@ enum {  // NOSONAR(cpp:S3642) C ABI function requirement bits.
     HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY = 4,
     HORO_EXTENSION_REQUIRES_EDITOR_PAGE = 8,
     HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR = 16,
+    HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT = 32,
 };
 
 /**

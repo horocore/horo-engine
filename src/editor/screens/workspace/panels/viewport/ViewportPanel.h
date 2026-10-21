@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
+#include "Horo/Extensions/EditorViewportHost.h"
 #include "WorldSourceViewportTool.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
@@ -21,6 +22,7 @@ namespace Horo::Editor {
 
         void OnAttach(PanelContext &ctx) override;
         void OnDetach() override;
+        void OnPresentationHidden(EditorWorkspaceViewCommandData &command) override;
 
         void DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, ImU32 color) override;
 
@@ -37,6 +39,19 @@ namespace Horo::Editor {
             float ground{0.0F};
         };
 
+        /** @brief Withdraws an unavailable provider transaction through normal preview rollback. */
+        [[nodiscard]] bool CancelUnavailableContribution(Extensions::EditorViewportTool tool, bool eligible,
+                                                         EditorWorkspaceViewCommandData &command);
+        /** @brief Prepares copied geometry and picks only when the host grants idle viewport input. */
+        [[nodiscard]] Extensions::EditorViewportPick PrepareContributions(const ViewportSurfaceLayout &layout,
+                                                                          Extensions::EditorViewportTool tool, bool editable, bool canPick);
+        /** @brief Draws the prepared provider layer after scene affordances and below toolbar controls. */
+        void RenderContributions(ImDrawList &drawList, const ViewportSurfaceLayout &layout) const;
+
+        /** @brief Defines the viewport pointer surface only outside toolbar controls or during owned capture. */
+        [[nodiscard]] static bool PrepareViewportInput(const ViewportSurfaceLayout &layout, bool inputEligible, bool surfaceInteractive);
+        /** @brief Resolves routed workspace eligibility without overriding a higher-priority input context. */
+        [[nodiscard]] bool ViewportInputEligible() const noexcept;
         void RequestViewportExtent(float width, float height) const noexcept;
         void ConfigureRenderer(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context) const;
         void DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout, const EditorWorkspaceViewModel &viewModel,
@@ -61,6 +76,9 @@ namespace Horo::Editor {
         Input::InputContextToken *workspaceInputContext_{nullptr};
         ViewportInteractionController interaction_;
         WorldSourceViewportTool worldSourceTool_;
+        Extensions::EditorViewportHost *contributions_{};
+        Extensions::EditorViewportFrame contributionFrame_;
+        Extensions::EditorViewportPick activeContribution_;
         bool lightMarkerFailureReported_{false};
         bool assetPlacementPreviewActive_{false};
         bool assetPlacementCancelled_{false};

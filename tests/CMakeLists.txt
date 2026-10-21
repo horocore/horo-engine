@@ -2874,6 +2874,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/ViewportOverlayRenderTests.cpp
             unit/editor/ColliderViewportRenderTests.cpp
             support/ViewportPanelRenderSupport.h
     )
@@ -3174,7 +3175,8 @@ target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroWorldBakeApplicationTests unit/application/WorldBakeApplicationTests.cpp)
 target_include_directories(HoroWorldBakeApplicationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
-target_link_libraries(HoroWorldBakeApplicationTests PRIVATE HoroEngine::WorldBakeApplication HoroEngine::PlatformProjectReadFiles)
+target_link_libraries(HoroWorldBakeApplicationTests PRIVATE
+        HoroEngine::WorldBakeApplication HoroEngine::PlatformProjectReadFiles HoroEngine::Platform)
 horo_register_catch_test(HoroWorldBakeApplicationTests LABELS "unit;headless;world_bake")
 
 add_executable(HoroPartitionedWorldWorkspaceTests
@@ -4482,9 +4484,11 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/EditorActivityRegistryTests.cpp
         unit/extensions/EditorCommandRegistryTests.cpp
         unit/extensions/EditorUiFormTests.cpp
+        unit/extensions/EditorUiCompositionTests.cpp
         unit/extensions/EditorPageDefinitionTests.cpp
         unit/extensions/EditorPageHostTests.cpp
         unit/extensions/EditorPageNativeTests.cpp
+        unit/extensions/EditorViewportHostTests.cpp
         unit/extensions/EditorInspectorNativeTests.cpp
         unit/extensions/EditorInspectorDefinitionTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
@@ -4497,6 +4501,12 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExternalImporterRegistrationTests.cpp
         integration/extensions/HeadlessExtensionHostTests.cpp
 )
+add_library(HoroEditorViewportFixture MODULE fixtures/extensions/EditorViewportModule.c)
+target_compile_features(HoroEditorViewportFixture PRIVATE c_std_11)
+set_target_properties(HoroEditorViewportFixture PROPERTIES C_EXTENSIONS OFF)
+target_link_libraries(HoroEditorViewportFixture PRIVATE HoroEngine::Extensions)
+add_dependencies(HoroExtensionManagerTests HoroEditorViewportFixture)
+target_compile_definitions(HoroExtensionManagerTests PRIVATE HORO_EDITOR_VIEWPORT_FIXTURE="$<TARGET_FILE:HoroEditorViewportFixture>")
 add_library(HoroEditorInspectorFixture MODULE fixtures/extensions/EditorInspectorModule.c)
 target_compile_features(HoroEditorInspectorFixture PRIVATE c_std_11)
 set_target_properties(HoroEditorInspectorFixture PROPERTIES C_EXTENSIONS OFF)
