@@ -17,6 +17,7 @@
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ShaderBuildService.h"
+#include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/DefaultScreenFactories.h"
@@ -52,6 +53,8 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "PackageHostPolicy.h"
 #include "PackageProjectHost.h"
@@ -61,8 +64,6 @@
 #endif
 #include "Horo/Physics/PhysicsSceneActivation.h"
 #include "Horo/Platform/ExternalProcess.h"
-#include "Horo/Platform/NativeProjectReadFiles.h"
-#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Input.h"
 #include "Horo/Runtime/Render/FramePacingErrors.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
@@ -1771,6 +1772,10 @@ namespace Horo::Editor {
             if (capturedPolicy.HasError())
                 return std::nullopt;
             auto scenePolicy = std::move(capturedPolicy).Value();
+            std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
+            if (scenePolicy.cooked)
+                worldBakeDependencies.emplace(scenePolicy.cooked->targetRoot, scenePolicy.cooked->target,
+                                              std::make_shared<NativeDurableFileSystem>());
             auto capturedRoot = CaptureEditorPreviewRoot(p.options);
             if (capturedRoot.HasError())
                 return std::nullopt;
@@ -1899,6 +1904,9 @@ namespace Horo::Editor {
             screenHost.Services().Register<RecentProjectInspectionService>(recentProjectInspection);
             screenHost.Services().RegisterConst<Log::IStructuredLogQuery>(p.logQuery);
             screenHost.Services().RegisterConst<IBuildOutputQuery>(p.operationServices.buildOutputStore);
+            screenHost.Services().Register<BuildOutputStore>(p.operationServices.buildOutputStore);
+            if (worldBakeDependencies)
+                screenHost.Services().RegisterConst<Application::WorldBakeDependencySource>(*worldBakeDependencies);
             screenHost.Services().Register<Application::ShaderBuildService>(p.operationServices.shaderBuild);
             screenHost.Services().Register<OperationStore>(p.operationServices.operationStore);
             screenHost.Services().RegisterConst<IOperationQuery>(p.operationServices.operationStore);

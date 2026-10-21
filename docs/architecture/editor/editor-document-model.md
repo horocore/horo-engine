@@ -830,6 +830,18 @@ presentation only. Authoring working-set, loaded payload, cooked availability an
 runtime residency remain independent. See the partitioned-world document migration
 guide for schema, ownership, rejection and lifecycle details.
 
+### World Composition offline bake
+
+The persistent World Composition tab submits typed revision-fenced bake/validation
+commands to the controller-owned `WorldBakeApplication`. Actual immutable page
+content and root-bound source capture feed the canonical Scene conversion, cell
+cooker, HOROCELL encoder and `ValidateWorldBuild` pipeline. Operations and Build
+Output project their shared bounded stores; panel lifetime never owns the job.
+Fresh successful bake output is retained independently from source dirty state,
+runtime activation and Assets release publication. The complete source, identity,
+cancellation, publication and migration contract is in the
+[world bake workflow guide](../../guides/world-bake-workflow.md).
+
 ### Workspace source authority composition
 
 The executable host supplies `WorkspaceReadSourceFactory` for project opening.

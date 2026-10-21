@@ -121,6 +121,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # One translation unit per registered public header verifies that consumers can
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
+target_sources(HoroWorldBakeApplicationPublicHeaderConsumer PRIVATE support/WorldBakePublicContract.cpp)
 target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp)
 target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PartitionedWorldPublicContract.cpp support/NavigationInspectorPublicContract.cpp support/PhysicsInspectorPublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
@@ -3171,6 +3172,11 @@ add_executable(HoroEditorViewportSceneTests
 
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
+add_executable(HoroWorldBakeApplicationTests unit/application/WorldBakeApplicationTests.cpp)
+target_include_directories(HoroWorldBakeApplicationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+target_link_libraries(HoroWorldBakeApplicationTests PRIVATE HoroEngine::WorldBakeApplication HoroEngine::PlatformProjectReadFiles)
+horo_register_catch_test(HoroWorldBakeApplicationTests LABELS "unit;headless;world_bake")
+
 add_executable(HoroPartitionedWorldWorkspaceTests
         unit/editor/PartitionedWorldWorkspaceTests.cpp
         unit/editor/WorldSourceAuthoringTests.cpp

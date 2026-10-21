@@ -44,6 +44,8 @@ namespace Horo::Editor {
 
     EditorWorkspaceController::~EditorWorkspaceController() {
         DetachWorldSourceOwner();
+        if (m_worldBake)
+            m_worldBake->Close();
         StopAudioPreview();
         m_prefabCancellation.RequestCancellation();
         RetirePrefabHierarchy();

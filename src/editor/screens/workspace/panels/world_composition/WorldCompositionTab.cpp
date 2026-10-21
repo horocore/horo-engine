@@ -215,12 +215,46 @@ namespace Horo::Editor {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.world.no_matches"), Theme::Muted(), fonts);
     }
 
+    /** @copydoc WorldCompositionTab::DrawBakeControls */
+    void WorldCompositionTab::DrawBakeControls(const EditorWorkspaceViewModel &vm, EditorWorkspaceViewCommandData &command,
+                                               const EditorGuiContext &context) {
+        const auto text = [&](const char *key) -> const std::string & {
+            return context.localization.Get("editor", key);
+        };
+        const auto &fonts = context.theme.fonts;
+        ImGui::BeginDisabled(command.command != EditorWorkspaceViewCommand::None);
+        if (Ui::Button({.label = text("workspace.world.bake").c_str(),
+                        .enabled = vm.worldBakeAvailable && !vm.worldBakeOperation,
+                        .font = fonts.sans})) {
+            command.command = EditorWorkspaceViewCommand::BakeWorldCells;
+            command.worldDocumentFence = vm.worldDocument->fence;
+        }
+        if (Ui::Button({.label = text("workspace.world.validate").c_str(),
+                        .enabled = vm.worldBakeAvailable && !vm.worldBakeOperation,
+                        .font = fonts.sans})) {
+            command.command = EditorWorkspaceViewCommand::ValidateWorldCells;
+            command.worldDocumentFence = vm.worldDocument->fence;
+        }
+        if (vm.worldBakeOperation && Ui::Button({.label = text("workspace.world.cancel_bake").c_str(), .font = fonts.sans})) {
+            command.command = EditorWorkspaceViewCommand::CancelWorldBake;
+            command.worldBakeOperation = vm.worldBakeOperation;
+            command.worldDocumentFence = vm.worldDocument->fence;
+        }
+        ImGui::EndDisabled();
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                        text(vm.worldBakeOperation ? "workspace.world.bake_running"
+                             : vm.worldBakeCurrent ? "workspace.world.bake_current"
+                                                   : "workspace.world.bake_needed"),
+                        Theme::Muted(), fonts);
+    }
+
     /** @copydoc WorldCompositionTab::DrawPanel */
     void WorldCompositionTab::DrawPanel(const ImVec2 &, const ImVec2 &, const EditorWorkspaceViewModel &vm,
                                         EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         if (!DrawAdmission(vm, command, context))
             return;
         DrawFilters(vm, command, context);
+        DrawBakeControls(vm, command, context);
         DrawTables(vm, command, context);
     }
 }  // namespace Horo::Editor

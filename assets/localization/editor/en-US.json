@@ -3223,6 +3223,12 @@
     "workspace.world_layers.name_hint": {"text": "Enter a non-empty layer name."},
     "workspace.world_layers.cancel": {"text": "Cancel"},
     "workspace.world_layers.stale": {"text": "The world changed or closed. Cancel and reopen this dialog."},
+    "workspace.world.bake": {"text": "Bake streaming cells"},
+    "workspace.world.validate": {"text": "Validate streaming cells"},
+    "workspace.world.cancel_bake": {"text": "Cancel bake"},
+    "workspace.world.bake_running": {"text": "Processing world cells. See Operations for progress and Build Output for diagnostics."},
+    "workspace.world.bake_current": {"text": "The baked cells match this world and project revision."},
+    "workspace.world.bake_needed": {"text": "Bake or validate the complete world. Diagnostics appear in Build Output."},
     "workspace.world_layers.rejected": {"text": "Layer creation was rejected. Check the name and document limits."},
     "workspace.navigation_inspector.surface": {
       "text": "Navigation surface"

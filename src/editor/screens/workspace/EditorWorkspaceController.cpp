@@ -90,6 +90,7 @@ namespace Horo::Editor {
           m_audioPreview(dependencies.audioPreview), m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
         m_viewModel.pcgPalette = dependencies.pcg.palette;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
+        InitializeWorldBake(dependencies);
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
         m_inspectorDocumentOwner = dependencies.documentSessionOwner;

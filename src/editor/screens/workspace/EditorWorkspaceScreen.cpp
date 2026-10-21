@@ -41,7 +41,6 @@
 #include "editor/screens/NavigationErrors.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
-#include <array>
 #include <filesystem>
 #include <format>
 #include <imgui.h>
@@ -284,6 +283,7 @@ namespace Horo::Editor {
                     if (projectServices_.assetRegistry != nullptr) {
                         controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
                     }
+                    controller_->UpdateWorldBake();
                     controller_->UpdateContentBrowser();
                     controller_->SynchronizeRuntimeScenePreview();
                     controller_->UpdateFps(ImGui::GetIO().Framerate);
@@ -694,6 +694,7 @@ namespace Horo::Editor {
                 if (capturedSources.HasError())
                     return Result<void>::Failure(capturedSources.ErrorValue());
                 auto sources = std::move(capturedSources).Value();
+                const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
                 auto pcgComposition = CreatePCGEditorCatalog();
                 if (pcgComposition.HasError())
                     return Result<void>::Failure(pcgComposition.ErrorValue());
@@ -710,6 +711,10 @@ namespace Horo::Editor {
                                                    .assetRegistrySource = std::move(sources.registry),
                                                    .importerCatalog = projectServices_.importerCatalog,
                                                    .jobs = &services_.Get<JobSystem>(),
+                                                   .worldBakeOperations = services_.TryGet<OperationStore>(),
+                                                   .worldBakeOutput = services_.TryGet<BuildOutputStore>(),
+                                                   .worldBakeDependencies =
+                                                       bakeDependencies ? std::optional{*bakeDependencies} : std::nullopt,
                                                    .gameplay = {.builds = services_.TryGet<Application::GameplayBuildService>(),
                                                                 .environment = gameplayEnvironment != nullptr
                                                                                    ? *gameplayEnvironment

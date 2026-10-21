@@ -95,6 +95,11 @@ namespace Horo::Editor::WorldCompositionTests {
             REQUIRE(controller.ViewModel().worldBrowser);
             CHECK(controller.ViewModel().worldBrowser->source == reopened);
             CHECK(controller.ViewModel().activeDocumentPanelId == "horo.world_composition");
+            controller.ProcessCommand(open);
+            REQUIRE(controller.ViewModel().worldDocumentError);
+            CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Stale.code);
+            CHECK(controller.WorldDocuments().Snapshot().Value() == reopened);
+            CHECK(controller.ViewModel().worldViewport.snapshot == reopened);
         }
         SECTION("missing payload") {
             controller.ProcessCommand(open);
@@ -248,3 +253,179 @@ namespace Horo::Editor::WorldCompositionTests {
         CHECK(controller.ViewModel().worldDocument->loadedPages.empty());
     }
 }  // namespace Horo::Editor::WorldCompositionTests
+
+namespace Horo::Editor {
+    TEST_CASE("World Composition bake command uses the application-owned real cell producer and shared diagnostic stores",
+              "[editor][world_bake][controller]") {
+        Horo::Tests::OwnedTestDirectory project{"world bake controller"};
+        JobSystem jobs{{.workerCount = 1}};
+        OperationStore operations{8, 16};
+        BuildOutputStore diagnostics{32};
+        Runtime::RuntimeSceneService runtime;
+        EditorWorkspaceController controller{project.Path(),
+                                             runtime,
+                                             {},
+                                             EditorWorkspaceDependencies{.jobs = &jobs,
+                                                                         .worldBakeOperations = &operations,
+                                                                         .worldBakeOutput = &diagnostics,
+                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+        auto &world = controller.WorldDocuments();
+        REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
+        for (const auto &page : WorldResidencyTests::Document().pages)
+            REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::BakeWorldCells;
+        command.worldDocumentFence = WorldResidencyTests::Current(world)->fence;
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().worldBakeOperation);
+        auto marker = jobs.SubmitResult({}, [](const CancellationToken &) {
+            return Result<void>::Success();
+        });
+        REQUIRE(marker.HasValue());
+        REQUIRE(marker.Value()
+                    .Wait({.waitPolicy = WaitPolicy::OwnerThreadBlockAllowed, .timeout = Duration::FromMilliseconds(5000)})
+                    .HasValue());
+        controller.UpdateWorldBake();
+        CHECK(controller.ViewModel().worldBakeCurrent);
+        CHECK(controller.SetWorldBakeProject({}).HasError());
+        CHECK(controller.ViewModel().worldBakeCurrent);
+        CHECK_FALSE(controller.ViewModel().worldBakeOperation);
+        const auto output = diagnostics.SnapshotIfChanged(0);
+        REQUIRE(output);
+        REQUIRE_FALSE(output->records.empty());
+        CHECK(output->records.back().result == BuildOutputResult::Succeeded);
+        const auto previous = WorldResidencyTests::Current(world);
+        command.worldDocumentFence->revision = WorldDocumentRevision::Create(previous->fence.revision.Value() + 1).Value();
+        controller.ProcessCommand(command);
+        REQUIRE(controller.ViewModel().worldDocumentError);
+        CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Stale.code);
+        CHECK(WorldResidencyTests::Current(world) == previous);
+        CHECK(controller.ViewModel().worldBakeCurrent);
+    }
+}  // namespace Horo::Editor
+
+namespace Horo::Editor {
+    TEST_CASE("World bake project replacement cannot reuse a source publication fence", "[editor][world_bake][controller]") {
+        Horo::Tests::OwnedTestDirectory project{"world bake project fence"};
+        JobSystem jobs{{.workerCount = 0}};
+        OperationStore operations{8, 16};
+        BuildOutputStore output{32};
+        Runtime::RuntimeSceneService runtime;
+        Application::WorldBakeProjectCapture capture;
+        capture.fence = {WorldResidencyTests::Asset(12), 7, {}};
+        capture.fence.schemas.bytes.front() = 1;
+        capture.settings.bytes.front() = 2;
+        EditorWorkspaceController controller{project.Path(),
+                                             runtime,
+                                             {},
+                                             EditorWorkspaceDependencies{.jobs = &jobs,
+                                                                         .worldBakeOperations = &operations,
+                                                                         .worldBakeOutput = &output,
+                                                                         .worldBakeProject = capture,
+                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+        auto &world = controller.WorldDocuments();
+        REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
+        for (const auto &page : WorldResidencyTests::Document().pages)
+            REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        const auto accepted = controller.StartWorldBake(Application::WorldBakeMode::Bake, world.Snapshot().Value()->fence);
+        REQUIRE(accepted.HasValue());
+        auto replacement = capture;
+        ++replacement.settings.bytes.front();
+        const auto rejected = controller.SetWorldBakeProject(replacement);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code == Application::WorldBakeErrors::Stale.code);
+        CHECK(controller.ViewModel().worldBakeOperation == accepted.Value());
+        ++replacement.fence.revision;
+        REQUIRE(controller.SetWorldBakeProject(replacement).HasValue());
+        CHECK_FALSE(controller.ViewModel().worldBakeOperation);
+        CHECK_FALSE(controller.ViewModel().worldBakeCurrent);
+        CHECK_FALSE(output.SnapshotIfChanged(0));
+    }
+}  // namespace Horo::Editor
+
+namespace Horo::Editor {
+    TEST_CASE("World bake publication fences the registry owner before a presentation snapshot refresh",
+              "[editor][world_bake][controller]") {
+        Horo::Tests::OwnedTestDirectory project{"world bake registry fence"};
+        JobSystem jobs{{.workerCount = 1}};
+        OperationStore operations{8, 16};
+        BuildOutputStore output{32};
+        Assets::AssetRegistry registry;
+        Runtime::RuntimeSceneService runtime;
+        EditorWorkspaceController controller{project.Path(), runtime, registry.Snapshot(),
+                                             EditorWorkspaceDependencies{.mutableAssetRegistry = &registry,
+                                                                         .jobs = &jobs,
+                                                                         .worldBakeOperations = &operations,
+                                                                         .worldBakeOutput = &output,
+                                                                         .documentSessionOwner = WorldResidencyTests::Asset(9)}};
+        auto &world = controller.WorldDocuments();
+        REQUIRE(world.Open(WorldResidencyTests::Document()).HasValue());
+        for (const auto &page : WorldResidencyTests::Document().pages)
+            REQUIRE(world.LoadPage(page.head, WorldResidencyTests::Source(), WorldResidencyTests::Current(world)->fence).HasValue());
+        const auto accepted = controller.StartWorldBake(Application::WorldBakeMode::Bake, world.Snapshot().Value()->fence);
+        REQUIRE(accepted.HasValue());
+        auto marker = jobs.SubmitResult({}, [](const CancellationToken &) {
+            return Result<void>::Success();
+        });
+        REQUIRE(marker.HasValue());
+        REQUIRE(marker.Value()
+                    .Wait({.waitPolicy = WaitPolicy::OwnerThreadBlockAllowed, .timeout = Duration::FromMilliseconds(5000)})
+                    .HasValue());
+        const auto publication = registry.Publish(std::vector<Assets::AssetRecord>{});
+        REQUIRE(publication.status == Assets::AssetRegistryBuildStatus::Complete);
+        controller.UpdateWorldBake();
+        CHECK_FALSE(controller.ViewModel().worldBakeCurrent);
+        CHECK_FALSE(output.SnapshotIfChanged(0));
+        const auto snapshot = operations.SnapshotIfChanged(0);
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->operations.size() == 1);
+        CHECK(snapshot->operations.front().state == OperationState::Cancelled);
+        REQUIRE(snapshot->operations.front().error);
+        CHECK(snapshot->operations.front().error->code == Application::WorldBakeErrors::Stale.code);
+    }
+}  // namespace Horo::Editor
+
+namespace Horo::Editor {
+    namespace {
+        /** @brief Creates actual native fixture readers while preserving their exact shared opening fence. */
+        Result<WorkspaceReadSources> CaptureTestReaders(const std::filesystem::path &root, const Assets::AssetId owner) {
+            auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
+            if (registry.HasError())
+                return Result<WorkspaceReadSources>::Failure(registry.ErrorValue());
+            auto world = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
+            if (world.HasError())
+                return Result<WorkspaceReadSources>::Failure(world.ErrorValue());
+            return Result<WorkspaceReadSources>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
+        }
+    }  // namespace
+
+    TEST_CASE("Workspace reader bridge retains actual native root authority", "[editor][world_bake][native]") {
+        Horo::Tests::OwnedTestDirectory project{"workspace native readers"};
+        const auto owner = WorldResidencyTests::Asset(9);
+        const WorkspaceReadSourceFactory factory{[owner](const std::filesystem::path &root) {
+            return CaptureTestReaders(root, owner);
+        }};
+        REQUIRE(std::filesystem::create_directory(project.Path() / "Assets"));
+        {
+            std::ofstream file{project.Path() / "Assets/page scene.horo"};
+            file << WorldResidencyTests::Source();
+            REQUIRE(file.good());
+        }
+        auto sources = CaptureWorkspaceReadSources(&factory, project.Path());
+        REQUIRE(sources.HasValue());
+        CHECK(sources.Value().owner == owner);
+        const Platform::ProjectReadContext context{.projectIdentity = owner.ToString(),
+                                                   .projectGeneration = 1,
+                                                   .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+        const auto bytes = sources.Value().world->SourceText("Assets/page scene.horo", context, {});
+        REQUIRE(bytes.HasValue());
+        REQUIRE(bytes.Value().text);
+        CHECK(*bytes.Value().text == WorldResidencyTests::Source());
+        const auto inventory = sources.Value().registry->Capture();
+        REQUIRE(inventory.HasValue());
+        CHECK(inventory.Value().assetRoot == "Assets");
+        REQUIRE(inventory.Value().entries.size() == 1);
+        CHECK(inventory.Value().entries.front().path == "Assets/page scene.horo");
+    }
+
+}  // namespace Horo::Editor
