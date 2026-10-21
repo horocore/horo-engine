@@ -133,3 +133,15 @@ timeline. Its provenance records source revision, installed driver/layer package
 ICD digest, commands and JUnit. A driver without a separate transfer family skips
 only that native cross-family case explicitly. Command/timeline completion does
 not claim rendered-pixel readback or cross-family hardware evidence when skipped.
+
+### Reflected material consumer
+
+The Vulkan material consumer shares this graph runtime's command tickets, copied
+`RenderQueueSubmission`, frontend lease receipt, successful-submit state commit
+and terminal drain. It adds no independent queue/timeline/retirement authority.
+Its conservative `GraphicsInputBuffer` state covers read-only uniform, vertex and
+index accesses. Subsequent graph imports must describe that exact committed state.
+Material passes require single-sample whole-image offscreen attachments and one
+admitted graphics queue; cross-queue transitions still require this document's
+matched graph release/acquire evidence. The public typed material packer consumes
+the normalized shader reflection ABI for matrix/array parameters.

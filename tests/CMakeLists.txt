@@ -5006,6 +5006,7 @@ if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests
             unit/runtime/renderer/VulkanRenderBackendTests.cpp
             unit/runtime/renderer/VulkanResourceRuntimeTests.cpp
+            unit/runtime/renderer/VulkanShaderRuntimeTests.cpp
             unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
             unit/runtime/renderer/VulkanGraphRuntimeTests.cpp
     )
@@ -5018,6 +5019,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             Catch2::Catch2WithMain
             HoroEngine::RenderFrontend
             HoroEngine::RenderVulkan
+            ${CMAKE_DL_LIBS}
             Vulkan::Headers
     )
     horo_register_catch_test(HoroRenderVulkanTests LABELS "native;renderer;vulkan;qualification")

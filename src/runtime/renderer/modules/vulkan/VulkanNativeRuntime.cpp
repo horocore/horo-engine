@@ -243,8 +243,13 @@ namespace Horo::Render {
                 if (auto dispatch = LoadDeviceDispatch(request); dispatch.HasError()) {
                     return dispatch;
                 }
+                return InitializeResources(selected->device, request);
+            }
+
+            /** @brief Attaches the sole resource registry and shader owner to the selected native device. */
+            Result<void> InitializeResources(VkPhysicalDevice physical, const VulkanDeviceRequest &request) {
                 VkPhysicalDeviceMemoryProperties memoryProperties{};
-                getPhysicalDeviceMemoryProperties_(selected->device, &memoryProperties);
+                getPhysicalDeviceMemoryProperties_(physical, &memoryProperties);
                 auto resources = resources_.Initialize(memoryProperties, device_, getDeviceProcAddr_);
                 if (resources.HasError())
                     return resources;
@@ -254,7 +259,7 @@ namespace Horo::Render {
                                                                          VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES,
                                                                      .pNext = &allocationLimits};
                 VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &timeline};
-                getPhysicalDeviceProperties2_(selected->device, &properties);
+                getPhysicalDeviceProperties2_(physical, &properties);
                 std::vector<Detail::VulkanCommandQueue> queues;
                 for (const auto &assignment : request.queueAssignments) {
                     if (std::ranges::any_of(queues, [&assignment](const Detail::VulkanCommandQueue &queue) {
@@ -269,11 +274,15 @@ namespace Horo::Render {
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError())
                     return Result<void>::Failure(incarnation.ErrorValue());
+                auto shaders =
+                    resources_.InitializeShaders(properties.properties, request.adapter, getDeviceProcAddr_, incarnation.Value());
+                if (shaders.HasError())
+                    return shaders;
                 auto prepared = graph_.Initialize(device_, queues, request.maxFramesInFlight, timeline.maxTimelineSemaphoreValueDifference,
                                                   incarnation.Value(), resources_, getDeviceProcAddr_);
                 if (prepared.HasError())
                     return prepared;
-                return PublishResourceCapabilities(selected->device, properties.properties, allocationLimits.maxMemoryAllocationSize,
+                return PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
                                                    incarnation.Value());
             }
 
@@ -298,6 +307,14 @@ namespace Horo::Render {
 
             Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
                 return graph_.ExecuteGraph(request);
+            }
+
+            bool SupportsMaterialCommands() const noexcept override {
+                return true;
+            }
+
+            Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) override {
+                return graph_.ExecuteMaterialPass(request);
             }
 
             Result<void> SubmitFrame(const FrameToken frame) override {

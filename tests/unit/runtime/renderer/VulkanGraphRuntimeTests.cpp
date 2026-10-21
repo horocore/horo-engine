@@ -18,6 +18,7 @@ namespace {
         std::vector<VkBufferMemoryBarrier2> barriers;
         int renderingBegins{};
         int renderingEnds{};
+        int pipelineBinds{}, descriptorBinds{}, vertexBinds{}, indexBinds{}, draws{};
     };
 
     EncodedGraph *encodedGraph{};
@@ -41,6 +42,34 @@ namespace {
         ++encodedGraph->renderingEnds;
     }
 
+    VKAPI_ATTR void VKAPI_CALL CapturePipeline(VkCommandBuffer, VkPipelineBindPoint, VkPipeline) {
+        ++encodedGraph->pipelineBinds;
+    }
+
+    VKAPI_ATTR void VKAPI_CALL CaptureSets(VkCommandBuffer, VkPipelineBindPoint, VkPipelineLayout, std::uint32_t, std::uint32_t,
+                                           const VkDescriptorSet *, std::uint32_t, const std::uint32_t *) {
+        ++encodedGraph->descriptorBinds;
+    }
+
+    VKAPI_ATTR void VKAPI_CALL CaptureVertices(VkCommandBuffer, std::uint32_t, std::uint32_t, const VkBuffer *, const VkDeviceSize *) {
+        ++encodedGraph->vertexBinds;
+    }
+
+    VKAPI_ATTR void VKAPI_CALL CaptureIndex(VkCommandBuffer, VkBuffer, VkDeviceSize, VkIndexType) {
+        ++encodedGraph->indexBinds;
+    }
+
+    VKAPI_ATTR void VKAPI_CALL CaptureViewport(VkCommandBuffer, std::uint32_t, std::uint32_t, const VkViewport *) {}
+
+    VKAPI_ATTR void VKAPI_CALL CaptureScissor(VkCommandBuffer, std::uint32_t, std::uint32_t, const VkRect2D *) {}
+
+    VKAPI_ATTR void VKAPI_CALL CaptureDraw(VkCommandBuffer, std::uint32_t count, std::uint32_t instances, std::uint32_t, std::int32_t,
+                                           std::uint32_t) {
+        CHECK(count == 3);
+        CHECK(instances == 1);
+        ++encodedGraph->draws;
+    }
+
     [[nodiscard]] PFN_vkVoidFunction GraphResolver(const VkDevice device, const char *name) {
         if (const auto resource = FakeResourceResolver(device, name))
             return resource;
@@ -55,7 +84,21 @@ namespace {
             return EraseFunction(PFN_vkCmdBeginRendering{CaptureBeginRendering});
         if (symbol == "vkCmdEndRendering")
             return EraseFunction(PFN_vkCmdEndRendering{CaptureEndRendering});
-        return nullptr;
+
+        struct Entry {
+            std::string_view name;
+            PFN_vkVoidFunction function;
+        };
+
+        const std::array entries{Entry{"vkCmdBindPipeline", EraseFunction(PFN_vkCmdBindPipeline{CapturePipeline})},
+                                 Entry{"vkCmdBindDescriptorSets", EraseFunction(PFN_vkCmdBindDescriptorSets{CaptureSets})},
+                                 Entry{"vkCmdBindVertexBuffers", EraseFunction(PFN_vkCmdBindVertexBuffers{CaptureVertices})},
+                                 Entry{"vkCmdBindIndexBuffer", EraseFunction(PFN_vkCmdBindIndexBuffer{CaptureIndex})},
+                                 Entry{"vkCmdSetViewport", EraseFunction(PFN_vkCmdSetViewport{CaptureViewport})},
+                                 Entry{"vkCmdSetScissor", EraseFunction(PFN_vkCmdSetScissor{CaptureScissor})},
+                                 Entry{"vkCmdDrawIndexed", EraseFunction(PFN_vkCmdDrawIndexed{CaptureDraw})}};
+        const auto found = std::ranges::find(entries, symbol, &Entry::name);
+        return found == entries.end() ? nullptr : found->function;
     }
 
     /** @brief Real resource and graph owners share native dispatch and survive assertion unwind until terminal release. */
@@ -105,6 +148,8 @@ namespace {
                 packet.instances[index].instance = instances[index];
         }
     };
+
+#include "VulkanMaterialCommandTests.inl"
 
     TEST_CASE("Vulkan graph encoding emits real copy commands and matched family ownership barriers",
               "[unit][runtime][renderer][vulkan][graph]") {

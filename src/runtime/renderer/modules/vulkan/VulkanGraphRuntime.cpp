@@ -33,6 +33,17 @@ namespace Horo::Render::Detail {
         }
     }
 
+    /** @brief Loads optional material command dispatch without changing graph-only admission. */
+    void VulkanGraphRuntime::Impl::LoadMaterialDispatch(VkDevice device, const VulkanShaderRuntime::Resolver &resolver) {
+        native.bindPipeline = std::bit_cast<PFN_vkCmdBindPipeline>(resolver(device, "vkCmdBindPipeline"));
+        native.bindSets = std::bit_cast<PFN_vkCmdBindDescriptorSets>(resolver(device, "vkCmdBindDescriptorSets"));
+        native.bindVertices = std::bit_cast<PFN_vkCmdBindVertexBuffers>(resolver(device, "vkCmdBindVertexBuffers"));
+        native.bindIndex = std::bit_cast<PFN_vkCmdBindIndexBuffer>(resolver(device, "vkCmdBindIndexBuffer"));
+        native.viewport = std::bit_cast<PFN_vkCmdSetViewport>(resolver(device, "vkCmdSetViewport"));
+        native.scissor = std::bit_cast<PFN_vkCmdSetScissor>(resolver(device, "vkCmdSetScissor"));
+        native.drawIndexed = std::bit_cast<PFN_vkCmdDrawIndexed>(resolver(device, "vkCmdDrawIndexed"));
+    }
+
     /** @copydoc VulkanGraphRuntime::Initialize */
     Result<void> VulkanGraphRuntime::Initialize(const VkDevice device, const std::span<const VulkanCommandQueue> queues,
                                                 const std::uint32_t frames, const std::uint64_t timelineDifference,
@@ -75,7 +86,9 @@ namespace Horo::Render::Detail {
         if (initialized.HasError())
             return initialized;
         impl_->native = dispatch;
+        impl_->LoadMaterialDispatch(device, resolver);
         impl_->resources = &resources;
+        impl_->deviceIncarnation = deviceIncarnation;
         impl_->owner = std::this_thread::get_id();
         impl_->closing = false;
         impl_->failedSubmission = false;

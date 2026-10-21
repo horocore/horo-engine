@@ -2730,11 +2730,15 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanNativeRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanResourceConversions.cpp
             runtime/renderer/modules/vulkan/VulkanResourceRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanShaderRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanPipelineResources.cpp
+            runtime/renderer/modules/vulkan/VulkanMaterialResources.cpp
             runtime/renderer/modules/vulkan/VulkanCommandRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanCommandSubmission.cpp
             runtime/renderer/modules/vulkan/VulkanGraphRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanMaterialCommands.cpp
             runtime/renderer/modules/vulkan/VulkanGraphBarriers.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackend.cpp
         runtime/renderer/modules/vulkan/VulkanBackendAdmission.cpp

@@ -96,20 +96,22 @@ namespace Horo::Render::Detail {
             VkDevice device{VK_NULL_HANDLE};
             VkImageView handle{VK_NULL_HANDLE};
             PFN_vkDestroyImageView destroy{nullptr};
-            Texture *texture{nullptr};
+            std::shared_ptr<Texture> texture;
             RenderTextureAspect aspect{};
+            RenderTextureViewDescriptor descriptor;
         };
 
         struct Mesh {
             RenderResourceNativeLifetime lifetime;
             std::uint64_t vertex{0};
             std::uint64_t index{0};
+            RenderMeshDescriptor descriptor;
         };
 
         struct Target {
             RenderResourceNativeLifetime lifetime;
-            View *color{nullptr};
-            View *depth{nullptr};
+            std::shared_ptr<View> color;
+            std::shared_ptr<View> depth;
             FramebufferExtent extent;
         };
 
@@ -268,15 +270,18 @@ namespace Horo::Render::Detail {
                    AttachmentAspectsMatch(color, depth);
         }
 
+        Result<VulkanMaterialResource> ResolveMaterialBuffer(const MaterialResidentResource &) const;
+        Result<VulkanMaterialResource> ResolveMaterialView(const MaterialResidentResource &) const;
+
         void RemoveTargetsReferencing(const View *view) {
             std::erase_if(targets, [view](const auto &entry) {
-                return entry.second->color == view || entry.second->depth == view;
+                return entry.second->color.get() == view || entry.second->depth.get() == view;
             });
         }
 
         void RemoveViewsReferencing(const Texture *texture) {
             std::erase_if(views, [this, texture](const auto &entry) {
-                if (entry.second->texture != texture)
+                if (entry.second->texture.get() != texture)
                     return false;
                 RemoveTargetsReferencing(entry.second.get());
                 return true;
@@ -333,6 +338,8 @@ namespace Horo::Render::Detail {
         }
         return Result<void>::Success();
     }
+
+#include "VulkanResourceShaderDelegation.inl"
 
     Result<RenderMemoryCostPlan> VulkanResourceRuntime::QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const {
         if (impl_->device == VK_NULL_HANDLE || !descriptor.IsValid())
@@ -462,6 +469,7 @@ namespace Horo::Render::Detail {
         mesh->lifetime = std::move(lifetime);
         mesh->vertex = vertexBuffer;
         mesh->index = indexBuffer;
+        mesh->descriptor = descriptor;
         return impl_->Register(impl_->meshes, std::move(mesh));
     }
 
@@ -545,8 +553,9 @@ namespace Horo::Render::Detail {
         view->lifetime = std::move(lifetime);
         view->device = impl_->device;
         view->destroy = impl_->dispatch.destroyImageView;
-        view->texture = texture;
+        view->texture = impl_->textures.at(textureIdentity);
         view->aspect = descriptor.aspect;
+        view->descriptor = descriptor;
         if (impl_->dispatch.createImageView(impl_->device, &info, nullptr, &view->handle) != VK_SUCCESS) {
             view->handle = VK_NULL_HANDLE;
             return Result<std::uint64_t>::Failure(
@@ -568,8 +577,10 @@ namespace Horo::Render::Detail {
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Render target identity allocation failed."));
         target->lifetime = std::move(lifetime);
-        target->color = color;
-        target->depth = depth;
+        if (color)
+            target->color = impl_->views.at(colorIdentity);
+        if (depth)
+            target->depth = impl_->views.at(depthIdentity);
         target->extent = descriptor.extent;
         return impl_->Register(impl_->targets, std::move(target));
     }
@@ -603,6 +614,7 @@ namespace Horo::Render::Detail {
     }
 
     void VulkanResourceRuntime::ShutdownResources() noexcept {
+        shaders_.Shutdown();
         impl_->targets.clear();
         impl_->views.clear();
         impl_->meshes.clear();
@@ -610,6 +622,8 @@ namespace Horo::Render::Detail {
         impl_->buffers.clear();
         impl_->device = VK_NULL_HANDLE;
     }
+
+#include "VulkanMaterialCapture.inl"
 
     /** @copydoc VulkanResourceRuntime::CaptureGraphResources */
     Result<void> VulkanResourceRuntime::CaptureGraphResources(const RenderGraphExecutionRequest &request,

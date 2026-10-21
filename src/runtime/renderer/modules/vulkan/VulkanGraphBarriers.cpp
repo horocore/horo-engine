@@ -9,57 +9,95 @@ namespace Horo::Render::Detail {
             RenderGraphTextureLayout expected{RenderGraphTextureLayout::NotApplicable};
         };
 
+        /** @brief Combines independent read/write masks without conflating access categories. */
+        VkAccessFlags2 AccessMask(bool read, bool write, VkAccessFlags2 readMask, VkAccessFlags2 writeMask) {
+            return (read ? readMask : 0) | (write ? writeMask : 0);
+        }
+
+        /** @brief Preserves transfer-only scope and exact source/destination layouts. */
+        Result<NativeState> CopyState(const RenderGraphLogicalState &state) {
+            if (state.scope != RenderGraphPipelineScope::Transfer)
+                return Result<NativeState>::Failure(
+                    MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Copy access requires transfer scope."));
+            const bool source = state.operation == RenderGraphSynchronizationOperation::CopySource;
+            return Result<NativeState>::Success(
+                {VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, source ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                 source ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                 source ? RenderGraphTextureLayout::CopySource : RenderGraphTextureLayout::CopyDestination});
+        }
+
+        /** @brief Keeps sampled-image and storage access masks distinct. */
+        NativeState ShaderState(const RenderGraphLogicalState &state, bool read, bool write) {
+            const bool sampled = state.operation == RenderGraphSynchronizationOperation::Sampled;
+            return {VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
+                    sampled ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
+                            : AccessMask(read, write, VK_ACCESS_2_SHADER_STORAGE_READ_BIT, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT),
+                    sampled ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL,
+                    sampled ? RenderGraphTextureLayout::ShaderReadOnly : RenderGraphTextureLayout::General};
+        }
+
         /** @brief Maps declared operations to exact native masks and logical image layouts. */
-        [[nodiscard]] Result<NativeState> TranslateOperation(const RenderGraphLogicalState &state, const bool read, const bool write) {
+        Result<NativeState> TranslateOperation(const RenderGraphLogicalState &state, bool read, bool write) {
             using enum RenderGraphSynchronizationOperation;
             switch (state.operation) {
                 case CopySource:
                 case CopyDestination:
-                    if (state.scope != RenderGraphPipelineScope::Transfer)
-                        return Result<NativeState>::Failure(
-                            MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Copy access requires transfer scope."));
-                    return Result<NativeState>::Success(
-                        {VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
-                         state.operation == CopySource ? VK_ACCESS_2_TRANSFER_READ_BIT : VK_ACCESS_2_TRANSFER_WRITE_BIT,
-                         state.operation == CopySource ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                         state.operation == CopySource ? RenderGraphTextureLayout::CopySource : RenderGraphTextureLayout::CopyDestination});
+                    return CopyState(state);
                 case ColorAttachment:
                     return Result<NativeState>::Success(
                         {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         (read ? VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT : 0) | (write ? VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT : 0),
+                         AccessMask(read, write, VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT),
                          VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, RenderGraphTextureLayout::ColorAttachment});
                 case DepthStencilAttachment:
                     return Result<NativeState>::Success(
                         {VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
-                         (read ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT : 0) |
-                             (write ? VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : 0),
+                         AccessMask(read, write, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT,
+                                    VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT),
                          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, RenderGraphTextureLayout::DepthStencilAttachment});
+                case GraphicsInputBuffer:
+                    if (write)
+                        return Result<NativeState>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+                    return Result<NativeState>::Success({VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT, VK_ACCESS_2_UNIFORM_READ_BIT |
+                                                                                                   VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                                                                                   VK_ACCESS_2_INDEX_READ_BIT});
                 case Sampled:
                 case Storage:
-                    return Result<NativeState>::Success(
-                        {VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT,
-                         state.operation == Sampled
-                             ? VK_ACCESS_2_SHADER_SAMPLED_READ_BIT
-                             : ((read ? VK_ACCESS_2_SHADER_STORAGE_READ_BIT : 0) | (write ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : 0)),
-                         state.operation == Sampled ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_GENERAL,
-                         state.operation == Sampled ? RenderGraphTextureLayout::ShaderReadOnly : RenderGraphTextureLayout::General});
+                    return Result<NativeState>::Success(ShaderState(state, read, write));
                 default:
                     return Result<NativeState>::Failure(
                         MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Unknown native graph operation."));
             }
         }
 
+        /** @brief Validates the sole canonical undefined state. */
+        Result<NativeState> UndefinedState(const RenderGraphLogicalState &state) {
+            if (state.operation == RenderGraphSynchronizationOperation::None && state.scope == RenderGraphPipelineScope::External &&
+                state.layout == RenderGraphTextureLayout::NotApplicable && !state.queue.IsValid())
+                return Result<NativeState>::Success({});
+            return Result<NativeState>::Failure(
+                MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Malformed undefined native state."));
+        }
+
+        /** @brief Checks native buffer/image layout placement independently of operation mask selection. */
+        bool ValidPlacement(const RenderGraphLogicalState &state, bool texture, const NativeState &native) {
+            const bool transfer = state.operation == RenderGraphSynchronizationOperation::CopySource ||
+                                  state.operation == RenderGraphSynchronizationOperation::CopyDestination;
+            const bool inputBuffer = state.operation == RenderGraphSynchronizationOperation::GraphicsInputBuffer;
+            return (texture ? state.layout == native.expected && !inputBuffer : state.layout == RenderGraphTextureLayout::NotApplicable) &&
+                   (transfer || state.scope == RenderGraphPipelineScope::Graphics);
+        }
+
+        /** @brief Admits only native queue scopes implemented by this graphics/transfer command path. */
+        bool ValidExecutionScope(const RenderGraphLogicalState &state) {
+            return state.queue.IsValid() && state.scope != RenderGraphPipelineScope::External &&
+                   state.scope != RenderGraphPipelineScope::Compute;
+        }
+
         /** @brief Rejects unsupported scopes instead of emitting native masks unavailable on a queue. */
         [[nodiscard]] Result<NativeState> Translate(const RenderGraphLogicalState &state, const bool texture) {
-            if (state.access == RenderGraphSynchronizationAccess::None) {
-                if (state.operation == RenderGraphSynchronizationOperation::None && state.scope == RenderGraphPipelineScope::External &&
-                    state.layout == RenderGraphTextureLayout::NotApplicable && !state.queue.IsValid())
-                    return Result<NativeState>::Success({});
-                return Result<NativeState>::Failure(
-                    MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Malformed undefined native state."));
-            }
-            if (!state.queue.IsValid() || state.scope == RenderGraphPipelineScope::External ||
-                state.scope == RenderGraphPipelineScope::Compute)
+            if (state.access == RenderGraphSynchronizationAccess::None)
+                return UndefinedState(state);
+            if (!ValidExecutionScope(state))
                 return Result<NativeState>::Failure(
                     MakeError(VulkanBackendErrors::UnsupportedOperation, "Native compute/external access scope is not admitted."));
             const bool read =
@@ -71,11 +109,7 @@ namespace Horo::Render::Detail {
             auto translated = TranslateOperation(state, read, write);
             if (translated.HasError())
                 return translated;
-            if ((texture && state.layout != translated.Value().expected) ||
-                (!texture && state.layout != RenderGraphTextureLayout::NotApplicable) ||
-                (state.operation != RenderGraphSynchronizationOperation::CopySource &&
-                 state.operation != RenderGraphSynchronizationOperation::CopyDestination &&
-                 state.scope != RenderGraphPipelineScope::Graphics))
+            if (!ValidPlacement(state, texture, translated.Value()))
                 return Result<NativeState>::Failure(
                     MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Native graph layout/scope differs from declared operation."));
             return translated;

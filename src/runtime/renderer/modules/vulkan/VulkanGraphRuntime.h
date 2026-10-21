@@ -28,6 +28,10 @@ namespace Horo::Render::Detail {
                                               const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver);
         [[nodiscard]] Result<void> BeginFrame(FrameToken frame);
         [[nodiscard]] Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request);
+        /** @brief Records one bounded reflected material pass using this runtime's existing submission owner.
+         * @param request Exact frame, offscreen target, immutable draws and explicit frontend submission/lease.
+         * @return Success with synchronous lease transfer or typed validation/native recording failure. */
+        [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request);
         /** @brief Submits exact copied Horo records; partial success retains accepted work and closes admission on failure. */
         [[nodiscard]] Result<void> SubmitFrame(FrameToken frame);
         void AbortFrame(FrameToken frame) noexcept;

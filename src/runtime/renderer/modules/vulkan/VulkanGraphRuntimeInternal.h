@@ -45,8 +45,23 @@ namespace Horo::Render::Detail {
             PFN_vkCmdCopyBuffer2 copy{};
             PFN_vkCmdBeginRendering beginRendering{};
             PFN_vkCmdEndRendering endRendering{};
+            PFN_vkCmdBindPipeline bindPipeline{};
+            PFN_vkCmdBindDescriptorSets bindSets{};
+            PFN_vkCmdBindVertexBuffers bindVertices{};
+            PFN_vkCmdBindIndexBuffer bindIndex{};
+            PFN_vkCmdSetViewport viewport{};
+            PFN_vkCmdSetScissor scissor{};
+            PFN_vkCmdDrawIndexed drawIndexed{};
         } native;
 
+        struct MaterialDraw {
+            VulkanMaterialMesh mesh;
+            const VulkanPreparedMaterialBinding *material{};
+        };
+
+        std::array<MaterialDraw, RenderMaterialPass::MaximumDraws> materialDraws;
+        VulkanMaterialTarget materialTarget;
+        std::uint64_t deviceIncarnation{};
         VulkanCommandRuntime commands;
         VulkanResourceRuntime *resources{};
         std::thread::id owner;
@@ -66,6 +81,7 @@ namespace Horo::Render::Detail {
         bool closing{false};
         bool failedSubmission{false};
 
+        void LoadMaterialDispatch(VkDevice device, const VulkanShaderRuntime::Resolver &resolver);
         [[nodiscard]] Result<void> Access(bool admission = true) const;
         [[nodiscard]] const VulkanCommandQueue *Queue(RenderQueueId id) const noexcept;
         [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request);
@@ -77,6 +93,17 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
         void Encode(VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept;
         void Barriers(VkCommandBuffer command, RenderGraphExecutionRange range) const noexcept;
+        [[nodiscard]] Result<void> ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const;
+        [[nodiscard]] Result<void> RecordMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
+        [[nodiscard]] Result<void> PrepareMaterialTarget(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
+        [[nodiscard]] Result<void> PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
+                                                       const RenderQueueSubmission &submission, VulkanCommandRetention &pins);
+        [[nodiscard]] Result<void> PrepareMaterialResources(const VulkanPreparedMaterialBinding &material,
+                                                            const RenderQueueSubmission &submission);
+        [[nodiscard]] Result<void> PrepareMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
+        [[nodiscard]] Result<void> MaterialState(const VulkanGraphResource &resource, RenderGraphLogicalState next,
+                                                 const RenderQueueSubmission &submission, bool requireContents);
+        void EncodeMaterial(VkCommandBuffer command, const RenderMaterialExecutionRequest &request) const noexcept;
         void Abort() noexcept;
 
         [[nodiscard]] static Error Invalid(const char *reason) {

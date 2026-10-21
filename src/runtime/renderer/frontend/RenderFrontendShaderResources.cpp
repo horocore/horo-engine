@@ -241,7 +241,9 @@ namespace Horo::Render {
                     return Preparation::Failure(MakeError(MaterialBindingErrors::InvalidDescriptor));
                 std::vector<std::byte> padded(size.Value());
                 std::ranges::copy(packed.bytes, padded.begin());
-                const RenderBufferDescriptor buffer{.byteSize = padded.size(), .usage = RenderBufferUsage::Uniform};
+                const RenderBufferDescriptor buffer{.byteSize = padded.size(),
+                                                    .usage = RenderBufferUsage::Uniform,
+                                                    .access = RenderBufferAccess::HostVisible};
                 const auto prepared =
                     PrepareResource({registry_, budget, backend, scope}, RenderResourceClass::Buffer, {}, [&backend, &buffer] {
                     return backend.QueryBufferMemoryCost(buffer);

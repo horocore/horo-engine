@@ -30,6 +30,7 @@ namespace Horo::Render {
         DepthStencilAttachment,
         CopySource,
         CopyDestination,
+        GraphicsInputBuffer, /**< Read-only uniform, vertex and index inputs; whole-buffer state conservatively covers all three. */
     };
 
     /** @brief Pipeline scope in which one logical resource access occurs. */

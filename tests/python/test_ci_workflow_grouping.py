@@ -614,3 +614,28 @@ def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> Non
         registration = re.search(rf'set_tests_properties\({consumer} PROPERTIES LABELS "([^"]+)"\)', tests_cmake)
         assert registration is not None
         assert "ci-windows" in registration.group(1).split(";")
+
+
+def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform_draws() -> None:
+    shader_workflow = (ROOT / ".github/workflows/vulkan-shader.yml").read_text(encoding="utf-8")
+    assert "ubuntu-24.04" in shader_workflow
+    assert "windows-2022" in shader_workflow
+    expected_targets = {"HoroRenderVulkanTests", "HoroMaterialBindingTests", "HoroPipelineCacheTests",
+                        "HoroShaderPermutationTests", "HoroMaterialBindingPublicHeaderConsumer"}
+    build_targets = re.search(r"cmake --build build/ci --target (.*?) --parallel 2", shader_workflow)
+    assert build_targets is not None
+    assert set(build_targets.group(1).split()) == expected_targets
+    test_selection = re.search(r"ctest --test-dir build/ci .*? -R '([^']+)'", shader_workflow)
+    assert test_selection is not None
+    selected = re.compile(test_selection.group(1))
+    for target in expected_targets - {"HoroMaterialBindingPublicHeaderConsumer"}:
+        assert selected.search(f"{target}::representative case") is not None
+        assert selected.search(f"Unrelated{target}::representative case") is None
+    assert selected.search("HoroMaterialBindingPublicHeaderConsumer") is not None
+    assert selected.search("HoroMaterialBindingPublicHeaderConsumerExtra") is None
+    assert "--no-tests=error" in shader_workflow
+    assert "VulkanTransform.vert" in shader_workflow
+    assert "VulkanTransform.frag" in shader_workflow
+    assert "HORO_VULKAN_TRANSFORM_VERTEX" in shader_workflow
+    assert "'[native-smoke]'" in shader_workflow
+    assert "continue-on-error" not in shader_workflow

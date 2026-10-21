@@ -1,4 +1,6 @@
+#include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "VulkanBackendInternal.h"
 #include "VulkanRenderBackendErrors.h"
 
@@ -67,6 +69,8 @@ namespace Horo::Render {
                 CommitInitialization(config.requirePresentation);
                 return Result<void>::Success();
             }
+
+#include "VulkanBackendShaderDelegation.inl"
 
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
                 return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->QueryBufferMemoryCost(descriptor)
@@ -162,6 +166,14 @@ namespace Horo::Render {
                 return commandPort_->ExecuteGraph(request);
             }
 
+            Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (request.frame != activeFrame_ || !activeFrame_.IsValid())
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                return commandPort_->ExecuteMaterialPass(request);
+            }
+
             Result<void> Present(const FrameToken frame) override {
                 if (const auto access = CommandAccess(); access.HasError())
                     return access;
@@ -235,6 +247,7 @@ namespace Horo::Render {
                 resourceBackend_ = resourcePort_ != nullptr ? resourcePort_->ResourceBackend() : nullptr;
                 initialized_ = true;
                 capabilities_.supportsExplicitGraphSubmissions = commandPort_ != nullptr;
+                capabilities_.supportsExplicitMaterialSubmissions = commandPort_ && commandPort_->SupportsMaterialCommands();
                 capabilities_.supportsSubmissionObservation = commandPort_ != nullptr;
                 capabilities_.support = resourcePort_ != nullptr ? resourcePort_->ResourceCapabilities() : RenderCapabilitySnapshot{};
                 capabilities_.supportsBufferResources = capabilities_.support.features.Supports(RenderCapability::BufferResources);
