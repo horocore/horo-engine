@@ -214,6 +214,53 @@
     "workspace.sequence.close": {
       "text": "Kapat"
     },
+    "workspace.pcg.undo": {"text": "Geri al"},
+    "workspace.pcg.redo": {"text": "Yinele"},
+    "workspace.pcg.reset_view": {"text": "Görünümü sıfırla"},
+    "workspace.pcg.focus": {"text": "Seçime odaklan"},
+    "workspace.pcg.zoom": {"text": "Yakınlaştırma"},
+    "workspace.pcg.navigation_hint": {"text": "Düğümleri başlığından sürükleyin. Orta tuşla kaydırın; Ctrl ve tekerlekle yakınlaştırın. Ctrl ile tıklayarak çoklu seçim yapın. Escape hareketi iptal eder."},
+    "workspace.pcg.palette": {"text": "Düğüm paleti"},
+    "workspace.pcg.filter": {"text": "Düğümleri filtrele"},
+    "workspace.pcg.no_catalog": {"text": "Bu çalışma alanı kataloğunda düğüm şablonu yok."},
+    "workspace.pcg.unknown": {"text": "Kullanılamayan düğüm"},
+    "workspace.pcg.input": {"text": "Girdi"},
+    "workspace.pcg.output": {"text": "Çıktı"},
+    "workspace.pcg.inspector": {"text": "Düğüm denetçisi"},
+    "workspace.pcg.select_hint": {"text": "Kimliğini, şemasını ve bağlantılarını incelemek için bir düğüm seçin."},
+    "workspace.pcg.remove": {"text": "Seçili düğümleri kaldır"},
+    "workspace.pcg.identity": {"text": "Düğüm kimliği"},
+    "workspace.pcg.version": {"text": "Şema sürümü"},
+    "workspace.pcg.payload": {"text": "Ayar baytları"},
+    "workspace.pcg.connections": {"text": "Bağlantılar"},
+    "workspace.pcg.disconnect": {"text": "Bağlantıyı kaldır"},
+    "workspace.pcg.cancel_connection": {"text": "Bağlantıyı iptal et"},
+    "workspace.pcg.rejected": {"text": "Düzenleme reddedildi. Pin türlerini, yönünü, girdi çokluğunu ve döngüleri kontrol edin veya güncel belgede yeniden deneyin."},
+    "workspace.pcg.nodes.grid": {"text": "Anlık görüntü ızgarası"},
+    "workspace.pcg.nodes.density_filter": {"text": "Yoğunluk filtresi"},
+    "workspace.pcg.nodes.merge": {"text": "Noktaları birleştir"},
+    "workspace.pcg.nodes.forward": {"text": "Noktaları ilet"},
+    "workspace.pcg.nodes.jitter": {"text": "Izgara sapması"},
+    "workspace.pcg.nodes.stratified": {"text": "Katmanlı örnekleme"},
+    "workspace.pcg.nodes.poisson": {"text": "Poisson dağılımı"},
+    "workspace.pcg.nodes.density_range": {"text": "Yoğunluk aralığı"},
+    "workspace.pcg.nodes.bounds": {"text": "Sınır filtresi"},
+    "workspace.pcg.nodes.slope": {"text": "Eğim filtresi"},
+    "workspace.pcg.nodes.distance": {"text": "Mesafe filtresi"},
+    "workspace.pcg.nodes.attribute": {"text": "Öznitelik filtresi"},
+    "workspace.pcg.nodes.transform": {"text": "Noktaları dönüştür"},
+    "workspace.pcg.nodes.alignment": {"text": "Yüzey hizalama"},
+    "workspace.pcg.nodes.offset": {"text": "Rastgele sapma"},
+    "workspace.pcg.nodes.perlin": {"text": "Perlin gürültüsü"},
+    "workspace.pcg.nodes.simplex": {"text": "Simplex gürültüsü"},
+    "workspace.pcg.types.points": {"text": "Nokta kümesi"},
+    "workspace.pcg.types.boolean": {"text": "Mantıksal"},
+    "workspace.pcg.types.signed": {"text": "İşaretli tamsayı"},
+    "workspace.pcg.types.unsigned": {"text": "İşaretsiz tamsayı"},
+    "workspace.pcg.types.scalar": {"text": "Skaler"},
+    "workspace.pcg.types.vector2": {"text": "Vektör2"},
+    "workspace.pcg.types.vector3": {"text": "Vektör3"},
+    "workspace.pcg.types.vector4": {"text": "Vektör4"},
     "workspace.sequence.zoom": {
       "text": "Zaman çizelgesi yakınlaştırma"
     },
@@ -2466,6 +2513,12 @@
     "workspace.packages.recovery_hint": {
       "text": "Paket hazırlığı veya politika kullanılamıyor olabilir. Projenin paket belgelerini ve ana uygulama yapılandırmasını denetleyip yenileyin. Uygulamanın sahip olduğu işlemler atılmaz."
     },
+    "workspace.physics.compound_children": {"text": "Gövdenin çarpıştırıcı alt öğeleri"},
+    "workspace.physics.edit_child": {"text": "Alt öğeyi görünümde düzenle"},
+    "workspace.physics.edit_compound": {"text": "Tüm bileşik alt öğeleri düzenle"},
+    "workspace.physics.gizmo_hint": {"text": "Çarpıştırıcı düzenleme · Ctrl: 0,1 m / 15° / %10 yakala · Ctrl-tık: alt öğeyi seç · Escape: iptal"},
+    "workspace.physics.gizmo_rejected": {"text": "Çarpıştırıcı düzenlemesi reddedildi. Pozitif sınırlar ve küre/kapsül için eş ölçek kullanın. Tanılamaya bakın."},
+    "workspace.physics.gizmo_unsupported": {"text": "Pişirilmiş şeklin alt öğeleri kendi kaynak belgesini gerektirir; görünümde düzenlenemez."},
     "workspace.physics.title": {
       "text": "Fizik"
     },
@@ -3029,5 +3082,155 @@
     "workspace.navigation_bake.cancel": {"text": "İptal iste…"},
     "workspace.navigation_bake.saved_source": {"text": "Üretimler kaydedilmiş proje kaynağını yakalar. Önce tanım ve Sahne düzenlemelerini kaydedin. Bu panelin kapanması veya gizlenmesi kabul edilmiş işi sürdürür."},
     "workspace.navigation_bake.preparing": {"text": "Proje gezinmesi hazırlanıyor…"}
+    "workspace.navigation_inspector.surface": {
+      "text": "Gezinme yüzeyi"
+    },
+    "workspace.navigation_inspector.region": {
+      "text": "Gezinme bölgesi"
+    },
+    "workspace.navigation_inspector.modifier": {
+      "text": "Gezinme değiştiricisi"
+    },
+    "workspace.navigation_inspector.link": {
+      "text": "Gezinme bağlantısı"
+    },
+    "workspace.navigation_inspector.agent": {
+      "text": "Gezinme aracısı"
+    },
+    "workspace.navigation_inspector.missing": {
+      "text": "Eksik tanımlayıcı / korunan kimlik:"
+    },
+    "workspace.navigation_inspector.degraded": {
+      "text": "Gezinme tanımlayıcıları kullanılamıyor. Değerler taslak olarak korunur; tam tanımlayıcıları çözülene kadar etkinleştirilemez."
+    },
+    "workspace.navigation_inspector.center": {
+      "text": "Yerel merkez"
+    },
+    "workspace.navigation_inspector.extents": {
+      "text": "Yerel yarı boyutlar"
+    },
+    "workspace.navigation_inspector.profiles": {
+      "text": "Yere bağlı aracı profilleri"
+    },
+    "workspace.navigation_inspector.remove_missing": {
+      "text": "Çözümlenemeyen profili taslaktan kaldır"
+    },
+    "workspace.navigation_inspector.definition": {
+      "text": "Gezinme tanımı varlığı"
+    },
+    "workspace.navigation_inspector.scope": {
+      "text": "Üretim kapsamı"
+    },
+    "workspace.navigation_inspector.subtree": {
+      "text": "Nesne alt ağacı"
+    },
+    "workspace.navigation_inspector.bounds": {
+      "text": "Yerel sınırlar"
+    },
+    "workspace.navigation_inspector.region_mode": {
+      "text": "Bölge işlemi"
+    },
+    "workspace.navigation_inspector.include": {
+      "text": "Dahil et"
+    },
+    "workspace.navigation_inspector.exclude": {
+      "text": "Hariç tut"
+    },
+    "workspace.navigation_inspector.sources": {
+      "text": "Kaynak seçimi"
+    },
+    "workspace.navigation_inspector.explicit": {
+      "text": "Açıkça belirtilen katkılar"
+    },
+    "workspace.navigation_inspector.static": {
+      "text": "Sınırlar içindeki statik çarpışma"
+    },
+    "workspace.navigation_inspector.shape": {
+      "text": "Hacim şekli"
+    },
+    "workspace.navigation_inspector.box": {
+      "text": "Kutu"
+    },
+    "workspace.navigation_inspector.cylinder": {
+      "text": "Y eksenli silindir"
+    },
+    "workspace.navigation_inspector.radius": {
+      "text": "Yarıçap (metre)"
+    },
+    "workspace.navigation_inspector.half_height": {
+      "text": "Yarı yükseklik (metre)"
+    },
+    "workspace.navigation_inspector.operation": {
+      "text": "Değiştirici işlemi"
+    },
+    "workspace.navigation_inspector.area": {
+      "text": "Alan geçersiz kılması"
+    },
+    "workspace.navigation_inspector.area_cost": {
+      "text": "Alan ve geçiş maliyeti"
+    },
+    "workspace.navigation_inspector.cost": {
+      "text": "Geçiş maliyeti"
+    },
+    "workspace.navigation_inspector.position": {
+      "text": "Yerel uç noktası konumu"
+    },
+    "workspace.navigation_inspector.connection_radius": {
+      "text": "Bağlantı yarıçapı (metre)"
+    },
+    "workspace.navigation_inspector.start": {
+      "text": "Başlangıç uç noktası"
+    },
+    "workspace.navigation_inspector.end": {
+      "text": "Bitiş uç noktası"
+    },
+    "workspace.navigation_inspector.kind": {
+      "text": "Geçiş türü"
+    },
+    "workspace.navigation_inspector.jump": {
+      "text": "Zıplama"
+    },
+    "workspace.navigation_inspector.ladder": {
+      "text": "Merdiven"
+    },
+    "workspace.navigation_inspector.door": {
+      "text": "Kapı"
+    },
+    "workspace.navigation_inspector.teleport": {
+      "text": "Işınlanma"
+    },
+    "workspace.navigation_inspector.direction": {
+      "text": "Geçiş yönü"
+    },
+    "workspace.navigation_inspector.forward": {
+      "text": "Başlangıçtan bitişe"
+    },
+    "workspace.navigation_inspector.both": {
+      "text": "Çift yönlü"
+    },
+    "workspace.navigation_inspector.profile": {
+      "text": "Aracı profili"
+    },
+    "workspace.navigation_inspector.filter": {
+      "text": "Sorgu filtresi"
+    },
+    "workspace.navigation_inspector.override_radius": {
+      "text": "Aracı yarıçapını geçersiz kıl"
+    },
+    "workspace.navigation_inspector.enabled": {
+      "text": "Etkin"
+    },
+    "workspace.navigation_inspector.invalid": {
+      "text": "Geçersiz taslak. Uygulamadan önce bileşeni düzeltin; belge ve çalışma zamanı durumu değişmedi."
+    },
+    "workspace.navigation_inspector.apply": {
+      "text": "Seçili tüm gezinme düzenlemelerini uygula"
+    },
+    "workspace.navigation_inspector.cancel": {
+      "text": "Gezinme taslaklarını iptal et"
+    },
+    "workspace.navigation_inspector.rejected": {
+      "text": "Gezinme düzenlemeleri reddedildi. Taslaklar düzeltme için korunuyor."
+    }
   }
 }

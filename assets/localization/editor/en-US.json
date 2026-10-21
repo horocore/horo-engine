@@ -214,6 +214,53 @@
     "workspace.sequence.close": {
       "text": "Close"
     },
+    "workspace.pcg.undo": {"text": "Undo"},
+    "workspace.pcg.redo": {"text": "Redo"},
+    "workspace.pcg.reset_view": {"text": "Reset view"},
+    "workspace.pcg.focus": {"text": "Focus selection"},
+    "workspace.pcg.zoom": {"text": "Zoom"},
+    "workspace.pcg.navigation_hint": {"text": "Drag node headers to move. Middle-drag to pan; Ctrl-wheel to zoom. Ctrl-click selects multiple nodes. Escape cancels a gesture."},
+    "workspace.pcg.palette": {"text": "Node palette"},
+    "workspace.pcg.filter": {"text": "Filter nodes"},
+    "workspace.pcg.no_catalog": {"text": "No node recipes are available from this workspace catalog."},
+    "workspace.pcg.unknown": {"text": "Unavailable node"},
+    "workspace.pcg.input": {"text": "Input"},
+    "workspace.pcg.output": {"text": "Output"},
+    "workspace.pcg.inspector": {"text": "Node inspector"},
+    "workspace.pcg.select_hint": {"text": "Select a node to inspect its identity, schema and connections."},
+    "workspace.pcg.remove": {"text": "Remove selected nodes"},
+    "workspace.pcg.identity": {"text": "Node identity"},
+    "workspace.pcg.version": {"text": "Schema version"},
+    "workspace.pcg.payload": {"text": "Settings bytes"},
+    "workspace.pcg.connections": {"text": "Connections"},
+    "workspace.pcg.disconnect": {"text": "Disconnect"},
+    "workspace.pcg.cancel_connection": {"text": "Cancel connection"},
+    "workspace.pcg.rejected": {"text": "The edit was rejected. Check pin types, direction, input cardinality and cycles, or retry against the current document."},
+    "workspace.pcg.nodes.grid": {"text": "Snapshot grid"},
+    "workspace.pcg.nodes.density_filter": {"text": "Density filter"},
+    "workspace.pcg.nodes.merge": {"text": "Merge points"},
+    "workspace.pcg.nodes.forward": {"text": "Forward points"},
+    "workspace.pcg.nodes.jitter": {"text": "Grid jitter"},
+    "workspace.pcg.nodes.stratified": {"text": "Stratified sampling"},
+    "workspace.pcg.nodes.poisson": {"text": "Poisson scatter"},
+    "workspace.pcg.nodes.density_range": {"text": "Density range"},
+    "workspace.pcg.nodes.bounds": {"text": "Bounds filter"},
+    "workspace.pcg.nodes.slope": {"text": "Slope filter"},
+    "workspace.pcg.nodes.distance": {"text": "Distance filter"},
+    "workspace.pcg.nodes.attribute": {"text": "Attribute filter"},
+    "workspace.pcg.nodes.transform": {"text": "Transform points"},
+    "workspace.pcg.nodes.alignment": {"text": "Surface alignment"},
+    "workspace.pcg.nodes.offset": {"text": "Random offset"},
+    "workspace.pcg.nodes.perlin": {"text": "Perlin noise"},
+    "workspace.pcg.nodes.simplex": {"text": "Simplex noise"},
+    "workspace.pcg.types.points": {"text": "Point set"},
+    "workspace.pcg.types.boolean": {"text": "Boolean"},
+    "workspace.pcg.types.signed": {"text": "Signed integer"},
+    "workspace.pcg.types.unsigned": {"text": "Unsigned integer"},
+    "workspace.pcg.types.scalar": {"text": "Scalar"},
+    "workspace.pcg.types.vector2": {"text": "Vector2"},
+    "workspace.pcg.types.vector3": {"text": "Vector3"},
+    "workspace.pcg.types.vector4": {"text": "Vector4"},
     "workspace.sequence.zoom": {
       "text": "Timeline zoom"
     },
@@ -2466,6 +2513,12 @@
     "workspace.packages.recovery_hint": {
       "text": "Package preparation or policy may be unavailable. Check the project package documents and host configuration, then refresh. Retained application operations are not discarded."
     },
+    "workspace.physics.compound_children": {"text": "Body collider children"},
+    "workspace.physics.edit_child": {"text": "Edit child in viewport"},
+    "workspace.physics.edit_compound": {"text": "Edit all compound children"},
+    "workspace.physics.gizmo_hint": {"text": "Collider editing · Ctrl: snap 0.1 m / 15° / 10% · Ctrl-click: toggle child · Escape: cancel"},
+    "workspace.physics.gizmo_rejected": {"text": "Collider edit rejected. Use valid positive bounds and uniform sphere/capsule scale. See diagnostics."},
+    "workspace.physics.gizmo_unsupported": {"text": "Cooked shape children require their owning source document; viewport editing is unavailable."},
     "workspace.physics.title": {
       "text": "Physics"
     },
@@ -3029,5 +3082,155 @@
     "workspace.navigation_bake.cancel": {"text": "Request cancellation…"},
     "workspace.navigation_bake.saved_source": {"text": "Bakes capture saved project source. Save definition and Scene edits first. Closing or hiding this panel leaves accepted work running."},
     "workspace.navigation_bake.preparing": {"text": "Preparing project navigation…"}
+    "workspace.navigation_inspector.surface": {
+      "text": "Navigation surface"
+    },
+    "workspace.navigation_inspector.region": {
+      "text": "Navigation region"
+    },
+    "workspace.navigation_inspector.modifier": {
+      "text": "Navigation modifier"
+    },
+    "workspace.navigation_inspector.link": {
+      "text": "Navigation link"
+    },
+    "workspace.navigation_inspector.agent": {
+      "text": "Navigation agent"
+    },
+    "workspace.navigation_inspector.missing": {
+      "text": "Missing descriptor / retained identity:"
+    },
+    "workspace.navigation_inspector.degraded": {
+      "text": "Navigation descriptors are unavailable. Values remain authored drafts; activation is blocked until their exact descriptors resolve."
+    },
+    "workspace.navigation_inspector.center": {
+      "text": "Local center"
+    },
+    "workspace.navigation_inspector.extents": {
+      "text": "Local half extents"
+    },
+    "workspace.navigation_inspector.profiles": {
+      "text": "Grounded agent profiles"
+    },
+    "workspace.navigation_inspector.remove_missing": {
+      "text": "Remove unresolved profile from draft"
+    },
+    "workspace.navigation_inspector.definition": {
+      "text": "Navigation definition asset"
+    },
+    "workspace.navigation_inspector.scope": {
+      "text": "Bake scope"
+    },
+    "workspace.navigation_inspector.subtree": {
+      "text": "Object subtree"
+    },
+    "workspace.navigation_inspector.bounds": {
+      "text": "Local bounds"
+    },
+    "workspace.navigation_inspector.region_mode": {
+      "text": "Region operation"
+    },
+    "workspace.navigation_inspector.include": {
+      "text": "Include"
+    },
+    "workspace.navigation_inspector.exclude": {
+      "text": "Exclude"
+    },
+    "workspace.navigation_inspector.sources": {
+      "text": "Source selection"
+    },
+    "workspace.navigation_inspector.explicit": {
+      "text": "Explicit contributors"
+    },
+    "workspace.navigation_inspector.static": {
+      "text": "Static collision in bounds"
+    },
+    "workspace.navigation_inspector.shape": {
+      "text": "Volume shape"
+    },
+    "workspace.navigation_inspector.box": {
+      "text": "Box"
+    },
+    "workspace.navigation_inspector.cylinder": {
+      "text": "Y-axis cylinder"
+    },
+    "workspace.navigation_inspector.radius": {
+      "text": "Radius (metres)"
+    },
+    "workspace.navigation_inspector.half_height": {
+      "text": "Half height (metres)"
+    },
+    "workspace.navigation_inspector.operation": {
+      "text": "Modifier operation"
+    },
+    "workspace.navigation_inspector.area": {
+      "text": "Area override"
+    },
+    "workspace.navigation_inspector.area_cost": {
+      "text": "Area and traversal cost"
+    },
+    "workspace.navigation_inspector.cost": {
+      "text": "Traversal cost"
+    },
+    "workspace.navigation_inspector.position": {
+      "text": "Local endpoint position"
+    },
+    "workspace.navigation_inspector.connection_radius": {
+      "text": "Connection radius (metres)"
+    },
+    "workspace.navigation_inspector.start": {
+      "text": "Start endpoint"
+    },
+    "workspace.navigation_inspector.end": {
+      "text": "End endpoint"
+    },
+    "workspace.navigation_inspector.kind": {
+      "text": "Traversal kind"
+    },
+    "workspace.navigation_inspector.jump": {
+      "text": "Jump"
+    },
+    "workspace.navigation_inspector.ladder": {
+      "text": "Ladder"
+    },
+    "workspace.navigation_inspector.door": {
+      "text": "Door"
+    },
+    "workspace.navigation_inspector.teleport": {
+      "text": "Teleport"
+    },
+    "workspace.navigation_inspector.direction": {
+      "text": "Traversal direction"
+    },
+    "workspace.navigation_inspector.forward": {
+      "text": "Start to end"
+    },
+    "workspace.navigation_inspector.both": {
+      "text": "Bidirectional"
+    },
+    "workspace.navigation_inspector.profile": {
+      "text": "Agent profile"
+    },
+    "workspace.navigation_inspector.filter": {
+      "text": "Query filter"
+    },
+    "workspace.navigation_inspector.override_radius": {
+      "text": "Override agent radius"
+    },
+    "workspace.navigation_inspector.enabled": {
+      "text": "Enabled"
+    },
+    "workspace.navigation_inspector.invalid": {
+      "text": "Invalid draft. Repair the highlighted component before applying; no document or runtime state has changed."
+    },
+    "workspace.navigation_inspector.apply": {
+      "text": "Apply all selected navigation edits"
+    },
+    "workspace.navigation_inspector.cancel": {
+      "text": "Discard navigation drafts"
+    },
+    "workspace.navigation_inspector.rejected": {
+      "text": "Navigation edits were rejected. Drafts are retained for repair."
+    }
   }
 }
