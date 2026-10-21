@@ -51,7 +51,7 @@ namespace {
             auto *view = state_.views.Acquire(state_.source.Identity().instance);
             if (!view)
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::Invalid));
-            view->widget.Publish(state_.source);
+            view->Publish(state_.source);
             return Result<void>::Success();
         }
 
@@ -125,6 +125,7 @@ TEST_CASE("Rejected route leave retains source views and failed destination entr
     auto *original = fixture.state.views.Acquire(instance);
     REQUIRE(original);
     const auto identity = original->widget.Identity();
+    CHECK(original->widget.HasHighlight(fixture.state.source.Revision()));
     REQUIRE(original->widget.Select({1, 3}));
     fixture.state.views.Presented(instance);
     fixture.state.deny = true;
@@ -142,6 +143,7 @@ TEST_CASE("Rejected route leave retains source views and failed destination entr
     auto *rolledBack = fixture.state.views.Acquire(instance);
     REQUIRE(rolledBack);
     CHECK(rolledBack->widget.Identity().value > identity.value);
+    CHECK(rolledBack->widget.HasHighlight(fixture.state.source.Revision()));
     CHECK(rolledBack->widget.Selection() == SourceWidgetSelection{0, 0});
     CHECK(fixture.state.views.NeedsFocus(instance));
 }

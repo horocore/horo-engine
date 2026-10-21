@@ -5,6 +5,7 @@
  */
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "SourceEditorTools.h"
+#include "SourceSyntaxCache.h"
 
 #include <map>
 
@@ -13,8 +14,18 @@ namespace Horo::Editor {
     struct SourceEditorView final {
         explicit SourceEditorView(SourceEditingViewId identity) : widget(identity) {}
 
+        /** @brief Reconciles one publication into independent interaction and lexical projections.
+         * @param source Current authoritative source publication.
+         */
+        void Publish(const SourceDocumentSnapshot &source) {
+            widget.Publish(source);
+            if (syntax.Publish(source) || !widget.HasHighlight(source.Revision()))
+                static_cast<void>(widget.Highlight(source.Revision(), syntax.Syntax()));
+        }
+
         SourceEditorWidget widget;
         SourceEditorTools tools;
+        SourceSyntaxCache syntax;
     };
 
     /** @brief Project-owner-scoped presentations with a monotonic host-lifetime identity allocator. */

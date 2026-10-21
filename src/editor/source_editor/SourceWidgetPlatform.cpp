@@ -1,9 +1,18 @@
 #include "SourceWidgetPlatform.h"
 
+#include "SourceEditorWidget.h"
+
+#include <cmath>
 #include <zep/filesystem.h>
 #include <zep/window.h>
 
 namespace Horo::Editor {
+    /** @copydoc ValidSourceWidgetFrame */
+    bool ValidSourceWidgetFrame(const SourceWidgetFrame &frame) noexcept {
+        return std::isfinite(frame.width) && std::isfinite(frame.height) && frame.width > 0 && frame.height > 0 &&
+               std::isfinite(frame.dpiScale) && frame.dpiScale > 0;
+    }
+
     namespace {
         /** @brief Denies every ambient filesystem path, including Zep configuration and save shortcuts. */
         class DeniedFileSystem final : public Zep::IZepFileSystem {
@@ -88,17 +97,4 @@ namespace Horo::Editor {
         return editor;
     }
 
-    /** @copydoc UpdateSourceWidgetTheme */
-    void UpdateSourceWidgetTheme(Zep::ZepEditor &editor) {
-        auto &theme = editor.GetTheme();
-        for (int value = 1; value < static_cast<int>(Zep::ThemeColor::UniqueColor0); ++value)
-            theme.SetColor(static_cast<Zep::ThemeColor>(value), Zep::toNVec4f(ImGui::GetStyleColorVec4(ImGuiCol_Text)));
-        for (const auto color : {Zep::ThemeColor::Background, Zep::ThemeColor::LineNumberBackground, Zep::ThemeColor::AirlineBackground,
-                                 Zep::ThemeColor::TabInactive})
-            theme.SetColor(color, Zep::toNVec4f(ImGui::GetStyleColorVec4(ImGuiCol_ChildBg)));
-        for (const auto color : {Zep::ThemeColor::TextDim, Zep::ThemeColor::LineNumber, Zep::ThemeColor::HiddenText})
-            theme.SetColor(color, Zep::toNVec4f(ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled)));
-        theme.SetColor(Zep::ThemeColor::VisualSelectBackground, Zep::toNVec4f(ImGui::GetStyleColorVec4(ImGuiCol_TextSelectedBg)));
-        theme.SetColor(Zep::ThemeColor::CursorLineBackground, Zep::toNVec4f(ImGui::GetStyleColorVec4(ImGuiCol_Header)));
-    }
 }  // namespace Horo::Editor

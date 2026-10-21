@@ -147,15 +147,14 @@ namespace Horo::Editor {
             return;
         }
         auto &widget = presentation->widget;
-        widget.Publish(source);
+        presentation->Publish(source);
         if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
             static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
         auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
         const bool focus = m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();
-        ImGui::PushFont(m_context.theme.fonts.sans);
-        auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent});
-        ImGui::PopFont();
+        auto intent =
+            widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent}, &m_context.theme.fonts);
         outCommand.sourceTextInputOwned = widget.OwnsInput() || presentation->tools.OwnsInput();
         m_sourceSession.Presented(instance);
         if (toolIntent)

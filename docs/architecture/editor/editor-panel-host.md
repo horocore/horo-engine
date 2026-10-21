@@ -652,6 +652,45 @@ Required source editor constraints:
   mode until a streaming editor contract exists;
 - editor shortcuts participate in the workspace shortcut conflict policy.
 
+### Source syntax and theme projection
+
+`SourceSyntax` is a GUI-private Horo lexical projection of the authoritative
+`SourceDocumentSnapshot`. It uses exact original UTF-8 byte offsets, including
+BOM and authored CRLF bytes. Widget adapters translate these offsets into their
+private normalized display coordinates; a widget coordinate is never a document
+byte offset. Language classification and tokenization do not mutate the document,
+select language services, or access files. The initial lexer recognizes C/C++,
+Lua/Horo Script, GLSL/HLSL/Metal, JSON, TOML, YAML, INI/CFG, XML and CMake.
+
+Lexical spans are sorted half-open ranges and are rebuilt only when a document
+publication changes. Work admission is bounded to 2 MiB, 64 KiB per line and
+65,536 spans. Unknown families, incomplete strings/comments and over-budget
+inputs yield no lexical spans, retaining the ordinary readable source style.
+This is a lexical readability service, not a language parser or semantic/LSP
+validation authority; syntactically invalid but lexically complete input can
+retain highlighting.
+
+`SourceEditorTheme` is resolved separately from the active frame design tokens.
+All open source surfaces apply that frame's styles when drawn, including surfaces
+first exposed after a theme change. Semantic roles are text, keyword, type,
+string, number, comment, directive and property. Custom theme resources may
+specify `tokens.sourceSyntax` entries with those names as `#RRGGBB`; omitted
+entries derive from the existing semantic editor palette. The source surface
+uses `surfaceWindow`, `actionPrimarySoft` selection and body typography. Source
+foregrounds are corrected toward a readable luminance endpoint when necessary
+to preserve WCAG 4.5:1 contrast against the opaque source surface and the
+alpha-composed selection overlay, including custom/light themes. Source typography
+uses the packaged IBM Plex Mono regular/emphasis faces with the same cell size;
+no smaller caption tier is introduced for comments or fallback text.
+
+This extends the existing design token and font carriers additively. Existing
+custom themes need no migration: absent source overrides inherit the active
+palette. Source widget consumers remain GUI-private and no Zep type enters a
+public header. Public-header consumers continue to use the existing owning GUI
+target for `DesignTokens.h` and `EditorTheme.h`. The in-process font carrier adds
+two borrowed atlas pointers; GUI consumers must be rebuilt together. No serialized
+format changes, alternate palette authority, or compatibility shim is introduced.
+
 ## Embedded Node Editors
 
 Node-based authoring surfaces appear inside workspace panels or dedicated editor

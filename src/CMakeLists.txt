@@ -3292,10 +3292,14 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/source_editor/SourceWidgetPlatform.cpp
+            editor/source_editor/SourceWidgetDisplay.cpp
             editor/source_editor/SourceWidgetText.cpp
             editor/source_editor/SourceEditorSession.cpp
             editor/source_editor/SourceEditorTools.cpp
             editor/source_editor/SourceEditorWidget.cpp
+            editor/source_editor/SourceSyntax.cpp
+            editor/source_editor/SourceSyntaxProjection.cpp
+            editor/source_editor/SourceEditorTheme.cpp
             editor/screens/workspace/EditorWorkspaceInputRouting.cpp
             editor/screens/workspace/PCGWorkspace.cpp
             editor/screens/workspace/PCGEditorCatalog.cpp

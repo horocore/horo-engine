@@ -2747,6 +2747,7 @@ target_link_libraries(HoroEditorViewportModelTests PRIVATE HoroEngine::EditorSer
 if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroSourceEditorWidgetTests
         unit/editor/SourceEditorWidgetTests.cpp
+        unit/editor/SourceEditorHighlightingTests.cpp
         unit/editor/SourceEditorSessionLifecycleTests.cpp
         unit/editor/SourceEditorWorkspaceInputTests.cpp)
     target_compile_features(HoroSourceEditorWidgetTests PRIVATE cxx_std_20)
@@ -2755,6 +2756,9 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroSourceEditorWidgetTests PRIVATE HoroEngine::Gui HoroEngine::Platform HoroThirdParty::ImGui)
     # These ImGui-context cases require the GUI library but no display/backend. Native CI must execute them.
     horo_register_catch_test(HoroSourceEditorWidgetTests LABELS "unit;editor;source;headless;sonar-coverage")
+    add_executable(HoroSourceSyntaxTests unit/editor/SourceSyntaxTests.cpp)
+    target_compile_features(HoroSourceSyntaxTests PRIVATE cxx_std_20)
+    target_link_libraries(HoroSourceSyntaxTests PRIVATE HoroEngine::Gui HoroEngine::EditorServices HoroThirdParty::ImGui)
 
     add_executable(HoroHierarchyPanelRenderTests
             unit/editor/HierarchyPanelRenderTests.cpp
@@ -3259,6 +3263,7 @@ set(HORO_EDITOR_WHITE_BOX_TEST_TARGETS
         HoroBuildReleaseModalSessionTests
         HoroEditorSelectionModelTests
         HoroEditorViewportModelTests
+        HoroSourceSyntaxTests
         HoroHierarchyPanelRenderTests
         HoroHierarchyEditSessionTests
         HoroInspectorPanelRenderTests
@@ -5102,6 +5107,7 @@ set(HORO_CATCH_TEST_TARGETS
         HoroHierarchyModelTests
         HoroEditorSelectionModelTests
         HoroEditorViewportModelTests
+        HoroSourceSyntaxTests
         HoroHierarchyPanelRenderTests
         HoroHierarchyEditSessionTests
         HoroInspectorEditSessionTests
