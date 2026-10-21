@@ -19,21 +19,46 @@ namespace Horo::Editor::PCGCanvasTestSupport {
         Assets::AssetRegistry registry;
         Runtime::RuntimeSceneService runtime;
         CancellationSource cancellation;
+        std::unique_ptr<JobSystem> jobs;
         std::unique_ptr<EditorWorkspaceController> controller;
 
-        CanvasWorkspace() {
+        explicit CanvasWorkspace(bool preview = false, bool grantPreview = true) {
             PublishGraphAsset(registry);
             REQUIRE(runtime.Startup(cancellation.Token()).HasValue());
-            auto composed = CreatePCGEditorCatalog();
+            const std::array grants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview, PCG::PCGCapability::OfflineBake,
+                                    PCG::PCGCapability::RuntimeEvaluation, PCG::PCGCapability::HybridEvaluation};
+            auto composed =
+                preview && grantPreview ? CreatePCGEditorCatalog(PCG::PCGCapabilitySet::Create(grants).Value()) : CreatePCGEditorCatalog();
             REQUIRE(composed.HasValue());
             auto catalog = std::move(composed).Value();
             // The existing durable fixture contains one synthetic source type; preserve it alongside built-ins.
             catalog.document.types.push_back(Catalog().types.front());
-            controller = std::make_unique<EditorWorkspaceController>(project.root, runtime, registry.Snapshot(),
-                                                                     EditorWorkspaceDependencies{.mutations = &project.mutations,
-                                                                                                 .durableFiles = &project.files,
-                                                                                                 .documentSessionOwner = Asset(9),
-                                                                                                 .pcg = std::move(catalog)});
+            if (preview) {
+                jobs = std::make_unique<JobSystem>(JobSystemConfig{.workerCount = 1});
+                PCG::PCGGraphSourceData source;
+                source.generation = {Id<PCG::GraphId>(1), Id<PCG::GraphRevision>(1)};
+                auto node = catalog.palette.front().prototype;
+                node.id = Id<PCG::NodeId>(1);
+                source.nodes = {node};
+                auto graph = PCG::PCGGraphAsset::Create(source, {.supportedNodeTypes = catalog.document.types});
+                REQUIRE(graph.HasValue());
+                auto bytes = PCG::SerializePCGGraphAsset(graph.Value()).Value();
+                const auto raw = std::as_bytes(std::span(bytes));
+                project.Write({{true, raw.size(), ComputeSha256(raw)}, {raw.begin(), raw.end()}});
+            }
+            controller =
+                std::make_unique<EditorWorkspaceController>(project.root, runtime, registry.Snapshot(),
+                                                            EditorWorkspaceDependencies{.mutations = &project.mutations,
+                                                                                        .durableFiles = &project.files,
+                                                                                        .jobs = jobs.get(),
+                                                                                        .documentSessionOwner = Asset(9),
+                                                                                        .pcg = std::move(catalog),
+                                                                                        .pcgPreviewInputs =
+                                                                                            preview
+                                                                                                ? std::optional{CreatePCGPreviewSandbox()
+                                                                                                                    .Value()}
+                                                                                                : std::nullopt});
+
             Open();
         }
 

@@ -418,6 +418,7 @@ namespace Horo::Editor {
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
         std::vector<PCGWorkspaceDocument> pcgDocuments;
         std::vector<PCGPaletteEntry> pcgPalette;
+        PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
         std::vector<SourceHistoryState> sourceHistory;
         std::optional<Result<SourceEditingPublication>> sourceEditingResult;

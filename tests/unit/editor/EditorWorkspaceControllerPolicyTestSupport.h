@@ -125,8 +125,8 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
                                             DiagnosticSourceNavigator diagnosticNavigator = {},
                                             SourceOpenNavigator sourceOpenNavigator = {})
             : controller_(projectRoot, runtimeScene_, {},
-                          EditorWorkspaceDependencies{.sourceOpenNavigator = std::move(sourceOpenNavigator),
-                                                      .diagnosticSourceNavigator = std::move(diagnosticNavigator)}) {
+                          EditorWorkspaceDependencies{.sourceNavigation = {.sourceOpenNavigator = std::move(sourceOpenNavigator),
+                                                                           .diagnosticSourceNavigator = std::move(diagnosticNavigator)}}) {
             REQUIRE((runtimeScene_.Startup(cancellation_.Token()).HasValue()));
             PumpLifecycleCommit();
         }
