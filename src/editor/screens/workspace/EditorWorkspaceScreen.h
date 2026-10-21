@@ -97,13 +97,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         /** @brief Expires delayed close decisions before the controller is retired. */
         void EndSession();
         /** @brief Routes active source Save/Undo/Redo before scene fallback; the controller may be absent. */
-        bool HandleMenuAction(EditorWorkspaceController *controller, const EditorMenuAction action);
+        bool HandleMenuAction(EditorWorkspaceController *controller, const EditorMenuAction action) const;
         /** @brief Borrows the current owner and modal services to capture an exact dirty source revision. */
         bool OpenCloseModal(EditorWorkspaceController &controller, const EditorWorkspaceViewCommandData &command,
                             EditorModalHost &modalHost, const EditorGuiContext &context);
         /** @brief Routes current-frame input through the borrowed workspace owner and input context. */
-        void RouteInput(Input::InputRouter &router, const Input::InputContextToken &inputContext, EditorWorkspaceController &controller,
-                        EditorWorkspaceViewCommandData &command);
+        void RouteInput(Input::InputRouter &router, const Input::InputContextToken &inputContext,
+                        const EditorWorkspaceController &controller, EditorWorkspaceViewCommandData &command) const;
 
     private:
         std::shared_ptr<const void> closeLifetime_;

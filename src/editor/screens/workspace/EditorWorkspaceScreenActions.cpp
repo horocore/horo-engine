@@ -76,7 +76,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     }  // namespace
 
     /** @copydoc WorkspaceSourceDocumentCommands::HandleMenuAction */
-    bool WorkspaceSourceDocumentCommands::HandleMenuAction(EditorWorkspaceController *controller, const EditorMenuAction action) {
+    bool WorkspaceSourceDocumentCommands::HandleMenuAction(EditorWorkspaceController *controller, const EditorMenuAction action) const {
         if (controller && (action == EditorMenuAction::SaveScene || action == EditorMenuAction::Undo || action == EditorMenuAction::Redo)) {
             const auto &model = controller->ViewModel();
             for (const auto &source : model.sourceDocuments) {

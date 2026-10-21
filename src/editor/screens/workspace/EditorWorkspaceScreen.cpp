@@ -238,7 +238,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc WorkspaceSourceDocumentCommands::RouteInput */
     void WorkspaceSourceDocumentCommands::RouteInput(Input::InputRouter &router, const Input::InputContextToken &inputContext,
-                                                     EditorWorkspaceController &controller, EditorWorkspaceViewCommandData &command) {
+                                                     const EditorWorkspaceController &controller,
+                                                     EditorWorkspaceViewCommandData &command) const {
         RouteWorkspaceInputAction(router, inputContext, controller.ViewModel(), command, controller.HasActivePCGDocument(),
                                   {ImGui::GetIO().WantTextInput,
                                    ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)});
