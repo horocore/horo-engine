@@ -4,6 +4,8 @@ Assets emits the existing process-local `HORO_ASSET_REFERENCE` payload for regis
 `core.prefab` sources. Its workspace opening, Scene revision and replacement epoch
 are captured once at drag start. Both hierarchy and viewport emit the existing
 typed `AssetSceneDropRequest`; panels own no source resolver or document mutation.
+A focused Prefab document rejects containing-Scene drop intents, including captured
+Scene gestures. Successful placement never opens a Prefab source document.
 This private process-local payload changed size; producers and consumers must be
 rebuilt together. No public header, persisted Scene format or asset identity changes.
 

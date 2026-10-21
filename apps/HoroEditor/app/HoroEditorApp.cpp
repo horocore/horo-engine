@@ -1103,7 +1103,7 @@ namespace Horo::Editor {
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                         qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiRender);
 #endif
-                        return p_->presentation.guiRenderer.RenderDrawData();
+                        return frame_->ComposeGui(p_->presentation.guiRenderer, pacing_.hostCancellation.value_or(CancellationToken{}));
                     case Runtime::RuntimePhase::Presentation:
                         return PresentFrame();
                     case Runtime::RuntimePhase::CommitDeferredLifecycleChanges:
@@ -1761,6 +1761,7 @@ namespace Horo::Editor {
             auto runtimeScene = std::move(preview.scenes);
             Runtime::RuntimeSceneService *runtimeSceneService = runtimeScene.get();
             auto playSceneFactory = Application::Internal::MakeEditorProjectSceneFactory(p.background.jobs, scenePolicy);
+            auto prefabStageFactory = Application::Internal::MakeEditorProjectPrefabStageFactory(p.background.jobs, scenePolicy);
             // Null is explicit; canonical activation needs an exact owner receipt.
             CollisionActivationEvidence collisionActivation{.revision = 1};
             if (preview.physicsMode == Physics::PhysicsRuntimeMode::Null)
@@ -1851,6 +1852,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
+            screenHost.Services().Register<EditorProjectPrefabStageFactory>(prefabStageFactory);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
             screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);

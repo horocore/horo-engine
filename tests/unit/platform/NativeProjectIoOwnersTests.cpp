@@ -5,6 +5,7 @@
 #include <array>
 #include <catch2/generators/catch_generators.hpp>
 #include <fstream>
+#include <string_view>
 
 namespace {
     using namespace Horo;
@@ -150,13 +151,20 @@ TEST_CASE("Native project I/O preserves original source identity generation stop
 
 TEST_CASE("Native project I/O retains spaces and Unicode project and output namespace spellings", "[platform][project-io]") {
     ProjectIoFixture fixture;
-    const auto root = fixture.anchor / std::filesystem::path{u8"project dir ü"};
+    const auto root = fixture.anchor / std::filesystem::path{u8"project dir \u00fc"};
+    constexpr std::u8string_view cacheNamespace{u8"derived/cache \u00fc"};
+    constexpr std::u8string_view publicationNamespace{u8"derived/cook \u00fc"};
     std::filesystem::rename(fixture.root, root);
-    const auto owners = CreateNativeProjectIoOwners(root, "project-io-test", 7, "derived/cache ü", "derived/cook ü");
+    // Use the same UTF-8 bytes for both API namespaces and native paths, independent of the execution code page.
+    const auto owners = CreateNativeProjectIoOwners(root, "project-io-test", 7, std::string{cacheNamespace.begin(), cacheNamespace.end()},
+                                                    std::string{publicationNamespace.begin(), publicationNamespace.end()});
     REQUIRE(owners.HasValue());
     REQUIRE(owners.Value().source->Text("authored/source.txt", fixture.Context(), {}).HasValue());
     REQUIRE(owners.Value().cache->Store("artifact", CacheBytes, {}).HasValue());
-    REQUIRE(owners.Value().publication->WriteDurable(root / std::filesystem::path{u8"derived/cook ü/private"}, {}).HasValue());
+    REQUIRE(std::filesystem::is_directory(root / std::filesystem::path{cacheNamespace}));
+    const auto publishedPath = root / std::filesystem::path{publicationNamespace} / "private";
+    REQUIRE(owners.Value().publication->WriteDurable(publishedPath, {}).HasValue());
+    REQUIRE(std::filesystem::is_regular_file(publishedPath));
 }
 
 TEST_CASE("Native project I/O reports an obstructed publication namespace as storage failure", "[platform][project-io]") {

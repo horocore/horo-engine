@@ -22,6 +22,7 @@
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
 
 #include <cstddef>
@@ -63,6 +64,12 @@ namespace Horo::Editor {
         EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
     };
 
+    /** @brief Explicit host composition for prefab source capture and isolated authoring previews. */
+    struct EditorWorkspacePrefabServices {
+        PrefabHierarchySourceCapture sources;
+        EditorPlaySceneFactory stageFactory;
+    };
+
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
@@ -82,8 +89,8 @@ namespace Horo::Editor {
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
-        PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
-        PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
+        EditorWorkspacePrefabServices prefab;              /**< Explicit authoring composition; never discovered by panels. */
+        PCGEditorCatalog pcg{.document = {.revision = 1}}; /**< One host-composed source-support and creation-recipe generation. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -159,6 +166,10 @@ namespace Horo::Editor {
             return m_sourceCloseOutcome;
         }
 
+        /** @brief Reports whether common workspace input belongs to a live PCG document.
+         * @return True only when the active instance has a canonical graph projection. */
+        [[nodiscard]] bool HasActivePCGDocument() const noexcept;
+
         /** @brief Queries workspace-owned PCG source without lending mutable roots. @return Owner-thread immutable query service. */
         [[nodiscard]] const PCGGraphDocumentService &PCGDocuments() const noexcept {
             return m_pcgDocuments;
@@ -179,6 +190,16 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ClosePCGDocument(DocumentInstanceId instance, bool discardDirty = false);
         /** @brief Includes graph documents in the shared leave guard. @return True if any graph has unsaved semantics. */
         [[nodiscard]] bool HasDirtyPCGDocuments() const;
+        /** @brief Reports dirty prefab source sessions for the shared leave workflow. */
+        [[nodiscard]] bool HasDirtyPrefabDocuments() const;
+        /** @brief Saves every dirty prefab through the canonical source publisher. */
+        [[nodiscard]] Result<void> SavePrefabDocuments();
+        /** @brief Saves the Scene authority explicitly for the multi-document leave transaction. */
+        void SaveScene(bool overwriteConflict = false);
+        /** @brief Flushes recovery or explicitly discards before releasing prefab owners. */
+        [[nodiscard]] Result<void> ShutdownPrefabDocuments(bool discard = false);
+        /** @brief Advances bounded recovery cadence; zero requests an immediate flush. */
+        void UpdatePrefabAutosave(float seconds, int minutes);
         /** @brief Saves every dirty graph through its one document service. @return Success only for durable publications. */
         [[nodiscard]] Result<void> SavePCGDocuments();
         /** @brief Drains graph ownership after explicit save/discard/recovery policy.
@@ -186,6 +207,32 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ShutdownPCGDocuments(bool discardDirty = false);
         /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
         [[nodiscard]] Result<void> ShutdownGameplayModules();
+
+        /** @brief Exposes the one editor authoring residency owner for explicit load/unload/pin commands.
+         * @return Owner-thread capability; source bytes must be authorized and read by the host outside draw paths. */
+        [[nodiscard]] PartitionedWorldWorkspace &WorldDocuments() noexcept {
+            return m_worldDocuments;
+        }
+
+        /** @brief Queries immutable partitioned document state. @return Owner-thread capability. */
+        [[nodiscard]] const PartitionedWorldWorkspace &WorldDocuments() const noexcept {
+            return m_worldDocuments;
+        }
+
+        /** @brief Routes page-aware selection through the actual editor selection adapter.
+         * @param objects Authored page-scoped addresses. @param primary Optional member. @param expected Exact publication.
+         * @return Typed committed world lease or rejection. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SelectWorldObjects(
+            std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
+            const std::optional<WorldStreaming::WorldAuthoringObjectAddress> &primary, const WorldDocumentFence &expected) {
+            return m_selection.SetWorldObjects(m_worldDocuments, objects, primary, expected);
+        }
+
+        /** @brief Includes dirty loaded page content in the ordinary workspace leave guard. @return Whether unsaved content is owned. */
+        [[nodiscard]] bool HasDirtyWorldDocuments() const {
+            const auto snapshot = m_worldDocuments.Snapshot();
+            return snapshot.HasValue() && snapshot.Value()->dirty;
+        }
 
         /** @brief Lazily composes actual project navigation sources with this exact active Scene/history owner. */
         [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings();
@@ -233,7 +280,7 @@ namespace Horo::Editor {
         /** @brief Returns the latest owning render snapshot extracted from the authoritative document.
          */
         [[nodiscard]] const EditorViewportSceneSnapshot &ViewportScene() const noexcept {
-            return m_viewportScene;
+            return m_activePrefabDocument ? m_prefabViewportScene : m_viewportScene;
         }
 
         /** @brief Returns the active document's absolute canonical scene path when available. */
@@ -296,11 +343,28 @@ namespace Horo::Editor {
         std::optional<Result<bool>> m_sourceCloseOutcome;
         SourceFileOpenService m_sourceOpenService;
         PCGGraphDocumentService m_pcgDocuments;
+        std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;
+        std::optional<DocumentInstanceId> m_activePrefabDocument;
+        EditorViewportSceneSnapshot m_prefabViewportScene;
+        std::uint64_t m_nextPrefabRuntime{EditorFirstPrefabStage.value};
+        float m_prefabAutosaveSeconds{};
+        std::uint64_t m_prefabStageAttemptRevision{};
+        bool m_prefabRefreshing{};
+        bool m_prefabStagePending{};
+        std::uint64_t m_prefabStageExtractedRevision{};
+        EditorPlaySceneFactory m_prefabStageFactory;
         PrefabHierarchySourceCapture m_prefabSourceCapture;
         Assets::AssetId m_workspaceSession;
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;
+        std::optional<Prefab::PrefabValueSchemaSnapshot> m_navigationPrefabSchemas;
+        /** @brief Explicitly compose inert built-in navigation topology metadata once for source and edit resolution. */
+        [[nodiscard]] Result<void> EnsureNavigationPrefabSchemas(const Prefab::PrefabLimitProfile &limits);
+        /** @brief Prepare and commit one exact Prefab-member gesture with canonical runtime graph validation. */
+        void ApplyPrefabNavigationInspector(const NavigationInspectorRequest &request);
+        /** @brief Commit one admitted Prefab gesture while its fresh source capture and mutation lease stay pinned. */
+        [[nodiscard]] Result<SceneCommandResult> CommitPrefabNavigationInspector(const NavigationInspectorRequest &request);
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
@@ -335,12 +399,25 @@ namespace Horo::Editor {
         /** @brief Refresh the sole borrowed Physics edit port after an actual document replacement. */
         void RefreshPhysicsInspectorPort();
         /** @brief Admit one selection-fenced Physics candidate through canonical history and events. */
+        /** @brief Admit one atomic navigation gesture through existing document/history owners. */
+        void ApplyNavigationInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit the complete ordinary selection and publish one canonical Scene transaction. */
+        void ApplySceneNavigationInspector(const NavigationInspectorRequest &request);
+        /** @brief Capture descriptor publications outside Draw without inventing defaults in degraded projects. */
+        void RefreshNavigationInspectorDefinitions();
         void ApplyPhysicsInspectorCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Admit collider child selection and atomic gizmo edits through this exact Scene/history owner. */
+        void ApplyColliderViewportCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Validate stable collider sub-selection without changing the document or selection. */
+        [[nodiscard]] Result<void> ValidateColliderViewportSelection(std::span<const ColliderEditTarget> selection) const;
+        /** @brief Commit an admitted collider gesture atomically and publish one canonical document event. */
+        void CommitColliderViewportEdits(const ColliderViewportRequest &request, const SceneTransactionSnapshot &snapshot);
         /** @brief Check the actual selection authority and exact owner fence before candidate preparation. */
         [[nodiscard]] Result<SceneTransactionSnapshot> CapturePhysicsInspectorSnapshot(const EditorWorkspaceViewCommandData &command) const;
         Assets::AssetId m_physicsDocumentOwner;
         std::uint64_t m_physicsReplacementEpoch{};
         const std::thread::id m_physicsOwnerThread{std::this_thread::get_id()};
+        PartitionedWorldWorkspace m_worldDocuments;
         SceneDocument m_document;
         EditorHistory m_history;
         std::optional<SceneDocumentTransactions> m_physicsTransactions;
@@ -534,11 +611,11 @@ namespace Horo::Editor {
         /** @brief Prepares all allocating source/row storage, then publishes one immutable owner generation.
          * @throws std::bad_alloc before publication; the outer refresh boundary preserves the prior cache. */
         void PrepareAndPublishPrefabHierarchy(const SceneDocumentSnapshot &document, std::uint64_t publication);
-        /** @brief Routes exact source/member gestures after owner/session/revision and protected-boundary checks. */
         /** @brief Admit and publish the canonical creation result before presentation callbacks. */
         [[nodiscard]] PrefabCreationOutcome ExecutePrefabCreation(const PrefabCreationIntent &intent);
         /** @brief Executes a confirmed create-from-selection through canonical document/source owners. */
         [[nodiscard]] bool ProcessCreatePrefabCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Routes exact source/member gestures after owner/session/revision and protected-boundary checks. */
         [[nodiscard]] bool ProcessPrefabHierarchyCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Retires cached source and selection evidence after a successful scene opening replacement. */
         void RetirePrefabHierarchy() noexcept;
@@ -549,15 +626,13 @@ namespace Horo::Editor {
          * @post Every provider exception, including non-standard types, is contained and retained as presentation failure.
          */
         void NotifyPrefabCreation(bool selectionChanged, std::optional<Error> &observerFailure) noexcept;
-        /** @brief Atomically commits the current default-scene snapshot and updates dirty state on
-         * success. */
         /** @brief Routes typed source publication/close intent through workspace-owned document services. */
         bool ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Routes document tabs to their owning lifecycle and publishes detached source snapshots. */
         bool ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Refreshes source presentation and dirty flags without disk I/O or document mutation. */
         void RefreshSourceDocumentProjection();
-        void SaveScene(bool overwriteConflict = false);
+
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);
         /** @brief Completes default metadata and active identity only after a successful destination source save.
@@ -671,11 +746,38 @@ namespace Horo::Editor {
         void RevealContentBrowserEntry(const std::filesystem::path &absolutePath);
         /** @brief Admits a sequence source into the persistent workspace document host. */
         void OpenEmbeddedPCGSource(const SourceOpenResult &result);
+        /** @brief Opens the persistent prefab source through the shared document registry. */
+        void OpenEmbeddedPrefabSource(const SourceOpenResult &result);
+        /** @brief Retires inactive stages and publishes immutable source/runtime projections. */
+        void RefreshPrefabDocuments();
+        /** @brief Captures source closure/recovery and queues one isolated stage. */
+        void PreparePrefabStage(PrefabDocumentSession &document);
+        /** @brief Publishes the exact durable recovery candidate for an active prefab source. */
+        void RefreshPrefabRecovery(const PrefabDocumentSnapshot &snapshot);
+        /** @brief Advances bounded preparation and extracts only a newly ready generation. */
+        void ExtractPrefabStage(PrefabDocumentSession &document);
+        /** @brief Executes an admitted durable or history action on its sole source owner. */
+        Result<void> ApplyPrefabDocumentAction(PrefabDocumentSession &document, const EditorWorkspaceViewCommandData &command);
+        /** @brief Applies source/session-fenced prefab application intents. */
+        bool ProcessPrefabDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Refuses dirty closes unless explicitly discarded, then closes the shared tab. */
+        Result<void> ClosePrefabDocument(DocumentInstanceId instance, bool discard);
+        /** @brief Routes exact-frame canvas intents through canonical document commands. */
+        bool ProcessPCGDocumentCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Translates common undo/redo/save intents only when the active document is PCG. */
+        bool ProcessPCGDocumentShortcut(const EditorWorkspaceViewCommandData &command);
+        /** @brief Validates one active-session fence and finite presentation before any edit. */
+        Result<void> ApplyPCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request);
+        /** @brief Dispatches an admitted request to the one canonical document executor or workspace presentation. */
+        Result<void> ExecutePCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request,
+                                             const PCGDocumentSnapshot &snapshot);
         void UpdatePCGAutosave(float elapsedSeconds, int intervalMinutes);
         void RefreshPCGDocumentProjection(DocumentInstanceId instance);
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
         /** @brief Dispatches one command to the explicit owning workspace subsystem. */
         void DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Routes focused prefab persistence/history and global transport without granting Scene mutation. */
+        void ProcessFocusedPrefabCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Routes admitted authored documents directly to their persistent host. */
         bool OpenEmbeddedAuthoredDocument(const SourceOpenResult &result);
         /** @brief Handles transient sequence presentation and explicit document lifecycle commands. */

@@ -4,6 +4,7 @@
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <algorithm>
 #include <format>
 #include <optional>
 #include <string>
@@ -112,7 +113,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::AdmitPrefabDrop */
     bool EditorWorkspaceController::AdmitPrefabDrop(const AssetSceneDropRequest &request) const {
-        return request.fence == m_viewModel.assetDropFence && request.fence.session.IsValid() &&
+        const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
+        const bool prefabFocused = m_activePrefabDocument || std::ranges::any_of(m_prefabDocuments, [active](const auto &document) {
+            return document->Instance() == active;
+        });
+        return !prefabFocused && request.fence == m_viewModel.assetDropFence && request.fence.session.IsValid() &&
                request.fence.replacementEpoch == m_document.ReplacementEpoch() && !m_playSession.IsActive() &&
                !m_viewModel.sceneExternalConflict && !m_viewModel.recoveryAvailable && m_mutations && m_prefabSourceCapture;
     }

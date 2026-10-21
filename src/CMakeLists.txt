@@ -2828,6 +2828,9 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
     "$<BUILD_INTERFACE:${_horo_prefab_hierarchy_headers}>")
 
 add_library(HoroEditorModel STATIC
+        editor/document/PartitionedWorldWorkspace.cpp
+        editor/document/PartitionedWorldResidency.cpp
+        editor/document/PartitionedWorldObjectInspection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
@@ -2836,7 +2839,11 @@ add_library(HoroEditorModel STATIC
         editor/document/SceneDocumentTransaction.cpp
         editor/document/SceneDocumentTransactionCapture.cpp
         editor/document/InspectorBehaviorBinding.cpp
+        editor/document/NavigationInspector.cpp
         editor/document/PhysicsInspector.cpp
+        editor/document/ColliderEditing.cpp
+        editor/document/ColliderGeometry.cpp
+        editor/document/ColliderGeometryInternal.h
         editor/document/SceneDocumentTransactionErrors.cpp
         editor/navigation/NavigationDefinitionDocument.cpp
         editor/navigation/NavigationSettingsWorkflow.cpp
@@ -2861,6 +2868,7 @@ target_include_directories(HoroEditorModel
 )
 target_link_libraries(HoroEditorModel
         PUBLIC
+        HoroEngine::WorldStreaming
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSourceModel
         HoroEngine::NavigationApi
@@ -2966,10 +2974,21 @@ add_library(HoroEditorPlaySceneHostInternal INTERFACE)
 target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_INTERFACE:${_horo_editor_play_host_headers}>")
 target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
 
+add_library(HoroPrefabDocumentSessionInternal INTERFACE)
+set(_horo_prefab_document_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_document_internal")
+file(MAKE_DIRECTORY "${_horo_prefab_document_headers}/editor/screens/workspace/prefab")
+configure_file(editor/screens/workspace/prefab/PrefabDocumentSession.h
+    "${_horo_prefab_document_headers}/editor/screens/workspace/prefab/PrefabDocumentSession.h" COPYONLY)
+target_include_directories(HoroPrefabDocumentSessionInternal INTERFACE "$<BUILD_INTERFACE:${_horo_prefab_document_headers}>")
+target_link_libraries(HoroPrefabDocumentSessionInternal INTERFACE HoroEditorPlaySceneHostInternal)
+
 add_library(HoroEditorServices STATIC
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/screens/workspace/prefab/PrefabCreation.cpp
         editor/screens/workspace/prefab/PrefabCreationPublication.cpp
+        editor/screens/workspace/prefab/PrefabDocumentSession.cpp
+        editor/screens/workspace/prefab/PrefabDocumentPersistence.cpp
+        editor/screens/workspace/prefab/PrefabDocumentStage.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
         editor/physics/CollisionIdentityGeneration.cpp
@@ -3062,6 +3081,7 @@ target_include_directories(HoroEditorServices
 target_link_libraries(HoroEditorServices
         PUBLIC
         HoroPrefabHierarchyInternal
+        HoroPrefabDocumentSessionInternal
         HoroEngine::ProjectCollisionSettings
         HoroEngine::SceneRuntimeConversion
         HoroEngine::SceneSource
@@ -3216,6 +3236,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/project_loading/ProjectLoadingView.cpp
             editor/screens/project_loading/ProjectLoadingScreen.cpp
             editor/screens/workspace/EditorWorkspaceControllerPrefabs.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPrefabDocuments.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabDragDrop.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabContext.cpp
             editor/screens/workspace/panels/hierarchy/HierarchyPrefabRows.cpp
@@ -3230,6 +3251,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelCharacterWidgets.cpp
+            editor/screens/workspace/panels/inspector/NavigationInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelNavigation.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
@@ -3244,6 +3267,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
+        editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoMath.cpp
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionCapture.cpp
@@ -3289,6 +3313,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorContributions.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorApproval.cpp
+        editor/screens/workspace/EditorWorkspaceControllerNavigationInspector.cpp
         editor/screens/workspace/EditorWorkspaceControllerPhysics.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp
@@ -3297,6 +3322,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/PCGWorkspace.cpp
+            editor/screens/workspace/PCGEditorCatalog.cpp
+            editor/screens/workspace/EditorWorkspaceViewPCG.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp

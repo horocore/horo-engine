@@ -52,6 +52,7 @@ namespace Horo::Editor {
         m_viewModel.documentRevision = documentSnapshot.revision;
         m_viewModel.assetDropFence = {m_workspaceSession, documentSnapshot.revision, m_document.ReplacementEpoch()};
         RefreshPhysicsInspectorPort();
+        RefreshNavigationInspectorDefinitions();
         m_viewModel.objects.clear();
         m_viewModel.objects.reserve(documentSnapshot.objects.size());
         for (const SceneObjectSnapshot &object : documentSnapshot.objects) {
@@ -69,6 +70,20 @@ namespace Horo::Editor {
                                                       .hiddenByParent = editorState.hiddenByParent,
                                                       .lockedByParent = editorState.lockedByParent});
         }
+        const auto colliders = ProjectPhysicsColliders(documentSnapshot.objects);
+        m_viewModel.viewportColliders.clear();
+        if (colliders.HasValue())
+            m_viewModel.viewportColliders = colliders.Value();
+        else
+            m_viewModel.physicsEditError = colliders.ErrorValue().message;
+        const auto oldColliderCount = m_viewModel.selectedColliders.size();
+        std::erase_if(m_viewModel.selectedColliders, [this](const auto target) {
+            return std::ranges::none_of(m_viewModel.viewportColliders, [target](const auto &value) {
+                return value.target == target;
+            });
+        });
+        if (oldColliderCount != m_viewModel.selectedColliders.size())
+            ++m_viewModel.colliderSelectionRevision;
         RefreshPrefabHierarchy(documentSnapshot);
         m_viewModel.isDirty = m_document.IsDirty();
         m_viewModel.canUndo = m_history.CanUndo();
