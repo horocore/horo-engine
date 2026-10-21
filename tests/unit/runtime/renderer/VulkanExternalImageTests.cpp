@@ -192,12 +192,15 @@ namespace {
         NativeGraphFixture fixture;
         const auto imported = fixture.resources.ImportExternalTexture(source, RenderResourceNativeLifetime{nativeLease});
         REQUIRE(imported.HasValue());
+        const VkImageAspectFlags expectedAspect =
+            source.descriptor.format == RenderTextureFormat::Depth32Float ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+        CHECK(fixture.resourceState.state.lastViewAspectMask == expectedAspect);
         auto packet = ExternalGraph(source, imported.Value());
         RenderGraphLeaseTransfer transfer;
         REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
         const auto execution = fixture.graph.ExecuteGraph(
             {{1}, packet.graph, packet.workloads, packet.instances, &fixture.lease, false, &transfer, packet.submissions});
-        INFO(execution.HasError() ? execution.ErrorValue().message : "external native graph admitted");
+        INFO((execution.HasError() ? execution.ErrorValue().message : "external native graph admitted"));
         REQUIRE(execution.HasValue());
         REQUIRE(fixture.encoded.imageBarriers.size() == 2);
         CHECK(fixture.encoded.layers == 2);

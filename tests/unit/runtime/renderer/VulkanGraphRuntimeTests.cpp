@@ -16,7 +16,7 @@ namespace {
         REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
         const auto executed =
             fixture.graph.ExecuteGraph({{1}, packet.graph, packet.workloads, packet.instances, &fixture.lease, false, &transfer, records});
-        INFO(executed.HasError() ? executed.ErrorValue().message : "native graph admitted");
+        INFO((executed.HasError() ? executed.ErrorValue().message : "native graph admitted"));
         REQUIRE(executed.HasValue());
         CHECK(transfer.authority == RenderGraphLeaseAuthority::BackendCompletion);
         REQUIRE(fixture.encoded.copies.size() == 2);

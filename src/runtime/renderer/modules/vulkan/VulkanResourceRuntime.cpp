@@ -514,11 +514,12 @@ namespace Horo::Render::Detail {
         if (descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
             descriptor.layerCount == 1 && descriptor.sampleCount == 1 && descriptor.format == RenderTextureFormat::Rgba8Unorm &&
             HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment)) {
+            const VkImageAspectFlags colorAspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             const VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                              .image = texture->handle,
                                              .viewType = VK_IMAGE_VIEW_TYPE_2D,
                                              .format = VulkanResourceConversion::TextureFormat(descriptor.format),
-                                             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+                                             .subresourceRange = {colorAspectMask, 0, 1, 0, 1}};
             if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(
                     ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing a native graph color attachment view failed."));

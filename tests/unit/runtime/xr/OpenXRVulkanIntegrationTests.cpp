@@ -277,7 +277,7 @@ namespace {
         void Render(const ExternalGraphPacket &packet) {
             auto frame = SubmissionTest::Take(frontend->BeginFrame({1, {640, 480}}));
             const auto executed = frame.ExecuteSubmittedGraph(packet.graph, packet.workloads, packet.submissions);
-            INFO(executed.HasError() ? executed.ErrorValue().message : "complete XR frontend/native graph admitted");
+            INFO((executed.HasError() ? executed.ErrorValue().message : "complete XR frontend/native graph admitted"));
             REQUIRE(executed.HasValue());
             REQUIRE(frame.Present().HasValue());
         }
@@ -324,7 +324,7 @@ namespace {
         CHECK(fixture.native.resourceState.state.destroyViewCount == 0);
         fixture.Complete();
         const auto released = fixture.swapchain.PollRelease();
-        INFO(released.HasError() ? released.ErrorValue().message : "native XR release progressed");
+        INFO((released.HasError() ? released.ErrorValue().message : "native XR release progressed"));
         REQUIRE(released.HasValue());
         CHECK(released.Value());
         CHECK(fixture.xr.releases == 1);
