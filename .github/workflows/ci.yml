@@ -148,7 +148,7 @@ jobs:
         run: |
           set -o pipefail
           ctest --test-dir build/ci-vulkan-commands --output-on-failure --parallel 1 \
-            -R '^(HoroRenderVulkanTests|HoroVulkanCommandExecutionSmoke|HoroRenderGraphTests|HoroRenderFrontendTests|HoroRenderBackendRegistryTests)$' \
+            -R '^((HoroRenderVulkanTests|HoroRenderGraphTests|HoroRenderFrontendTests|HoroRenderBackendRegistryTests)(::.+)?|HoroVulkanCommandExecutionSmoke)$' \
             --output-junit ../vulkan-command-evidence/tests.xml \
             2>&1 | tee build/vulkan-command-evidence/test.txt
       - name: Upload native command qualification evidence

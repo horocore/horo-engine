@@ -428,6 +428,17 @@ def test_vulkan_native_commands_have_a_bounded_independent_build_and_execution_c
     assert 'sha256sum "$VK_DRIVER_FILES"' in native_job
     assert "vulkaninfo --summary" in native_job
     assert "--output-junit" in native_job
+    selection = re.search(r"-R '([^']+)'", native_job)
+    assert selection is not None
+    selected = re.compile(selection.group(1))
+    for target in ("HoroRenderVulkanTests", "HoroRenderGraphTests", "HoroRenderFrontendTests",
+                   "HoroRenderBackendRegistryTests"):
+        assert selected.fullmatch(target)
+        assert selected.fullmatch(f"{target}::representative case [tag]")
+        assert not selected.fullmatch(f"{target}Unrelated::case")
+    assert selected.fullmatch("HoroVulkanCommandExecutionSmoke")
+    assert not selected.fullmatch("HoroVulkanCommandExecutionSmoke::unregistered case")
+    assert not selected.fullmatch("UnrelatedTests::case")
     assert "continue-on-error" not in native_job
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
@@ -609,9 +620,19 @@ def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform
     shader_workflow = (ROOT / ".github/workflows/vulkan-shader.yml").read_text(encoding="utf-8")
     assert "ubuntu-24.04" in shader_workflow
     assert "windows-2022" in shader_workflow
-    for target in ("HoroRenderVulkanTests", "HoroMaterialBindingTests", "HoroPipelineCacheTests",
-                   "HoroShaderPermutationTests", "HoroMaterialBindingPublicHeaderConsumer"):
-        assert shader_workflow.count(target) == 2
+    expected_targets = {"HoroRenderVulkanTests", "HoroMaterialBindingTests", "HoroPipelineCacheTests",
+                        "HoroShaderPermutationTests", "HoroMaterialBindingPublicHeaderConsumer"}
+    build_targets = re.search(r"cmake --build build/ci --target (.*?) --parallel 2", shader_workflow)
+    assert build_targets is not None
+    assert set(build_targets.group(1).split()) == expected_targets
+    test_selection = re.search(r"ctest --test-dir build/ci .*? -R '([^']+)'", shader_workflow)
+    assert test_selection is not None
+    selected = re.compile(test_selection.group(1))
+    for target in expected_targets - {"HoroMaterialBindingPublicHeaderConsumer"}:
+        assert selected.search(f"{target}::representative case") is not None
+        assert selected.search(f"Unrelated{target}::representative case") is None
+    assert selected.search("HoroMaterialBindingPublicHeaderConsumer") is not None
+    assert selected.search("HoroMaterialBindingPublicHeaderConsumerExtra") is None
     assert "--no-tests=error" in shader_workflow
     assert "VulkanTransform.vert" in shader_workflow
     assert "VulkanTransform.frag" in shader_workflow
