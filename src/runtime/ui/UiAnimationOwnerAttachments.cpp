@@ -297,8 +297,9 @@ namespace Horo::Runtime::Ui {
         auto inspector = UiLayoutInspector::Create(*storage_->publisher.Current(), storage_->definition.canvas, limits);
         if (inspector.HasError())
             return Result<void>::Failure(inspector.ErrorValue());
-        inspector.Value().Enable(enabled);
-        storage_->inspector.emplace(std::move(inspector).Value());
+        auto ownedInspector = std::move(inspector).Value();
+        ownedInspector.Enable(enabled);
+        storage_->inspector.emplace(std::move(ownedInspector));
         storage_->inspectedAttachment = attachment;
         return Result<void>::Success();
     }

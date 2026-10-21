@@ -182,8 +182,9 @@ namespace Horo::Runtime::Ui {
             auto commands =
                 UiStructuralCommandBuffer::Create(tree.Instance(), tree.Canvas(), tree.SourceDocumentRevision(), tree.Revision(), 1);
             REQUIRE(commands.HasValue());
-            REQUIRE(commands.Value().Add(UiInsertElementCommand{ProfileId<UiElementId>(12), tree.Root().Value().handle, 1}).HasValue());
-            REQUIRE(tree.CommitDeferred(commands.Value(), UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands).HasValue());
+            auto buffer = std::move(commands).Value();
+            REQUIRE(buffer.Add(UiInsertElementCommand{ProfileId<UiElementId>(12), tree.Root().Value().handle, 1}).HasValue());
+            REQUIRE(tree.CommitDeferred(buffer, UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands).HasValue());
             REQUIRE(fixture.Select(ProfileEvidence()).HasError());
             REQUIRE(fixture.ResolveLayout(prior, ProfileId<UiElementId>(10), {}).HasError());
             auto evidence = ProfileEvidence();

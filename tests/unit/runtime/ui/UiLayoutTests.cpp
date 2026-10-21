@@ -418,12 +418,13 @@ namespace Horo::Runtime::Ui {
             {
                 auto candidate = engine.Prepare(tree, Request(evaluator, 2));
                 REQUIRE(candidate.HasValue());
-                const auto work = candidate.Value().Candidate().Get(leaf).Value().work;
+                auto prepared = std::move(candidate).Value();
+                const auto work = prepared.Candidate().Get(leaf).Value().work;
                 REQUIRE(work.HasCause(UiLayoutWorkCause::ExplicitInvalidation));
                 REQUIRE(work.invalidation == UiLayoutDirtyKind::Arrange);
                 REQUIRE(work.measurements == 0);
                 REQUIRE(work.arrangements == 1);
-                candidate.Value().Abandon();
+                prepared.Abandon();
             }
             REQUIRE(initial.Value().Get(leaf).Value().work == retained);
             REQUIRE(engine.Invalidate({leaf, tree.Revision(), UiLayoutDirtyKind::Measure}).HasValue());
