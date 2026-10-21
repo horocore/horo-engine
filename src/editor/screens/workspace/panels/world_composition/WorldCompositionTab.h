@@ -1,0 +1,54 @@
+#pragma once
+
+#include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/IWorkspacePanel.h"
+#include "Horo/Editor/PartitionedWorldWorkspace.h"
+
+#include <array>
+
+namespace Horo::Editor {
+    /** @brief Persistent World Composition tab; owns only disposable filter/table/path presentation.
+     * The controller owns documents and query publication. No workspace or selection authority is retained here.
+     */
+    class WorldCompositionTab final : public IWorkspacePanel {
+    public:
+        [[nodiscard]] std::string GetId() const override {
+            return "horo.world_composition";
+        }
+
+        [[nodiscard]] std::string GetDisplayName() const override {
+            return "workspace.panel.world_composition";
+        }
+
+        [[nodiscard]] WorkspaceDockArea GetDefaultDockArea() const override {
+            return WorkspaceDockArea::Document;
+        }
+
+        [[nodiscard]] std::vector<std::string> GetObservedEventTypes() const override {
+            return {};
+        }
+
+        void OnAttach(PanelContext &) override {}
+
+        /** @brief Releases cached source leases and disposable presentation on panel teardown. */
+        void OnDetach() override;
+        void DrawIcon(ImDrawList *drawList, const ImVec2 &position, const ImVec2 &size, ImU32 color) override;
+        void DrawPanel(const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
+                       EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) override;
+
+    private:
+        /** @brief Rebuilds tables only after a publication/filter/locale change; draw frames reuse bounded rows. */
+        void RefreshRows(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context);
+        std::string path_;
+        PartitionedWorldSnapshotLease source_;
+        WorldBrowserQuery query_;
+        WorldBrowserQuery draft_;
+        std::vector<const char *> layerLabels_;
+        std::array<Ui::TableColumn, 5> layerColumns_;
+        std::array<Ui::TableColumn, 5> cellColumns_;
+        ImVec4 textColor_{};
+        std::string localeLabel_;
+        std::vector<Ui::TableRow> layers_;
+        std::vector<Ui::TableRow> cells_;
+    };
+}  // namespace Horo::Editor

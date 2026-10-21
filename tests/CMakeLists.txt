@@ -2230,6 +2230,7 @@ endif ()
 add_executable(HoroEditorLocalizationServiceTests
         unit/editor/LocalizationServiceTests.cpp
         unit/editor/PhysicsInspectorLocalizationTests.cpp
+        unit/editor/WorldSourceLocalizationTests.cpp
 )
 
 target_compile_features(HoroEditorLocalizationServiceTests PRIVATE cxx_std_20)
@@ -2641,6 +2642,9 @@ target_link_libraries(HoroWorkspaceSplitterInteractionTests PRIVATE HoroEngine::
 if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
             unit/editor/EditorWorkspaceControllerTests.cpp
+            unit/editor/WorldSourceControllerTests.cpp
+            unit/editor/EditorWorkspaceWorldResidencyTests.cpp
+            unit/editor/WorldLayerWorkspaceControllerTests.cpp
             unit/editor/EditorWorkspaceControllerPersistenceTests.cpp
             unit/editor/EditorWorkspaceControllerCollisionTests.cpp
             unit/editor/EditorWorkspaceControllerContentBrowserTests.cpp
@@ -2658,6 +2662,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
+            unit/editor/EditorWorkspaceWorldCompositionTests.cpp
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
@@ -2678,7 +2683,7 @@ if (HORO_BUILD_EDITOR_GUI)
             HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
     )
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json
-        HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull)
+        HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull HoroEngine::PlatformProjectReadFiles)
     add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule)
     add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)
     target_compile_features(HoroCameraCutEditorIntegrationTests PRIVATE cxx_std_20)
@@ -2845,9 +2850,11 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorUiComponentsRenderTests.cpp
             unit/editor/ActivityButtonIdentityTests.cpp
             unit/editor/SequenceTimelineRenderTests.cpp
+            unit/editor/WorldLayerOutlinerRenderTests.cpp
     )
 
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
+    target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_link_libraries(HoroEditorUiComponentsRenderTests
             PRIVATE
             HoroEngine::Gui
@@ -3147,7 +3154,14 @@ add_executable(HoroEditorViewportSceneTests
 
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
-add_executable(HoroPartitionedWorldWorkspaceTests unit/editor/PartitionedWorldWorkspaceTests.cpp)
+add_executable(HoroPartitionedWorldWorkspaceTests
+        unit/editor/PartitionedWorldWorkspaceTests.cpp
+        unit/editor/WorldSourceAuthoringTests.cpp
+        unit/editor/PartitionedWorldResidencyTests.cpp
+        unit/editor/PartitionedWorldObjectInspectionTests.cpp
+        unit/editor/WorldLayerCommandsTests.cpp
+        unit/editor/WorldCompositionBrowserTests.cpp
+        unit/editor/PartitionedWorldSourceTests.cpp)
 target_link_libraries(HoroPartitionedWorldWorkspaceTests PRIVATE HoroEngine::EditorModel)
 horo_register_catch_test(HoroPartitionedWorldWorkspaceTests LABELS "unit;headless;world_document")
 
@@ -5403,4 +5417,5 @@ endforeach()
 
 add_executable(HoroWorldStreamingPreviewTests unit/editor/WorldStreamingPreviewTests.cpp)
 target_link_libraries(HoroWorldStreamingPreviewTests PRIVATE HoroEngine::EditorModel)
+target_include_directories(HoroWorldStreamingPreviewTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
 horo_register_catch_test(HoroWorldStreamingPreviewTests LABELS "unit;headless;streaming_preview")

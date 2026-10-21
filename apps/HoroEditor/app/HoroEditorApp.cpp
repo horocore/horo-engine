@@ -38,6 +38,7 @@
 #include "Horo/Editor/RecentProjectInspectionService.h"
 #include "Horo/Editor/WelcomeController.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Editor/WorldStreamingPreview.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -1804,6 +1805,7 @@ namespace Horo::Editor {
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
             const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
+            WorldStreamingPreviewHost streamingPreview;
             GuiScreenHost
                 screenHost{guiContext,
                            GuiScreenHostComposition{.modalHost = p.modalHost,
@@ -1849,6 +1851,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<IEditorViewportRenderer>(p.presentation.viewportRenderer);
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
+            screenHost.Services().Register<WorldStreamingPreviewHost>(streamingPreview);
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);

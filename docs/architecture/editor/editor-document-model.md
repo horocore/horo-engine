@@ -790,3 +790,42 @@ Required tests cover:
 - [Cinematic Sequencer](../runtime/cinematic-sequencer-architecture.md)
 - [VFX And Particles](../runtime/vfx-and-particles-architecture.md)
 - [Terrain And Foliage](../runtime/terrain-and-foliage-architecture.md)
+
+### Manual partitioned-page residency
+
+`PartitionedWorldWorkspace` extends its metadata authority with actual immutable
+SceneDocument payloads, explicit manual load/unload/pins, and page-scoped selection.
+Load admits exact source revisions after Scene decoding and document validation;
+loaded metadata/content successors commit atomically. Metadata-only edits cannot
+invalidate loaded pages. Dirty, selected or pinned pages cannot be silently
+unloaded, and runtime eviction has no access to this owner. The controller composes
+the owner and its selection adapter; the ordinary leave guard includes its dirty
+state and requires exact revision-fenced discard consent. Reader leases survive
+owner teardown. See the [migration contract](../../guides/partitioned-world-document-migration.md#manual-page-residency-and-selection-horo-1635)
+for capacity, lifecycle, consumer migration and validation requirements.
+
+### Partitioned-world selected object inspection
+
+`PartitionedWorldWorkspace` owns transient page-scoped object selection alongside
+its immutable source root. Selection and source currentness use one exact
+`WorldDocumentFence`; removal prunes selection atomically and replacement clears
+it. `InspectSelectedObjects` returns a bounded immutable bounds/coverage/override
+explanation using WorldStreaming's source assignment and spanning kernels. It
+neither loads pages nor mutates runtime demand. Presentation retains the result
+lease and queries only after an owner revision changes. See the
+[world document migration guide](../../guides/partitioned-world-document-migration.md#object-assignment-and-bounds-inspection-wst-0095)
+for diagnostics, budgets, lifecycle and consumer migration.
+
+
+## World Composition projection
+
+The registered persistent `WorldCompositionTab` is a presentation surface over the
+controller's canonical `PartitionedWorldWorkspace`, never another source or
+selection authority. Project-relative `.horoworld` source admission is an explicit
+bounded command-phase operation through the Platform read capability and the
+existing Open/Replace dirty/revision guards. `Browse` derives bounded cell coverage
+through the ordinary authoring spatial-assignment kernel and publishes complete
+immutable source-fenced cell/layer results. Search/status/layer filters change
+presentation only. Authoring working-set, loaded payload, cooked availability and
+runtime residency remain independent. See the partitioned-world document migration
+guide for schema, ownership, rejection and lifecycle details.

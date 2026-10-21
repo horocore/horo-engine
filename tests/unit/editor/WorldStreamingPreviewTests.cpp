@@ -1,8 +1,10 @@
 #include "Horo/Editor/WorldStreamingPreview.h"
+#include "StreamingPlannerFixture.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <thread>
 #include <type_traits>
 
 namespace Horo::Editor {
@@ -50,6 +52,20 @@ namespace Horo::Editor {
                                              .cell = desired.front().cell.cell};
             }
 
+            WS::StreamingCellStateRecord FailedAttempt() const {
+                const WS::StreamingCellOperationHandle handle{Id<WS::StreamingCellOperationId>(),
+                                                              {world, owner.epoch, desired.front().cell.cell,
+                                                               Id<WS::StreamingGeneration>()}};
+                auto ledger = WS::StreamingCellStateLedger::Create({owner, 4}).Value();
+                auto operation = WS::StreamingCellOperation::Create(handle, WS::StreamingCellOperationKind::Load).Value();
+                operation = operation.Advance(handle, WS::StreamingCellOperationTransition::Admit).Value();
+                REQUIRE(ledger.Apply(owner, operation).Value().state == WS::StreamingCellState::Loading);
+                operation = operation.Advance(handle, WS::StreamingCellOperationTransition::Fail).Value();
+                REQUIRE(ledger.Apply(owner, operation).Value().state == WS::StreamingCellState::Evicting);
+                operation = operation.Advance(handle, WS::StreamingCellOperationTransition::AcknowledgeRetirement).Value();
+                return ledger.Apply(owner, operation).Value();
+            }
+
             WS::WorldStreamingDiagnosticSnapshot Diagnostics(
                 const WS::WorldStreamingRuntimeCompositionState lifecycle = WS::WorldStreamingRuntimeCompositionState::Active) const {
                 std::array<WS::StreamingBudgetLimit, WS::StreamingBudgetDimensionCount> limits{};
@@ -82,11 +98,9 @@ namespace Horo::Editor {
                                     .state = WS::StreamingSchedulerAdmissionState::Accepting}};
                 if (lifecycle == WS::WorldStreamingRuntimeCompositionState::Closed)
                     input.queue.state = WS::StreamingSchedulerAdmissionState::Closed;
-                const WS::StreamingCellOperationHandle operation{Id<WS::StreamingCellOperationId>(),
-                                                                 {world, owner.epoch, desired.front().cell.cell,
-                                                                  Id<WS::StreamingGeneration>()}};
-                const std::array attempts{WS::StreamingCellStateRecord{operation, WS::StreamingCellState::Failed}};
-                const std::array failures{WS::StreamingDiagnosticFailureRecord{operation, WS::StreamingCellOperationOutcome::Failed}};
+                const std::array attempts{FailedAttempt()};
+                const std::array failures{
+                    WS::StreamingDiagnosticFailureRecord{attempts.front().operation, WS::StreamingCellOperationOutcome::Failed}};
                 auto result =
                     WS::WorldStreamingDiagnosticSnapshot::Create(input, policy, sample, {.cells = attempts, .failures = failures});
                 REQUIRE(result.HasValue());
@@ -103,6 +117,28 @@ namespace Horo::Editor {
 
             WorldStreamingPreviewFence Fence() const {
                 return {source->fence, snapshot.Binding(), Id<WS::WorldStreamingDiagnosticRevision>(), 1, 1};
+            }
+        };
+
+        struct NativeFixture : Fixture {
+            std::unique_ptr<WS::StreamingSourcePlanner> planner;
+            WS::StreamingSourceRegistration registration;
+            WS::WorldStreamingDiagnosticSnapshot diagnostics = Diagnostics();
+
+            NativeFixture() {
+                const std::array enabled{layer};
+                const WS::StreamingSourceEnvironment environment{1, {1}, 1, 0, enabled};
+                planner = WS::StreamingSourcePlanner::Create(WS::PlannerFixture::Config(4), snapshot, environment).Value();
+                const WS::StreamingSourceRequest request{.id = Id<WS::StreamingSourceId>(),
+                                                         .revision = Id<WS::StreamingSourceRevision>(),
+                                                         .intent = WS::StreamingSourceIntent::Gameplay,
+                                                         .priority = WS::StreamingSourcePriority::Create(1.0F).Value(),
+                                                         .shape =
+                                                             WS::StreamingSourceBox{Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0),
+                                                                                    Math::WorldCoordinate64::FromMillimeters(-1, 999, 999)},
+                                                         .residency = WS::StreamingDesiredResidency::Activated};
+                registration = planner->Register(request).Value();
+                REQUIRE_FALSE(WS::PlannerFixture::Finish(*planner).cells.empty());
             }
         };
 
@@ -258,6 +294,104 @@ namespace Horo::Editor {
             REQUIRE(fixture.workspace.Shutdown().HasValue());
             REQUIRE(result.Value().Cells().front().desired->residency == WS::StreamingDesiredResidency::Activated);
             REQUIRE(result.Value().Source()->fence == oldFence.document);
+        }
+
+        TEST_CASE("Streaming geometry uses the canonical origin and rejects stale capacity and cancellation",
+                  "[unit][editor][streaming_preview]") {
+            Fixture fixture;
+            const auto diagnostics = fixture.Diagnostics();
+            auto preview = WorldStreamingPreview::Create(fixture.source, fixture.snapshot, fixture.Plan(), diagnostics, fixture.Fence());
+            REQUIRE(preview.HasValue());
+            const auto owned = std::make_shared<const WorldStreamingPreview>(preview.Value());
+            WorldViewportBinding view{fixture.source, {}, 1};
+            const auto geometry = BuildWorldStreamingPreviewGeometry(owned, view);
+            REQUIRE(geometry.HasValue());
+            REQUIRE(geometry.Value()->boxes.size() == 2);
+            CHECK(geometry.Value()->boxes.front().corners.front().x == -1.0F);
+            RequireError(BuildWorldStreamingPreviewGeometry(owned, view, 1), "world_document.capacity");
+            view.viewRevision = 2;
+            RequireError(BuildWorldStreamingPreviewGeometry(owned, view), "world_document.stale");
+            view.viewRevision = 1;
+            std::stop_source cancellation;
+            cancellation.request_stop();
+            RequireError(BuildWorldStreamingPreviewGeometry(owned, view, 256, cancellation.get_token()), "world_document.cancelled");
+            view.globalOrigin = Math::WorldCoordinate64::FromMillimeters(100'000'000, 0, 0);
+            const auto distant = BuildWorldStreamingPreviewGeometry(owned, view);
+            REQUIRE(distant.HasValue());
+            CHECK(distant.Value()->boxes.empty());
+            CHECK(distant.Value()->outsideLocalWindow == 2);
+        }
+
+        TEST_CASE("Native streaming preview bridge reads real planner publications and revokes cached evidence on unmount",
+                  "[unit][editor][streaming_preview][native_host]") {
+            NativeFixture fixture;
+            WorldStreamingPreviewHost host;
+            const WorldViewportBinding view{fixture.source, {}, 1};
+            RequireError(host.Refresh(view), "world_document.lifecycle");
+            REQUIRE(host.BindRuntime(*fixture.registry, *fixture.planner, fixture.diagnostics).HasValue());
+            const auto first = host.Refresh(view);
+            REQUIRE(first.HasValue());
+            REQUIRE(first.Value()->preview->Cells().front().desired.has_value());
+            CHECK(first.Value()->preview->Cells().front().desired->residency == WS::StreamingDesiredResidency::Activated);
+            CHECK(first.Value()->preview->Cells().front().attempts.front().state == WS::StreamingCellState::Failed);
+            CHECK(host.Refresh(view).Value() == first.Value());
+            auto stale = fixture.owner;
+            stale.epoch = Id<WS::PartitionEpoch>(2);
+            RequireError(host.UnbindRuntime(stale), "world_document.stale");
+            REQUIRE(host.UnbindRuntime(fixture.owner).HasValue());
+            RequireError(host.Refresh(view), "world_document.lifecycle");
+            CHECK(first.Value()->preview->Cells().front().attempts.front().state == WS::StreamingCellState::Failed);
+            CHECK(fixture.registration.Close().HasValue());
+        }
+
+        TEST_CASE("Native streaming capture failures revoke current presentation without destroying historical leases",
+                  "[unit][editor][streaming_preview][native_host]") {
+            NativeFixture fixture;
+            WorldStreamingPreviewHost host;
+            const WorldViewportBinding view{fixture.source, {}, 1};
+            REQUIRE(host.BindRuntime(*fixture.registry, *fixture.planner, fixture.diagnostics).HasValue());
+            const auto historical = host.Refresh(view).Value();
+            SECTION("planner cancellation") {
+                REQUIRE(fixture.planner->Shutdown().HasValue());
+                CHECK(host.Refresh(view).HasError());
+            }
+            SECTION("source withdrawal invalidates published intent") {
+                REQUIRE(fixture.registration.Close().HasValue());
+                CHECK(host.Refresh(view).HasError());
+            }
+            SECTION("closed runtime diagnostic publication") {
+                fixture.diagnostics = fixture.Diagnostics(WS::WorldStreamingRuntimeCompositionState::Closed);
+                RequireError(host.Refresh(view), "world_document.lifecycle");
+            }
+            SECTION("registry shutdown") {
+                fixture.registry->Shutdown();
+                CHECK(host.Refresh(view).HasError());
+            }
+            SECTION("changed origin cannot reuse a view revision") {
+                auto moved = view;
+                moved.globalOrigin = Math::WorldCoordinate64::FromMillimeters(1000, 0, 0);
+                RequireError(host.Refresh(moved), "world_document.stale");
+                moved.viewRevision = 2;
+                REQUIRE(host.Refresh(moved).HasValue());
+                RequireError(host.Refresh(view), "world_document.stale");
+            }
+            CHECK(historical->preview->Cells().front().attempts.front().state == WS::StreamingCellState::Failed);
+            REQUIRE(host.UnbindRuntime(fixture.owner).HasValue());
+        }
+
+        TEST_CASE("Native capture rejects access outside the native owner lane", "[unit][editor][streaming_preview][native_host]") {
+            NativeFixture fixture;
+            WorldStreamingPreviewHost host;
+            const WorldViewportBinding view{fixture.source, {}, 1};
+            REQUIRE(host.BindRuntime(*fixture.registry, *fixture.planner, fixture.diagnostics).HasValue());
+            bool rejected{};
+            std::thread thread{[&] {
+                const auto result = host.Refresh(view);
+                rejected = result.HasError() && result.ErrorValue().code == WorldDocumentErrors::WrongThread.code;
+            }};
+            thread.join();
+            CHECK(rejected);
+            REQUIRE(host.UnbindRuntime(fixture.owner).HasValue());
         }
 
         TEST_CASE("Streaming preview rejects terminal runtime instead of fabricating empty residency",

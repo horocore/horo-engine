@@ -1334,6 +1334,60 @@
     "workspace.panel.inspector": {"text": "Inspector"},
     "workspace.panel.scene": {"text": "Scene"},
     "workspace.panel.viewport": {"text": "Viewport"},
+    "workspace.streaming.accepted": {"text": "Accepted"},
+    "workspace.streaming.deferred": {"text": "Deferred"},
+    "workspace.streaming.rejected": {"text": "Rejected"},
+    "workspace.streaming.pinned": {"text": "Pinned residency floor"},
+    "workspace.streaming.predicted": {"text": "Predicted source / target"},
+    "workspace.streaming.source": {"text": "Source / target"},
+    "workspace.streaming.visible_counts": {"text": "Visible / outside precision window"},
+    "workspace.streaming.capacity": {"text": "Streaming preview exceeds its cell or geometry budget"},
+    "workspace.streaming.stale": {"text": "Streaming preview publications are stale; waiting for a coherent capture"},
+    "workspace.streaming.legend": {"text": "Streaming: boundary = desired, dot = actual; hover a dot for reasons"},
+    "workspace.streaming.unavailable": {"text": "Streaming preview unavailable: no current mounted runtime capture"},
+    "workspace.streaming.unknown": {"text": "Unknown / not observed"},
+    "workspace.streaming.unloaded": {"text": "Unloaded"},
+    "workspace.streaming.loaded": {"text": "Loaded"},
+    "workspace.streaming.activated": {"text": "Activated"},
+    "workspace.streaming.loading": {"text": "Loading"},
+    "workspace.streaming.resident": {"text": "Resident"},
+    "workspace.streaming.active": {"text": "Active"},
+    "workspace.streaming.evicting": {"text": "Evicting"},
+    "workspace.streaming.failed": {"text": "Failed"},
+    "workspace.streaming.succeeded": {"text": "Succeeded"},
+    "workspace.streaming.cancelled": {"text": "Cancelled"},
+    "workspace.streaming.replaced": {"text": "Replaced"},
+    "workspace.streaming.shutdown": {"text": "Shutdown"},
+    "workspace.streaming.cell": {"text": "Cell / LOD / layer"},
+    "workspace.streaming.desired": {"text": "Desired"},
+    "workspace.streaming.runtime": {"text": "Actual runtime"},
+    "workspace.streaming.reason": {"text": "Authority reason"},
+    "workspace.streaming.evidence_counts": {"text": "Sources / attempts / failures / decisions"},
+    "workspace.streaming.no_demand": {"text": "No planned demand"},
+    "workspace.panel.world_composition": {"text": "World Composition"},
+    "workspace.world.source_hint": {"text": "Open a project-relative .horoworld source document. Replacing a dirty document requires resolving its unsaved changes."},
+    "workspace.world.path": {"text": "Project-relative source path"},
+    "workspace.world.open_source": {"text": "Open world source"},
+    "workspace.world.close_source": {"text": "Close world source"},
+    "workspace.world.no_document": {"text": "No partitioned world is open."},
+    "workspace.world.error": {"text": "World Composition could not complete the operation. Current source state is preserved."},
+    "workspace.world.authoring_status": {"text": "Source coverage and authoring working set. Cooked availability and runtime residency are independent."},
+    "workspace.world.search": {"text": "Search layer name, layer ID, cell coordinates or LOD"},
+    "workspace.world.all": {"text": "All statuses"},
+    "workspace.world.all_layers": {"text": "All layers"},
+    "workspace.world.open": {"text": "Open in authoring set"},
+    "workspace.world.closed": {"text": "Outside authoring set"},
+    "workspace.world.mixed": {"text": "Partially open"},
+    "workspace.world.layers": {"text": "Layers"},
+    "workspace.world.cells": {"text": "Cells"},
+    "workspace.world.layer": {"text": "Layer"},
+    "workspace.world.id": {"text": "ID"},
+    "workspace.world.status": {"text": "Authoring status"},
+    "workspace.world.objects": {"text": "Objects"},
+    "workspace.world.always_present": {"text": "Always present"},
+    "workspace.world.coordinate": {"text": "Cell coordinates"},
+    "workspace.world.lod": {"text": "LOD"},
+    "workspace.world.no_matches": {"text": "No cells or layers match the filters."},
     "workspace.panel.game": {"text": "Game"},
     "workspace.panel.global_dock": {"text": "Bottom Dock"},
     "workspace.game.idle": {"text": "Press Play to start the game."},
@@ -1654,6 +1708,78 @@
     "workspace.value.on": {"text": "On"},
     "workspace.value.off": {"text": "Off"},
     "workspace.value.static": {"text": "✓ Static"},
+    "workspace.world_sources.title": {
+      "text": "Streaming sources"
+    },
+    "workspace.world_sources.unavailable": {
+      "text": "Open a partitioned world through the world document host to author sources."
+    },
+    "workspace.world_sources.authoring_only": {
+      "text": "Source metadata authoring. Handles use the editor scene origin; distant global points require world viewport composition."
+    },
+    "workspace.world_sources.sphere": {
+      "text": "Create sphere"
+    },
+    "workspace.world_sources.box": {
+      "text": "Create box"
+    },
+    "workspace.world_sources.frustum": {
+      "text": "Create frustum"
+    },
+    "workspace.world_sources.path": {
+      "text": "Create path volume"
+    },
+    "workspace.world_sources.priority": {
+      "text": "Priority"
+    },
+    "workspace.world_sources.target": {
+      "text": "Target state"
+    },
+    "workspace.world_sources.unloaded": {
+      "text": "Unloaded"
+    },
+    "workspace.world_sources.loaded": {
+      "text": "Loaded"
+    },
+    "workspace.world_sources.activated": {
+      "text": "Activated"
+    },
+    "workspace.world_sources.intent": {
+      "text": "Intent"
+    },
+    "workspace.world_sources.camera": {
+      "text": "Camera"
+    },
+    "workspace.world_sources.gameplay": {
+      "text": "Gameplay"
+    },
+    "workspace.world_sources.network": {
+      "text": "Network relevance"
+    },
+    "workspace.world_sources.preload": {
+      "text": "Preload"
+    },
+    "workspace.world_sources.color": {
+      "text": "Debug color"
+    },
+    "workspace.world_sources.apply": {
+      "text": "Apply source"
+    },
+    "workspace.world_sources.remove": {
+      "text": "Remove source"
+    },
+    "workspace.world_sources.cancel": {
+      "text": "Cancel preview"
+    },
+    "workspace.world_sources.undo": {
+      "text": "Undo source edit"
+    },
+    "workspace.world_sources.redo": {
+      "text": "Redo source edit"
+    },
+    "workspace.world_sources.rejected": {
+      "text": "Source edit rejected"
+    },
     "workspace.viewport.object_count": {"text": "{} object(s)"},
     "workspace.viewport.perspective": {"text": "Perspective"},
     "workspace.viewport.orthographic": {"text": "Orthographic"},
@@ -2976,6 +3102,27 @@
     },
     "settings.navigation.override_cost": {
       "text": "Overridden traversal cost"
-    }
+    },
+    "workspace.world_layers.title": {"text": "Layers"},
+    "workspace.world_layers.create": {"text": "Create layer"},
+    "workspace.world_layers.undo": {"text": "Undo layer command"},
+    "workspace.world_layers.redo": {"text": "Redo layer command"},
+    "workspace.world_layers.filter": {"text": "Filter layers"},
+    "workspace.world_layers.all_owners": {"text": "All owners"},
+    "workspace.world_layers.streaming": {"text": "World streaming"},
+    "workspace.world_layers.gameplay": {"text": "Gameplay script"},
+    "workspace.world_layers.network": {"text": "Network replication"},
+    "workspace.world_layers.current": {"text": "Current authoring layer"},
+    "workspace.world_layers.set_current": {"text": "Make current"},
+    "workspace.world_layers.clear_current": {"text": "Clear current layer"},
+    "workspace.world_layers.move_up": {"text": "Move up"},
+    "workspace.world_layers.move_down": {"text": "Move down"},
+    "workspace.world_layers.empty": {"text": "No layers match this filter."},
+    "workspace.world_layers.current_hidden": {"text": "The current authoring layer is hidden by the filter."},
+    "workspace.world_layers.name": {"text": "Layer name"},
+    "workspace.world_layers.name_hint": {"text": "Enter a non-empty layer name."},
+    "workspace.world_layers.cancel": {"text": "Cancel"},
+    "workspace.world_layers.stale": {"text": "The world changed or closed. Cancel and reopen this dialog."},
+    "workspace.world_layers.rejected": {"text": "Layer creation was rejected. Check the name and document limits."}
   }
 }

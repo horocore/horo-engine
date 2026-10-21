@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
+#include "WorldSourceViewportTool.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.h"
@@ -59,6 +60,7 @@ namespace Horo::Editor {
         Input::InputRouter *inputRouter_{nullptr};
         Input::InputContextToken *workspaceInputContext_{nullptr};
         ViewportInteractionController interaction_;
+        WorldSourceViewportTool worldSourceTool_;
         bool lightMarkerFailureReported_{false};
         bool assetPlacementPreviewActive_{false};
         bool assetPlacementCancelled_{false};

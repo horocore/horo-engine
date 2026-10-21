@@ -2777,7 +2777,15 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
 
 add_library(HoroEditorModel STATIC
         editor/document/WorldStreamingPreview.cpp
+        editor/document/WorldStreamingPreviewHost.cpp
+        editor/document/WorldCompositionBrowser.cpp
+        editor/document/PartitionedWorldSource.cpp
         editor/document/PartitionedWorldWorkspace.cpp
+        editor/document/PartitionedWorldSourceAuthoring.cpp
+        editor/document/WorldSourceGizmo.cpp
+        editor/document/WorldLayerCommands.cpp
+        editor/document/PartitionedWorldResidency.cpp
+        editor/document/PartitionedWorldObjectInspection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyProjection.cpp
         editor/screens/workspace/prefab/PrefabHierarchyCommand.cpp
         editor/data_bus/EditorDataBus.cpp
@@ -3186,8 +3194,11 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorPanelAudioWidgets.cpp
             editor/screens/workspace/panels/input_mapping/InputMappingPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
+            editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
+            editor/screens/workspace/panels/viewport/WorldSourceViewportTool.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
+            editor/screens/workspace/panels/viewport/ViewportStreamingPreview.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
             editor/screens/workspace/panels/viewport/gizmo/TransformGizmoGeometry.cpp
@@ -3221,6 +3232,7 @@ if (HORO_BUILD_EDITOR_GUI)
         editor/screens/workspace/EditorWorkspaceControllerNavigationSettings.cpp
             editor/screens/workspace/EditorWorkspaceControllerScenePersistence.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportEditing.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldSources.cpp
             editor/screens/workspace/EditorWorkspaceControllerAssetInstantiation.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerDockCommands.cpp
@@ -3243,7 +3255,11 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
+            editor/screens/workspace/EditorWorkspaceControllerWorldStreaming.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
+            editor/screens/workspace/WorldLayerOutliner.cpp
+            editor/modals/world_layer/CreateWorldLayerModal.cpp
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
@@ -3273,7 +3289,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::PlatformProjectReadFiles)
     target_link_libraries(HoroGui
             PUBLIC
             HoroEngine::EditorServices

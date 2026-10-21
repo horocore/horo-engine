@@ -5,6 +5,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ViewportOverlay.h"
+#include "ViewportStreamingPreview.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "visualizers/light/LightMarkerLayer.h"
 
@@ -74,6 +75,7 @@ namespace Horo::Editor {
 
     /** @copydoc ViewportPanel::OnDetach */
     void ViewportPanel::OnDetach() {
+        worldSourceTool_.Cancel();
         interaction_.Detach();
         inputRouter_ = nullptr;
         workspaceInputContext_ = nullptr;
@@ -118,8 +120,10 @@ namespace Horo::Editor {
         const bool hasRenderedViewport = viewportRenderer_ != nullptr && viewportRenderer_->IsReady() && textureView.IsValid();
         DrawViewportSurface(drawList, surfaceLayout, textureView, hasRenderedViewport);
 
-        if (hasRenderedViewport && width > 0.0F && height > 0.0F)
+        if (hasRenderedViewport && width > 0.0F && height > 0.0F) {
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
+            DrawViewportStreamingPreview(drawList, origin, {width, height}, viewModel, context, viewportRenderer_->ClipDepthRange());
+        }
 
         const ViewportOverlayAction overlay =
             DrawViewportOverlay(origin, {width, height},
@@ -270,6 +274,9 @@ namespace Horo::Editor {
             CancelAssetPlacementPreview(command);
         const bool assetDragActive =
             inputEligible && surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, context, depthRange);
+        const bool sourceToolActive =
+            worldSourceTool_.Draw(drawList, layout.origin, {layout.width, layout.height}, viewModel, command, context, depthRange,
+                                  inputEligible && !interaction_.IsActive() && !assetDragActive);
         const Result<std::optional<SceneObjectId>> clickedLight =
             DrawViewportLightMarkers({.drawList = drawList,
                                       .origin = layout.origin,
@@ -277,12 +284,12 @@ namespace Horo::Editor {
                                       .height = layout.height,
                                       .camera = viewModel.viewportCamera,
                                       .depthRange = depthRange,
-                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive},
+                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !sourceToolActive},
                                      viewModel.viewportLights, viewModel.primarySelection);
         if (!inputEligible)
             static_cast<void>(interaction_.ConsumePendingCancellation(command));
         if (ResolveLightMarkerInteraction(clickedLight, lightMarkerFailureReported_, command) && inputEligible && surfaceInteractive &&
-            !assetDragActive) {
+            !assetDragActive && !sourceToolActive) {
             interaction_.Draw({.drawList = drawList,
                                .origin = layout.origin,
                                .width = layout.width,

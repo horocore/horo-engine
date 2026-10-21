@@ -40,6 +40,10 @@ namespace Horo::Extensions {
     class EditorInspectorHost;
 }
 
+namespace Horo::Platform {
+    class IProjectReadFiles;
+}
+
 namespace Horo::Editor {
     class ILocalizationService;
     struct EditorViewportPickResult;
@@ -78,6 +82,9 @@ namespace Horo::Editor {
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
+        WorldStreamingPreviewHost *streamingPreview{}; /**< Application-owned read-only native capture bridge; outlives this workspace. */
+        PartitionedWorldWorkspace *partitionedWorld{}; /**< Borrowed host-owned canonical world; outlives this session. */
+        std::shared_ptr<const Platform::IProjectReadFiles> worldSourceFiles; /**< Host-composed retained project root; no draw-path I/O. */
         Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
@@ -95,6 +102,21 @@ namespace Horo::Editor {
                                   const EditorWorkspaceDependencies &dependencies = {});
         ~EditorWorkspaceController();
 
+        /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
+        void RefreshWorldSourceProjection();
+        /** @brief Refreshes native streaming evidence and immutable overlay geometry from the canonical active view. */
+        void RefreshWorldStreamingPreview();
+        /** @brief Binds an active host view to the composed canonical document after validating the exact immutable root.
+         * @param binding Current root, exact global origin and monotonic view incarnation.
+         * @return Typed rejection for stale roots/views; no hidden replacement or ownership transfer. */
+        [[nodiscard]] Result<void> SetWorldViewportBinding(const WorldViewportBinding &binding);
+        /** @brief Explicitly binds the canonical owner of the host's active world view; no new document authority is allocated.
+         * @param canonicalOwner Borrowed owner; detach before its destruction. Switching owners requires explicit detach first.
+         * @param binding Current immutable root/origin and monotonic active-view revision.
+         * @return Typed stale/conflict/lifecycle rejection without changing the previous binding. */
+        [[nodiscard]] Result<void> SetWorldViewportBinding(PartitionedWorldWorkspace &canonicalOwner, const WorldViewportBinding &binding);
+        /** @brief Host must call before destroying the borrowed world owner; retained reader leases remain immutable and valid. */
+        void DetachWorldSourceOwner() noexcept;
         /** @brief Starts captured audio through the injected host, never through a widget/backend bypass.
          * @param object Exact selected authored source. @param revision Expected document revision. @return Typed admission/failure. */
         [[nodiscard]] Result<void> StartAudioPreview(SceneObjectId object, DocumentRevision revision);
@@ -126,6 +148,15 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> SeekCameraCutPreview(Cinematic::SequenceTime position);
         /** @brief Releases preview authority at the owner boundary and restores the current authoring camera. */
         void StopCameraCutPreview();
+
+        /** @brief Captures current canonical world state for all panels, dropping obsolete leases on close/replacement.
+         * @param forceQuery Rebuilds a changed presentation filter even when the document fence is unchanged. */
+        void RefreshWorldDocumentProjection(bool forceQuery = false);
+        /** @brief Opens contained version-one source into the one world owner outside draw paths.
+         * @param relativePath Portable project-relative .horoworld path. @param expected Expected active document, absent for first open.
+         * @return Typed admission outcome; failed reads/decodes/replacement preserve document and focus. */
+        [[nodiscard]] Result<void> OpenWorldCompositionSource(std::string_view relativePath,
+                                                              std::optional<WorldDocumentFence> expected = std::nullopt);
 
         [[nodiscard]] const EditorWorkspaceViewModel &ViewModel() const noexcept {
             return m_viewModel;
@@ -180,6 +211,37 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ShutdownPCGDocuments(bool discardDirty = false);
         /** @brief Stops play and drains native module retirement before workspace destruction. @return Typed busy if callbacks remain. */
         [[nodiscard]] Result<void> ShutdownGameplayModules();
+
+        /** @brief Exposes the one editor authoring residency owner for explicit load/unload/pin commands.
+         * @return Owner-thread capability; source bytes must be authorized and read by the host outside draw paths. */
+        [[nodiscard]] PartitionedWorldWorkspace &WorldDocuments() noexcept {
+            return m_worldDocuments;
+        }
+
+        /** @brief Queries immutable partitioned document state. @return Owner-thread capability. */
+        [[nodiscard]] const PartitionedWorldWorkspace &WorldDocuments() const noexcept {
+            return m_worldDocuments;
+        }
+
+        /** @brief Routes page-aware selection through the actual editor selection adapter.
+         * @param objects Authored page-scoped addresses. @param primary Optional member. @param expected Exact publication.
+         * @return Typed committed world lease or rejection. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> SelectWorldObjects(
+            std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
+            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected) {
+            return m_selection.SetWorldObjects(m_worldDocuments, objects, primary, expected);
+        }
+
+        /** @brief Executes one world-layer intent against the canonical residency/selection owner.
+         * @param intent Captured typed action and exact document fence. @return Complete immutable result or typed atomic rejection.
+         */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ApplyWorldLayerIntent(const WorldLayerOutlinerIntent &intent);
+
+        /** @brief Includes dirty loaded page content in the ordinary workspace leave guard. @return Whether unsaved content is owned. */
+        [[nodiscard]] bool HasDirtyWorldDocuments() const {
+            const auto snapshot = m_worldDocuments.Snapshot();
+            return snapshot.HasValue() && snapshot.Value()->dirty;
+        }
 
         /** @brief Lazily composes actual project navigation sources with this exact active Scene/history owner. */
         [[nodiscard]] Result<NavigationProjectSettingsSession *> NavigationSettings();
@@ -275,6 +337,10 @@ namespace Horo::Editor {
         void OpenNavigationDefinitionTab(Assets::AssetId asset);
         /** @brief Projects constant-time dirty/focus/close state without copying Scene roots per frame. */
         void UpdateNavigationDocumentTabs();
+        /** @brief Routes typed viewport source commands through the composed document/history authority. */
+        [[nodiscard]] bool ProcessWorldSourceCommand(const EditorWorkspaceViewCommandData &command);
+        PartitionedWorldWorkspace *m_partitionedWorld{};
+        std::uint64_t m_nextWorldSourceId{1};
         Runtime::RuntimeSceneService &m_runtimeScene;
         std::optional<SceneSource::TriggerVolumeConversionContext> m_triggerBinding;
         EditorPlaySceneFactory m_playSceneFactory;
@@ -287,6 +353,8 @@ namespace Horo::Editor {
         PCGGraphDocumentService m_pcgDocuments;
         PrefabHierarchySourceCapture m_prefabSourceCapture;
         Assets::AssetId m_workspaceSession;
+        WorldStreamingPreviewHost *m_streamingPreview{};
+        std::shared_ptr<const Platform::IProjectReadFiles> m_worldSourceFiles;
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;
@@ -330,6 +398,7 @@ namespace Horo::Editor {
         Assets::AssetId m_physicsDocumentOwner;
         std::uint64_t m_physicsReplacementEpoch{};
         const std::thread::id m_physicsOwnerThread{std::this_thread::get_id()};
+        PartitionedWorldWorkspace m_worldDocuments;
         SceneDocument m_document;
         EditorHistory m_history;
         std::optional<SceneDocumentTransactions> m_physicsTransactions;
@@ -477,6 +546,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool ProcessContentBrowserMutationCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessContentBrowserAssetCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessContentBrowserSourceCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Routes world presentation commands to the canonical world owner with exact revision fencing. */
+        [[nodiscard]] bool ProcessWorldCompositionCommand(const EditorWorkspaceViewCommandData &command);
         [[nodiscard]] bool ProcessActivePanelCommand(const EditorWorkspaceViewCommandData &cmd);
         [[nodiscard]] bool ProcessLayoutCommand(const EditorWorkspaceViewCommandData &cmd);
         void ReorderActivityBarItem(const EditorWorkspaceViewCommandData &cmd);

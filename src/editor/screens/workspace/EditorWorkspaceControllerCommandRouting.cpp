@@ -30,10 +30,34 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
-        static_cast<void>(ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
-                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
-                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
-                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        if (cmd.command == EditorWorkspaceViewCommand::WorldLayerAuthoring) {
+            const auto result = cmd.worldLayerIntent
+                                    ? ApplyWorldLayerIntent(*cmd.worldLayerIntent)
+                                    : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            m_viewModel.worldLayerFailure = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
+            RefreshWorldDocumentProjection();
+            return;
+        }
+        static_cast<void>(ProcessWorldCompositionCommand(cmd) || ProcessWorldSourceCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
+                          ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
+                          ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
+                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
+                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        RefreshWorldDocumentProjection();
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplyWorldLayerIntent */
+    Result<PartitionedWorldSnapshotLease> EditorWorkspaceController::ApplyWorldLayerIntent(const WorldLayerOutlinerIntent &intent) {
+        switch (intent.action) {
+            case WorldLayerOutlinerAction::Execute:
+                return intent.command ? m_worldDocuments.ExecuteLayerCommand(*intent.command, intent.expected)
+                                      : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            case WorldLayerOutlinerAction::Undo:
+            case WorldLayerOutlinerAction::Redo:
+                return m_worldDocuments.ReplayLayerCommand(intent.action == WorldLayerOutlinerAction::Redo, intent.expected);
+            default:
+                return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Unsupported));
+        }
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

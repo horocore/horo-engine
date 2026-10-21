@@ -69,12 +69,13 @@ namespace Horo::Editor {
                                                          Runtime::RuntimeSceneService &runtimeScene,
                                                          const Assets::AssetRegistrySnapshot &assetRegistry,
                                                          const EditorWorkspaceDependencies &dependencies)
-        : m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding),
+        : m_partitionedWorld(dependencies.partitionedWorld), m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding),
           m_playSceneFactory(dependencies.gameplay.sceneFactory), m_assetRegistry(assetRegistry),
           m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
           m_prefabSourceCapture(dependencies.prefabSources), m_workspaceSession(dependencies.documentSessionOwner),
+          m_streamingPreview(dependencies.streamingPreview), m_worldSourceFiles(dependencies.worldSourceFiles),
           m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collision.inventory),
           m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
           m_collisionSceneOwner(dependencies.documentSessionOwner), m_mutations(dependencies.mutations),
@@ -85,8 +86,8 @@ namespace Horo::Editor {
           m_gameplayBuilds(dependencies.gameplay.builds), m_gameplayBuildEnvironment(dependencies.gameplay.environment),
           m_localization(dependencies.localization),
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
-          m_playSession(dependencies.networkDebugger), m_audioPreview(dependencies.audioPreview),
-          m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
+          m_worldDocuments(dependencies.documentSessionOwner), m_playSession(dependencies.networkDebugger),
+          m_audioPreview(dependencies.audioPreview), m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
@@ -108,6 +109,7 @@ namespace Horo::Editor {
         InitializeWorkspaceLayout();
         InitializeInitialScene(absoluteProjectRoot);
         RefreshSceneProjections();
+        RefreshWorldSourceProjection();
     }
 
     void EditorWorkspaceController::InitializeProjectState(const std::filesystem::path &absoluteProjectRoot) {
@@ -133,11 +135,14 @@ namespace Horo::Editor {
         m_viewModel.panelDockAreas = {{"horo.hierarchy", WorkspaceDockArea::Left},
                                       {"horo.viewport", WorkspaceDockArea::Document},
                                       {"horo.game", WorkspaceDockArea::Document},
+                                      {"horo.world_composition", WorkspaceDockArea::Document},
                                       {"horo.global_dock", WorkspaceDockArea::Bottom},
                                       {"horo.inspector", WorkspaceDockArea::Right}};
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.hierarchy", ActivityBarSlot{ActivityBarRail::Left, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.viewport", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.game", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 1}));
+        static_cast<void>(
+            m_viewModel.activityBarLayout.Insert("horo.world_composition", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 2}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.global_dock", ActivityBarSlot{ActivityBarRail::Left, 2, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.inspector", ActivityBarSlot{ActivityBarRail::Right, 0, 0}));
     }
