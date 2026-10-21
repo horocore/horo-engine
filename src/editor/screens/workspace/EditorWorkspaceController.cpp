@@ -74,7 +74,7 @@ namespace Horo::Editor {
           m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
-          m_prefabStageFactory(dependencies.prefabStageFactory), m_prefabSourceCapture(dependencies.prefabSources),
+          m_prefabStageFactory(dependencies.prefab.stageFactory), m_prefabSourceCapture(dependencies.prefab.sources),
           m_workspaceSession(dependencies.documentSessionOwner), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
           m_collisionInventory(dependencies.collision.inventory), m_collisionActivation(dependencies.collision.activation),
           m_previewCollisionReceipt(dependencies.collision.previewReceipt), m_collisionSceneOwner(dependencies.documentSessionOwner),

@@ -64,6 +64,12 @@ namespace Horo::Editor {
         EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
     };
 
+    /** @brief Explicit host composition for prefab source capture and isolated authoring previews. */
+    struct EditorWorkspacePrefabServices {
+        PrefabHierarchySourceCapture sources;
+        EditorPlaySceneFactory stageFactory;
+    };
+
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
@@ -83,8 +89,7 @@ namespace Horo::Editor {
         const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
-        PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
-        EditorPlaySceneFactory prefabStageFactory;         /**< Explicit isolated native/assets stage composition. */
+        EditorWorkspacePrefabServices prefab;              /**< Explicit authoring composition; never discovered by panels. */
         PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
@@ -675,6 +680,8 @@ namespace Horo::Editor {
         void OpenEmbeddedSequenceSource(const SourceOpenResult &result);
         /** @brief Dispatches one command to the explicit owning workspace subsystem. */
         void DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Routes focused prefab persistence/history and global transport without granting Scene mutation. */
+        void ProcessFocusedPrefabCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Routes admitted authored documents directly to their persistent host. */
         bool OpenEmbeddedAuthoredDocument(const SourceOpenResult &result);
         /** @brief Handles transient sequence presentation and explicit document lifecycle commands. */

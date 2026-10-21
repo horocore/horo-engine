@@ -1,7 +1,10 @@
+#include "../../support/NativePublicationFiles.h"
+#include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "PrefabHierarchyTestSupport.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 
+#include <functional>
 #include <string_view>
 #include <thread>
 
@@ -40,6 +43,18 @@ namespace Horo::Editor {
         private:
             Runtime::RuntimeSceneService scenes_;
             std::shared_ptr<StageProbe> probe_;
+        };
+
+        /** @brief Exercises reentrant owner admission while native source publication is inside the busy guard. */
+        struct ReentrantFiles final : Horo::TestSupport::NativePublicationFiles {
+            std::function<void()> duringWrite;
+
+            Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                             std::filesystem::perms permissions) override {
+                if (duringWrite)
+                    duringWrite();
+                return native.WritePrivateDurable(path, bytes, created, permissions);
+            }
         };
 
         /** @brief Owns real canonical files, shared identity registry and one source authority. */
@@ -392,4 +407,63 @@ namespace Horo::Editor {
         CHECK(fixture.document->Execute(before.fence, RenamePrefabObject{{0}, "Closed"}).HasError());
         CHECK(before.source->Data().objects.front().name == "Unsaved");
     }
+
+    TEST_CASE("Prefab source opening rejects foreign identities malformed bytes and missing native source", "[editor][prefab][session]") {
+        Fixture fixture;
+        const auto original = fixture.document->Snapshot();
+        const auto open = [&](DocumentIdentity identity, Assets::AssetId asset) {
+            return PrefabDocumentSession::Open(fixture.project.directory.path, fixture.project.source, asset, std::move(identity),
+                                               original.fence.owner, fixture.limits);
+        };
+        SECTION("invalid shared identity") {
+            CHECK(open({}, fixture.project.asset).HasError());
+        }
+        SECTION("foreign asset") {
+            CHECK(open(original.identity, PrefabAsset(44).Asset()).HasError());
+        }
+        SECTION("wrong source kind") {
+            auto identity = original.identity;
+            identity.key.kind = DocumentKind::Source;
+            CHECK(open(identity, fixture.project.asset).HasError());
+        }
+        SECTION("malformed source") {
+            std::ofstream(fixture.project.source, std::ios::trunc) << "{broken";
+            CHECK(open(original.identity, fixture.project.asset).HasError());
+            REQUIRE(fixture.document->InspectExternal().HasValue());
+            CHECK(fixture.document->Snapshot().externalConflict);
+            CHECK(fixture.document->Execute(original.fence, RenamePrefabObject{{0}, "Rejected"}).HasError());
+            CHECK(fixture.document->Replay(original.fence, false).HasError());
+        }
+        SECTION("missing source") {
+            REQUIRE(std::filesystem::remove(fixture.project.source));
+            CHECK(open(original.identity, fixture.project.asset).HasError());
+            REQUIRE(fixture.document->InspectExternal().HasValue());
+            CHECK(fixture.document->Snapshot().externalConflict);
+        }
+        CHECK(fixture.document->Snapshot().source == original.source);
+        CHECK_FALSE(fixture.document->Snapshot().dirty);
+    }
+
+    TEST_CASE("Prefab publication rejects reentrant source commands and releases admission after save", "[editor][prefab][session]") {
+        Fixture fixture;
+        fixture.Rename("Published once");
+        const auto fence = fixture.document->Snapshot().fence;
+        ReentrantFiles files;
+        ProjectMutationCoordinator mutations{files};
+        std::size_t rejected{};
+        files.duringWrite = [&] {
+            const auto result = fixture.document->Execute(fence, RenamePrefabObject{{0}, "Reentrant"});
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code.Value() == SourceDocumentErrors::Busy.code.Value());
+            ++rejected;
+        };
+        auto saved = fixture.document->Save(fence, mutations, files);
+        REQUIRE(saved.HasValue());
+        CHECK(rejected == 1);
+        CHECK_FALSE(fixture.document->Snapshot().dirty);
+        CHECK(fixture.document->Snapshot().source->Data().objects.front().name == "Published once");
+        fixture.Rename("Allowed after publication");
+        CHECK(fixture.document->Snapshot().dirty);
+    }
+
 }  // namespace Horo::Editor

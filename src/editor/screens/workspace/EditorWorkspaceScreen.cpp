@@ -716,8 +716,8 @@ namespace Horo::Editor {
                                                    .documentSessionOwner = sessionOwner,
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-                                                   .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
-                                                   .prefabStageFactory = BindPrefabStageFactory(projectRoot),
+                                                   .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                                              .stageFactory = BindPrefabStageFactory(projectRoot)},
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();

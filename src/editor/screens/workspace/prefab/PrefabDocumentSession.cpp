@@ -5,6 +5,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 
 namespace Horo::Editor {
@@ -19,26 +20,26 @@ namespace Horo::Editor {
 
         /** @brief Views owned bounded bytes only during parsing. */
         std::string_view Text(const Assets::AssetSourceCapture &capture) {
-            return {reinterpret_cast<const char *>(capture.bytes.data()), capture.bytes.size()};
+            return {std::bit_cast<const char *>(capture.bytes.data()), capture.bytes.size()};
         }
     }  // namespace
 
-    PrefabDocumentSession::PrefabDocumentSession(std::filesystem::path root, std::filesystem::path path, DocumentIdentity identity,
-                                                 Assets::AssetId owner, Prefab::PrefabLimitProfile limits)
-        : root_(std::move(root)), path_(std::move(path)), identity_(std::move(identity)), owner_(owner), limits_(std::move(limits)) {}
+    PrefabDocumentSession::PrefabDocumentSession(const ConstructionKey &, std::filesystem::path root, std::filesystem::path path,
+                                                 DocumentIdentity identity, Assets::AssetId owner, const Prefab::PrefabLimitProfile &limits)
+        : root_(std::move(root)), path_(std::move(path)), identity_(std::move(identity)), owner_(owner), limits_(limits) {}
 
     /** @copydoc PrefabDocumentSession::Open */
     Result<std::unique_ptr<PrefabDocumentSession>> PrefabDocumentSession::Open(const std::filesystem::path &root,
                                                                                const std::filesystem::path &path, Assets::AssetId asset,
                                                                                DocumentIdentity identity, Assets::AssetId owner,
-                                                                               Prefab::PrefabLimitProfile limits) {
+                                                                               const Prefab::PrefabLimitProfile &limits) {
         if (!asset.IsValid() || !owner.IsValid() || !identity.IsValid() || identity.key.kind != DocumentKind::Prefab ||
             path != root / std::filesystem::path(std::u8string(identity.key.source.Value().begin(), identity.key.source.Value().end())))
             return Result<std::unique_ptr<PrefabDocumentSession>>::Failure(MakeError(Prefab::PrefabErrors::IdentityInvalid));
         auto capture = Assets::CaptureAssetSource(root, path, Prefab::PrefabHardLimits::SourceDocumentBytes);
         if (capture.HasError())
             return Result<std::unique_ptr<PrefabDocumentSession>>::Failure(capture.ErrorValue());
-        auto session = std::unique_ptr<PrefabDocumentSession>(new PrefabDocumentSession(root, path, std::move(identity), owner, limits));
+        auto session = std::make_unique<PrefabDocumentSession>(ConstructionKey{}, root, path, std::move(identity), owner, limits);
         auto parsed = Prefab::PrefabDocument::Parse(Text(capture.Value()), limits);
         if (parsed.HasError())
             return Result<std::unique_ptr<PrefabDocumentSession>>::Failure(parsed.ErrorValue());
@@ -48,7 +49,8 @@ namespace Horo::Editor {
         if (digest.HasError())
             return Result<std::unique_ptr<PrefabDocumentSession>>::Failure(digest.ErrorValue());
         session->source_ = std::make_shared<const Prefab::PrefabDocument>(std::move(parsed).Value());
-        session->state_ = session->saved_ = digest.Value();
+        session->state_ = digest.Value();
+        session->saved_ = digest.Value();
         session->accepted_ = capture.Value().identity;
         return Result<std::unique_ptr<PrefabDocumentSession>>::Success(std::move(session));
     }
@@ -71,7 +73,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::Admit */
-    Result<void> PrefabDocumentSession::Admit(const PrefabDocumentFence fence) const {
+    Result<void> PrefabDocumentSession::Admit(const PrefabDocumentFence &fence) const {
         const ErrorCodeDescriptor *failure = nullptr;
         if (std::this_thread::get_id() != thread_)
             failure = &SourceDocumentErrors::WrongThread;
@@ -94,8 +96,7 @@ namespace Horo::Editor {
         auto found = std::ranges::find(data.objects, id, &Prefab::PrefabObjectNode::localId);
         if (found == data.objects.end())
             return Result<std::shared_ptr<const Prefab::PrefabDocument>>::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
-        std::visit([&](const auto &value) {
-            using T = std::decay_t<decltype(value)>;
+        std::visit([&]<typename T>(const T &value) {
             if constexpr (std::is_same_v<T, RenamePrefabObject>)
                 found->name = value.name;
             else
@@ -109,7 +110,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::Execute */
-    Result<void> PrefabDocumentSession::Execute(const PrefabDocumentFence fence, const PrefabSourceEdit &edit) {
+    Result<void> PrefabDocumentSession::Execute(const PrefabDocumentFence &fence, const PrefabSourceEdit &edit) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
         if (conflict_)
@@ -144,7 +145,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::Replay */
-    Result<void> PrefabDocumentSession::Replay(const PrefabDocumentFence fence, const bool redo) {
+    Result<void> PrefabDocumentSession::Replay(const PrefabDocumentFence &fence, const bool redo) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
         if (conflict_)
@@ -191,7 +192,8 @@ namespace Horo::Editor {
             return Result<void>::Failure(digest.ErrorValue());
         auto replacement = std::make_shared<const Prefab::PrefabDocument>(std::move(parsed).Value());
         source_.swap(replacement);
-        state_ = saved_ = digest.Value();
+        state_ = digest.Value();
+        saved_ = digest.Value();
         accepted_ = capture.identity;
         conflict_ = false;
         history_.Clear();
@@ -202,7 +204,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::Reload */
-    Result<void> PrefabDocumentSession::Reload(const PrefabDocumentFence fence, const bool discardDirty) {
+    Result<void> PrefabDocumentSession::Reload(const PrefabDocumentFence &fence, const bool discardDirty) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
         if (state_ != saved_ && !discardDirty)
@@ -227,7 +229,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::Close */
-    Result<void> PrefabDocumentSession::Close(const PrefabDocumentFence fence, const bool discardDirty) {
+    Result<void> PrefabDocumentSession::Close(const PrefabDocumentFence &fence, const bool discardDirty) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
         if (state_ != saved_ && !discardDirty)

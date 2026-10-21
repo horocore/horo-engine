@@ -12,10 +12,11 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::OpenEmbeddedPrefabSource */
     void EditorWorkspaceController::OpenEmbeddedPrefabSource(const SourceOpenResult &result) {
         const auto &opened = *result.document;
-        const auto existing = std::ranges::find_if(m_prefabDocuments, [&](const auto &entry) {
+        if (const auto existing = std::ranges::find_if(m_prefabDocuments,
+                                                       [&](const auto &entry) {
             return entry->Snapshot().identity.instance == opened.identity.instance;
         });
-        if (existing != m_prefabDocuments.end()) {
+            existing != m_prefabDocuments.end()) {
             static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(opened.identity.instance));
             return;
         }
@@ -39,8 +40,7 @@ namespace Horo::Editor {
         }
         // Reserve before publishing the tab so an allocation cannot strand an unowned persistent surface.
         m_prefabDocuments.reserve(m_prefabDocuments.size() + 1);
-        auto tab = m_viewModel.workspacePanelHost.OpenDocument(opened.identity.key);
-        if (tab.HasError()) {
+        if (auto tab = m_viewModel.workspacePanelHost.OpenDocument(opened.identity.key); tab.HasError()) {
             fail(tab.ErrorValue());
             return;
         }
@@ -57,10 +57,10 @@ namespace Horo::Editor {
         ++m_viewportSceneRevision;
         auto limits = Prefab::PrefabLimitProfile::Create({});
         const std::array roots{snapshot.source->Data().assetId};
-        auto captured = m_prefabSourceCapture
-                            ? m_prefabSourceCapture(m_assetRegistry, roots, limits.Value(), m_prefabCancellation.Token())
-                            : Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
-        if (captured.HasError())
+        if (auto captured = m_prefabSourceCapture
+                                ? m_prefabSourceCapture(m_assetRegistry, roots, limits.Value(), m_prefabCancellation.Token())
+                                : Result<PreparedPrefabHierarchySources>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
+            captured.HasError())
             m_viewModel.prefabDocumentError = captured.ErrorValue();
         else if (m_nextPrefabRuntime > EditorLastPrefabStage.value)
             m_viewModel.prefabDocumentError = MakeError(Prefab::PrefabErrors::WorkBudgetExceeded);
@@ -122,16 +122,21 @@ namespace Horo::Editor {
             return;
 
         struct RefreshGuard final {
-            bool &active;
+            bool *active;
 
-            explicit RefreshGuard(bool &value) : active(value) {
-                active = true;
+            explicit RefreshGuard(bool &value) : active(&value) {
+                *active = true;
             }
+
+            RefreshGuard(const RefreshGuard &) = delete;
+            RefreshGuard &operator=(const RefreshGuard &) = delete;
 
             ~RefreshGuard() {
-                active = false;
+                *active = false;
             }
-        } guard(m_prefabRefreshing);
+        };
+
+        RefreshGuard guard(m_prefabRefreshing);
 
         const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
         auto found = std::ranges::find_if(m_prefabDocuments, [active](const auto &entry) {
@@ -190,8 +195,7 @@ namespace Horo::Editor {
             std::ranges::any_of(m_prefabDocuments, [&](const auto &entry) {
             return entry->Snapshot().identity.instance == *command.documentInstance;
         })) {
-            const auto result = ClosePrefabDocument(*command.documentInstance, false);
-            if (result.HasError())
+            if (const auto result = ClosePrefabDocument(*command.documentInstance, false); result.HasError())
                 m_viewModel.prefabDocumentError = result.ErrorValue();
             return true;
         }
@@ -206,14 +210,13 @@ namespace Horo::Editor {
             return true;
         auto &document = **found;
         const auto fence = *command.prefabFence;
-        const auto snapshot = document.Snapshot();
-        if (fence.owner != snapshot.fence.owner || fence.revision != snapshot.fence.revision) {
+        if (const auto snapshot = document.Snapshot(); fence.owner != snapshot.fence.owner || fence.revision != snapshot.fence.revision) {
             m_viewModel.prefabDocumentError = MakeError(SourceDocumentErrors::Stale);
             return true;
         }
-        const auto result =
-            command.prefabEdit ? document.Execute(fence, *command.prefabEdit) : ApplyPrefabDocumentAction(document, command);
-        if (result.HasError())
+        if (const auto result =
+                command.prefabEdit ? document.Execute(fence, *command.prefabEdit) : ApplyPrefabDocumentAction(document, command);
+            result.HasError())
             m_viewModel.prefabDocumentError = result.ErrorValue();
         else {
             m_viewModel.prefabDocumentError.reset();

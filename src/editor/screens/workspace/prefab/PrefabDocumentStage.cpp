@@ -121,8 +121,8 @@ namespace Horo::Editor {
             return Result<bool>::Success(true);
         const Runtime::FrameContext frame{.frameNumber = preview_.frame++, .cancellation = preview_.cancellation.Token()};
         auto advanced = preview_.host->CommitSceneChanges(frame);
-        auto failure = advanced.HasError() ? std::optional<Error>{advanced.ErrorValue()} : preview_.host->Scenes().TakeOperationError();
-        if (failure) {
+        if (auto failure = advanced.HasError() ? std::optional<Error>{advanced.ErrorValue()} : preview_.host->Scenes().TakeOperationError();
+            failure) {
             ReleaseStage();
             return Result<bool>::Failure(*failure);
         }

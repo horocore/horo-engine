@@ -336,6 +336,10 @@ never runtime entities or full-document history snapshots.
 
 The workspace routes durable source edits and persistence through typed commands,
 `ProjectMutationCoordinator`, `PublishAssetSource` and `DocumentRecoveryService`.
+Host source capture and isolated-stage factories are grouped in the private
+`EditorWorkspacePrefabServices` dependency value (`sources`, `stageFactory`); callers
+migrate the former individual dependency fields together. Session factories retain
+a private construction key, and command admission borrows immutable fences.
 A native replacement whose directory durability cannot be confirmed keeps the
 source dirty and requires reconciliation. External changes reject saves; malformed
 reload and rejected dirty close retain the complete source/history/stage. Recovery

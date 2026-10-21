@@ -171,10 +171,11 @@ namespace Horo::Editor {
             .visible = gridOverride_.value_or(context.settings.settings.gridOverlay),
         });
         EditorViewportLightVisualizerOptions lightVisualizer;
-        const bool prefab = std::ranges::any_of(viewModel.prefabDocuments, [&](const auto &entry) {
+        if (const bool prefab = std::ranges::any_of(viewModel.prefabDocuments,
+                                                    [&](const auto &entry) {
             return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
         });
-        if (!prefab && viewModel.primarySelection.has_value()) {
+            !prefab && viewModel.primarySelection.has_value()) {
             const auto selected =
                 std::ranges::find(viewModel.viewportLights, *viewModel.primarySelection, &ViewportLightPresentation::object);
             if (selected != viewModel.viewportLights.end())

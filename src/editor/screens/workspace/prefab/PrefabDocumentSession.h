@@ -55,7 +55,17 @@ namespace Horo::Editor {
      * and memory; explicit recovery/close decisions happen before destruction. No gameplay callbacks run.
      */
     class PrefabDocumentSession final {
+        class ConstructionKey final {
+            friend class PrefabDocumentSession;
+            ConstructionKey() = default;
+        };
+
     public:
+        /** @brief Internal factory construction; only Open can create the admission key.
+         * @param root Canonical project root. @param path Canonical source. @param identity Shared identity.
+         * @param owner Workspace incarnation. @param limits Validated policy. */
+        PrefabDocumentSession(const ConstructionKey &, std::filesystem::path root, std::filesystem::path path, DocumentIdentity identity,
+                              Assets::AssetId owner, const Prefab::PrefabLimitProfile &limits);
         /** @brief Cancels pending preparation and retires all isolated native resources. */
         ~PrefabDocumentSession();
         /** @brief Opens a validated canonical source without mutation.
@@ -67,7 +77,7 @@ namespace Horo::Editor {
         [[nodiscard]] static Result<std::unique_ptr<PrefabDocumentSession>> Open(const std::filesystem::path &root,
                                                                                  const std::filesystem::path &path, Assets::AssetId asset,
                                                                                  DocumentIdentity identity, Assets::AssetId owner,
-                                                                                 Prefab::PrefabLimitProfile limits);
+                                                                                 const Prefab::PrefabLimitProfile &limits);
         /** @brief Captures immutable presentation state. @return Owned source lease and distinct revisions. */
         [[nodiscard]] PrefabDocumentSnapshot Snapshot() const;
 
@@ -78,27 +88,27 @@ namespace Horo::Editor {
 
         /** @brief Applies one semantic transaction. @param fence Exact source admission. @param edit Source-owned edit.
          * @return Success or zero-mutation validation/history/stale error. */
-        [[nodiscard]] Result<void> Execute(PrefabDocumentFence fence, const PrefabSourceEdit &edit);
+        [[nodiscard]] Result<void> Execute(const PrefabDocumentFence &fence, const PrefabSourceEdit &edit);
         /** @brief Replays exact semantic values. @param fence Current source admission. @param redo Replay direction.
          * @return Success or zero-mutation rejection. */
-        [[nodiscard]] Result<void> Replay(PrefabDocumentFence fence, bool redo);
+        [[nodiscard]] Result<void> Replay(const PrefabDocumentFence &fence, bool redo);
         /** @brief Saves through the existing project and asset publication authorities.
          * @param fence Current source admission. @param mutations Shared project writer. @param files Native durable service.
          * @return Tracked publication; uncertain durability retains dirty state and raises conflict. */
-        [[nodiscard]] Result<Assets::AssetSourcePublication> Save(PrefabDocumentFence fence, const ProjectMutationCoordinator &mutations,
-                                                                  DurableFileSystem &files);
+        [[nodiscard]] Result<Assets::AssetSourcePublication> Save(const PrefabDocumentFence &fence,
+                                                                  const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Observes external bytes without changing source/history. @return Capture result. */
         [[nodiscard]] Result<void> InspectExternal();
         /** @brief Replaces accepted source only after explicit dirty-state decision and complete validation.
          * @param fence Exact admission. @param discardDirty Explicit discard decision. @return Success or retained session. */
-        [[nodiscard]] Result<void> Reload(PrefabDocumentFence fence, bool discardDirty);
+        [[nodiscard]] Result<void> Reload(const PrefabDocumentFence &fence, bool discardDirty);
         /** @brief Writes dirty source to shared recovery storage, never canonical source.
          * @param mutations Shared writer. @param files Native durable service. @return Durable recovery or retained prior record. */
         [[nodiscard]] Result<void> Autosave(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Explicitly accepts an exact shared recovery candidate only against its unchanged source base.
          * @param fence Exact admission. @param record User-inspected candidate. @param mutations Shared writer.
          * @param files Native durable service. @return Success or zero-mutation conflict/corruption error. */
-        [[nodiscard]] Result<void> Recover(PrefabDocumentFence fence, const DocumentRecoveryRecord &record,
+        [[nodiscard]] Result<void> Recover(const PrefabDocumentFence &fence, const DocumentRecoveryRecord &record,
                                            const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Discards only this session's recovery record or its explicitly accepted exact candidate.
          * @param mutations Shared writer. @param files Durable service. @return Success or retained candidate on failure.
@@ -109,7 +119,7 @@ namespace Horo::Editor {
          * @param mutations Shared writer. @param files Durable service.
          * @return Success or stale/authority failure preserving newer records; source/history/dirty state never changes.
          */
-        [[nodiscard]] Result<void> DiscardRecoveryCandidate(PrefabDocumentFence fence, const DocumentRecoveryRecord &record,
+        [[nodiscard]] Result<void> DiscardRecoveryCandidate(const PrefabDocumentFence &fence, const DocumentRecoveryRecord &record,
                                                             const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Resolves current in-memory source, projects typed components and creates a real isolated runtime scene.
          * @param registry Pinned registry. @param dependencies Canonical captured dependency sources, root replaced by this session.
@@ -141,7 +151,7 @@ namespace Horo::Editor {
 
         /** @brief Closes after explicit dirty decision. @param fence Exact admission. @param discardDirty User decision.
          * @return Success or retained live session. */
-        [[nodiscard]] Result<void> Close(PrefabDocumentFence fence, bool discardDirty);
+        [[nodiscard]] Result<void> Close(const PrefabDocumentFence &fence, bool discardDirty);
 
     private:
         struct Delta final {
@@ -151,22 +161,22 @@ namespace Horo::Editor {
             std::size_t bytes{};
         };
 
-        PrefabDocumentSession(std::filesystem::path root, std::filesystem::path path, DocumentIdentity identity, Assets::AssetId owner,
-                              Prefab::PrefabLimitProfile limits);
-        [[nodiscard]] Result<void> Admit(PrefabDocumentFence fence) const;
+        [[nodiscard]] Result<void> Admit(const PrefabDocumentFence &fence) const;
         [[nodiscard]] Result<std::shared_ptr<const Prefab::PrefabDocument>> Apply(const PrefabSourceEdit &edit) const;
         [[nodiscard]] Result<void> Replace(const Assets::AssetSourceCapture &capture);
         /** @brief Installs only a complete definition, retaining the old stage on preparation rejection. */
         [[nodiscard]] Result<void> InstallStage(Runtime::RuntimeSceneDefinition definition, Runtime::SceneRuntimeId id,
                                                 const EditorPlaySceneFactory &factory);
-        std::filesystem::path root_, path_;
+        std::filesystem::path root_;
+        std::filesystem::path path_;
         DocumentIdentity identity_;
         Assets::AssetId owner_;
         Prefab::PrefabLimitProfile limits_;
         std::thread::id thread_{std::this_thread::get_id()};
         std::shared_ptr<const Prefab::PrefabDocument> source_;
         Assets::AssetSourceIdentity accepted_;
-        Sha256Digest state_, saved_;
+        Sha256Digest state_;
+        Sha256Digest saved_;
         SemanticDocumentHistory<Delta> history_;
         std::optional<DocumentRecoveryRecord> acceptedRecovery_;
 
@@ -178,9 +188,14 @@ namespace Horo::Editor {
             std::uint64_t frame{};
             std::uint64_t revision{};
             bool published{};
-        } preview_;
+        };
 
-        std::uint64_t revision_{1}, recoveryRevision_{};
-        bool conflict_{}, closed_{}, busy_{};
+        PreviewState preview_;
+
+        std::uint64_t revision_{1};
+        std::uint64_t recoveryRevision_{};
+        bool conflict_{};
+        bool closed_{};
+        bool busy_{};
     };
 }  // namespace Horo::Editor

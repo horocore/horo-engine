@@ -2,6 +2,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <algorithm>
 #include <filesystem>
 
 namespace Horo::Editor {
@@ -39,28 +40,50 @@ namespace Horo::Editor {
             ProcessLayoutCommand(cmd))
             return;
         if (m_activePrefabDocument) {
-            using enum EditorWorkspaceViewCommand;
-            if (cmd.command == SaveScene || cmd.command == UndoScene || cmd.command == RedoScene) {
-                for (const auto &entry : m_prefabDocuments) {
-                    if (entry->Instance() != m_activePrefabDocument)
-                        continue;
-                    EditorWorkspaceViewCommandData request;
-                    request.command = PrefabDocument;
-                    request.prefabFence = entry->Snapshot().fence;
-                    request.prefabAction = cmd.command == SaveScene   ? PrefabDocumentAction::Save
-                                           : cmd.command == UndoScene ? PrefabDocumentAction::Undo
-                                                                      : PrefabDocumentAction::Redo;
-                    static_cast<void>(ProcessPrefabDocumentCommand(request));
-                }
-            } else if (cmd.command == DiscardSceneRecovery)
-                static_cast<void>(ProcessDocumentCommand(cmd));
-            else if (cmd.command == StopPlay || cmd.command == PausePlay || cmd.command == ResumePlay || cmd.command == StepPlay)
-                static_cast<void>(ProcessPlayCommand(cmd));
+            ProcessFocusedPrefabCommand(cmd);
             return;
         }
         static_cast<void>(ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) ||
                           ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) ||
                           ProcessComponentCommand(cmd));
+    }
+
+    /** @copydoc EditorWorkspaceController::ProcessFocusedPrefabCommand */
+    void EditorWorkspaceController::ProcessFocusedPrefabCommand(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == DiscardSceneRecovery) {
+            static_cast<void>(ProcessDocumentCommand(command));
+            return;
+        }
+        if (command.command == StopPlay || command.command == PausePlay || command.command == ResumePlay || command.command == StepPlay) {
+            static_cast<void>(ProcessPlayCommand(command));
+            return;
+        }
+        using enum PrefabDocumentAction;
+        PrefabDocumentAction action;
+        switch (command.command) {
+            case SaveScene:
+                action = Save;
+                break;
+            case UndoScene:
+                action = Undo;
+                break;
+            case RedoScene:
+                action = Redo;
+                break;
+            default:
+                return;
+        }
+        const auto entry = std::ranges::find_if(m_prefabDocuments, [this](const auto &document) {
+            return document->Instance() == m_activePrefabDocument;
+        });
+        if (entry == m_prefabDocuments.end())
+            return;
+        EditorWorkspaceViewCommandData request;
+        request.command = PrefabDocument;
+        request.prefabFence = (*entry)->Snapshot().fence;
+        request.prefabAction = action;
+        static_cast<void>(ProcessPrefabDocumentCommand(request));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

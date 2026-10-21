@@ -8,6 +8,7 @@
 #include <array>
 #include <charconv>
 #include <cstddef>
+#include <format>
 #include <span>
 
 namespace Horo::Editor {
@@ -47,10 +48,11 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceView::DrawDockContent */
     void EditorWorkspaceView::DrawDockContent(const WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
                                               const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const {
-        const bool prefab = std::ranges::any_of(viewModel.prefabDocuments, [&](const auto &entry) {
+        if (const bool prefab = std::ranges::any_of(viewModel.prefabDocuments,
+                                                    [&](const auto &entry) {
             return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
         });
-        if (area != WorkspaceDockArea::Document && prefab && panel &&
+            area != WorkspaceDockArea::Document && prefab && panel &&
             (panel->GetId() == "horo.hierarchy" || panel->GetId() == "horo.inspector")) {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x,
                             m_context.localization.Get("editor", "workspace.prefab_document.source_controls"), Theme::Muted(),
@@ -162,9 +164,9 @@ namespace Horo::Editor {
             auto &draft = m_prefabNameDrafts[index];
             draft.fill('\0');
             const auto &name = source.source->Data().objects[index].name;
-            std::copy(name.begin(), name.end(), draft.begin());
+            std::ranges::copy(name, draft.begin());
         }
-        m_prefabNameScope = source.fence.owner.ToString() + "/" + std::to_string(source.fence.instance.Value());
+        m_prefabNameScope = std::format("{}/{}", source.fence.owner.ToString(), source.fence.instance.Value());
         m_prefabNameFence = source.fence;
     }
 
@@ -234,10 +236,11 @@ namespace Horo::Editor {
                             Theme::ConsoleWarning(), m_context.theme.fonts);
         DrawPrefabSourceFields(source, outCommand);
         const auto &panels = m_panelRegistry.GetAllPanels();
-        const auto viewport = std::ranges::find_if(panels, [](const auto &entry) {
+        if (const auto viewport = std::ranges::find_if(panels,
+                                                       [](const auto &entry) {
             return entry->GetId() == "horo.viewport";
         });
-        if (source.stageActive && viewport != panels.end()) {
+            source.stageActive && viewport != panels.end()) {
             EditorWorkspaceViewCommandData previewOnly;
             (*viewport)->DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), viewModel, previewOnly, m_context);
         } else

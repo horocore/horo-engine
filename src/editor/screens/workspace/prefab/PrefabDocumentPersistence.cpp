@@ -3,26 +3,30 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 
+#include <bit>
 #include <chrono>
 
 namespace Horo::Editor {
     namespace {
         /** @brief Blocks reentrant source operations while native persistence invokes borrowed services. */
         struct PublicationGuard final {
-            bool &active;
+            bool *active;
 
-            explicit PublicationGuard(bool &value) : active(value) {
-                active = true;
+            explicit PublicationGuard(bool &value) : active(&value) {
+                *active = true;
             }
 
+            PublicationGuard(const PublicationGuard &) = delete;
+            PublicationGuard &operator=(const PublicationGuard &) = delete;
+
             ~PublicationGuard() {
-                active = false;
+                *active = false;
             }
         };
     }  // namespace
 
     /** @copydoc PrefabDocumentSession::Save */
-    Result<Assets::AssetSourcePublication> PrefabDocumentSession::Save(const PrefabDocumentFence fence,
+    Result<Assets::AssetSourcePublication> PrefabDocumentSession::Save(const PrefabDocumentFence &fence,
                                                                        const ProjectMutationCoordinator &mutations,
                                                                        DurableFileSystem &files) {
         if (auto admitted = Admit(fence); admitted.HasError())
@@ -101,8 +105,7 @@ namespace Horo::Editor {
         if (!record.Value())
             return Result<void>::Success();
         const bool owned = record.Value()->sessionOwner == owner_ && record.Value()->sessionGeneration == identity_.instance.Value();
-        const bool accepted = acceptedRecovery_ && *record.Value() == *acceptedRecovery_;
-        if (!owned && !accepted)
+        if (const bool accepted = acceptedRecovery_ && *record.Value() == *acceptedRecovery_; !owned && !accepted)
             return Result<void>::Success();
         auto discarded = recovery.Discard(*record.Value());
         if (discarded.HasValue()) {
@@ -113,7 +116,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::DiscardRecoveryCandidate */
-    Result<void> PrefabDocumentSession::DiscardRecoveryCandidate(const PrefabDocumentFence fence, const DocumentRecoveryRecord &record,
+    Result<void> PrefabDocumentSession::DiscardRecoveryCandidate(const PrefabDocumentFence &fence, const DocumentRecoveryRecord &record,
                                                                  const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
@@ -121,8 +124,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
         PublicationGuard guard(busy_);
         DocumentRecoveryService recovery(root_, mutations, files);
-        auto discarded = recovery.Discard(record);
-        if (discarded.HasError())
+        if (auto discarded = recovery.Discard(record); discarded.HasError())
             return discarded;
         if ((record.sessionOwner == owner_ && record.sessionGeneration == identity_.instance.Value()) ||
             (acceptedRecovery_ && *acceptedRecovery_ == record)) {
@@ -133,7 +135,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PrefabDocumentSession::Recover */
-    Result<void> PrefabDocumentSession::Recover(const PrefabDocumentFence fence, const DocumentRecoveryRecord &record,
+    Result<void> PrefabDocumentSession::Recover(const PrefabDocumentFence &fence, const DocumentRecoveryRecord &record,
                                                 const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
         if (auto admitted = Admit(fence); admitted.HasError())
             return admitted;
@@ -142,7 +144,7 @@ namespace Horo::Editor {
         if (record.asset != source_->Data().assetId || record.document != identity_.key || record.acceptedSource != accepted_ ||
             record.payload.empty())
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        const std::string_view text{reinterpret_cast<const char *>(record.payload.data()), record.payload.size()};
+        const std::string_view text{std::bit_cast<const char *>(record.payload.data()), record.payload.size()};
         auto parsed = Prefab::PrefabDocument::Parse(text, limits_, {.expectedProjectVersion = source_->Data().projectVersion});
         if (parsed.HasError())
             return Result<void>::Failure(parsed.ErrorValue());

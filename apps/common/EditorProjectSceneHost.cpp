@@ -281,9 +281,8 @@ namespace Horo::Application::Internal {
         /** @brief Composes identical project resources under an explicitly disjoint host identity grant. */
         Editor::EditorProjectPlaySceneFactory ProjectFactory(JobSystem &jobs, EditorProjectScenePolicy policy,
                                                              const ScenePhysicsIdentityRange range) {
-            return [&jobs, policy = std::move(policy),
-                    range](const std::filesystem::path &root, const Runtime::SceneRuntimeId identity,
-                           const Runtime::RuntimeSceneDefinition &definition) -> Result<std::unique_ptr<Editor::EditorPlaySceneHost>> {
+            return [&jobs, policy = std::move(policy), range](const std::filesystem::path &root, const Runtime::SceneRuntimeId identity,
+                                                              const Runtime::RuntimeSceneDefinition &definition) {
                 if (identity.value < range.first.value || identity.value > range.last.value)
                     return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(MakeError(InvalidProjectScene));
                 auto host = std::make_unique<ProjectPlaySceneHost>(identity, range);
