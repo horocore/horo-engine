@@ -42,6 +42,7 @@ namespace Horo::Editor {
             std::array<bool, 256> mixed{};
             std::vector<std::pair<std::size_t, Extensions::EditorUiScalarState>> scalars;
             std::optional<Extensions::EditorUiRenderSnapshot> render;
+            float preparedWidth{};
             std::array<std::size_t, 256> order{};
             bool enabled{};
             bool approved{};

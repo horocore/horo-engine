@@ -102,20 +102,20 @@ namespace Horo::Extensions {
         CHECK(semantic.focusable);
         CHECK(std::get<double>(*semantic.value) == 25.0);
         EditorUiScalarState state;
-        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01));
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01F));
         CHECK(state.editing);
         CHECK(state.preview == 75.0);
         CHECK(std::get<double>(number.value) == 25.0);
-        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, false, theme, .01));
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, false, theme, .01F));
         CHECK_FALSE(state.editing);
         CHECK(state.preview == 25.0);
-        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01));
-        const auto proposed = UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, true, theme, .01);
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01F));
+        const auto proposed = UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, true, theme, .01F);
         REQUIRE(proposed);
         CHECK(*proposed == 75.0);
         CHECK(std::get<double>(number.value) == 25.0);
         theme.accessibility.reduceMotion = true;
-        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .5, true, theme, .001));
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .5, true, theme, .001F));
         CHECK(state.emphasis == 1.0F);
     }
 

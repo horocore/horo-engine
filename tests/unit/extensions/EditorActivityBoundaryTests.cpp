@@ -263,8 +263,8 @@ namespace Horo::Extensions::Tests {
         std::optional<double> proposed;
         {
             Horo::Tests::AllocationProbe::ScopedFailure failure;
-            static_cast<void>(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01));
-            proposed = UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, true, theme, .01);
+            static_cast<void>(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01F));
+            proposed = UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, true, theme, .01F);
         }
         REQUIRE(proposed);
         CHECK(*proposed == 75.0);

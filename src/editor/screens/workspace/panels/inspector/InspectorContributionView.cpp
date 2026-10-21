@@ -28,7 +28,7 @@ namespace Horo::Editor {
         if (!host_.IsAvailable(entry.contribution) || !theme_.revision)
             return false;
         const float width = ImGui::GetContentRegionAvail().x;
-        if (entry.render && entry.render->themeRevision == theme_.revision && entry.render->availableWidth == width)
+        if (entry.render && entry.render->themeRevision == theme_.revision && entry.preparedWidth == width)
             return true;
         auto render = BuildEditorUiRenderSnapshot(entry.form, theme_, width / theme_.uiScale);
         if (render.HasError()) {
@@ -36,6 +36,7 @@ namespace Horo::Editor {
             return false;
         }
         entry.render.emplace(std::move(render).Value());
+        entry.preparedWidth = width;
         Ui::ApplyEditorUiInput(*entry.render, inputAdmitted_ && entry.enabled);
         for (std::size_t i = 0; i < entry.form.nodes.size(); ++i)
             entry.order[i] = i;

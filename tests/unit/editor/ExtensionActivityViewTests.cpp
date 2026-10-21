@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <memory>
@@ -218,6 +219,39 @@ namespace {
         CHECK(std::get<Extensions::EditorUiVectorValue>(*plot->value).dimension == 2);
     }
 
+    /** @brief Fractional DPI must not turn a stable physical-width cache into per-frame layout allocations. */
+    void CheckStableLayoutCache(ExtensionActivityView &view) {
+        struct RestoreScale {
+            int previous{static_cast<int>(std::lround(Theme::GetActiveTokens().sizes.uiScale * 100))};
+
+            ~RestoreScale() {
+                Theme::SetUiScalePercent(previous);
+                Theme::ApplyCurrentTheme();
+            }
+        } restore;
+
+        Theme::SetUiScalePercent(133);
+        Theme::ApplyCurrentTheme();
+        for (int warmup = 0; warmup < 3; ++warmup) {
+            view.Update();
+            ImGui::NewFrame();
+            view.DrawDrawer(Extensions::EditorActivitySide::Left, {42, 0}, {259, 420});
+            ImGui::Render();
+        }
+        view.Update();
+        bool retained{true};
+        {
+            Horo::Tests::AllocationProbe::ScopedFailure failure;
+            try {
+                view.Update();
+            } catch (const std::bad_alloc &) {
+                retained = false;
+            }
+        }
+        CHECK(retained);
+        CHECK_FALSE(view.Accessibility("fixture.activity").empty());
+    }
+
     void CheckRailKeyboardFocus(ExtensionActivityView &view) {
         // ImGui applies focus API navigation results at the following NewFrame.
         ImGuiID railControl{};
@@ -354,6 +388,8 @@ namespace {
         CheckDrawerFocusAndNarrowFrames(view);
         CheckCustomPlotThemes(view);
         CheckPlotAccessibility(view);
+        CheckStableLayoutCache(view);
+        view.Update();
         CheckRailKeyboardFocus(view);
         CHECK(renderer.creates == 1);
         CHECK(renderer.destroys == 0);

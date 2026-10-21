@@ -400,11 +400,12 @@ namespace Horo::Editor {
         const auto theme = themeCapture_.Frame();
         if (!theme || !entry.projection.surface.form)
             return;
-        if (entry.render && entry.render->themeRevision == theme->revision && entry.render->availableWidth == entry.offeredWidth)
+        if (entry.render && entry.render->themeRevision == theme->revision && entry.preparedWidth == entry.offeredWidth)
             return;
         auto render = Extensions::BuildEditorUiRenderSnapshot(*entry.projection.surface.form, *theme, entry.offeredWidth / theme->uiScale);
         if (render.HasValue()) {
             entry.render.emplace(std::move(render).Value());
+            entry.preparedWidth = entry.offeredWidth;
             Ui::ApplyEditorUiInput(*entry.render, inputAdmitted_ && entry.projection.surface.activity.enabled);
         } else
             entry.render.reset();

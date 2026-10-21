@@ -92,8 +92,11 @@ separate bounds. Style records are copied at registration, and layout/semantic
 caches rebuild only on declaration, width or theme changes. Activity layout rebuilds
 at owner Update; inspector layout preparation reuses its cached snapshot until an
 input changes. Custom state vectors allocate only at projection capture. Steady
-widget gestures use bounded loops, stack text and existing host draw buffers.
-No additional callback, job, GPU resource or subscription is created by drawing.
+widget preview/animation uses bounded loops, stack text and existing host draw
+buffers. Layout cache keys retain the offered physical width directly, avoiding
+DPI round-trip drift. Activation/commit leaves the pure model: existing host command
+envelopes may copy bounded node/action IDs or selected inspector targets once per
+gesture, under their existing queue/selection limits. No additional callback, job, GPU resource or subscription is created by drawing.
 These are structural budgets, not a measured frame-time claim.
 
 Failure, disablement, shutdown and retirement withdraw input/publication before
@@ -115,7 +118,7 @@ unchanged; custom presenters add no owned GPU resource.
 | Document commands and undo | Actual scalar GUI gesture reaches the approved workspace transaction; test checks unchanged owner before dispatch, one revision, undo and redo. |
 | Modal ownership | Input withdrawal cancels pending activity actions and scalar previews; native GUI regression checks no commit after withdrawal. |
 | Failure, disable and unload | Existing callback failure/cancellation/late-result and live provider retirement tests; views recheck current host availability. |
-| Budgets/resources/subscriptions | Aggregate admission limits, bounded samples/state, no executable presenter callback or subscription API; allocation-forbidden scalar model test. |
+| Budgets/resources/subscriptions | Aggregate admission limits, bounded samples/state, no executable presenter callback or subscription API; allocation-forbidden scalar model and stable fractional-DPI activity-cache tests. |
 
 Qualification targets are `HoroExtensionManagerTests`, `HoroEditorActivityBoundaryTests`,
 `HoroEditorActivityTests`, relevant editor activity/inspector/page tests and affected

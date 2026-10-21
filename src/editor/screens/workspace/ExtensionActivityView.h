@@ -72,6 +72,7 @@ namespace Horo::Editor {
             std::vector<std::pair<std::size_t, Extensions::EditorUiPlotState>> plots;
             std::optional<Extensions::EditorUiRenderSnapshot> render;
             float offeredWidth{320};
+            float preparedWidth{};
             bool focusPending{};
             bool requestNativePanelClear{};
             std::uint64_t token{};
