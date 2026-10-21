@@ -28,6 +28,20 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {
             CancelAssetPlacementPreview();
         }
+        if (cmd.command != EditorWorkspaceViewCommand::None && cmd.command != EditorWorkspaceViewCommand::EditPCGGraph)
+            for (auto &document : m_viewModel.pcgDocuments)
+                CancelPCGCanvasGesture(document.canvas);
+        if (!m_viewModel.selectedColliders.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
+            cmd.command != EditorWorkspaceViewCommand::SelectPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::CommitPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::NavigateViewport && cmd.command != EditorWorkspaceViewCommand::AlignViewportToAxis &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeViewportProjection &&
+            cmd.command != EditorWorkspaceViewCommand::FocusViewportSelection &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformTool &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformSpace) {
+            m_viewModel.selectedColliders.clear();
+            ++m_viewModel.colliderSelectionRevision;
+        }
         DispatchWorkspaceCommand(cmd);
         RefreshSourceDocumentProjection();
         RefreshPrefabDocuments();
@@ -36,8 +50,8 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
         if (ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
-            ProcessSourceDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
-            ProcessLayoutCommand(cmd))
+            ProcessSourceDocumentCommand(cmd) || ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
+            ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd))
             return;
         if (m_activePrefabDocument) {
             ProcessFocusedPrefabCommand(cmd);

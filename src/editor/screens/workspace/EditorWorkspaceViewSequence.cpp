@@ -65,6 +65,8 @@ namespace Horo::Editor {
             return;
         if (area == WorkspaceDockArea::Document && DrawNavigationDocument(viewModel))
             return;
+        if (area == WorkspaceDockArea::Document && DrawPCGDocument(viewModel, outCommand))
+            return;
         if (area == WorkspaceDockArea::Document && DrawSequenceDocument(viewModel, outCommand))
             return;
         if (panel)

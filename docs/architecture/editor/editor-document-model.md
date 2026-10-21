@@ -68,6 +68,20 @@ play-session, or panel lifetime; those remain in the workspace/application host.
 
 ## Document Model
 
+### Partitioned world metadata workspace (WST-009.2)
+
+`PartitionedWorldWorkspace`, owned by `HoroEditorModel`, is the headless Editor
+authority for a partitioned world's authored settings, stable layers, immutable
+source-page/object metadata and separate transient open-page working set. It does
+not replace `SceneDocument` or equate authoring pages with cooked cells. Typed
+owner/generation/publication fences guard complete atomic metadata transactions;
+changed pages additionally require their exact immutable revision successor.
+Working-set changes never delete source metadata or mark it saved. Dirty-preserving
+close/replacement/shutdown, cancellation and immutable reader lifetimes are explicit.
+The additive public contract, dependency direction, limits, integration obligations
+and excluded UI/payload/persistence work are recorded in the
+[partitioned-world document migration guide](../../guides/partitioned-world-document-migration.md).
+
 ### Editable Source Ownership (EDT-003.4)
 
 `SourceFileOpenService` owns `SourceDocumentService` in the workspace controller,
@@ -833,3 +847,28 @@ Required tests cover:
 - [Cinematic Sequencer](../runtime/cinematic-sequencer-architecture.md)
 - [VFX And Particles](../runtime/vfx-and-particles-architecture.md)
 - [Terrain And Foliage](../runtime/terrain-and-foliage-architecture.md)
+
+### Manual partitioned-page residency
+
+`PartitionedWorldWorkspace` extends its metadata authority with actual immutable
+SceneDocument payloads, explicit manual load/unload/pins, and page-scoped selection.
+Load admits exact source revisions after Scene decoding and document validation;
+loaded metadata/content successors commit atomically. Metadata-only edits cannot
+invalidate loaded pages. Dirty, selected or pinned pages cannot be silently
+unloaded, and runtime eviction has no access to this owner. The controller composes
+the owner and its selection adapter; the ordinary leave guard includes its dirty
+state and requires exact revision-fenced discard consent. Reader leases survive
+owner teardown. See the [migration contract](../../guides/partitioned-world-document-migration.md#manual-page-residency-and-selection-horo-1635)
+for capacity, lifecycle, consumer migration and validation requirements.
+
+### Partitioned-world selected object inspection
+
+`PartitionedWorldWorkspace` owns transient page-scoped object selection alongside
+its immutable source root. Selection and source currentness use one exact
+`WorldDocumentFence`; removal prunes selection atomically and replacement clears
+it. `InspectSelectedObjects` returns a bounded immutable bounds/coverage/override
+explanation using WorldStreaming's source assignment and spanning kernels. It
+neither loads pages nor mutates runtime demand. Presentation retains the result
+lease and queries only after an owner revision changes. See the
+[world document migration guide](../../guides/partitioned-world-document-migration.md#object-assignment-and-bounds-inspection-wst-0095)
+for diagnostics, budgets, lifecycle and consumer migration.

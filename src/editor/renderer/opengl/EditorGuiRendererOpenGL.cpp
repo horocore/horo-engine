@@ -4,22 +4,45 @@
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/renderer/opengl/OpenGLViewportResourceBridge.h"
 
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <glad/gl.h>
 #include <imgui.h>
 #include <imgui_impl_opengl3.h>
 #include <imgui_impl_sdl3.h>
-
-#if defined(__APPLE__)
-#include <OpenGL/gl3.h>
-#else
-#include <SDL3/SDL_opengl.h>
-#endif
-
-#include <algorithm>
-#include <cstddef>
 #include <string>
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Selects the primary backbuffer and restores its draw selection plus caller state. */
+        class GuiOutputScope final {
+        public:
+            GuiOutputScope() noexcept {
+                glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFramebuffer_);
+                glGetBooleani_v(GL_COLOR_WRITEMASK, 0, colorMask_.data());
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+                glGetIntegerv(GL_DRAW_BUFFER, &drawBuffer_);
+                glDrawBuffer(GL_BACK);
+                glColorMaski(0, GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            }
+
+            ~GuiOutputScope() {
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+                glDrawBuffer(static_cast<GLenum>(drawBuffer_));
+                glColorMaski(0, colorMask_[0], colorMask_[1], colorMask_[2], colorMask_[3]);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(drawFramebuffer_));
+            }
+
+            GuiOutputScope(const GuiOutputScope &) = delete;
+            GuiOutputScope &operator=(const GuiOutputScope &) = delete;
+
+        private:
+            GLint drawFramebuffer_{0};
+            GLint drawBuffer_{GL_BACK};
+            std::array<GLboolean, 4> colorMask_{};
+        };
+
         [[nodiscard]] Error MakeGuiRendererError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
         }
@@ -35,8 +58,21 @@ namespace Horo::Editor {
         Shutdown();
     }
 
+    /** @copydoc EditorGuiRendererOpenGL::ValidateContext */
+    Result<void> EditorGuiRendererOpenGL::ValidateContext() const {
+        if (ownerThread_ != std::this_thread::get_id() || ImGui::GetCurrentContext() == nullptr || context_ == nullptr ||
+            SDL_GL_GetCurrentContext() != context_ || SDL_GL_GetCurrentWindow() != window_) {
+            return Result<void>::Failure(
+                MakeGuiRendererError(RendererErrors::GuiInvalidState,
+                                     "OpenGL GUI work requires its current window/context on the creating thread."));
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorGuiRendererOpenGL::Initialize */
     Result<void> EditorGuiRendererOpenGL::Initialize() {
+        if (const auto current = ValidateContext(); current.HasError())
+            return current;
         if (platformInitialized_ || rendererInitialized_ || context_ == nullptr) {
             return Result<void>::Failure(
                 MakeGuiRendererError(RendererErrors::GuiInvalidState, "OpenGL GUI renderer state or context is invalid."));
@@ -53,6 +89,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererOpenGL::BeginFrame */
     Result<void> EditorGuiRendererOpenGL::BeginFrame() {
+        if (const auto current = ValidateContext(); current.HasError())
+            return current;
         if (!rendererInitialized_) {
             return Result<void>::Failure(
                 MakeGuiRendererError(RendererErrors::GuiNotInitialized, "OpenGL GUI renderer is not initialized."));
@@ -64,16 +102,23 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererOpenGL::RenderDrawData */
     Result<void> EditorGuiRendererOpenGL::RenderDrawData() {
+        if (const auto current = ValidateContext(); current.HasError())
+            return current;
         if (!rendererInitialized_) {
             return Result<void>::Failure(
                 MakeGuiRendererError(RendererErrors::GuiNotInitialized, "OpenGL GUI renderer is not initialized."));
         }
+        // Backend execution restores caller bindings; GUI output belongs to the primary
+        // backbuffer even when the caller retained an offscreen framebuffer binding.
+        const GuiOutputScope output;
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         return Result<void>::Success();
     }
 
     /** @copydoc EditorGuiRendererOpenGL::CreateTexture */
     Result<std::uintptr_t> EditorGuiRendererOpenGL::CreateTexture(const EditorRgba8ImageView &image) {
+        if (const auto current = ValidateContext(); current.HasError())
+            return Result<std::uintptr_t>::Failure(current.ErrorValue());
         if (!rendererInitialized_ || !image.IsValid()) {
             return Result<std::uintptr_t>::Failure(
                 MakeGuiRendererError(RendererErrors::GuiInvalidTexture, "OpenGL GUI texture upload is invalid."));
@@ -104,32 +149,35 @@ namespace Horo::Editor {
         if (const auto completed = frontend_->ResourceOperationResult(view.Value().operation);
             processed.HasError() || completed.HasError()) {
             const Error error = processed.HasError() ? processed.ErrorValue() : completed.ErrorValue();
-            static_cast<void>(frontend_->ReleaseTextureView(view.Value().handle));
-            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            ReleaseTextureResources(texture.Value().handle, view.Value().handle);
             return Result<std::uintptr_t>::Failure(error);
         }
         auto identity = OpenGLViewportResourceBridge::EditorImageIdentity(*frontend_, view.Value().handle);
         if (identity.HasError()) {
-            static_cast<void>(frontend_->ReleaseTextureView(view.Value().handle));
-            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            ReleaseTextureResources(texture.Value().handle, view.Value().handle);
             return Result<std::uintptr_t>::Failure(identity.ErrorValue());
         }
         try {
             textures_.emplace_back(identity.Value(), texture.Value().handle, view.Value().handle);
         } catch (...) {  // NOSONAR(cpp:S2738)
-            static_cast<void>(frontend_->ReleaseTextureView(view.Value().handle));
-            static_cast<void>(frontend_->ReleaseTexture(texture.Value().handle));
+            ReleaseTextureResources(texture.Value().handle, view.Value().handle);
             return Result<std::uintptr_t>::Failure(
                 MakeGuiRendererError(RendererErrors::GuiInvalidTexture, "OpenGL GUI texture ownership record allocation failed."));
         }
         return Result<std::uintptr_t>::Success(identity.Value());
     }
 
+    /** @copydoc EditorGuiRendererOpenGL::ReleaseTextureResources */
+    void EditorGuiRendererOpenGL::ReleaseTextureResources(const Render::RenderTextureHandle texture,
+                                                          const Render::RenderTextureViewHandle view) noexcept {
+        static_cast<void>(frontend_->ReleaseTextureView(view));
+        static_cast<void>(frontend_->ReleaseTexture(texture));
+    }
+
     /** @copydoc EditorGuiRendererOpenGL::DestroyTexture */
     void EditorGuiRendererOpenGL::DestroyTexture(const std::uintptr_t textureId) noexcept {
         if (const auto found = std::ranges::find(textures_, textureId, &TextureRecord::imageIdentity); found != textures_.end()) {
-            static_cast<void>(frontend_->ReleaseTextureView(found->view));
-            static_cast<void>(frontend_->ReleaseTexture(found->texture));
+            ReleaseTextureResources(found->texture, found->view);
             textures_.erase(found);
         }
     }
@@ -137,8 +185,7 @@ namespace Horo::Editor {
     /** @copydoc EditorGuiRendererOpenGL::Shutdown */
     void EditorGuiRendererOpenGL::Shutdown() noexcept {
         for (const TextureRecord &texture : textures_) {
-            static_cast<void>(frontend_->ReleaseTextureView(texture.view));
-            static_cast<void>(frontend_->ReleaseTexture(texture.texture));
+            ReleaseTextureResources(texture.texture, texture.view);
         }
         textures_.clear();
         if (rendererInitialized_) {

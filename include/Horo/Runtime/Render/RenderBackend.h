@@ -270,6 +270,22 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<void> ExecuteStaticMeshPass(const StaticMeshPassDescriptor &descriptor) = 0;
     };
 
+    /**
+     * @brief Host-selected, native-free GUI encoder borrowed synchronously by a frame scope.
+     * @details The matching editor integration owns draw data and sampled image lifetimes through
+     * presentation/cancellation. Encoding runs once on the render-capable owner thread, without
+     * selecting a backend, presenting, waiting for GPU completion, or retaining the frame scope.
+     */
+    class IGuiPassExecutor {
+    public:
+        virtual ~IGuiPassExecutor() = default;
+        /**
+         * @brief Encodes current GUI draw data into the selected backend's primary output.
+         * @return Success or the original typed initialization, unsupported, or encoding failure.
+         */
+        [[nodiscard]] virtual Result<void> RenderDrawData() = 0;
+    };
+
     /** @brief Minimal compiled pass metadata consumed in deterministic order. */
     struct RenderPassDescriptor {
         RenderPassId id;
