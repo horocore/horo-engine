@@ -95,6 +95,28 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Draw the cylindrical seams and exterior hemispheres of a canonical capsule. */
+        void CapsuleWire(ColliderWireframe &wire, const Math::Mat4 &matrix, const Runtime::PhysicsCapsuleCollider &capsule) {
+            const float height = capsule.cylindricalHalfHeightMeters;
+            Circle(wire, matrix, {0, height, 0}, {1, 0, 0}, {0, 0, 1}, capsule.radiusMeters);
+            Circle(wire, matrix, {0, -height, 0}, {1, 0, 0}, {0, 0, 1}, capsule.radiusMeters);
+            for (const Math::Vec3 axis : {Math::Vec3{1, 0, 0}, Math::Vec3{0, 0, 1}}) {
+                for (int index = 0; index < 32; ++index) {
+                    // Split at the equators so no segment connects through the capsule interior.
+                    const float first = static_cast<float>(index) * 2 * std::numbers::pi_v<float> / 32;
+                    const float second = static_cast<float>(index + 1) * 2 * std::numbers::pi_v<float> / 32;
+                    const float y = index < 16 ? height : -height;
+                    Segment(wire, matrix,
+                            axis * (std::cos(first) * capsule.radiusMeters) + Math::Vec3{0, std::sin(first) * capsule.radiusMeters + y, 0},
+                            axis * (std::cos(second) * capsule.radiusMeters) +
+                                Math::Vec3{0, std::sin(second) * capsule.radiusMeters + y, 0});
+                }
+                for (const float side : {-1.0F, 1.0F})
+                    Segment(wire, matrix, axis * (side * capsule.radiusMeters) + Math::Vec3{0, -height, 0},
+                            axis * (side * capsule.radiusMeters) + Math::Vec3{0, height, 0});
+            }
+        }
+
         /** @brief Add a ray parameter only inside its requested world-distance interval. */
         void Candidate(std::optional<double> &nearest, const double distance, const Math::Ray &ray) {
             if (std::isfinite(distance) && distance >= ray.minimumDistance && distance <= ray.maximumDistance &&
@@ -195,6 +217,107 @@ namespace Horo::Editor {
             }
             return nearest;
         }
+
+        /** @brief Quantize translation in the active gizmo axes rather than unrelated contributor/body axes. */
+        Result<Math::Vec3> SnapTranslation(const ColliderPresentation &primary, const Math::Vec3 draft, const Math::Quaternion axesWorld) {
+            const auto inverseAxes = axesWorld.TryInverse();
+            const auto inverseBody = Math::TryInverseAffine(primary.bodyToWorld);
+            if (inverseAxes.HasError())
+                return Result<Math::Vec3>::Failure(inverseAxes.ErrorValue());
+            if (inverseBody.HasError())
+                return Result<Math::Vec3>::Failure(inverseBody.ErrorValue());
+            const auto worldDelta = Math::TransformDirection(primary.bodyToWorld, draft - primary.localTransform.translation);
+            const auto projected = inverseAxes.Value().TryRotate(worldDelta);
+            if (projected.HasError())
+                return Result<Math::Vec3>::Failure(projected.ErrorValue());
+            const auto quantize = [](const float value) {
+                return std::round(value / 0.1F) * 0.1F;
+            };
+            const auto snapped =
+                axesWorld.TryRotate({quantize(projected.Value().x), quantize(projected.Value().y), quantize(projected.Value().z)});
+            if (snapped.HasError())
+                return Result<Math::Vec3>::Failure(snapped.ErrorValue());
+            return Result<Math::Vec3>::Success(primary.localTransform.translation +
+                                               Math::TransformDirection(inverseBody.Value(), snapped.Value()));
+        }
+
+        /** @brief Snap one validated primary draft without accumulating quantization across preview frames. */
+        Result<Math::Transform> SnapPrimary(const ColliderPresentation &primary, Math::Transform draft, const Math::Quaternion axesWorld) {
+            const auto quantize = [](const float value, const float step) {
+                return std::round(value / step) * step;
+            };
+            const auto translation = SnapTranslation(primary, draft.translation, axesWorld);
+            if (translation.HasError())
+                return Result<Math::Transform>::Failure(translation.ErrorValue());
+            draft.translation = translation.Value();
+            const auto rotation = (draft.rotation * primary.localTransform.rotation.Inverse()).TryNormalized();
+            if (rotation.HasError())
+                return Result<Math::Transform>::Failure(rotation.ErrorValue());
+            const Math::Vec3 axis{rotation.Value().x, rotation.Value().y, rotation.Value().z};
+            if (Math::LengthSquared(axis) > 1.0e-12F) {
+                const float angle = 2 * std::atan2(Math::Length(axis), rotation.Value().w);
+                const auto snapped = Math::Quaternion::TryFromAxisAngle(axis, quantize(angle, Math::DegreesToRadians(15)));
+                if (snapped.HasError())
+                    return Result<Math::Transform>::Failure(snapped.ErrorValue());
+                draft.rotation = snapped.Value() * primary.localTransform.rotation;
+            }
+            const auto scale = [&](const float value, const float original) {
+                return original * std::max(0.1F, quantize(value / original, 0.1F));
+            };
+            draft.scale = {scale(draft.scale.x, primary.localTransform.scale.x), scale(draft.scale.y, primary.localTransform.scale.y),
+                           scale(draft.scale.z, primary.localTransform.scale.z)};
+            return Result<Math::Transform>::Success(draft);
+        }
+
+        /** @brief Convert a common world delta into one contributor's explicitly referenced body space. */
+        Result<ColliderTransformEdit> TransformChild(const ColliderPresentation &child, const Math::Mat4 &delta, const bool unchanged) {
+            if (!child.editable || child.diagnostic)
+                return Result<ColliderTransformEdit>::Failure(child.diagnostic.value_or(Rejected(SceneTransactionFailure::Unauthorized)));
+            const auto world = ShapeMatrix(child);
+            const auto bodyInverse = Math::TryInverseAffine(child.bodyToWorld);
+            if (world.HasError())
+                return Result<ColliderTransformEdit>::Failure(world.ErrorValue());
+            if (bodyInverse.HasError())
+                return Result<ColliderTransformEdit>::Failure(bodyInverse.ErrorValue());
+            auto local = Math::TryDecomposeAffineTRS(Math::Multiply(bodyInverse.Value(), Math::Multiply(delta, world.Value())));
+            if (local.HasError())
+                return Result<ColliderTransformEdit>::Failure(local.ErrorValue());
+            if (unchanged)
+                local = Result<Math::Transform>::Success(child.localTransform);
+            const auto &scale = local.Value().scale;
+            if (scale.x <= 0 || scale.y <= 0 || scale.z <= 0)
+                return Result<ColliderTransformEdit>::Failure(Rejected(SceneTransactionFailure::Invalid));
+            if ((std::holds_alternative<Runtime::PhysicsSphereCollider>(child.shape) ||
+                 std::holds_alternative<Runtime::PhysicsCapsuleCollider>(child.shape)) &&
+                (!Math::NearlyEqual(scale.x, scale.y) || !Math::NearlyEqual(scale.y, scale.z)))
+                return Result<ColliderTransformEdit>::Failure(
+                    MakeError(Physics::PhysicsErrors::OperationUnsupported,
+                              "Sphere and capsule bounds require uniform scale; use the uniform handle."));
+            return Result<ColliderTransformEdit>::Success({child.target, child.generation, local.Value()});
+        }
+
+        /** @brief Validate exact contributor generation, source and inherited body/owner edit permissions. */
+        Result<void> ValidateEdit(const SceneTransactionSnapshot &snapshot, const ColliderTransformEdit &edit) {
+            const auto object = std::ranges::find(snapshot.objects, edit.target.object, &SceneSource::SceneObjectSnapshot::id);
+            const auto state = ResolveSceneObjectEditorState(snapshot.objects, edit.target.object);
+            if (object == snapshot.objects.end() || object->generated || !state || state->effectivelyLocked)
+                return Result<void>::Failure(Rejected(SceneTransactionFailure::Unauthorized));
+            const auto child = std::ranges::find(object->components.colliders, edit.target.component, &Runtime::ColliderComponent::id);
+            if (child == object->components.colliders.end() || child->generation != edit.generation)
+                return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
+            if (!std::holds_alternative<Runtime::PhysicsAnalyticCollider>(child->source))
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::OperationUnsupported,
+                                                       "Cooked collider source editing requires its owning shape document."));
+            const auto bodyState = ResolveSceneObjectEditorState(snapshot.objects, {child->body.object.value});
+            if (!bodyState || bodyState->effectivelyLocked)
+                return Result<void>::Failure(Rejected(SceneTransactionFailure::Unauthorized));
+            if (const auto world = BodyMatrix(snapshot.objects, child->body); world.HasError())
+                return Result<void>::Failure(world.ErrorValue());
+            if (edit.transform.TryToMatrix().HasError())
+                return Result<void>::Failure(Rejected(SceneTransactionFailure::Invalid));
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     /** @copydoc ProjectPhysicsColliders */
@@ -270,25 +393,7 @@ namespace Horo::Editor {
             Circle(wire, matrix.Value(), {}, {1, 0, 0}, {0, 0, 1}, sphere->radiusMeters);
             Circle(wire, matrix.Value(), {}, {0, 1, 0}, {0, 0, 1}, sphere->radiusMeters);
         } else if (const auto *capsule = std::get_if<Runtime::PhysicsCapsuleCollider>(&collider.shape)) {
-            const float height = capsule->cylindricalHalfHeightMeters;
-            Circle(wire, matrix.Value(), {0, height, 0}, {1, 0, 0}, {0, 0, 1}, capsule->radiusMeters);
-            Circle(wire, matrix.Value(), {0, -height, 0}, {1, 0, 0}, {0, 0, 1}, capsule->radiusMeters);
-            for (const Math::Vec3 axis : {Math::Vec3{1, 0, 0}, Math::Vec3{0, 0, 1}}) {
-                for (int index = 0; index < 32; ++index) {
-                    // Split at the equators so no segment connects through the capsule interior.
-                    const float first = static_cast<float>(index) * 2 * std::numbers::pi_v<float> / 32;
-                    const float second = static_cast<float>(index + 1) * 2 * std::numbers::pi_v<float> / 32;
-                    const float y = index < 16 ? height : -height;
-                    Segment(wire, matrix.Value(),
-                            axis * (std::cos(first) * capsule->radiusMeters) +
-                                Math::Vec3{0, std::sin(first) * capsule->radiusMeters + y, 0},
-                            axis * (std::cos(second) * capsule->radiusMeters) +
-                                Math::Vec3{0, std::sin(second) * capsule->radiusMeters + y, 0});
-                }
-                for (const float side : {-1.0F, 1.0F})
-                    Segment(wire, matrix.Value(), axis * (side * capsule->radiusMeters) + Math::Vec3{0, -height, 0},
-                            axis * (side * capsule->radiusMeters) + Math::Vec3{0, height, 0});
-            }
+            CapsuleWire(wire, matrix.Value(), *capsule);
         } else {
             const auto &plane = std::get<Runtime::PhysicsStaticPlaneCollider>(collider.shape);
             const auto tangent =
@@ -321,6 +426,8 @@ namespace Horo::Editor {
         for (const auto &collider : colliders) {
             if (!collider.visible || collider.diagnostic)
                 continue;
+            if (!collider.target.object.IsValid() || !collider.target.component.IsValid() || collider.generation == 0)
+                return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
             const auto distance = Hit(collider, ray);
             if (distance && (!nearest || *distance < *nearest || (*distance == *nearest && collider.target < *target))) {
                 nearest = distance;
@@ -332,7 +439,8 @@ namespace Horo::Editor {
 
     /** @copydoc EvaluateColliderGroupTransform */
     Result<std::vector<ColliderTransformEdit>> EvaluateColliderGroupTransform(const std::span<const ColliderPresentation> selection,
-                                                                              Math::Transform primaryDraft, const bool snap) {
+                                                                              Math::Transform primaryDraft, const bool snap,
+                                                                              const Math::Quaternion snapAxesWorld) {
         using Return = Result<std::vector<ColliderTransformEdit>>;
         if (selection.empty() || selection.size() > SceneTransactionLimits{}.maximumChanges || primaryDraft.TryToMatrix().HasError())
             return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
@@ -343,33 +451,12 @@ namespace Horo::Editor {
         if (primaryDraft.scale.x <= 0 || primaryDraft.scale.y <= 0 || primaryDraft.scale.z <= 0)
             return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
         if (snap) {
-            const auto quantize = [](const float value, const float step) {
-                return std::round(value / step) * step;
-            };
-            const auto delta = primaryDraft.translation - primary.localTransform.translation;
-            primaryDraft.translation =
-                primary.localTransform.translation + Math::Vec3{quantize(delta.x, 0.1F), quantize(delta.y, 0.1F), quantize(delta.z, 0.1F)};
-            const auto rotation = (primaryDraft.rotation * primary.localTransform.rotation.Inverse()).TryNormalized();
-            if (rotation.HasError())
-                return Return::Failure(rotation.ErrorValue());
-            const Math::Vec3 axis{rotation.Value().x, rotation.Value().y, rotation.Value().z};
-            if (Math::LengthSquared(axis) > 1.0e-12F) {
-                const float angle = 2 * std::atan2(Math::Length(axis), rotation.Value().w);
-                const auto snapped = Math::Quaternion::TryFromAxisAngle(axis, quantize(angle, Math::DegreesToRadians(15)));
-                if (snapped.HasError())
-                    return Return::Failure(snapped.ErrorValue());
-                primaryDraft.rotation = snapped.Value() * primary.localTransform.rotation;
-            }
-            const auto scale = [&](const float value, const float original) {
-                return original * std::max(0.1F, quantize(value / original, 0.1F));
-            };
-            primaryDraft.scale = {scale(primaryDraft.scale.x, primary.localTransform.scale.x),
-                                  scale(primaryDraft.scale.y, primary.localTransform.scale.y),
-                                  scale(primaryDraft.scale.z, primary.localTransform.scale.z)};
+            const auto snapped = SnapPrimary(primary, primaryDraft, snapAxesWorld);
+            if (snapped.HasError())
+                return Return::Failure(snapped.ErrorValue());
+            primaryDraft = snapped.Value();
         }
         const auto draft = primaryDraft.TryToMatrix();
-        if (initial.HasError())
-            return Return::Failure(initial.ErrorValue());
         if (draft.HasError())
             return Return::Failure(draft.ErrorValue());
         const auto inverse = Math::TryInverseAffine(initial.Value());
@@ -380,28 +467,10 @@ namespace Horo::Editor {
             std::vector<ColliderTransformEdit> edits;
             edits.reserve(selection.size());
             for (const auto &child : selection) {
-                if (!child.editable || child.diagnostic)
-                    return Return::Failure(child.diagnostic.value_or(Rejected(SceneTransactionFailure::Unauthorized)));
-                const auto world = ShapeMatrix(child);
-                const auto bodyInverse = Math::TryInverseAffine(child.bodyToWorld);
-                if (world.HasError())
-                    return Return::Failure(world.ErrorValue());
-                if (bodyInverse.HasError())
-                    return Return::Failure(bodyInverse.ErrorValue());
-                auto local = Math::TryDecomposeAffineTRS(Math::Multiply(bodyInverse.Value(), Math::Multiply(delta, world.Value())));
-                if (local.HasError())
-                    return Return::Failure(local.ErrorValue());
-                if (primaryDraft == primary.localTransform)
-                    local = Result<Math::Transform>::Success(child.localTransform);
-                const auto &scale = local.Value().scale;
-                if (scale.x <= 0 || scale.y <= 0 || scale.z <= 0)
-                    return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
-                if ((std::holds_alternative<Runtime::PhysicsSphereCollider>(child.shape) ||
-                     std::holds_alternative<Runtime::PhysicsCapsuleCollider>(child.shape)) &&
-                    (!Math::NearlyEqual(scale.x, scale.y) || !Math::NearlyEqual(scale.y, scale.z)))
-                    return Return::Failure(MakeError(Physics::PhysicsErrors::OperationUnsupported,
-                                                     "Sphere and capsule bounds require uniform scale; use the uniform handle."));
-                edits.push_back({child.target, child.generation, local.Value()});
+                const auto edited = TransformChild(child, delta, primaryDraft == primary.localTransform);
+                if (edited.HasError())
+                    return Return::Failure(edited.ErrorValue());
+                edits.push_back(edited.Value());
             }
             return Return::Success(std::move(edits));
         } catch (const std::bad_alloc &) {
@@ -425,23 +494,9 @@ namespace Horo::Editor {
                 for (std::size_t prior = 0; prior < index; ++prior)
                     if (edits[prior].target == edit.target)
                         return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
+                if (const auto valid = ValidateEdit(snapshot, edit); valid.HasError())
+                    return Return::Failure(valid.ErrorValue());
                 const auto object = std::ranges::find(snapshot.objects, edit.target.object, &SceneSource::SceneObjectSnapshot::id);
-                const auto state = ResolveSceneObjectEditorState(snapshot.objects, edit.target.object);
-                if (object == snapshot.objects.end() || object->generated || !state || state->effectivelyLocked)
-                    return Return::Failure(Rejected(SceneTransactionFailure::Unauthorized));
-                const auto child = std::ranges::find(object->components.colliders, edit.target.component, &Runtime::ColliderComponent::id);
-                if (child == object->components.colliders.end() || child->generation != edit.generation)
-                    return Return::Failure(Rejected(SceneTransactionFailure::Stale));
-                if (!std::holds_alternative<Runtime::PhysicsAnalyticCollider>(child->source))
-                    return Return::Failure(MakeError(Physics::PhysicsErrors::OperationUnsupported,
-                                                     "Cooked collider source editing requires its owning shape document."));
-                const auto bodyState = ResolveSceneObjectEditorState(snapshot.objects, {child->body.object.value});
-                if (!bodyState || bodyState->effectivelyLocked)
-                    return Return::Failure(Rejected(SceneTransactionFailure::Unauthorized));
-                if (const auto world = BodyMatrix(snapshot.objects, child->body); world.HasError())
-                    return Return::Failure(world.ErrorValue());
-                if (edit.transform.TryToMatrix().HasError())
-                    return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
                 // Prepare the entire object's children together so one object appears once in the atomic batch.
                 if (std::ranges::any_of(changes, [&](const auto &change) {
                     return change.object == object->id;

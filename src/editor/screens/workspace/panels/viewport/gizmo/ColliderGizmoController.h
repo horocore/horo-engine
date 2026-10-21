@@ -23,6 +23,15 @@ namespace Horo::Editor {
                                 const EditorGuiContext &gui);
 
     private:
+        /** @brief Advance the shared transform gizmo and translate its detached preview/commit semantics. */
+        [[nodiscard]] bool AdvanceGizmo(ImDrawList &drawList, const TransformGizmoDrawContext &context,
+                                        ViewportInteractionCapture &capture);
+        /** @brief Resolve an exact analytic child hit into a fenced selection intent. */
+        [[nodiscard]] bool PickChild(const TransformGizmoDrawContext &context) const;
+        /** @brief Wrap localized gesture feedback within the available logical viewport bounds. */
+        void DrawHint(ImDrawList &drawList, const TransformGizmoDrawContext &context, const EditorGuiContext &gui) const;
+        /** @brief Detect document, selection or lifecycle invalidation before processing pointer input. */
+        [[nodiscard]] bool HasStaleRequest(const EditorWorkspaceViewModel &view) const noexcept;
         /** @brief Build the narrow existing transform-gizmo adapter for a stable collider pivot. */
         void Adapt(const EditorWorkspaceViewModel &view, const ColliderPresentation &primary);
         /** @brief Draw fixed world geometry clipped to this viewport using the active renderer's depth convention. */

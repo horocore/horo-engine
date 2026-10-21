@@ -91,11 +91,13 @@ namespace Horo::Editor {
     /** @brief Evaluate a shared world-space group delta around the primary child's pivot.
      * @param selection Primary-first committed child projections retained for the gesture.
      * @param primaryDraft New primary body-local pose/scale. @param snap Enable 0.1 m, 15 degree and 10 percent increments.
+     * @param snapAxesWorld World orientation of the active snapping axes; identity selects the world grid.
      * @return Absolute generation-fenced edits, or unsupported shear/nonuniform sphere/capsule and invalid input errors.
      * @details Snap is relative to the captured primary. No owner, history or source is mutated.
      */
     [[nodiscard]] Result<std::vector<ColliderTransformEdit>> EvaluateColliderGroupTransform(std::span<const ColliderPresentation> selection,
-                                                                                            Math::Transform primaryDraft, bool snap);
+                                                                                            Math::Transform primaryDraft, bool snap,
+                                                                                            Math::Quaternion snapAxesWorld = {});
     /** @brief Prepare one atomic multi-child edit for the existing Scene/history owner.
      * @param snapshot Exact owner snapshot. @param edits Distinct generation-fenced child edits.
      * @param limits Finite transaction ceilings. @return Complete replacements or zero-mutation rejection.

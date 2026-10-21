@@ -2,13 +2,45 @@
 #include "editor/screens/workspace/panels/inspector/PhysicsInspectorWidgets.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
+#include <string_view>
 
 namespace Horo::Editor {
     namespace {
         using namespace PhysicsInspectorWidgets;
 
-        /** @brief Select an explicit body's real stable contributors without inventing nested cooked children. */
+        /** @brief Draw stable contributor data without allocating label strings or using display names as control IDs. */
+        void DrawColliderChild(const ColliderPresentation &child, const EditorWorkspaceViewModel &view,
+                               EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+            const auto owner = std::ranges::find(view.objects, child.target.object, &SceneObject::id);
+            const std::string_view name = owner == view.objects.end() ? std::string_view{"?"} : std::string_view{owner->name};
+            std::array<char, MaximumSceneObjectNameBytes + 32> label{};
+            const auto text = std::format_to_n(label.data(), label.size() - 1, "{} / {}", name, child.target.component.value);
+            label[std::min(label.size() - 1, static_cast<std::size_t>(text.size))] = '\0';
+            Ui::FieldLabel(label.data(), context.theme.fonts);
+            if (child.diagnostic)
+                Ui::Hint(Label(context, "workspace.physics.gizmo_unsupported"), context.theme.fonts);
+            std::array<char, 48> identity{};
+            static_cast<void>(
+                std::format_to_n(identity.data(), identity.size() - 1, "{}:{}", child.target.object.value, child.target.component.value));
+            ImGui::PushID(identity.data());
+            if (Action(context, "workspace.physics.edit_child", child.editable && child.visible)) {
+                command.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
+                auto selection =
+                    ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper ? view.selectedColliders : std::vector<ColliderEditTarget>{};
+                const auto selected = std::ranges::find(selection, child.target);
+                if (selected == selection.end())
+                    selection.push_back(child.target);
+                else
+                    selection.erase(selected);
+                command.colliderPayload =
+                    ColliderViewportRequest{view.physicsContext, view.colliderSelectionRevision, std::move(selection), {}};
+            }
+            ImGui::PopID();
+        }
+
+        /** @brief Select an explicit body's real contributors; allocate a selection batch only for an actual action. */
         void DrawColliderHierarchy(const SceneObject &object, const EditorWorkspaceViewModel &view, EditorWorkspaceViewCommandData &command,
                                    const EditorGuiContext &context) {
             if (!object.components.rigidBody)
@@ -18,34 +50,20 @@ namespace Horo::Editor {
             card.DrawTitleBar(
                 {.id = "title", .title = Label(context, "workspace.physics.compound_children"), .fonts = context.theme.fonts});
             if (card.BeginBody()) {
-                std::vector<ColliderEditTarget> children;
+                std::size_t editableCount = 0;
                 for (const auto &child : view.viewportColliders) {
                     if (child.body != body)
                         continue;
-                    const auto owner = std::ranges::find(view.objects, child.target.object, &SceneObject::id);
-                    const auto label =
-                        std::format("{} / {}", owner == view.objects.end() ? "?" : owner->name, child.target.component.value);
-                    Ui::FieldLabel(label.c_str(), context.theme.fonts);
-                    if (child.diagnostic)
-                        Ui::Hint(Label(context, "workspace.physics.gizmo_unsupported"), context.theme.fonts);
-                    ImGui::PushID(label.c_str());
-                    if (Action(context, "workspace.physics.edit_child", child.editable && child.visible)) {
-                        command.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
-                        auto selection =
-                            ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper ? view.selectedColliders : std::vector<ColliderEditTarget>{};
-                        const auto selected = std::ranges::find(selection, child.target);
-                        if (selected == selection.end())
-                            selection.push_back(child.target);
-                        else
-                            selection.erase(selected);
-                        command.colliderPayload =
-                            ColliderViewportRequest{view.physicsContext, view.colliderSelectionRevision, std::move(selection), {}};
-                    }
-                    ImGui::PopID();
+                    DrawColliderChild(child, view, command, context);
                     if (child.editable && child.visible)
-                        children.push_back(child.target);
+                        ++editableCount;
                 }
-                if (Action(context, "workspace.physics.edit_compound", !children.empty())) {
+                if (Action(context, "workspace.physics.edit_compound", editableCount != 0)) {
+                    std::vector<ColliderEditTarget> children;
+                    children.reserve(editableCount);
+                    for (const auto &child : view.viewportColliders)
+                        if (child.body == body && child.editable && child.visible)
+                            children.push_back(child.target);
                     command.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
                     command.colliderPayload =
                         ColliderViewportRequest{view.physicsContext, view.colliderSelectionRevision, std::move(children), {}};

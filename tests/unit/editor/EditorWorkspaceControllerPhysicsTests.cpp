@@ -36,6 +36,20 @@ namespace {
         command.objectPayload = object;
         controller.ProcessCommand(command);
     }
+
+    /** @brief Author a real two-child compound through the existing Inspector command path. */
+    void CreateCompound(EditorWorkspaceController &controller) {
+        Select(controller, controller.ViewModel().objects.front().id);
+        auto creation = Creation(controller.ViewModel());
+        auto second = creation.physicsPayload->values.colliders.front();
+        second.id = {3};
+        second.collider = {21};
+        second.localPose.translation.x = 2;
+        creation.physicsPayload->values.colliders.push_back(second);
+        controller.ProcessCommand(creation);
+        REQUIRE(controller.ViewModel().physicsEditError.empty());
+        REQUIRE(controller.ViewModel().viewportColliders.size() == 2);
+    }
 }  // namespace
 
 TEST_CASE("Physics Inspector controller commits once through canonical history and events", "[unit][editor][physics][inspector]") {
@@ -97,16 +111,7 @@ TEST_CASE("Physics Inspector requires the explicit host document opening identit
 TEST_CASE("Collider viewport edits use the real Inspector transaction owner and one undo event", "[unit][editor][physics][collider]") {
     Runtime::RuntimeSceneService runtime;
     EditorWorkspaceController controller{"test-project", runtime, {}, {.documentSessionOwner = Identity(1)}};
-    Select(controller, controller.ViewModel().objects.front().id);
-    auto creation = Creation(controller.ViewModel());
-    auto second = creation.physicsPayload->values.colliders.front();
-    second.id = {3};
-    second.collider = {21};
-    second.localPose.translation.x = 2;
-    creation.physicsPayload->values.colliders.push_back(second);
-    controller.ProcessCommand(creation);
-    REQUIRE(controller.ViewModel().physicsEditError.empty());
-    REQUIRE(controller.ViewModel().viewportColliders.size() == 2);
+    CreateCompound(controller);
     EditorWorkspaceViewCommandData selection;
     selection.command = EditorWorkspaceViewCommand::SelectPhysicsColliders;
     const auto &view = controller.ViewModel();

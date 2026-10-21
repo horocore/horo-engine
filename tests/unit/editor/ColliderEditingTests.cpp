@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cmath>
 #include <limits>
 #include <thread>
@@ -119,7 +120,7 @@ TEST_CASE("Collider projection diagnoses invalid unsupported and locked lifecycl
     CHECK(BuildColliderWireframe(projection.Value().front()).HasError());
 }
 
-TEST_CASE("Collider picking intersects exact oriented primitive surfaces and world distance", "[unit][editor][physics][collider]") {
+TEST_CASE("Collider picking rejects conservative bounds and far-offset false hits", "[unit][editor][physics][collider]") {
     auto child = Project(Runtime::PhysicsBoxCollider{});
     Math::Ray ray{{0, 0, 5}, {0, 0, -1}, 0, 10};
     SECTION("rotated thin box rejects conservative world bounds") {
@@ -148,6 +149,11 @@ TEST_CASE("Collider picking intersects exact oriented primitive surfaces and wor
         CHECK_FALSE(PickPhysicsCollider(std::span{&child, 1}, ray).Value());
         return;
     }
+}
+
+TEST_CASE("Collider picking intersects exact oriented primitive surfaces and world distance", "[unit][editor][physics][collider]") {
+    auto child = Project(Runtime::PhysicsBoxCollider{});
+    Math::Ray ray{{0, 0, 5}, {0, 0, -1}, 0, 10};
     SECTION("capsule cap hit") {
         child.shape = Runtime::PhysicsCapsuleCollider{1, 1};
         ray = {{0, 5, 0}, {0, -1, 0}, 0, 10};
@@ -167,6 +173,11 @@ TEST_CASE("Collider picking intersects exact oriented primitive surfaces and wor
     SECTION("hidden is not picked") {
         child.visible = false;
         CHECK_FALSE(PickPhysicsCollider(std::span{&child, 1}, ray).Value());
+        return;
+    }
+    SECTION("invalid pick identity fails") {
+        child.target.component = {};
+        CHECK(PickPhysicsCollider(std::span{&child, 1}, ray).HasError());
         return;
     }
     SECTION("invalid ray fails") {
@@ -289,6 +300,19 @@ TEST_CASE("Collider atomic preparation rejects invalid stale cancelled reload an
         CHECK(Bytes(owner.Snapshot().Value()) == Bytes(before));
         return;
     }
+    CHECK(PrepareColliderTransformEdits(before, edits).HasError());
+    CHECK(Bytes(owner.Snapshot().Value()) == Bytes(before));
+}
+
+TEST_CASE("Collider transactions reject cancelled replaced foreign-thread and closed owners", "[unit][editor][physics][collider]") {
+    auto created = SceneDocumentTransactions::Create({Asset(1), 1}, Root());
+    REQUIRE(created.HasValue());
+    auto owner = std::move(created).Value();
+    const auto before = owner.Snapshot().Value();
+    const auto children = ProjectPhysicsColliders(before.objects).Value();
+    auto draft = children.front().localTransform;
+    draft.translation.x = 1;
+    auto edits = EvaluateColliderGroupTransform(children, draft, false).Value();
     SECTION("cancelled commit") {
         const auto changes = PrepareColliderTransformEdits(before, edits).Value();
         CancellationSource cancellation;
@@ -319,6 +343,23 @@ TEST_CASE("Collider atomic preparation rejects invalid stale cancelled reload an
         CHECK(owner.Execute(Fence(before), changes).HasError());
         return;
     }
-    CHECK(PrepareColliderTransformEdits(before, edits).HasError());
-    CHECK(Bytes(owner.Snapshot().Value()) == Bytes(before));
+}
+
+TEST_CASE("Collider translation snapping follows active axes through rotated body and child poses", "[unit][editor][physics][collider]") {
+    auto objects = Root();
+    const auto bodyRotation = Math::Quaternion::FromAxisAngle({0, 0, 1}, Math::DegreesToRadians(45));
+    const auto childRotation = Math::Quaternion::FromAxisAngle({0, 0, 1}, Math::DegreesToRadians(45));
+    objects.front().localTransform.rotation = bodyRotation;
+    objects.front().components.colliders.front().localPose.rotation = childRotation;
+    const auto children = ProjectPhysicsColliders(objects).Value();
+    auto draft = children.front().localTransform;
+    const bool localSpace = GENERATE(false, true);
+    const Math::Quaternion snapAxes = localSpace ? bodyRotation * childRotation : Math::Quaternion{};
+    const Math::Vec3 worldIntent = snapAxes.Rotate({0.26F, 0, 0});
+    draft.translation = bodyRotation.Inverse().Rotate(worldIntent);
+    const auto edits = EvaluateColliderGroupTransform(children, draft, true, snapAxes);
+    REQUIRE(edits.HasValue());
+    const auto actualWorldDelta = Math::TransformDirection(children.front().bodyToWorld, edits.Value().front().transform.translation);
+    const auto expectedWorldDelta = snapAxes.Rotate({0.3F, 0, 0});
+    CHECK(Math::NearlyEqual(actualWorldDelta, expectedWorldDelta));
 }

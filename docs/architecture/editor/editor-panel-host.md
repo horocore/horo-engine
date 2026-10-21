@@ -805,10 +805,14 @@ the resulting displacement through the parent inverse before previewing it.
 Physics collider editing uses the same routed pointer-capture and transform-gizmo
 geometry. PhysicsInspector exposes the explicit body's contributor hierarchy by
 stable object/component identity, including contributors stored on other objects.
-Edit Child selects one contributor; Edit All selects the admitted flat compound.
+Guides follow the selected body/contributor or explicit child selection, keeping
+normal scene drawing free of unrelated collider geometry. Edit Child selects one
+contributor; Edit All selects the admitted flat compound.
 Ctrl/Command-click toggles children in the viewport. Move, Rotate and Scale edit
 body-local poses and positive authored bounds; Ctrl snaps relative to the captured
-primary (0.1 m, 15 degrees, 10 percent). Screen input and overlay widths use logical
+primary (0.1 m in the active Local/World axes, 15 degrees, 10 percent).
+The group evaluator takes the explicit world orientation of those axes; an identity
+orientation selects the world grid. Screen input and overlay widths use logical
 pixels; framebuffer scale affects the render-target extent only. Picking intersects
 actual oriented boxes, spheres, capsules and plane equations, using the renderer's
 clip convention and world-distance ray limits.

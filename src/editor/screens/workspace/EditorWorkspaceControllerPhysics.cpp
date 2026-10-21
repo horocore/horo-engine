@@ -123,30 +123,24 @@ namespace Horo::Editor {
             return;
         }
         if (command.command == EditorWorkspaceViewCommand::SelectPhysicsColliders) {
-            if (request.selection.size() > SceneTransactionLimits{}.maximumChanges) {
-                reject(MakeError(SceneTransactionError(SceneTransactionFailure::Capacity)));
+            if (const auto valid = ValidateColliderViewportSelection(request.selection); valid.HasError()) {
+                reject(valid.ErrorValue());
                 return;
-            }
-            for (std::size_t index = 0; index < request.selection.size(); ++index) {
-                const auto target = request.selection[index];
-                if (std::ranges::find(request.selection.begin(), request.selection.begin() + static_cast<std::ptrdiff_t>(index), target) !=
-                    request.selection.begin() + static_cast<std::ptrdiff_t>(index)) {
-                    reject(MakeError(SceneTransactionError(SceneTransactionFailure::Invalid)));
-                    return;
-                }
-                const auto found = std::ranges::find(m_viewModel.viewportColliders, target, &ColliderPresentation::target);
-                if (found == m_viewModel.viewportColliders.end() || !found->visible || !found->editable) {
-                    reject(found != m_viewModel.viewportColliders.end() && found->diagnostic
-                               ? *found->diagnostic
-                               : MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
-                    return;
-                }
             }
             m_viewModel.selectedColliders = request.selection;
             ++m_viewModel.colliderSelectionRevision;
             m_viewModel.physicsEditError.clear();
             return;
         }
+        CommitColliderViewportEdits(request, snapshot.Value());
+    }
+
+    /** @copydoc EditorWorkspaceController::CommitColliderViewportEdits */
+    void EditorWorkspaceController::CommitColliderViewportEdits(const ColliderViewportRequest &request,
+                                                                const SceneTransactionSnapshot &snapshot) {
+        const auto reject = [this](const Error &error) {
+            m_viewModel.physicsEditError = error.message;
+        };
         if (!request.context.canEdit || request.selection != m_viewModel.selectedColliders ||
             request.edits.size() != request.selection.size()) {
             reject(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
@@ -157,7 +151,7 @@ namespace Horo::Editor {
                 reject(MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
                 return;
             }
-        auto changes = PrepareColliderTransformEdits(snapshot.Value(), request.edits);
+        auto changes = PrepareColliderTransformEdits(snapshot, request.edits);
         if (changes.HasError()) {
             reject(changes.ErrorValue());
             return;
@@ -178,5 +172,26 @@ namespace Horo::Editor {
         event.committed = committed.Value().committed;
         m_viewModel.physicsEditError.clear();
         HandleDocumentCommandResult(Result<SceneCommandResult>::Success(std::move(event)), "Edit collider children");
+    }
+
+    /** @copydoc EditorWorkspaceController::ValidateColliderViewportSelection */
+    Result<void> EditorWorkspaceController::ValidateColliderViewportSelection(const std::span<const ColliderEditTarget> selection) const {
+        if (selection.size() > SceneTransactionLimits{}.maximumChanges) {
+            return Result<void>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Capacity)));
+        }
+        for (std::size_t index = 0; index < selection.size(); ++index) {
+            const auto target = selection[index];
+            if (std::ranges::find(selection.begin(), selection.begin() + static_cast<std::ptrdiff_t>(index), target) !=
+                selection.begin() + static_cast<std::ptrdiff_t>(index)) {
+                return Result<void>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Invalid)));
+            }
+            const auto found = std::ranges::find(m_viewModel.viewportColliders, target, &ColliderPresentation::target);
+            if (found == m_viewModel.viewportColliders.end() || !found->visible || !found->editable) {
+                return Result<void>::Failure(found != m_viewModel.viewportColliders.end() && found->diagnostic
+                                                 ? *found->diagnostic
+                                                 : MakeError(SceneTransactionError(SceneTransactionFailure::Unauthorized)));
+            }
+        }
+        return Result<void>::Success();
     }
 }  // namespace Horo::Editor
