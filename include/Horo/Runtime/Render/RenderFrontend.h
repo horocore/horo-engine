@@ -155,6 +155,17 @@ namespace Horo::Render {
          * or a translated backend exception.
          */
         [[nodiscard]] Result<void> Execute(std::span<const RenderPassDescriptor> orderedPasses);
+
+        /**
+         * @brief Composes GUI output once after successful execution and before presentation.
+         * @param executor Matching host-selected integration; borrowed only for this call.
+         * @param cancellation Cooperative cancellation sampled before encoding.
+         * @return Success, typed stage/cancellation error, original encoder failure, or translated exception.
+         * @details Cancellation, encoder failure and exceptions abort the frame. Invalid stage calls
+         * leave it recoverable. No allocation or GPU wait is introduced by the composition stage.
+         */
+        [[nodiscard]] Result<void> ComposeGui(IGuiPassExecutor &executor, const CancellationToken &cancellation = {});
+
         /** @brief Consumes one bounded prepared material pass, retaining exact generations until native completion.
          * @param pass Ready target/meshes and immutable material leases, borrowed only during this call.
          * @return Success or typed stage, identity, unsupported or native failure. No frame-hot preparation occurs.
@@ -299,6 +310,7 @@ namespace Horo::Render {
         FrameToken frame_{};
         std::uint64_t hostFrame_{};
         bool executed_{false};
+        bool guiComposed_{false};
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
     };

@@ -419,6 +419,16 @@ namespace Horo::Editor {
         std::uint64_t expectedReplacementEpoch{};
     };
 
+    /** @brief One atomic same-instance component gesture fenced to the exact source/schema/document opening. */
+    struct EditScenePrefabComponentsCommand final {
+        Prefab::PrefabInstanceId instance;
+        DocumentRevision expectedRevision;
+        Prefab::PrefabResolutionRevision expectedSource;
+        Sha256Digest expectedSchema;
+        std::vector<Prefab::PrefabComponentEdit> edits;
+        std::uint64_t expectedReplacementEpoch{};
+    };
+
     /** @brief Typed request to duplicate a placement with a fresh scene-local instance identity. */
     struct DuplicateScenePrefabInstanceCommand final {
         Prefab::PrefabInstanceId source;
@@ -601,6 +611,17 @@ namespace Horo::Editor {
          * @param limits Captured resource policy. @param cancellation Cooperative preparation cancellation.
          * @return One complete history transition or typed error without mutation. */
         [[nodiscard]] Result<SceneCommandResult> Execute(const EditScenePrefabComponentCommand &command,
+                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                         const Prefab::PrefabLimitProfile &limits,
+                                                         const CancellationToken &cancellation = {});
+
+        /** @brief Commits all prepared component replacements as one existing override-history record.
+         * @param command Exact owner/source/schema fenced gesture. @param sources Canonical source owner.
+         * @param schemas Captured validating metadata. @param limits Explicit bounded policy.
+         * @param cancellation Cooperative cancellation. @return One commit or zero-mutation rejection.
+         */
+        [[nodiscard]] Result<SceneCommandResult> Execute(const EditScenePrefabComponentsCommand &command,
                                                          const Prefab::PrefabSourceResolverSnapshot &sources,
                                                          const Prefab::PrefabValueSchemaSnapshot *schemas,
                                                          const Prefab::PrefabLimitProfile &limits,
