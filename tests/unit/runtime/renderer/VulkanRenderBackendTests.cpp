@@ -47,7 +47,7 @@ namespace {
         REQUIRE_FALSE(backend->Capabilities().presentsToWindow);
         REQUIRE_FALSE(backend->Capabilities().supportsCompute);
         REQUIRE(backend->BeginFrame({.frameNumber = 1, .outputExtent = {1280, 720}}).ErrorValue().code.Value() ==
-                "render.vulkan.unsupported_operation");
+                "render.vulkan.presentation_unsupported");
 
         Horo::Render::Test::RequireDrainedOwner(*backend);
         Horo::Render::Test::RequireDrainedOwner(*backend);
@@ -155,9 +155,9 @@ namespace {
 
         REQUIRE(backend->Initialize(RenderBackendConfig{.requirePresentation = true}).HasValue());
         Test::RequireErrorCode(backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {1280, 720}}),
-                               "render.vulkan.unsupported_operation", "horo.render.vulkan");
+                               "render.vulkan.presentation_unsupported", "horo.render.vulkan");
         Test::RequireErrorCode(backend->Execute(RenderExecutionPlan{}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
-        Test::RequireErrorCode(backend->Present(FrameToken{1}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Present(FrameToken{1}), "render.vulkan.presentation_unsupported", "horo.render.vulkan");
         Test::RequireErrorCode(backend->Resize(FramebufferExtent{1280, 720}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
 
         Horo::Render::Test::RequireDrainedOwner(*backend);

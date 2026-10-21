@@ -421,8 +421,9 @@ namespace Horo::Render::Detail {
 
     std::size_t RenderResourceRegistry::DrainRetirements(const BackendResourceReleaseMode releaseMode) noexcept {
         std::size_t retired = 0;
-        const auto scan = std::min(static_cast<std::size_t>(limits_.retirementDrainBudget), retirementQueueCount_);
-        for (std::size_t examined = 0; examined < scan; ++examined) {
+        // Retiring a child can enqueue its now-unpinned parents. Consume those within the same
+        // fixed work budget; a still-live native lease may requeue but cannot cause an unbounded scan.
+        for (std::size_t examined = 0; examined < limits_.retirementDrainBudget && retirementQueueCount_ != 0; ++examined) {
             const std::uint32_t slot = retirementQueue_[retirementQueueHead_];
             retirementQueueHead_ = (retirementQueueHead_ + 1) % retirementQueue_.size();
             --retirementQueueCount_;
