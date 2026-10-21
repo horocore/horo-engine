@@ -87,7 +87,7 @@ namespace {
         ConfigurationService configuration = CreateEditorConfigurationService(DefaultEditorSettings());
         EditorSettingsService settings{DefaultEditorSettings(), configuration, gui.editorEvents, gui.localization};
         EditorModalHost modals{gui.editorEvents, gui.input};
-        RendererAvailabilitySnapshot renderers{};
+        RendererAvailabilitySnapshot renderers{{}, {}};
         SessionState state{.root = directory.Path()};
         GuiScreenHost host{gui.context,
                            {.modalHost = modals,
