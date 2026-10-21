@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <imgui.h>
+#include <optional>
 
 namespace Horo::Editor::DesignSystem {
 
@@ -148,6 +149,18 @@ namespace Horo::Editor::DesignSystem {
         float propertyRowGap; /**< Vertical separation between adjacent Inspector property controls. */
     };
 
+    /** @brief Optional semantic source colors; absent entries inherit the active editor palette. */
+    struct SourceColorTokens {
+        std::optional<ImVec4> text;
+        std::optional<ImVec4> keyword;
+        std::optional<ImVec4> type;
+        std::optional<ImVec4> string;
+        std::optional<ImVec4> number;
+        std::optional<ImVec4> comment;
+        std::optional<ImVec4> directive;
+        std::optional<ImVec4> property;
+    };
+
     /** @brief Resolved immutable editor design tokens for one rendered frame. */
     struct DesignTokens {
         ColorTokens colors;
@@ -156,6 +169,7 @@ namespace Horo::Editor::DesignSystem {
         SizeTokens sizes;
         SpacingTokens spacing;
         ComponentTokens components;
+        SourceColorTokens sourceSyntax{};
     };
 
     /**

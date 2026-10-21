@@ -41,7 +41,15 @@ endings survive byte-for-byte. Newly inserted lines use the first authored newli
 family, defaulting to LF for a document without newlines. A rejected edit or an
 external replacement reconciles from the authoritative lease on the next frame.
 
-The adapter uses the host font, frame scale, semantic GUI palette and clipboard.
+The adapter consumes the host's semantic monospace regular/emphasis font roles,
+frame scale, active source-theme projection and clipboard. `SourceSyntaxCache`
+belongs to the workspace view, separate from interaction and language service
+ownership. The widget accepts revision-fenced lexical spans, projects original
+BOM/CRLF coordinates once, and selects per-glyph styles in its private display
+bridge. It never asks Zep to parse a language or allocate a per-byte syntax table.
+While an edit awaits owner publication it draws readable ordinary text; rejected
+edits and new publications invalidate the old projection. Theme changes update
+every retained view at drawing time without tokenizing again.
 Committed IME characters bypass Zep's eight-bit key converter and enter as UTF-8.
 `IMGUI_USE_WCHAR32` is shared by the ImGui target and all of its consumers; this is
 a deliberate private GUI ABI evolution and requires rebuilding those consumers.

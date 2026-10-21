@@ -8,6 +8,7 @@
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/source_editor/SourceEditorTools.h"
 #include "editor/source_editor/SourceEditorWidget.h"
+#include "editor/source_editor/SourceSyntaxCache.h"
 
 #include <cstdint>
 #include <imgui.h>
@@ -126,6 +127,7 @@ namespace Horo::Editor {
 
             SourceEditorWidget widget;
             SourceEditorTools tools;
+            SourceSyntaxCache syntax;
         };
 
         mutable std::map<std::uint64_t, SourceView> m_sourceWidgets;

@@ -10,7 +10,13 @@
 #include <span>
 #include <variant>
 
+namespace Horo::Editor::Theme {
+    struct Fonts;
+}
+
 namespace Horo::Editor {
+    struct SourceSyntax;
+
     /** @brief Half-open, revision-relative document byte selection. */
     struct SourceWidgetSelection final {
         std::size_t anchor{};
@@ -60,9 +66,19 @@ namespace Horo::Editor {
          */
         void Publish(const SourceDocumentSnapshot &snapshot);
         /** @brief Draws inside the current GUI window and emits at most one revision-fenced operation.
-         * @param frame Host extent, scale and focus permission. @return Owned edit intent or no text change.
+         * @param frame Host extent, scale and focus permission. @param fonts Optional borrowed host atlas faces.
+         * @return Owned edit intent or no text change.
          */
-        [[nodiscard]] std::optional<SourceEditingCommand> Draw(const SourceWidgetFrame &frame);
+        [[nodiscard]] std::optional<SourceEditingCommand> Draw(const SourceWidgetFrame &frame, const Theme::Fonts *fonts = nullptr);
+        /** @brief Projects validated lexical spans for this exact authoritative publication.
+         * @param revision Current source revision. @param syntax Original document-byte lexical spans.
+         * @return False without replacement for stale, invalid or pending-edit inputs.
+         */
+        [[nodiscard]] bool Highlight(std::uint64_t revision, const SourceSyntax &syntax);
+        /** @brief Checks whether the unchanged current mirror already has this publication's lexical projection.
+         * @param revision Authoritative source revision. @return True only while both publication and mirror remain unchanged.
+         */
+        [[nodiscard]] bool HasHighlight(std::uint64_t revision) const noexcept;
         /** @brief Returns exact document-byte selection. @return Empty selection if detached. */
         [[nodiscard]] SourceWidgetSelection Selection() const;
         /** @brief Captures this view's current presentation state for semantic editing/search commands.

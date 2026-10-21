@@ -1,6 +1,8 @@
 #include "SourceEditorWidget.h"
 
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/Utf8.h"
+#include "SourceSyntaxProjection.h"
 #include "SourceWidgetPlatform.h"
 #include "SourceWidgetText.h"
 
@@ -51,6 +53,9 @@ namespace Horo::Editor {
         Zep::ZepWindow *window{};
         std::string mirror;
         std::uint64_t update{};
+        SourceSyntax syntax;
+        std::uint64_t syntaxRevision{};
+        std::uint64_t syntaxUpdate{};
         bool pending{};
         bool pointerCaptured{};
         std::uint64_t restoredRevision{};
@@ -109,6 +114,8 @@ namespace Horo::Editor {
             // A fixed extension-free name never chooses a language service or syntax provider.
             buffer = editor->InitWithText("source", text);
             buffer->SetSyntax({});
+            syntax = {};
+            syntaxRevision = 0;
             window = editor->GetActiveTabWindow()->GetActiveWindow();
             update = buffer->GetUpdateCount();
         }
@@ -269,19 +276,20 @@ namespace Horo::Editor {
         }
 
         /** @brief Keeps font-cache invalidation bounded to actual font or DPI changes. */
-        WidgetDisplay &PrepareDisplay(const SourceWidgetFrame &frame, const ImVec2 origin, const ImVec2 extent) {
+        WidgetDisplay &PrepareDisplay(const SourceWidgetFrame &frame, const ImVec2 origin, const ImVec2 extent, const Theme::Fonts *fonts) {
             auto &display = static_cast<WidgetDisplay &>(editor->GetDisplay());
             if (display.GetPixelScale().x != frame.dpiScale || display.GetPixelScale().y != frame.dpiScale)
                 display.SetPixelScale({frame.dpiScale, frame.dpiScale});
-            const int fontPixels = static_cast<int>(ImGui::GetFontSize());
-            for (int type = 0; type < static_cast<int>(Zep::ZepTextType::Count); ++type) {
-                auto &font = display.GetFont(static_cast<Zep::ZepTextType>(type));
-                if (font.GetPixelHeight() != fontPixels)
-                    font.SetPixelHeight(fontPixels);
-            }
+            const auto theme = ResolveSourceEditorTheme(Theme::GetActiveTokens());
+            display.Configure(theme, fonts);
             editor->SetDisplayRegion({origin.x, origin.y}, {origin.x + extent.x, origin.y + extent.y});
-            UpdateSourceWidgetTheme(*editor);
+            UpdateSourceWidgetTheme(*editor, theme);
             return display;
+        }
+
+        /** @brief Suppresses stale lexical styling during an unpublished local edit. */
+        [[nodiscard]] const SourceSyntax *CurrentSyntax() const noexcept {
+            return buffer->GetUpdateCount() == syntaxUpdate ? &syntax : nullptr;
         }
 
         /** @brief Captures exact byte coordinates only when an interaction needs them, avoiding idle frame scans. */
@@ -429,7 +437,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SourceEditorWidget::Draw */
-    std::optional<SourceEditingCommand> SourceEditorWidget::Draw(const SourceWidgetFrame &frame) {
+    std::optional<SourceEditingCommand> SourceEditorWidget::Draw(const SourceWidgetFrame &frame, const Theme::Fonts *fonts) {
         auto &state = *storage_;
         if (!state.editor || !ValidFrame(frame))
             return std::nullopt;
@@ -444,11 +452,13 @@ namespace Horo::Editor {
             const bool focused = state.AcquireFocus(inputEnabled, frame.requestFocus, hovered);
             const auto origin = ImGui::GetCursorScreenPos();
             const auto extent = ImGui::GetContentRegionAvail();
-            auto &display = state.PrepareDisplay(frame, origin, extent);
+            auto &display = state.PrepareDisplay(frame, origin, extent, fonts);
             state.Input(focused, hovered);
             state.ApplyScroll(inputEnabled && hovered, origin, extent);
             display.cursorColor = state.editor->GetTheme().GetColor(Zep::ThemeColor::CursorInsert);
+            display.Bind(state.buffer, state.CurrentSyntax());
             state.editor->Display();
+            display.Bind(nullptr, nullptr);
             state.Ime(display, focused, origin);
             if (auto edit = state.CaptureEdit())
                 intent = std::move(*edit);
@@ -465,6 +475,27 @@ namespace Horo::Editor {
         ImGui::EndChild();
         ImGui::PopID();
         return intent;
+    }
+
+    /** @copydoc SourceEditorWidget::Highlight */
+    bool SourceEditorWidget::Highlight(const std::uint64_t revision, const SourceSyntax &syntax) {
+        auto &state = *storage_;
+        if (!state.buffer || state.pending || revision != state.source.Revision())
+            return false;
+        auto projected = ProjectSourceSyntaxForDisplay(state.source, syntax);
+        if (!projected)
+            return false;
+        state.syntax = std::move(*projected);
+        state.syntaxRevision = revision;
+        state.syntaxUpdate = state.buffer->GetUpdateCount();
+        return true;
+    }
+
+    /** @copydoc SourceEditorWidget::HasHighlight */
+    bool SourceEditorWidget::HasHighlight(const std::uint64_t revision) const noexcept {
+        const auto &state = *storage_;
+        return state.buffer && !state.pending && state.source.Revision() == revision && state.syntaxRevision == revision &&
+               state.syntaxUpdate == state.buffer->GetUpdateCount();
     }
 
     /** @copydoc SourceEditorWidget::Selection */

@@ -247,7 +247,9 @@ namespace Horo::Editor::Theme {
         ImFont *sans = nullptr;
         ImFont *sansCompact = nullptr;
         ImFont *sansEmphasis = nullptr;
-        ImFont *icon = nullptr; /**< Material Symbols Outlined for editor UI icons. */
+        ImFont *icon = nullptr;              /**< Material Symbols Outlined for editor UI icons. */
+        ImFont *monospace = nullptr;         /**< Source text at the semantic body size. */
+        ImFont *monospaceEmphasis = nullptr; /**< Emphasized source roles with identical cell metrics. */
     };
 
     namespace FontPx {

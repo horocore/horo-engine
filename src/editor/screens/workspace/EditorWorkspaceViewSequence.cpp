@@ -148,14 +148,15 @@ namespace Horo::Editor {
         }
         auto &widget = found->second.widget;
         widget.Publish(source);
+        if (found->second.syntax.Publish(source) || !widget.HasHighlight(source.Revision()))
+            static_cast<void>(widget.Highlight(source.Revision(), found->second.syntax.Syntax()));
         if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
             static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
         auto toolIntent = found->second.tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
         const bool focus = m_focusedSource != source.Identity().instance || found->second.tools.TakeFocusRequest();
         const auto available = ImGui::GetContentRegionAvail();
-        ImGui::PushFont(m_context.theme.fonts.sans);
-        auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent});
-        ImGui::PopFont();
+        auto intent =
+            widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent}, &m_context.theme.fonts);
         m_focusedSource = source.Identity().instance;
         if (toolIntent)
             intent = std::move(toolIntent);
