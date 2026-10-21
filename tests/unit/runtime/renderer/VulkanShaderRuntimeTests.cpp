@@ -27,6 +27,8 @@ namespace {
         std::uint32_t maximumUniformDescriptors{128};
         std::uint32_t maximumStageUniformDescriptors{128};
         std::uint32_t maximumBoundSets{4};
+        std::uint32_t maximumUniformRange{65536};
+        std::vector<ShaderReflectedParameter> parameterOverride;
         bool pairedSampler{false};
         bool matrixParameters{false};
         std::size_t resolvedBufferBytes{16};
@@ -66,7 +68,7 @@ namespace {
             state.uniformRange = resolvedBufferBytes;
             VkPhysicalDeviceProperties properties{};
             properties.limits.minUniformBufferOffsetAlignment = 16;
-            properties.limits.maxUniformBufferRange = 65536;
+            properties.limits.maxUniformBufferRange = maximumUniformRange;
             properties.limits.maxDescriptorSetUniformBuffers = maximumUniformDescriptors;
             properties.limits.maxDescriptorSetSampledImages = 128;
             properties.limits.maxDescriptorSetSamplers = 128;
@@ -105,6 +107,30 @@ namespace {
             resolvedBufferBytes = 160;
         }
 
+        void UseNativeViewTransforms() {
+            UseMatrixParameters();
+            manifest.parameters[2].arrayCount = 32;
+            manifest.parameters.push_back({{4}, {1}, ShaderValueType::Float32, 4, 4, 1});
+            parameterOverride = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1, 0, 0, 0, true, true},
+                                 {{2}, {1}, ShaderValueType::Uint32, 1, 1, 1, 16, 0, 0, true, true},
+                                 {{3}, {1}, ShaderValueType::Float32, 4, 4, 32, 32, 64, 16, true, true},
+                                 {{4}, {1}, ShaderValueType::Float32, 4, 4, 1, 2080, 0, 16, true, true}};
+            resolvedBufferBytes = 2144;
+        }
+
+        void UseMultiviewParameters() {
+            manifest.bindings[0].stages = ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment;
+            manifest.parameters = {{{1}, {1}, ShaderValueType::Float32, 4, 4, 32},
+                                   {{2}, {1}, ShaderValueType::Float32, 4, 4, 1},
+                                   {{3}, {1}, ShaderValueType::Uint32, 1, 1, 32},
+                                   {{4}, {1}, ShaderValueType::Uint32, 1, 1, 1}};
+            parameterOverride = {{{1}, {1}, ShaderValueType::Float32, 4, 4, 32, 0, 64, 16, true, true},
+                                 {{2}, {1}, ShaderValueType::Float32, 4, 4, 1, 2048, 0, 16, true, true},
+                                 {{3}, {1}, ShaderValueType::Uint32, 1, 1, 32, 2112, 16, 0, true, true},
+                                 {{4}, {1}, ShaderValueType::Uint32, 1, 1, 1, 2624, 0, 0, true, true}};
+            resolvedBufferBytes = 2640;
+        }
+
         void Reflect() {
             ShaderReflectionCandidate candidate{.backend = ShaderTargetBackend::Vulkan,
                                                 .interfaceSchemaVersion = 1,
@@ -115,6 +141,8 @@ namespace {
                 candidate.parameters.push_back({{2}, {1}, ShaderValueType::Uint32, 1, 1, 1, 16, 0, 0, true, true});
                 candidate.parameters.push_back({{3}, {1}, ShaderValueType::Float32, 4, 4, 2, 32, 64, 16, true, true});
             }
+            if (!parameterOverride.empty())
+                candidate.parameters = parameterOverride;
             for (const auto &binding : manifest.bindings) {
                 candidate.bindings.push_back({binding.id, binding.kind, binding.access, binding.arrayCount, binding.stages, true});
                 candidate.targetBindings.push_back({binding.id, 0, 0, binding.id.value - 1, "", {}, true});
@@ -229,6 +257,68 @@ TEST_CASE("Vulkan material matrix arrays use canonical reflected extents", "[vul
     REQUIRE(f.state.destroyedPipelines == 0);
     std::move(table).Value().reset();
     REQUIRE(f.state.destroyedPipelines == 1);
+}
+
+TEST_CASE("Vulkan multiview uniforms admit 32 matrices object transform layers and exact padded tail", "[vulkan][material][matrix]") {
+    Fixture f;
+    f.UseMultiviewParameters();
+    f.maximumUniformRange = 2640;
+    f.Prepare();
+    const auto pipeline = f.Pipeline();
+    REQUIRE(pipeline.HasValue());
+    auto material = f.Material();
+    SECTION("generic external uniform buffer") {
+        material.resources[0].value = MaterialBufferBinding{{{1}, 6, 1}, 0, 2640};
+    }
+    SECTION("owned packed parameter block") {}
+    REQUIRE(ComputeMaterialParameterBufferByteSize(material.layout, {1}).Value() == 2628);
+    REQUIRE(f.runtime.QueryMaterialParameterBufferSize(pipeline.Value(), material, {1}).Value() == 2640);
+    const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, 99, 0, 2640}};
+    auto table = f.runtime.RealizeResolved(material, pipeline.Value(), resources);
+    REQUIRE(table.HasValue());
+    CHECK(f.state.updates == 1);
+}
+
+TEST_CASE("Vulkan downstream world object and layer block validates its exact final array tail", "[vulkan][material][matrix]") {
+    Fixture f;
+    f.UseMultiviewParameters();
+    f.manifest.parameters.pop_back();
+    f.parameterOverride.pop_back();
+    f.resolvedBufferBytes = 2624;
+    f.maximumUniformRange = 2624;
+    f.Prepare();
+    const auto pipeline = f.Pipeline();
+    REQUIRE(pipeline.HasValue());
+    auto material = f.Material();
+    material.resources[0].value = MaterialBufferBinding{{{1}, 6, 1}, 0, 2624};
+    REQUIRE(ComputeMaterialParameterBufferByteSize(material.layout, {1}).Value() == 2612);
+    REQUIRE(f.runtime.QueryMaterialParameterBufferSize(pipeline.Value(), material, {1}).Value() == 2624);
+    const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, 99, 0, 2624}};
+    REQUIRE(f.runtime.RealizeResolved(material, pipeline.Value(), resources).HasValue());
+    CHECK(f.state.updates == 1);
+}
+
+TEST_CASE("Vulkan uniform bounds include reflected tail and native block padding", "[vulkan][material][matrix][limits]") {
+    Fixture f;
+    f.UseMultiviewParameters();
+    f.maximumUniformRange = 2640;
+    bool deviceTailRejected = false;
+    SECTION("device limit fits reflected extent but not padded tail") {
+        f.maximumUniformRange = 2639;
+        deviceTailRejected = true;
+    }
+    SECTION("external buffer range omits final padding byte") {}
+    f.Prepare();
+    const auto pipeline = f.Pipeline();
+    REQUIRE(pipeline.HasValue());
+    auto material = f.Material();
+    material.resources[0].value = MaterialBufferBinding{{{1}, 6, 1}, 0, 2639};
+    REQUIRE(ValidateMaterialBindingDescriptor(material, {1}).HasValue());
+    CHECK(f.runtime.QueryMaterialParameterBufferSize(pipeline.Value(), material, {1}).HasError() == deviceTailRejected);
+    const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, 99, 0, 2639}};
+    REQUIRE(f.runtime.RealizeResolved(material, pipeline.Value(), resources).HasError());
+    CHECK(f.state.pools == 0);
+    CHECK(f.state.updates == 0);
 }
 
 TEST_CASE("Vulkan pipeline specialization overrides reach the declared native SpecId", "[vulkan][pipeline][specialization]") {

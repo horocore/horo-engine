@@ -140,3 +140,39 @@ Remaining scope gaps are inline-constant value transport, graphics storage
 bindings, MSAA, combined image/sampler native coordinates, WSI presentation and
 image upload. These are explicit unsupported outcomes, not completed capabilities.
 Hardware pixel-readback qualification and Windows GPU execution remain unproven.
+
+### HORO-2095 consumer contract
+
+The shared `PackMaterialParameterBinding` / `ComputeMaterialParameterBufferByteSize`
+API admits a column-major `float4x4[32]` with reflected `matrixStride=16` and
+`arrayStride=64`, a separate object transform, scalar controls and strided uint
+layer arrays. This is the same canonical Horo shader/material ABI; downstream
+consumers should use it rather than maintain a second byte-packing algorithm.
+Reflection remains the source of offsets and strides; the values API takes
+array-major, row-major scalar components regardless of reflected matrix order.
+
+The bounded regression layout places WorldToClip at offset 0 (2048 bytes),
+LocalToWorld at 2048 (64 bytes), ViewLayers[32] at 2112 with stride 16 (last
+occupied byte ends at 2612), and a scalar control at 2624 (required extent 2628).
+Without the optional scalar, the downstream three-field block has a 2612-byte
+occupied extent and a 2624-byte Vulkan extent. With that scalar, Vulkan requires
+a 2640-byte block after 16-byte tail alignment. A device limit
+of 2639 or a resident range of 2639 is rejected before descriptor allocation,
+even though the generic reflected extent fits. Packed and external uniform
+bindings use the same native range check. These offsets are regression fixtures,
+not an additional fixed XR packet format.
+
+`VulkanPreparedMaterialBinding::state` already copies the pipeline's immutable
+`RenderGraphicsPipelineState`; no additional public pipeline-state/digest field is
+introduced here. HORO-2095 owns any view-routing capability/digest migration,
+multiview workload admission, mesh/material/view pinning, XR pose conversion and
+actual native encoder routing. It must validate view index and object-instance
+index independently against the reflected shape, including baseline
+`firstInstance=viewIndex` semantics. The material packer cannot infer semantic
+relationships between scalar values or validate shader built-in indices.
+
+The Linux native fixture additionally selects view 31 from 32 nonidentity
+WorldToClip matrices and multiplies a separate nonidentity LocalToWorld matrix.
+It qualifies preparation/submission/completion when actually run; it performs no
+pixel readback and does not prove SV_InstanceID/object-instance routing behavior.
+That distinct-index native regression remains with the multiview consumer.

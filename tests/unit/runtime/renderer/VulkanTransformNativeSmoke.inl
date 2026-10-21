@@ -16,15 +16,24 @@ namespace {
             auto layout = PrepareMaterialBindingLayout(metadata.reflection);
             REQUIRE(layout.HasValue());
             const std::array<float, 4> tint{0.25F, 0.5F, 0.75F, 1};
-            const std::array<std::uint32_t, 1> viewIndex{1};
-            const std::array<float, 32> transforms{1,    0, 0, 0,     0, 1,    0, 0,      0, 0, 1, 0, 0, 0, 0, 1,
-                                                   0.5F, 0, 0, 0.25F, 0, 0.5F, 0, 0.125F, 0, 0, 1, 0, 0, 0, 0, 1};
+            const std::array<std::uint32_t, 1> viewIndex{31};
+            std::array<float, 512> transforms{};
+            for (std::size_t view = 0; view < 32; ++view) {
+                transforms[view * 16] = 0.5F;
+                transforms[view * 16 + 5] = 0.5F;
+                transforms[view * 16 + 10] = 1;
+                transforms[view * 16 + 15] = 1;
+                transforms[view * 16 + 3] = static_cast<float>(view) / 64;
+                transforms[view * 16 + 7] = static_cast<float>(view) / 128;
+            }
+            const std::array<float, 16> localToWorld{1, 0, 0, -0.25F, 0, 1, 0, -0.125F, 0, 0, 1, 0, 0, 0, 0, 1};
             const std::array values{MaterialParameterValue{{1}, std::span<const float>{tint}},
                                     MaterialParameterValue{{2}, std::span<const std::uint32_t>{viewIndex}},
-                                    MaterialParameterValue{{3}, std::span<const float>{transforms}}};
+                                    MaterialParameterValue{{3}, std::span<const float>{transforms}},
+                                    MaterialParameterValue{{4}, std::span<const float>{localToWorld}}};
             auto packed = PackMaterialParameterBinding(layout.Value(), {1}, values);
             REQUIRE(packed.HasValue());
-            REQUIRE(packed.Value().bytes.size() == 160);
+            REQUIRE(packed.Value().bytes.size() == 2144);
             return std::move(packed).Value();
         }
 
@@ -63,7 +72,7 @@ namespace {
             buffer = Buffer(parameters.bytes, RenderBufferUsage::Uniform);
             auto material = metadata.Material();
             material.resources[0].value = std::move(parameters);
-            const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, buffer, 0, 160}};
+            const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, buffer, 0, 2144}};
             auto realized = backend->RealizeResolved(material, native, resources);
             INFO((realized.HasError() ? realized.ErrorValue().message : "transform material realized"));
             REQUIRE(realized.HasValue());
@@ -131,14 +140,15 @@ namespace {
     };
 }  // namespace
 
-TEST_CASE("Vulkan native material draw consumes a view-indexed nonidentity transform array", "[vulkan][material][native-smoke]") {
+TEST_CASE("Vulkan native material draw consumes view 31 from 32 transforms separately from an object transform",
+          "[vulkan][material][native-smoke]") {
     const auto vertexPath = std::getenv("HORO_VULKAN_TRANSFORM_VERTEX");
     const auto fragmentPath = std::getenv("HORO_VULKAN_TRANSFORM_FRAGMENT");
     if (!vertexPath || !fragmentPath)
         SKIP("Opt-in native transform qualification requires cooked shader paths.");
     NativeTransformFixture fixture;
     fixture.Initialize();
-    fixture.metadata.UseMatrixParameters();
+    fixture.metadata.UseNativeViewTransforms();
     fixture.PrepareShaders(vertexPath, fragmentPath, false);
     fixture.PreparePipeline();
     fixture.PrepareDraw();
