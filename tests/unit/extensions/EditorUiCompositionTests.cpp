@@ -31,7 +31,7 @@ namespace Horo::Extensions {
                               .samples = {{0, 0.2F}, {0.5F, 0.8F}, {1, 0.3F}}};
         EditorUiForm form{.id = {"custom"}, .title = {EditorUiTextKind::LocalizationKey, "plot.title"}, .nodes = {{plot}}};
         const auto valid = ValidateEditorUiForm(form);
-        INFO(valid.HasError() ? valid.ErrorValue().message : std::string{});
+        INFO((valid.HasError() ? valid.ErrorValue().message : std::string{}));
         REQUIRE(valid.HasValue());
         EditorThemeFrame theme;
         auto first = BuildEditorUiRenderSnapshot(form, theme, 80);
@@ -73,7 +73,7 @@ namespace Horo::Extensions {
                               .samples = {{0, 0}, {1, 1}}};
         EditorUiForm form{.id = {"custom"}, .title = {EditorUiTextKind::LocalizationKey, "plot.title"}, .nodes = {{parent}, {plot}}};
         const auto valid = ValidateEditorUiForm(form);
-        INFO(valid.HasError() ? valid.ErrorValue().message : std::string{});
+        INFO((valid.HasError() ? valid.ErrorValue().message : std::string{}));
         REQUIRE(valid.HasValue());
         CHECK_FALSE(IsEditorUiNodeEnabled(form, {"plot"}));
         auto snapshot = BuildEditorUiRenderSnapshot(form, {}, 80);

@@ -232,7 +232,7 @@ namespace Horo::Extensions::Tests {
                                             .nodes = reinterpret_cast<const HoroEditorActivityNode *>(&node),
                                             .nodeCount = 1};
         auto copied = Detail::CopyActivityForm(snapshot, "drawer", "fixture.title");
-        INFO(copied.HasError() ? copied.ErrorValue().message : std::string{});
+        INFO((copied.HasError() ? copied.ErrorValue().message : std::string{}));
         REQUIRE(copied.HasValue());
         samples[1].y = 0;
         const auto &plot = std::get<EditorUiPlotNode>(copied.Value().nodes.front().payload);
