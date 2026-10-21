@@ -5,6 +5,7 @@
  */
 #include "Horo/Runtime/Ui/UiAnimationTracks.h"
 #include "Horo/Runtime/Ui/UiHotReload.h"
+#include "Horo/Runtime/Ui/UiLayoutInspector.h"
 #include "Horo/Runtime/Ui/UiPointerInteraction.h"
 
 namespace Horo::Runtime::Ui {
@@ -45,6 +46,17 @@ namespace Horo::Runtime::Ui {
             intrinsicProvider; /**< Explicit application-owned provider pin, never ambient discovery. */
     };
 
+    inline constexpr std::uint32_t MaximumUiAnimationAttachments = 8;
+
+    /** @brief Explicit immutable host classifications; extent comes from the ordinary resolved viewport. */
+    struct UiAnimationPresentationEvidence final {
+        UiPresentationEvidenceRevision revision;
+        UiPresentationFormFactor formFactor{UiPresentationFormFactor::Unknown};
+        UiPresentationViewRole viewRole{UiPresentationViewRole::Single};
+        UiPresentationCapabilities available{UiPresentationCapabilities::None};
+        [[nodiscard]] auto operator<=>(const UiAnimationPresentationEvidence &) const noexcept = default;
+    };
+
     /** @brief Actual application viewport facts borrowed for one synchronous UI update; carries no clock or commitment authority. */
     struct UiAnimationViewport final {
         UiLayoutConstraints constraints;
@@ -53,6 +65,25 @@ namespace Horo::Runtime::Ui {
         UiLayoutIntrinsicRevision intrinsic;
         UiLayoutCanvasRevision canvas;
         UiLayoutPolicyRevision policy;
+        std::optional<UiAnimationPresentationEvidence> presentation;
+        [[nodiscard]] auto operator<=>(const UiAnimationViewport &) const noexcept = default;
+    };
+
+    /** @brief Copied local navigation/interaction bounds; semantic focus remains with the existing sole graph. */
+    struct UiAnimationFocusGeometry final {
+        UiElementHandle element;
+        UiLogicalRect bounds;
+        bool routeEligible{};
+    };
+
+    /** @brief Immutable attachment-local derived geometry; semantic controls/focus/capture remain owned once. */
+    struct UiAnimationAttachmentFrame final {
+        UiPresentationAttachmentId attachment;
+        UiRenderViewId view;
+        UiPresentationProfileSelection selection;
+        std::optional<UiLayoutSnapshot> layout;
+        std::optional<UiLayoutClipSnapshot> clipping;
+        std::span<const UiAnimationFocusGeometry> focusGeometry; /**< Copied projected bounds; requires the containing frame lease. */
     };
 
     /** @brief Exact immutable evaluated timeline correlated to one atomic successful UI publication. */
@@ -164,6 +195,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiAnimationControlRecord> Controls() const noexcept;
         /** @brief Borrows optional clipping and scroll geometry from this exact layout publication. @return Projection or null. */
         [[nodiscard]] const UiLayoutClipSnapshot *Clipping() const noexcept;
+        /** @brief Borrows actual primary responsive selection from this committed frame. @return Selection or null for legacy composition.
+         */
+        [[nodiscard]] const UiPresentationProfileSelection *PresentationSelection() const noexcept;
+        /** @brief Borrows secondary attachment geometry sharing the exact primary interaction issuer. @return Immutable derived frames. */
+        [[nodiscard]] std::span<const UiAnimationAttachmentFrame> Attachments() const noexcept;
         /** @brief Borrows actual bounded route-stack state copied at this publication. @return Immutable route instances. */
         [[nodiscard]] std::span<const UiRouteInstance> Routes() const noexcept;
         /** @brief Returns the last admitted route operation's exact copied progress, without completion authority. */
@@ -258,7 +294,9 @@ namespace Horo::Runtime::Ui {
          * @param cancellation Load ancestry.
          * @return Copied real reconciliation or typed failure preserving old publication and cursors.
          * @pre Owner-thread load-time operation outside dispatch and any prepared candidate; no required gate is pending.
-         * @post Old raw source/clock/timeline handles cannot admit commands. Old frames stay readable; new input waits for a receipt.
+         * @post Old raw source/clock/timeline/attachment handles cannot admit commands. Old frames and copied inspection leases stay
+         * readable; successful reload clears attachment and inspection admission. Hosts explicitly reattach and configure the
+         * new generation, and new input waits for a receipt. Failed/cancelled reload preserves all existing admission.
          */
         [[nodiscard]] Result<UiAnimationReloadResult> Reload(UiReloadGeneration replacement, UiElementSlotAllocator &allocator,
                                                              RuntimeStyleRegistry registry, UiStyleResolver styles,
@@ -305,6 +343,29 @@ namespace Horo::Runtime::Ui {
          * @return Exact frame lease or typed lifecycle/no-publication failure.
          */
         [[nodiscard]] Result<UiAnimationFrameLease> Acquire() const;
+        /** @brief Returns the issued primary attachment incarnation. @return Exact current primary or invalid after shutdown. */
+        [[nodiscard]] UiPresentationAttachmentId PrimaryAttachment() const noexcept;
+        /** @brief Admits an additional view with private derived caches at a load-time owner boundary.
+         * @param view Exact independently presented view. @param viewport Resolved local safe content and typed host evidence.
+         * @return Fresh attachment, or typed failure without changing existing publication. No semantic owner is cloned.
+         */
+        [[nodiscard]] Result<UiPresentationAttachmentId> Attach(UiRenderViewId view, UiAnimationViewport viewport);
+        /** @brief Coalesces a complete newer attachment viewport/evidence at the next cutoff.
+         * @param attachment Exact issued secondary incarnation. @param viewport Complete new local facts.
+         * @return Admission or typed lifecycle/stale/foreign/capacity failure preserving prior facts.
+         */
+        [[nodiscard]] Result<void> UpdateAttachment(UiPresentationAttachmentId attachment, UiAnimationViewport viewport);
+        /** @brief Retires one exact secondary incarnation and closes its input fence immediately.
+         * @param attachment Issued incarnation. @return Admission or typed stale/lifecycle failure.
+         */
+        [[nodiscard]] Result<void> Detach(UiPresentationAttachmentId attachment);
+        /** @brief Preallocates optional independent copied inspection for one current attachment.
+         * @param attachment Issued primary/secondary. @param limits Bounded observer storage. @param enabled Initial capture choice.
+         * @return Observer admission; capture failures never change ordinary publication.
+         */
+        [[nodiscard]] Result<void> ConfigureInspection(UiPresentationAttachmentId attachment, UiLayoutInspectorLimits limits, bool enabled);
+        /** @brief Borrows the latest independent copied inspection. @return Empty when never captured/configured. */
+        [[nodiscard]] std::optional<UiLayoutInspectionSnapshot> Inspect() const noexcept;
         /** @brief Checks this owner's current actual frame identity.
          * @param frame Retained immutable pin.
          * @return Whether new extraction/input may use that exact publication.
@@ -438,6 +499,18 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] static Result<void> EvaluateTimelineCursor(Storage &storage, std::uint32_t index);
         /** @brief Copies clipped and scroll-translated focus geometry into preallocated scratch. @return Projection admission. */
         [[nodiscard]] static Result<void> PrepareFocusGeometry(Storage &storage);
+        /** @brief Validates and selects primary attachment inputs before computed property projection. */
+        [[nodiscard]] static Result<void> PrepareProfiles(Storage &storage, const UiAnimationViewport &viewport);
+        /** @brief Prepares every additional derived attachment against the actual primary reservation. */
+        [[nodiscard]] static Result<void> PrepareAttachments(Storage &storage);
+        /** @brief Checks that a secondary view has actually published this exact admitted attachment incarnation. */
+        [[nodiscard]] static bool AttachmentInputEligible(const Storage &storage, UiRenderViewId view) noexcept;
+        /** @brief Projects bounded local focus/navigation geometry without creating a semantic focus owner. */
+        [[nodiscard]] static Result<void> ProjectAttachmentFocus(Storage &storage, const UiLayoutSnapshot &layout,
+                                                                 const UiLayoutClipSnapshot *clipping,
+                                                                 std::span<UiAnimationFocusGeometry> output);
+        /** @brief Copies optional committed evidence after ordinary publication, without affecting it. */
+        static void CaptureInspection(Storage &storage) noexcept;
         /** @brief Prepares actual style, layout, clipping and focus owners without publishing any generation. */
         [[nodiscard]] static Result<void> PreparePresentation(Storage &storage, const UiAnimationViewport &viewport);
         /** @brief Reads visual participation from the actual owned focus/control state, never an authored visual-state DTO. */

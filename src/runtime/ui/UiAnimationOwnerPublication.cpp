@@ -22,6 +22,30 @@ namespace Horo::Runtime::Ui {
         } else {
             frame.clipped.reset();
         }
+        frame.selection = candidate.selection;
+        frame.attachments.clear();
+        frame.focusGeometry.clear();
+        for (auto &entry : storage_->attachments) {
+            if (!entry || !entry->active)
+                continue;
+            auto &attachment = *entry;
+            auto layout = attachment.layout.PublishValidated(std::move(*attachment.preparedLayout));
+            std::optional<UiLayoutClipSnapshot> clipping;
+            if (attachment.preparedClipping)
+                clipping.emplace(attachment.clipping->PublishValidated(std::move(*attachment.preparedClipping)));
+            const auto focusOffset = frame.focusGeometry.size();
+            frame.focusGeometry.insert(frame.focusGeometry.end(), attachment.focusGeometry.begin(), attachment.focusGeometry.end());
+            const auto focus =
+                std::span<const UiAnimationFocusGeometry>{frame.focusGeometry}.subspan(focusOffset, attachment.focusGeometry.size());
+            frame.attachments.push_back(
+                {attachment.id, attachment.view, *attachment.selection, std::move(layout), std::move(clipping), focus});
+            attachment.preparedLayout.reset();
+            attachment.preparedClipping.reset();
+            attachment.selection.reset();
+        }
+        storage_->presentation = candidate.presentation.IsValid() ? candidate.presentation : storage_->presentation;
+        storage_->publishedViewport = candidate.viewport;
+        storage_->attachmentDirty = false;
         if (canvas->focus)
             canvas->focus->PublishPreparedLayout(*frame.layout);
         for (auto *control : candidate.controls)
@@ -50,6 +74,7 @@ namespace Horo::Runtime::Ui {
         candidate.layout.reset();
         candidate.clipping.reset();
         candidate.source = {};
+        CaptureInspection(*storage_);
         return Result<void>::Success();
     }
 }  // namespace Horo::Runtime::Ui

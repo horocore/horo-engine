@@ -37,6 +37,7 @@ namespace Horo::Runtime::Ui::ReloadTests {
         std::optional<UiFocusPlayerId> player{UiFocusPlayerId{Owner(), 3, 1}};
         UiFocusPresentationLayerId layer{Owner(), 4, 1};
         UiRenderViewId view{Owner(), 10, 1};
+        std::vector<UiDocumentPresentationProfiles> profiles; /**< Real durable alternatives for profile integration coverage. */
         std::uint8_t childMarker{11}; /**< Change the real authored target ID to exercise removal across cooked reload. */
     };
 

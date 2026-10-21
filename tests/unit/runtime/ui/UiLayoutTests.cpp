@@ -237,7 +237,7 @@ namespace Horo::Runtime::Ui {
             evaluator.failMeasure = false;
             auto next = engine.Update(tree, Request(evaluator, 2));
             REQUIRE(next.HasValue());
-            REQUIRE(next.Value().Descriptor().interaction == Rev<UiInteractionRevision>(2));
+            REQUIRE(next.Value().Descriptor().interaction == Rev<UiInteractionRevision>(3));
         }
 
         TEST_CASE("Layout evaluator reentrancy rejects competing updates and safely closes admission", "[runtime_ui][layout][prepare]") {
@@ -360,6 +360,112 @@ namespace Horo::Runtime::Ui {
             REQUIRE(engine.Update(tree, Request(evaluator, 2)).HasValue());
             REQUIRE(evaluator.measures == std::array<std::uint32_t, 32>{});
             REQUIRE(evaluator.arranges[leaf.slot] == 1);
+        }
+
+        TEST_CASE("Layout work evidence captures evaluated constraints and actual dirty propagation", "[runtime_ui][layout][inspection]") {
+            auto tree = Tree();
+            auto engine = Engine();
+            CountingEvaluator evaluator;
+            const auto first = engine.Update(tree, Request(evaluator));
+            REQUIRE(first.HasValue());
+            const auto leaf = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto root = tree.Root().Value().handle;
+            const auto sibling = tree.Find(Stable<UiElementId>(4)).Value();
+            const auto initial = first.Value().Get(leaf).Value();
+            REQUIRE(initial.constraints == Request(evaluator).rootConstraints);
+            REQUIRE(initial.work.HasCause(UiLayoutWorkCause::Topology));
+            REQUIRE(initial.work.HasCause(UiLayoutWorkCause::InheritedConstraints));
+            REQUIRE(initial.work.measurements == 1);
+            REQUIRE(initial.work.arrangements == 1);
+            REQUIRE(initial.work.remeasurements == 0);
+            evaluator.ResetCounts();
+
+            REQUIRE(engine.Invalidate({leaf, tree.Revision(), UiLayoutDirtyKind::Measure}).HasValue());
+            const auto updated = engine.Update(tree, Request(evaluator, 2));
+            REQUIRE(updated.HasValue());
+            const auto measured = updated.Value().Get(leaf).Value();
+            REQUIRE(measured.constraints == initial.constraints);
+            REQUIRE(measured.work.HasCause(UiLayoutWorkCause::ExplicitInvalidation));
+            REQUIRE(measured.work.invalidation == UiLayoutDirtyKind::Measure);
+            REQUIRE_FALSE(measured.work.HasCause(UiLayoutWorkCause::Topology));
+            REQUIRE_FALSE(measured.work.HasCause(UiLayoutWorkCause::SourceRevision));
+            REQUIRE(measured.work.measurements == evaluator.measures[leaf.slot]);
+            REQUIRE(measured.work.arrangements == evaluator.arranges[leaf.slot]);
+            const auto ancestor = updated.Value().Get(root).Value();
+            REQUIRE(ancestor.work.HasCause(UiLayoutWorkCause::AncestorMeasure));
+            REQUIRE_FALSE(ancestor.work.HasCause(UiLayoutWorkCause::ExplicitInvalidation));
+            REQUIRE_FALSE(ancestor.work.invalidation.has_value());
+            REQUIRE(ancestor.work.constraintResolutions == evaluator.constraints[root.slot]);
+            REQUIRE(updated.Value().Get(sibling).Value().work == UiLayoutWork{});
+            REQUIRE(updated.Value().Get(sibling).Value().constraints == initial.constraints);
+            REQUIRE(first.Value().Get(leaf).Value().work == initial.work);
+
+            const auto unchanged = engine.Update(tree, Request(evaluator, 2));
+            REQUIRE(unchanged.HasValue());
+            REQUIRE(unchanged.Value().Get(leaf).Value().work == measured.work);
+        }
+
+        TEST_CASE("Arrange evidence resets without measuring and survives abandoned and failed candidates",
+                  "[runtime_ui][layout][inspection]") {
+            auto tree = Tree();
+            auto engine = Engine();
+            CountingEvaluator evaluator;
+            auto initial = engine.Update(tree, Request(evaluator));
+            REQUIRE(initial.HasValue());
+            const auto leaf = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto retained = initial.Value().Get(leaf).Value().work;
+            REQUIRE(engine.Invalidate({leaf, tree.Revision(), UiLayoutDirtyKind::Arrange}).HasValue());
+            {
+                auto candidate = engine.Prepare(tree, Request(evaluator, 2));
+                REQUIRE(candidate.HasValue());
+                const auto work = candidate.Value().Candidate().Get(leaf).Value().work;
+                REQUIRE(work.HasCause(UiLayoutWorkCause::ExplicitInvalidation));
+                REQUIRE(work.invalidation == UiLayoutDirtyKind::Arrange);
+                REQUIRE(work.measurements == 0);
+                REQUIRE(work.arrangements == 1);
+                candidate.Value().Abandon();
+            }
+            REQUIRE(initial.Value().Get(leaf).Value().work == retained);
+            REQUIRE(engine.Invalidate({leaf, tree.Revision(), UiLayoutDirtyKind::Measure}).HasValue());
+            evaluator.failMeasure = true;
+            RequireError(engine.Update(tree, Request(evaluator, 2)), UiErrors::LayoutInvalid);
+            REQUIRE(initial.Value().Get(leaf).Value().work == retained);
+            evaluator.failMeasure = false;
+            auto recovered = engine.Update(tree, Request(evaluator, 2));
+            REQUIRE(recovered.HasValue());
+            const auto work = recovered.Value().Get(leaf).Value().work;
+            REQUIRE(work.measurements == 1);
+            REQUIRE(work.arrangements == 1);
+            REQUIRE(work.HasCause(UiLayoutWorkCause::ExplicitInvalidation));
+            engine.Shutdown();
+            tree.Shutdown();
+            REQUIRE(initial.Value().Get(leaf).Value().work == retained);
+            REQUIRE(recovered.Value().Get(leaf).Value().work == work);
+        }
+
+        TEST_CASE("Layout evidence counts bounded dependent retry and root input work", "[runtime_ui][layout][inspection]") {
+            auto tree = Tree();
+            auto engine = Engine();
+            DependentEvaluator evaluator;
+            auto initial = engine.Update(tree, Request(evaluator));
+            REQUIRE(initial.HasValue());
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto work = initial.Value().Get(child).Value().work;
+            REQUIRE(work.HasCause(UiLayoutWorkCause::ParentAssignment));
+            REQUIRE(work.HasCause(UiLayoutWorkCause::ParentDependency));
+            REQUIRE(work.measurements == evaluator.measures[child.slot]);
+            REQUIRE(work.arrangements == evaluator.arranges[child.slot]);
+            REQUIRE(work.measurements == 2);
+            REQUIRE(work.remeasurements == 1);
+            evaluator.ResetCounts();
+            auto request = Request(evaluator);
+            request.rootConstraints.maximum.width = 2048;
+            auto updated = engine.Update(tree, request);
+            REQUIRE(updated.HasValue());
+            REQUIRE(updated.Value().Get(child).Value().constraints == request.rootConstraints);
+            REQUIRE(updated.Value().Get(child).Value().work.HasCause(UiLayoutWorkCause::RootInputs));
+            REQUIRE_FALSE(updated.Value().Get(child).Value().work.HasCause(UiLayoutWorkCause::SourceRevision));
+            REQUIRE(initial.Value().Get(child).Value().constraints != request.rootConstraints);
         }
 
         TEST_CASE("Structural revisions rebuild bounded topology transactionally", "[runtime_ui][layout][structure]") {

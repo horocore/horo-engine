@@ -129,8 +129,13 @@ namespace Horo::Runtime::Ui::AnimationTests {
     inline UiAnimationOwner OwnerAggregate(UiElementSlotAllocator &allocator, const bool routeMotion = false,
                                            const std::int64_t deadline = 1000000000, UiActionRouter **attachedActions = nullptr,
                                            WriteAttachment *writes = nullptr, UiActionRouter **routeActions = nullptr,
-                                           const std::uint64_t version = 1, UiFocusGraph **attachedFocus = nullptr) {
-        auto initial = Generation(allocator, version, 32, false, 0, 0, 4);
+                                           const std::uint64_t version = 1, UiFocusGraph **attachedFocus = nullptr,
+                                           const std::vector<UiDocumentPresentationProfiles> &profiles = {},
+                                           std::shared_ptr<const UiLayoutIntrinsicProvider> intrinsicProvider = {},
+                                           const bool boundWidth = false, const bool accessibilityWidth = false) {
+        ReloadTests::LayerOptions layer;
+        layer.profiles = profiles;
+        auto initial = Generation(allocator, version, 32, false, 0, 0, 4, layer);
         const auto &canvas = initial.Canvases().front();
         if (attachedFocus)
             *attachedFocus = initial.Canvas(canvas.id)->focus ? &*initial.Canvas(canvas.id)->focus : nullptr;
@@ -146,6 +151,15 @@ namespace Horo::Runtime::Ui::AnimationTests {
         auto *routeStack = routeActions ? &*initial.Canvas(canvas.id)->routes : nullptr;
         const auto routeOwner = canvas.controls.front().control.Owner();
         auto resources = Resources(canvas, routeMotion, deadline);
+        if (boundWidth)
+            resources.definition.layoutBindings.front().field = UiAnimationLayoutField::Width;
+        if (accessibilityWidth)
+            resources.definition.elements.back().policyProperties.push_back(
+                {Stable<UiStylePropertyId>(1), UiStyleValueSource::Literal(UiStyleDimension{64}), false});
+        if (intrinsicProvider) {
+            resources.definition.intrinsicProvider = std::move(intrinsicProvider);
+            resources.definition.elements.back().intrinsic = {UiLayoutIntrinsicKind::Text, true, {}};
+        }
         auto owner = UiAnimationOwner::Create(std::move(initial), allocator, std::move(resources.registry), std::move(resources.styles),
                                               std::move(resources.definition));
         REQUIRE(owner.HasValue());
@@ -183,6 +197,10 @@ namespace Horo::Runtime::Ui::AnimationTests {
         UiElementSlotAllocator *allocator{};
         std::uint64_t version{1};
         UiAnimationApplication application{UiAnimationApplication::Runtime};
+        std::vector<UiDocumentPresentationProfiles> profiles;
+        std::shared_ptr<const UiLayoutIntrinsicProvider> intrinsicProvider;
+        bool boundWidth{};
+        bool accessibilityWidth{};
         bool focusAccess{}; /**< Test-only quiescent borrow; never exposed by a production owner contract. */
     };
 
@@ -208,7 +226,9 @@ namespace Horo::Runtime::Ui::AnimationTests {
                                                                       options.actions ? &attachedActions : nullptr,
                                                                       options.writes ? &attachedWrites : nullptr,
                                                                       options.routeActions ? &attachedRouteActions : nullptr,
-                                                                      options.version, options.focusAccess ? &attachedFocus : nullptr),
+                                                                      options.version, options.focusAccess ? &attachedFocus : nullptr,
+                                                                      options.profiles, options.intrinsicProvider, options.boundWidth,
+                                                                      options.accessibilityWidth),
                                                        host->DispatchSource(), config);
             REQUIRE(composed.HasValue());
             auto composition = std::move(composed).Value();

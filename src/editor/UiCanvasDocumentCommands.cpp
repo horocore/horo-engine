@@ -88,6 +88,9 @@ namespace Horo::Editor {
             for (const auto &route : source.Routes())
                 if (const auto added = builder.AddRoute(route); added.HasError())
                     return Result<UiDocument>::Failure(added.ErrorValue());
+            for (const auto &profiles : source.PresentationProfiles())
+                if (const auto added = builder.AddPresentationProfiles(profiles); added.HasError())
+                    return Result<UiDocument>::Failure(added.ErrorValue());
             return std::move(builder).Build();
         }
 

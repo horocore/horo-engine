@@ -75,6 +75,11 @@ namespace Horo::Runtime::Ui::DiagnosticsInternal {
             &UiErrors::LayoutConstraintConflict,
             &UiErrors::LayoutIntrinsicUnavailable,
             &UiErrors::LayoutSourceStale,
+            &UiErrors::PresentationProfileMalformed,
+            &UiErrors::PresentationProfileSourceStale,
+            &UiErrors::PresentationProfileUnsupported,
+            &UiErrors::PresentationProfileForeignIdentity,
+
             &UiErrors::LayoutNonConvergent,
             &UiErrors::LayoutSnapshotStorageExhausted,
             &UiErrors::LayoutLifecycleUnavailable,

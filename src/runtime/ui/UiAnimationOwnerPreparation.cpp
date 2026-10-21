@@ -28,6 +28,8 @@ namespace Horo::Runtime::Ui {
         auto &inactive = **frame;
         inactive.timelines.clear();
         inactive.markers.clear();
+        inactive.attachments.clear();
+        inactive.focusGeometry.clear();
         if (const auto clocks = PrepareClocks(*storage_, read, inactive.clocks); clocks.HasError())
             return Result<Prepared>::Failure(clocks.ErrorValue());
         if (const auto child = PrepareRouteClock(*storage_); child.HasError())
@@ -59,6 +61,8 @@ namespace Horo::Runtime::Ui {
         for (std::size_t index = 0; index < storage.work.layoutDescriptors.size(); ++index)
             storage.work.layoutDescriptors[index] = {storage.work.elementInputs[index].element, storage.definition.elements[index].layout,
                                                      storage.definition.elements[index].intrinsic};
+        if (auto profiles = PrepareProfiles(storage, viewport); profiles.HasError())
+            return profiles;
         const auto &computed = storage.candidate.styles->Candidate();
         if (auto projected = AnimationInternal::ProjectLayout(computed, storage.work.layoutBindings, storage.work.layoutDescriptors);
             projected.HasError())
@@ -74,7 +78,8 @@ namespace Horo::Runtime::Ui {
                                               UiLayoutStyleRevision::Create(computed.Descriptor().geometry.Value()).Value(),
                                               viewport.intrinsic,
                                               viewport.canvas,
-                                              viewport.policy};
+                                              viewport.policy,
+                                              storage.candidate.presentation};
         auto layout =
             canvas->layoutEngine->Prepare(tree, {sources, viewport.constraints, viewport.content, &evaluator.Value(), viewport.fontScale});
         if (layout.HasError())
@@ -88,6 +93,8 @@ namespace Horo::Runtime::Ui {
         }
         if (auto focus = PrepareFocusGeometry(storage); focus.HasError())
             return focus;
+        if (auto attachments = PrepareAttachments(storage); attachments.HasError())
+            return attachments;
         return PrepareControlSources(storage);
     }
 
@@ -111,6 +118,19 @@ namespace Horo::Runtime::Ui {
         if (candidate.clipping) {
             if (auto clipping = candidate.clipping->CanPublish(canvas->tree); clipping.HasError())
                 return clipping;
+        }
+        for (const auto &attachment : storage.attachments) {
+            if (!attachment || !attachment->active)
+                continue;
+            if (!attachment->preparedLayout)
+                return Result<void>::Failure(MakeError(UiErrors::LayoutSourceStale));
+            if (auto valid = attachment->preparedLayout->CanPublish(canvas->tree); valid.HasError())
+                return valid;
+            if (attachment->clipping && !attachment->preparedClipping)
+                return Result<void>::Failure(MakeError(UiErrors::LayoutClipSourceStale));
+            if (attachment->preparedClipping)
+                if (auto valid = attachment->preparedClipping->CanPublish(canvas->tree); valid.HasError())
+                    return valid;
         }
         if (canvas->captures) {
             if (auto captures = canvas->captures->CanPublishInteraction(canvas->tree.Canvas()); captures.HasError())

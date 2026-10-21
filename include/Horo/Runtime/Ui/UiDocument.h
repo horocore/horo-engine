@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Runtime/Ui/UiPresentationProfiles.h"
+
 /** @file UiDocument.h
  * @brief Authored, cooked, scene-reference, and mutable-instance Runtime UI contracts.
  */
@@ -42,8 +44,8 @@ namespace Horo::Runtime::Ui {
     /** @brief Maximum byte count admitted by one cooked document payload. */
     inline constexpr std::size_t MaximumCookedUiDocumentBytes = 64ULL * 1024ULL * 1024ULL;
 
-    /** @brief Binary Runtime UI payload version; v3 adds typed element presentation, retaining v1/v2 decode. */
-    inline constexpr std::uint32_t CurrentCookedUiDocumentFormatVersion = 3;
+    /** @brief Binary payload version; v4 appends responsive tables, retaining explicit neutral v1-v3 decode. */
+    inline constexpr std::uint32_t CurrentCookedUiDocumentFormatVersion = 4;
 
     /** @brief Bounded limits applied while producing or decoding one cooked Runtime UI document. */
     struct UiDocumentCookLimits final {
@@ -76,7 +78,7 @@ namespace Horo::Runtime::Ui {
     };
 
     /** @brief Current schema emitted by the Runtime UI document serializer. */
-    inline constexpr UiDocumentSchemaVersion CurrentUiDocumentSchemaVersion{1, 3};
+    inline constexpr UiDocumentSchemaVersion CurrentUiDocumentSchemaVersion{1, 4};
 
     /** @brief Closed semantic presentation band persisted by a route definition. */
     enum class UiPresentationBand : std::uint8_t {
@@ -176,6 +178,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiAssetDependency> Dependencies() const noexcept;
         /** @brief Returns route definitions in canonical route identity order. @return Borrowed immutable route metadata. */
         [[nodiscard]] std::span<const UiRouteMetadata> Routes() const noexcept;
+        /** @brief Borrows canonical per-canvas responsive alternatives; empty means neutral base.
+         * @return Immutable bounded profile tables owned by this document generation.
+         */
+        [[nodiscard]] std::span<const UiDocumentPresentationProfiles> PresentationProfiles() const noexcept;
 
     private:
         friend class UiDocumentBuilder;
@@ -191,6 +197,7 @@ namespace Horo::Runtime::Ui {
         std::vector<UiLocalizedAssetReference> localizedAssets_; /**< Authored localized asset variant sets. */
         std::vector<UiAssetDependency> dependencies_;            /**< Canonical dependency enumeration. */
         std::vector<UiRouteMetadata> routes_;                    /**< Canonical route definitions. */
+        std::vector<UiDocumentPresentationProfiles> profiles_;   /**< Canonical bounded alternatives; empty is neutral base. */
     };
 
     /** @brief Load-time authoring builder that publishes only complete validated documents. */
@@ -231,6 +238,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> AddRoute(UiRouteMetadata route);
         /** @brief Validates and consumes the builder. @return Immutable authored document or typed failure. */
         [[nodiscard]] Result<UiDocument> Build() &&;
+        /** @brief Adds one bounded per-canvas profile table; full exact-canvas membership is checked at Build.
+         * @param profiles Inert complete alternatives. @return Typed validation/capacity failure without adoption.
+         */
+        [[nodiscard]] Result<void> AddPresentationProfiles(UiDocumentPresentationProfiles profiles);
 
     private:
         UiDocumentSchemaVersion schemaVersion_;                  /**< Candidate source schema. */
@@ -241,6 +252,7 @@ namespace Horo::Runtime::Ui {
         std::vector<UiCanvasDescriptor> canvases_;               /**< Bounded authored-order canvases. */
         std::vector<UiDocumentElement> elements_;                /**< Candidate hierarchy and typed values. */
         std::vector<UiRouteMetadata> routes_;                    /**< Candidate route definitions. */
+        std::vector<UiDocumentPresentationProfiles> profiles_;   /**< Canonical bounded alternatives; empty is neutral base. */
         std::vector<UiAssetDependency> dependencies_;            /**< Bounded canonicalizable dependencies. */
     };
 
@@ -286,6 +298,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::span<const UiAssetDependency> Dependencies() const noexcept;
         /** @brief Returns immutable route descriptors retained for runtime preparation. @return Borrowed route data. */
         [[nodiscard]] std::span<const UiRouteMetadata> Routes() const noexcept;
+        /** @brief Borrows canonical per-canvas responsive alternatives; empty means neutral base.
+         * @return Immutable bounded profile tables owned by this document generation.
+         */
+        [[nodiscard]] std::span<const UiDocumentPresentationProfiles> PresentationProfiles() const noexcept;
 
     private:
         friend class UiRuntimeInstance;
@@ -293,15 +309,16 @@ namespace Horo::Runtime::Ui {
         CookedUiDocument(UiDocumentSchemaVersion schemaVersion, UiDocumentId id, UiDocumentRevision revision,
                          std::vector<UiCanvasDescriptor> canvases, std::vector<UiDocumentElement> elements,
                          std::vector<UiAssetDependency> dependencies, std::vector<UiRouteMetadata> routes,
-                         std::vector<std::uint8_t> payload) noexcept;
-        UiDocumentSchemaVersion schemaVersion_;       /**< Source schema represented by this cooked snapshot. */
-        UiDocumentId id_;                             /**< Stable authored identity. */
-        UiDocumentRevision revision_;                 /**< Source authored revision. */
-        std::vector<UiCanvasDescriptor> canvases_;    /**< Runtime-ready immutable canvas descriptors. */
-        std::vector<UiDocumentElement> elements_;     /**< Runtime-ready immutable element descriptors. */
-        std::vector<UiAssetDependency> dependencies_; /**< Canonical cooked dependency manifest. */
-        std::vector<UiRouteMetadata> routes_;         /**< Runtime-ready immutable route descriptors. */
-        std::vector<std::uint8_t> payload_;           /**< Deterministic owned cooked bytes. */
+                         std::vector<UiDocumentPresentationProfiles> profiles, std::vector<std::uint8_t> payload) noexcept;
+        UiDocumentSchemaVersion schemaVersion_;                /**< Source schema represented by this cooked snapshot. */
+        UiDocumentId id_;                                      /**< Stable authored identity. */
+        UiDocumentRevision revision_;                          /**< Source authored revision. */
+        std::vector<UiCanvasDescriptor> canvases_;             /**< Runtime-ready immutable canvas descriptors. */
+        std::vector<UiDocumentElement> elements_;              /**< Runtime-ready immutable element descriptors. */
+        std::vector<UiAssetDependency> dependencies_;          /**< Canonical cooked dependency manifest. */
+        std::vector<UiRouteMetadata> routes_;                  /**< Runtime-ready immutable route descriptors. */
+        std::vector<UiDocumentPresentationProfiles> profiles_; /**< Canonical bounded alternatives; empty is neutral base. */
+        std::vector<std::uint8_t> payload_;                    /**< Deterministic owned cooked bytes. */
     };
 
     /** @brief Stable scene/component reference to one canvas asset and expected authored identity. */
@@ -375,6 +392,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] const UiRuntimeAsset *FindAsset(Assets::AssetId id) const noexcept;
         /** @brief Returns immutable cooked route descriptors. @return Borrowed route data. */
         [[nodiscard]] std::span<const UiRouteMetadata> Routes() const noexcept;
+        /** @brief Borrows canonical per-canvas responsive alternatives; empty means neutral base.
+         * @return Immutable bounded profile tables owned by this document generation.
+         */
+        [[nodiscard]] std::span<const UiDocumentPresentationProfiles> PresentationProfiles() const noexcept;
         /** @brief Returns cooked bytes retained until shutdown. @return Borrowed immutable payload. */
         [[nodiscard]] std::span<const std::uint8_t> Payload() const noexcept;
         /** @brief Admits runtime work from Prepared. @return Success or UiErrors::InstanceStateInvalid. */
