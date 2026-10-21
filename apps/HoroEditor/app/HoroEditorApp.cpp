@@ -1848,6 +1848,13 @@ namespace Horo::Editor {
                                                          .availableCapabilities = {{"horo.editor.inspector"},
                                                                                    {"horo.editor.property-drawer"},
                                                                                    Extensions::EditorCustomCompositionCapability}},
+                                                    .extensionViewportPolicy = {.revision = 1,
+                                                                                .knownPermissions = {{"editor.viewport-overlay"},
+                                                                                                     {"editor.gizmo"}},
+                                                                                .approvedPermissions = {{"editor.viewport-overlay"},
+                                                                                                        {"editor.gizmo"}},
+                                                                                .availableCapabilities = {{"horo.editor.viewport-overlay"},
+                                                                                                          {"horo.editor.gizmo"}}},
                                                     .gameplayRetirements = gameplayRetirements}};
             // Closes route/extension scopes and joins before destroying the successfully constructed screen host.
             const EditorWorkerShutdown jobShutdown{p.background.jobs, p.operationServices.shaderBuild, &screenHost, packages.get()};

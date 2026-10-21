@@ -21,6 +21,11 @@ namespace Horo::Editor {
         return gizmo_.ConsumePendingCancellation(command);
     }
 
+    /** @copydoc ViewportInteractionController::CancelContribution */
+    void ViewportInteractionController::CancelContribution() noexcept {
+        capture_.Cancel(Input::CaptureCancellationReason::Explicit);
+    }
+
     void ViewportInteractionController::Draw(const ViewportInteractionDrawContext &context) {
         const Input::InputRouter *router = capture_.Router();
         if (router == nullptr || capture_.WorkspaceContext() == nullptr)
@@ -34,6 +39,7 @@ namespace Horo::Editor {
                 .input = input,
                 .viewModel = context.viewModel,
                 .command = context.command,
+                .contributedAxis = context.contributedAxis,
                 .depthRange = context.depthRange,
             };
             gizmo_.Draw(context.drawList, gizmoContext, capture_))

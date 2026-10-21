@@ -3353,6 +3353,9 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorActivitySession.cpp
         extensions/host/EditorActivityAction.cpp
         extensions/host/EditorPageHost.cpp
+        extensions/manifest/EditorViewportDefinition.cpp
+        extensions/host/EditorViewportHost.cpp
+        extensions/host/EditorViewportNativeSession.cpp
         extensions/host/EditorInspectorHost.cpp
         extensions/host/EditorInspectorNativeSession.cpp
         extensions/host/EditorInspectorAbiConversion.cpp
