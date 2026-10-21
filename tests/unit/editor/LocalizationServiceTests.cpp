@@ -2,6 +2,7 @@
 #include "Horo/Editor/Localization/LocalizationService.h"
 
 #include <array>
+#include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <filesystem>
 #include <fstream>
@@ -101,8 +102,10 @@ namespace {
     };
 
     template <typename Range> void RequireCatalogKeys(const Horo::Editor::LocalizationService &service, const Range &keys) {
-        for (const char *key : keys)
+        for (const char *key : keys) {
+            INFO("Catalog key: " << key);
             REQUIRE((!service.Get("editor", key).starts_with("[missing:")));
+        }
     }
 
     void ActivatePreparedCatalog(Horo::Editor::LocalizationService &service, const char *locale) {

@@ -214,12 +214,24 @@
     "workspace.sequence.close": {
       "text": "Kapat"
     },
-    "workspace.pcg.preview.refresh": "Önizle",
-    "workspace.pcg.preview.cancel": "Önizlemeyi temizle",
-    "workspace.pcg.preview.running": "Yakalanan grafik değerlendiriliyor…",
-    "workspace.pcg.preview.failed": "Önizleme başarısız. Grafik ve Sahne değişmedi.",
-    "workspace.pcg.preview.current": "Güncel önizleme · üstten noktalar ve çıktı sınırları · en fazla 8192 nokta",
-    "workspace.pcg.preview.empty": "Yalıtılmış çalışma alanı: ızgara 1, kutu 2, yüzey 3. Önizleme Sahneyi değiştirmez.",
+    "workspace.pcg.preview.refresh": {
+      "text": "Önizle"
+    },
+    "workspace.pcg.preview.cancel": {
+      "text": "Önizlemeyi temizle"
+    },
+    "workspace.pcg.preview.running": {
+      "text": "Yakalanan grafik değerlendiriliyor…"
+    },
+    "workspace.pcg.preview.failed": {
+      "text": "Önizleme başarısız. Grafik ve Sahne değişmedi."
+    },
+    "workspace.pcg.preview.current": {
+      "text": "Güncel önizleme · üstten noktalar ve çıktı sınırları · en fazla 8192 nokta"
+    },
+    "workspace.pcg.preview.empty": {
+      "text": "Yalıtılmış çalışma alanı: ızgara 1, kutu 2, yüzey 3. Önizleme Sahneyi değiştirmez."
+    },
     "workspace.pcg.undo": {"text": "Geri al"},
     "workspace.pcg.redo": {"text": "Yinele"},
     "workspace.pcg.reset_view": {"text": "Görünümü sıfırla"},

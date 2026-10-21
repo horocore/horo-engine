@@ -11,21 +11,31 @@ namespace Horo::Editor {
     /** @brief Exercises actual point/bounds draw primitives under the finite render budget. */
     void CheckPreviewDrawing(const CanvasWorkspace &fixture) {
         Tests::EditorGuiContextFixture gui;
+        ImGui::GetIO().IniFilename = nullptr;
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(gui.localization.LoadCatalogFile(root / (std::string{locale} + ".json")));
         for (const auto preset : {Theme::Preset::HoroDark, Theme::Preset::Light}) {
             Theme::SetThemePreset(preset);
+            Theme::ApplyCurrentTheme();
+            CHECK(ImGui::GetStyle().Colors[ImGuiCol_Text].x == Theme::GetActiveTokens().colors.textPrimary.x);
             for (const auto locale : {"en-US", "tr-TR"}) {
                 REQUIRE(gui.localization.Prepare(LocaleTag{locale}));
                 REQUIRE(gui.localization.ActivatePrepared());
                 for (const float width : {280.0F, 1000.0F}) {
-                    gui.imgui.BeginFrame();
-                    ImGui::SetNextWindowSize({width, 450});
-                    ImGui::Begin("BoundedPCGPreview");
-                    CHECK(DrawPCGPreview(fixture.View().preview, fixture.View().previewRegion, 4, gui.localization, gui.imgui.Fonts()) ==
-                          PCGPreviewAction::None);
-                    ImGui::End();
-                    gui.imgui.EndFrame();
+                    for (int frame = 0; frame < 2; ++frame) {
+                        gui.imgui.BeginFrame();
+                        ImGui::SetNextWindowPos({0, 0});
+                        ImGui::SetNextWindowSize({width, 450});
+                        ImGui::Begin("BoundedPCGPreview", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                        CHECK(DrawPCGPreview(fixture.View().preview, fixture.View().previewRegion, 4, gui.localization,
+                                             gui.imgui.Fonts()) == PCGPreviewAction::None);
+                        ImGui::End();
+                        gui.imgui.EndFrame();
+                    }
                     const auto *draw = ImGui::GetDrawData();
                     REQUIRE(draw);
+                    CHECK(draw->TotalVtxCount > 0);
                     // Four point/bounds primitives plus shared controls/text, independent of the 256-point candidate.
                     CHECK(draw->TotalVtxCount < 12000);
                     for (int list = 0; list < draw->CmdListsCount; ++list)
