@@ -6,7 +6,6 @@
 #include <array>
 #include <charconv>
 #include <cmath>
-#include <cstdio>
 #include <imgui_internal.h>
 #include <limits>
 #include <numbers>
@@ -77,20 +76,18 @@ namespace Horo::Editor::Ui {
 
     /** @copydoc EditorUiIcon */
     UiIcon EditorUiIcon(Extensions::EditorThemeIconRole role) noexcept {
-        static constexpr std::array icons{UiIcon::None,         UiIcon::Generic,    UiIcon::Info,          UiIcon::Warning,
-                                          UiIcon::Error,        UiIcon::Create,     UiIcon::Rename,        UiIcon::Duplicate,
-                                          UiIcon::Delete,       UiIcon::Reset,      UiIcon::Check,         UiIcon::Settings,
-                                          UiIcon::MoreVertical, UiIcon::Visibility, UiIcon::VisibilityOff, UiIcon::Lock,
-                                          UiIcon::Search,       UiIcon::ArrowBack,  UiIcon::ArrowForward,  UiIcon::Folder,
-                                          UiIcon::Description,  UiIcon::Play,       UiIcon::Pause,         UiIcon::Stop,
-                                          UiIcon::Record};
+        using enum UiIcon;
+        static constexpr std::array icons{None,          Generic, Info,   Warning,   Error,        Create,       Rename,
+                                          Duplicate,     Delete,  Reset,  Check,     Settings,     MoreVertical, Visibility,
+                                          VisibilityOff, Lock,    Search, ArrowBack, ArrowForward, Folder,       Description,
+                                          Play,          Pause,   Stop,   Record};
         const auto index = static_cast<std::size_t>(role);
-        return index < icons.size() ? icons[index] : UiIcon::None;
+        return index < icons.size() ? icons[index] : None;
     }
 
     namespace {
         /** @brief Emits only scoped semantic input; the native host remains the focus/capture authority. */
-        Extensions::EditorUiScalarInput ScalarInput(Extensions::EditorUiScalarState &state, bool enabled) {
+        Extensions::EditorUiScalarInput ScalarInput(const Extensions::EditorUiScalarState &state, bool enabled) {
             using enum Extensions::EditorUiScalarInput;
             if (!enabled || ImGui::IsKeyPressed(ImGuiKey_Escape))
                 return Cancel;
@@ -126,7 +123,7 @@ namespace Horo::Editor::Ui {
             const ImVec2 center{origin.x + size.x * 0.5F, origin.y + size.y * 0.5F};
             const float radius = std::min(size.x, size.y) * (0.30F + state.emphasis * 0.05F);
             const double value = state.editing ? state.preview : std::get<double>(node.value);
-            const float phase = static_cast<float>((value - *node.minimum) / (*node.maximum - *node.minimum));
+            const auto phase = static_cast<float>((value - *node.minimum) / (*node.maximum - *node.minimum));
             const float angle = (phase * 2.0F - 1.0F) * std::numbers::pi_v<float>;
             const float stroke = std::max(theme.uiScale, theme.interaction.focusRingWidth * theme.uiScale);
             auto *draw = ImGui::GetWindowDrawList();
@@ -154,9 +151,10 @@ namespace Horo::Editor::Ui {
             state.emphasis = 0;
         }
         state.lastPresentedFrame = frame;
-        char text[64]{};
-        std::snprintf(text, sizeof(text), "%.9g", state.editing ? state.preview : std::get<double>(node.value));
-        Hint(text, fonts);
+        std::array<char, 64> text{};
+        static_cast<void>(std::to_chars(text.data(), text.data() + text.size() - 1,
+                                        state.editing ? state.preview : std::get<double>(node.value), std::chars_format::general, 9));
+        Hint(text.data(), fonts);
         const auto origin = ImGui::GetCursorScreenPos();
         size.x = std::max(size.x, theme.uiScale);
         size.y = std::max(size.y, theme.metrics.minimumInteractiveTarget * theme.uiScale);
@@ -170,7 +168,7 @@ namespace Horo::Editor::Ui {
         if (semantic) {
             semantic->enabled = enabled;
             semantic->focusable = enabled && !node.base.readOnly;
-            semantic->value = state.editing || proposed ? state.preview : std::get<double>(node.value);
+            semantic->value = state.editing || proposed.has_value() ? state.preview : std::get<double>(node.value);
             semantic->preview = state.editing || proposed.has_value();
         }
         return proposed;

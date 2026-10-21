@@ -23,8 +23,8 @@ namespace Horo::Extensions {
         /** @brief A scalar dial can only propose exact decimal edits against a finite nonempty admitted range. */
         bool ValidDial(const EditorUiNode &node) noexcept {
             const auto *number = std::get_if<EditorUiNumberNode>(&node.payload);
-            return number && number->numberKind == EditorUiNumberKind::Decimal && number->minimum && number->maximum &&
-                   *number->minimum < *number->maximum && std::isfinite(*number->maximum - *number->minimum);
+            return number && number->numberKind == EditorUiNumberKind::Decimal && number->minimum.has_value() &&
+                   number->maximum.has_value() && *number->minimum < *number->maximum && std::isfinite(*number->maximum - *number->minimum);
         }
 
         /** @brief Bounds aggregate host work, independent of the concrete renderer or provider's claims. */
@@ -70,15 +70,16 @@ namespace Horo::Extensions {
         /** @brief Emits only committed intent; document ownership and undo stay with the caller's application command. */
         std::optional<double> CompleteEditorUiScalarGesture(const EditorUiNumberNode &node, EditorUiScalarState &state,
                                                             const EditorUiScalarInput input, const bool admitted) noexcept {
+            using enum EditorUiScalarInput;
             if (!admitted || !node.base.enabled || node.base.readOnly)
                 return {};
-            if (input == EditorUiScalarInput::Commit && state.editing) {
+            if (input == Commit && state.editing) {
                 state.editing = false;
                 return state.preview;
             }
-            if (input == EditorUiScalarInput::Increment || input == EditorUiScalarInput::Decrement) {
+            if (input == Increment || input == Decrement) {
                 const double step = (*node.maximum - *node.minimum) / 100.0;
-                const double direction = input == EditorUiScalarInput::Increment ? 1.0 : -1.0;
+                const double direction = input == Increment ? 1.0 : -1.0;
                 const double current = std::get<double>(node.value);
                 state.preview = std::clamp(current + direction * step, *node.minimum, *node.maximum);
                 if (state.preview == current)
@@ -114,8 +115,8 @@ namespace Horo::Extensions {
 
     /** @copydoc ValidateEditorUiCustomPresentation */
     Result<void> ValidateEditorUiCustomPresentation(const EditorUiNode &node) {
-        const auto &base = EditorUiNodeBaseOf(node);
-        if (base.custom &&
+        if (const auto &base = EditorUiNodeBaseOf(node);
+            base.custom &&
             (!ValidPresentation(*base.custom) || (base.custom->widget == EditorUiCustomWidget::ScalarDial && !ValidDial(node)) ||
              (base.custom->widget == EditorUiCustomWidget::Standard && !std::holds_alternative<EditorUiPlotNode>(node.payload))))
             return Invalid("Custom presentation version, roles or scalar binding is unsupported.");
@@ -151,8 +152,8 @@ namespace Horo::Extensions {
     std::optional<double> UpdateEditorUiScalar(const EditorUiNumberNode &node, EditorUiScalarState &state, const EditorUiScalarInput input,
                                                const double normalizedValue, const bool admitted, const EditorThemeFrame &theme,
                                                const float elapsedSeconds) noexcept {
-        if (!node.base.custom || node.base.custom->widget != EditorUiCustomWidget::ScalarDial || !node.minimum || !node.maximum ||
-            !std::holds_alternative<double>(node.value)) {
+        if (!node.base.custom || node.base.custom->widget != EditorUiCustomWidget::ScalarDial || !node.minimum.has_value() ||
+            !node.maximum.has_value() || !std::holds_alternative<double>(node.value)) {
             state = {};
             return {};
         }
@@ -160,11 +161,9 @@ namespace Horo::Extensions {
         if (!admitted || !node.base.enabled || node.base.readOnly || input == EditorUiScalarInput::Cancel) {
             state.preview = current;
             state.editing = false;
-        } else if (input == EditorUiScalarInput::Begin || input == EditorUiScalarInput::Preview) {
-            if (std::isfinite(normalizedValue)) {
-                state.preview = std::lerp(*node.minimum, *node.maximum, std::clamp(normalizedValue, 0.0, 1.0));
-                state.editing = true;
-            }
+        } else if ((input == EditorUiScalarInput::Begin || input == EditorUiScalarInput::Preview) && std::isfinite(normalizedValue)) {
+            state.preview = std::lerp(*node.minimum, *node.maximum, std::clamp(normalizedValue, 0.0, 1.0));
+            state.editing = true;
         }
         Animate(state.emphasis, admitted && state.editing, *node.base.custom, theme, elapsedSeconds);
         return CompleteEditorUiScalarGesture(node, state, input, admitted);

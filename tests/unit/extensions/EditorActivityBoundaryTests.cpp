@@ -219,24 +219,36 @@ namespace Horo::Extensions::Tests {
 namespace Horo::Extensions::Tests {
     TEST_CASE("Specialized plot ABI copies bounded typed data and preserves legacy transport", "[Extensions][Activity][Plot][ABI]") {
         HoroEditorActivityPlotSample samples[] = {{0, 0}, {1, 1}};
+        HoroEditorUiCustomPresentation style{sizeof(style),
+                                             1,
+                                             HORO_EDITOR_UI_STANDARD,
+                                             HORO_EDITOR_UI_FONT_SANS_EMPHASIS,
+                                             HORO_EDITOR_UI_ICON_INFO,
+                                             HORO_EDITOR_UI_COLOR_ACCENT,
+                                             HORO_EDITOR_UI_MOTION_FOCUS,
+                                             3};
         HoroEditorActivityNodeV2 node{.node = {.structSize = sizeof(HoroEditorActivityNode),
                                                .kind = HORO_EDITOR_ACTIVITY_PLOT,
                                                .id = {"plot", 4},
                                                .labelKey = {"plot.label", 10},
                                                .actionId = {"inspect", 7}},
                                       .samples = samples,
-                                      .sampleCount = 2};
+                                      .sampleCount = 2,
+                                      .presentation = &style};
         HoroEditorActivitySnapshot snapshot{.structSize = sizeof(HoroEditorActivitySnapshot),
                                             .schemaVersion = HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION,
                                             .revision = 1,
-                                            .nodes = reinterpret_cast<const HoroEditorActivityNode *>(&node),
+                                            .nodes = &node.node,
                                             .nodeCount = 1};
         auto copied = Detail::CopyActivityForm(snapshot, "drawer", "fixture.title");
         INFO((copied.HasError() ? copied.ErrorValue().message : std::string{}));
         REQUIRE(copied.HasValue());
         samples[1].y = 0;
+        style.iconRole = HORO_EDITOR_UI_ICON_NONE;
         const auto &plot = std::get<EditorUiPlotNode>(copied.Value().nodes.front().payload);
         CHECK(plot.samples.back().y == 1);
+        REQUIRE(plot.base.custom.has_value());
+        CHECK(plot.base.custom->icon == EditorThemeIconRole::Info);
         snapshot.schemaVersion = HORO_EDITOR_ACTIVITY_SCHEMA_VERSION;
         CHECK(Detail::CopyActivityForm(snapshot, "drawer", "fixture.title").HasError());
         snapshot.schemaVersion = HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION;

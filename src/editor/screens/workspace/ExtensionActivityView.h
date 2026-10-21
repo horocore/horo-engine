@@ -92,6 +92,11 @@ namespace Horo::Editor {
 
         /** @brief Applies a queued move only while its exact retained projection and provider remain live. */
         void ApplyPendingMove();
+        /** @brief Retains local plot state only for a matching node in the same provider publication.
+         * @param entry Newly prepared entry receiving bounded plot state.
+         * @param previous Prior matching provider entry, or null for a fresh publication.
+         */
+        void PreparePlots(Entry &entry, const Entry *previous) const;
         /** @brief Refreshes copied localization and transfers texture ownership at the owner Update boundary. */
         [[nodiscard]] Entry PrepareEntry(const Extensions::EditorActivityProjection &projection, const std::string &locale);
         /** @brief Prepares candidate resources and opening/focus transitions without changing published texture ownership. */
@@ -101,13 +106,13 @@ namespace Horo::Editor {
         /** @brief Copies provider-localized node text during the owner update phase. */
         void PrepareNodeText(Entry &entry, const std::string &locale);
         /** @brief Draws the admitted form using retained text and queues typed actions without invoking providers. */
-        void DrawForm(Entry &entry);
+        void DrawForm(Entry &entry) const;
         /** @brief Draws one copied semantic node inside its inherited native input and clipping scopes. */
-        void DrawFormNode(Entry &entry, std::size_t index, float width, bool enabled);
+        void DrawFormNode(Entry &entry, std::size_t index, float width, bool enabled) const;
         /** @brief Allocates layout and semantic snapshots only at owner updates on declaration, width or live-theme change. */
-        void PrepareLayout(Entry &entry);
+        void PrepareLayout(Entry &entry) const;
         /** @brief Host-owned specialized plot; consumes copied data and current tokens without provider callbacks. */
-        void DrawPlot(Entry &entry, const Extensions::EditorUiPlotNode &plot, std::size_t index, bool enabled);
+        void DrawPlot(Entry &entry, const Extensions::EditorUiPlotNode &plot, std::size_t index, bool enabled) const;
         /** @brief Presents localized destination and insertion actions for one retained control. */
         void DrawPlacementMenu(const Entry &entry, std::size_t group);
         /** @brief Presents durable user visibility choices for the current activity rail. */

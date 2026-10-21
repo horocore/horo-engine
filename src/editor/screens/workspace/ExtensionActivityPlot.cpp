@@ -4,7 +4,8 @@
 #include "editor/design_system/components/EditorUiCustomResources.h"
 
 #include <algorithm>
-#include <cstdio>
+#include <array>
+#include <charconv>
 #include <imgui_internal.h>
 
 namespace Horo::Editor {
@@ -63,10 +64,18 @@ namespace Horo::Editor {
         void PlotReadout(const Extensions::EditorUiPlotNode &plot, const Extensions::EditorUiPlotState &state, const Theme::Fonts &fonts,
                          Extensions::EditorUiAccessibleNode &semantic) {
             const auto &sample = plot.samples[state.selected];
-            char value[96]{};
-            std::snprintf(value, sizeof(value), "%zu/%zu  (%.3g, %.3g)", state.selected + 1, plot.samples.size(),
-                          static_cast<double>(sample.x), static_cast<double>(sample.y));
-            Ui::Hint(value, fonts);
+            // Admitted sample counts and normalized values fit this complete stack readout.
+            std::array<char, 96> value{};
+            auto *const end = value.data() + value.size() - 1;
+            const auto selected = std::to_chars(value.data(), end, state.selected + 1);
+            *selected.ptr = '/';
+            const auto count = std::to_chars(selected.ptr + 1, end, plot.samples.size());
+            std::copy_n("  (", 3, count.ptr);
+            const auto x = std::to_chars(count.ptr + 3, end, static_cast<double>(sample.x), std::chars_format::general, 3);
+            std::copy_n(", ", 2, x.ptr);
+            const auto y = std::to_chars(x.ptr + 2, end, static_cast<double>(sample.y), std::chars_format::general, 3);
+            *y.ptr = ')';
+            Ui::Hint(value.data(), fonts);
             semantic.selectedIndex = static_cast<std::uint32_t>(state.selected);
             semantic.value = Extensions::EditorUiVectorValue{.components = {sample.x, sample.y}, .dimension = 2};
         }
@@ -85,7 +94,7 @@ namespace Horo::Editor {
 
     /** @copydoc ExtensionActivityView::DrawPlot */
     void ExtensionActivityView::DrawPlot(Entry &entry, const Extensions::EditorUiPlotNode &plot, const std::size_t index,
-                                         const bool enabled) {
+                                         const bool enabled) const {
         using namespace Extensions;
         const auto theme = themeCapture_.Frame();
         if (!theme || theme->revision == 0 || plot.samples.size() < 2)

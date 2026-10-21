@@ -121,6 +121,38 @@ namespace Horo::Extensions {
         CHECK(state.emphasis == 1.0F);
     }
 
+    TEST_CASE("Zero scalar proposals stay present while authored values remain unchanged", "[Extensions][Composition][Scalar]") {
+        auto form = ScalarForm();
+        auto &number = std::get<EditorUiNumberNode>(form.nodes.front().payload);
+        number.minimum = -1.0;
+        number.maximum = 1.0;
+        number.value = 0.5;
+        REQUIRE(ValidateEditorUiForm(form).HasValue());
+        EditorUiScalarState state;
+        EditorThemeFrame theme;
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .5, true, theme, .01F).has_value());
+        const auto proposed = UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .5, true, theme, .01F);
+        REQUIRE(proposed.has_value());
+        CHECK(*proposed == 0.0);
+        CHECK(std::get<double>(number.value) == 0.5);
+        CHECK_FALSE(state.editing);
+    }
+
+    TEST_CASE("Plot selection retains deterministic ties and ignores invalid or distant input", "[Extensions][Form][Plot][Input]") {
+        EditorUiPlotNode plot{.samples = {{0, 0}, {.5F, 1}, {1, 0}}};
+        EditorUiPlotState state{.selected = 2};
+        EditorThemeFrame theme;
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Select, .25F, true, theme, .01F));
+        CHECK(state.selected == 0);
+        state.selected = 2;
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Select, 100, true, theme, .01F));
+        CHECK(state.selected == 2);
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Select, std::numeric_limits<float>::quiet_NaN(), true, theme, .01F));
+        CHECK(state.selected == 2);
+        CHECK_FALSE(UpdateEditorUiPlot(plot, state, EditorUiPlotInput::Select, 0, false, theme, .01F));
+        CHECK(state.selected == 2);
+    }
+
     TEST_CASE("Custom composition budgets and unsupported presenter versions fail before publication",
               "[Extensions][Composition][Budget]") {
         auto form = ScalarForm();

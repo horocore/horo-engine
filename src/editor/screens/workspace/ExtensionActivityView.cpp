@@ -77,6 +77,28 @@ namespace Horo::Editor {
         host_->Update();
     }
 
+    /** @copydoc ExtensionActivityView::PreparePlots */
+    void ExtensionActivityView::PreparePlots(Entry &entry, const Entry *previous) const {
+        const auto &form = entry.projection.surface.form;
+        if (!form)
+            return;
+        for (std::size_t i = 0; i < form->nodes.size(); ++i) {
+            if (!std::holds_alternative<Extensions::EditorUiPlotNode>(form->nodes[i].payload))
+                continue;
+            Extensions::EditorUiPlotState state;
+            if (previous && previous->projection.surface.form) {
+                const auto &oldNodes = previous->projection.surface.form->nodes;
+                const auto &id = Extensions::EditorUiNodeBaseOf(form->nodes[i]).id;
+                const auto old = std::ranges::find_if(previous->plots, [&](const auto &candidate) {
+                    return Extensions::EditorUiNodeBaseOf(oldNodes[candidate.first]).id == id;
+                });
+                if (old != previous->plots.end())
+                    state = old->second;
+            }
+            entry.plots.emplace_back(i, state);
+        }
+    }
+
     /** @copydoc ExtensionActivityView::PrepareEntry */
     ExtensionActivityView::Entry ExtensionActivityView::PrepareEntry(const Extensions::EditorActivityProjection &projection,
                                                                      const std::string &locale) {
@@ -87,20 +109,7 @@ namespace Horo::Editor {
         Entry entry{.projection = projection};
         if (previous != entries_.end())
             entry.offeredWidth = previous->offeredWidth;
-        if (projection.surface.form) {
-            for (std::size_t i = 0; i < projection.surface.form->nodes.size(); ++i) {
-                if (!std::holds_alternative<Extensions::EditorUiPlotNode>(projection.surface.form->nodes[i].payload))
-                    continue;
-                Extensions::EditorUiPlotState state;
-                if (previous != entries_.end() && previous->projection.surface.form) {
-                    const auto &id = Extensions::EditorUiNodeBaseOf(projection.surface.form->nodes[i]).id;
-                    for (const auto &[oldIndex, oldState] : previous->plots)
-                        if (Extensions::EditorUiNodeBaseOf(previous->projection.surface.form->nodes[oldIndex]).id == id)
-                            state = oldState;
-                }
-                entry.plots.emplace_back(i, state);
-            }
-        }
+        PreparePlots(entry, previous != entries_.end() ? std::to_address(previous) : nullptr);
         const auto &descriptor = projection.surface.descriptor;
         entry.label = host_->LocalizedText(descriptor.provider, descriptor.labelLocalizationKey, locale);
         entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
@@ -397,7 +406,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ExtensionActivityView::PrepareLayout */
-    void ExtensionActivityView::PrepareLayout(Entry &entry) {
+    void ExtensionActivityView::PrepareLayout(Entry &entry) const {
         const auto theme = themeCapture_.Frame();
         if (!theme || !entry.projection.surface.form)
             return;
@@ -422,30 +431,32 @@ namespace Horo::Editor {
     }
 
     /** @copydoc ExtensionActivityView::DrawFormNode */
-    void ExtensionActivityView::DrawFormNode(Entry &entry, std::size_t index, float width, bool enabled) {
+    void ExtensionActivityView::DrawFormNode(Entry &entry, std::size_t index, float width, bool enabled) const {
         const auto &surface = entry.projection.surface;
         const auto &node = surface.form->nodes[index];
         const auto &base = Extensions::EditorUiNodeBaseOf(node);
         const auto &geometry = entry.render->nodes[index];
         const auto fonts = Ui::EditorUiFonts(context_.theme.fonts, geometry.font);
-        if (const auto *plot = std::get_if<Extensions::EditorUiPlotNode>(&node.payload)) {
-            DrawPlot(entry, *plot, index, enabled);
-        } else if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
-            if (Ui::Button({.label = entry.nodeText[index].c_str(),
-                            .size = {width / entry.render->uiScale, geometry.height / entry.render->uiScale},
-                            .enabled = enabled,
-                            .font = fonts.sans}))
-                static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
-                                                     action->action.value, entry.projection.revision));
-        } else if (std::holds_alternative<Extensions::EditorUiContainerNode>(node.payload)) {
-            if (!entry.nodeText[index].empty())
-                Ui::SectionTitle(entry.nodeText[index].c_str(), fonts);
-        } else
-            Ui::Hint(entry.nodeText[index].c_str(), fonts);
+        std::visit([&]<class T>(const T &typed) {
+            if constexpr (std::is_same_v<T, Extensions::EditorUiPlotNode>) {
+                DrawPlot(entry, typed, index, enabled);
+            } else if constexpr (std::is_same_v<T, Extensions::EditorUiActionNode>) {
+                if (Ui::Button({.label = entry.nodeText[index].c_str(),
+                                .size = {width / entry.render->uiScale, geometry.height / entry.render->uiScale},
+                                .enabled = enabled,
+                                .font = fonts.sans}))
+                    static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
+                                                         typed.action.value, entry.projection.revision));
+            } else if constexpr (std::is_same_v<T, Extensions::EditorUiContainerNode>) {
+                if (!entry.nodeText[index].empty())
+                    Ui::SectionTitle(entry.nodeText[index].c_str(), fonts);
+            } else
+                Ui::Hint(entry.nodeText[index].c_str(), fonts);
+        }, node.payload);
     }
 
     /** @copydoc ExtensionActivityView::DrawForm */
-    void ExtensionActivityView::DrawForm(Entry &entry) {
+    void ExtensionActivityView::DrawForm(Entry &entry) const {
         const auto &surface = entry.projection.surface;
         if (!surface.form || !entry.render)
             return;

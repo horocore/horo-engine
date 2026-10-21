@@ -3,9 +3,14 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <type_traits>
 
 namespace Horo::Extensions {
     namespace {
+        static_assert(std::is_standard_layout_v<HoroEditorInspectorDescriptorV2>);
+        static_assert(offsetof(HoroEditorInspectorDescriptorV2, base) == 0);
+
         /** @brief Builds typed malformed transport errors without dropping downstream form validation causes. */
         template <class T> Result<T> Invalid() {
             return Result<T>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
@@ -60,7 +65,7 @@ namespace Horo::Extensions {
         Result<void> CopyPresentations(const HoroEditorInspectorDescriptor &input, EditorUiForm &form) {
             if (input.schemaVersion == HORO_EDITOR_INSPECTOR_SCHEMA_VERSION)
                 return Result<void>::Success();
-            const auto &extended = reinterpret_cast<const HoroEditorInspectorDescriptorV2 &>(input);
+            const auto &extended = *static_cast<const HoroEditorInspectorDescriptorV2 *>(static_cast<const void *>(&input));
             for (std::uint32_t i = 0; i < extended.presentationCount; ++i) {
                 std::string id;
                 if (!Detail::CopyActivityText(extended.presentations[i].nodeId, id))

@@ -2,7 +2,12 @@
 
 #include "Horo/Extensions/ExtensionErrors.h"
 
+#include <cstddef>
+#include <type_traits>
+
 namespace Horo::Extensions::Detail {
+    static_assert(std::is_standard_layout_v<HoroEditorActivityNodeV2>);
+    static_assert(offsetof(HoroEditorActivityNodeV2, node) == 0);
     static_assert(HORO_EDITOR_UI_FONT_COUNT == static_cast<std::uint32_t>(EditorThemeFontRole::Count));
     static_assert(HORO_EDITOR_UI_ICON_COUNT == static_cast<std::uint32_t>(EditorThemeIconRole::Count));
     static_assert(HORO_EDITOR_UI_COLOR_COUNT == static_cast<std::uint32_t>(EditorThemeColorRole::Count));
@@ -46,15 +51,16 @@ namespace Horo::Extensions::Detail {
 
         /** @brief Resolves only registered standard layout semantics; no absolute screen placement crosses the ABI. */
         EditorUiLayoutKind LayoutKind(const std::uint32_t kind) noexcept {
+            using enum EditorUiLayoutKind;
             switch (kind) {
                 case HORO_EDITOR_ACTIVITY_GROUP:
-                    return EditorUiLayoutKind::Group;
+                    return Group;
                 case HORO_EDITOR_ACTIVITY_ROW:
-                    return EditorUiLayoutKind::Row;
+                    return Row;
                 case HORO_EDITOR_ACTIVITY_GRID:
-                    return EditorUiLayoutKind::Grid;
+                    return Grid;
                 default:
-                    return EditorUiLayoutKind::Stack;
+                    return Stack;
             }
         }
 
@@ -159,7 +165,7 @@ namespace Horo::Extensions::Detail {
         std::size_t textBytes{};
         for (std::uint32_t index = 0; index < snapshot.nodeCount; ++index) {
             const auto *advanced = snapshot.schemaVersion == HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION
-                                       ? reinterpret_cast<const HoroEditorActivityNodeV2 *>(snapshot.nodes) + index
+                                       ? static_cast<const HoroEditorActivityNodeV2 *>(static_cast<const void *>(snapshot.nodes)) + index
                                        : nullptr;
             if (advanced && !HoroEditorActivityNodeV2Shape(advanced))
                 return invalid();

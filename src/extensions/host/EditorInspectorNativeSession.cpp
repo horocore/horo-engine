@@ -133,7 +133,7 @@ namespace Horo::Extensions {
                                               surface.provider.activationGeneration,
                                               {}};
             for (const auto &capability : surface.requiredCapabilities)
-                request.capabilities.push_back({capability, surface.requiredPermissions});
+                request.capabilities.emplace_back(capability, surface.requiredPermissions);
             auto admitted = ExtensionCapabilityAdmission::Evaluate(request, load.inspectorHost->AdmissionPolicy());
             if (admitted.HasError())
                 return Result<std::shared_ptr<EditorInspectorNativeSession>>::Failure(admitted.ErrorValue());

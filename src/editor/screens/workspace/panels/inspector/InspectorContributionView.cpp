@@ -250,13 +250,14 @@ namespace Horo::Editor {
         for (auto &entry : entries_)
             if (entry.render)
                 Ui::ApplyEditorUiInput(*entry.render, admitted && entry.enabled);
-        if (!admitted)
-            for (auto &entry : entries_)
-                for (auto &[index, state] : entry.scalars) {
-                    state = {};
-                    if (const auto *number = std::get_if<EditorUiNumberNode>(&entry.form.nodes[index].payload))
-                        state.preview = std::get<double>(number->value);
-                }
+        if (admitted)
+            return;
+        for (auto &entry : entries_)
+            for (auto &[index, state] : entry.scalars) {
+                state = {};
+                if (const auto *number = std::get_if<EditorUiNumberNode>(&entry.form.nodes[index].payload))
+                    state.preview = std::get<double>(number->value);
+            }
     }
 
     /** @copydoc InspectorContributionView::Accessibility */

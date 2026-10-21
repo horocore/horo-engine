@@ -177,7 +177,8 @@ namespace Horo::Extensions {
 
     /** @brief Seals the explicit custom feature grant before publication; basic UI support confers no advanced authority. */
     static HoroExtensionStatus AdmitComposition(const std::shared_ptr<EditorActivitySession> &session,
-                                                AssetImporterRegistrationSession &load, const HoroEditorActivityDescriptor &descriptor) {
+                                                const AssetImporterRegistrationSession &load,
+                                                const HoroEditorActivityDescriptor &descriptor) {
         const bool custom = std::ranges::find(load.extensionModule->requiredCapabilities, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY) !=
                             load.extensionModule->requiredCapabilities.end();
         if ((descriptor.initialSnapshot.schemaVersion == HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION ||

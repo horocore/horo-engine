@@ -471,7 +471,9 @@ namespace Horo::Extensions {
         if (!id.IsValid())
             return false;
         std::size_t index = FindNodeIndex(form.nodes, id);
-        for (std::size_t depth = 0; depth < form.nodes.size(); ++depth) {
+        std::size_t remaining = form.nodes.size();
+        while (remaining != 0) {
+            --remaining;
             if (index == form.nodes.size())
                 return false;
             const auto &base = BaseOf(form.nodes[index]);
