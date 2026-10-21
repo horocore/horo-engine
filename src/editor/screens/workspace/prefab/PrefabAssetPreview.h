@@ -1,4 +1,5 @@
-#pragma once
+#ifndef HORO_EDITOR_PREFAB_ASSET_PREVIEW_H
+#define HORO_EDITOR_PREFAB_ASSET_PREVIEW_H
 /** @file PrefabAssetPreview.h
  * @brief Immutable canonical prefab geometry rendered by the existing bounded preview host.
  */
@@ -30,3 +31,5 @@ namespace Horo::Editor {
     [[nodiscard]] std::shared_ptr<const Assets::IAssetPreviewProvider> CreatePrefabAssetPreviewProvider(
         Assets::AssetRegistrySnapshot registry, Assets::AssetId asset, PrefabHierarchySourceCapture capture);
 }  // namespace Horo::Editor
+
+#endif

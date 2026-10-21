@@ -665,6 +665,17 @@ namespace Horo::Editor {
                 return playSceneFactory;
             }
 
+            /** @brief Binds the explicit authoring stage capability to this authorized project. */
+            EditorPlaySceneFactory BindPrefabStageFactory(const std::filesystem::path &projectRoot) const {
+                const auto *factory = services_.TryGet<EditorProjectPrefabStageFactory>();
+                if (!factory || !factory->create)
+                    return {};
+                return [create = factory->create, root = projectRoot](Runtime::SceneRuntimeId identity,
+                                                                      const Runtime::RuntimeSceneDefinition &definition) {
+                    return create(root, identity, definition);
+                };
+            }
+
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
@@ -706,6 +717,7 @@ namespace Horo::Editor {
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                                   .prefabStageFactory = BindPrefabStageFactory(projectRoot),
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();

@@ -45,4 +45,7 @@ GUI bridge; detach releases those resources on the renderer owner thread.
 
 The internal model gains thumbnail status/diagnostics and a typed classification
 helper. Existing importer preview providers retain their contract. No public
-header or ownership registry changes are required.
+header or ownership registry changes are required. The existing non-installed
+`HoroPrefabHierarchyInternal` exact-header interface stages `PrefabAssetPreview.h`
+for GUI/test consumers; a named include guard also protects mixed source/staged
+header inclusion. No broad include root is added.

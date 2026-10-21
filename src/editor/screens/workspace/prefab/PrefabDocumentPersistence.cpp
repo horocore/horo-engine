@@ -46,7 +46,7 @@ namespace Horo::Editor {
         auto published =
             Assets::PublishAssetSource(root_, path_, accepted_, std::as_bytes(std::span(encoded.Value())), lease.Value(), files);
         if (published.HasError()) {
-            if (published.ErrorValue().code == Assets::AssetSourceErrors::Conflict.code)
+            if (published.ErrorValue().code.Value() == Assets::AssetSourceErrors::Conflict.code.Value())
                 conflict_ = true;
             return published;
         }
@@ -87,6 +87,29 @@ namespace Horo::Editor {
             acceptedRecovery_.reset();
         }
         return result;
+    }
+
+    /** @copydoc PrefabDocumentSession::DiscardOwnedRecovery */
+    Result<void> PrefabDocumentSession::DiscardOwnedRecovery(const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+        if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
+            return admitted;
+        PublicationGuard guard(busy_);
+        DocumentRecoveryService recovery(root_, mutations, files);
+        auto record = recovery.Inspect(source_->Data().assetId, identity_.key);
+        if (record.HasError())
+            return Result<void>::Failure(record.ErrorValue());
+        if (!record.Value())
+            return Result<void>::Success();
+        const bool owned = record.Value()->sessionOwner == owner_ && record.Value()->sessionGeneration == identity_.instance.Value();
+        const bool accepted = acceptedRecovery_ && *record.Value() == *acceptedRecovery_;
+        if (!owned && !accepted)
+            return Result<void>::Success();
+        auto discarded = recovery.Discard(*record.Value());
+        if (discarded.HasValue()) {
+            acceptedRecovery_.reset();
+            recoveryRevision_ = 0;
+        }
+        return discarded;
     }
 
     /** @copydoc PrefabDocumentSession::Recover */

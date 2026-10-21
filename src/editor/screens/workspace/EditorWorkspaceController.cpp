@@ -74,12 +74,12 @@ namespace Horo::Editor {
           m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
-          m_prefabSourceCapture(dependencies.prefabSources), m_workspaceSession(dependencies.documentSessionOwner),
-          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collision.inventory),
-          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
-          m_collisionSceneOwner(dependencies.documentSessionOwner), m_mutations(dependencies.mutations),
-          m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assetRegistrySource),
-          m_importerCatalog(dependencies.importerCatalog),
+          m_prefabStageFactory(dependencies.prefabStageFactory), m_prefabSourceCapture(dependencies.prefabSources),
+          m_workspaceSession(dependencies.documentSessionOwner), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
+          m_collisionInventory(dependencies.collision.inventory), m_collisionActivation(dependencies.collision.activation),
+          m_previewCollisionReceipt(dependencies.collision.previewReceipt), m_collisionSceneOwner(dependencies.documentSessionOwner),
+          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles),
+          m_assetRegistrySource(dependencies.assetRegistrySource), m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceOpenNavigator), m_diagnosticSourceNavigator(dependencies.diagnosticSourceNavigator),
           m_gameplayBuilds(dependencies.gameplay.builds), m_gameplayBuildEnvironment(dependencies.gameplay.environment),
@@ -258,6 +258,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::UpdateGameplaySources(const float elapsedSeconds) {
+        if (m_prefabStagePending)
+            RefreshPrefabDocuments();
         RefreshSourceDocumentProjection();
         (void)m_gameplayRetirements->Drain();
         UpdateGameplayBuild(elapsedSeconds);

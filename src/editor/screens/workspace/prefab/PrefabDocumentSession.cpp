@@ -67,7 +67,7 @@ namespace Horo::Editor {
                 conflict_,
                 history_.UndoCount() != 0,
                 history_.RedoCount() != 0,
-                stage_ != nullptr};
+                StageView().has_value()};
     }
 
     /** @copydoc PrefabDocumentSession::Admit */
@@ -135,7 +135,7 @@ namespace Horo::Editor {
         auto retained = history_.Prepare(Delta{id, std::move(before), edit, bytes});
         if (!retained)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
-        source_.swap(candidate.Value());
+        source_ = std::move(candidate).Value();
         history_.Commit(*retained);
         state_ = digest.Value();
         ++revision_;
@@ -158,7 +158,7 @@ namespace Horo::Editor {
         auto digest = Digest(*candidate.Value());
         if (digest.HasError())
             return Result<void>::Failure(digest.ErrorValue());
-        source_.swap(candidate.Value());
+        source_ = std::move(candidate).Value();
         state_ = digest.Value();
         history_.DidReplay(redo);
         ++revision_;
@@ -213,7 +213,17 @@ namespace Horo::Editor {
 
     /** @copydoc PrefabDocumentSession::ReleaseStage */
     void PrefabDocumentSession::ReleaseStage() noexcept {
+        stageCancellation_.RequestCancellation();
+        if (hostedStage_)
+            hostedStage_->Shutdown();
+        hostedStage_.reset();
         stage_.reset();
+        hostedStagePublished_ = false;
+    }
+
+    /** @copydoc PrefabDocumentSession::~PrefabDocumentSession */
+    PrefabDocumentSession::~PrefabDocumentSession() {
+        ReleaseStage();
     }
 
     /** @copydoc PrefabDocumentSession::Close */

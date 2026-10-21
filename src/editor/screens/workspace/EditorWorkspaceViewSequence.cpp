@@ -10,6 +10,33 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Emits only source-local semantic edits from a virtualized shared-control list. */
+        void DrawPrefabSourceFields(const PrefabDocumentSnapshot &source, EditorWorkspaceViewCommandData &outCommand,
+                                    const EditorGuiContext &context) {
+            // Each field emits a source-local semantic transaction; no SceneDocument or runtime entity mutation is exposed.
+            ImGui::BeginChild("##prefab_source", {0, ImGui::GetContentRegionAvail().y / 3.0F});
+            ImGuiListClipper clipper;
+            clipper.Begin(static_cast<int>(source.source->Data().objects.size()));
+            while (clipper.Step())
+                for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
+                    const auto &object = source.source->Data().objects[static_cast<std::size_t>(index)];
+                    const auto id = std::to_string(object.localId.value);
+                    ImGui::PushID(id.c_str());
+                    std::string name = object.name;
+                    ImGui::BeginDisabled(source.externalConflict);
+                    if (Ui::InputTextControl("##name", name, Prefab::MaximumPrefabObjectNameBytes, context.theme.fonts,
+                                             {.hint = context.localization.Get("editor", "workspace.prefab_document.name").c_str(),
+                                              .componentSize = Ui::ComponentSize::Medium})) {
+                        outCommand.command = EditorWorkspaceViewCommand::PrefabDocument;
+                        outCommand.prefabFence = source.fence;
+                        outCommand.prefabEdit = RenamePrefabObject{object.localId, std::move(name)};
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::PopID();
+                }
+            ImGui::EndChild();
+        }
+
         /** @brief Emits stable-neighbor reorder requests for the active document tab. */
         void DrawDocumentReorderActions(const ILocalizationService &localization, const std::span<const WorkspaceDocumentTab> tabs,
                                         const std::size_t index, EditorWorkspaceViewCommandData &outCommand) {
@@ -171,28 +198,7 @@ namespace Horo::Editor {
         if (source.externalConflict)
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.prefab_document.conflict"),
                             Theme::ConsoleWarning(), m_context.theme.fonts);
-        // Each field emits a source-local semantic transaction; no SceneDocument or runtime entity mutation is exposed.
-        ImGui::BeginChild("##prefab_source", {0, ImGui::GetContentRegionAvail().y / 3.0F});
-        ImGuiListClipper clipper;
-        clipper.Begin(static_cast<int>(source.source->Data().objects.size()));
-        while (clipper.Step())
-            for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
-                const auto &object = source.source->Data().objects[static_cast<std::size_t>(index)];
-                const auto id = std::to_string(object.localId.value);
-                ImGui::PushID(id.c_str());
-                std::string name = object.name;
-                ImGui::BeginDisabled(source.externalConflict);
-                if (Ui::InputTextControl("##name", name, Prefab::MaximumPrefabObjectNameBytes, m_context.theme.fonts,
-                                         {.hint = m_context.localization.Get("editor", "workspace.prefab_document.name").c_str(),
-                                          .componentSize = Ui::ComponentSize::Medium})) {
-                    outCommand.command = EditorWorkspaceViewCommand::PrefabDocument;
-                    outCommand.prefabFence = source.fence;
-                    outCommand.prefabEdit = RenamePrefabObject{object.localId, std::move(name)};
-                }
-                ImGui::EndDisabled();
-                ImGui::PopID();
-            }
-        ImGui::EndChild();
+        DrawPrefabSourceFields(source, outCommand, m_context);
         if (source.stageActive && panel) {
             EditorWorkspaceViewCommandData previewOnly;
             panel->DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), viewModel, previewOnly, m_context);

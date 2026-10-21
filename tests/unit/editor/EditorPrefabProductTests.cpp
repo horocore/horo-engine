@@ -200,6 +200,41 @@ namespace Horo::Application::PrefabEditorProductTest {
         }
     }  // namespace
 
+    TEST_CASE("Actual prefab stage host loads committed assets in its separate authoring range", "[prefab][editor][product][stage]") {
+        PrefabCookTestSupport::HostFixture fixture;
+        Observation observation;
+        PrepareProject(fixture, observation);
+        auto factory =
+            Internal::MakeEditorProjectPrefabStageFactory(fixture.jobs,
+                                                          {.physicsMode = Physics::PhysicsRuntimeMode::Null,
+                                                           .cooked = Internal::SceneCookSelection{fixture.cooked.path,
+                                                                                                  fixture.request.assets.target}});
+        Runtime::SceneDefinitionBuilder builder({91}, {1});
+        builder.Add({.object = {1}});
+        REQUIRE(builder.RequireAsset({fixture.prefabId, Assets::AssetTypeId::Parse("core.prefab").Value()}).HasValue());
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        CHECK(factory.create(fixture.project.dir.path, Editor::EditorFirstPlayScene, definition.Value()).HasError());
+        auto prepared = factory.create(fixture.project.dir.path, Editor::EditorFirstPrefabStage, definition.Value());
+        REQUIRE(prepared.HasValue());
+        auto &host = *prepared.Value();
+        REQUIRE(host.Scenes().Startup({}).HasValue());
+        REQUIRE(host.Scenes().QueuePreparation(definition.Value()).HasValue());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        std::uint64_t frame = 1;
+        while (!host.Scenes().ActiveScene() && std::chrono::steady_clock::now() < deadline) {
+            REQUIRE(host.CommitSceneChanges({.frameNumber = frame++}).HasValue());
+            REQUIRE_FALSE(host.Scenes().TakeOperationError().has_value());
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        REQUIRE(host.Scenes().ActiveScene().has_value());
+        CHECK(host.Scenes().ActiveScene()->RuntimeId() == Editor::EditorFirstPrefabStage);
+        CHECK(host.Scenes().ActiveScene()->FindAsset(fixture.prefabId).has_value());
+        CHECK(observation.calls == 0);
+        host.Shutdown();
+        CHECK_FALSE(host.Scenes().ActiveScene().has_value());
+    }
+
     TEST_CASE("Actual Editor Play grants committed prefab loading and revokes retained clients on Stop",
               "[prefab][editor][product][committed]") {
         Physics::PhysicsRuntimeMode mode{Physics::PhysicsRuntimeMode::Null};
