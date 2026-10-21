@@ -2751,7 +2751,8 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroSourceEditorWidgetTests PRIVATE
         ${PROJECT_SOURCE_DIR}/src/editor/source_editor ${PROJECT_SOURCE_DIR}/tests)
     target_link_libraries(HoroSourceEditorWidgetTests PRIVATE HoroEngine::Gui HoroEngine::Platform HoroThirdParty::ImGui)
-    horo_register_catch_test(HoroSourceEditorWidgetTests LABELS "unit;editor;source;gui;ci-windows;sonar-coverage")
+    # These ImGui-context cases require the GUI library but no display/backend. Native CI must execute them.
+    horo_register_catch_test(HoroSourceEditorWidgetTests LABELS "unit;editor;source;headless;sonar-coverage")
 
     add_executable(HoroHierarchyPanelRenderTests
             unit/editor/HierarchyPanelRenderTests.cpp

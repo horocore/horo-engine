@@ -2,6 +2,7 @@
 #include "Horo/Editor/EditorDataBus.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorSettingsService.h"
+#include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/DataBus.h"

@@ -86,7 +86,8 @@ TEST_CASE("Zep widget emits exact Unicode edits while preserving BOM and mixed n
     const auto original = fixture.Open("code.cpp", "\xEF\xBB\xBF"
                                                    "one\r\ntwo\nthree\r");
     fixture.first.Publish(original);
-    static_cast<void>(fixture.Frame(fixture.first));
+    // Initial publication must bind the mode before any frame or selection call.
+    CHECK(fixture.first.Selection() == SourceWidgetSelection{3, 3});
     REQUIRE(fixture.first.Select({3, 6}));
     ImGui::GetIO().AddInputCharactersUTF8("ğ中😀");
     const auto intent = fixture.Frame(fixture.first);
