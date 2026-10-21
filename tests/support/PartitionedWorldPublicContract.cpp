@@ -34,3 +34,11 @@ static_assert(std::is_same_v<decltype(Horo::WorldStreaming::WorldSpatialAssignme
                                  std::span<const Horo::WorldStreaming::WorldSpatialAssignmentCandidate>{},
                                  Horo::WorldStreaming::WorldSpatialAssignmentLimits{})),
                              Horo::Result<Horo::WorldStreaming::WorldSpatialAssignment>>);
+
+using WorldSelectionMethod = Horo::Result<PartitionedWorldSnapshotLease> (PartitionedWorldWorkspace::*)(
+    std::span<const Horo::WorldStreaming::WorldAuthoringObjectAddress>,
+    const std::optional<Horo::WorldStreaming::WorldAuthoringObjectAddress> &, const WorldDocumentFence &, std::stop_token);
+using WorldInspectionMethod = Horo::Result<Horo::Editor::WorldObjectInspectionLease> (PartitionedWorldWorkspace::*)(
+    const WorldDocumentFence &, Horo::Editor::WorldObjectInspectionLimits, std::stop_token) const;
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::SetSelection), WorldSelectionMethod>);
+static_assert(std::is_same_v<decltype(&PartitionedWorldWorkspace::InspectSelectedObjects), WorldInspectionMethod>);

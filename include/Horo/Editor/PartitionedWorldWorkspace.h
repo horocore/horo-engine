@@ -139,6 +139,7 @@ namespace Horo::Editor {
         std::vector<WorldObjectInspection> objects; /**< Stable selection order. Empty selection is valid. */
     };
 
+    /** @brief Shared immutable Inspector result; no source, runtime or widget mutation capability. */
     using WorldObjectInspectionLease = std::shared_ptr<const WorldObjectSelectionInspection>;
 
     /** @brief Explicit dirty-state disposition; Cancel is never equivalent to discard. */
@@ -189,13 +190,13 @@ namespace Horo::Editor {
                                                                           WorldDocumentFence expected, std::stop_token cancellation = {});
         /** @brief Atomically selects distinct source addresses; opening geometry is not required.
          * @param objects Existing page-scoped addresses in presentation order. @param primary Optional address within that selection.
-         * @param expected Exact source/selection fence.
+         * @param expected Exact source/selection fence, borrowed only for this call.
          * @param cancellation Checked before publication. @return Immutable selection root or typed zero-mutation rejection.
          * @details No-op retains its revision. Source removal prunes selection in the same commit. Replace clears it.
          */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetSelection(
             std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
-            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected,
+            const std::optional<WorldStreaming::WorldAuthoringObjectAddress> &primary, const WorldDocumentFence &expected,
             std::stop_token cancellation = {});
         /** @brief Explains the current selected objects through canonical WorldStreaming assignment/spanning kernels.
          * @param expected Exact source/selection publication. @param limits Bounded owned output ceilings, no larger than defaults.
@@ -204,7 +205,7 @@ namespace Horo::Editor {
          * become per-object diagnostics; stale requests, unsupported policy, resource exhaustion and cancellation reject the whole query.
          * Retained results survive source replacement, selection changes, close and shutdown. No I/O, runtime activation or mutation.
          */
-        [[nodiscard]] Result<WorldObjectInspectionLease> InspectSelectedObjects(WorldDocumentFence expected,
+        [[nodiscard]] Result<WorldObjectInspectionLease> InspectSelectedObjects(const WorldDocumentFence &expected,
                                                                                 WorldObjectInspectionLimits limits = {},
                                                                                 std::stop_token cancellation = {}) const;
 

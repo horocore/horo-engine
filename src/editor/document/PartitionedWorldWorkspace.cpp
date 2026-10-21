@@ -96,13 +96,13 @@ namespace Horo::Editor {
             if (object.assignmentLod >= document.settings.grid.LodLevels())
                 return Failure<void>(WorldDocumentErrors::Unsupported);
             if (object.spanning) {
+                using enum WS::WorldSpanningObjectPolicy;
                 const auto &directive = *object.spanning;
-                if (directive.policy < WS::WorldSpanningObjectPolicy::SingleCellOwner ||
-                    directive.policy > WS::WorldSpanningObjectPolicy::NonSpatial)
+                if (directive.policy < SingleCellOwner || directive.policy > NonSpatial)
                     return Failure<void>(WorldDocumentErrors::Unsupported);
                 if (directive.address != object.descriptor.address || directive.revision != object.descriptor.revision ||
                     object.descriptor.placement != WS::WorldSpatialObjectPlacementClass::Spatial ||
-                    ((directive.policy == WS::WorldSpanningObjectPolicy::SingleCellOwner) != directive.ownerCell.IsValid()))
+                    ((directive.policy == SingleCellOwner) != directive.ownerCell.IsValid()))
                     return Failure<void>(WorldDocumentErrors::Invalid);
             }
             return Result<void>::Success();
@@ -286,9 +286,9 @@ namespace Horo::Editor {
                 return record.head.sourceAsset == page;
             });
         });
-        std::erase_if(candidate->selectedObjects, [&](const auto &address) {
-            return std::ranges::none_of(document.pages, [&](const auto &page) {
-                return page.head.sourceAsset == address.page && std::ranges::any_of(page.objects, [&](const auto &object) {
+        std::erase_if(candidate->selectedObjects, [&document](const auto &address) {
+            return std::ranges::none_of(document.pages, [&address](const auto &page) {
+                return page.head.sourceAsset == address.page && std::ranges::any_of(page.objects, [&address](const auto &object) {
                     return object.descriptor.address == address;
                 });
             });

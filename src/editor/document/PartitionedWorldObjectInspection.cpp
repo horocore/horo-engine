@@ -1,6 +1,7 @@
 #include "Horo/Editor/PartitionedWorldWorkspace.h"
 
 #include <algorithm>
+#include <memory>
 #include <set>
 #include <utility>
 
@@ -18,7 +19,7 @@ namespace Horo::Editor {
             const auto object = std::ranges::find(page->objects, address, [](const auto &value) {
                 return value.descriptor.address;
             });
-            return object == page->objects.end() ? nullptr : &*object;
+            return object == page->objects.end() ? nullptr : std::to_address(object);
         }
 
         /** @brief Prepares source coverage and exact policy explanation without mutating document or runtime state. */
@@ -49,10 +50,10 @@ namespace Horo::Editor {
             result.spanning = cells.size() > 1;
             result.requiresDirective = cells.size() > document.settings.maximumDirectCellsPerObject;
             const auto directives = object.spanning ? std::span{&*object.spanning, 1} : std::span<const WS::WorldSpanningObjectDirective>{};
-            auto placement =
-                WS::WorldSpanningObjectPlan::Create(coverage.Value(), directives,
-                                                    {1, document.settings.maximumDirectCellsPerObject, limits.maximumTotalCells});
-            if (placement.HasError()) {
+            if (auto placement =
+                    WS::WorldSpanningObjectPlan::Create(coverage.Value(), directives,
+                                                        {1, document.settings.maximumDirectCellsPerObject, limits.maximumTotalCells});
+                placement.HasError()) {
                 if (placement.ErrorValue().code.Value() == WS::WorldStreamingErrors::SpanningObjectPlanCapacityExceeded.code.Value())
                     return Result<WorldObjectInspection>::Failure(MakeError(WorldDocumentErrors::Capacity));
                 result.diagnostic = placement.ErrorValue();
@@ -69,9 +70,9 @@ namespace Horo::Editor {
         /** @brief Validates selection membership and primary against the same immutable source root. */
         Result<void> ValidateSelection(const PartitionedWorldDocument &document,
                                        const std::span<const WS::WorldAuthoringObjectAddress> objects,
-                                       const std::optional<WS::WorldAuthoringObjectAddress> primary) {
+                                       const std::optional<WS::WorldAuthoringObjectAddress> &primary) {
             std::set<WS::WorldAuthoringObjectAddress> distinct;
-            for (const auto address : objects) {
+            for (const auto &address : objects) {
                 if (!address.IsValid())
                     return Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
                 if (!distinct.insert(address).second || !FindObject(document, address))
@@ -97,7 +98,7 @@ namespace Horo::Editor {
             candidate->primary = snapshot.primary;
             candidate->objects.reserve(snapshot.selectedObjects.size());
             std::size_t usedCells{};
-            for (const auto address : snapshot.selectedObjects) {
+            for (const auto &address : snapshot.selectedObjects) {
                 if (cancellation.stop_requested())
                     return Result<WorldObjectInspectionLease>::Failure(MakeError(WorldDocumentErrors::Cancelled));
                 const auto *source = FindObject(snapshot.document, address);
@@ -122,8 +123,8 @@ namespace Horo::Editor {
 
     /** @copydoc PartitionedWorldWorkspace::SetSelection */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::SetSelection(
-        const std::span<const WS::WorldAuthoringObjectAddress> objects, const std::optional<WS::WorldAuthoringObjectAddress> primary,
-        const WorldDocumentFence expected, const std::stop_token cancellation) {
+        const std::span<const WS::WorldAuthoringObjectAddress> objects, const std::optional<WS::WorldAuthoringObjectAddress> &primary,
+        const WorldDocumentFence &expected, const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
         if (cancellation.stop_requested())
@@ -141,7 +142,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PartitionedWorldWorkspace::InspectSelectedObjects */
-    Result<WorldObjectInspectionLease> PartitionedWorldWorkspace::InspectSelectedObjects(const WorldDocumentFence expected,
+    Result<WorldObjectInspectionLease> PartitionedWorldWorkspace::InspectSelectedObjects(const WorldDocumentFence &expected,
                                                                                          const WorldObjectInspectionLimits limits,
                                                                                          const std::stop_token cancellation) const {
         if (const auto valid = CheckFence(expected); valid.HasError())

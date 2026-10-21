@@ -182,3 +182,11 @@ Regression coverage lives in `PartitionedWorldObjectInspectionTests.cpp` within
 `HoroEditorModelPublicHeaderConsumer` / `HoroWorldStreamingPublicHeaderConsumer`;
 run the existing world-document and WorldStreaming CTest groups. No native/GPU
 interaction or GUI rendering result is implied by these model-level tests.
+
+The selection/query entry points synchronously borrow `WorldDocumentFence` and the
+optional primary address by const reference. These larger input values are never
+retained by reference; publications copy their owned state before returning.
+Ordinary calls, including temporary/null primary values, are unchanged. Consumers
+storing member-function pointers must use the const-reference parameter types;
+the standalone public consumer asserts those exact signatures. Rebuild consumers
+with this in-memory API evolution; no source-file or serialized identity changes.
