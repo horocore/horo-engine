@@ -262,7 +262,7 @@ TEST_CASE("Canvas publication fences reject undo ABA replacement and reopened se
     const auto beforeReplacement = document.CurrentState();
     const auto staleReplacement = document.Replace(Document());
     REQUIRE(staleReplacement.HasError());
-    REQUIRE(staleReplacement.ErrorValue().code == UiErrors::RevisionStale.code);
+    REQUIRE(staleReplacement.ErrorValue().code.Value() == UiErrors::RevisionStale.code.Value());
     REQUIRE(document.CurrentState() == beforeReplacement);
     REQUIRE(document.Replace(Document(false, document.Document().Revision().Value() + 1)).HasValue());
     REQUIRE(document.Select(beforeReplacement, Id<UiElementId>(3)).HasError());
