@@ -71,7 +71,7 @@ jobs:
             abi_args+=(--abi x86_64)
           fi
           for iteration in first second; do
-            python3 scripts/android_package.py --profile "$PACKAGE_PROFILE" "${abi_args[@]}" --sdk "$ANDROID_HOME" --ndk "$ANDROID_HOME/ndk/28.2.13676358" --gradle "$RUNNER_TEMP/gradle-8.11.1/bin/gradle" --game-activity "$RUNNER_TEMP/game-activity.aar" --output "$RUNNER_TEMP/$iteration"
+            python3 scripts/project.py android --profile "$PACKAGE_PROFILE" "${abi_args[@]}" --sdk "$ANDROID_HOME" --ndk "$ANDROID_HOME/ndk/28.2.13676358" --gradle "$RUNNER_TEMP/gradle-8.11.1/bin/gradle" --game-activity "$RUNNER_TEMP/game-activity.aar" --output "$RUNNER_TEMP/$iteration"
           done
           cmp "$RUNNER_TEMP/first/signed.apk" "$RUNNER_TEMP/second/signed.apk"
           cmp "$RUNNER_TEMP/first/provenance.json" "$RUNNER_TEMP/second/provenance.json"

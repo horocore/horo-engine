@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "MetalRenderTestSupport.h"
 #include "RenderMemoryTestSupport.h"
@@ -9,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <memory>
 #include <string>
+#include <string_view>
 
 #if !defined(__APPLE__)
 namespace Horo::Render::Detail {
@@ -24,6 +26,114 @@ namespace {
     using namespace Horo;
     using namespace Horo::Render;
     using namespace Horo::Render::MetalBackendTests;
+
+    /** @brief Captures preparation transport independently of any native Metal implementation. */
+    struct PreparationProbe {
+        std::array<unsigned, 8> calls{};
+        std::array<std::uint64_t, 2> stages{};
+        std::size_t cookedBytes{0};
+        std::uint64_t destroyed{0};
+    };
+
+    /** @brief Returns an exact injected failure so inherited unsupported defaults cannot satisfy delegation tests. */
+    class PreparationRuntime final : public FakeMetalRuntime {
+    public:
+        PreparationRuntime(IMetalPresentationPort &port, PortState &state, PreparationProbe &probe)
+            : FakeMetalRuntime(port, state), probe_(&probe) {}
+
+        Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &, std::size_t) const override {
+            return Observe<RenderMemoryCostPlan>(0);
+        }
+
+        Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &, std::uint64_t,
+                                                                     std::uint64_t) const override {
+            return Observe<RenderMemoryCostPlan>(1);
+        }
+
+        Result<RenderMemoryCostPlan> QuerySamplerMemoryCost(const RenderSamplerDescriptor &) const override {
+            return Observe<RenderMemoryCostPlan>(2);
+        }
+
+        Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &, std::span<const std::uint8_t> code,
+                                                 const RenderMemoryPlacement &) override {
+            probe_->cookedBytes = code.size();
+            return Observe<std::uint64_t>(3);
+        }
+
+        Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescriptor &, std::uint64_t vertex, std::uint64_t fragment,
+                                                     const RenderMemoryPlacement &) override {
+            probe_->stages = {vertex, fragment};
+            return Observe<std::uint64_t>(4);
+        }
+
+        Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &, const RenderMemoryPlacement &) override {
+            return Observe<std::uint64_t>(5);
+        }
+
+        Result<std::size_t> QueryMaterialParameterBufferSize(std::uint64_t, const MaterialBindingDescriptor &,
+                                                             ShaderBindingId) const override {
+            return Observe<std::size_t>(6);
+        }
+
+        Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const MaterialBindingDescriptor &, std::uint64_t,
+                                                                          std::span<const MaterialResidentResource>) override {
+            return Observe<std::unique_ptr<IResidentMaterialBinding>>(7);
+        }
+
+        void DestroyShaderModule(std::uint64_t identity) noexcept override {
+            probe_->destroyed += identity;
+        }
+
+        void DestroyGraphicsPipeline(std::uint64_t identity) noexcept override {
+            probe_->destroyed += identity;
+        }
+
+        void DestroySampler(std::uint64_t identity) noexcept override {
+            probe_->destroyed += identity;
+        }
+
+    private:
+        /** @brief Records a synchronous owner call and preserves a distinct native error identity. */
+        template <typename T> Result<T> Observe(std::size_t operation) const {
+            ++probe_->calls[operation];
+            return Result<T>::Failure(MakePortError("render.test.preparation_failed", "Exact selected-runtime preparation failure."));
+        }
+
+        PreparationProbe *probe_;
+    };
+
+    /** @brief Installs only the explicitly injected transport probe. */
+    class PreparationFactory final : public Detail::IMetalRuntimeFactory {
+    public:
+        PreparationFactory(PortState &state, PreparationProbe &probe) : state_(&state), probe_(&probe) {}
+
+        Result<std::unique_ptr<Detail::IMetalRuntime>> Create(IMetalPresentationPort &port, MetalEditorGraphicsBridge &) const override {
+            return Result<std::unique_ptr<Detail::IMetalRuntime>>::Success(std::make_unique<PreparationRuntime>(port, *state_, *probe_));
+        }
+
+    private:
+        PortState *state_;
+        PreparationProbe *probe_;
+    };
+
+    /** @brief Checks the native error survives resource and material preparation result types. */
+    template <typename T> void CheckPreparationError(const Result<T> &result, const std::string_view code) {
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == code);
+    }
+
+    /** @brief Exercises each preparation method without introducing native policy into the transport fixture. */
+    void CheckPreparationSurface(IRenderBackend &backend, std::string_view code) {
+        constexpr std::array<std::uint8_t, 4> bytes{};
+        CheckPreparationError(backend.QueryShaderModuleMemoryCost({}, bytes.size()), code);
+        CheckPreparationError(backend.QueryGraphicsPipelineMemoryCost({}, 11, 13), code);
+        CheckPreparationError(backend.QuerySamplerMemoryCost({}), code);
+        CheckPreparationError(backend.CreateShaderModule({}, bytes, {}), code);
+        CheckPreparationError(backend.CreateGraphicsPipeline({}, 17, 19, {}), code);
+        CheckPreparationError(backend.CreateSampler({}, {}), code);
+        CheckPreparationError(backend.QueryMaterialParameterBufferSize(23, {}, ShaderBindingId{1}), code);
+        CheckPreparationError(backend.RealizeResolved({}, 29, {}), code);
+    }
 
     using GenericResourceIdentities = BackendTestSupport::RenderResourceIdentities;
 
@@ -282,6 +392,67 @@ namespace {
         Check(initialized.HasError());
         Check(initialized.ErrorValue().code.Value() == "render.metal.unsupported_frames_in_flight");
         Check(state.createCount == 0);
+    }
+
+    TEST_CASE("Metal preparation preserves exact runtime failures and lifecycle admission", "[unit][runtime][renderer]") {
+        PortState state;
+        PreparationProbe probe;
+        FakePresentationPort port{state};
+        MetalEditorGraphicsBridge bridge;
+        PreparationFactory factory{state, probe};
+        RenderBackendRegistry registry;
+        REQUIRE(Detail::RegisterMetalRenderBackendWithRuntimeFactory(registry, port, bridge, factory).HasValue());
+        REQUIRE(registry.Seal().HasValue());
+        auto created = registry.Create(RenderBackendId{"metal"});
+        REQUIRE(created.HasValue());
+        auto backend = std::move(created).Value();
+        CheckPreparationSurface(*backend, "render.backend.not_initialized");
+        REQUIRE(backend->Initialize({}).HasValue());
+        CheckPreparationSurface(*backend, "render.test.preparation_failed");
+        CHECK(probe.cookedBytes == 4);
+        CHECK((probe.stages == std::array<std::uint64_t, 2>{17, 19}));
+        backend->DestroyShaderModule(101);
+        backend->DestroyGraphicsPipeline(103);
+        backend->DestroySampler(107);
+        CHECK(probe.destroyed == 311);
+        REQUIRE(backend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}}).HasValue());
+        CheckPreparationSurface(*backend, "render.backend.frame_active");
+        backend->AbortActiveFrame();
+        backend->Shutdown();
+        CheckPreparationSurface(*backend, "render.backend.not_initialized");
+        backend->DestroyShaderModule(109);
+        backend->DestroyGraphicsPipeline(113);
+        backend->DestroySampler(127);
+        CHECK(probe.destroyed == 311);
+        for (const auto count : probe.calls)
+            CHECK(count == 1);
+    }
+
+    TEST_CASE("Metal preparation rejects active frames and shutdown before touching an unsupported runtime", "[unit][runtime][renderer]") {
+        PortState state;
+        FakePresentationPort port{state};
+        MetalEditorGraphicsBridge bridge;
+        auto backend = CreateBackend(port, state, bridge);
+        const auto cold = backend->QueryPipelineDeviceIdentity();
+        REQUIRE(cold.HasError());
+        CHECK(cold.ErrorValue().code.Value() == "render.backend.not_initialized");
+        REQUIRE(backend->Initialize(RenderBackendConfig{}).HasValue());
+        const auto preparedIdentity = backend->QueryPipelineDeviceIdentity();
+        REQUIRE(preparedIdentity.HasValue());
+        CHECK(preparedIdentity.Value().driverIdentity == "injected.metal.preparation");
+        // A selected runtime without sampler preparation support preserves its typed unsupported result.
+        const auto unsupported = backend->QuerySamplerMemoryCost({});
+        REQUIRE(unsupported.HasError());
+        const auto frame = backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {640, 480}});
+        REQUIRE(frame.HasValue());
+        const auto active = backend->QuerySamplerMemoryCost({});
+        REQUIRE(active.HasError());
+        CHECK(active.ErrorValue().code.Value() == "render.backend.frame_active");
+        backend->AbortActiveFrame();
+        backend->Shutdown();
+        const auto closed = backend->RealizeResolved({}, 0, {});
+        REQUIRE(closed.HasError());
+        CHECK(closed.ErrorValue().code.Value() == "render.backend.not_initialized");
     }
 
 }  // namespace

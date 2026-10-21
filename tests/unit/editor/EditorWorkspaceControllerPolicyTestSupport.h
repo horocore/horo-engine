@@ -144,6 +144,18 @@ namespace HoroEditorWorkspaceControllerPolicyTests {
             return controller_.SourceDocuments();
         }
 
+        [[nodiscard]] bool HasDirtySourceDocuments() {
+            return controller_.HasDirtySourceDocuments();
+        }
+
+        [[nodiscard]] Horo::Result<void> SaveSourceDocuments() {
+            return controller_.SaveSourceDocuments();
+        }
+
+        [[nodiscard]] EditorWorkspaceController &Controller() noexcept {
+            return controller_;
+        }
+
         [[nodiscard]] const auto &SourceSaveOutcome() const noexcept {
             return controller_.SourceSaveOutcome();
         }

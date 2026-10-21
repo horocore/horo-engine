@@ -1,6 +1,8 @@
 """Positive qualification requires both recovered Save generator branches."""
 from __future__ import annotations
 
+import sys
+
 import importlib.util
 from pathlib import Path
 from html import escape
@@ -12,10 +14,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
-    "save_qualification", ROOT / "scripts/verify_save_allocation_qualification.py")
+    "save_qualification", ROOT / 'scripts/dev.py')
 assert SPEC
 assert SPEC.loader
 QUALIFICATION = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = QUALIFICATION
 SPEC.loader.exec_module(QUALIFICATION)
 
 
@@ -27,7 +30,7 @@ def explicit_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def report(tmp_path: Path, *, omitted: str = "", outcome: str = "") -> Path:
     cases = []
-    for name, phase in QUALIFICATION.CASES.items():
+    for name, phase in QUALIFICATION.SAVE_CASES.items():
         output = []
         for variant in ("success", "failure"):
             markers = (f"{phase}-sync-{variant}", f"{phase}-failure-reset",
@@ -35,7 +38,7 @@ def report(tmp_path: Path, *, omitted: str = "", outcome: str = "") -> Path:
                        f"{phase}-fixture-cleanup-next", "fixture-scope-exited")
             output.extend(f"[save-allocation] {marker}\n" for marker in markers if marker != omitted)
         result = f"<{outcome}/>" if outcome else ""
-        cases.append(f'<testcase name="{escape(QUALIFICATION.PREFIX + name, quote=True)}" status="run">'
+        cases.append(f'<testcase name="{escape(QUALIFICATION.SAVE_PREFIX + name, quote=True)}" status="run">'
                      f"{result}<system-out>{escape(''.join(output))}</system-out></testcase>")
     path = tmp_path / "qualification.xml"
     path.write_text('<testsuite tests="2" failures="0" skipped="0">' + "".join(cases) + "</testsuite>", encoding="utf-8")
@@ -96,8 +99,8 @@ def test_cli_qualifies_reports_in_the_explicit_workspace(tmp_path: Path, monkeyp
     path = report(workspace)
     monkeypatch.chdir(workspace)
     argument = str(path) if absolute else path.name
-    monkeypatch.setattr("sys.argv", ["verify_save_allocation_qualification.py", argument])
-    QUALIFICATION.main()
+    monkeypatch.setattr("sys.argv", ['dev.py', argument])
+    QUALIFICATION.save_main()
     assert "2 passed cases, both variants completed, zero skips" in capsys.readouterr().out
 
 
@@ -116,9 +119,9 @@ def test_cli_rejects_report_paths_outside_its_workspace(tmp_path: Path, monkeypa
     else:
         argument = "../qualification.xml"
     monkeypatch.chdir(workspace)
-    monkeypatch.setattr("sys.argv", ["verify_save_allocation_qualification.py", argument])
+    monkeypatch.setattr("sys.argv", ['dev.py', argument])
     with pytest.raises(SystemExit) as error:
-        QUALIFICATION.main()
+        QUALIFICATION.save_main()
     assert error.value.code == 2
     assert "inside the current workspace" in capsys.readouterr().err
 

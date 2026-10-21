@@ -143,10 +143,14 @@ namespace Horo::Editor {
     }
 
     WorkspaceLayoutOperationResult WorkspacePanelHost::MovePanel(const std::string_view panelId, const TabPlacement &placement) {
+        if (panelId == "horo.viewport")
+            return {WorkspaceLayoutOperationCode::UnknownPanel};
         return m_layout.MoveTab(panelId, placement);
     }
 
     WorkspaceLayoutOperationResult WorkspacePanelHost::ClosePanel(const std::string_view panelId) {
+        if (panelId == "horo.viewport")
+            return {WorkspaceLayoutOperationCode::UnknownPanel};
         return m_layout.CloseTab(panelId);
     }
 
@@ -165,7 +169,7 @@ namespace Horo::Editor {
     WorkspaceLayoutOperationResult WorkspacePanelHost::DockPanel(const std::string_view panelId, const std::string_view targetNodeId,
                                                                  const DropKind kind) {
         using enum WorkspaceLayoutOperationCode;
-        if (panelId.empty())
+        if (panelId.empty() || panelId == "horo.viewport")
             return {UnknownPanel};
         if (m_layout.FindNode(targetNodeId) == nullptr)
             return {UnknownStack};
@@ -236,9 +240,12 @@ namespace Horo::Editor {
         if (const Result<SerializedDocumentOpenKey> serialized = SerializeDocumentOpenKey(key); serialized.HasValue()) {
             std::erase(m_layout.openDocuments, serialized.Value());
         }
+        const auto index = static_cast<std::size_t>(tab - m_documentTabs.begin());
         m_documentTabs.erase(tab);
         if (m_activeDocument == instance) {
-            m_activeDocument = m_documentTabs.empty() ? std::nullopt : std::optional{m_documentTabs.front().identity.instance};
+            m_activeDocument = m_documentTabs.empty()
+                                   ? std::nullopt
+                                   : std::optional{m_documentTabs[std::min(index, m_documentTabs.size() - 1)].identity.instance};
         }
         return Result<void>::Success();
     }
@@ -258,6 +265,59 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DocumentUnknown));
         m_activeDocument = instance;
         return Result<void>::Success();
+    }
+
+    /** @copydoc WorkspacePanelHost::MoveDocument */
+    Result<void> WorkspacePanelHost::MoveDocument(const DocumentInstanceId instance, const std::optional<DocumentInstanceId> before) {
+        if (const auto source = FindDocumentTab(m_documentTabs, instance);
+            source == m_documentTabs.end() || (before && FindDocumentTab(m_documentTabs, *before) == m_documentTabs.end()))
+            return Result<void>::Failure(MakeError(WorkspaceDocumentErrors::DocumentUnknown));
+        if (before == instance)
+            return Result<void>::Success();
+        auto tabs = m_documentTabs;
+        const auto moving = *FindDocumentTab(tabs, instance);
+        tabs.erase(FindDocumentTab(tabs, instance));
+        tabs.insert(before ? FindDocumentTab(tabs, *before) : tabs.end(), moving);
+        std::vector<SerializedDocumentOpenKey> persisted;
+        persisted.reserve(tabs.size());
+        for (const auto &tab : tabs) {
+            const auto key = SerializeDocumentOpenKey(tab.identity.key);
+            if (key.HasError())
+                return Result<void>::Failure(key.ErrorValue());
+            persisted.push_back(key.Value());
+        }
+        m_documentTabs.swap(tabs);
+        m_layout.openDocuments.swap(persisted);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc WorkspacePanelHost::RefreshDocuments */
+    void WorkspacePanelHost::RefreshDocuments() {
+        if (std::ranges::all_of(m_documentTabs, [this](const WorkspaceDocumentTab &tab) {
+            return m_documentRegistry_->IsCurrent(tab.identity);
+        }))
+            return;
+        std::vector<WorkspaceDocumentTab> tabs;
+        std::vector<SerializedDocumentOpenKey> persisted;
+        tabs.reserve(m_documentTabs.size());
+        persisted.reserve(m_documentTabs.size());
+        for (const auto &tab : m_documentTabs) {
+            const auto current = m_documentRegistry_->Find(tab.identity.instance);
+            if (!current)
+                continue;
+            const auto key = SerializeDocumentOpenKey(current->key);
+            if (key.HasError())
+                continue;
+            tabs.emplace_back(*current, tab.dirty);
+            persisted.push_back(key.Value());
+        }
+        if (m_activeDocument && FindDocumentTab(tabs, *m_activeDocument) == tabs.end()) {
+            const auto previous = FindDocumentTab(m_documentTabs, *m_activeDocument);
+            const auto index = previous == m_documentTabs.end() ? 0U : static_cast<std::size_t>(previous - m_documentTabs.begin());
+            m_activeDocument = tabs.empty() ? std::nullopt : std::optional{tabs[std::min(index, tabs.size() - 1)].identity.instance};
+        }
+        m_documentTabs.swap(tabs);
+        m_layout.openDocuments.swap(persisted);
     }
 
     /** @copydoc WorkspacePanelHost::CloseDocumentTabs */

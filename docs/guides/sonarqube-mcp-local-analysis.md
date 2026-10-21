@@ -9,40 +9,44 @@ neither checks nor doctor perform Vortex analysis or entitlement probes.
 Coverage, C/C++ taint analysis, Sonar duplication, and the full hosted quality
 gates remain CI responsibilities. Codacy CPD is a local duplication estimate.
 
-This repository currently supports managed sessions on Linux with `/proc`,
-`pidfd_open`, a display server, VS Code and SonarQube for IDE. macOS/Windows
-session ownership is not implemented; the command fails explicitly there.
+Managed sessions support native Windows and Linux. `analyze.py` internally selects the
+OS adapter for file locks, subprocess cancellation, process identity, loopback
+listener ownership and safe termination. Linux retains `/proc` and pidfd checks;
+Windows uses native process handles and a Job Object for bounded command cleanup,
+with `psutil` for process/connection discovery. Other platforms fail explicitly.
+A supported OS is not evidence of authenticated connected mode or C++ analysis;
+those are still verified separately for every managed session.
 
 ## Commands
 
 ```sh
 # Branch changes plus staged, unstaged, and untracked edits.
-rtk proxy python3 scripts/quality_preflight.py check --base origin/main
+rtk proxy python3 scripts/analyze.py check --base origin/main
 
 # Only current uncommitted changes.
-rtk proxy python3 scripts/quality_preflight.py check --dirty
+rtk proxy python3 scripts/analyze.py check --dirty
 
 # Inspect another worktree using the script from this checkout.
-rtk proxy python3 scripts/quality_preflight.py check --worktree /path/to/worktree --base origin/main
+rtk proxy python3 scripts/analyze.py check --worktree /path/to/worktree --base origin/main
 
 # Reuse that worktree's CMake/Ninja build and focus on explicit files.
-rtk proxy python3 scripts/quality_preflight.py check --worktree /path/to/worktree \
+rtk proxy python3 scripts/analyze.py check --worktree /path/to/worktree \
   --compile-commands build/skeleton/compile_commands.json --files src/example.cpp
 
 # Diagnose prerequisites and Codacy cloud configuration drift.
-rtk proxy python3 scripts/quality_preflight.py doctor
-rtk proxy python3 scripts/quality_preflight.py doctor --offline
+rtk proxy python3 scripts/analyze.py doctor
+rtk proxy python3 scripts/analyze.py doctor --offline
 
 # Close only this helper's idle Sonar sessions in the common Git repository.
-rtk proxy python3 scripts/quality_preflight.py stop
+rtk proxy python3 scripts/analyze.py stop
 ```
 
 Use the actual PR target as `--base`, including for stacked branches. The default
 is `origin/main`; the command never fetches and fails if the ref is unavailable.
 `--dirty`, `--base` and `--files` are mutually exclusive. `--only sonar` and
 `--only codacy` are explicitly partial checks, recorded as such in the report.
-The compatibility entry point `sonar_ide_analysis.py` delegates to the managed
-Sonar-only scope. Explicit bridge ports are rejected.
+Use `analyze.py check --only sonar` for the managed Sonar-only scope. There is no
+compatibility parser or unmanaged port-discovery entry point. Explicit bridge ports are rejected.
 
 The terminal prints findings and a JSON report path. `--format json` prints the
 whole report. Exit statuses are:
@@ -75,14 +79,15 @@ uses the OS keychain to decrypt the connection; if it cannot, authenticate the
 managed window once and retry. The released extension is activated with Code's `--extensionDevelopmentPath`
 in the private host; no extension source is modified. Java's `user.home` is also
 private, so profiles do not share the mutable `~/.sonarlint` database.
-The helper sets `security.workspace.trust.enabled` to `false` before launching
-its private profile, so new worktrees do not require a manual workspace trust
-confirmation. This applies only to the managed profile. The user's own trust
-settings and trusted-folder records are neither changed nor copied. Sessions
-created before this setting was corrected are restarted automatically.
+Workspace Trust remains enabled in the private profile. The helper never disables
+trust, copies the user's trusted-folder records, or silently trusts a worktree.
+Accept the normal trust prompt for a worktree you trust; Restricted Mode can prevent
+Sonar activation and is not a clean scan. Sessions created with the old trust-disabled
+profile are not reused without retirement and a secure profile refresh.
 The source settings file currently must be JSON,
-without JSONC comments. Inline-token-only connections must be migrated to VS
-Code SecretStorage first.
+without JSONC comments. An absent settings file supplies no connections, not implicit
+authentication. Inline-token-only connections must be migrated to VS Code
+SecretStorage first. Environment tokens used by the CLI are not an IDE connection.
 
 There are at most two Sonar sessions per common Git repository. Each active
 session has a lease; further requests wait. Idle sessions are reused, or the
@@ -143,7 +148,7 @@ Unsupported selected file types are reported explicitly.
 Raw complexity uses the same Lizard executable/version as the Codacy pass:
 
 ```sh
-rtk proxy python3 scripts/codacy_lizard_complexity.py --base origin/main
+rtk proxy python3 scripts/analyze.py complexity --base origin/main
 ```
 
 CPD uses the Codacy-managed PMD distribution and Java runtime, scans the complete
@@ -153,6 +158,44 @@ and lexical-error skipping requested. Any reported lexical error still makes
 our result incomplete. Each group retains all occurrence paths and line ranges,
 including unchanged partners. The result is an estimate, not a hosted percentage;
 cloud versions and settings may differ. Version identities are recorded.
+
+## Native Windows setup
+
+Use an initialized MSVC x64 developer shell and the project's Python environment.
+Install the Windows discovery prerequisite into that environment, not an unrelated
+agent interpreter:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r scripts/requirements.txt
+.\.venv\Scripts\python.exe scripts/analyze.py doctor --offline
+.\.venv\Scripts\python.exe scripts/analyze.py check --base origin/main `
+  --compile-commands build/skeleton/compile_commands.json
+```
+
+The default VS Code source profile is `%APPDATA%/Code`; Linux uses
+`~/.config/Code`. Extensions default to `~/.vscode/extensions`. Override
+`--code-user-data` and `--extensions-directory` for Insiders, portable Code or a
+non-default installation. Cache state stays outside the source tree; Windows uses
+`%LOCALAPPDATA%/horo-quality`; `XDG_CACHE_HOME` selects the cache parent on Linux
+only.
+
+The compilation database must name this exact worktree and a Ninja/CMake build.
+Windows compiler commands preserve native quoting/backslashes and support MSVC
+`/Fo` object output and `/I` includes as well as explicit database `output` fields.
+The default Windows configure does not force the Linux-only extended CI composition;
+selected files missing from the chosen build remain incomplete, never silently skipped.
+
+Authenticate SonarQube for IDE's connected mode in VS Code for the requested
+connection/project. The CLI's `SONARQUBE_CLI_TOKEN` plus `SONARQUBE_CLI_ORG`
+authenticate `sonar analyze secrets`; `SONAR_TOKEN` alone is a SonarScanner variable,
+not a VS Code SecretStorage connection. Never place tokens in source settings or
+command arguments. A valid API token does not prove IDE authentication.
+
+Windows uses native managed Lizard and PMD entry points rather than POSIX venv paths
+or `run.sh`. Unsupported filenames/unsafe batch arguments, missing tools, denied
+process inspection, unavailable keychain credentials and unaccepted workspace trust
+are reported as incomplete. No platform adapter substitutes a cloud upload, Vortex,
+blank issue list or unverified listening port for C++ sensor evidence.
 
 ## CLI secrets
 
