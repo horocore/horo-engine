@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-15, macos-15-intel]
+        runner: [macos-14, macos-26, macos-26-intel]
     steps:
       - name: Compile and report actual Metal host facts (diagnostic only)
         shell: bash
