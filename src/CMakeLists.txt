@@ -2991,6 +2991,7 @@ target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::Runt
 
 add_library(HoroEditorServices STATIC
         editor/document/WorkspaceReadSources.cpp
+        editor/navigation/NavigationViewportSnapshot.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
@@ -3003,8 +3004,10 @@ add_library(HoroEditorServices STATIC
         editor/physics/CollisionSourceInventory.cpp
         editor/physics/NativeAssetRegistrySource.cpp
         editor/pcg/PCGDocumentErrors.cpp
+        editor/pcg/PCGGraphAuthoring.cpp
         editor/pcg/PCGGraphDocument.cpp
         editor/pcg/PCGGraphDocumentService.cpp
+        editor/pcg/PCGPreviewSession.cpp
         editor/document/DocumentRecoveryService.cpp
         editor/audio/AudioEditorDocument.cpp
         editor/audio/AudioComponentPreview.cpp
@@ -3070,7 +3073,7 @@ target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
-target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices
@@ -3272,6 +3275,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/WorldSourceShapeControls.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/ViewportStreamingPreview.cpp
+            editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
         editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.cpp
@@ -3281,6 +3285,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.cpp
             editor/screens/workspace/panels/viewport/navigation/ViewportNavigationController.cpp
             editor/screens/workspace/WorkspacePanelRegistry.cpp
+            editor/navigation/NavigationTab.cpp
+            editor/navigation/NavigationBakeCancelModal.cpp
             editor/screens/workspace/DefaultWorkspacePanels.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPanel.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.cpp
@@ -3333,9 +3339,13 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerWorldComposition.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldStreaming.cpp
             editor/screens/workspace/EditorWorkspaceControllerWorldBake.cpp
+            editor/screens/workspace/EditorWorkspaceControllerPCGPreview.cpp
+            editor/screens/workspace/PCGPreviewSandbox.cpp
+            editor/screens/workspace/PCGPreviewView.cpp
             editor/screens/workspace/PCGWorkspace.cpp
             editor/screens/workspace/PCGEditorCatalog.cpp
             editor/screens/workspace/EditorWorkspaceViewPCG.cpp
+            editor/pcg/PCGAuthoringInspector.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
             editor/screens/workspace/WorldLayerOutliner.cpp
             editor/modals/world_layer/CreateWorldLayerModal.cpp

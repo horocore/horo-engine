@@ -7,6 +7,7 @@
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.h"
+#include "navigation/NavigationOverlayLayer.h"
 
 #include <imgui.h>
 #include <optional>
@@ -76,6 +77,9 @@ namespace Horo::Editor {
         Input::InputContextToken *workspaceInputContext_{nullptr};
         ViewportInteractionController interaction_;
         WorldSourceViewportTool worldSourceTool_;
+        const NavigationViewportAccess *navigationOverlays_{};
+        NavigationOverlayLayer navigationLayer_;
+        std::filesystem::path navigationProjectRoot_;
         Extensions::EditorViewportHost *contributions_{};
         Extensions::EditorViewportFrame contributionFrame_;
         Extensions::EditorViewportPick activeContribution_;

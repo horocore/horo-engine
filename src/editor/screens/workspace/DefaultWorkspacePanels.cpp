@@ -1,6 +1,7 @@
 #include "Horo/Editor/DefaultWorkspacePanels.h"
 
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "editor/navigation/NavigationTab.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
@@ -10,6 +11,11 @@
 #include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
 
 namespace Horo::Editor {
+    /** @copydoc RegisterNavigationWorkspacePanel */
+    void RegisterNavigationWorkspacePanel(WorkspacePanelRegistry &registry, NavigationBakeWorkspaceAccess access, EditorModalHost &modals) {
+        registry.RegisterPanel(std::make_shared<NavigationTab>(std::move(access), modals));
+    }
+
     /** @copydoc RegisterDefaultWorkspacePanels(WorkspacePanelRegistry&) */
     void RegisterDefaultWorkspacePanels(WorkspacePanelRegistry &registry) {
         RegisterDefaultWorkspacePanels(registry, {});

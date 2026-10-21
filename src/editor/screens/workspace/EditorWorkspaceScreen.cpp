@@ -12,6 +12,7 @@
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
@@ -42,6 +43,7 @@
 #include "editor/screens/NavigationErrors.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <array>
 #include <filesystem>
 #include <format>
 #include <imgui.h>
@@ -617,6 +619,7 @@ namespace Horo::Editor {
                     .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
                     .networkDebuggerControl = panelServices_.networkDebuggerControl,
                     .extensionInspectors = services_.TryGet<Extensions::EditorInspectorHost>(),
+                    .navigationOverlays = services_.TryGetConst<NavigationViewportAccess>(),
                     .extensionViewport = services_.TryGet<Extensions::EditorViewportHost>(),
                     .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
                 };
@@ -697,10 +700,16 @@ namespace Horo::Editor {
                     return Result<void>::Failure(capturedSources.ErrorValue());
                 auto sources = std::move(capturedSources).Value();
                 const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
-                auto pcgComposition = CreatePCGEditorCatalog();
+                const std::array previewGrants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview,
+                                               PCG::PCGCapability::OfflineBake, PCG::PCGCapability::RuntimeEvaluation,
+                                               PCG::PCGCapability::HybridEvaluation};
+                auto pcgComposition = CreatePCGEditorCatalog(PCG::PCGCapabilitySet::Create(previewGrants).Value());
                 if (pcgComposition.HasError())
                     return Result<void>::Failure(pcgComposition.ErrorValue());
                 auto pcgCatalog = std::move(pcgComposition).Value();
+                auto pcgPreview = CreatePCGPreviewSandbox();
+                if (pcgPreview.HasError())
+                    return Result<void>::Failure(pcgPreview.ErrorValue());
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -734,6 +743,8 @@ namespace Horo::Editor {
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
                                                    .pcg = std::move(pcgCatalog),
+                                                   .pcgPreviewInputs = std::move(pcgPreview).Value(),
+
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();

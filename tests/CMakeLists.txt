@@ -667,7 +667,10 @@ target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE HoroEngine::Edi
     HoroEngine::AudioImport HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioComponentPreviewHostTests LABELS "unit;audio;editor;headless;lifecycle")
 target_sources(HoroAudioFrontendPublicHeaderConsumer PRIVATE support/AudioFrontendPublicContract.cpp)
-target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/AudioEditorDocumentPublicContract.cpp support/WorkspaceReadSourcesPublicContract.cpp)
+target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE
+        support/AudioEditorDocumentPublicContract.cpp
+        support/WorkspaceReadSourcesPublicContract.cpp
+        support/NavigationBakeWorkspacePublicConsumer.cpp)
 target_sources(HoroAudioDspPublicHeaderConsumer PRIVATE support/CoreStereoSpatialPublicContract.cpp)
 add_executable(HoroCoreAudioDspTests
     support/AllocationProbe.cpp
@@ -1356,6 +1359,18 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
             HORO_TEST_NAVIGATION_MCP_SCRIPT="${PROJECT_SOURCE_DIR}/tests/integration/cli_navigation_mcp_contract.py")
     add_dependencies(HoroNavigationNativeCliTests horo-engine)
     horo_register_catch_test(HoroNavigationNativeCliTests LABELS "unit;navigation;cli;integration;headless;ci-windows;sonar-coverage")
+
+    add_executable(HoroEditorNavigationBakeHostTests
+            unit/editor/NavigationBakeWorkspaceTests.cpp
+            unit/editor/NavigationViewportSnapshotTests.cpp
+            "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorNavigationBakeHost.cpp")
+    target_compile_features(HoroEditorNavigationBakeHostTests PRIVATE cxx_std_20)
+    target_include_directories(HoroEditorNavigationBakeHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support
+            "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
+    target_link_libraries(HoroEditorNavigationBakeHostTests PRIVATE Catch2::Catch2WithMain HoroEngine::EditorServices
+            HoroNativeNavigationBakeHost HoroEngine::NavigationRecastDetour HoroEngine::PlatformProjectIo
+            HoroEngine::PlatformProjectReadFiles)
+    horo_register_catch_test(HoroEditorNavigationBakeHostTests LABELS "unit;editor;navigation;headless;ci-windows;sonar-coverage;native")
 
     add_executable(HoroNavigationBakeApplicationTests unit/application/navigation/NavigationBakeApplicationTests.cpp)
     target_compile_features(HoroNavigationBakeApplicationTests PRIVATE cxx_std_20)
@@ -2671,7 +2686,10 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp
             unit/editor/EditorWorkspaceStreamingMountTests.cpp
             unit/editor/WorkspaceReadSourcesTests.cpp
+            unit/editor/EditorWorkspacePCGAuthoringTests.cpp
             unit/editor/EditorWorkspaceNavigationInspectorTests.cpp
+            unit/editor/PCGPreviewWorkspaceTests.cpp
+
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
@@ -2819,6 +2837,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/WorldSourceViewportRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
             unit/editor/PlayTopologyModalTests.cpp
+            unit/editor/NavigationBakeRenderTests.cpp
     )
 
     target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform)
@@ -2863,8 +2882,12 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/ActivityButtonIdentityTests.cpp
             unit/editor/SequenceTimelineRenderTests.cpp
             unit/editor/WorldLayerOutlinerRenderTests.cpp
+            unit/editor/PCGAuthoringInspectorRenderTests.cpp
     )
 
+    target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE
+            "${PROJECT_SOURCE_DIR}/src/editor/pcg"
+            "${PROJECT_SOURCE_DIR}/src/editor/screens/workspace")
     target_compile_features(HoroEditorUiComponentsRenderTests PRIVATE cxx_std_20)
     target_include_directories(HoroEditorUiComponentsRenderTests PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_link_libraries(HoroEditorUiComponentsRenderTests
@@ -2874,6 +2897,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/NavigationOverlayRenderTests.cpp
             unit/editor/ViewportOverlayRenderTests.cpp
             unit/editor/ColliderViewportRenderTests.cpp
             support/ViewportPanelRenderSupport.h
@@ -2883,6 +2907,8 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroViewportPanelRenderTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
+            ${PROJECT_SOURCE_DIR}/tests/helpers
+            ${PROJECT_SOURCE_DIR}/tests/support
     )
     target_link_libraries(HoroViewportPanelRenderTests
             PRIVATE
@@ -5341,7 +5367,7 @@ add_executable(HoroNavigationHostErrorTests unit/application/navigation/Navigati
 target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
-target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
     HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 
@@ -5373,8 +5399,10 @@ set_tests_properties(HoroAnimationGraphPublicHeaderConsumer PROPERTIES LABELS "u
 
 add_executable(HoroPCGDocumentTests
         unit/editor/PCGGraphDocumentSaveTests.cpp
+        unit/editor/PCGGraphAuthoringTests.cpp
         unit/editor/PCGGraphDocumentTests.cpp
-        unit/editor/PCGGraphDocumentServiceTests.cpp)
+        unit/editor/PCGGraphDocumentServiceTests.cpp
+        unit/editor/PCGPreviewSessionTests.cpp)
 target_compile_features(HoroPCGDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroPCGDocumentTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroPCGDocumentTests LABELS "unit;editor;pcg;headless;sonar-coverage;ci-windows")
