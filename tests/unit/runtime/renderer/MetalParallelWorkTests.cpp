@@ -3,6 +3,31 @@
 #include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::Render::MetalBackendTests {
+    TEST_CASE("Metal closing retains its presentation attachment and rejects restart until actual runtime drain",
+              "[unit][renderer][metal][shutdown]") {
+        PortState state;
+        FakePresentationPort port{state};
+        MetalEditorGraphicsBridge bridge;
+        auto backend = CreateInitializedBackend(port, state, bridge);
+        state.pendingDrainPolls = 2;
+        REQUIRE(backend->BeginShutdown().HasValue());
+        REQUIRE(backend->BeginShutdown().HasValue());
+        CHECK(state.destroyCount == 0);
+        CHECK(backend->BeginFrame({1, {64, 64}}).HasError());
+        CHECK(backend->Initialize({}).HasError());
+        REQUIRE(backend->PollDrain().Value() == RenderBackendDrainProgress::Pending);
+        CHECK(state.destroyCount == 0);
+        REQUIRE(backend->PollDrain().Value() == RenderBackendDrainProgress::Pending);
+        CHECK(state.destroyCount == 0);
+        REQUIRE(backend->PollDrain().Value() == RenderBackendDrainProgress::Drained);
+        CHECK(state.destroyCount == 1);
+        REQUIRE(backend->PollDrain().Value() == RenderBackendDrainProgress::Drained);
+        REQUIRE(backend->Initialize({}).HasValue());
+        REQUIRE(backend->BeginShutdown().HasValue());
+        REQUIRE(backend->PollDrain().Value() == RenderBackendDrainProgress::Drained);
+        CHECK(state.destroyCount == 2);
+    }
+
     TEST_CASE("Foreign worker recording exceptions preserve canonical completion and capsule pins until terminal acknowledgement",
               "[unit][renderer][parallel][native][exception][lifetime]") {
         for (const bool foreign : {false, true}) {
@@ -97,6 +122,8 @@ namespace Horo::Render::MetalBackendTests {
         CHECK(std::get<PrimaryOutputAttachment>(fixture.observation->submitted[1]).clearColor.green == 1);
         CHECK(fixture.observation->submitThread == std::this_thread::get_id());
         jobs.Shutdown(ShutdownPolicy::Drain);
+        fixture.observation->nativeComplete = true;
+        fixture.Close();
     }
 
     TEST_CASE("Native worker cancellation failure and owner shutdown never publish partial records",
@@ -117,8 +144,12 @@ namespace Horo::Render::MetalBackendTests {
             cancellation.RequestCancellation();
             REQUIRE(frame.PollParallelExecution().HasError());
         }
-        SECTION("destroy owner while encoder is active") {
-            fixture.frontend.reset();
+        SECTION("retain closing owner while encoder is active") {
+            REQUIRE(fixture.frontend->BeginShutdown().HasValue());
+            const auto pending = fixture.frontend->PollDrain();
+            REQUIRE(pending.HasValue());
+            CHECK(pending.Value() == RenderBackendDrainProgress::Pending);
+            CHECK(fixture.state.destroyCount == 0);
             REQUIRE(frame.PollParallelExecution().HasError());
         }
         if (fixture.observation->failIndex == 1) {
@@ -129,6 +160,7 @@ namespace Horo::Render::MetalBackendTests {
         CHECK_FALSE(fixture.observation->accepted);
         frame.Cancel();
         jobs.Shutdown(ShutdownPolicy::Cancel);
+        fixture.Close();
     }
 
     TEST_CASE("Native graph admission rejects mismatched bindings and unsupported backend routes before job scheduling",
@@ -143,7 +175,7 @@ namespace Horo::Render::MetalBackendTests {
         CHECK_FALSE(fixture.observation->entered[1].load());
         REQUIRE(frame.Execute({}).HasValue());
         REQUIRE(frame.Present().HasValue());
-        fixture.frontend.reset();
+        fixture.Close();
         // A non-native fake runtime uses the same production backend's explicit opt-out,
         // not a frontend fallback to synchronous encoding.
         auto backend = CreateInitializedBackend(fixture.port, fixture.state, fixture.bridge);

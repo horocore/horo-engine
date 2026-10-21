@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderBackend.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
@@ -329,8 +330,8 @@ namespace {
 
         Check(backend->Present(token).HasValue());
         Check(backend->Resize(FramebufferExtent{1920, 1080}).HasValue());
-        backend->Shutdown();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Null backend satisfies the shared backend contract", "[unit][runtime][renderer][contract][qualification]") {
@@ -397,7 +398,7 @@ namespace {
         backend->DestroyMesh(mesh.Value());
         backend->DestroyBuffer(vertex.Value());
         backend->DestroyBuffer(index.Value());
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Null Backend Rejects Invalid Configuration And Frame Extent", "[unit][runtime][renderer]") {

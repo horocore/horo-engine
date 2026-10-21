@@ -30,6 +30,7 @@ namespace Horo::Render {
 
     /** @brief Backing accounting views; retiring/staging are not additive to committed bytes. */
     struct D3D12ResourceSnapshot {
+        std::uint64_t deviceIncarnation{0}; /**< Shared process-wide producer identity of this admitted native context. */
         std::size_t committedBytes{0};
         std::size_t estimatedDescriptorHeapBytes{0}; /**< Separately configured service infrastructure; not resource backing. */
         std::size_t uploadBytes{0};
@@ -53,7 +54,14 @@ namespace Horo::Render {
 
     /** @brief Backend-local transfer identity, never an authored or public resource identity. */
     struct D3D12TransferId {
+        std::uint64_t deviceIncarnation{0};
         std::uint64_t value{0};
+
+        [[nodiscard]] constexpr bool IsValid() const noexcept {
+            return deviceIncarnation != 0 && value != 0;
+        }
+
+        [[nodiscard]] constexpr bool operator==(const D3D12TransferId &) const noexcept = default;
     };
 
     /** @brief Owner-thread native resource service borrowed from the initialized device session.

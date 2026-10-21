@@ -24,6 +24,19 @@ namespace Horo::Render::D3D12Detail {
         return index < formats.size() ? formats[index] : DXGI_FORMAT_UNKNOWN;
     }
 
+    /** @brief Uses typeless families where canonical views allow depth planes or linear/sRGB reinterpretation. */
+    DXGI_FORMAT StorageFormat(RenderTextureFormat format) {
+        constexpr std::array formats{DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R24G8_TYPELESS,     DXGI_FORMAT_R32_TYPELESS,
+                                     DXGI_FORMAT_R8_UNORM,          DXGI_FORMAT_R8G8_UNORM,         DXGI_FORMAT_R8G8B8A8_TYPELESS,
+                                     DXGI_FORMAT_B8G8R8A8_TYPELESS, DXGI_FORMAT_B8G8R8A8_TYPELESS,  DXGI_FORMAT_R16_FLOAT,
+                                     DXGI_FORMAT_R16G16_FLOAT,      DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R32_FLOAT,
+                                     DXGI_FORMAT_R32G32_FLOAT,      DXGI_FORMAT_R32G32B32A32_FLOAT, DXGI_FORMAT_R16_TYPELESS,
+                                     DXGI_FORMAT_R32G8X24_TYPELESS};
+        static_assert(formats.size() == static_cast<std::size_t>(RenderTextureFormat::Depth32FloatStencil8) + 1U);
+        const auto index = static_cast<std::size_t>(format);
+        return index < formats.size() ? formats[index] : DXGI_FORMAT_UNKNOWN;
+    }
+
     /** @brief Identifies depth storage; typed depth resources are attachment-only in this implementation. */
     bool IsDepth(RenderTextureFormat format) {
         using enum RenderTextureFormat;
@@ -64,25 +77,7 @@ namespace Horo::Render::D3D12Detail {
         shape.DepthOrArraySize =
             static_cast<UINT16>(descriptor.dimension == RenderTextureDimension::ThreeD ? descriptor.depth : descriptor.layerCount);
         shape.MipLevels = static_cast<UINT16>(descriptor.mipCount);
-        shape.Format = NativeFormat(descriptor.format);
-        if (IsDepth(descriptor.format) && HasTextureUsage(descriptor.usage, RenderTextureUsage::Sampled)) {
-            switch (descriptor.format) {
-                case RenderTextureFormat::Depth16Unorm:
-                    shape.Format = DXGI_FORMAT_R16_TYPELESS;
-                    break;
-                case RenderTextureFormat::Depth24Stencil8:
-                    shape.Format = DXGI_FORMAT_R24G8_TYPELESS;
-                    break;
-                case RenderTextureFormat::Depth32Float:
-                    shape.Format = DXGI_FORMAT_R32_TYPELESS;
-                    break;
-                case RenderTextureFormat::Depth32FloatStencil8:
-                    shape.Format = DXGI_FORMAT_R32G8X24_TYPELESS;
-                    break;
-                default:
-                    break;
-            }
-        }
+        shape.Format = StorageFormat(descriptor.format);
         shape.SampleDesc.Count = descriptor.sampleCount;
         shape.Flags = TextureFlags(descriptor);
         return shape;
@@ -182,7 +177,7 @@ namespace Horo::Render::D3D12Detail {
             native.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE3D;
             native.Texture3D.MipSlice = view.baseMip;
             native.Texture3D.WSize = std::max(1U, texture.depth >> view.baseMip);
-        } else if (texture.layerCount > 1) {
+        } else if (texture.layerCount > 1 || view.dimension == RenderTextureViewDimension::TwoDArray) {
             native.ViewDimension = texture.sampleCount > 1 ? D3D12_RTV_DIMENSION_TEXTURE2DMSARRAY : D3D12_RTV_DIMENSION_TEXTURE2DARRAY;
             if (texture.sampleCount > 1) {
                 native.Texture2DMSArray.FirstArraySlice = view.baseLayer;
@@ -200,14 +195,25 @@ namespace Horo::Render::D3D12Detail {
         return native;
     }
 
+    /** @brief Makes the omitted depth/stencil write plane read-only in packed attachment views. */
+    D3D12_DSV_FLAGS DepthFlags(const RenderTextureViewDescriptor &view) {
+        if (view.aspect == RenderTextureAspect::Stencil)
+            return D3D12_DSV_FLAG_READ_ONLY_DEPTH;
+        if (view.aspect == RenderTextureAspect::Depth &&
+            (view.format == RenderTextureFormat::Depth24Stencil8 || view.format == RenderTextureFormat::Depth32FloatStencil8))
+            return D3D12_DSV_FLAG_READ_ONLY_STENCIL;
+        return D3D12_DSV_FLAG_NONE;
+    }
+
     /** @brief Produces a typed depth attachment with the same exact array/sample range. */
     D3D12_DEPTH_STENCIL_VIEW_DESC DepthView(const RenderTextureViewDescriptor &view, const RenderTextureDescriptor &texture) {
         D3D12_DEPTH_STENCIL_VIEW_DESC native{};
         native.Format = NativeFormat(view.format);
+        native.Flags = DepthFlags(view);
         if (texture.dimension == RenderTextureDimension::OneD) {
             native.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE1D;
             native.Texture1D.MipSlice = view.baseMip;
-        } else if (texture.layerCount > 1) {
+        } else if (texture.layerCount > 1 || view.dimension == RenderTextureViewDimension::TwoDArray) {
             native.ViewDimension = texture.sampleCount > 1 ? D3D12_DSV_DIMENSION_TEXTURE2DMSARRAY : D3D12_DSV_DIMENSION_TEXTURE2DARRAY;
             if (texture.sampleCount > 1) {
                 native.Texture2DMSArray.FirstArraySlice = view.baseLayer;
@@ -236,7 +242,7 @@ namespace Horo::Render::D3D12Detail {
             native.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
             native.Texture3D.MipSlice = view.baseMip;
             native.Texture3D.WSize = std::max(1U, texture.depth >> view.baseMip);
-        } else if (texture.layerCount > 1) {
+        } else if (texture.layerCount > 1 || view.dimension == RenderTextureViewDimension::TwoDArray) {
             native.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
             native.Texture2DArray.MipSlice = view.baseMip;
             native.Texture2DArray.FirstArraySlice = view.baseLayer;

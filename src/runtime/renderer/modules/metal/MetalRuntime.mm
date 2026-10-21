@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <exception>
 #include <format>
 #include <memory>
 #include <string>
@@ -53,12 +54,17 @@ namespace Horo::Render::Detail {
                 : presentationPort_(&presentationPort), editorGraphicsBridge_(&editorGraphicsBridge) {}
 
             ~MetalRuntime() override {
-                Shutdown();
+                const auto begun = BeginShutdown();
+                const auto drained = PollDrain();
+                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
             }
 
             Result<MetalDeviceCapabilities> Initialize(const MetalPresentationDescriptor &descriptor,
                                                        const MetalDeviceAdmissionRequest &request) override {
-                if (device_ != nil || surfaceCreated_) {
+                if (ownerThread_ != std::thread::id{} && std::this_thread::get_id() != ownerThread_)
+                    return Result<MetalDeviceCapabilities>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ != nil || surfaceCreated_ || (closing_ && !drained_)) {
                     return Result<MetalDeviceCapabilities>::Failure(
                         MakeMetalRuntimeError("render.metal.presentation_exists",
                                               "Metal runtime presentation resources are already retained."));
@@ -67,6 +73,11 @@ namespace Horo::Render::Detail {
                 if (validRequest.HasError()) {
                     return Result<MetalDeviceCapabilities>::Failure(validRequest.ErrorValue());
                 }
+                ownerThread_ = std::this_thread::get_id();
+                closing_ = false;
+                drained_ = false;
+                drainError_.reset();
+                drainErrorReported_ = false;
 
                 std::uint64_t discoveryRevision = 0;
                 device_ = FindMetalDevice(request.adapter, discoveryRevision);
@@ -81,19 +92,19 @@ namespace Horo::Render::Detail {
                 Result<MetalDeviceCapabilities> admitted =
                     AdmitMetalDevice(QueryMetalDeviceFacts(device_, discoveryRevision, commandQueue_ != nil), request);
                 if (admitted.HasError()) {
-                    Shutdown();
+                    CloseUnsubmittedInitialization();
                     return Result<MetalDeviceCapabilities>::Failure(admitted.ErrorValue());
                 }
 
                 const Result<void> surface = presentationPort_->CreateSurface();
                 if (surface.HasError()) {
-                    Shutdown();
+                    CloseUnsubmittedInitialization();
                     return Result<MetalDeviceCapabilities>::Failure(surface.ErrorValue());
                 }
                 surfaceCreated_ = true;
                 layer_ = (__bridge CAMetalLayer *)presentationPort_->Layer();
                 if (layer_ == nil) {
-                    Shutdown();
+                    CloseUnsubmittedInitialization();
                     return Result<MetalDeviceCapabilities>::Failure(
                         MakeMetalRuntimeError("render.metal.layer_unavailable",
                                               "The platform presentation port did not expose a CAMetalLayer."));
@@ -109,6 +120,13 @@ namespace Horo::Render::Detail {
                                                              (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
                 resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_);
                 auto capabilities = std::move(admitted).Value();
+                const auto incarnation = AcquireRenderDeviceIncarnation();
+                if (incarnation.HasError()) {
+                    CloseUnsubmittedInitialization();
+                    return Result<MetalDeviceCapabilities>::Failure(incarnation.ErrorValue());
+                }
+                capabilities.deviceIncarnation = incarnation.Value();
+                capabilities.implemented.support.deviceIncarnation = incarnation.Value();
                 capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
                 return Result<MetalDeviceCapabilities>::Success(std::move(capabilities));
             }
@@ -232,27 +250,28 @@ namespace Horo::Render::Detail {
             }
 
             ResourceInstanceResult CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                                const RenderMemoryPlacement &placement) override {
-                return Resources().CreateBuffer(descriptor, initialData, placement);
+                                                const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateBuffer(descriptor, initialData, placement, std::move(lifetime));
             }
 
             ResourceInstanceResult CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
-                                              const std::uint64_t indexBuffer) override {
-                return Resources().CreateMesh(descriptor, vertexBuffer, indexBuffer);
+                                              const std::uint64_t indexBuffer, RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateMesh(descriptor, vertexBuffer, indexBuffer, std::move(lifetime));
             }
 
             ResourceInstanceResult CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                                 const RenderMemoryPlacement &placement) override {
-                return Resources().CreateTexture(descriptor, initialData, placement);
+                                                 const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateTexture(descriptor, initialData, placement, std::move(lifetime));
             }
 
-            ResourceInstanceResult CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
-                return Resources().CreateTextureView(descriptor, texture);
+            ResourceInstanceResult CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture,
+                                                     RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateTextureView(descriptor, texture, std::move(lifetime));
             }
 
             ResourceInstanceResult CreateRenderTarget(const RenderTargetDescriptor &descriptor, const std::uint64_t colorAttachment,
-                                                      const std::uint64_t depthAttachment) override {
-                return Resources().CreateRenderTarget(descriptor, colorAttachment, depthAttachment);
+                                                      const std::uint64_t depthAttachment, RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateRenderTarget(descriptor, colorAttachment, depthAttachment, std::move(lifetime));
             }
 
             void DestroyBuffer(const std::uint64_t backendInstance) noexcept override {
@@ -276,6 +295,8 @@ namespace Horo::Render::Detail {
             }
 
             Result<void> BeginFrame(const FramebufferExtent extent) override {
+                if (closing_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
                 if (device_ == nil || commandQueue_ == nil || layer_ == nil) {
                     return Result<void>::Failure(
                         MakeMetalRuntimeError("render.metal.not_initialized", "Metal runtime presentation resources are not initialized."));
@@ -513,20 +534,53 @@ namespace Horo::Render::Detail {
                 return Result<void>::Success();
             }
 
-            void Shutdown() noexcept override {
+            /** @copydoc IMetalRuntime::BeginShutdown */
+            Result<void> BeginShutdown() override {
+                if (ownerThread_ != std::thread::id{} && std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (closing_)
+                    return Result<void>::Success();
+                closing_ = true;
                 feedback_->Close();
                 AbortFrame();
-                WaitUntilIdle();
-                // Closing the domain prevents submission/reuse. Outstanding CPU capsules own
-                // their native resources AND heaps and can finish cancellation after this runtime.
                 for (auto &retired : cancelledRecordings_) {
                     if (retired.recording)
                         retired.recording->Cancel();
-                    if (retired.lease != nullptr)
-                        retired.lease->Release();
-                    retired = {};
                 }
-                submitted_.ReleaseLeases();
+                return Result<void>::Success();
+            }
+
+            /** @copydoc IMetalRuntime::PollDrain */
+            Result<RenderBackendDrainProgress> PollDrain() override {
+                if (ownerThread_ != std::thread::id{} && std::this_thread::get_id() != ownerThread_)
+                    return Result<RenderBackendDrainProgress>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (!closing_)
+                    return Result<RenderBackendDrainProgress>::Failure(
+                        MakeError(MetalBackendErrors::InvalidConfig, "Begin Metal shutdown before polling retirement."));
+                if (drained_)
+                    return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
+                DrainCancelledRecordings();
+                if (const auto submitted = submitted_.DrainTerminals(); submitted.HasError() && !drainError_)
+                    drainError_ = submitted.ErrorValue();
+                const auto uploads = resources_.PollUploadDrain();
+                if (uploads.HasError() && !drainError_)
+                    drainError_ = uploads.ErrorValue();
+                const bool pendingUploads = uploads.HasValue() && !uploads.Value();
+                if (submitted_.Count() == 0 && recordingBudget_->live.load(std::memory_order_acquire) == 0 && !pendingUploads) {
+                    ReleaseDrainedResources();
+                    drained_ = true;
+                }
+                if (drainError_ && !drainErrorReported_) {
+                    drainErrorReported_ = true;
+                    return Result<RenderBackendDrainProgress>::Failure(*drainError_);
+                }
+                return Result<RenderBackendDrainProgress>::Success(drained_ ? RenderBackendDrainProgress::Drained
+                                                                            : RenderBackendDrainProgress::Pending);
+            }
+
+        private:
+            /** @brief Releases native parents only after every submitted command and external CPU capsule is terminal. */
+            void ReleaseDrainedResources() noexcept {
                 resources_.Shutdown();
                 submitted_.Clear();
                 MetalEditorGraphicsAccess::Clear(*editorGraphicsBridge_);
@@ -536,7 +590,6 @@ namespace Horo::Render::Detail {
                 }
                 lastSubmittedCommandBuffer_ = nil;
                 submissionError_.reset();
-                ownerThread_ = {};
                 commandQueue_ = nil;
                 device_ = nil;
                 if (surfaceCreated_) {
@@ -545,7 +598,14 @@ namespace Horo::Render::Detail {
                 }
             }
 
-        private:
+            /** @brief Failed initialization has admitted no GPU work and must close synchronously without a hidden wait. */
+            void CloseUnsubmittedInitialization() noexcept {
+                const auto begun = BeginShutdown();
+                const auto drained = PollDrain();
+                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
+            }
+
             /**
              * @brief Admits preparation without reading native state from a foreign thread.
              * Initialization and shutdown are externally serialized owner lifecycle operations.
@@ -553,7 +613,7 @@ namespace Horo::Render::Detail {
              * callers must join them before owner shutdown. This is not concurrent-shutdown admission.
              */
             [[nodiscard]] Result<void> ValidatePreparationAccess() const {
-                if (ownerThread_ == std::thread::id{})
+                if (closing_ || ownerThread_ == std::thread::id{})
                     return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
                 if (std::this_thread::get_id() != ownerThread_)
                     return Result<void>::Failure(MakeError(MetalBackendErrors::WrongThread));
@@ -575,6 +635,9 @@ namespace Horo::Render::Detail {
 
             /** @brief Checks native capture state and all command-count bounds before any buffer allocation. */
             [[nodiscard]] Result<void> ValidateParallelCapture(const RenderGraphExecutionRequest &request) const {
+                if (!request.submissions.empty())
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::UnsupportedGraphExecution, "Metal explicit graph submissions are not implemented."));
                 if (commandBuffer_ == nil || drawable_ == nil || renderEncoder_ != nil || activeGraphLease_ != nullptr || activeRecording_)
                     return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
                 if (request.workloads.size() > MetalRecordingBudget::MaximumPasses)
@@ -720,6 +783,10 @@ namespace Horo::Render::Detail {
             std::uint32_t maxFramesInFlight_{0};
             MetalResourceRuntime resources_;
             bool surfaceCreated_{false};
+            bool closing_{false};
+            bool drained_{false};
+            std::optional<Error> drainError_;
+            bool drainErrorReported_{false};
         };
     }  // namespace
 

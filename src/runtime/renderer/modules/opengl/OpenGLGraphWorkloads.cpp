@@ -148,6 +148,9 @@ namespace Horo::Render::Detail {
 
     /** @copydoc ValidateOpenGLGraphWorkloads */
     Result<void> ValidateOpenGLGraphWorkloads(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources) {
+        if (!request.submissions.empty())
+            return Result<void>::Failure(
+                MakeError(OpenGLBackendErrors::UnsupportedResourceOperation, "OpenGL explicit graph submissions are not implemented."));
         if (!request.resources.empty() && request.lease == nullptr)
             return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
         if (const auto portable = ValidateRenderGraphExecutionRequest(request); portable.HasError())

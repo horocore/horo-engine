@@ -3,7 +3,50 @@
 #if defined(_WIN32) && defined(_M_X64)
 namespace Horo::Render::D3D12Detail {
 
+    /** @copydoc QueryAllocationInfo */
+    Result<D3D12_RESOURCE_ALLOCATION_INFO> QueryAllocationInfo(ID3D12Device &device, const D3D12_RESOURCE_DESC &shape) {
+        const auto info = device.GetResourceAllocationInfo(0, 1, &shape);
+        if (info.SizeInBytes == std::numeric_limits<UINT64>::max() || info.SizeInBytes == 0 || info.Alignment == 0 ||
+            (info.Alignment & (info.Alignment - 1U)) != 0) {
+            const HRESULT removed = device.GetDeviceRemovedReason();
+            if (FAILED(removed))
+                return Result<D3D12_RESOURCE_ALLOCATION_INFO>::Failure(
+                    ResourceError("render.d3d12.device_lost", "The device was removed during allocation requirements query.", removed));
+            return Result<D3D12_RESOURCE_ALLOCATION_INFO>::Failure(
+                ResourceError("render.d3d12.requirements_failed", "The device returned invalid resource size/alignment requirements."));
+        }
+        return Result<D3D12_RESOURCE_ALLOCATION_INFO>::Success(info);
+    }
+
     namespace {
+        /** @brief Separates native tier-1 heap classes and MSAA placement alignment. */
+        MemoryCompatibility Compatibility(const D3D12_RESOURCE_DESC &shape, RenderMemoryClass memoryClass) {
+            if (memoryClass == RenderMemoryClass::Upload)
+                return MemoryCompatibility::UploadBuffer;
+            if (shape.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                return MemoryCompatibility::DeviceBuffer;
+            if ((shape.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) == 0)
+                return MemoryCompatibility::Texture;
+            return shape.SampleDesc.Count > 1 ? MemoryCompatibility::MultisampledAttachment : MemoryCompatibility::Attachment;
+        }
+
+        /** @brief Restricts native heaps to the compatible resource class admitted by the cost plan. */
+        D3D12_HEAP_FLAGS HeapFlags(const D3D12_RESOURCE_DESC &shape) {
+            if (shape.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
+                return D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS;
+            return (shape.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) != 0
+                       ? D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES
+                       : D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
+        }
+
+        /** @brief Verifies the caller's unchanged admitted requirements without granting additional capacity. */
+        bool PlacementRequirementsMatch(const RenderMemoryCostPlan &plan, const RenderMemoryPlacement &placement) {
+            return placement.IsValid() && placement.memoryClass == plan.memoryClass && placement.compatibility == plan.compatibility &&
+                   placement.allocationClass == plan.allocationClass && placement.provenance == plan.provenance &&
+                   placement.payloadBytes == plan.payloadBytes && placement.requiredBytes == plan.requiredBytes &&
+                   placement.offsetBytes % plan.alignment == 0 && placement.backingBytes % plan.alignment == 0;
+        }
+
         /** @brief Rejects buffer policies which cannot be represented by upload heaps or native views. */
         bool BufferPolicySupported(const RenderBufferDescriptor &descriptor) {
             if (descriptor.access != RenderBufferAccess::HostVisible)
@@ -97,31 +140,31 @@ namespace Horo::Render::D3D12Detail {
 
     /** @copydoc Resources::CreateBuffer */
     Result<std::uint64_t> Resources::CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> bytes,
-                                                  const RenderMemoryPlacement &placement) {
+                                                  const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime) {
         auto plan = QueryBufferMemoryCost(descriptor);
         if (plan.HasError())
             return Result<std::uint64_t>::Failure(plan.ErrorValue());
-        if (bytes.size() > descriptor.byteSize)
-            return Failure<std::uint64_t>("render.d3d12.upload_range", "Initial buffer bytes exceed storage.");
+        if (auto valid = ValidateRenderBufferInitialData(descriptor, {bytes}); valid.HasError())
+            return Result<std::uint64_t>::Failure(valid.ErrorValue());
         auto shape = BufferShape(descriptor.byteSize);
         if (HasBufferUsage(descriptor.usage, RenderBufferUsage::Storage))
             shape.Flags |= D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
-        auto created = Allocate(shape, plan.Value(), placement, Resource::Kind::Buffer);
+        auto created = Allocate(shape, plan.Value(), placement, Resource::Kind::Buffer, std::move(lifetime));
         if (created.HasError())
             return Result<std::uint64_t>::Failure(created.ErrorValue());
         const auto resource = created.Value();
+        CreationRollback rollback{*this, *resource};
         resource->buffer = descriptor;
         if (auto views = CreateBufferViews(*resource); views.HasError()) {
-            Retire(resource->id, Resource::Kind::Buffer);
             return Result<std::uint64_t>::Failure(views.ErrorValue());
         }
         if (!bytes.empty()) {
-            auto upload = Upload(resource->id, bytes, 0, {});
+            auto upload = Write(resource, bytes, 0, {});
             if (upload.HasError()) {
-                Retire(resource->id, Resource::Kind::Buffer);
                 return Result<std::uint64_t>::Failure(upload.ErrorValue());
             }
         }
+        rollback.Commit();
         return Result<std::uint64_t>::Success(resource->id);
     }
 
@@ -155,7 +198,7 @@ namespace Horo::Render::D3D12Detail {
 
     /** @copydoc Resources::CreateTexture */
     Result<std::uint64_t> Resources::CreateTexture(const RenderTextureDescriptor &descriptor, std::span<const std::byte> bytes,
-                                                   const RenderMemoryPlacement &placement) {
+                                                   const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime) {
         auto plan = QueryTextureMemoryCost(descriptor);
         if (plan.HasError())
             return Result<std::uint64_t>::Failure(plan.ErrorValue());
@@ -163,32 +206,36 @@ namespace Horo::Render::D3D12Detail {
             (bytes.size() != *RenderTextureBaseLevelByteSize(descriptor) || descriptor.sampleCount != 1 || IsDepth(descriptor.format)))
             return Failure<std::uint64_t>("render.d3d12.upload_unsupported",
                                           "Texture initialization requires one complete uncompressed color base level without MSAA.");
-        auto created = Allocate(TextureShape(descriptor), plan.Value(), placement, Resource::Kind::Texture);
+        auto created = Allocate(TextureShape(descriptor), plan.Value(), placement, Resource::Kind::Texture, std::move(lifetime));
         if (created.HasError())
             return Result<std::uint64_t>::Failure(created.ErrorValue());
         const auto resource = created.Value();
+        CreationRollback rollback{*this, *resource};
         resource->texture = descriptor;
         if (!bytes.empty()) {
-            auto upload = Upload(resource->id, bytes, 0, {});
+            auto upload = Write(resource, bytes, 0, {});
             if (upload.HasError()) {
-                Retire(resource->id, Resource::Kind::Texture);
                 return Result<std::uint64_t>::Failure(upload.ErrorValue());
             }
         }
+        rollback.Commit();
         return Result<std::uint64_t>::Success(resource->id);
     }
 
     /** @copydoc Resources::Cost */
     Result<RenderMemoryCostPlan> Resources::Cost(const D3D12_RESOURCE_DESC &shape, std::size_t payload,
                                                  RenderMemoryClass memoryClass) const {
-        const auto info = device_->GetResourceAllocationInfo(0, 1, &shape);
-        if (info.SizeInBytes == std::numeric_limits<UINT64>::max() || info.SizeInBytes < payload || info.Alignment == 0)
+        const auto queried = QueryAllocationInfo(*device_.Get(), shape);
+        if (queried.HasError())
+            return Result<RenderMemoryCostPlan>::Failure(queried.ErrorValue());
+        const auto &info = queried.Value();
+        if (info.SizeInBytes < payload)
             return Failure<RenderMemoryCostPlan>("render.d3d12.requirements_failed",
                                                  "The selected device rejected resource allocation requirements.");
         return Result<RenderMemoryCostPlan>::Success({memoryClass,
-                                                      RenderMemoryAllocationClass::Dedicated,
+                                                      RenderMemoryAllocationClass::Suballocated,
                                                       RenderMemoryCostProvenance::Exact,
-                                                      {memoryClass == RenderMemoryClass::Upload ? 0xD31202U : 0xD31201U},
+                                                      {static_cast<std::uint64_t>(Compatibility(shape, memoryClass))},
                                                       payload,
                                                       static_cast<std::size_t>(info.SizeInBytes),
                                                       static_cast<std::size_t>(info.Alignment)});
@@ -196,46 +243,90 @@ namespace Horo::Render::D3D12Detail {
 
     /** @copydoc Resources::PlacementMatches */
     bool Resources::PlacementMatches(const RenderMemoryCostPlan &plan, const RenderMemoryPlacement &placement) const {
-        return placement.IsValid() && placement.memoryClass == plan.memoryClass && placement.compatibility == plan.compatibility &&
-               placement.allocationClass == plan.allocationClass && placement.provenance == plan.provenance &&
-               placement.payloadBytes == plan.payloadBytes && placement.requiredBytes == plan.requiredBytes &&
-               placement.backingBytes == plan.requiredBytes && placement.offsetBytes == 0 &&
-               std::ranges::none_of(resources_, [&](const auto &entry) {
-            return entry->pool == placement.pool;
+        if (!PlacementRequirementsMatch(plan, placement))
+            return false;
+        if (plan.allocationClass == RenderMemoryAllocationClass::Dedicated)
+            if (placement.offsetBytes != 0 || placement.backingBytes != plan.requiredBytes)
+                return false;
+        return std::ranges::none_of(resources_, [&](const auto &entry) {
+            if (entry->pool != placement.pool)
+                return false;
+            if (plan.allocationClass == RenderMemoryAllocationClass::Dedicated || !entry->heap)
+                return true;
+            const auto begin = placement.offsetBytes;
+            const auto end = begin + placement.requiredBytes;
+            return begin < entry->offsetBytes + entry->requiredBytes && entry->offsetBytes < end;
         });
+    }
+
+    /** @copydoc Resources::AcquireHeap */
+    Result<std::shared_ptr<HeapAllocation>> Resources::AcquireHeap(const D3D12_RESOURCE_DESC &shape, const RenderMemoryCostPlan &plan,
+                                                                   const RenderMemoryPlacement &placement) {
+        const auto found = std::ranges::find_if(heapAllocations_, [&](const auto &heap) {
+            return heap->pool == placement.pool;
+        });
+        const auto flags = HeapFlags(shape);
+        if (found != heapAllocations_.end()) {
+            const auto &heap = *found;
+            if (heap->scope != placement.scope || heap->memoryClass != placement.memoryClass ||
+                heap->compatibility != placement.compatibility || heap->capacity != placement.backingBytes ||
+                heap->alignment != plan.alignment || heap->flags != flags)
+                return Failure<std::shared_ptr<HeapAllocation>>("render.d3d12.placement_invalid",
+                                                                "Reuse only the exact admitted compatible heap and scope.");
+            return Result<std::shared_ptr<HeapAllocation>>::Success(heap);
+        }
+        auto heap = std::make_shared<HeapAllocation>();
+        heap->pool = placement.pool;
+        heap->scope = placement.scope;
+        heap->memoryClass = placement.memoryClass;
+        heap->compatibility = placement.compatibility;
+        heap->capacity = placement.backingBytes;
+        heap->alignment = plan.alignment;
+        heap->flags = flags;
+        D3D12_HEAP_DESC description{};
+        description.SizeInBytes = heap->capacity;
+        description.Alignment = heap->alignment;
+        description.Properties.Type = plan.memoryClass == RenderMemoryClass::Upload ? D3D12_HEAP_TYPE_UPLOAD : D3D12_HEAP_TYPE_DEFAULT;
+        description.Properties.CreationNodeMask = 1;
+        description.Properties.VisibleNodeMask = 1;
+        description.Flags = flags;
+        const HRESULT status = device_->CreateHeap(&description, IID_PPV_ARGS(&heap->native));
+        if (FAILED(status))
+            return Result<std::shared_ptr<HeapAllocation>>::Failure(
+                ResourceError("render.d3d12.allocation_failed", "Allocate the exact admitted native heap capacity.", status));
+        heap->slot = heapAllocations_.size();
+        heapAllocations_.push_back(heap);
+        return Result<std::shared_ptr<HeapAllocation>>::Success(std::move(heap));
     }
 
     /** @copydoc Resources::Allocate */
     Result<std::shared_ptr<Resource>> Resources::Allocate(const D3D12_RESOURCE_DESC &shape, const RenderMemoryCostPlan &plan,
-                                                          const RenderMemoryPlacement &placement, Resource::Kind kind) {
+                                                          const RenderMemoryPlacement &placement, Resource::Kind kind,
+                                                          RenderResourceNativeLifetime lifetime) {
         if (!PlacementMatches(plan, placement))
             return Failure<std::shared_ptr<Resource>>("render.d3d12.placement_invalid",
-                                                      "Admit a fresh exact dedicated placement from this device's cost query.");
-        auto result = NewResource(kind);
+                                                      "Use an unchanged admitted placement with no live native overlap.");
+        auto result = NewResource(kind, std::move(lifetime));
         if (result.HasError())
             return result;
         const auto resource = result.Value();
-        D3D12_HEAP_DESC heap{};
-        heap.SizeInBytes = placement.backingBytes;
-        heap.Alignment = plan.alignment;
-        heap.Properties.Type = plan.memoryClass == RenderMemoryClass::Upload ? D3D12_HEAP_TYPE_UPLOAD : D3D12_HEAP_TYPE_DEFAULT;
-        heap.Properties.CreationNodeMask = 1;
-        heap.Properties.VisibleNodeMask = 1;
-        heap.Flags = shape.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER ? D3D12_HEAP_FLAG_ALLOW_ONLY_BUFFERS
-                     : (shape.Flags & (D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET | D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL)) != 0
-                         ? D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES
-                         : D3D12_HEAP_FLAG_ALLOW_ONLY_NON_RT_DS_TEXTURES;
-        HRESULT status = device_->CreateHeap(&heap, IID_PPV_ARGS(&resource->heap));
-        if (SUCCEEDED(status))
-            status = device_->CreatePlacedResource(resource->heap.Get(), 0, &shape,
-                                                   plan.memoryClass == RenderMemoryClass::Upload ? D3D12_RESOURCE_STATE_GENERIC_READ
-                                                                                                 : D3D12_RESOURCE_STATE_COMMON,
-                                                   nullptr, IID_PPV_ARGS(&resource->native));
+        auto acquired = AcquireHeap(shape, plan, placement);
+        if (acquired.HasError())
+            return Result<std::shared_ptr<Resource>>::Failure(acquired.ErrorValue());
+        resource->heap = acquired.Value();
+        HeapRollback rollback{*this, *resource->heap};
+        const HRESULT status =
+            device_->CreatePlacedResource(resource->heap->native.Get(), placement.offsetBytes, &shape,
+                                          plan.memoryClass == RenderMemoryClass::Upload ? D3D12_RESOURCE_STATE_GENERIC_READ
+                                                                                        : D3D12_RESOURCE_STATE_COMMON,
+                                          nullptr, IID_PPV_ARGS(&resource->native));
         if (FAILED(status))
             return Result<std::shared_ptr<Resource>>::Failure(
-                ResourceError("render.d3d12.allocation_failed", "Allocate the admitted resource and heap.", status));
-        resource->backingBytes = placement.backingBytes;
+                ResourceError("render.d3d12.allocation_failed", "Create the resource inside its admitted heap region.", status));
         resource->pool = placement.pool;
+        resource->offsetBytes = placement.offsetBytes;
+        resource->requiredBytes = placement.requiredBytes;
+        ++resource->heap->allocationCount;
         resources_.push_back(resource);
         return result;
     }

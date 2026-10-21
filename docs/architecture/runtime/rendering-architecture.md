@@ -2060,3 +2060,9 @@ Required tests cover:
 - [ADR-137: Terrain and Foliage Ownership, Data, Tier and Lifecycle](../../adr/137-terrain-foliage-ownership-data-tier-and-lifecycle.md)
 - [ADR-139: Terrain Render Extraction, Material, LOD and Tier Boundary](../../adr/139-terrain-render-extraction-material-lod-and-tier-boundary.md)
 - [ADR-141: Terrain/Foliage Cross-System Ownership and Readiness](../../adr/141-terrain-foliage-cross-system-ownership-and-readiness.md)
+
+## Explicit submission and retirement migration
+
+See [Canonical graph submission and native command retirement](vulkan-command-execution.md)
+for the HORO-326 shared submission, imported-state, bounded closing, device identity
+and native memory-charge lifetime contract and affected caller migration.

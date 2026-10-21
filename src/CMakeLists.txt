@@ -2447,6 +2447,7 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
         runtime/renderer/api/RenderGraphLifetime.cpp
         runtime/renderer/api/RenderGraphWorkload.cpp
+        runtime/renderer/api/RenderDeviceIncarnation.cpp
         runtime/renderer/api/LightCulling.cpp
         runtime/renderer/api/LightCullingKernel.cpp
         runtime/renderer/api/LightFrameLayout.cpp
@@ -2727,6 +2728,19 @@ if (WIN32)
     target_link_libraries(HoroRenderD3D12 PRIVATE d3d12 dxgi ole32)
 endif ()
 
+# Tests receive only the deliberate D3D12 startup/resource seams, never broad src visibility.
+if (BUILD_TESTING)
+    add_library(HoroRenderD3D12TestingInternal INTERFACE)
+    set(_horo_d3d12_test_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/d3d12-testing")
+    file(MAKE_DIRECTORY "${_horo_d3d12_test_headers}")
+    foreach(_horo_d3d12_test_header IN ITEMS D3D12Initialization.h D3D12Resources.h D3D12NativeResources.h)
+        configure_file("runtime/renderer/modules/d3d12/${_horo_d3d12_test_header}"
+            "${_horo_d3d12_test_headers}/${_horo_d3d12_test_header}" COPYONLY)
+    endforeach ()
+    target_include_directories(HoroRenderD3D12TestingInternal INTERFACE "${_horo_d3d12_test_headers}")
+    target_link_libraries(HoroRenderD3D12TestingInternal INTERFACE HoroEngine::RenderD3D12 HoroEngine::RenderApi)
+endif ()
+
 if (HORO_BUILD_RENDER_VULKAN)
     add_library(HoroRenderVulkan STATIC
             runtime/renderer/modules/vulkan/VulkanAdapterDiscovery.cpp
@@ -2735,6 +2749,12 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanNativeRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanResourceConversions.cpp
             runtime/renderer/modules/vulkan/VulkanResourceRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanCommandRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanCommandSubmission.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphBarriers.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackend.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.cpp
     )

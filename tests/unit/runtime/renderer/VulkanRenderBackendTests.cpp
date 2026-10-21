@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "RenderMemoryTestSupport.h"
 #include "renderer/RenderBackendContractSuite.h"
@@ -174,26 +175,29 @@ namespace {
             return Result<RenderMemoryCostPlan>::Success(plan);
         }
 
-        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>,
-                                           const RenderMemoryPlacement &) override {
+        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>, const RenderMemoryPlacement &,
+                                           RenderResourceNativeLifetime lifetime = {}) override {
             ++state_->createBufferCount;
             return Result<std::uint64_t>::Success(101);
         }
 
-        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t,
+                                         RenderResourceNativeLifetime lifetime = {}) override {
             return Result<std::uint64_t>::Success(102);
         }
 
-        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>,
-                                            const RenderMemoryPlacement &) override {
+        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>, const RenderMemoryPlacement &,
+                                            RenderResourceNativeLifetime lifetime = {}) override {
             return Result<std::uint64_t>::Success(103);
         }
 
-        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t) override {
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t,
+                                                RenderResourceNativeLifetime lifetime = {}) override {
             return Result<std::uint64_t>::Success(104);
         }
 
-        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t) override {
+        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t,
+                                                 RenderResourceNativeLifetime lifetime = {}) override {
             return Result<std::uint64_t>::Success(105);
         }
 
@@ -311,8 +315,8 @@ namespace {
         REQUIRE(backend->BeginFrame({.frameNumber = 1, .outputExtent = {1280, 720}}).ErrorValue().code.Value() ==
                 "render.vulkan.unsupported_operation");
 
-        backend->Shutdown();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         REQUIRE(state.lifecycle == std::vector<std::string>{"acquire-loader", "create-instance", "create-device", "destroy-device",
                                                             "destroy-instance", "release-loader"});
     }
@@ -340,7 +344,7 @@ namespace {
 
         backend->DestroyBuffer(created.Value());
         REQUIRE(state.destroyBufferCount == 1);
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         REQUIRE(backend->QueryBufferMemoryCost(descriptor).HasError());
     }
 
@@ -422,8 +426,8 @@ namespace {
         Test::RequireErrorCode(backend->Present(FrameToken{1}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
         Test::RequireErrorCode(backend->Resize(FramebufferExtent{1280, 720}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
 
-        backend->Shutdown();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         Test::RequireErrorCode(backend->BeginFrame(FrameDescriptor{.frameNumber = 2, .outputExtent = {640, 480}}),
                                "render.backend.not_initialized", "horo.render.vulkan");
     }
@@ -552,7 +556,7 @@ namespace {
             const auto overlap = second.Value()->Initialize({});
             REQUIRE(overlap.HasError());
             REQUIRE(overlap.ErrorValue().code.Value() == "render.vulkan.presentation_in_use");
-            first.Value()->Shutdown();
+            Horo::Render::Test::RequireDrainedOwner(*first.Value());
             REQUIRE(second.Value()->Initialize({}).HasValue());
         }
     }

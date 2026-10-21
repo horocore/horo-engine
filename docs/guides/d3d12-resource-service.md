@@ -14,23 +14,30 @@ Resource allocation and transfer preparation are load/preparation operations,
 serialized outside frame recording. No native types enter `include/Horo/`.
 The native constructor seam is private to `HoroRenderD3D12`; it retains the exact
 device and verifies that the supplied direct queue belongs to it. Initialization
-builds bounded CPU descriptor heaps and a fence after host/runtime admission.
+builds bounded descriptor heaps (shader-visible CBV/SRV/UAV and sampler heaps,
+CPU-only RTV/DSV heaps) and a fence after host/runtime admission.
 Failure or cancellation before readiness rolls back the entire startup session.
 
 Call `QueryBufferMemoryCost` or `QueryTextureMemoryCost`, reserve that exact plan
 in the frontend memory ledger, then pass its `RenderMemoryPlacement` to creation.
-The first implementation uses explicit dedicated heaps and placed resources.
-Size/alignment come from the selected device, and the entire heap is charged.
-A placement must have a fresh pool, offset zero, matching class, compatibility,
-provenance, payload and backing; native failure retains the original HRESULT.
-This conservative dedicated strategy avoids introducing an unmeasured pool-size
-policy or accepting uncharged slack. It is not a performance claim.
+Compatible resources use explicit shared heaps and placed resources. Size and
+alignment come from the selected device. The frontend chooses and charges the
+whole backing capacity; the native service never rounds it up or grants slack.
+A placement must preserve class, compatibility, provenance, payload and required
+bytes, fit its admitted capacity, and avoid every live or retiring native range.
+Reuse requires the exact pool, scope, capacity, alignment and tier-1-safe native
+heap class. Buffer, upload, ordinary texture, attachment and MSAA attachment
+compatibilities stay distinct. There is no independent native pool-size policy.
+`Snapshot` counts each heap's whole capacity once until its final native allocation
+retires; freeing one suballocation does not pretend the remaining heap vanished.
+Native allocation failure retains the original HRESULT.
 
 Buffers support device-local storage and CPU-visible upload storage. GPU-written
 host-visible buffers are rejected. Uniform buffers require native 256-byte size
 alignment and at most 64 KiB; raw storage buffers require four-byte elements.
 Texture queries check native format/usage/sample support and field-width limits.
-Depth sampling uses typeless storage and explicit depth/stencil shader planes.
+Depth and linear/sRGB families use typeless storage with explicit typed views.
+Packed depth/stencil attachment views make omitted write planes read-only.
 Views create SRV, UAV, RTV and DSV descriptors as applicable; sampler creation
 uses the canonical immutable filtering/comparison policy. Composite mesh/target
 records retain their exact buffer/view dependencies.
@@ -48,12 +55,15 @@ creation contract. Upper mip contents remain undefined until separately produced
 Initial uploads are copied synchronously into bounded owned staging, submitted on
 the initialized direct queue, and ordered ahead of subsequent use on that queue.
 CPU-visible initial buffer bytes map directly. Default resource transfers use
-explicit COMMON to COPY_SOURCE/COPY_DEST to COMMON barriers. Future D3D12 command
-recording must use this same boundary; another queue cannot consume these
+first-access alias activation for placed memory and explicit COMMON to
+COPY_SOURCE/COPY_DEST to COMMON barriers. Future D3D12 command
+recording must activate unused placed resources and use this same state boundary; another queue cannot consume these
 resources without its own explicit synchronization handoff.
 
 `Upload`/`Readback` operate on private backend instances after canonical frontend
-identity resolution. They are resource-service operations, not a second public
+identity resolution. Live uploads require CopyDestination usage; immutable
+initial bytes use a separate pre-publication write path. CPU-visible upload
+buffers cannot be mutated after publication through the live upload API. They are resource-service operations, not a second public
 resource registry or a replacement for `RenderUploadQueue`/`RenderReadbackQueue`.
 The existing frontend transfer queues remain lifecycle/accounting models; host
 adapters can use their payload/completion contracts with this native executor.
@@ -101,10 +111,64 @@ Windows Server CI to qualify resource operations without claiming host startup
 support. Bounded test polling is permitted solely for test completion.
 
 Coverage includes buffer and pitched texture byte round trips, arrays/volumes,
-aligned placement/duplicate pool rejection, descriptor exhaustion and reuse,
+linear/sRGB view families, native descriptor diagnostics when installed,
+aligned shared placement/overlap rejection and whole-heap accounting, descriptor exhaustion and reuse,
 composite dependency retention, sampled depth, samplers/raw/constant buffers,
 resource/transfer backpressure, cancellation, owner-thread rejection and drain.
 `HoroD3D12InitializationTests` covers resource-stage failure/cancellation rollback.
-Build both targets and run their tests on Windows; Linux/macOS cover portable
-omission and startup policy only. Hosted build/test results are distinct from
+Both targets consume only the three staged startup/resource test headers through
+the non-installed `HoroRenderD3D12TestingInternal` interface; neither publishes or
+receives a repository-wide source include root. Production internals remain
+private. Build both targets and run their tests on Windows; Linux/macOS cover
+portable omission and startup policy only. Hosted build/test results are distinct from
 local source checks and from physical-device driver qualification.
+
+## Canonical frontend retirement handoff
+
+The native consumer uses HORO-326's move-only `RenderResourceNativeLifetime` on
+the five core creation methods: buffers, meshes, textures, views and targets.
+The exact owned bundle moves into the native resource record before heap
+allocation or enqueue. Its member precedes the resource/heap COM members, so
+reverse destruction drops native backing before marking the lease released.
+Descriptor slots are returned before that record is destroyed. Creation rollback
+also retires unpublished records during metadata-exception unwind. Native copy
+references retain the same record and lease after cancellation or failed
+creation following accepted Execute. Release only marks owner-thread evidence;
+it never reenters registry or ledger callbacks.
+
+The frontend retains stable lease addresses, resource generations and their one
+existing memory charge until its drain consumes terminal native evidence.
+Successful creation converts that same reservation to an allocation. Failed
+creation after accepted native work retains the reservation until native
+retirement. A void Destroy request alone is not a memory acknowledgement.
+Synchronous sampler preparation retains its existing synchronous contract and
+never enqueues private copy work.
+
+Each admitted native resource context acquires its incarnation once from the
+shared process-wide `AcquireRenderDeviceIncarnation` producer during actual
+initialization. Exhaustion propagates its typed failure before readiness; no
+backend-local device counter or metadata-constructor allocation exists. Resource
+snapshots project that same identity, and transfer tokens bind it to their local
+value. Zero, foreign and stale tokens are rejected before native completion
+counter polling. A future D3D12 capability snapshot must project this context
+identity rather than create a second one.
+
+WARP regressions cover one claim/release across all five creation methods,
+invalid-placement rollback, cancellation/shutdown, copy/readback retention and
+device removal immediately after actual Execute. The post-Execute hook is an
+empty-by-default target-private qualification seam; production passes no hook.
+The same-value-one regression creates two real contexts and rejects the stale
+incarnation. Portable session tests separately preserve pending/failed drain
+state without releasing the native owner early. The descriptor diagnostic test
+explicitly skips when Windows diagnostic layers are unavailable; byte-transfer
+and lifetime tests run independently of that optional diagnostic evidence.
+
+## Native API references
+
+- [D3D12 copy footprints](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device-getcopyablefootprints)
+- [Texture upload/readback layout](https://learn.microsoft.com/en-us/windows/win32/direct3d12/upload-and-readback-of-texture-data)
+- [Explicit resource barriers](https://learn.microsoft.com/en-us/windows/win32/direct3d12/using-resource-barriers-to-synchronize-resource-states-in-direct3d-12)
+- [Residency and DXGI observations](https://learn.microsoft.com/en-us/windows/win32/direct3d12/residency)
+- [Explicit test device removal](https://learn.microsoft.com/en-us/windows/win32/api/d3d12/nf-d3d12-id3d12device5-removedevice)
+
+- [Placed-memory alias activation](https://learn.microsoft.com/en-us/windows/win32/direct3d12/memory-aliasing-and-data-inheritance)

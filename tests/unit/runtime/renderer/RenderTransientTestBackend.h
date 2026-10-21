@@ -65,7 +65,10 @@ namespace Horo::Render::TransientTest {
             : backend_(std::move(backend)), audit_(std::move(audit)), completion_(*audit_) {}
 
         ~ProbeBackend() override {
-            Shutdown();
+            const auto begun = BeginShutdown();
+            const auto drained = PollDrain();
+            if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                std::terminate();
         }
 
         Result<void> Initialize(const RenderBackendConfig &config) override {
@@ -94,31 +97,32 @@ namespace Horo::Render::TransientTest {
         }
 
         Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> bytes,
-                                           const RenderMemoryPlacement &placement) override {
+                                           const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime = {}) override {
             if (FailCreation())
                 return Result<std::uint64_t>::Failure(CreationError());
-            return backend_->CreateBuffer(descriptor, bytes, placement);
+            return backend_->CreateBuffer(descriptor, bytes, placement, std::move(lifetime));
         }
 
         Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> bytes,
-                                            const RenderMemoryPlacement &placement) override {
+                                            const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime = {}) override {
             if (FailCreation())
                 return Result<std::uint64_t>::Failure(CreationError());
-            return backend_->CreateTexture(descriptor, bytes, placement);
+            return backend_->CreateTexture(descriptor, bytes, placement, std::move(lifetime));
         }
 
-        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertex,
-                                         const std::uint64_t index) override {
-            return backend_->CreateMesh(descriptor, vertex, index);
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertex, const std::uint64_t index,
+                                         RenderResourceNativeLifetime lifetime = {}) override {
+            return backend_->CreateMesh(descriptor, vertex, index, std::move(lifetime));
         }
 
-        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
-            return backend_->CreateTextureView(descriptor, texture);
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture,
+                                                RenderResourceNativeLifetime lifetime = {}) override {
+            return backend_->CreateTextureView(descriptor, texture, std::move(lifetime));
         }
 
         Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, const std::uint64_t color,
-                                                 const std::uint64_t depth) override {
-            return backend_->CreateRenderTarget(descriptor, color, depth);
+                                                 const std::uint64_t depth, RenderResourceNativeLifetime lifetime = {}) override {
+            return backend_->CreateRenderTarget(descriptor, color, depth, std::move(lifetime));
         }
 
         void DestroyBuffer(const std::uint64_t instance) noexcept override {
@@ -185,11 +189,18 @@ namespace Horo::Render::TransientTest {
             return backend_->Resize(extent);
         }
 
-        void Shutdown() noexcept override {
-            backend_->Shutdown();
+        Result<void> BeginShutdown() override {
+            return backend_->BeginShutdown();
+        }
+
+        Result<RenderBackendDrainProgress> PollDrain() override {
+            const auto progress = backend_->PollDrain();
+            if (progress.HasError() || progress.Value() != RenderBackendDrainProgress::Drained)
+                return progress;
             audit_->Complete();
             if (std::exchange(live_, false))
                 ++audit_->shutdowns;
+            return progress;
         }
 
     private:

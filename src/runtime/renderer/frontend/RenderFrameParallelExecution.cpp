@@ -35,6 +35,8 @@ namespace Horo::Render {
     Result<void> RenderFrameScope::ValidateExecutionAdmission() const {
         if (backend_ == nullptr)
             return Result<void>::Failure(MakeError(FrontendErrors::FrameNotActive, "Renderer frame scope no longer owns a frame."));
+        if (auto admission = owner_->RequireOpenOwner(); admission.HasError())
+            return admission;
         if (executed_ || parallelWork_ || parallelGraphWork_)
             return Result<void>::Failure(
                 MakeError(FrontendErrors::FrameAlreadyExecuted, "Renderer frame scope has already executed its pass sequence."));

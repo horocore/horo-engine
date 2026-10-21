@@ -2,6 +2,7 @@
 #include "MetalCommandExecution.h"
 #include "MetalRenderBackendErrors.h"
 
+#include <exception>
 #include <limits>
 #include <memory>
 #include <string>
@@ -42,7 +43,10 @@ namespace Horo::Render {
                 : runtime_(std::move(runtime)), presentationLease_(std::move(presentationLease)) {}
 
             ~MetalRenderBackend() override {
-                Shutdown();
+                const auto begun = BeginShutdown();
+                const auto drained = PollDrain();
+                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
             }
 
             /** @copydoc IRenderBackend::Initialize */
@@ -51,10 +55,15 @@ namespace Horo::Render {
                     return Result<void>::Failure(
                         MakeMetalError(MetalBackendErrors::AlreadyInitialized, "Renderer backend is already initialized."));
                 }
+                if (shutdownBegun_ && !drained_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::PresentationInUse));
                 if (!config.IsValid()) {
                     return Result<void>::Failure(
                         MakeMetalError(MetalBackendErrors::InvalidConfig, "Metal backend configuration is invalid."));
                 }
+                if (!config.HasSingleEffectiveQueue())
+                    return Result<void>::Failure(MakeMetalError(MetalBackendErrors::UnsupportedGraphExecution,
+                                                                "Metal does not implement distinct effective graph queues."));
                 if (config.maxFramesInFlight < 2 || config.maxFramesInFlight > 3) {
                     return Result<void>::Failure(MakeMetalError(MetalBackendErrors::UnsupportedFramesInFlight,
                                                                 "Metal interactive presentation supports two or three frames in flight."));
@@ -66,9 +75,10 @@ namespace Horo::Render {
 
                 presentationLease_->claimed = true;
                 ownsPresentationLease_ = true;
+                shutdownBegun_ = false;
+                drained_ = false;
                 // Claim cleanup before entering platform code. Typed failure guarantees no
                 // retained resources; an exception may occur after native acquisition.
-                runtimeInitialized_ = true;
                 const Result<Detail::MetalDeviceCapabilities> created = runtime_->Initialize(
                     MetalPresentationDescriptor{
                         .enableValidation = config.enableValidation,
@@ -81,14 +91,15 @@ namespace Horo::Render {
                         .requirePresentation = config.requirePresentation,
                     });
                 if (created.HasError()) {
-                    runtime_->Shutdown();
-                    runtimeInitialized_ = false;
-                    ReleasePresentationLease();
+                    CloseUnsubmittedInitialization();
                     return Result<void>::Failure(created.ErrorValue());
                 }
 
+                runtimeInitialized_ = true;
                 capabilities_ = created.Value().implemented;
                 initialized_ = true;
+                shutdownBegun_ = false;
+                drained_ = false;
                 return Result<void>::Success();
             }
 
@@ -246,46 +257,50 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::CreateBuffer */
             Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                               const RenderMemoryPlacement &placement) override {
+                                               const RenderMemoryPlacement &placement,
+                                               RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal buffer creation requires an initialized backend.");
                 if (!capabilities_.support.Supports(descriptor))
                     return UnsupportedResource<std::uint64_t>("Metal buffer creation failed: " +
                                                               DescribeRenderBufferAdmissionFailure(descriptor, capabilities_.support));
-                return runtime_->CreateBuffer(descriptor, initialData, placement);
+                return runtime_->CreateBuffer(descriptor, initialData, placement, std::move(lifetime));
             }
 
             /** @copydoc IRenderBackend::CreateMesh */
             Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
-                                             const std::uint64_t indexBuffer) override {
+                                             const std::uint64_t indexBuffer, RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal mesh creation requires an initialized backend.");
                 if (!capabilities_.support.features.Supports(RenderCapability::MeshResources))
                     return UnsupportedResource<std::uint64_t>("Metal mesh resources are not available on the admitted device.");
-                return runtime_->CreateMesh(descriptor, vertexBuffer, indexBuffer);
+                return runtime_->CreateMesh(descriptor, vertexBuffer, indexBuffer, std::move(lifetime));
             }
 
             Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                                const RenderMemoryPlacement &placement) override {
+                                                const RenderMemoryPlacement &placement,
+                                                RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal texture creation requires an initialized backend.");
                 if (!capabilities_.support.Supports(descriptor))
                     return UnsupportedResource<std::uint64_t>("Metal texture creation failed: " +
                                                               DescribeRenderTextureAdmissionFailure(descriptor, capabilities_.support));
-                return runtime_->CreateTexture(descriptor, initialData, placement);
+                return runtime_->CreateTexture(descriptor, initialData, placement, std::move(lifetime));
             }
 
-            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
+            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture,
+                                                    RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal texture-view creation requires an initialized backend.");
-                return runtime_->CreateTextureView(descriptor, texture);
+                return runtime_->CreateTextureView(descriptor, texture, std::move(lifetime));
             }
 
             Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, const std::uint64_t colorAttachment,
-                                                     const std::uint64_t depthAttachment) override {
+                                                     const std::uint64_t depthAttachment,
+                                                     RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_)
                     return ResourceNotInitialized("Metal render-target creation requires an initialized backend.");
-                return runtime_->CreateRenderTarget(descriptor, colorAttachment, depthAttachment);
+                return runtime_->CreateRenderTarget(descriptor, colorAttachment, depthAttachment, std::move(lifetime));
             }
 
             /** @copydoc IRenderBackend::DestroyBuffer */
@@ -368,6 +383,9 @@ namespace Horo::Render {
                 if (const auto state = ValidateActiveFrame(request.frame); state.HasError()) {
                     return state;
                 }
+                if (!request.submissions.empty())
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::UnsupportedGraphExecution, "Metal explicit graph submissions are not implemented."));
                 if (!request.resources.empty() && request.lease == nullptr) {
                     return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan,
                                                            "Resident graph execution requires a frontend-owned resource lease."));
@@ -484,12 +502,30 @@ namespace Horo::Render {
                 return runtime_->Resize(extent);
             }
 
-            /** @copydoc IRenderBackend::Shutdown */
-            void Shutdown() noexcept override {
-                AbortActiveFrame();
+            /** @copydoc IRenderBackend::BeginShutdown */
+            Result<void> BeginShutdown() override {
+                if (const auto begun = runtime_->BeginShutdown(); begun.HasError())
+                    return begun;
+                if (shutdownBegun_)
+                    return Result<void>::Success();
+                shutdownBegun_ = true;
                 initialized_ = false;
-                DestroyRuntime();
-                capabilities_ = RenderBackendCapabilities{.backend = RenderBackendId{"metal"}};
+                frameActive_ = false;
+                activeFrame_ = {};
+                activeHostFrame_ = 0;
+                return Result<void>::Success();
+            }
+
+            /** @copydoc IRenderBackend::PollDrain */
+            Result<RenderBackendDrainProgress> PollDrain() override {
+                const auto progress = runtime_->PollDrain();
+                if (progress.HasValue() && progress.Value() == RenderBackendDrainProgress::Drained) {
+                    drained_ = true;
+                    runtimeInitialized_ = false;
+                    ReleasePresentationLease();
+                    capabilities_ = RenderBackendCapabilities{.backend = RenderBackendId{"metal"}};
+                }
+                return progress;
             }
 
         private:
@@ -537,12 +573,12 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
-            void DestroyRuntime() noexcept {
-                if (runtimeInitialized_) {
-                    runtime_->Shutdown();
-                    runtimeInitialized_ = false;
-                }
-                ReleasePresentationLease();
+            /** @brief Initialization has submitted no work; a nonterminal cleanup is a violated construction contract. */
+            void CloseUnsubmittedInitialization() noexcept {
+                const auto begun = BeginShutdown();
+                const auto drained = PollDrain();
+                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
             }
 
             void ReleasePresentationLease() noexcept {
@@ -562,6 +598,8 @@ namespace Horo::Render {
             bool runtimeInitialized_{false};
             bool ownsPresentationLease_{false};
             bool frameActive_{false};
+            bool shutdownBegun_{false};
+            bool drained_{false};
         };
 
         class MetalBackendProvider final : public IRenderBackendProvider {

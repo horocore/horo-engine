@@ -63,8 +63,10 @@ namespace Horo::Render {
      * @brief Backend-private runtime seam for deterministic failure and lifecycle coverage.
      * Calls run synchronously on the render-capable thread with host-initialized COM.
      * Release is idempotent, tolerates partial acquisition, and releases queues before
-     * device, adapters and factory. No command submission is exposed by this ticket,
-     * so teardown has no outstanding GPU work and performs no GPU wait.
+     * device, adapters and factory. The resource service can submit bounded native
+     * copies after startup. Release requires that those copies have drained, that
+     * no resource service was published, or that the native device is actually lost.
+     * The session polls drain before explicit release; it never inserts a CPU/GPU wait.
      */
     class ID3D12InitializationRuntime {
     public:
@@ -96,12 +98,15 @@ namespace Horo::Render {
     };
 
     /**
-     * @brief Owns a startup-only D3D12 device session on its construction thread.
+     * @brief Owns D3D12 startup and the native resource-service lifetime on its construction thread.
      *
      * The host must construct, initialize, stop and destroy this object on its
      * render-capable owner thread. No async work or borrowed native handles escape.
-     * Failed/cancelled initialization rolls back and may be retried; Shutdown closes
-     * admission permanently. Device-ready here does not imply presentation or parity.
+     * Failed/cancelled initialization rolls back and may be retried. Shutdown closes
+     * resource admission permanently and returns drain_pending until copies retire.
+     * Before destruction, the host must retire external submission pins and complete
+     * shutdown, unless the native device is actually removed. Device-ready here does
+     * not imply presentation or interactive renderer parity.
      */
     class D3D12Initialization final {
     public:

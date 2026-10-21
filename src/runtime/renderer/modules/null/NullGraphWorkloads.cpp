@@ -61,6 +61,9 @@ namespace Horo::Render::Detail {
 
     /** @copydoc ValidateNullGraphWorkloads */
     Result<void> ValidateNullGraphWorkloads(const NullGraphResources &resources, const RenderGraphExecutionRequest &request) {
+        if (!request.submissions.empty())
+            return Result<void>::Failure(
+                MakeError(NullBackendErrors::UnsupportedResourceOperation, "Null explicit graph submissions are not implemented."));
         if (!request.resources.empty() && request.lease == nullptr)
             return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
         if (const auto portable = ValidateRenderGraphExecutionRequest(request); portable.HasError())

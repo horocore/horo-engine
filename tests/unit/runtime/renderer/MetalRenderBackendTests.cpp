@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "MetalRenderTestSupport.h"
@@ -253,8 +254,8 @@ namespace {
 
         ExerciseFrameLifecycle(*backend, state);
 
-        backend->Shutdown();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         Check(state.destroyCount == 1);
         Check(!backend->Capabilities().presentsToWindow);
     }
@@ -271,7 +272,7 @@ namespace {
                       .requirePresentation = true,
                   })
                   .HasValue());
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
 
         const Result<void> stale = backend->Initialize(RenderBackendConfig{
             .adapter = RenderAdapterId{"metal:test"},
@@ -322,7 +323,7 @@ namespace {
         Check(backend->BeginFrame(FrameDescriptor{.frameNumber = 3, .outputExtent = {800, 600}}).HasValue());
         backend->AbortActiveFrame();
         Check(state.abortCount == 2);
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Shared Presentation Port Rejects Overlapping Backends", "[unit][runtime][renderer]") {
@@ -355,7 +356,7 @@ namespace {
         Check(invalid.ErrorValue().code.Value() == "render.metal.unsupported_pass_kind");
         Check(state.executeCount == 0);
         backend->AbortActiveFrame();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Generic Resources Delegate To Metal Runtime", "[unit][runtime][renderer]") {
@@ -372,7 +373,7 @@ namespace {
         Check(state.resourceCreateCount == 8);
         DestroyGenericResources(*backend, resources);
         Check(state.resourceDestroyCount == 8);
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Module Info Describes Metal Window Before Backend Creation", "[unit][runtime][renderer]") {
@@ -418,7 +419,7 @@ namespace {
         REQUIRE(backend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}}).HasValue());
         CheckPreparationSurface(*backend, "render.backend.frame_active");
         backend->AbortActiveFrame();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         CheckPreparationSurface(*backend, "render.backend.not_initialized");
         backend->DestroyShaderModule(109);
         backend->DestroyGraphicsPipeline(113);
@@ -449,7 +450,7 @@ namespace {
         REQUIRE(active.HasError());
         CHECK(active.ErrorValue().code.Value() == "render.backend.frame_active");
         backend->AbortActiveFrame();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         const auto closed = backend->RealizeResolved({}, 0, {});
         REQUIRE(closed.HasError());
         CHECK(closed.ErrorValue().code.Value() == "render.backend.not_initialized");

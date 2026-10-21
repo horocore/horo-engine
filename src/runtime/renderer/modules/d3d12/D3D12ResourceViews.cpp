@@ -11,22 +11,72 @@ namespace Horo::Render::D3D12Detail {
                    HasBufferUsage(indices->buffer.usage, RenderBufferUsage::Index);
         }
 
+        /** @brief Requires both logical ranges and native 32-bit vertex/index view sizes to fit without truncation. */
+        bool MeshRangesMatch(const RenderMeshDescriptor &descriptor, const Resource &vertices, const Resource &indices) {
+            const std::uint64_t vertexBytes = std::uint64_t(descriptor.vertexStride) * descriptor.vertexCount;
+            const std::uint64_t indexBytes =
+                std::uint64_t(descriptor.indexCount) * (descriptor.indexFormat == RenderIndexFormat::UInt16 ? 2U : 4U);
+            return vertexBytes <= vertices.buffer.byteSize && indexBytes <= indices.buffer.byteSize &&
+                   vertexBytes <= std::numeric_limits<UINT>::max() && indexBytes <= std::numeric_limits<UINT>::max();
+        }
+
         /** @brief Identifies native mip-specific attachment/storage descriptors. */
         bool NeedsSingleMip(const RenderTextureDescriptor &texture) {
             return HasTextureUsage(texture.usage, RenderTextureUsage::Storage) ||
                    HasTextureUsage(texture.usage, RenderTextureUsage::RenderAttachment);
         }
 
-        /** @brief Rejects shader interpretations whose native dimensionality would differ from the request. */
+        /** @brief Preserves canonical shader dimensionality and the planes exposed by native cube descriptors. */
+        bool ShaderShapeSupported(const RenderTextureDescriptor &texture, const RenderTextureViewDescriptor &view) {
+            if (view.dimension == RenderTextureViewDimension::Cube || view.dimension == RenderTextureViewDimension::CubeArray) {
+                if (texture.sampleCount != 1 || view.aspect == RenderTextureAspect::Stencil)
+                    return false;
+                return view.dimension != RenderTextureViewDimension::Cube || view.baseLayer == 0;
+            }
+            if (texture.layerCount > 1)
+                return view.dimension != RenderTextureViewDimension::TwoD && view.dimension != RenderTextureViewDimension::OneD;
+            return true;
+        }
+
+        /** @brief Rejects native view policies which would expose a different range or shader plane. */
         bool ViewPolicySupported(const RenderTextureDescriptor &texture, const RenderTextureViewDescriptor &view) {
-            if (texture.layerCount > 1 &&
-                (view.dimension == RenderTextureViewDimension::TwoD || view.dimension == RenderTextureViewDimension::OneD))
-                return false;
-            if (view.dimension == RenderTextureViewDimension::Cube && view.baseLayer != 0)
+            if (!ShaderShapeSupported(texture, view))
                 return false;
             if (NeedsSingleMip(texture) && view.mipCount != 1)
                 return false;
             return !(view.aspect == RenderTextureAspect::DepthStencil && HasTextureUsage(texture.usage, RenderTextureUsage::Sampled));
+        }
+
+        /** @brief Validates typed view support before calling native void-returning descriptor creation APIs. */
+        Result<void> CheckViewFormat(ID3D12Device &device, DXGI_FORMAT format, UINT required1, UINT required2) {
+            D3D12_FEATURE_DATA_FORMAT_SUPPORT support{format};
+            const HRESULT status = device.CheckFeatureSupport(D3D12_FEATURE_FORMAT_SUPPORT, &support, sizeof(support));
+            if (FAILED(status))
+                return Result<void>::Failure(
+                    ResourceError("render.d3d12.format_query_failed", "Query the exact typed view format.", status));
+            if ((support.Support1 & required1) != required1 || (support.Support2 & required2) != required2)
+                return Result<void>::Failure(ResourceError("render.d3d12.view_unsupported",
+                                                           "Select a typed view format supporting every requested use on this device."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks shader, attachment and storage interpretations independently for compatible typeless storage. */
+        Result<void> ViewFormatSupported(ID3D12Device &device, const RenderTextureDescriptor &texture,
+                                         const RenderTextureViewDescriptor &view) {
+            if (HasTextureUsage(texture.usage, RenderTextureUsage::Sampled)) {
+                const UINT required =
+                    view.aspect == RenderTextureAspect::Stencil ? D3D12_FORMAT_SUPPORT1_SHADER_LOAD : D3D12_FORMAT_SUPPORT1_SHADER_SAMPLE;
+                if (auto valid = CheckViewFormat(device, ShaderViewFormat(view), required, 0); valid.HasError())
+                    return valid;
+            }
+            if (HasTextureUsage(texture.usage, RenderTextureUsage::RenderAttachment)) {
+                const UINT required = IsDepth(view.format) ? D3D12_FORMAT_SUPPORT1_DEPTH_STENCIL : D3D12_FORMAT_SUPPORT1_RENDER_TARGET;
+                if (auto valid = CheckViewFormat(device, NativeFormat(view.format), required, 0); valid.HasError())
+                    return valid;
+            }
+            if (HasTextureUsage(texture.usage, RenderTextureUsage::Storage))
+                return CheckViewFormat(device, NativeFormat(view.format), 0, D3D12_FORMAT_SUPPORT2_UAV_TYPED_STORE);
+            return Result<void>::Success();
         }
 
         /** @brief Converts the validated comparison/anisotropy/filter combination. */
@@ -86,27 +136,34 @@ namespace Horo::Render::D3D12Detail {
     }  // namespace
 
     /** @copydoc Resources::CreateMesh */
-    Result<std::uint64_t> Resources::CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertex, std::uint64_t index) {
+    Result<std::uint64_t> Resources::CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertex, std::uint64_t index,
+                                                RenderResourceNativeLifetime lifetime) {
         if (auto checked = Check(); checked.HasError())
             return Result<std::uint64_t>::Failure(checked.ErrorValue());
         auto vertices = Find(vertex);
         auto indices = Find(index);
-        const std::size_t indexBytes = descriptor.indexFormat == RenderIndexFormat::UInt16 ? 2 : 4;
-        if (!descriptor.IsValid() || !MeshBuffersMatch(vertices, indices) ||
-            std::size_t(descriptor.vertexCount) > vertices->buffer.byteSize / descriptor.vertexStride ||
-            std::size_t(descriptor.indexCount) > indices->buffer.byteSize / indexBytes)
+        if (!descriptor.IsValid() || !MeshBuffersMatch(vertices, indices) || !MeshRangesMatch(descriptor, *vertices, *indices))
             return Failure<std::uint64_t>("render.d3d12.mesh_invalid", "Resolve compatible live vertex/index buffers and checked ranges.");
-        auto created = NewResource(Resource::Kind::Mesh);
+        auto created = NewResource(Resource::Kind::Mesh, std::move(lifetime));
         if (created.HasError())
             return Result<std::uint64_t>::Failure(created.ErrorValue());
         const auto resource = created.Value();
+        resource->mesh = descriptor;
+        resource->vertexView = {vertices->native->GetGPUVirtualAddress(),
+                                static_cast<UINT>(std::uint64_t(descriptor.vertexStride) * descriptor.vertexCount),
+                                descriptor.vertexStride};
+        resource->indexView = {indices->native->GetGPUVirtualAddress(),
+                               static_cast<UINT>(std::uint64_t(descriptor.indexCount) *
+                                                 (descriptor.indexFormat == RenderIndexFormat::UInt16 ? 2U : 4U)),
+                               descriptor.indexFormat == RenderIndexFormat::UInt16 ? DXGI_FORMAT_R16_UINT : DXGI_FORMAT_R32_UINT};
         resource->dependencies = {vertices, indices};
         resources_.push_back(resource);
         return Result<std::uint64_t>::Success(resource->id);
     }
 
     /** @copydoc Resources::CreateTextureView */
-    Result<std::uint64_t> Resources::CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture) {
+    Result<std::uint64_t> Resources::CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture,
+                                                       RenderResourceNativeLifetime lifetime) {
         if (auto checked = Check(); checked.HasError())
             return Result<std::uint64_t>::Failure(checked.ErrorValue());
         const auto storage = Find(texture);
@@ -118,7 +175,9 @@ namespace Horo::Render::D3D12Detail {
         if (!ViewPolicySupported(storage->texture, descriptor))
             return Failure<std::uint64_t>("render.d3d12.view_unsupported",
                                           "Use explicit array views, one mip for attachment/storage, and one shader plane.");
-        auto created = NewResource(Resource::Kind::View);
+        if (auto supported = ViewFormatSupported(*device_.Get(), storage->texture, descriptor); supported.HasError())
+            return Result<std::uint64_t>::Failure(supported.ErrorValue());
+        auto created = NewResource(Resource::Kind::View, std::move(lifetime));
         if (created.HasError())
             return Result<std::uint64_t>::Failure(created.ErrorValue());
         auto resource = created.Value();
@@ -126,10 +185,11 @@ namespace Horo::Render::D3D12Detail {
         resource->texture = storage->texture;
         resource->dependencies = {storage};
         resources_.push_back(resource);
+        CreationRollback rollback{*this, *resource};
         if (auto views = CreateTextureDescriptors(*resource, *storage); views.HasError()) {
-            Retire(resource->id, Resource::Kind::View);
             return Result<std::uint64_t>::Failure(views.ErrorValue());
         }
+        rollback.Commit();
         return Result<std::uint64_t>::Success(resource->id);
     }
 
@@ -188,7 +248,7 @@ namespace Horo::Render::D3D12Detail {
         return Result<RenderMemoryCostPlan>::Success({RenderMemoryClass::PersistentDevice,
                                                       RenderMemoryAllocationClass::Dedicated,
                                                       RenderMemoryCostProvenance::Estimated,
-                                                      {0xD31203U},
+                                                      {static_cast<std::uint64_t>(MemoryCompatibility::Sampler)},
                                                       1,
                                                       65536,
                                                       65536});
@@ -211,6 +271,8 @@ namespace Horo::Render::D3D12Detail {
         resource->descriptors[D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER] = slot;
         resource->pool = placement.pool;
         resource->backingBytes = placement.backingBytes;
+        resource->requiredBytes = placement.requiredBytes;
+        resource->sampler = descriptor;
         resources_.push_back(resource);
         const auto sampler = NativeSampler(descriptor);
         device_->CreateSampler(&sampler, pools_[D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER].Handle(*slot));
@@ -218,8 +280,8 @@ namespace Horo::Render::D3D12Detail {
     }
 
     /** @copydoc Resources::CreateRenderTarget */
-    Result<std::uint64_t> Resources::CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t color,
-                                                        std::uint64_t depth) {
+    Result<std::uint64_t> Resources::CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t color, std::uint64_t depth,
+                                                        RenderResourceNativeLifetime lifetime) {
         if (auto checked = Check(); checked.HasError())
             return Result<std::uint64_t>::Failure(checked.ErrorValue());
         auto colorView = Find(color);
@@ -227,10 +289,11 @@ namespace Horo::Render::D3D12Detail {
         if ((color != 0 && !colorView) || (depth != 0 && !depthView) || !TargetMatches(descriptor, colorView, depthView))
             return Failure<std::uint64_t>("render.d3d12.target_invalid",
                                           "Use live compatible attachment views matching target extent and samples.");
-        auto created = NewResource(Resource::Kind::Target);
+        auto created = NewResource(Resource::Kind::Target, std::move(lifetime));
         if (created.HasError())
             return Result<std::uint64_t>::Failure(created.ErrorValue());
         auto resource = created.Value();
+        resource->target = descriptor;
         if (colorView)
             resource->dependencies.push_back(colorView);
         if (depthView)

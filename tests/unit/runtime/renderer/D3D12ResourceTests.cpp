@@ -1,10 +1,4 @@
-#include "runtime/renderer/modules/d3d12/D3D12Initialization.h"
-#include "runtime/renderer/modules/d3d12/D3D12NativeResources.h"
-
-#include <array>
-#include <catch2/catch_test_macros.hpp>
-#include <chrono>
-#include <thread>
+#include "D3D12ResourceTestSupport.h"
 
 TEST_CASE("D3D12 resource service rejects invalid finite host bounds", "[renderer][d3d12][resources]") {
     Horo::Render::D3D12ResourceLimits limits;
@@ -23,102 +17,9 @@ TEST_CASE("D3D12 resource service rejects invalid finite host bounds", "[rendere
 }
 
 #if defined(_WIN32) && defined(_M_X64)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
-#include <d3d12.h>
-#include <dxgi1_6.h>
-#include <wrl/client.h>
-
-namespace {
-    using namespace Horo;
-    using namespace Horo::Render;
-    using Microsoft::WRL::ComPtr;
-
-    // WARP is explicitly selected by tests. This bypasses production host admission only
-    // to test native resource ownership on CI; it is not a renderer fallback or qualification of startup.
-    class Fixture {
-    public:
-        explicit Fixture(const D3D12ResourceLimits &limits = {}) {
-            ComPtr<IDXGIFactory4> factory;
-            REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
-            ComPtr<IDXGIAdapter> warp;
-            REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))));
-            REQUIRE(SUCCEEDED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device))));
-            D3D12_COMMAND_QUEUE_DESC description{};
-            description.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-            REQUIRE(SUCCEEDED(device->CreateCommandQueue(&description, IID_PPV_ARGS(&queue))));
-            auto created = CreateD3D12Resources(device.Get(), queue.Get(), limits);
-            REQUIRE(created.HasValue());
-            resources = std::move(created).Value();
-        }
-
-        ~Fixture() {
-            if (!resources)
-                return;
-            resources->StopAdmission();
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
-            while (std::chrono::steady_clock::now() < deadline) {
-                const auto drain = resources->PollDrain();
-                if (drain.HasError() || drain.Value())
-                    return;
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-            }
-        }
-
-        RenderMemoryPlacement Placement(const RenderMemoryCostPlan &plan) {
-            return {.pool = {{1}, nextPool++},
-                    .scope = {1, 1},
-                    .attempt = {nextPool},
-                    .memoryClass = plan.memoryClass,
-                    .compatibility = plan.compatibility,
-                    .provenance = plan.provenance,
-                    .budgetRevision = 1,
-                    .offsetBytes = 0,
-                    .payloadBytes = plan.payloadBytes,
-                    .requiredBytes = plan.requiredBytes,
-                    .backingBytes = plan.requiredBytes,
-                    .allocationClass = plan.allocationClass};
-        }
-
-        std::uint64_t Buffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> bytes = {}) {
-            const auto plan = resources->QueryBufferMemoryCost(descriptor);
-            REQUIRE(plan.HasValue());
-            const auto created = resources->CreateBuffer(descriptor, bytes, Placement(plan.Value()));
-            REQUIRE(created.HasValue());
-            return created.Value();
-        }
-
-        std::uint64_t Texture(const RenderTextureDescriptor &descriptor, std::span<const std::byte> bytes = {}) {
-            const auto plan = resources->QueryTextureMemoryCost(descriptor);
-            REQUIRE(plan.HasValue());
-            const auto created = resources->CreateTexture(descriptor, bytes, Placement(plan.Value()));
-            REQUIRE(created.HasValue());
-            return created.Value();
-        }
-
-        std::vector<std::byte> Read(D3D12TransferId id) {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
-            while (std::chrono::steady_clock::now() < deadline) {
-                auto result = resources->TakeReadback(id);
-                if (result.HasValue())
-                    return std::move(result).Value();
-                REQUIRE(result.ErrorValue().code.Value() == "render.d3d12.transfer_pending");
-                std::this_thread::sleep_for(std::chrono::milliseconds{1});
-            }
-            FAIL("Bounded WARP readback timed out");
-            return {};
-        }
-
-        ComPtr<ID3D12Device> device;
-        ComPtr<ID3D12CommandQueue> queue;
-        std::unique_ptr<ID3D12Resources> resources;
-        std::uint64_t nextPool{1};
-    };
-
-    constexpr RenderBufferUsage CopyUsage = RenderBufferUsage::CopySource | RenderBufferUsage::CopyDestination;
-}  // namespace
+using namespace Horo;
+using namespace Horo::Render;
+using namespace Horo::Render::D3D12Tests;
 
 TEST_CASE("D3D12 WARP buffer uploads and readbacks retain actual bytes and backing", "[renderer][d3d12][resources][warp]") {
     Fixture fixture;
@@ -221,36 +122,6 @@ TEST_CASE("D3D12 WARP descriptor reuse waits for dependency retirement", "[rende
     REQUIRE(fixture.resources->Snapshot().committedBytes == 0);
 }
 
-TEST_CASE("D3D12 WARP transfer capacity cancellation and shutdown preserve fence ownership", "[renderer][d3d12][resources][warp]") {
-    D3D12ResourceLimits limits;
-    limits.maximumTransfers = 1;
-    limits.maximumTransferBytes = 65536;
-    Fixture fixture{limits};
-    const auto buffer = fixture.Buffer({65536, CopyUsage});
-    const auto first = fixture.resources->Readback(buffer, 0, 16);
-    REQUIRE(first.HasValue());
-    REQUIRE(fixture.resources->Readback(buffer, 0, 16).HasError());
-    REQUIRE(fixture.resources->Cancel(first.Value()).HasValue());
-    REQUIRE(fixture.resources->TakeReadback(first.Value()).HasError());
-    fixture.resources->DestroyBuffer(buffer);
-    fixture.resources->StopAdmission();
-    REQUIRE(fixture.resources->QueryBufferMemoryCost({1, CopyUsage}).HasError());
-    REQUIRE_FALSE(fixture.resources->Snapshot().accepting);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
-    bool drained = false;
-    while (std::chrono::steady_clock::now() < deadline) {
-        auto poll = fixture.resources->PollDrain();
-        REQUIRE(poll.HasValue());
-        if (poll.Value()) {
-            drained = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds{1});
-    }
-    REQUIRE(drained);
-    REQUIRE(fixture.resources->Snapshot().committedBytes == 0);
-}
-
 TEST_CASE("D3D12 WARP resource calls enforce owner thread and unsupported formats", "[renderer][d3d12][resources][warp]") {
     Fixture fixture;
     bool rejected = false;
@@ -267,6 +138,12 @@ TEST_CASE("D3D12 WARP resource calls enforce owner thread and unsupported format
     REQUIRE(fixture.resources->QueryTextureMemoryCost(depth).HasError());
     REQUIRE(fixture.resources->QueryBufferMemoryCost({256, CopyUsage, RenderBufferAccess::HostVisible}).HasError());
     REQUIRE(fixture.resources->QueryBufferMemoryCost({255, RenderBufferUsage::Uniform}).HasError());
+    const std::array initial{std::byte{7}, std::byte{8}, std::byte{9}, std::byte{10}};
+    const auto immutable = fixture.Buffer({4, RenderBufferUsage::CopySource}, initial);
+    REQUIRE(fixture.resources->Upload(immutable, initial, 0).HasError());
+    const auto preserved = fixture.resources->Readback(immutable, 0, 4);
+    REQUIRE(preserved.HasValue());
+    REQUIRE(fixture.Read(preserved.Value()) == std::vector<std::byte>(initial.begin(), initial.end()));
     RenderSamplerDescriptor sampler;
     sampler.maximumAnisotropy = 32;
     REQUIRE(fixture.resources->QuerySamplerMemoryCost(sampler).HasError());
@@ -324,16 +201,59 @@ TEST_CASE("D3D12 WARP host-visible initial bytes and finite resource capacity ar
     REQUIRE(fixture.Buffer({4, CopyUsage}) != buffer);
 }
 
-TEST_CASE("D3D12 WARP device removal remains a typed failure instead of false completion", "[renderer][d3d12][resources][warp]") {
+TEST_CASE("D3D12 native color views preserve linear sRGB families and reject unsupported storage interpretations",
+          "[renderer][d3d12][resources][warp]") {
     Fixture fixture;
-    const auto buffer = fixture.Buffer({256, CopyUsage});
-    REQUIRE(fixture.resources->Readback(buffer, 0, 256).HasValue());
-    ComPtr<ID3D12Device5> removable;
-    REQUIRE(SUCCEEDED(fixture.device.As(&removable)));
-    removable->RemoveDevice();
-    const auto result = fixture.resources->Poll();
-    REQUIRE(result.HasError());
-    REQUIRE(result.ErrorValue().code.Value() == "render.d3d12.device_lost");
-    REQUIRE(fixture.resources->QueryBufferMemoryCost({256, CopyUsage}).HasError());
+    RenderTextureDescriptor descriptor;
+    descriptor.extent = {3, 2};
+    descriptor.usage = RenderTextureUsage::Sampled | RenderTextureUsage::CopySource;
+    const std::vector bytes(24, std::byte{127});
+    const auto texture = fixture.Texture(descriptor, bytes);
+    RenderTextureViewDescriptor srgb;
+    srgb.texture = {{1}, 1, 1};
+    srgb.format = RenderTextureFormat::Rgba8UnormSrgb;
+    const auto view = fixture.resources->CreateTextureView(srgb, texture);
+    REQUIRE(view.HasValue());
+    const auto readback = fixture.resources->Readback(texture, 0, bytes.size());
+    REQUIRE(readback.HasValue());
+    REQUIRE(fixture.Read(readback.Value()) == bytes);
+    fixture.resources->DestroyTextureView(view.Value());
+    fixture.resources->DestroyTexture(texture);
+    descriptor.usage = RenderTextureUsage::Sampled | RenderTextureUsage::Storage;
+    const auto writable = fixture.Texture(descriptor);
+    const auto unsupported = fixture.resources->CreateTextureView(srgb, writable);
+    REQUIRE(unsupported.HasError());
+    REQUIRE(unsupported.ErrorValue().code.Value() == "render.d3d12.view_unsupported");
 }
+
+TEST_CASE("D3D12 native descriptor creation is checked by the installed debug layer", "[renderer][d3d12][resources][warp][diagnostics]") {
+    Fixture fixture;
+    if (!fixture.debugEnabled)
+        SKIP("D3D12 diagnostic layers are unavailable; native byte/lifetime tests run independently.");
+    ComPtr<ID3D12InfoQueue> diagnostics;
+    REQUIRE(SUCCEEDED(fixture.device.As(&diagnostics)));
+    diagnostics->ClearStoredMessages();
+    RenderTextureDescriptor descriptor;
+    descriptor.extent = {4, 4};
+    descriptor.layerCount = 2;
+    descriptor.usage = RenderTextureUsage::Sampled | RenderTextureUsage::Storage | RenderTextureUsage::RenderAttachment;
+    const auto texture = fixture.Texture(descriptor);
+    RenderTextureViewDescriptor view;
+    view.texture = {{1}, 1, 1};
+    view.dimension = RenderTextureViewDimension::TwoDArray;
+    view.layerCount = 2;
+    REQUIRE(fixture.resources->CreateTextureView(view, texture).HasValue());
+    for (UINT64 index = 0; index < diagnostics->GetNumStoredMessages(); ++index) {
+        SIZE_T size = 0;
+        REQUIRE(SUCCEEDED(diagnostics->GetMessage(index, nullptr, &size)));
+        REQUIRE(size <= 1024U * 1024U);
+        std::vector<std::byte> storage(size);
+        auto *message = reinterpret_cast<D3D12_MESSAGE *>(storage.data());
+        REQUIRE(SUCCEEDED(diagnostics->GetMessage(index, message, &size)));
+        INFO(message->pDescription);
+        REQUIRE(message->Severity != D3D12_MESSAGE_SEVERITY_ERROR);
+        REQUIRE(message->Severity != D3D12_MESSAGE_SEVERITY_CORRUPTION);
+    }
+}
+
 #endif

@@ -9,6 +9,8 @@
 
 namespace Horo::Render::RenderGraphExecutionErrors {
     extern const ErrorCodeDescriptor UnsupportedWorkload;
+    extern const ErrorCodeDescriptor SubmissionObservationUnsupported;
+    extern const ErrorCodeDescriptor DeviceIncarnationExhausted;
     /** @brief Retained typed VFX work has no implemented native particle encoder. */
     extern const ErrorCodeDescriptor VfxExecutionUnavailable;
     /** @brief Complete view sorting/draw runs exceed the remaining global budget. */

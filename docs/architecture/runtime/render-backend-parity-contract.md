@@ -308,6 +308,24 @@ Encode editor GUI draw data
 Present backend frame
 ```
 
+The host routes GUI encoding through `RenderFrameScope::ComposeGui` and a
+synchronously borrowed `IGuiPassExecutor`. The scope requires successful pass
+execution, admits composition once, and aborts before presentation on cooperative
+cancellation, typed encoder failure or exception. HoroEditor supplies its existing
+engine cancellation token at this stage without allocating a second cancellation
+source. The executor owns its draw-data
+and image leases through presentation or cancellation; it cannot present or
+select another backend. The stage shares the frame's render-thread affinity.
+This extends the established frame contract because calling the editor adapter
+directly bypassed lifecycle admission. HoroEditor and the interactive UI-test
+renderer migrate their direct calls to this stage; non-GUI hosts keep the existing
+Execute/Present flow. Existing public headers retain their owning targets.
+
+The OpenGL GUI adapter binds the primary backbuffer privately and restores caller
+framebuffer/write-mask state. An offscreen caller binding must not redirect GUI
+composition into a viewport texture. Mesa/Xvfb coverage proves software execution;
+it does not qualify a macOS driver or hardware performance.
+
 The editor integration may coordinate private native state required to encode
 GUI work, but it cannot expose that state to editor screens, panels, settings,
 scene code, or the public Render API.

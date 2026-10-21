@@ -3,8 +3,10 @@
 #if defined(_WIN32) && defined(_M_X64)
 namespace Horo::Render::D3D12Detail {
     /** @copydoc Resources::Resources */
-    Resources::Resources(ID3D12Device *device, ID3D12CommandQueue *queue, const D3D12ResourceLimits &limits)
-        : device_(device), queue_(queue), limits_(limits) {
+    Resources::Resources(ID3D12Device *device, ID3D12CommandQueue *queue, const D3D12ResourceLimits &limits,
+                         D3D12ResourceTestHooks testHooks)
+        : device_(device), queue_(queue), limits_(limits), testHooks_(testHooks) {
+        heapAllocations_.reserve(limits.maximumResources);
         resources_.reserve(limits.maximumResources);
         transfers_.reserve(limits.maximumTransfers);
     }
@@ -14,10 +16,20 @@ namespace Horo::Render::D3D12Detail {
         HORO_INVARIANT_MSG(owner_ == std::this_thread::get_id(), "Destroy D3D12 resources on their owner thread.");
         // A real removed device can no longer execute outstanding work. Otherwise the host must drain.
         HORO_INVARIANT_MSG(transfers_.empty() || FAILED(device_->GetDeviceRemovedReason()), "Drain D3D12 transfers before destruction.");
+        // Records retain each heap until their native resources disappear, before their final lease releases.
+        heapAllocations_.clear();
     }
 
     /** @copydoc Resources::Initialize */
     Result<void> Resources::Initialize() {
+        if (auto checked = CheckOwner(); checked.HasError())
+            return checked;
+        if (deviceIncarnation_ != 0)
+            return Failure<void>("render.d3d12.invalid_state", "Initialize each native resource context exactly once.");
+        auto incarnation = AcquireRenderDeviceIncarnation();
+        if (incarnation.HasError())
+            return Result<void>::Failure(incarnation.ErrorValue());
+        deviceIncarnation_ = incarnation.Value();
         for (UINT index = 0; index < pools_.size(); ++index) {
             auto result =
                 pools_[index].Initialize(*device_.Get(), static_cast<D3D12_DESCRIPTOR_HEAP_TYPE>(index), limits_.maximumDescriptors);
@@ -129,14 +141,17 @@ namespace Horo::Render::D3D12Detail {
     D3D12ResourceSnapshot Resources::Snapshot() const noexcept {
         HORO_INVARIANT_MSG(owner_ == std::this_thread::get_id(), "Read resource accounting on the owner thread.");
         D3D12ResourceSnapshot result;
+        result.deviceIncarnation = deviceIncarnation_;
         result.accepting = accepting_;
         result.estimatedDescriptorHeapBytes = pools_.size() * 65536U;
         result.resourceCount = static_cast<std::uint32_t>(resources_.size());
         result.transferCount = static_cast<std::uint32_t>(transfers_.size());
+        for (const auto &heap : heapAllocations_)
+            result.committedBytes += heap->capacity;
         for (const auto &resource : resources_) {
             result.committedBytes += resource->backingBytes;
             if (resource->retired)
-                result.retiringBytes += resource->backingBytes;
+                result.retiringBytes += resource->requiredBytes;
             for (const auto &descriptor : resource->descriptors)
                 if (descriptor)
                     ++result.descriptorCount;
@@ -148,10 +163,27 @@ namespace Horo::Render::D3D12Detail {
         return result;
     }
 
-    /** @copydoc Resources::Check */
-    Result<void> Resources::Check(bool admission) const {
+    /** @copydoc Resources::CheckOwner */
+    Result<void> Resources::CheckOwner() const {
         if (owner_ != std::this_thread::get_id())
             return Failure<void>("render.d3d12.wrong_thread", "Use the initialized device's render owner thread.");
+        return Result<void>::Success();
+    }
+
+    /** @copydoc Resources::CheckTransferIdentity */
+    Result<void> Resources::CheckTransferIdentity(D3D12TransferId id) const {
+        if (auto checked = CheckOwner(); checked.HasError())
+            return checked;
+        if (!id.IsValid() || id.deviceIncarnation != deviceIncarnation_)
+            return Failure<void>("render.d3d12.transfer_invalid",
+                                 "Use an outstanding transfer from this exact admitted device incarnation.");
+        return Result<void>::Success();
+    }
+
+    /** @copydoc Resources::Check */
+    Result<void> Resources::Check(bool admission) const {
+        if (auto checked = CheckOwner(); checked.HasError())
+            return checked;
         if (admission && !accepting_)
             return Failure<void>("render.d3d12.stopping", "Resource admission is closed during shutdown.");
         const HRESULT status = device_->GetDeviceRemovedReason();
@@ -162,14 +194,14 @@ namespace Horo::Render::D3D12Detail {
     }
 
     /** @copydoc Resources::NewResource */
-    Result<std::shared_ptr<Resource>> Resources::NewResource(Resource::Kind kind) {
+    Result<std::shared_ptr<Resource>> Resources::NewResource(Resource::Kind kind, RenderResourceNativeLifetime lifetime) {
         if (auto checked = Check(); checked.HasError())
             return Result<std::shared_ptr<Resource>>::Failure(checked.ErrorValue());
         Reclaim();
         if (resources_.size() == limits_.maximumResources || nextResource_ == std::numeric_limits<std::uint64_t>::max())
             return Failure<std::shared_ptr<Resource>>("render.d3d12.resource_capacity",
                                                       "Retire resources before requesting more bounded metadata.");
-        auto result = std::make_shared<Resource>();
+        auto result = std::make_shared<Resource>(std::move(lifetime));
         result->id = nextResource_++;
         result->kind = kind;
         return Result<std::shared_ptr<Resource>>::Success(std::move(result));
@@ -191,6 +223,21 @@ namespace Horo::Render::D3D12Detail {
         Reclaim();
     }
 
+    /** @copydoc Resources::RemoveEmptyHeap */
+    void Resources::RemoveEmptyHeap(HeapAllocation &heap) noexcept {
+        if (heap.slot == std::numeric_limits<std::size_t>::max())
+            return;
+        const auto slot = heap.slot;
+        HORO_INVARIANT_MSG(slot < heapAllocations_.size() && heapAllocations_[slot].get() == &heap && heap.allocationCount == 0,
+                           "Reclaim only the exact empty native pool.");
+        heap.slot = std::numeric_limits<std::size_t>::max();
+        if (slot + 1 != heapAllocations_.size()) {
+            heapAllocations_[slot] = std::move(heapAllocations_.back());
+            heapAllocations_[slot]->slot = slot;
+        }
+        heapAllocations_.pop_back();
+    }
+
     /** @copydoc Resources::Reclaim */
     void Resources::Reclaim() noexcept {
         // One reverse pass handles ordinary parent-after-child creation; later polls handle arbitrary graphs.
@@ -200,6 +247,11 @@ namespace Horo::Render::D3D12Detail {
                 for (std::size_t slot = 0; slot < resource->descriptors.size(); ++slot)
                     if (resource->descriptors[slot])
                         pools_[slot == 4 ? 0 : slot].occupied[*resource->descriptors[slot]] = false;
+                if (resource->heap) {
+                    HORO_INVARIANT_MSG(resource->heap->allocationCount != 0, "Native heap allocation count must not underflow.");
+                    if (--resource->heap->allocationCount == 0)
+                        RemoveEmptyHeap(*resource->heap);
+                }
                 if (index != resources_.size())
                     resource = std::move(resources_.back());
                 resources_.pop_back();
