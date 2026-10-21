@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "RenderExternalImages.h"

@@ -412,3 +412,64 @@ TEST_CASE("Canonical material packing preserves integer and Bool32 scalar repres
     const auto bytes = std::bit_cast<std::array<std::byte, 4>>(expected);
     REQUIRE(std::equal(bytes.begin(), bytes.end(), packed.Value().bytes.begin()));
 }
+
+TEST_CASE("Canonical matrix packing covers the last of 32 views independently of object transform and view control",
+          "[renderer][material][matrix]") {
+    auto layout = Descriptor().layout;
+    layout.parameters = {{{1}, {1}, ShaderValueType::Float32, 4, 4, 32, 0, 64, 16, true, true},
+                         {{2}, {1}, ShaderValueType::Float32, 4, 4, 1, 2048, 0, 16, true, true},
+                         {{3}, {1}, ShaderValueType::Uint32, 1, 1, 32, 2112, 16, 0, true, true},
+                         {{4}, {1}, ShaderValueType::Uint32, 1, 1, 1, 2624, 0, 0, true, true}};
+    std::array<float, 512> worldToClip{};
+    for (std::size_t index = 0; index < worldToClip.size(); ++index)
+        worldToClip[index] = static_cast<float>(index + 100);
+    const std::array<float, 16> localToWorld{2, 0, 0, 1, 0, 3, 0, 2, 0, 0, 4, 3, 0, 0, 0, 1};
+    std::array<std::uint32_t, 32> viewLayers{};
+    for (std::size_t index = 0; index < viewLayers.size(); ++index)
+        viewLayers[index] = static_cast<std::uint32_t>((index + 7) % 32);
+    const std::array<std::uint32_t, 1> viewControl{17};
+    const std::array values{MaterialParameterValue{{1}, std::span<const float>{worldToClip}},
+                            MaterialParameterValue{{2}, std::span<const float>{localToWorld}},
+                            MaterialParameterValue{{3}, std::span<const std::uint32_t>{viewLayers}},
+                            MaterialParameterValue{{4}, std::span<const std::uint32_t>{viewControl}}};
+    auto packed = PackMaterialParameterBinding(layout, {1}, values);
+    REQUIRE(packed.HasValue());
+    REQUIRE(packed.Value().bytes.size() == 2628);
+    const auto wordAt = [&](std::size_t offset) {
+        REQUIRE(offset <= packed.Value().bytes.size() - 4);
+        std::array<std::byte, 4> bytes;
+        std::copy_n(packed.Value().bytes.begin() + offset, 4, bytes.begin());
+        return std::bit_cast<std::uint32_t>(bytes);
+    };
+    CHECK(std::bit_cast<float>(wordAt(2040)) == worldToClip[31 * 16 + 2 * 4 + 3]);
+    CHECK(std::bit_cast<float>(wordAt(2044)) == worldToClip[511]);
+    CHECK(std::bit_cast<float>(wordAt(2096)) == localToWorld[3]);
+    CHECK(wordAt(2112) == 7);
+    CHECK(wordAt(2116) == 0);
+    CHECK(wordAt(2608) == 6);
+    CHECK(wordAt(2624) == 17);
+    CHECK(wordAt(2612) == 0);
+}
+
+TEST_CASE("Canonical matrix array packing rejects malformed strides and truncated tail components", "[renderer][material][matrix]") {
+    auto layout = Descriptor().layout;
+    layout.parameters = {{{1}, {1}, ShaderValueType::Float32, 4, 4, 32, 0, 64, 16, true, true}};
+    const std::array<float, 512> components{};
+    MaterialParameterValue value{{1}, std::span<const float>{components}};
+    SECTION("matrix stride overlaps columns") {
+        layout.parameters[0].matrixStride = 15;
+    }
+    SECTION("array stride overlaps matrices") {
+        layout.parameters[0].arrayStride = 63;
+    }
+    SECTION("array stride overflows bounded block") {
+        layout.parameters[0].arrayStride = std::numeric_limits<std::uint32_t>::max();
+    }
+    SECTION("last matrix component missing") {
+        value.components = std::span<const float>{components}.first(511);
+    }
+    SECTION("block exceeds canonical byte limit") {
+        layout.parameters[0].byteOffset = 65536 - 2047;
+    }
+    ErrorIs(PackMaterialParameterBinding(layout, {1}, std::span{&value, 1}), MaterialBindingErrors::InvalidDescriptor);
+}

@@ -1,4 +1,6 @@
 #if defined(__linux__)
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <dlfcn.h>
@@ -209,7 +211,7 @@ namespace {
             backend->DestroyGraphicsPipeline(native);
             backend->DestroyShaderModule(vertex);
             backend->DestroyShaderModule(fragment);
-            backend->Shutdown();
+            Test::RequireDrainedOwner(*backend);
             CHECK(backend->QueryPipelineDeviceIdentity().HasError());
         }
     };
