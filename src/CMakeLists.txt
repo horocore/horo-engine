@@ -2824,6 +2824,7 @@ add_library(HoroEditorModel STATIC
         editor/document/SceneDocument.cpp
         editor/document/SceneDocumentTransaction.cpp
         editor/document/InspectorBehaviorBinding.cpp
+        editor/document/NavigationInspector.cpp
         editor/document/PhysicsInspector.cpp
         editor/document/ColliderEditing.cpp
         editor/document/ColliderGeometry.cpp
@@ -3218,6 +3219,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/inspector/InspectorPanel.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelComponentWidgets.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelCharacterWidgets.cpp
+            editor/screens/workspace/panels/inspector/NavigationInspectorSession.cpp
+            editor/screens/workspace/panels/inspector/InspectorPanelNavigation.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysics.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsBody.cpp
             editor/screens/workspace/panels/inspector/InspectorPanelPhysicsCollider.cpp
@@ -3278,6 +3281,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorContributions.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorApproval.cpp
+        editor/screens/workspace/EditorWorkspaceControllerNavigationInspector.cpp
         editor/screens/workspace/EditorWorkspaceControllerPhysics.cpp
             editor/screens/workspace/EditorWorkspaceControllerViewportCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerContentBrowser.cpp

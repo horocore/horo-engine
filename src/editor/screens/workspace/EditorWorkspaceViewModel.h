@@ -4,6 +4,7 @@
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
+#include "Horo/Editor/NavigationInspector.h"
 #include "Horo/Editor/PhysicsInspector.h"
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceFileOpenService.h"
@@ -123,6 +124,7 @@ namespace Horo::Editor {
         UpdateLightComponent,
         UpdateTriggerVolumeComponent,
         UpdatePhysicsComponents,
+        UpdateNavigationComponents,
         SelectPhysicsColliders,
         CommitPhysicsColliders,
         UpdateAudioSourceComponent,
@@ -247,6 +249,17 @@ namespace Horo::Editor {
         PhysicsInspectorValues values;
     };
 
+    /** @brief Detached complete navigation gesture; host proves exact owner, descriptors, sources and selection before publication. */
+    struct NavigationInspectorRequest final {
+        SceneTransactionContext context;
+        std::uint64_t selectionRevision{};
+        std::vector<SceneObjectId> objects;
+        std::optional<PrefabHierarchyTarget> prefab;
+        std::shared_ptr<const PrefabHierarchyProjection> publication;
+        std::vector<NavigationDefinitionSnapshot> definitions;
+        std::vector<NavigationInspectorEdit> edits;
+    };
+
     /** @brief Detached collider gesture tied to one exact document and collider-selection generation. */
     struct ColliderViewportRequest final {
         SceneTransactionContext context;
@@ -278,6 +291,7 @@ namespace Horo::Editor {
         std::optional<Runtime::LightComponent> lightPayload = std::nullopt;
         std::optional<Runtime::TriggerVolumeComponent> triggerVolumePayload = std::nullopt;
         std::optional<PhysicsInspectorRequest> physicsPayload;
+        std::optional<NavigationInspectorRequest> navigationPayload;
         std::optional<ColliderViewportRequest> colliderPayload;
         std::optional<Runtime::AudioSourceComponent> audioSourcePayload = std::nullopt;
         std::optional<Runtime::CharacterControllerComponent> characterPayload = std::nullopt;
@@ -346,6 +360,8 @@ namespace Horo::Editor {
         std::uint64_t selectionRevision{};
         std::vector<InspectorProviderApproval> inspectorApprovals;
         SceneTransactionContext physicsContext;
+        std::vector<NavigationDefinitionSnapshot> navigationDefinitions;
+        std::string navigationEditError;
         std::uint64_t physicsSelectionRevision{};
         std::string physicsEditError;
         std::vector<ColliderPresentation> viewportColliders;
