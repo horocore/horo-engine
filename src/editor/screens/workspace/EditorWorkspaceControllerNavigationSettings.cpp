@@ -101,6 +101,7 @@ namespace Horo::Editor {
     void EditorWorkspaceController::UpdateNavigationSettingsProjection() {
         if (!m_navigationSettings)
             return;
+        RefreshNavigationInspectorDefinitions();
         if (const auto asset = m_navigationSettings->TakeOpenDefinitionRequest())
             OpenNavigationDefinitionTab(*asset);
         UpdateNavigationDocumentTabs();

@@ -1212,10 +1212,12 @@ horo_configure_target_header_boundary(HoroRenderVulkan)
 horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
+    Horo/Editor/PartitionedWorldWorkspace.h
     Horo/Editor/NavigationDefinitionDocument.h
     Horo/Editor/NavigationSettingsWorkflow.h
     Horo/Editor/SceneDocumentTransaction.h
     Horo/Editor/InspectorBehaviorBinding.h
+    Horo/Editor/NavigationInspector.h
     Horo/Editor/PhysicsInspector.h
     Horo/Editor/EditorDataBus.h
 )
