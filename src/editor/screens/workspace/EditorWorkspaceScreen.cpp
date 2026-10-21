@@ -701,12 +701,19 @@ namespace Horo::Editor {
                 return Result<std::unique_ptr<UiInspectorResources>>::Success(nullptr);
             }
 
+            /** @brief Capture gameplay borrows and the selected play factory at the host composition boundary. */
+            EditorWorkspaceGameplayServices BindGameplayServices(const std::filesystem::path &projectRoot) {
+                const auto *environment = services_.TryGet<Application::GameplayBuildEnvironment>();
+                return {.builds = services_.TryGet<Application::GameplayBuildService>(),
+                        .environment = environment ? *environment : Application::GameplayBuildEnvironment{},
+                        .retirements = host_.GameplayRetirements(),
+                        .sceneFactory = BindPlayFactory(projectRoot)};
+            }
+
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
-                const Application::GameplayBuildEnvironment *gameplayEnvironment =
-                    services_.TryGet<Application::GameplayBuildEnvironment>();
                 const auto session = CreateDocumentSessionOwner();
                 if (session.HasError())
                     return Result<void>::Failure(session.ErrorValue());
@@ -721,34 +728,31 @@ namespace Horo::Editor {
                 if (pcgComposition.HasError())
                     return Result<void>::Failure(pcgComposition.ErrorValue());
                 auto pcgCatalog = std::move(pcgComposition).Value();
-                controller_ = std::make_unique<
-                    EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
-                                               EditorWorkspaceDependencies{
-                                                   .mutableAssetRegistry = projectServices_.assetRegistry,
-                                                   .uiInspectorResources = uiInspectorResources.get(),
-                                                   .collision = {.inventory = projectServices_.collisionInventory,
-                                                                 .activation = projectServices_.collisionActivation,
-                                                                 .previewReceipt = projectServices_.previewCollisionReceipt},
-                                                   .mutations = projectServices_.mutations,
-                                                   .durableFiles = projectServices_.durableFiles,
-                                                   .assetRegistrySource = std::move(registrySource).Value(),
-                                                   .importerCatalog = projectServices_.importerCatalog,
-                                                   .jobs = &services_.Get<JobSystem>(),
-                                                   .gameplay = {.builds = services_.TryGet<Application::GameplayBuildService>(),
-                                                                .environment = gameplayEnvironment != nullptr
-                                                                                   ? *gameplayEnvironment
-                                                                                   : Application::GameplayBuildEnvironment{},
-                                                                .retirements = host_.GameplayRetirements(),
-                                                                .sceneFactory = BindPlayFactory(projectRoot)},
-                                                   .localization = &context_.localization,
-                                                   .engineEvents = &context_.engineEvents,
-                                                   .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
-                                                   .documentSessionOwner = session.Value(),
-                                                   .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
-                                                   .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-                                                   .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
-                                                   .pcg = std::move(pcgCatalog),
-                                               });
+                controller_ =
+                    std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
+                                                                EditorWorkspaceDependencies{
+                                                                    .mutableAssetRegistry = projectServices_.assetRegistry,
+                                                                    .uiInspectorResources = uiInspectorResources.get(),
+                                                                    .collision = {.inventory = projectServices_.collisionInventory,
+                                                                                  .activation = projectServices_.collisionActivation,
+                                                                                  .previewReceipt =
+                                                                                      projectServices_.previewCollisionReceipt},
+                                                                    .mutations = projectServices_.mutations,
+                                                                    .durableFiles = projectServices_.durableFiles,
+                                                                    .assetRegistrySource = std::move(registrySource).Value(),
+                                                                    .importerCatalog = projectServices_.importerCatalog,
+                                                                    .jobs = &services_.Get<JobSystem>(),
+                                                                    .gameplay = BindGameplayServices(projectRoot),
+                                                                    .localization = &context_.localization,
+                                                                    .engineEvents = &context_.engineEvents,
+                                                                    .networkDebugger =
+                                                                        services_.TryGet<Application::NetworkDebuggerService>(),
+                                                                    .documentSessionOwner = session.Value(),
+                                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
+                                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
+                                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                                                    .pcg = std::move(pcgCatalog),
+                                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
                     controller_.reset();

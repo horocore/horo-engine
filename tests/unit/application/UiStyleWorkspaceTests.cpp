@@ -6,6 +6,21 @@ using namespace Horo::Editor;
 using namespace Horo::Runtime::Ui;
 using namespace Horo::UiStyleTest;
 
+namespace {
+    /** @brief Produce the complete authored edit used to verify transaction and persistence preservation. */
+    UiElementPresentation EditedPresentation(const UiElementPresentation &baseline) {
+        auto value = baseline;
+        value.inlineStyle = {
+            {CoreUiStylePropertyId(UiCoreStyleProperty::Fill), UiStyleValueSource::Literal(UiStyleColor{0.8F, 0.2F, 0.1F, 1}), false}};
+        value.state.focusable = false;
+        value.accessibility =
+            UiElementAccessibility{.role = UiAccessibilityRole::Application,
+                                   .name = UiLocalizedText::Create(UiMessageKey::Create("game.ui", "canvas").Value(), "Accessible canvas")
+                                               .Value()};
+        return value;
+    }
+}  // namespace
+
 TEST_CASE("Real tracked style assets cook load and activate through the actual workspace factory", "[application][ui][style][pipeline]") {
     Project project;
     const auto before = project.resources->Capture();
@@ -49,14 +64,7 @@ TEST_CASE("Real factory style capability validates canonical edits before histor
     const auto resources = project.resources->Capture();
     const auto context = Context(owner, resources);
     const auto baseline = *owner.Document().Elements()[0].presentation;
-    auto value = baseline;
-    value.inlineStyle = {
-        {CoreUiStylePropertyId(UiCoreStyleProperty::Fill), UiStyleValueSource::Literal(UiStyleColor{0.8F, 0.2F, 0.1F, 1}), false}};
-    value.state.focusable = false;
-    value.accessibility =
-        UiElementAccessibility{.role = UiAccessibilityRole::Application,
-                               .name =
-                                   UiLocalizedText::Create(UiMessageKey::Create("game.ui", "canvas").Value(), "Accessible canvas").Value()};
+    auto value = EditedPresentation(baseline);
     UiInspectorDraft draft;
     REQUIRE(draft.Begin(context, {.layout = baseline.layout}));
     const auto prepared = draft.PreparePresentation(context, value, true);

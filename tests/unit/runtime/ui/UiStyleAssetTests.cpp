@@ -21,6 +21,23 @@ namespace {
             {CoreUiStylePropertyId(UiCoreStyleProperty::Fill), UiStyleValueSource::Literal(UiStyleColor{0.2F, 0.3F, 0.4F, 1}), false}};
         return document;
     }
+    enum class AssignmentContainer {
+        Namespace,
+        NamespaceState,
+        Class,
+        ClassState
+    };
+
+    /** @brief Inspect authored assignment order through the decoded typed container. */
+    const std::vector<UiStyleAssignment> &Assignments(const UiStyleAssetDocument &document, const AssignmentContainer container) {
+        if (container == AssignmentContainer::NamespaceState)
+            return document.style.states.at(0).assignments;
+        if (container == AssignmentContainer::Class)
+            return document.style.classes.at(0).assignments;
+        if (container == AssignmentContainer::ClassState)
+            return document.style.classes.at(0).states.at(0).assignments;
+        return document.style.assignments;
+    }
 }  // namespace
 
 TEST_CASE("Canonical style source and cooked payload preserve full sidecar identity and one explicit schema",
@@ -44,6 +61,43 @@ TEST_CASE("Canonical style source and cooked payload preserve full sidecar ident
     auto changed = schema;
     changed.fingerprint.bytes[31] ^= 1;
     CHECK(DecodeCookedUiStyleAsset(cooked.Value(), Asset(), changed).HasError());
+}
+
+TEST_CASE("Style encoding preserves authored assignment order and rejects repeated property identities", "[runtime_ui][style][asset]") {
+    auto document = Document();
+    auto *assignments = &document.style.assignments;
+    AssignmentContainer container{};
+    SECTION("namespace assignments") {
+        container = AssignmentContainer::Namespace;
+    }
+    SECTION("namespace state assignments") {
+        document.style.states.push_back({UiVisualStateMask{UiVisualState::Hovered}, {}, UiStateLayer::Pointer, {}});
+        assignments = &document.style.states.back().assignments;
+        container = AssignmentContainer::NamespaceState;
+    }
+    SECTION("class assignments") {
+        document.style.classes.push_back({.id = UiStyleClassId::Create(Asset().Bytes()).Value()});
+        assignments = &document.style.classes.back().assignments;
+        container = AssignmentContainer::Class;
+    }
+    SECTION("class state assignments") {
+        document.style.classes.push_back({.id = UiStyleClassId::Create(Asset().Bytes()).Value()});
+        document.style.classes.back().states.push_back({UiVisualStateMask{UiVisualState::Hovered}, {}, UiStateLayer::Pointer, {}});
+        assignments = &document.style.classes.back().states.back().assignments;
+        container = AssignmentContainer::ClassState;
+    }
+    *assignments = {{CoreUiStylePropertyId(UiCoreStyleProperty::Fill), UiStyleValueSource::Literal(UiStyleColor{0.2F, 0.3F, 0.4F, 1}),
+                     false},
+                    {CoreUiStylePropertyId(UiCoreStyleProperty::Width), UiStyleValueSource::Literal(UiStyleDimension{42}), true}};
+    const auto encoded = SerializeUiStyleAsset(document);
+    REQUIRE(encoded.HasValue());
+    const auto decoded = DeserializeUiStyleAsset(encoded.Value());
+    REQUIRE(decoded.HasValue());
+    CHECK(Assignments(decoded.Value(), container) == *assignments);
+    auto duplicate = assignments->front();
+    duplicate.sealed = true;
+    assignments->push_back(duplicate);
+    CHECK(SerializeUiStyleAsset(document).HasError());
 }
 
 TEST_CASE("Style source rejects unsupported unknown duplicate oversized and malformed declarations", "[runtime_ui][style][asset]") {

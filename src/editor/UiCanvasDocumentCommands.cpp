@@ -45,7 +45,7 @@ namespace Horo::Editor {
                 if (depth >= MaximumUiTreeDepth || rows.size() == elements.size())
                     return Failure<std::vector<UiCanvasHierarchyRow>>(UiErrors::DocumentHierarchyInvalid);
                 const auto &element = elements[index];
-                rows.push_back({element.id, element.parent, depth, element.type.Value()});
+                rows.emplace_back(element.id, element.parent, depth, element.type.Value());
                 append(element.id, depth + 1);
             }
             if (rows.size() != elements.size())
@@ -72,7 +72,7 @@ namespace Horo::Editor {
                     return Result<UiDocument>::Failure(added.ErrorValue());
             std::map<UiElementId, const UiDocumentElement *> indexed;
             for (const auto &element : elements)
-                indexed.emplace(element.id, &element);
+                indexed.try_emplace(element.id, &element);
             for (const auto &row : rows.Value())
                 if (const auto added = builder.AddElement(*indexed.at(row.element)); added.HasError())
                     return Result<UiDocument>::Failure(added.ErrorValue());
@@ -99,8 +99,7 @@ namespace Horo::Editor {
             const auto found = Find(elements, parent);
             if (found == elements.end())
                 return Failure<std::size_t>(UiErrors::DocumentHierarchyInvalid);
-            const auto *descriptor = UiElementCatalog::Find(found->type.Value());
-            if (!descriptor || !descriptor->admitsChildren)
+            if (const auto *descriptor = UiElementCatalog::Find(found->type.Value()); !descriptor || !descriptor->admitsChildren)
                 return Failure<std::size_t>(UiErrors::DocumentHierarchyInvalid);
             if (!before.IsValid())
                 return Result<std::size_t>::Success(elements.size());
@@ -162,8 +161,8 @@ namespace Horo::Editor {
         /** @brief Captures the original semantic move position without retaining document pointers. */
         std::optional<UiCanvasElementCommand> Inverse(const UiDocument &document, const UiCanvasElementCommand &command) {
             if (const auto *presentation = std::get_if<UiCanvasSetPresentation>(&command)) {
-                const auto found = std::ranges::find(document.Elements(), presentation->element, &UiDocumentElement::id);
-                if (found != document.Elements().end())
+                if (const auto found = std::ranges::find(document.Elements(), presentation->element, &UiDocumentElement::id);
+                    found != document.Elements().end())
                     return UiCanvasElementCommand{UiCanvasSetPresentation{found->id, found->presentation}};
                 return std::nullopt;
             }
@@ -203,18 +202,19 @@ namespace Horo::Editor {
             return Result<void>::Failure(next.ErrorValue());
         try {
             std::vector<Runtime::Ui::UiDocumentElement> elements{Document().Elements().begin(), Document().Elements().end()};
-            const auto applied = std::visit([&](const auto &value) {
+            if (const auto applied = std::visit(
+                    [&](const auto &value) {
                 return Apply(elements, value, Document());
             }, command);
-            if (applied.HasError())
+                applied.HasError())
                 return applied;
             auto candidate = Rebuild(Document(), elements);
             if (candidate.HasError())
                 return Result<void>::Failure(candidate.ErrorValue());
             if (std::ranges::equal(candidate.Value().Elements(), Document().Elements()))
                 return Result<void>::Success();
-            const auto afterSelection = std::visit([](const auto &value) {
-                if constexpr (std::is_same_v<std::decay_t<decltype(value)>, UiCanvasCreateElement>)
+            const auto afterSelection = std::visit([]<typename T>(const T &value) {
+                if constexpr (std::is_same_v<T, UiCanvasCreateElement>)
                     return value.id;
                 else
                     return value.element;
@@ -327,7 +327,7 @@ namespace Horo::Editor {
             std::vector<UiCanvasHierarchyRow> filtered;
             for (std::size_t index = 0; index < rows.Value().size(); ++index)
                 if (visible[index])
-                    filtered.push_back(std::move(rows.Value()[index]));
+                    filtered.push_back(rows.Value()[index]);
             return Result<std::vector<UiCanvasHierarchyRow>>::Success(std::move(filtered));
         } catch (const std::bad_alloc &) {
             return Failure<std::vector<UiCanvasHierarchyRow>>(UiErrors::CapacityExceeded);
@@ -340,10 +340,11 @@ namespace Horo::Editor {
             return Failure(UiCanvasDocumentErrors::Closed);
         if (expected != currentState_)
             return Failure(UiCanvasDocumentErrors::Conflict);
-        const bool legacyRoot = Document().Elements().empty() && std::ranges::any_of(Document().Canvases(), [element](const auto &canvas) {
+        if (const bool legacyRoot = Document().Elements().empty() && std::ranges::any_of(Document().Canvases(),
+                                                                                         [element](const auto &canvas) {
             return canvas.rootElement == element;
         });
-        if (element.IsValid() && !legacyRoot &&
+            element.IsValid() && !legacyRoot &&
             std::ranges::find(Document().Elements(), element, &UiDocumentElement::id) == Document().Elements().end())
             return Failure(UiErrors::DocumentHierarchyInvalid);
         selection_ = element;

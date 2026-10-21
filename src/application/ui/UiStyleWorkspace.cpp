@@ -47,6 +47,30 @@ namespace Horo::Application {
             };
             return phase;
         }
+
+        /** @brief Cook the pinned source closure while preserving registry and source verification before publication. */
+        Result<Assets::AssetCookReport> CookCaptured(JobSystem &jobs, const UiStyleWorkspaceConfig &config,
+                                                     const std::shared_ptr<const Capture> &capture,
+                                                     const Assets::AssetRegistryRevision revision, const RuntimeStyleGeneration generation,
+                                                     const CancellationToken &cancellation) {
+            auto catalog = ResourceCatalog(config);
+            if (catalog.HasError())
+                return Result<Assets::AssetCookReport>::Failure(catalog.ErrorValue());
+            auto cook = config.cook;
+            cook.registry = capture->selected;
+            cook.pinnedInputs = capture->inputs;
+            cook.dependentPhase = StylePhase(capture, cook.target, generation);
+            const auto previous = cook.validateHostInputs;
+            cook.validateHostInputs = [&config, revision, previous, capture, cancellation]() -> Result<void> {
+                if (config.currentAssets() != revision)
+                    return Result<void>::Failure(MakeError(UiErrors::AssetRegistryStale));
+                if (const auto unchanged = capture->inputs->VerifyUnchanged(cancellation); unchanged.HasError())
+                    return unchanged;
+                return previous ? previous() : Result<void>::Success();
+            };
+            Assets::AssetCookService service{jobs, std::move(catalog).Value()};
+            return service.Cook(cook, cancellation);
+        }
     }  // namespace
 
     /** @copydoc PrepareUiStyleWorkspace */
@@ -78,27 +102,11 @@ namespace Horo::Application {
         if (captured.HasError())
             return R::Failure(captured.ErrorValue());
         auto capture = std::make_shared<const Capture>(std::move(captured).Value());
-        auto catalog = ResourceCatalog(config);
-        if (catalog.HasError())
-            return R::Failure(catalog.ErrorValue());
-        auto cook = config.cook;
-        cook.registry = capture->selected;
-        cook.pinnedInputs = capture->inputs;
-        cook.dependentPhase = StylePhase(capture, cook.target, generation);
-        const auto previous = cook.validateHostInputs;
-        cook.validateHostInputs = [&config, revision, previous, capture, cancellation]() -> Result<void> {
-            if (config.currentAssets() != revision)
-                return Result<void>::Failure(MakeError(UiErrors::AssetRegistryStale));
-            if (const auto unchanged = capture->inputs->VerifyUnchanged(cancellation); unchanged.HasError())
-                return unchanged;
-            return previous ? previous() : Result<void>::Success();
-        };
-        Assets::AssetCookService service{jobs, std::move(catalog).Value()};
-        auto cooked = service.Cook(cook, cancellation);
+        auto cooked = CookCaptured(jobs, config, capture, revision, generation, cancellation);
         if (cooked.HasError())
             return R::Failure(cooked.ErrorValue());
         auto candidate =
-            LoadCandidate(jobs, config, *capture, cooked.Value().generation, workspace, request, theme, generation, cancellation);
+            LoadCandidate(jobs, config, *capture, cooked.Value().generation, {workspace, request, theme, generation}, cancellation);
         if (candidate.HasError())
             return candidate;
         if (config.currentAssets() != revision)

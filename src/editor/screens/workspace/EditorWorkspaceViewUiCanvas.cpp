@@ -31,15 +31,16 @@ namespace Horo::Editor {
                     }
             } else {
                 bool passedNext = false;
-                for (std::size_t next = index + 1; next < document.rows.size(); ++next)
-                    if (document.rows[next].parent == selected->parent) {
-                        if (passedNext) {
-                            output.command = EditorWorkspaceViewCommand::UiCanvasMove;
-                            output.uiCanvasMove = UiCanvasMoveElement{selected->element, selected->parent, document.rows[next].element};
-                            return;
-                        }
-                        passedNext = true;
+                for (std::size_t next = index + 1; next < document.rows.size(); ++next) {
+                    if (document.rows[next].parent != selected->parent)
+                        continue;
+                    if (passedNext) {
+                        output.command = EditorWorkspaceViewCommand::UiCanvasMove;
+                        output.uiCanvasMove = UiCanvasMoveElement{selected->element, selected->parent, document.rows[next].element};
+                        return;
                     }
+                    passedNext = true;
+                }
                 if (passedNext) {
                     output.command = EditorWorkspaceViewCommand::UiCanvasMove;
                     output.uiCanvasMove = UiCanvasMoveElement{selected->element, selected->parent, {}};
@@ -85,8 +86,7 @@ namespace Horo::Editor {
                          EditorWorkspaceViewCommandData &output) {
             const auto selected = std::ranges::find(document.rows, document.selection, &UiCanvasHierarchyRow::element);
             const auto *parentType = selected == document.rows.end() ? nullptr : Runtime::Ui::UiElementCatalog::Find(selected->label);
-            const bool canCreate = !document.selection.IsValid() || (parentType && parentType->admitsChildren);
-            if (Ui::Button(
+            if (const bool canCreate = !document.selection.IsValid() || (parentType && parentType->admitsChildren); Ui::Button(
                     {.label = Text(context, "workspace.ui_canvas.create").c_str(), .enabled = canCreate, .font = context.theme.fonts.sans}))
                 ImGui::OpenPopup("palette");
             if (Ui::BeginMenuPopup("palette")) {

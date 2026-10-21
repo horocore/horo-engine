@@ -16,11 +16,17 @@ namespace Horo::Application::UiStyleWorkspaceInternal {
     /** @brief Build the single schema from actual verified first-phase resource envelopes. */
     [[nodiscard]] Result<Runtime::Ui::UiStyleSchema> Schema(const Capture &capture,
                                                             std::span<const Assets::AssetCookCandidateArtifactView> resources);
+
+    /** @brief Exact owner-issued identity carried unchanged through one synchronous candidate load. */
+    struct CandidateIdentity final {
+        Assets::AssetId workspace;
+        std::uint64_t request{};
+        Runtime::Ui::RuntimeStyleAssetId theme;
+        Runtime::Ui::RuntimeStyleGeneration generation;
+    };
+
     /** @brief Load one pinned manifest through the normal provider and revalidate all domain payloads. */
     [[nodiscard]] Result<UiStyleWorkspaceCandidate> LoadCandidate(JobSystem &jobs, const UiStyleWorkspaceConfig &config,
                                                                   const Capture &capture, const Assets::AssetCookGeneration &generation,
-                                                                  Assets::AssetId workspace, std::uint64_t request,
-                                                                  Runtime::Ui::RuntimeStyleAssetId theme,
-                                                                  Runtime::Ui::RuntimeStyleGeneration styleGeneration,
-                                                                  const CancellationToken &cancellation);
+                                                                  const CandidateIdentity &identity, const CancellationToken &cancellation);
 }  // namespace Horo::Application::UiStyleWorkspaceInternal

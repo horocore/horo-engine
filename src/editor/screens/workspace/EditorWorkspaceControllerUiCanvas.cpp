@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <limits>
 
 namespace Horo::Editor {
@@ -12,9 +13,8 @@ namespace Horo::Editor {
         Result<Runtime::Ui::UiElementId> NewElementId(const UiCanvasDocument &document) {
             using namespace Runtime::Ui;
             for (std::size_t probe = 0; probe <= MaximumUiDocumentElements; ++probe) {
-                const auto seed = Assets::AssetId::FromBytes(document.Document().Id().Bytes()).ToString() + ":" +
-                                  std::to_string(document.Document().Revision().Value()) + ":" +
-                                  std::to_string(document.CurrentState().value) + ":" + std::to_string(probe);
+                const auto seed = std::format("{}:{}:{}:{}", Assets::AssetId::FromBytes(document.Document().Id().Bytes()).ToString(),
+                                              document.Document().Revision().Value(), document.CurrentState().value, probe);
                 const auto hash = ComputeSha256(std::as_bytes(std::span{seed.data(), seed.size()}));
                 SerializedUiId bytes{};
                 std::copy_n(hash.bytes.begin(), bytes.size(), bytes.begin());
@@ -66,6 +66,29 @@ namespace Horo::Editor {
                     return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
             }
         }
+
+        /** @brief Refresh cached authored rows and selected values only after their canonical fences change. */
+        void RefreshDocumentProjection(const UiCanvasDocument &owner, UiCanvasWorkspaceDocument &projection) {
+            const bool sourceChanged = projection.state != owner.CurrentState();
+            const bool selectionChanged = projection.selection != owner.Selection();
+            if (selectionChanged && projection.selectionRevision != std::numeric_limits<std::uint64_t>::max())
+                ++projection.selectionRevision;
+            if (sourceChanged || selectionChanged) {
+                const auto elements = owner.Document().Elements();
+                const auto selected = std::ranges::find(elements, owner.Selection(), &Runtime::Ui::UiDocumentElement::id);
+                projection.selectedElement = selected == elements.end() ? std::nullopt : std::optional{*selected};
+                projection.documentRevision = owner.Document().Revision();
+            }
+            if (sourceChanged) {
+                if (auto rows = owner.Hierarchy(projection.search); rows.HasValue())
+                    projection.rows = std::move(rows).Value();
+                else {
+                    projection.rows.clear();
+                    projection.diagnostic = rows.ErrorValue();
+                }
+                projection.state = owner.CurrentState();
+            }
+        }
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::UpdateUiCanvasResources */
@@ -93,26 +116,7 @@ namespace Horo::Editor {
                 projections.push_back({.identity = owner.Identity()});
                 projection = projections.end() - 1;
             }
-            const bool sourceChanged = projection->state != owner.CurrentState();
-            const bool selectionChanged = projection->selection != owner.Selection();
-            if (selectionChanged && projection->selectionRevision != std::numeric_limits<std::uint64_t>::max())
-                ++projection->selectionRevision;
-            if (sourceChanged || selectionChanged) {
-                const auto elements = owner.Document().Elements();
-                const auto selected = std::ranges::find(elements, owner.Selection(), &Runtime::Ui::UiDocumentElement::id);
-                projection->selectedElement = selected == elements.end() ? std::nullopt : std::optional{*selected};
-                projection->documentRevision = owner.Document().Revision();
-            }
-            if (sourceChanged) {
-                auto rows = owner.Hierarchy(projection->search);
-                if (rows.HasValue())
-                    projection->rows = std::move(rows).Value();
-                else {
-                    projection->rows.clear();
-                    projection->diagnostic = rows.ErrorValue();
-                }
-                projection->state = owner.CurrentState();
-            }
+            RefreshDocumentProjection(owner, *projection);
             projection->inspectorAssets = resources.assets.Revision();
             projection->inspectorStyles = resources.StyleGeneration();
             projection->inspectorResourcePublication = resources.publication;
@@ -131,7 +135,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::SaveUiCanvasSource */
-    Result<void> EditorWorkspaceController::SaveUiCanvasSource(UiCanvasDocument &owner) {
+    Result<void> EditorWorkspaceController::SaveUiCanvasSource(UiCanvasDocument &owner) const {
         if (!m_mutations)
             return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
         NativeDurableFileSystem files;

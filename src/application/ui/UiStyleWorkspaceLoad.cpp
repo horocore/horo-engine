@@ -113,9 +113,8 @@ namespace Horo::Application::UiStyleWorkspaceInternal {
 
     /** @copydoc LoadCandidate */
     Result<UiStyleWorkspaceCandidate> LoadCandidate(JobSystem &jobs, const UiStyleWorkspaceConfig &config, const Capture &capture,
-                                                    const Assets::AssetCookGeneration &generation, const Assets::AssetId workspace,
-                                                    const std::uint64_t request, const RuntimeStyleAssetId theme,
-                                                    const RuntimeStyleGeneration styleGeneration, const CancellationToken &cancellation) {
+                                                    const Assets::AssetCookGeneration &generation, const CandidateIdentity &identity,
+                                                    const CancellationToken &cancellation) {
         using R = Result<UiStyleWorkspaceCandidate>;
         auto inventory = LoadInventory(jobs, config, capture, generation, cancellation);
         if (inventory.HasError())
@@ -127,22 +126,22 @@ namespace Horo::Application::UiStyleWorkspaceInternal {
         auto documents = LoadedNamespaces(capture, loaded, schema.Value());
         if (documents.HasError())
             return R::Failure(documents.ErrorValue());
-        auto registry = PrepareUiStyleRegistry(documents.Value(), schema.Value(), styleGeneration);
+        auto registry = PrepareUiStyleRegistry(documents.Value(), schema.Value(), identity.generation);
         if (registry.HasError())
             return R::Failure(registry.ErrorValue());
-        if (!registry.Value().HasAsset(theme))
+        if (!registry.Value().HasAsset(identity.theme))
             return R::Failure(MakeError(UiErrors::StyleReferenceInvalid));
         if (const auto unchanged = capture.inputs->VerifyUnchanged(cancellation); unchanged.HasError())
             return R::Failure(unchanged.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return R::Failure(MakeError(UiErrors::AssetLoadCancelled));
-        return R::Success({workspace,
-                           request,
+        return R::Success({identity.workspace,
+                           identity.request,
                            capture.inputs->Registry().Revision(),
                            generation,
                            std::move(schema).Value(),
                            std::make_shared<const RuntimeStyleRegistry>(std::move(registry).Value()),
-                           theme,
+                           identity.theme,
                            std::move(loaded.bytes),
                            {}});
     }

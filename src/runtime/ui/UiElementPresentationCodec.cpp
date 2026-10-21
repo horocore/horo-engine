@@ -109,8 +109,9 @@ namespace Horo::Runtime::Ui::PresentationCodec {
 
         /** @brief Encodes optional anchor coordinates and their canonical alignment policy. */
         Out Axis(const UiLayoutAnchorAxis &axis) {
-            return Out::array({axis.start ? Out(*axis.start) : Out(nullptr), axis.end ? Out(*axis.end) : Out(nullptr),
-                               static_cast<std::uint8_t>(axis.alignment), axis.preserveSize});
+            return Out::array({axis.start.has_value() ? Out(*axis.start) : Out(nullptr),
+                               axis.end.has_value() ? Out(*axis.end) : Out(nullptr), static_cast<std::uint8_t>(axis.alignment),
+                               axis.preserveSize});
         }
 
         /** @brief Decodes one anchor axis retaining explicit absence. */
@@ -245,8 +246,7 @@ namespace Horo::Runtime::Ui::PresentationCodec {
         /** @brief Encodes the closed existing style value variant, without encoding editor-specific properties. */
         Out Literal(const UiStyleValue &value) {
             Out payload;
-            std::visit([&](const auto &typed) {
-                using T = std::decay_t<decltype(typed)>;
+            std::visit([&]<typename T>(const T &typed) {
                 if constexpr (std::is_same_v<T, UiStyleColor>)
                     payload = Color(typed);
                 else if constexpr (std::is_same_v<T, UiStyleDimension>)
@@ -311,7 +311,7 @@ namespace Horo::Runtime::Ui::PresentationCodec {
         }
 
         /** @brief Encodes an explicitly qualified style class reference. */
-        Out Class(const UiStyleClassReference value) {
+        Out Class(const UiStyleClassReference &value) {
             return value.IsValid() ? Out::array({Id(value.asset), Id(value.id)}) : Out(nullptr);
         }
 
@@ -332,7 +332,8 @@ namespace Horo::Runtime::Ui::PresentationCodec {
 
     /** @copydoc Encode */
     nlohmann::ordered_json Encode(const UiElementPresentation &presentation) {
-        Out classes = Out::array(), assignments = Out::array();
+        Out classes = Out::array();
+        Out assignments = Out::array();
         for (const auto &entry : presentation.classes)
             classes.push_back(Class(entry));
         for (const auto &assignment : presentation.inlineStyle) {
@@ -372,7 +373,8 @@ namespace Horo::Runtime::Ui::PresentationCodec {
             if (!value.at("styleAsset").is_null())
                 presentation.styleAsset = Identity<RuntimeStyleAssetId>(value.at("styleAsset"));
             presentation.typeClass = Class(value.at("typeClass"));
-            const auto &classes = value.at("classes"), &assignments = value.at("inlineStyle");
+            const auto &classes = value.at("classes");
+            const auto &assignments = value.at("inlineStyle");
             if (!classes.is_array() || classes.size() > MaximumUiStyleClasses || !assignments.is_array() ||
                 assignments.size() > MaximumUiStyleProperties)
                 throw std::invalid_argument("presentation capacity");

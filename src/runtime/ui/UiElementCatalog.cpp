@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <utility>
 
 namespace Horo::Runtime::Ui {
@@ -43,13 +44,13 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiElementCatalog::Find(UiElementKind) */
     const UiElementTypeDescriptor *UiElementCatalog::Find(const UiElementKind kind) noexcept {
         const auto found = std::ranges::find(Types, kind, &UiElementTypeDescriptor::kind);
-        return found == Types.end() ? nullptr : &*found;
+        return found == Types.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc UiElementCatalog::Find(std::string_view) */
     const UiElementTypeDescriptor *UiElementCatalog::Find(const std::string_view type) noexcept {
         const auto found = std::ranges::find(Types, type, &UiElementTypeDescriptor::documentType);
-        return found == Types.end() ? nullptr : &*found;
+        return found == Types.end() ? nullptr : std::to_address(found);
     }
 
     /** @copydoc CreateUiElement */

@@ -84,11 +84,11 @@ namespace Horo::Runtime::Ui {
         /** @brief Encode bounded assignment order exactly. */
         Out Assignments(std::span<const UiStyleAssignment> values) {
             Out out = Out::array();
-            for (const auto &value : values) {
-                auto assignment = Assignment(value);
-                if (std::ranges::find(out, assignment.property, &UiStyleAssignment::property) != out.end())
+            for (std::size_t index = 0; index < values.size(); ++index) {
+                const auto prefix = values.first(index);
+                if (std::ranges::find(prefix, values[index].property, &UiStyleAssignment::property) != prefix.end())
                     throw std::invalid_argument("duplicate assignment");
-                out.push_back(std::move(assignment));
+                out.push_back(Assignment(values[index]));
             }
             return out;
         }

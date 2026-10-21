@@ -83,7 +83,7 @@ namespace Horo::UiStyleTest {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
             while (resources->Capture().pending && std::chrono::steady_clock::now() < deadline) {
                 const auto polled = resources->Refresh();
-                INFO(polled.HasError() ? polled.ErrorValue().message : "");
+                INFO((polled.HasError() ? polled.ErrorValue().message : ""));
                 REQUIRE(polled.HasValue());
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
