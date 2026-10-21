@@ -247,6 +247,9 @@ namespace Horo::Editor {
         Runtime::Ui::UiElementId root;
         Runtime::Ui::UiElementId selection;
         std::uint64_t selectionRevision{1};
+        Assets::AssetRegistryRevision inspectorAssets;
+        Runtime::Ui::RuntimeStyleGeneration inspectorStyles;
+        std::uint64_t inspectorResourcePublication{};
         Runtime::Ui::UiDocumentRevision documentRevision;
         std::optional<Runtime::Ui::UiDocumentElement> selectedElement;
         std::vector<UiCanvasHierarchyRow> rows;
@@ -285,6 +288,9 @@ namespace Horo::Editor {
         std::optional<UiCanvasSetPresentation> uiCanvasPresentation;
         std::uint64_t uiCanvasSelectionRevision{};
         Runtime::Ui::UiDocumentRevision uiCanvasDocumentRevision;
+        Assets::AssetRegistryRevision uiCanvasInspectorAssets;
+        Runtime::Ui::RuntimeStyleGeneration uiCanvasInspectorStyles;
+        std::uint64_t uiCanvasInspectorResourcePublication{};
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;

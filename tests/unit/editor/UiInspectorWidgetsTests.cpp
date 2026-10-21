@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
+#include "editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.h"
 #include "editor/screens/workspace/panels/inspector/UiInspectorWidgets.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -234,4 +235,48 @@ TEST_CASE("UI canvas inspector host surface captures and releases exact selected
         DrawSource(panel, source, harness);
     }
     panel.Clear();
+}
+
+TEST_CASE("Canonical authoring controls render localized typed fields without changing source records", "[editor][ui][inspector][render]") {
+    UiRenderHarness harness;
+    const auto kind = GENERATE(UiElementKind::Text, UiElementKind::Toggle, UiElementKind::Slider, UiElementKind::TextInput);
+    const auto scenario = GENERATE(RenderScenario::Normal, RenderScenario::Narrow, RenderScenario::Disabled);
+    const std::array arguments{UiLocalizedArgument{"integer", std::int64_t{-9007199254740993LL}},
+                               UiLocalizedArgument{"decimal", 0.12345678901234567},
+                               UiLocalizedArgument{"boolean", true},
+                               UiLocalizedArgument{"date", UiLocalizedDateTime{123}},
+                               UiLocalizedArgument{"duration", UiLocalizedDuration{456}},
+                               UiLocalizedArgument{"enum", UiLocalizedStableEnum{7, 8}},
+                               UiLocalizedArgument{"text", std::string{"Ürün"}},
+                               UiLocalizedArgument{"shortcut", UiLocalizedShortcut{0, 65}}};
+    auto message = UiLocalizedText::Create(UiMessageKey::Create("game.ui", "test").Value(), arguments, "Fallback");
+    REQUIRE(message.HasValue());
+    UiElementPresentation value;
+    if (kind == UiElementKind::Text)
+        value.localizedText = message.Value();
+    if (kind == UiElementKind::Toggle)
+        value.state.initial = true;
+    if (kind == UiElementKind::Slider)
+        value.state.initial = UiControlScalarValues{-2, 2, 0.125, 0.375};
+    if (kind == UiElementKind::TextInput)
+        value.state.initial = std::string{"Initial ürün"};
+    value.accessibility =
+        UiElementAccessibility{.role = DefaultUiElementAccessibilityRole(kind), .name = message.Value(), .description = message.Value()};
+    const auto baseline = value;
+    UiInspectorAuthoringWidgets controls;
+    controls.Capture(value);
+    for (int frame = 0; frame < 2; ++frame) {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize({scenario == RenderScenario::Narrow ? 180.0F : 360.0F, 850});
+        ImGui::Begin("UiCanonicalAuthoring", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        ImGui::BeginDisabled(scenario == RenderScenario::Disabled);
+        CHECK_FALSE(controls.Draw(harness.context, kind, value));
+        CHECK(controls.IsValid());
+        CHECK(value == baseline);
+        ImGui::EndDisabled();
+        ImGui::End();
+        ImGui::Render();
+        REQUIRE(ImGui::GetDrawData() != nullptr);
+        CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
+    }
 }

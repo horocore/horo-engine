@@ -78,8 +78,24 @@ namespace Horo::Runtime::Ui {
             return Invalid();
         if (!element.properties.empty())
             return Invalid();
-        if (element.presentation && !element.presentation->IsValid())
-            return Invalid();
+        if (element.presentation) {
+            if (!element.presentation->IsValid())
+                return Invalid();
+            const auto &initial = element.presentation->state.initial;
+            if ((std::holds_alternative<bool>(initial) && type->kind != UiElementKind::Toggle) ||
+                (std::holds_alternative<UiControlScalarValues>(initial) && type->kind != UiElementKind::Slider) ||
+                (std::holds_alternative<std::string>(initial) && type->kind != UiElementKind::TextInput) ||
+                (element.presentation->localizedText && type->kind != UiElementKind::Text))
+                return Invalid();
+            if (element.presentation->accessibility) {
+                const auto role = element.presentation->accessibility->role;
+                if ((role == UiAccessibilityRole::Slider && type->kind != UiElementKind::Slider) ||
+                    (role == UiAccessibilityRole::TextField && type->kind != UiElementKind::TextInput) ||
+                    ((role == UiAccessibilityRole::Toggle || role == UiAccessibilityRole::Checkbox || role == UiAccessibilityRole::Radio) &&
+                     type->kind != UiElementKind::Toggle))
+                    return Invalid();
+            }
+        }
         return Result<void>::Success();
     }
 
@@ -98,6 +114,7 @@ namespace Horo::Runtime::Ui {
             return Invalid<UiStyleElementInput>();
         UiStyleElementInput result{.element = handle};
         if (element.presentation) {
+            result.state = element.presentation->state.InitialVisualState();
             result.asset = element.presentation->styleAsset;
             result.typeClass = element.presentation->typeClass;
             result.classes = element.presentation->classes;
@@ -120,6 +137,7 @@ namespace Horo::Runtime::Ui {
         result.layout = layout.Value().style;
         result.intrinsic = layout.Value().intrinsic;
         result.fill = {0, 0, 0, 0};
+        result.visible = !element.presentation || element.presentation->state.visible;
         return Result<UiThemeSurfaceInput>::Success(std::move(result));
     }
 }  // namespace Horo::Runtime::Ui

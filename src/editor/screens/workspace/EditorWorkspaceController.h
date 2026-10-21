@@ -12,6 +12,7 @@
 #include "Horo/Editor/PCGGraphDocumentService.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -66,6 +67,7 @@ namespace Horo::Editor {
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
+        UiInspectorResources *uiInspectorResources{}; /**< Actual host resource publisher, outliving the workspace. */
         EditorWorkspaceCollisionEvidence collision{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
@@ -299,6 +301,7 @@ namespace Horo::Editor {
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
+        UiInspectorResources *m_uiInspectorResources{};
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
         const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};

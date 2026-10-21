@@ -71,6 +71,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::RefreshUiCanvasProjection */
     void EditorWorkspaceController::RefreshUiCanvasProjection() {
         auto &projections = m_viewModel.uiCanvasDocuments;
+        const auto resources = m_uiInspectorResources ? m_uiInspectorResources->Capture() : UiInspectorResourceSnapshot{};
         std::erase_if(projections, [this](const auto &projection) {
             return std::ranges::none_of(m_uiCanvasDocuments, [&](const auto &owner) {
                 return owner.Identity().instance == projection.identity.instance;
@@ -106,6 +107,9 @@ namespace Horo::Editor {
                 }
                 projection->state = owner.CurrentState();
             }
+            projection->inspectorAssets = resources.assets.Revision();
+            projection->inspectorStyles = resources.StyleGeneration();
+            projection->inspectorResourcePublication = resources.publication;
             projection->root = owner.Document().Canvases().front().rootElement;
             projection->selection = owner.Selection();
             projection->canUndo = owner.CanUndo();
@@ -144,6 +148,7 @@ namespace Horo::Editor {
         const auto projection = std::ranges::find_if(m_viewModel.uiCanvasDocuments, [&](const auto &entry) {
             return entry.identity.instance == *command.documentInstance;
         });
+        const auto resources = m_uiInspectorResources ? m_uiInspectorResources->Capture() : UiInspectorResourceSnapshot{};
         Result<void> result = Result<void>::Success();
         if (command.uiCanvasState != owner->CurrentState()) {
             result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
@@ -156,8 +161,11 @@ namespace Horo::Editor {
                                                          .state = command.uiCanvasState,
                                                          .revision = command.uiCanvasDocumentRevision,
                                                          .element = command.uiCanvasElement,
-                                                         .selectionRevision = command.uiCanvasSelectionRevision},
-                                                        projection->selectionRevision, *command.uiCanvasPresentation);
+                                                         .selectionRevision = command.uiCanvasSelectionRevision,
+                                                         .styles = command.uiCanvasInspectorStyles,
+                                                         .assets = command.uiCanvasInspectorAssets,
+                                                         .resourcePublication = command.uiCanvasInspectorResourcePublication},
+                                                        projection->selectionRevision, *command.uiCanvasPresentation, &resources);
         } else if (command.command == UiCanvasSave) {
             result = SaveUiCanvasSource(*owner);
         } else if (command.command == UiCanvasReload) {

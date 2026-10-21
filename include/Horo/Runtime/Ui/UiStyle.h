@@ -402,6 +402,13 @@ namespace Horo::Runtime::Ui {
         std::shared_ptr<Storage> storage_;
     };
 
+    /** @brief Validates authored assignments against a real active registry without resolving a fake tree.
+     * @param registry Active host-composed property/token authority. @param assignments Bounded locally shaped assignments.
+     * @return Original typed lifecycle/reference/category/range failure or success; publishes nothing.
+     */
+    [[nodiscard]] Result<void> ValidateUiStyleAssignments(const RuntimeStyleRegistry &registry,
+                                                          std::span<const UiStyleAssignment> assignments);
+
     /** @brief Complete immutable source revisions for one style resolution candidate. */
     struct UiStyleSourceRevisions final {
         UiDocumentRevision document;

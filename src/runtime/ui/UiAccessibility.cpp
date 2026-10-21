@@ -522,4 +522,9 @@ namespace Horo::Runtime::Ui {
             return value;
         return Result<void>::Success();
     }
+
+    /** @copydoc ValidateUiAccessibilityNodeInput */
+    Result<void> ValidateUiAccessibilityNodeInput(const UiAccessibilityNodeInput &node) {
+        return ValidateNode(node);
+    }
 }  // namespace Horo::Runtime::Ui

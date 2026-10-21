@@ -303,3 +303,24 @@ TEST_CASE("UI inspector preserves the canonical minimum-wins layout policy", "[e
     CHECK(prepared.Value().values.layout.minimumWidth == UiLength::Dip(200));
     CHECK(prepared.Value().values.layout.maximumWidth == UiLength::Dip(100));
 }
+
+TEST_CASE("UI inspector double buffers preserve canonical precision and failed input", "[editor][ui][inspector]") {
+    UiInspectorDouble text;
+    const double original = 0.12345678901234567;
+    text.Capture(original);
+    double parsed{};
+    REQUIRE(text.Parse(parsed));
+    CHECK(parsed == original);
+    text.bytes = {};
+    const std::string_view invalid = "1e999";
+    std::copy(invalid.begin(), invalid.end(), text.bytes.begin());
+    CHECK_FALSE(text.Parse(parsed));
+    CHECK(parsed == original);
+    CHECK(std::string_view{text.bytes.data()} == invalid);
+    text.Capture(std::numeric_limits<double>::max());
+    REQUIRE(text.Parse(parsed));
+    CHECK(parsed == std::numeric_limits<double>::max());
+    text.Capture(std::numeric_limits<double>::infinity());
+    CHECK_FALSE(text.valid);
+    CHECK_FALSE(text.Parse(parsed));
+}

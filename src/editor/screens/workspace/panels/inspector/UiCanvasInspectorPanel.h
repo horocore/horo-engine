@@ -3,6 +3,7 @@
 /** @file UiCanvasInspectorPanel.h
  * @brief Transient Runtime UI inspector surface; canonical source/history stay in UiCanvasDocument.
  */
+#include "UiInspectorAuthoringWidgets.h"
 #include "UiInspectorWidgets.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
@@ -54,6 +55,8 @@ namespace Horo::Editor {
         Runtime::Ui::UiElementPresentation baseline_;
         Runtime::Ui::UiElementPresentation presentation_;
         UiInspectorDraft draft_;
+        UiInspectorAuthoringWidgets authoring_;
+        Runtime::Ui::UiDocumentElement sourceElement_;
         UiInspectorWidgets::Buffers layoutText_;
         UiInspectorWidgets::Buffers styleText_;
         std::array<UiInspectorInteger, 2> intrinsicText_;

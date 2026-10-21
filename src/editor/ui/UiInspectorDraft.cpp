@@ -73,22 +73,9 @@ namespace Horo::Editor {
             return Failure<UiInspectorPreparedEdit>(UiErrors::StyleLifecycleUnavailable);
         if (!current.styles.IsValid() || registry->Generation() != current.styles)
             return Failure<UiInspectorPreparedEdit>(UiErrors::RevisionStale);
-        const auto properties = registry->Properties();
-        const auto found = std::ranges::find(properties, values_.style->property, &UiStylePropertyDescriptor::id);
-        if (found == properties.end())
-            return Failure<UiInspectorPreparedEdit>(UiErrors::StyleReferenceInvalid);
-        UiStylePropertyDescriptor candidate = *found;
-        if (values_.style->value.referencesToken) {
-            const auto resolved = registry->ResolveToken(values_.style->value.token);
-            if (resolved.HasError())
-                return Result<UiInspectorPreparedEdit>::Failure(resolved.ErrorValue());
-            candidate.defaultValue = resolved.Value();
-        } else {
-            candidate.defaultValue = values_.style->value.literal;
-        }
-        // The canonical descriptor validator checks the candidate's category, range and signed-dimension policy.
-        if (!candidate.IsValid())
-            return Failure<UiInspectorPreparedEdit>(UiErrors::StyleInvalid);
+        const std::array assignments{*values_.style};
+        if (const auto valid = Runtime::Ui::ValidateUiStyleAssignments(*registry, assignments); valid.HasError())
+            return Result<UiInspectorPreparedEdit>::Failure(valid.ErrorValue());
         return Result<UiInspectorPreparedEdit>::Success({.expected = current, .values = values_});
     }
 
@@ -114,13 +101,41 @@ namespace Horo::Editor {
 
     /** @copydoc ExecuteUiInspectorPresentation */
     Result<void> ExecuteUiInspectorPresentation(UiCanvasDocument &owner, const UiInspectorContext &expected,
-                                                const std::uint64_t selectionRevision, const UiCanvasSetPresentation &command) {
+                                                const std::uint64_t selectionRevision, const UiCanvasSetPresentation &command,
+                                                const UiInspectorResourceSnapshot *resources) {
         if (owner.IsClosed())
             return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Closed));
         if (!expected.IsValid() || owner.Identity().instance != expected.document || owner.CurrentState() != expected.state ||
             owner.Document().Revision() != expected.revision || owner.Selection() != expected.element ||
             selectionRevision != expected.selectionRevision || command.element != expected.element)
             return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RevisionStale));
+        if (resources) {
+            if (resources->publication != expected.resourcePublication)
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::AssetRegistryStale));
+            if (resources->assets.Revision() != expected.assets)
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::AssetRegistryStale));
+            if (resources->StyleGeneration() != expected.styles)
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::StyleSourceStale));
+        } else if (expected.assets.value != 0 || expected.styles.IsValid() || expected.resourcePublication != 0) {
+            return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::StyleLifecycleUnavailable));
+        }
+        const auto found = std::ranges::find(owner.Document().Elements(), command.element, &Runtime::Ui::UiDocumentElement::id);
+        if (found == owner.Document().Elements().end())
+            return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
+        const Runtime::Ui::UiElementPresentation empty;
+        const auto &before = found->presentation ? *found->presentation : empty;
+        const auto &after = command.presentation ? *command.presentation : empty;
+        const bool changedResources = before.styleAsset != after.styleAsset || before.typeClass != after.typeClass ||
+                                      before.classes != after.classes || before.inlineStyle != after.inlineStyle;
+        const bool usesResources =
+            after.styleAsset.IsValid() || after.typeClass.IsValid() || !after.classes.empty() || !after.inlineStyle.empty();
+        const bool changedCascadeState = before.state.InitialVisualState() != after.state.InitialVisualState();
+        if ((changedResources || changedCascadeState) && usesResources) {
+            if (!resources)
+                return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::StyleLifecycleUnavailable));
+            if (const auto valid = resources->Validate(owner.Document(), after); valid.HasError())
+                return valid;
+        }
         return owner.Execute(expected.state, command);
     }
 }  // namespace Horo::Editor

@@ -68,7 +68,8 @@ namespace Horo::Runtime::Ui {
     [[nodiscard]] Result<UiLayoutElementDescriptor> ProjectUiElementLayout(const UiDocumentElement &element, UiElementHandle handle);
     /** @brief Projects authored style inputs for one synchronous resolution call.
      * @param element Source whose immutable lifetime encloses resolution. @param handle Exact runtime handle.
-     * @return Style input borrowing source presentation spans; caller must retain the source document until resolution returns.
+     * @return Style input borrowing source presentation spans and carrying authored initial disabled/checked state.
+     * Caller retains the source until resolution returns; active control owners replace initial state with current live state.
      */
     [[nodiscard]] Result<UiStyleElementInput> ProjectUiElementStyle(const UiDocumentElement &element, UiElementHandle handle);
 
@@ -79,4 +80,28 @@ namespace Horo::Runtime::Ui {
      * element.presentation until it changes or is destroyed.
      */
     [[nodiscard]] Result<UiThemeSurfaceInput> ProjectUiElementSurface(const UiDocumentElement &element, UiElementHandle handle);
+    /** @brief Applies authored initial state to an actual host-owned control descriptor.
+     * @param document Pinned source document. @param element Stable authored control identity.
+     * @param tree Active retained tree from the exact source revision. @param descriptor Real owner/action/handle descriptor.
+     * @details Bounded creation-time projection; never applied to an already active mutable control.
+     * @return Validated control descriptor or a typed kind/value/ownership error; live control state is never patched.
+     */
+    [[nodiscard]] Result<UiControlDescriptor> ProjectUiElementControl(const UiDocument &document, UiElementId element,
+                                                                      const UiElementTree &tree, UiControlDescriptor descriptor);
+    /** @brief Applies authored accessibility metadata to a resolved owner-produced semantic node.
+     * @param element Exact authored element. @param node Node with resolved localized labels and real live values/actions/bounds.
+     * @return Canonically validated node borrowing its caller's text/actions, or a typed failure; no live authority changes.
+     * @pre Caller resolved element accessibility message references against its pinned Localization snapshot.
+     */
+    [[nodiscard]] Result<UiAccessibilityNodeInput> ProjectUiElementAccessibility(const UiDocumentElement &element,
+                                                                                 UiAccessibilityNodeInput node);
+    /** @brief Queries the canonical localized content reference for a Text element.
+     * @param element Immutable authored Text element retained through resolution.
+     * @return Borrowed immutable reference or null; Localization remains responsible for catalog resolution.
+     */
+    [[nodiscard]] const UiLocalizedText *UiElementLocalizedText(const UiDocumentElement &element) noexcept;
+    /** @brief Returns the canonical initial semantic role for a core element kind.
+     * @param kind Catalog kind. @return Appropriate role; unknown kinds return Group and are rejected by catalog validation.
+     */
+    [[nodiscard]] UiAccessibilityRole DefaultUiElementAccessibilityRole(UiElementKind kind) noexcept;
 }  // namespace Horo::Runtime::Ui

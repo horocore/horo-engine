@@ -718,7 +718,9 @@ add_library(HoroRuntimeUi STATIC
         runtime/ui/UiCanvasSpace.cpp
         runtime/ui/UiLocalization.cpp
         runtime/ui/UiElementPresentation.cpp
+        runtime/ui/UiElementAuthoringProjection.cpp
         runtime/ui/UiElementPresentationCodec.cpp
+        runtime/ui/UiElementAuthoringCodec.cpp
         runtime/ui/UiElementCatalog.cpp
         runtime/ui/UiDocument.cpp
         runtime/ui/UiRuntimeInstance.cpp
@@ -2990,6 +2992,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
         editor/ui/UiInspectorDraft.cpp
+        editor/ui/UiInspectorResources.cpp
         editor/UiCanvasDocumentCommands.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
@@ -3294,6 +3297,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
             editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/UiInspectorAuthoringWidgets.cpp
             editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.cpp
             editor/screens/workspace/EditorWorkspaceViewUiCanvas.cpp
             editor/screens/workspace/EditorWorkspaceControllerUiCanvas.cpp

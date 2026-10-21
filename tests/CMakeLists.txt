@@ -2615,9 +2615,14 @@ target_sources(HoroSourceFileOpenServiceTests PRIVATE $<TARGET_OBJECTS:HoroSourc
 add_executable(HoroUiCanvasDocumentTests
         unit/editor/UiInspectorDraftTests.cpp
         unit/editor/UiCanvasInspectorCommandTests.cpp
+        unit/editor/UiInspectorResourcesTests.cpp
         unit/editor/UiCanvasHierarchyTests.cpp
         unit/editor/UiCanvasDocumentTests.cpp
 )
+add_library(HoroUiInspectorResourcesPublicHeaderConsumer OBJECT support/UiInspectorResourcesPublicContract.cpp)
+target_compile_features(HoroUiInspectorResourcesPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroUiInspectorResourcesPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
+target_sources(HoroUiCanvasDocumentTests PRIVATE $<TARGET_OBJECTS:HoroUiInspectorResourcesPublicHeaderConsumer>)
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroUiInspectorInternal)
 target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices nlohmann_json::nlohmann_json)
@@ -3698,6 +3703,7 @@ add_test(NAME HoroRuntimeUiHotReloadPublicHeaderConsumer COMMAND HoroRuntimeUiHo
 set_tests_properties(HoroRuntimeUiHotReloadPublicHeaderConsumer PROPERTIES LABELS "unit;runtime_ui;headless")
 add_executable(HoroRuntimeUiDocumentTests
         unit/runtime/ui/UiElementCatalogTests.cpp
+        unit/runtime/ui/UiElementAuthoringTests.cpp
         unit/runtime/ui/UiDocumentTests.cpp
         unit/runtime/ui/UiAssetLoadingTests.cpp
         unit/runtime/ui/UiDocumentSerializationTests.cpp

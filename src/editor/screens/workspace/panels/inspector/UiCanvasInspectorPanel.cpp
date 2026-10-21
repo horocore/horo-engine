@@ -91,6 +91,10 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasInspectorPanel::Clear */
     void UiCanvasInspectorPanel::Clear() noexcept {
+        if (!context_)
+            return;
+        sourceElement_ = {};
+        authoring_ = UiInspectorAuthoringWidgets{};
         context_.reset();
         baseline_ = {};
         presentation_ = {};
@@ -107,6 +111,7 @@ namespace Horo::Editor {
     /** @copydoc UiCanvasInspectorPanel::Capture */
     void UiCanvasInspectorPanel::Capture(const UiCanvasWorkspaceDocument &source, const UiInspectorContext context) {
         context_ = context;
+        sourceElement_ = *source.selectedElement;
         hadPresentation_ = source.selectedElement->presentation.has_value();
         baseline_ = source.selectedElement->presentation.value_or(Runtime::Ui::UiElementPresentation{});
         Reset();
@@ -115,6 +120,7 @@ namespace Horo::Editor {
     /** @copydoc UiCanvasInspectorPanel::Reset */
     void UiCanvasInspectorPanel::Reset() {
         presentation_ = baseline_;
+        authoring_.Capture(presentation_);
         draft_.Clear();
         styleAsset_ = IdText(presentation_.styleAsset);
         typeAsset_ = IdText(presentation_.typeClass.asset);
@@ -179,9 +185,15 @@ namespace Horo::Editor {
         StoreProperty();
         const bool styleText = propertyIndex_ < 0 ||
                                (draft_.Values().style->value.referencesToken ? tokenAsset_.valid && tokenId_.valid : styleText_.IsValid());
-        valid_ = layoutText_.IsValid() && styleText && styleAsset_.valid && typeAsset_.valid && typeClass_.valid &&
+        valid_ = authoring_.IsValid() && layoutText_.IsValid() && styleText && styleAsset_.valid && typeAsset_.valid && typeClass_.valid &&
                  (classIndex_ < 0 || (classAsset_.valid && classId_.valid)) && intrinsicText_[0].valid && intrinsicText_[1].valid &&
                  draft_.Values().layout.IsValid() && presentation_.IsValid();
+        if (valid_) {
+            auto candidate = sourceElement_;
+            candidate.presentation = presentation_;
+            candidate.presentation->layout = draft_.Values().layout;
+            valid_ = Runtime::Ui::ValidateCoreUiElement(candidate).HasValue();
+        }
     }
 
     /** @copydoc UiCanvasInspectorPanel::DrawResources */
@@ -333,6 +345,9 @@ namespace Horo::Editor {
         output.uiCanvasElement = context_->element;
         output.uiCanvasDocumentRevision = context_->revision;
         output.uiCanvasSelectionRevision = context_->selectionRevision;
+        output.uiCanvasInspectorStyles = context_->styles;
+        output.uiCanvasInspectorAssets = context_->assets;
+        output.uiCanvasInspectorResourcePublication = context_->resourcePublication;
         output.uiCanvasPresentation = command;
     }
 
@@ -349,7 +364,10 @@ namespace Horo::Editor {
                                          .state = source.state,
                                          .revision = source.documentRevision,
                                          .element = source.selection,
-                                         .selectionRevision = source.selectionRevision};
+                                         .selectionRevision = source.selectionRevision,
+                                         .styles = source.inspectorStyles,
+                                         .assets = source.inspectorAssets,
+                                         .resourcePublication = source.inspectorResourcePublication};
         if (!current.IsValid() || source.selectedElement->id != current.element) {
             Clear();
             Ui::ErrorText(Label(context, "workspace.ui_inspector.invalid_draft"), context.theme.fonts);
@@ -362,8 +380,15 @@ namespace Horo::Editor {
         Ui::FieldLabel(Label(context, "workspace.ui_inspector.title"), context.theme.fonts);
         bool changed = UiInspectorWidgets::Layout(context, draft_.Values().layout, layoutText_);
         changed = DrawIntrinsic(context) || changed;
+        if (!source.inspectorStyles.IsValid())
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Label(context, "workspace.ui_inspector.registry_unavailable"), Theme::Muted(),
+                            context.theme.fonts);
+        ImGui::BeginDisabled(!source.inspectorStyles.IsValid());
         changed = DrawResources(context) || changed;
         changed = DrawStyle(context) || changed;
+        ImGui::EndDisabled();
+        if (const auto *type = Runtime::Ui::UiElementCatalog::Find(sourceElement_.type.Value()))
+            changed = authoring_.Draw(context, type->kind, presentation_) || changed;
         if (changed) {
             dirty_ = true;
             Validate();
@@ -373,9 +398,10 @@ namespace Horo::Editor {
         if (Action(context, "workspace.ui_inspector.apply", dirty_ && valid_)) {
             auto prepared = draft_.PreparePresentation(current, presentation_, true);
             if (prepared.HasValue()) {
-                if (!hadPresentation_ && prepared.Value().presentation == baseline_)
-                    prepared.Value().presentation.reset();
-                Emit(prepared.Value(), output);
+                auto command = std::move(prepared).Value();
+                if (!hadPresentation_ && command.presentation == baseline_)
+                    command.presentation.reset();
+                Emit(command, output);
             }
         }
         if (Action(context, "workspace.ui_inspector.cancel", dirty_))

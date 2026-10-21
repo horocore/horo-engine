@@ -662,10 +662,18 @@ namespace Horo::Editor {
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
+                std::unique_ptr<UiInspectorResources> uiInspectorResources;
+                if (const auto *factory = services_.TryGet<UiInspectorResourcesFactory>()) {
+                    auto prepared = (*factory)(projectRoot, sessionOwner);
+                    if (prepared.HasError())
+                        return Result<void>::Failure(prepared.ErrorValue());
+                    uiInspectorResources = std::move(prepared).Value();
+                }
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
                                                    .mutableAssetRegistry = projectServices_.assetRegistry,
+                                                   .uiInspectorResources = uiInspectorResources.get(),
                                                    .collision = {.inventory = projectServices_.collisionInventory,
                                                                  .activation = projectServices_.collisionActivation,
                                                                  .previewReceipt = projectServices_.previewCollisionReceipt},
@@ -693,6 +701,7 @@ namespace Horo::Editor {
                     controller_.reset();
                     return Result<void>::Failure(error);
                 }
+                uiInspectorResources_ = std::move(uiInspectorResources);
                 return Result<void>::Success();
             }
 
@@ -1045,6 +1054,7 @@ namespace Horo::Editor {
             WorkspacePanelServices panelServices_{};
             WorkspaceProjectServices projectServices_{};
             WorkspacePublishedRevisions publishedRevisions_{};
+            std::unique_ptr<UiInspectorResources> uiInspectorResources_;
             std::unique_ptr<EditorWorkspaceController> controller_;
             mutable WorkspaceLeaveCapture leaveCapture_;
             std::unique_ptr<EditorSnackbarHost> snackbarHost_;

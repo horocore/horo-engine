@@ -4,14 +4,17 @@
  * @brief Detached Runtime UI layout/style drafts; document and history remain host-owned.
  */
 #include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
 #include "Horo/Runtime/Ui/UiStyle.h"
 
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <concepts>
 #include <iterator>
+#include <limits>
 #include <optional>
 #include <string_view>
 
@@ -24,6 +27,8 @@ namespace Horo::Editor {
         Runtime::Ui::UiElementId element;
         std::uint64_t selectionRevision{};
         Runtime::Ui::RuntimeStyleGeneration styles;
+        Assets::AssetRegistryRevision assets;
+        std::uint64_t resourcePublication{};
         /** @brief Checks that every owner fence is present. @return Whether the context is usable. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] auto operator<=>(const UiInspectorContext &) const noexcept = default;
@@ -58,6 +63,38 @@ namespace Horo::Editor {
             const char *last = bytes.data() + std::distance(bytes.begin(), end);
             const auto parsed = std::from_chars(bytes.data(), last, candidate);
             valid = parsed.ec == std::errc{} && parsed.ptr == last;
+            if (valid)
+                value = candidate;
+            return valid;
+        }
+    };
+
+    /** @brief Lossless retained decimal text for canonical double values. */
+    struct UiInspectorDouble final {
+        std::array<char, 64> bytes{};
+        bool valid{true};
+
+        /** @brief Capture exact round-trip decimal text. @param value Current typed value. */
+        void Capture(double value) noexcept {
+            bytes.fill('\0');
+            const auto result = std::to_chars(bytes.data(), bytes.data() + bytes.size() - 1, value, std::chars_format::general,
+                                              std::numeric_limits<double>::max_digits10);
+            valid = result.ec == std::errc{} && std::isfinite(value);
+        }
+
+        /** @brief Parse on edits only, preserving the last typed value on malformed/nonfinite input.
+         * @param value Typed destination. @return Whether complete finite text parsed.
+         */
+        [[nodiscard]] bool Parse(double &value) noexcept {
+            const auto end = std::find(bytes.begin(), bytes.end(), '\0');
+            if (end == bytes.end() || end == bytes.begin()) {
+                valid = false;
+                return false;
+            }
+            double candidate{};
+            const auto parsed =
+                std::from_chars(bytes.data(), bytes.data() + std::distance(bytes.begin(), end), candidate, std::chars_format::general);
+            valid = parsed.ec == std::errc{} && parsed.ptr == bytes.data() + std::distance(bytes.begin(), end) && std::isfinite(candidate);
             if (valid)
                 value = candidate;
             return valid;
@@ -121,8 +158,10 @@ namespace Horo::Editor {
     /** @brief Checks current selection and exact publication fences before canonical command execution.
      * @param owner Current document owner. @param expected View-captured fences.
      * @param selectionRevision Current host selection revision. @param command Prepared canonical presentation edit.
+     * @param resources Current pinned host capability; required when changing resource references or their selected visual state.
      * @return Canonical execution outcome; stale, closed or mismatched selection publishes nothing.
      */
     [[nodiscard]] Result<void> ExecuteUiInspectorPresentation(UiCanvasDocument &owner, const UiInspectorContext &expected,
-                                                              std::uint64_t selectionRevision, const UiCanvasSetPresentation &command);
+                                                              std::uint64_t selectionRevision, const UiCanvasSetPresentation &command,
+                                                              const UiInspectorResourceSnapshot *resources = nullptr);
 }  // namespace Horo::Editor

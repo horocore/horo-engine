@@ -2,6 +2,7 @@
 
 #include "JsonUtils.h"
 #include "UiDocumentSerializationInternal.h"
+#include "UiElementAuthoringCodec.h"
 
 #include <cmath>
 #include <limits>
@@ -334,7 +335,7 @@ namespace Horo::Runtime::Ui::PresentationCodec {
                     {"source", source.referencesToken ? Out{{"token", Out::array({Id(source.token.asset), Id(source.token.id)})}}
                                                       : Out{{"literal", Literal(source.literal)}}}});
         }
-        return Out{{"version", 1},
+        Out output{{"version", presentation.UsesAuthoringExtensions() ? 2 : 1},
                    {"layout", Layout(presentation.layout)},
                    {"intrinsic", Out::array({static_cast<std::uint8_t>(presentation.intrinsic.kind), presentation.intrinsic.required,
                                              presentation.intrinsic.fallback.width, presentation.intrinsic.fallback.height})},
@@ -342,13 +343,21 @@ namespace Horo::Runtime::Ui::PresentationCodec {
                    {"typeClass", Class(presentation.typeClass)},
                    {"classes", std::move(classes)},
                    {"inlineStyle", std::move(assignments)}};
+        if (presentation.UsesAuthoringExtensions())
+            WriteAuthoring(output, presentation);
+        return output;
     }
 
     /** @copydoc Decode */
     Result<UiElementPresentation> Decode(const nlohmann::json &value) {
         try {
-            Fields(value, {"version", "layout", "intrinsic", "styleAsset", "typeClass", "classes", "inlineStyle"});
-            if (Integer<std::uint32_t>(value.at("version")) != 1)
+            const auto version = Integer<std::uint32_t>(value.at("version"));
+            if (version == 1)
+                Fields(value, {"version", "layout", "intrinsic", "styleAsset", "typeClass", "classes", "inlineStyle"});
+            else if (version == 2)
+                Fields(value, {"version", "layout", "intrinsic", "styleAsset", "typeClass", "classes", "inlineStyle", "state",
+                               "localizedText", "accessibility"});
+            else
                 throw std::invalid_argument("presentation version");
             UiElementPresentation presentation;
             presentation.layout = Layout(value.at("layout"));
@@ -380,6 +389,11 @@ namespace Horo::Runtime::Ui::PresentationCodec {
                     decoded = UiStyleValueSource::Literal(Literal(source.at("literal")));
                 }
                 presentation.inlineStyle.push_back({Identity<UiStylePropertyId>(entry.at("property")), std::move(decoded), false});
+            }
+            if (version == 2) {
+                auto authored = ReadAuthoring(value, presentation);
+                if (authored.HasError())
+                    return Result<UiElementPresentation>::Failure(authored.ErrorValue());
             }
             if (!presentation.IsValid())
                 throw std::invalid_argument("presentation validation");
