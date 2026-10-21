@@ -82,6 +82,11 @@ namespace Horo::Editor {
         SourceDocumentSnapshot() = default;
         /** @brief Returns exact session identity. @return Empty identity for an inert snapshot. */
         [[nodiscard]] DocumentIdentity Identity() const;
+        /** @brief Checks exact immutable published-root identity without copying paths or comparing source bytes.
+         * @param other Retained publication to compare. @return True for the same root, including two inert snapshots.
+         * @details This is not semantic text equality. Both leases retain their roots throughout comparison, preventing
+         *          address reuse from identifying another publication as the same root. */
+        [[nodiscard]] bool SharesStateWith(const SourceDocumentSnapshot &other) const noexcept;
         /** @brief Returns the monotonic committed observation/edit revision. @return Zero when inert. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Returns the revision of the last explicitly loaded or durably saved disk base. @return Zero when inert. */

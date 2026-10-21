@@ -8,6 +8,8 @@ namespace Horo::Render::FrontendErrors {
     extern const ErrorCodeDescriptor FrameAlreadyActive;
     extern const ErrorCodeDescriptor FrameAlreadyExecuted;
     extern const ErrorCodeDescriptor FrameException;
+    extern const ErrorCodeDescriptor GuiAlreadyComposed;
+    extern const ErrorCodeDescriptor GuiCancelled;
     extern const ErrorCodeDescriptor FrameNotActive;
     extern const ErrorCodeDescriptor FrameNotExecuted;
     extern const ErrorCodeDescriptor InitializeException;

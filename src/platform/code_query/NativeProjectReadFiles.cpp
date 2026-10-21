@@ -1,7 +1,7 @@
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Foundation/Utf8.h"
 #include "ProjectCodeFilesTesting.h"
-#include "ProjectReadNative.h"
+#include "RootedProjectOwnersInternal.h"
 
 #include <algorithm>
 #include <array>
@@ -376,6 +376,21 @@ namespace Horo::Platform {
             CodeFilesTesting::Observer observer_;
         };
     }  // namespace
+
+    /** @copydoc RootedProjectOwnersInternal::Source */
+    Result<std::shared_ptr<const IProjectReadFiles>> RootedProjectOwnersInternal::Source(ProjectReadNative::Handle root,
+                                                                                         std::string identity,
+                                                                                         const std::uint64_t generation) {
+        using Return = Result<std::shared_ptr<const IProjectReadFiles>>;
+        if (!root.IsValid() || identity.empty() || identity.size() > 256 || !IsValidUtf8ScalarSequence(identity) || generation == 0)
+            return Return::Failure(MakeError(ProjectReadErrors::Invalid));
+        try {
+            return Return::Success(
+                std::make_shared<NativeFiles>(std::move(root), std::move(identity), generation, CodeFilesTesting::Observer{}));
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(ProjectReadErrors::Capacity));
+        }
+    }
 
     /** @copydoc CodeFilesTesting::Create */
     Result<std::shared_ptr<const IProjectReadFiles>> CodeFilesTesting::Create(const std::filesystem::path &root, std::string identity,

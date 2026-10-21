@@ -25,15 +25,28 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {
             CancelAssetPlacementPreview();
         }
+        if (!m_viewModel.selectedColliders.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
+            cmd.command != EditorWorkspaceViewCommand::SelectPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::CommitPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::NavigateViewport && cmd.command != EditorWorkspaceViewCommand::AlignViewportToAxis &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeViewportProjection &&
+            cmd.command != EditorWorkspaceViewCommand::FocusViewportSelection &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformTool &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformSpace) {
+            m_viewModel.selectedColliders.clear();
+            ++m_viewModel.colliderSelectionRevision;
+        }
         DispatchWorkspaceCommand(cmd);
+        RefreshSourceDocumentProjection();
     }
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
-        static_cast<void>(ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
-                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
-                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
-                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        static_cast<void>(ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
+                          ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
+                          ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
+                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
+                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

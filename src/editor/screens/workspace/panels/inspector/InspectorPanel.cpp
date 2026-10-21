@@ -53,6 +53,7 @@ namespace Horo::Editor {
         m_prefabPresentation.reset();
         m_nameInputContext.Reset();
         m_physicsSession.Clear();
+        m_navigationSession.Clear();
         m_inputRouter = nullptr;
     }
 
@@ -101,6 +102,7 @@ namespace Horo::Editor {
             AdoptCommand(cmd, m_editSession.Clear());
             m_nameInputContext.Reset();
             DrawPrefabSelection(vm, cmd, ctx);
+            DrawNavigationInspector(m_navigationSession, vm, cmd, ctx);
         } else if (!selectedObjects.empty() && FindSelectedObject(vm) != nullptr) {
             DrawSelection(vm, selectedObjects, cmd, ctx);
             if (selectedObjects.size() == 1) {
@@ -109,6 +111,7 @@ namespace Horo::Editor {
             }
         } else {
             m_physicsSession.Clear();
+            m_navigationSession.Clear();
             DrawEmptyState(cmd, ctx);
         }
 
@@ -144,6 +147,7 @@ namespace Horo::Editor {
                                        context.localization.Get("editor", "workspace.inspector.transform_invalid"), context.theme.fonts,
                                        8.0F);
 
+        DrawNavigationInspector(m_navigationSession, viewModel, command, context);
         if (m_editSession.Draft().selectedObjectCount == 1)
             DrawComponentEditors(*primaryObject, viewModel, command, context);
         else if (m_contributions)

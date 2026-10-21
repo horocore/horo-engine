@@ -43,6 +43,16 @@ namespace Horo::Prefab::ValueDetail {
         }
     }  // namespace
 
+    /** @brief Share the existing canonical object ordering with component records in the same override envelope. */
+    std::strong_ordering CompareObjectAddresses(const PrefabObjectAddress &left, const PrefabObjectAddress &right) noexcept {
+        return CompareObjects(left, right);
+    }
+
+    /** @brief Reuse the same bounded nested-scope decoder for value and component targets. */
+    Result<PrefabObjectAddress> DecodeObjectAddress(const Json &value) {
+        return DecodeObject(value);
+    }
+
     /** @brief Define canonical target order independently from record arrival and UI order. */
     bool TargetLess(const PrefabValueOverrideTarget &left, const PrefabValueOverrideTarget &right) noexcept {
         if (auto order = CompareObjects(Object(left), Object(right)); order != 0)

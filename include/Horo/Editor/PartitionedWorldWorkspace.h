@@ -151,6 +151,7 @@ namespace Horo::Editor {
     /**
      * @brief Single-threaded Editor authority for source metadata and open authoring pages.
      * All calls belong to the constructing thread. Readers use immutable leases only.
+     * Inputs are borrowed only for each synchronous call; limits and published metadata are owned copies.
      * Caller storage is copied before publication; no callback, I/O, runtime activation or implicit save occurs.
      * Owner IDs are host-issued and never reused across workspace instances. Allocation exceptions preserve state.
      * This is bounded tooling metadata, not a frame-hot payload owner. Retained historical leases are budgeted by consumers.
@@ -161,7 +162,7 @@ namespace Horo::Editor {
     public:
         /** @brief Creates an empty active owner. @param owner Host-issued workspace incarnation. @param limits Bounded metadata ceilings.
          */
-        explicit PartitionedWorldWorkspace(Assets::AssetId owner, WorldDocumentLimits limits = {});
+        explicit PartitionedWorldWorkspace(Assets::AssetId owner, const WorldDocumentLimits &limits = {});
         PartitionedWorldWorkspace(const PartitionedWorldWorkspace &) = delete;
         PartitionedWorldWorkspace &operator=(const PartitionedWorldWorkspace &) = delete;
         PartitionedWorldWorkspace(PartitionedWorldWorkspace &&) = delete;
@@ -180,14 +181,15 @@ namespace Horo::Editor {
          * @param document Complete proposed metadata, including settings/layers/pages/objects. @param expected Exact current fence.
          * @param cancellation Operation cancellation fence. @return Committed dirty snapshot, unchanged lease for no-op, or typed
          * rejection. */
-        [[nodiscard]] Result<PartitionedWorldSnapshotLease> Commit(const PartitionedWorldDocument &document, WorldDocumentFence expected,
-                                                                   std::stop_token cancellation = {});
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> Commit(const PartitionedWorldDocument &document,
+                                                                   const WorldDocumentFence &expected, std::stop_token cancellation = {});
         /** @brief Atomically changes the transient set without touching source pages or dirty state.
          * @param pages Distinct admitted page assets; order is preserved. @param expected Exact current owner fence.
          * @param cancellation Operation cancellation fence. @return New immutable snapshot, unchanged lease for a no-op, or typed
          * rejection. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SetWorkingSet(std::span<const Assets::AssetId> pages,
-                                                                          WorldDocumentFence expected, std::stop_token cancellation = {});
+                                                                          const WorldDocumentFence &expected,
+                                                                          std::stop_token cancellation = {});
         /** @brief Atomically selects distinct source addresses; opening geometry is not required.
          * @param objects Existing page-scoped addresses in presentation order. @param primary Optional address within that selection.
          * @param expected Exact source/selection fence, borrowed only for this call.
@@ -214,11 +216,11 @@ namespace Horo::Editor {
          * @param disposition Explicit permission to discard dirty metadata. @param cancellation Operation cancellation fence.
          * @return New clean admission snapshot or typed failure preserving the old document and working set. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Replace(
-            const PartitionedWorldDocument &document, WorldDocumentFence expected,
+            const PartitionedWorldDocument &document, const WorldDocumentFence &expected,
             WorldDocumentDisposition disposition = WorldDocumentDisposition::Preserve, std::stop_token cancellation = {});
         /** @brief Closes the document, preserving retained leases; a subsequent Open gets a new generation.
          * @param expected Exact current fence. @param disposition Explicit dirty-state decision. @return Success or typed rejection. */
-        [[nodiscard]] Result<void> Close(WorldDocumentFence expected,
+        [[nodiscard]] Result<void> Close(const WorldDocumentFence &expected,
                                          WorldDocumentDisposition disposition = WorldDocumentDisposition::Preserve);
         /** @brief Gates further admission/edits while preserving queries and explicit teardown. @return Success or wrong-thread failure. */
         [[nodiscard]] Result<void> BeginCancellation();
@@ -230,7 +232,7 @@ namespace Horo::Editor {
         /** @brief Prepares and publishes an admitted fresh incarnation with strong failure isolation. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Install(const PartitionedWorldDocument &document, std::stop_token cancellation);
         /** @brief Checks mutation thread, lifecycle and exact incarnation/revision. */
-        [[nodiscard]] Result<void> CheckFence(WorldDocumentFence expected) const;
+        [[nodiscard]] Result<void> CheckFence(const WorldDocumentFence &expected) const;
         /** @brief Publishes one fully prepared successor after a final cancellation check. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Publish(std::shared_ptr<PartitionedWorldSnapshot> candidate,
                                                                     std::stop_token cancellation);

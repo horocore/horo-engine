@@ -176,8 +176,8 @@ configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/HoroGameplayModule.cmake"
                "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroGameplayModule.cmake" COPYONLY)
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteGameplayModuleManifest.cmake"
                "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/WriteGameplayModuleManifest.cmake" COPYONLY)
-configure_file("${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_gameplay_behavior_bundle.py"
-               "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/generate_gameplay_behavior_bundle.py" COPYONLY)
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/scripts/project.py"
+               "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/project.py" COPYONLY)
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/apps/CMakeLists.txt")
     add_subdirectory(apps)
