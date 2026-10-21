@@ -295,7 +295,7 @@ namespace Horo::Render {
         REQUIRE(execution.HasValue());
         REQUIRE(execution.Value().ExternalReleases().size() == 1);
         CHECK(execution.Value().ExternalReleases().front().releaseAfter == pass);
-        auto moved = std::move(execution.Value());
+        auto moved = std::move(execution).Value();
         CHECK(moved.ExternalReleases().size() == 1);
     }
 

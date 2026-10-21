@@ -85,7 +85,9 @@ silently translated to color rendering. Projection depth requires negotiated
 `XR_KHR_composition_layer_depth`.
 
 The Linux native-command CI composition additionally enables OpenXR and builds the
-actual adapter plus its dedicated header consumer. Regressions drive the production
+actual adapter plus its dedicated header consumer. It asserts the discovered XR
+integration case exists and selects Catch `target::case` names explicitly, so a
+standalone smoke executable cannot hide an omitted contract suite. Regressions drive the production
 OpenXR owner, Vulkan image adapter, frontend registry, graph compiler, native graph
 recorder and retirement through injected official dispatch. Coverage includes color
 and depth arrays, native operation order, timeout/retry, stale/reacquired plans,
