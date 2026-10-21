@@ -68,6 +68,13 @@ namespace Horo::Editor {
             Application::INetworkDebuggerControl *networkDebuggerControl{};
         };
 
+        /** @brief One workspace incarnation and its independently retained root-bound source capabilities. */
+        struct WorkspaceSourceAuthorities {
+            Assets::AssetId owner;
+            std::shared_ptr<const Assets::IAssetRegistrySource> registry;
+            std::shared_ptr<const Platform::IProjectReadFiles> world;
+        };
+
         struct WorkspaceProjectServices {
             Assets::AssetRegistry *assetRegistry{nullptr};
             CollisionInventoryEvidence *collisionInventory{};
@@ -680,22 +687,31 @@ namespace Horo::Editor {
                 return Result<Assets::AssetId>::Success(owner);
             }
 
+            /** @brief Captures both native readers under the same fresh workspace incarnation before exposing either. */
+            static Result<WorkspaceSourceAuthorities> CaptureWorkspaceSources(const std::filesystem::path &root) {
+                const auto identity = CreateSessionOwner();
+                if (identity.HasError())
+                    return Result<WorkspaceSourceAuthorities>::Failure(identity.ErrorValue());
+                const auto owner = identity.Value();
+                auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
+                if (registry.HasError())
+                    return Result<WorkspaceSourceAuthorities>::Failure(registry.ErrorValue());
+                auto world = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
+                if (world.HasError())
+                    return Result<WorkspaceSourceAuthorities>::Failure(world.ErrorValue());
+                return Result<WorkspaceSourceAuthorities>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
+            }
+
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =
                     services_.TryGet<Application::GameplayBuildEnvironment>();
-                const auto identity = CreateSessionOwner();
-                if (identity.HasError())
-                    return Result<void>::Failure(identity.ErrorValue());
-                const auto sessionOwner = identity.Value();
-                auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
-                if (registrySource.HasError())
-                    return Result<void>::Failure(registrySource.ErrorValue());
-                auto worldSources = Platform::CreateNativeProjectReadFiles(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
-                if (worldSources.HasError())
-                    return Result<void>::Failure(worldSources.ErrorValue());
+                auto capturedSources = CaptureWorkspaceSources(projectRoot);
+                if (capturedSources.HasError())
+                    return Result<void>::Failure(capturedSources.ErrorValue());
+                auto sources = std::move(capturedSources).Value();
                 const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
@@ -706,7 +722,7 @@ namespace Horo::Editor {
                                                                  .previewReceipt = projectServices_.previewCollisionReceipt},
                                                    .mutations = projectServices_.mutations,
                                                    .durableFiles = projectServices_.durableFiles,
-                                                   .assetRegistrySource = std::move(registrySource).Value(),
+                                                   .assetRegistrySource = std::move(sources.registry),
                                                    .importerCatalog = projectServices_.importerCatalog,
                                                    .jobs = &services_.Get<JobSystem>(),
                                                    .worldBakeOperations = services_.TryGet<OperationStore>(),
@@ -722,8 +738,8 @@ namespace Horo::Editor {
                                                    .localization = &context_.localization,
                                                    .engineEvents = &context_.engineEvents,
                                                    .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
-                                                   .worldSourceFiles = std::move(worldSources).Value(),
-                                                   .documentSessionOwner = sessionOwner,
+                                                   .worldSourceFiles = std::move(sources.world),
+                                                   .documentSessionOwner = sources.owner,
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
