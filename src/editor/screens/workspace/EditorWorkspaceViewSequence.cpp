@@ -1,3 +1,4 @@
+#include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/modals/settings/NavigationSettingsDraft.h"
@@ -213,7 +214,7 @@ namespace Horo::Editor {
                 outCommand.command = EditorWorkspaceViewCommand::PrefabDocument;
                 outCommand.prefabFence = source.fence;
                 outCommand.prefabAction = intent;
-                if (intent == PrefabDocumentAction::Recover)
+                if (intent == PrefabDocumentAction::Recover || intent == PrefabDocumentAction::DiscardRecovery)
                     outCommand.prefabRecovery = viewModel.prefabRecovery;
             }
         };
@@ -221,7 +222,9 @@ namespace Horo::Editor {
         action("workspace.prefab_document.undo", PrefabDocumentAction::Undo, source.canUndo && !source.externalConflict);
         action("workspace.prefab_document.redo", PrefabDocumentAction::Redo, source.canRedo && !source.externalConflict);
         action("workspace.prefab_document.reload", PrefabDocumentAction::Reload, !source.dirty);
-        action("workspace.prefab_document.recover", PrefabDocumentAction::Recover, viewModel.prefabRecoveryAvailable && !source.dirty);
+        action("workspace.prefab_document.recover", PrefabDocumentAction::Recover,
+               viewModel.prefabRecovery && !source.dirty && viewModel.prefabRecovery->acceptedSource == source.acceptedSource);
+        action("workspace.prefab_document.discard_recovery", PrefabDocumentAction::DiscardRecovery, viewModel.prefabRecoveryAvailable);
         action("workspace.prefab_document.discard_reload", PrefabDocumentAction::DiscardAndReload, source.dirty || source.externalConflict);
         action("workspace.prefab_document.discard_close", PrefabDocumentAction::DiscardAndClose, source.dirty);
         if (viewModel.prefabDocumentError)

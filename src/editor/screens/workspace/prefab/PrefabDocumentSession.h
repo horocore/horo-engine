@@ -104,6 +104,13 @@ namespace Horo::Editor {
          * @param mutations Shared writer. @param files Durable service. @return Success or retained candidate on failure.
          */
         [[nodiscard]] Result<void> DiscardOwnedRecovery(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Discards an exact inspected candidate after an explicit user decision, including a foreign/stale session.
+         * @param fence Current source admission. @param record Exact displayed candidate, never a guessed record path.
+         * @param mutations Shared writer. @param files Durable service.
+         * @return Success or stale/authority failure preserving newer records; source/history/dirty state never changes.
+         */
+        [[nodiscard]] Result<void> DiscardRecoveryCandidate(PrefabDocumentFence fence, const DocumentRecoveryRecord &record,
+                                                            const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Resolves current in-memory source, projects typed components and creates a real isolated runtime scene.
          * @param registry Pinned registry. @param dependencies Canonical captured dependency sources, root replaced by this session.
          * @param runtimeId Host-reserved unique runtime incarnation. @param factory Explicit native/assets composition or assetless tests.
@@ -121,7 +128,7 @@ namespace Horo::Editor {
 
         /** @brief Reports pending/active resource ownership. @return Whether a stage is owned. */
         [[nodiscard]] bool HasStage() const noexcept {
-            return stage_ || hostedStage_;
+            return preview_.scene || preview_.host;
         }
 
         /** @brief Releases every preview/runtime resource without changing source, history or saved/recovery state. */
@@ -129,7 +136,7 @@ namespace Horo::Editor {
 
         /** @brief Borrows active runtime for immediate extraction. @return Stage or null. */
         [[nodiscard]] const Runtime::RuntimeScene *Stage() const noexcept {
-            return stage_.get();
+            return preview_.scene.get();
         }
 
         /** @brief Closes after explicit dirty decision. @param fence Exact admission. @param discardDirty User decision.
@@ -162,12 +169,18 @@ namespace Horo::Editor {
         Sha256Digest state_, saved_;
         SemanticDocumentHistory<Delta> history_;
         std::optional<DocumentRecoveryRecord> acceptedRecovery_;
-        std::unique_ptr<Runtime::RuntimeScene> stage_;
-        std::unique_ptr<EditorPlaySceneHost> hostedStage_;
-        CancellationSource stageCancellation_;
-        std::uint64_t stageFrame_{};
-        bool hostedStagePublished_{};
-        std::uint64_t revision_{1}, recoveryRevision_{}, previewRevision_{};
+
+        /** @brief Owns one preview incarnation while retaining its successful publication counter across retirement. */
+        struct PreviewState final {
+            std::unique_ptr<Runtime::RuntimeScene> scene;
+            std::unique_ptr<EditorPlaySceneHost> host;
+            CancellationSource cancellation;
+            std::uint64_t frame{};
+            std::uint64_t revision{};
+            bool published{};
+        } preview_;
+
+        std::uint64_t revision_{1}, recoveryRevision_{};
         bool conflict_{}, closed_{}, busy_{};
     };
 }  // namespace Horo::Editor

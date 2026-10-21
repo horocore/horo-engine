@@ -57,7 +57,7 @@ namespace Horo::Editor {
                                                       const Runtime::SceneRuntimeId runtimeId, const EditorPlaySceneFactory &factory) {
         if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
             return admitted;
-        if (previewRevision_ == std::numeric_limits<std::uint64_t>::max())
+        if (preview_.revision == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
         std::vector<Prefab::PrefabDependencySource> sources;
         for (const auto &dependency : dependencies.Sources())
@@ -71,7 +71,7 @@ namespace Horo::Editor {
                                                   Prefab::PrefabInstanceId::Create(identity_.instance.Value()).Value(), limits_);
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
-        auto definition = Definition(candidate.Value(), limits_, {identity_.instance.Value()}, {previewRevision_ + 1});
+        auto definition = Definition(candidate.Value(), limits_, {identity_.instance.Value()}, {preview_.revision + 1});
         if (definition.HasError())
             return Result<void>::Failure(definition.ErrorValue());
         return InstallStage(std::move(definition).Value(), runtimeId, factory);
@@ -97,16 +97,16 @@ namespace Horo::Editor {
                 return queued;
             }
             ReleaseStage();
-            stageCancellation_ = std::move(cancellation);
-            hostedStage_ = std::move(prepared).Value();
-            stageFrame_ = 1;
+            preview_.cancellation = std::move(cancellation);
+            preview_.host = std::move(prepared).Value();
+            preview_.frame = 1;
         } else {
             auto runtime = Runtime::RuntimeScene::Create(definition, runtimeId);
             if (runtime.HasError())
                 return Result<void>::Failure(runtime.ErrorValue());
             ReleaseStage();
-            stage_ = std::move(runtime).Value();
-            ++previewRevision_;
+            preview_.scene = std::move(runtime).Value();
+            ++preview_.revision;
         }
         return Result<void>::Success();
     }
@@ -115,28 +115,28 @@ namespace Horo::Editor {
     Result<bool> PrefabDocumentSession::AdvanceStage() {
         if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
             return Result<bool>::Failure(admitted.ErrorValue());
-        if (!hostedStage_)
-            return Result<bool>::Success(stage_ != nullptr);
-        if (hostedStagePublished_)
+        if (!preview_.host)
+            return Result<bool>::Success(preview_.scene != nullptr);
+        if (preview_.published)
             return Result<bool>::Success(true);
-        const Runtime::FrameContext frame{.frameNumber = stageFrame_++, .cancellation = stageCancellation_.Token()};
-        auto advanced = hostedStage_->CommitSceneChanges(frame);
-        auto failure = advanced.HasError() ? std::optional<Error>{advanced.ErrorValue()} : hostedStage_->Scenes().TakeOperationError();
+        const Runtime::FrameContext frame{.frameNumber = preview_.frame++, .cancellation = preview_.cancellation.Token()};
+        auto advanced = preview_.host->CommitSceneChanges(frame);
+        auto failure = advanced.HasError() ? std::optional<Error>{advanced.ErrorValue()} : preview_.host->Scenes().TakeOperationError();
         if (failure) {
             ReleaseStage();
             return Result<bool>::Failure(*failure);
         }
-        if (!hostedStage_->Scenes().ActiveScene())
+        if (!preview_.host->Scenes().ActiveScene())
             return Result<bool>::Success(false);
-        hostedStagePublished_ = true;
-        ++previewRevision_;
+        preview_.published = true;
+        ++preview_.revision;
         return Result<bool>::Success(true);
     }
 
     /** @copydoc PrefabDocumentSession::StageView */
     std::optional<Runtime::RuntimeSceneView> PrefabDocumentSession::StageView() const noexcept {
-        if (stage_)
-            return stage_->View();
-        return hostedStage_ && hostedStagePublished_ ? hostedStage_->Scenes().ActiveScene() : std::nullopt;
+        if (preview_.scene)
+            return preview_.scene->View();
+        return preview_.host && preview_.published ? preview_.host->Scenes().ActiveScene() : std::nullopt;
     }
 }  // namespace Horo::Editor

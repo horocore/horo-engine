@@ -339,7 +339,10 @@ The workspace routes durable source edits and persistence through typed commands
 A native replacement whose directory durability cannot be confirmed keeps the
 source dirty and requires reconciliation. External changes reject saves; malformed
 reload and rejected dirty close retain the complete source/history/stage. Recovery
-acceptance requires the exact inspected record and unchanged source base.
+acceptance requires the exact inspected record and unchanged source base. An explicit
+discard-candidate command can remove a foreign or obsolete record while preserving
+current source edits and history; exact-record comparison prevents a stale UI command
+from deleting a newer candidate. Autosave then publishes a new owned recovery record.
 
 The authoring stage replaces the captured resolver root with the current immutable
 in-memory source, then uses canonical resolution, identity remapping, built-in

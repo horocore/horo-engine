@@ -9,6 +9,7 @@
     "workspace.prefab_document.redo": { "text": "Redo source edit" },
     "workspace.prefab_document.reload": { "text": "Reload saved source" },
     "workspace.prefab_document.recover": { "text": "Restore recovery candidate" },
+    "workspace.prefab_document.discard_recovery": { "text": "Discard recovery candidate (keep source edits)" },
     "workspace.prefab_document.discard_reload": { "text": "Discard changes and reload source" },
     "workspace.prefab_document.discard_close": { "text": "Discard changes and close prefab" },
     "workspace.prefab_document.conflict": { "text": "The source changed outside this session. Reload or preserve recovery before continuing." },

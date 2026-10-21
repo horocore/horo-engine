@@ -112,6 +112,26 @@ namespace Horo::Editor {
         return discarded;
     }
 
+    /** @copydoc PrefabDocumentSession::DiscardRecoveryCandidate */
+    Result<void> PrefabDocumentSession::DiscardRecoveryCandidate(const PrefabDocumentFence fence, const DocumentRecoveryRecord &record,
+                                                                 const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+        if (auto admitted = Admit(fence); admitted.HasError())
+            return admitted;
+        if (record.asset != source_->Data().assetId || record.document != identity_.key)
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        PublicationGuard guard(busy_);
+        DocumentRecoveryService recovery(root_, mutations, files);
+        auto discarded = recovery.Discard(record);
+        if (discarded.HasError())
+            return discarded;
+        if ((record.sessionOwner == owner_ && record.sessionGeneration == identity_.instance.Value()) ||
+            (acceptedRecovery_ && *acceptedRecovery_ == record)) {
+            acceptedRecovery_.reset();
+            recoveryRevision_ = 0;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc PrefabDocumentSession::Recover */
     Result<void> PrefabDocumentSession::Recover(const PrefabDocumentFence fence, const DocumentRecoveryRecord &record,
                                                 const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {

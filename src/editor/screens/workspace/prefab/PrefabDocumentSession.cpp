@@ -62,7 +62,7 @@ namespace Horo::Editor {
                 accepted_,
                 saved_,
                 recoveryRevision_,
-                previewRevision_,
+                preview_.revision,
                 state_ != saved_,
                 conflict_,
                 history_.UndoCount() != 0,
@@ -213,12 +213,12 @@ namespace Horo::Editor {
 
     /** @copydoc PrefabDocumentSession::ReleaseStage */
     void PrefabDocumentSession::ReleaseStage() noexcept {
-        stageCancellation_.RequestCancellation();
-        if (hostedStage_)
-            hostedStage_->Shutdown();
-        hostedStage_.reset();
-        stage_.reset();
-        hostedStagePublished_ = false;
+        preview_.cancellation.RequestCancellation();
+        if (preview_.host)
+            preview_.host->Shutdown();
+        preview_.host.reset();
+        preview_.scene.reset();
+        preview_.published = false;
     }
 
     /** @copydoc PrefabDocumentSession::~PrefabDocumentSession */
