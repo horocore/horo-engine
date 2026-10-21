@@ -51,6 +51,27 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<Assets::AssetId>::Success(sessionOwner);
         }
 
+        /** @brief Owns the capability catalog and disposable preview inputs admitted together by the workspace host. */
+        struct WorkspacePCGComposition final {
+            PCGEditorCatalog catalog;
+            PCGPreviewInputs previewInputs;
+        };
+
+        /** @brief Prepares PCG capabilities and sandbox inputs before publishing a workspace controller. */
+        Result<WorkspacePCGComposition> CreatePCGWorkspaceComposition() {
+            const std::array previewGrants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview,
+                                           PCG::PCGCapability::OfflineBake, PCG::PCGCapability::RuntimeEvaluation,
+                                           PCG::PCGCapability::HybridEvaluation};
+            auto pcgComposition = CreatePCGEditorCatalog(PCG::PCGCapabilitySet::Create(previewGrants).Value());
+            if (pcgComposition.HasError())
+                return Result<WorkspacePCGComposition>::Failure(pcgComposition.ErrorValue());
+            auto pcgCatalog = std::move(pcgComposition).Value();
+            auto pcgPreview = CreatePCGPreviewSandbox();
+            if (pcgPreview.HasError())
+                return Result<WorkspacePCGComposition>::Failure(pcgPreview.ErrorValue());
+            return Result<WorkspacePCGComposition>::Success({std::move(pcgCatalog), std::move(pcgPreview).Value()});
+        }
+
     }  // namespace
 
     /** @copydoc EditorWorkspaceScreen::AttachWorkspacePanels */
@@ -105,15 +126,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, session.Value().ToString(), 1);
         if (registrySource.HasError())
             return Result<void>::Failure(registrySource.ErrorValue());
-        const std::array previewGrants{PCG::PCGCapability::Validation, PCG::PCGCapability::EditorPreview, PCG::PCGCapability::OfflineBake,
-                                       PCG::PCGCapability::RuntimeEvaluation, PCG::PCGCapability::HybridEvaluation};
-        auto pcgComposition = CreatePCGEditorCatalog(PCG::PCGCapabilitySet::Create(previewGrants).Value());
+        auto pcgComposition = CreatePCGWorkspaceComposition();
         if (pcgComposition.HasError())
-            return Result<void>::Failure(pcgComposition.ErrorValue());
-        auto pcgCatalog = std::move(pcgComposition).Value();
-        auto pcgPreview = CreatePCGPreviewSandbox();
-        if (pcgPreview.HasError())
-            return Result<void>::Failure(pcgPreview.ErrorValue());
+            return Result<void>::Failure(std::move(pcgComposition).ErrorValue());
+        auto pcg = std::move(pcgComposition).Value();
         view_.ResetSourceSession();
         controller_ =
             std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
@@ -140,8 +156,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                             .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                             .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                             .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
-                                                            .pcg = std::move(pcgCatalog),
-                                                            .pcgPreviewInputs = std::move(pcgPreview).Value(),
+                                                            .pcg = std::move(pcg.catalog),
+                                                            .pcgPreviewInputs = std::move(pcg.previewInputs),
                                                         });
         if (controller_->InitializationError().has_value()) {
             const Error error = *controller_->InitializationError();
