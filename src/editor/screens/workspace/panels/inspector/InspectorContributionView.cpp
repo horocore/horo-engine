@@ -8,10 +8,8 @@
 #include "editor/design_system/components/EditorUiCustomResources.h"
 
 #include <algorithm>
-#include <array>
 #include <charconv>
 #include <imgui.h>
-#include <limits>
 
 namespace Horo::Editor {
     using namespace Extensions;
@@ -214,16 +212,14 @@ namespace Horo::Editor {
     void InspectorContributionView::DrawEntry(Entry &entry, const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
                                               const EditorGuiContext &context) {
         const Ui::ScopedEditorUiInput inputScope{inputAdmitted_};
+        const Ui::ScopedEditorUiIdentity identity{entry.contribution.context.Provider(), entry.contribution.context.Surface().id,
+                                                  selectionRevision_};
         if (!entry.approved) {
             DrawApproval(entry, model, command, context);
             return;
         }
         if (!Prepare(entry))
             return;
-        ImGui::PushID(entry.contribution.context.Surface().id.c_str());
-        std::array<char, std::numeric_limits<std::uint64_t>::digits10 + 1> epoch{};
-        const auto encoded = std::to_chars(epoch.data(), epoch.data() + epoch.size(), selectionRevision_);
-        ImGui::PushID(epoch.data(), encoded.ptr);
         const auto origin = ImGui::GetCursorScreenPos();
         float extra{};
         float bottom{};
@@ -246,8 +242,6 @@ namespace Horo::Editor {
         ImGui::SetCursorScreenPos({origin.x, origin.y + bottom});
         if (entry.failure)
             ImGui::TextWrapped("%s", context.localization.Get("editor", "workspace.inspector.extension_invalid").c_str());
-        ImGui::PopID();
-        ImGui::PopID();
     }
 
     /** @copydoc InspectorContributionView::SetInputAdmitted */

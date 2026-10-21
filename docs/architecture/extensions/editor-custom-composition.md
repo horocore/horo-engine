@@ -75,7 +75,10 @@ modal controls. Keyboard arrows are owned by the focused native widget; pointer
 selection/dragging is scoped to its host hit target. Disabled ancestors cannot
 activate controls. There are no custom global shortcuts, event subscriptions or
 provider callbacks in draw traversal. Stable identity combines provider generation,
-surface, node and the inspector selection epoch. Locale/theme changes do not alter
+surface, node and the inspector selection epoch. The private native identity scope
+hashes the complete extension/module/generation, surface and owner epoch without
+truncating high bits. Activity controls also use their retained attachment token;
+standard action labels carry a host-stable hidden identity across locale changes. Locale/theme changes do not alter
 node identity; provider/selection/document replacement discards local drafts. A host
 frame-continuity fence also cancels a drag when its control was hidden; reopening
 a panel cannot commit a stale preview.

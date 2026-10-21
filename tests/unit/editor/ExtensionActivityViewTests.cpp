@@ -10,6 +10,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "SecurityTestSupport.h"
+#include "editor/design_system/components/EditorUiCustomResources.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/ExtensionActivityView.h"
@@ -252,6 +253,19 @@ namespace {
         CHECK_FALSE(view.Accessibility("fixture.activity").empty());
     }
 
+    /** @brief The actual rail controls obey the same modal input admission as their custom drawer content. */
+    void CheckActivityModalInput(ExtensionActivityView &view) {
+        view.SetInputAdmitted(false);
+        ImGui::NewFrame();
+        ImGui::Begin("rail");
+        CHECK_FALSE(view.DrawItems(false, 0, {1, 8}, 40, 470));
+        CHECK((GImGui->LastItemData.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        ImGui::End();
+        view.DrawDrawer(Extensions::EditorActivitySide::Left, {42, 0}, {320, 420});
+        ImGui::Render();
+        view.SetInputAdmitted(true);
+    }
+
     void CheckRailKeyboardFocus(ExtensionActivityView &view) {
         // ImGui applies focus API navigation results at the following NewFrame.
         ImGuiID railControl{};
@@ -388,6 +402,7 @@ namespace {
         CheckDrawerFocusAndNarrowFrames(view);
         CheckCustomPlotThemes(view);
         CheckPlotAccessibility(view);
+        CheckActivityModalInput(view);
         CheckStableLayoutCache(view);
         view.Update();
         CheckRailKeyboardFocus(view);
@@ -397,4 +412,30 @@ namespace {
         CheckBottomMouseActivation(view, host, workspace, leftPanel);
         CheckQueuedMoveRetirement(view, host, provider, manager, renderer);
     }
+
+    TEST_CASE("Native custom identities retain every provider generation and owner epoch bit", "[editor][Composition][Identity]") {
+        Gui gui;
+        ImGui::NewFrame();
+        ImGui::Begin("identity");
+        const auto outer = ImGui::GetID("outside");
+        Extensions::EditorSurfaceProviderIdentity provider{"identity.package", "identity.module", 1};
+        const auto identity = [&](const auto &owner, std::string_view surface, std::uint64_t epoch) {
+            const Ui::ScopedEditorUiIdentity scope{owner, surface, epoch};
+            return ImGui::GetID("widget");
+        };
+        const auto first = identity(provider, "surface", 1);
+        CHECK(first == identity(provider, "surface", 1));
+        CHECK(first != identity(provider, "other.surface", 1));
+        CHECK(first != identity(provider, "surface", (std::uint64_t{1} << 32) + 1));
+        provider.activationGeneration = (std::uint64_t{1} << 32) + 1;
+        CHECK(first != identity(provider, "surface", 1));
+        provider = {"other.package", "identity.module", 1};
+        CHECK(first != identity(provider, "surface", 1));
+        provider = {"identity.package", "other.module", 1};
+        CHECK(first != identity(provider, "surface", 1));
+        CHECK(ImGui::GetID("outside") == outer);
+        ImGui::End();
+        ImGui::Render();
+    }
+
 }  // namespace

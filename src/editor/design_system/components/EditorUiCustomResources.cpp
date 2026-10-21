@@ -4,12 +4,42 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <imgui_internal.h>
+#include <limits>
 #include <numbers>
 
 namespace Horo::Editor::Ui {
+    namespace {
+        /** @brief Hashes every bit of an owner epoch using bounded stack text. */
+        void PushIdentityNumber(std::uint64_t value) {
+            std::array<char, std::numeric_limits<std::uint64_t>::digits10 + 1> text{};
+            const auto encoded = std::to_chars(text.data(), text.data() + text.size(), value);
+            ImGui::PushID(text.data(), encoded.ptr);
+        }
+    }  // namespace
+
+    /** @copydoc ScopedEditorUiIdentity::ScopedEditorUiIdentity */
+    ScopedEditorUiIdentity::ScopedEditorUiIdentity(const Extensions::EditorSurfaceProviderIdentity &provider, std::string_view surface,
+                                                   std::uint64_t epoch) {
+        ImGui::PushID(provider.extensionId.c_str());
+        ImGui::PushID(provider.moduleId.c_str());
+        PushIdentityNumber(provider.activationGeneration);
+        if (surface.empty())
+            ImGui::PushID("");
+        else
+            ImGui::PushID(surface.data(), surface.data() + surface.size());
+        PushIdentityNumber(epoch);
+    }
+
+    /** @copydoc ScopedEditorUiIdentity::~ScopedEditorUiIdentity */
+    ScopedEditorUiIdentity::~ScopedEditorUiIdentity() {
+        for (int i = 0; i < 5; ++i)
+            ImGui::PopID();
+    }
+
     /** @copydoc ScopedEditorUiInput::ScopedEditorUiInput */
     ScopedEditorUiInput::ScopedEditorUiInput(bool admitted) {
         ImGui::BeginDisabled(!admitted);

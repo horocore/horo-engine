@@ -2,9 +2,26 @@
 /** @file EditorUiCustomResources.h @brief Private host adapters for semantic custom composition resources and scalar gestures. */
 #include "Horo/Editor/EditorIcons.h"
 #include "Horo/Editor/EditorTheme.h"
+#include "Horo/Extensions/EditorSurfaceContext.h"
 #include "Horo/Extensions/EditorUiForm.h"
 
+#include <string_view>
+
 namespace Horo::Editor::Ui {
+    /** @brief Scopes native control identity to the exact provider activation, surface and owner epoch. */
+    class ScopedEditorUiIdentity final {
+    public:
+        /** @brief Hashes complete typed identities without truncation or retained borrows.
+         * @param provider Exact attached extension/module/generation. @param surface Stable surface ID.
+         * @param epoch Host attachment or selection epoch. @note Requires the current host GUI window.
+         */
+        ScopedEditorUiIdentity(const Extensions::EditorSurfaceProviderIdentity &provider, std::string_view surface, std::uint64_t epoch);
+        /** @brief Restores the containing native identity stack. */
+        ~ScopedEditorUiIdentity();
+        ScopedEditorUiIdentity(const ScopedEditorUiIdentity &) = delete;
+        ScopedEditorUiIdentity &operator=(const ScopedEditorUiIdentity &) = delete;
+    };
+
     /** @brief Applies the actual workspace input decision to native controls, including custom presenters. */
     class ScopedEditorUiInput final {
     public:
