@@ -110,6 +110,17 @@ namespace {
         REQUIRE((service.ActivatePrepared()));
     }
 
+    /** @brief Requires the localized controls and close decisions belonging to persistent document tabs. */
+    void RequireDocumentCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array documentKeys{"workspace.documents.close",         "workspace.documents.move_left",
+                                          "workspace.documents.move_right",    "workspace.documents.save",
+                                          "workspace.documents.preview",       "workspace.documents.preview_limit",
+                                          "workspace.documents.close_title",   "workspace.documents.close_prompt",
+                                          "workspace.documents.close_failed",  "workspace.documents.save_close",
+                                          "workspace.documents.discard_close", "workspace.documents.cancel"};
+        RequireCatalogKeys(service, documentKeys);
+    }
+
     void RequireSettingsCatalogKeys(const Horo::Editor::LocalizationService &service) {
         REQUIRE_FALSE(service.Get("editor", "settings.nav.packages").starts_with("[missing:"));
         REQUIRE_FALSE(service.Get("editor", "settings.nav.updates").starts_with("[missing:"));
@@ -150,6 +161,7 @@ namespace {
                                          "workspace.packages.recovery_hint"};
         RequireCatalogKeys(service, packageKeys);
         RequireCatalogKeys(service, globalDockKeys);
+        RequireDocumentCatalogKeys(service);
         RequireCatalogKeys(service, contentBrowserKeys);
         RequireCatalogKeys(service, recoveryKeys);
         RequireCatalogKeys(service, projectLoadingKeys);

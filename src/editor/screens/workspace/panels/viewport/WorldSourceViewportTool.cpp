@@ -9,7 +9,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <type_traits>
 
 namespace Horo::Editor {
     namespace {
@@ -25,7 +24,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Rejects distant points with exact unsigned differences before constructing any per-frame error value. */
-        bool FitsViewportWindow(Point point, Point origin) {
+        bool FitsViewportWindow(const Point &point, const Point &origin) {
             const auto p = point.Millimeters();
             const auto o = origin.Millimeters();
             for (std::size_t axis = 0; axis < p.size(); ++axis) {
@@ -55,7 +54,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Emits one complete intent; UI never obtains mutable document storage. */
-        void Emit(EditorWorkspaceViewCommandData &command, WorldSourceToolAction action, WorldDocumentFence fence,
+        void Emit(EditorWorkspaceViewCommandData &command, WorldSourceToolAction action, const WorldDocumentFence &fence,
                   const WorldViewportBinding &binding, std::optional<PartitionedWorldSource> source = {}) {
             command.command = EditorWorkspaceViewCommand::WorldSourceTool;
             command.worldSource = WorldSourceToolCommand{.action = action,
@@ -66,8 +65,46 @@ namespace Horo::Editor {
                                                          .viewRevision = binding.viewRevision};
         }
 
+        /** @brief Translates a detached default point through checked local/global conversion. */
+        Result<void> TranslatePoint(Point &point, const Point &origin) {
+            const auto local = WorldSourceViewportPoint(point, {});
+            if (local.HasError())
+                return Result<void>::Failure(local.ErrorValue());
+            const auto global = WorldSourceViewportGlobal(origin, local.Value());
+            if (global.HasError())
+                return Result<void>::Failure(global.ErrorValue());
+            point = global.Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Translates only the sphere center; its extent remains exact. */
+        Result<void> TranslateGeometry(WS::StreamingSourceSphere &shape, const Point &origin) {
+            return TranslatePoint(shape.center, origin);
+        }
+
+        /** @brief Rejects either box corner overflow before the detached default can be submitted. */
+        Result<void> TranslateGeometry(WS::StreamingSourceBox &shape, const Point &origin) {
+            if (const auto minimum = TranslatePoint(shape.minimum, origin); minimum.HasError())
+                return minimum;
+            return TranslatePoint(shape.maximum, origin);
+        }
+
+        /** @brief Translates the frustum anchor without changing its plane equations. */
+        Result<void> TranslateGeometry(WS::StreamingSourceFrustum &shape, const Point &origin) {
+            return TranslatePoint(shape.anchor, origin);
+        }
+
+        /** @brief Translates the complete bounded path prefix before publication. */
+        Result<void> TranslateGeometry(WS::StreamingSourcePathVolume &shape, const Point &origin) {
+            for (std::size_t index = 0; index < shape.pointCount; ++index) {
+                if (const auto point = TranslatePoint(shape.points[index], origin); point.HasError())
+                    return point;
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Builds bounded usable authored defaults, without runtime registration or activation. */
-        Result<PartitionedWorldSource> DefaultSource(std::size_t shape, Point origin) {
+        Result<PartitionedWorldSource> DefaultSource(std::size_t shape, const Point &origin) {
             PartitionedWorldSource value{.shape = WS::StreamingSourceSphere{{}, 1000},
                                          .priority = WS::StreamingSourcePriority::Create(1).Value()};
             if (shape == 1)
@@ -84,35 +121,11 @@ namespace Horo::Editor {
                 path.points[1] = Point::FromMillimeters(1000, 0, 0);
                 value.shape = path;
             }
-            const auto translated = std::visit([&](auto &geometry) -> Result<void> {
-                using T = std::decay_t<decltype(geometry)>;
-                const auto translate = [&](Point &point) -> Result<void> {
-                    const auto local = WorldSourceViewportPoint(point, {});
-                    if (local.HasError())
-                        return Result<void>::Failure(local.ErrorValue());
-                    const auto global = WorldSourceViewportGlobal(origin, local.Value());
-                    if (global.HasError())
-                        return Result<void>::Failure(global.ErrorValue());
-                    point = global.Value();
-                    return Result<void>::Success();
-                };
-                if constexpr (std::is_same_v<T, WS::StreamingSourceSphere>)
-                    return translate(geometry.center);
-                else if constexpr (std::is_same_v<T, WS::StreamingSourceBox>) {
-                    if (const auto minimum = translate(geometry.minimum); minimum.HasError())
-                        return minimum;
-                    return translate(geometry.maximum);
-                } else if constexpr (std::is_same_v<T, WS::StreamingSourceFrustum>)
-                    return translate(geometry.anchor);
-                else {
-                    for (std::size_t index = 0; index < geometry.pointCount; ++index) {
-                        if (const auto point = translate(geometry.points[index]); point.HasError())
-                            return point;
-                    }
-                    return Result<void>::Success();
-                }
+            if (const auto translated = std::visit(
+                    [&]<typename Geometry>(Geometry &geometry) {
+                return TranslateGeometry(geometry, origin);
             }, value.shape);
-            if (translated.HasError())
+                translated.HasError())
                 return Result<PartitionedWorldSource>::Failure(translated.ErrorValue());
             return Result<PartitionedWorldSource>::Success(std::move(value));
         }
@@ -132,7 +145,7 @@ namespace Horo::Editor {
 
     /** @copydoc WorldSourceViewportTool::DrawSourceProperties */
     void WorldSourceViewportTool::DrawSourceProperties(const EditorGuiContext &context) {
-        const auto label = [&](const char *key) -> const char * {
+        const auto label = [&](const char *key) {
             return context.localization.Get("editor", key).c_str();
         };
         float priority = draft_->priority.Value();
@@ -141,14 +154,14 @@ namespace Horo::Editor {
         const auto value = WS::StreamingSourcePriority::Create(priority);
         draft_->priority = value.HasValue() ? value.Value() : WS::StreamingSourcePriority{};
         int target = static_cast<int>(draft_->target);
-        const std::array<const char *, 3> targets{label("workspace.world_sources.unloaded"), label("workspace.world_sources.loaded"),
-                                                  label("workspace.world_sources.activated")};
-        if (Ui::DrawComboPropRow(label("workspace.world_sources.target"), "##source_target", target, targets, context.theme.fonts))
+        if (const auto targets = std::array{label("workspace.world_sources.unloaded"), label("workspace.world_sources.loaded"),
+                                            label("workspace.world_sources.activated")};
+            Ui::DrawComboPropRow(label("workspace.world_sources.target"), "##source_target", target, targets, context.theme.fonts))
             draft_->target = static_cast<WS::StreamingDesiredResidency>(target);
         int intent = static_cast<int>(draft_->intent);
-        const std::array<const char *, 4> intents{label("workspace.world_sources.camera"), label("workspace.world_sources.gameplay"),
-                                                  label("workspace.world_sources.network"), label("workspace.world_sources.preload")};
-        if (Ui::DrawComboPropRow(label("workspace.world_sources.intent"), "##source_intent", intent, intents, context.theme.fonts))
+        if (const auto intents = std::array{label("workspace.world_sources.camera"), label("workspace.world_sources.gameplay"),
+                                            label("workspace.world_sources.network"), label("workspace.world_sources.preload")};
+            Ui::DrawComboPropRow(label("workspace.world_sources.intent"), "##source_intent", intent, intents, context.theme.fonts))
             draft_->intent = static_cast<WS::StreamingSourceIntent>(intent);
         static_cast<void>(
             Ui::DrawColor3PropRow(label("workspace.world_sources.color"), "##source_color", draft_->debugColor, context.theme.fonts));
@@ -180,7 +193,7 @@ namespace Horo::Editor {
     /** @copydoc WorldSourceViewportTool::DrawPopup */
     void WorldSourceViewportTool::DrawPopup(const EditorWorkspaceViewModel &view, EditorWorkspaceViewCommandData &command,
                                             const EditorGuiContext &context) {
-        const auto label = [&](const char *key) -> const char * {
+        const auto label = [&](const char *key) {
             return context.localization.Get("editor", key).c_str();
         };
         if (!view.worldViewport.snapshot) {
@@ -232,14 +245,13 @@ namespace Horo::Editor {
     }
 
     /** @copydoc WorldSourceViewportTool::Draw */
-    bool WorldSourceViewportTool::Draw(ImDrawList &draw, ImVec2 origin, ImVec2 size, const EditorWorkspaceViewModel &view,
-                                       EditorWorkspaceViewCommandData &command, const EditorGuiContext &context, Math::ClipDepthRange depth,
-                                       bool eligible) {
+    bool WorldSourceViewportTool::Draw(const Frame &frame, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+        const auto &[draw, origin, size, view, depth, eligible] = frame;
         if (!view.worldViewport.snapshot ||
             (draft_ && (fence_ != view.worldViewport.snapshot->fence || origin_ != view.worldViewport.globalOrigin ||
                         viewRevision_ != view.worldViewport.viewRevision)) ||
             !MatchesProjection(view.viewportCamera, origin, size, depth) || view.playState != EditorPlayState::Idle ||
-            (!eligible && dragged_))
+            (!eligible && dragged_.has_value()))
             Cancel();
         const bool canEdit = eligible && view.playState == EditorPlayState::Idle;
         ImGui::SetCursorScreenPos({origin.x + Theme::Layout::BodyPadX, origin.y + size.y - ImGui::GetFrameHeightWithSpacing()});
@@ -261,8 +273,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc WorldSourceViewportTool::BeginDrag */
-    void WorldSourceViewportTool::BeginDrag(const Frame &frame, const PartitionedWorldSource &source, std::size_t handle, Point global,
-                                            Math::Vec3 local) {
+    void WorldSourceViewportTool::BeginDrag(const Frame &frame, const PartitionedWorldSource &source, std::size_t handle,
+                                            const Point &global, Math::Vec3 local) {
         const auto normal = Math::TryNormalize(frame.view.viewportCamera.target - frame.view.viewportCamera.position);
         if (normal.HasError())
             return;
@@ -312,7 +324,7 @@ namespace Horo::Editor {
             const float dy = mouse.y - pixel.y;
             const bool hovered = frame.eligible && dx * dx + dy * dy <= 64;
             frame.draw.AddCircleFilled(pixel, hovered ? 6 : 4, color);
-            if (frame.eligible && hovered && !dragged_ && (!draft_ || draft_->id == authored.id) &&
+            if (frame.eligible && hovered && !dragged_.has_value() && (!draft_ || draft_->id == authored.id) &&
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 BeginDrag(frame, authored, handle, points.Value().Points()[handle], local.Value());
         }
@@ -320,14 +332,15 @@ namespace Horo::Editor {
 
     /** @copydoc WorldSourceViewportTool::UpdateDrag */
     bool WorldSourceViewportTool::UpdateDrag(const Frame &frame, EditorWorkspaceViewCommandData &command) {
-        if (!dragged_ || !draft_)
+        if (!dragged_.has_value() || !draft_)
             return false;
         if (!frame.eligible) {
             Cancel();
             return true;
         }
-        const auto pointer = PointerPoint(frame.origin, frame.size, frame.view.viewportCamera, frame.depth, dragNormal_, dragPlanePoint_);
-        if (pointer) {
+        if (const auto pointer =
+                PointerPoint(frame.origin, frame.size, frame.view.viewportCamera, frame.depth, dragNormal_, dragPlanePoint_);
+            pointer.has_value()) {
             const auto position = WorldSourceViewportGlobal(dragStart_, *pointer - dragIntersection_);
             if (position.HasValue()) {
                 const auto value = MoveWorldSourceGizmo(*dragOriginal_, *dragged_, position.Value());
@@ -358,7 +371,8 @@ namespace Horo::Editor {
     bool WorldSourceViewportTool::DrawHandles(ImDrawList &draw, ImVec2 origin, ImVec2 size, const EditorWorkspaceViewModel &view,
                                               EditorWorkspaceViewCommandData &command, Math::ClipDepthRange depth, bool eligible) {
         const bool hadDrag = dragged_.has_value();
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) || (dragged_ && !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            (dragged_.has_value() && !ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))) {
             Cancel();
             return hadDrag;
         }

@@ -13,6 +13,10 @@ namespace {
         }
     };
 
+    static_assert(std::is_same_v<decltype(Horo::SceneSource::EncodePrefabNavigationComponent(
+                                     Horo::Runtime::BuiltinSceneComponentKind::NavigationAgent, Horo::Prefab::PrefabComponentInstanceId{},
+                                     Horo::SceneSource::SceneObjectComponentSet{})),
+                                 Horo::Result<Horo::Prefab::RawComponentPayload>>);
     static_assert(Horo::Runtime::SceneStructuralParticipantContractVersion == 3);
     static_assert(std::is_constructible_v<Horo::Prefab::PrefabSpawnService, Horo::Prefab::PrefabTemplateProvider &,
                                           Horo::Runtime::RuntimeSceneService &, const Horo::Gameplay::ComponentRegistry *,

@@ -957,8 +957,7 @@ namespace Horo::Editor {
         ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tokens.spacing.propertyRowGap, 0.0F));
         for (const std::string &panelId : stack->tabs)
             DrawDocumentTab(panelId, outCommand, !viewModel.workspacePanelHost.ActiveDocument().has_value() && stack->activeTab == panelId);
-        DrawSequenceDocumentTabs(viewModel, outCommand);
-        DrawNavigationDocumentTabs(viewModel);
+        DrawWorkspaceDocumentTabs(viewModel, outCommand);
         ImGui::PopStyleVar();
         ImGui::EndChild();
     }

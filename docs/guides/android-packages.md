@@ -21,7 +21,7 @@ AAR. The hosted `android-package.yml` workflow demonstrates these prerequisites
 and checks download hashes before execution. Assemble in a new output directory:
 
 ```bash
-python3 scripts/android_package.py --profile qualification-debug \
+python3 scripts/project.py android --profile qualification-debug \
   --abi arm64-v8a --abi x86_64 --sdk "$ANDROID_HOME" \
   --ndk "$ANDROID_NDK_ROOT" --gradle "$GRADLE_HOME/bin/gradle" \
   --game-activity "$GAME_ACTIVITY_AAR" --output "$PACKAGE_OUTPUT" --unsigned

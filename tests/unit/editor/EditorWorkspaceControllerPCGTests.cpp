@@ -12,6 +12,16 @@ namespace Horo::Editor {
             REQUIRE(registry.Publish({{Asset(), Assets::AssetTypeId::Parse("core.pcg_graph").Value(), source, metadata}}).status ==
                     Assets::AssetRegistryBuildStatus::Complete);
         }
+
+        /** @brief Verifies that the common document command retires the canonical clean PCG owner and its tab together. */
+        void CheckWorkspacePCGClose(EditorWorkspaceController &controller, const DocumentInstanceId instance) {
+            EditorWorkspaceViewCommandData close;
+            close.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument;
+            close.documentInstance = instance;
+            controller.ProcessCommand(close);
+            CHECK(controller.PCGDocuments().Snapshots().Value().empty());
+            CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().empty());
+        }
     }  // namespace
 
     TEST_CASE("Workspace PCG activation owns binary sessions dirty tabs recovery save and close", "[unit][editor][pcg][workspace]") {
@@ -54,8 +64,7 @@ namespace Horo::Editor {
         REQUIRE(controller.SavePCGDocuments().HasValue());
         CHECK_FALSE(controller.HasDirtyPCGDocuments());
         CHECK_FALSE(controller.ViewModel().workspacePanelHost.DocumentTabs().front().dirty);
-        REQUIRE(controller.ClosePCGDocument(initial.identity.instance, false).HasValue());
-        CHECK(controller.ViewModel().workspacePanelHost.DocumentTabs().empty());
+        CheckWorkspacePCGClose(controller, initial.identity.instance);
         controller.ProcessCommand(open);
         auto reopened = controller.PCGDocuments().Snapshots().Value().front();
         CHECK(reopened.session != initial.session);

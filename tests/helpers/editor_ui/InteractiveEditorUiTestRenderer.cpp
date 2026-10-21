@@ -78,7 +78,7 @@ namespace Horo::Tests {
         if (!frameExecuted_)
             ExecutePasses({}, false);
 
-        const Result<void> rendered = guiRenderer_->RenderDrawData();
+        const Result<void> rendered = frame_->ComposeGui(*guiRenderer_);
         if (rendered.HasError()) {
             frame_->Cancel();
             frame_.reset();

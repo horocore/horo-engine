@@ -1,6 +1,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 
 namespace {
     using namespace Horo;
@@ -108,6 +109,57 @@ namespace {
         REQUIRE(controller.SetWorldViewportBinding(canonical, {replacement, {}, 2}).HasValue());
         controller.ProcessCommand(Create({replacement, {}, 2}));
         CHECK(canonical.Snapshot().Value()->document.sources.size() == 1);
+    }
+
+    TEST_CASE("Source bindings reject missing foreign and closed owners without retargeting", "[editor][world_document][viewport]") {
+        PartitionedWorldWorkspace world{Owner()};
+        const auto root = world.Open(Document()).Value();
+        Runtime::RuntimeSceneService runtime;
+        EditorWorkspaceController controller{"test-project", runtime};
+        const WorldViewportBinding binding{root, {}, 1};
+        CHECK(controller.SetWorldViewportBinding(binding).HasError());
+        REQUIRE(controller.SetWorldViewportBinding(world, binding).HasValue());
+        CHECK(controller.SetWorldViewportBinding(world, {{}, {}, 2}).HasError());
+        CHECK(controller.SetWorldViewportBinding(world, {root, {}, 0}).HasError());
+        auto bytes = Owner().Bytes();
+        bytes[0] = 18;
+        PartitionedWorldWorkspace foreign{Assets::AssetId::FromBytes(bytes)};
+        const auto foreignRoot = foreign.Open(Document()).Value();
+        CHECK(controller.SetWorldViewportBinding(foreign, {foreignRoot, {}, 2}).HasError());
+        CHECK(controller.ViewModel().worldViewport.snapshot == root);
+        REQUIRE(world.Close(root->fence, WorldDocumentDisposition::Discard).HasValue());
+        CHECK(controller.SetWorldViewportBinding(world, binding).HasError());
+        controller.RefreshWorldSourceProjection();
+        CHECK_FALSE(controller.ViewModel().worldViewport.snapshot);
+        CHECK(foreign.Snapshot().Value() == foreignRoot);
+    }
+
+    TEST_CASE("Source command rejection preserves root when identity space or semantic action is unavailable",
+              "[editor][world_document][viewport]") {
+        PartitionedWorldWorkspace world{Owner()};
+        auto document = Document();
+        document.sources.push_back({.id = WS::StreamingSourceId::Create(std::numeric_limits<std::uint64_t>::max()).Value(),
+                                    .revision = WS::StreamingSourceRevision::Create(1).Value(),
+                                    .shape = WS::StreamingSourceSphere{{}, 1000},
+                                    .priority = WS::StreamingSourcePriority::Create(1).Value()});
+        const auto root = world.Open(document).Value();
+        Runtime::RuntimeSceneService runtime;
+        EditorWorkspaceController controller{"test-project", runtime, {}, {.partitionedWorld = &world}};
+        const WorldViewportBinding binding{root, {}, 1};
+        REQUIRE(controller.SetWorldViewportBinding(binding).HasValue());
+        controller.ProcessCommand(Create(binding));
+        REQUIRE(controller.ViewModel().worldSourceError.has_value());
+        CHECK(controller.ViewModel().worldSourceError->code.Value() == "world_document.exhausted");
+        CHECK(world.Snapshot().Value() == root);
+        auto unsupported = Create(binding);
+        unsupported.worldSource->action = static_cast<WorldSourceToolAction>(255);
+        controller.ProcessCommand(unsupported);
+        CHECK(controller.ViewModel().worldSourceError->code.Value() == "world_document.unsupported");
+        CHECK(world.Snapshot().Value() == root);
+        unsupported.worldSource.reset();
+        controller.ProcessCommand(unsupported);
+        CHECK(controller.ViewModel().worldSourceError->code.Value() == "world_document.lifecycle");
+        CHECK(world.Snapshot().Value() == root);
     }
 
 }  // namespace

@@ -70,18 +70,25 @@ namespace Horo::Prefab {
     }  // namespace
 
     /** @copydoc PrefabValueSchemaSnapshot::PrefabValueSchemaSnapshot */
-    PrefabValueSchemaSnapshot::PrefabValueSchemaSnapshot(std::vector<PrefabValuePropertySchema> properties,
-                                                         const Sha256Digest &revision) noexcept
-        : properties_(std::move(properties)), revision_(revision) {}
+    PrefabValueSchemaSnapshot::PrefabValueSchemaSnapshot(std::vector<PrefabValuePropertySchema> properties, const Sha256Digest &revision,
+                                                         std::vector<PrefabComponentOverridePolicy> components,
+                                                         std::vector<PrefabBehaviorComponentPolicy> behaviors) noexcept
+        : properties_(std::move(properties)), revision_(revision), components_(std::move(components)), behaviors_(std::move(behaviors)) {}
 
     /** @copydoc PrefabValueSchemaSnapshot::Create */
     Result<PrefabValueSchemaSnapshot> PrefabValueSchemaSnapshot::Create(std::vector<PrefabValuePropertySchema> properties,
-                                                                        const PrefabLimitProfile &limits) {
+                                                                        const PrefabLimitProfile &limits,
+                                                                        std::vector<PrefabComponentOverridePolicy> components,
+                                                                        std::vector<PrefabBehaviorComponentPolicy> behaviors) {
         try {
             auto revision = ValidateSchemas(properties, limits);
             if (revision.HasError())
                 return Result<PrefabValueSchemaSnapshot>::Failure(revision.ErrorValue());
-            return Result<PrefabValueSchemaSnapshot>::Success(PrefabValueSchemaSnapshot{std::move(properties), revision.Value()});
+            auto complete = CaptureComponentSchemas(components, behaviors, properties, revision.Value(), limits);
+            if (complete.HasError())
+                return Result<PrefabValueSchemaSnapshot>::Failure(complete.ErrorValue());
+            return Result<PrefabValueSchemaSnapshot>::Success(
+                PrefabValueSchemaSnapshot{std::move(properties), complete.Value(), std::move(components), std::move(behaviors)});
         } catch (const std::bad_alloc &) {
             return Result<PrefabValueSchemaSnapshot>::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
         }
@@ -102,5 +109,29 @@ namespace Horo::Prefab {
         const auto key = std::pair{std::string_view(target.ComponentType().Value()), target.Property().Value()};
         const auto found = std::ranges::lower_bound(properties_, key, {}, Key);
         return found != properties_.end() && Key(*found) == key ? std::to_address(found) : nullptr;
+    }
+
+    /** @copydoc PrefabValueSchemaSnapshot::Components */
+    std::span<const PrefabComponentOverridePolicy> PrefabValueSchemaSnapshot::Components() const noexcept {
+        return components_;
+    }
+
+    /** @copydoc PrefabValueSchemaSnapshot::Behaviors */
+    std::span<const PrefabBehaviorComponentPolicy> PrefabValueSchemaSnapshot::Behaviors() const noexcept {
+        return behaviors_;
+    }
+
+    /** @copydoc PrefabValueSchemaSnapshot::FindComponent */
+    const PrefabComponentOverridePolicy *PrefabValueSchemaSnapshot::FindComponent(const Gameplay::ComponentTypeId &type) const noexcept {
+        const auto found = std::ranges::lower_bound(components_, type, {}, [](const auto &entry) -> const auto & {
+            return entry.component.typeId;
+        });
+        return found != components_.end() && found->component.typeId == type ? std::to_address(found) : nullptr;
+    }
+
+    /** @copydoc PrefabValueSchemaSnapshot::FindBehavior */
+    const PrefabBehaviorComponentPolicy *PrefabValueSchemaSnapshot::FindBehavior(const Gameplay::BehaviorTypeId &type) const noexcept {
+        const auto found = std::ranges::lower_bound(behaviors_, type, {}, &PrefabBehaviorComponentPolicy::type);
+        return found != behaviors_.end() && found->type == type ? std::to_address(found) : nullptr;
     }
 }  // namespace Horo::Prefab

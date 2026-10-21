@@ -119,9 +119,24 @@ namespace Horo::Application {
         if (error)
             SKIP("Directory symlink creation is unavailable to this test account");
         const auto failed = fixture.Run({}, 6);
-        CHECK(failed.at("error").at("code") == "project_read.unsafe_path");
+        CHECK(failed.at("error").at("code") == "file_storage.unsafe_object");
         CHECK(std::filesystem::is_empty(outside.Path()));
         CHECK_FALSE(std::filesystem::exists(fixture.Namespace("cooked")));
+    }
+
+    TEST_CASE("Native CLI rejects redirected publication ancestors through its retained writer", "[navigation][cli][integration]") {
+        NativeCli fixture;
+        Horo::Tests::OwnedTestDirectory outside{"navigation outside publication"};
+        const auto parent = fixture.project.source.directory.Path() / ".horo/cooked";
+        std::filesystem::create_directories(parent);
+        std::error_code error;
+        std::filesystem::create_directory_symlink(outside.Path(), parent / "navigation", error);
+        if (error)
+            SKIP("Directory symlink creation is unavailable to this test account");
+        const auto failed = fixture.Run({}, 6);
+        CHECK(failed.at("error").at("code") == "file_storage.unsafe_object");
+        CHECK(std::filesystem::is_empty(outside.Path()));
+        CHECK_FALSE(std::filesystem::exists(fixture.Namespace("cache")));
     }
 
     TEST_CASE("Native MCP publishes bound navigation tools while preserving exact mutation approval", "[navigation][mcp][integration]") {

@@ -52,7 +52,7 @@ namespace Horo::Editor {
         // Prepare all fallible history storage before the authority publishes anything.
         auto history = sourceHistory_;
         history.resize(sourceHistoryCursor_);
-        history.push_back({snapshot_->document.sources, document.sources});
+        history.emplace_back(snapshot_->document.sources, document.sources);
         auto result = Commit(document, edit.expected, cancellation);
         if (result.HasValue()) {
             sourceHistory_.swap(history);
@@ -62,7 +62,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PartitionedWorldWorkspace::ReplaySources */
-    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::ReplaySources(const WorldDocumentFence expected, const bool redo,
+    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::ReplaySources(const WorldDocumentFence &expected, const bool redo,
                                                                                    const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());

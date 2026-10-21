@@ -1,3 +1,4 @@
+#include "../../support/OwnedTestDirectory.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "editor/screens/project_loading/ProjectLoadingView.h"
@@ -8,6 +9,8 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <fstream>
+#include <imgui_internal.h>
 #include <memory>
 #include <string>
 #include <utility>
@@ -71,6 +74,34 @@ namespace {
         std::string id_;
         Horo::Editor::WorkspaceDockArea area_;
     };
+
+    /** @brief Drives the rendered Save action and unavailable-owner presentation using the same workspace view. */
+    void CheckSourceSaveAndUnavailable(Horo::Editor::Tests::EditorGuiContextFixture &fixture, Horo::Editor::EditorWorkspaceView &view,
+                                       Horo::Editor::EditorWorkspaceViewModel &model, const Horo::Editor::SourceDocumentSnapshot &source,
+                                       const float width) {
+        using namespace Horo::Editor;
+        ImGuiID saveId{};
+        for (const auto *window : ImGui::GetCurrentContext()->Windows)
+            if (std::string_view{window->Name}.find("##DockDocument/##DockContent") != std::string_view::npos)
+                saveId = ImHashStr(fixture.localization.Get("editor", "workspace.documents.save").c_str(), 0, window->IDStack.back());
+        REQUIRE(saveId != 0);
+        ImGui::ActivateItemByID(saveId);
+        EditorWorkspaceViewCommandData save;
+        fixture.imgui.BeginFrame();
+        view.Draw(model, save, GuiContentRegion{0, 0, width, 600});
+        fixture.imgui.EndFrame();
+        REQUIRE(save.command == EditorWorkspaceViewCommand::SaveSourceDocument);
+        REQUIRE(save.sourceSave);
+        CHECK(save.sourceSave->instance == source.Identity().instance);
+        CHECK(save.sourceSave->expectedRevision == source.Revision());
+        // A surviving host identity must show an unavailable owner rather than another tab's cached text.
+        REQUIRE(model.workspacePanelHost.FocusDocument(model.workspacePanelHost.DocumentTabs()[1].identity.instance).HasValue());
+        EditorWorkspaceViewCommandData unavailable;
+        fixture.imgui.BeginFrame();
+        view.Draw(model, unavailable, GuiContentRegion{0, 0, width, 600});
+        fixture.imgui.EndFrame();
+        CHECK(unavailable.command == EditorWorkspaceViewCommand::None);
+    }
 }  // namespace
 
 TEST_CASE("Welcome presentation renders recent-project compatibility states and news", "[unit][editor][gui][welcome]") {
@@ -78,7 +109,7 @@ TEST_CASE("Welcome presentation renders recent-project compatibility states and 
     using namespace Horo::Application;
     using namespace Horo::Editor;
 
-    Tests::EditorGuiContextFixture fixture;
+    Horo::Editor::Tests::EditorGuiContextFixture fixture;
     static constexpr std::array statuses{
         ProjectCompatibilityStatus::Current,
         ProjectCompatibilityStatus::CompatibleReleaseLine,
@@ -117,7 +148,7 @@ TEST_CASE("Welcome presentation renders recent-project compatibility states and 
 TEST_CASE("Project loading presentation renders active cancelled and failure states", "[unit][editor][gui][project-loading]") {
     using namespace Horo::Editor;
 
-    Tests::EditorGuiContextFixture fixture;
+    Horo::Editor::Tests::EditorGuiContextFixture fixture;
     const GuiContentRegion content{0.0F, 0.0F, 1280.0F, 800.0F};
     std::array states{
         ProjectLoadingViewState{.projectName = "Active", .projectRoot = "/projects/active", .progress = 42.0F},
@@ -147,7 +178,7 @@ TEST_CASE("Workspace presentation renders lifecycle and recovery states without 
     using namespace Horo;
     using namespace Horo::Editor;
 
-    Tests::EditorGuiContextFixture fixture;
+    Horo::Editor::Tests::EditorGuiContextFixture fixture;
     WorkspacePanelRegistry panels;
     auto workspaceInput = fixture.input.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
     EditorWorkspaceView view{fixture.context, panels, 0, fixture.input, workspaceInput};
@@ -181,7 +212,7 @@ TEST_CASE("Workspace presentation routes registered panels through every dock ar
     using namespace Horo;
     using namespace Horo::Editor;
 
-    Tests::EditorGuiContextFixture fixture;
+    Horo::Editor::Tests::EditorGuiContextFixture fixture;
     WorkspacePanelRegistry panels;
     const auto left = std::make_shared<RecordingWorkspacePanel>("test.left", WorkspaceDockArea::Left);
     const auto right = std::make_shared<RecordingWorkspacePanel>("test.right", WorkspaceDockArea::Right);
@@ -219,7 +250,7 @@ TEST_CASE("Workspace presentation routes registered panels through every dock ar
 TEST_CASE("Workspace presentation clamps oversized docks at narrow bounds", "[unit][editor][gui][workspace]") {
     using namespace Horo;
     using namespace Horo::Editor;
-    Tests::EditorGuiContextFixture fixture;
+    Horo::Editor::Tests::EditorGuiContextFixture fixture;
     WorkspacePanelRegistry panels;
     const auto left = std::make_shared<RecordingWorkspacePanel>("test.left", WorkspaceDockArea::Left);
     const auto right = std::make_shared<RecordingWorkspacePanel>("test.right", WorkspaceDockArea::Right);
@@ -248,4 +279,49 @@ TEST_CASE("Workspace presentation clamps oversized docks at narrow bounds", "[un
         CHECK(panel->lastSize.y >= 0.0F);
         CHECK(panel->lastSize.y <= 480.0F);
     }
+}
+
+TEST_CASE("Workspace document strip retains long source identities and exposes narrow overflow",
+          "[unit][editor][gui][workspace][documents]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    Horo::Editor::Tests::EditorGuiContextFixture fixture;
+    WorkspacePanelRegistry panels;
+    auto input = fixture.input.PushContext(Input::InputContextId{"editor.workspace"}, Input::InputContextKind::EditorWorkspace);
+    EditorWorkspaceView view{fixture.context, panels, 0, fixture.input, input};
+    EditorWorkspaceViewModel model;
+    const Horo::Tests::OwnedTestDirectory directory{"workspace-source-presentation"};
+    {
+        std::ofstream source(directory.Path() / "preview.cpp");
+        source << std::string(65'535, 'a') << "\xC3\xBC";
+    }
+    SourceDocumentService documents{directory.Path()};
+    const auto preview = model.workspacePanelHost.OpenDocument({DocumentKind::Source, SourceDocumentId::Parse("preview.cpp").Value()});
+    REQUIRE(preview.HasValue());
+    const auto source = documents.Open(preview.Value().identity, directory.Path() / "preview.cpp");
+    REQUIRE(source.HasValue());
+    model.sourceDocuments.push_back(source.Value());
+    for (int index = 0; index < 8; ++index) {
+        const auto path = "source/" + std::to_string(index) + "/LongLocalizedSourceDocumentName.cpp";
+        REQUIRE(model.workspacePanelHost.OpenDocument({DocumentKind::Source, SourceDocumentId::Parse(path).Value()}).HasValue());
+    }
+    REQUIRE(model.workspacePanelHost.FocusDocument(preview.Value().identity.instance).HasValue());
+    REQUIRE(model.workspacePanelHost.SetDocumentDirty(preview.Value().identity.instance, true).HasValue());
+    const float width = GENERATE(1280.0F, 320.0F);
+    for (int frame = 0; frame < 2; ++frame) {
+        EditorWorkspaceViewCommandData command;
+        fixture.imgui.BeginFrame();
+        view.Draw(model, command, GuiContentRegion{0, 0, width, 600});
+        fixture.imgui.EndFrame();
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
+    }
+    bool overflow = false;
+    for (const auto *window : ImGui::GetCurrentContext()->Windows)
+        if (std::string_view{window->Name}.find("DocumentTabStrip") != std::string_view::npos)
+            overflow = window->ScrollMax.x > 0;
+    CHECK(overflow);
+    CHECK(model.workspacePanelHost.DocumentTabs().size() == 9);
+    CHECK(model.workspacePanelHost.ActiveDocument() == preview.Value().identity.instance);
+    CHECK(source.Value().Text().size() == 65'537);
+    CheckSourceSaveAndUnavailable(fixture, view, model, source.Value(), width);
 }

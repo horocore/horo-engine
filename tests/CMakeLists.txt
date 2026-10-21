@@ -99,7 +99,7 @@ set_tests_properties(HoroExtensionSdkReconfigureTest PROPERTIES
 add_test(NAME HoroExtensionScaffoldsTest
     COMMAND "${CMAKE_COMMAND}"
         "-DHORO_EXTENSION_SDK_PACKAGE_DIR=${HORO_EXTENSION_SDK_PACKAGE_DIR}"
-        "-DHORO_EXTENSION_SCAFFOLDER=${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-scaffold-extension.py"
+        "-DHORO_EXTENSION_SCAFFOLDER=${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/project.py"
         "-DHORO_EXTENSION_ACTIVATION_TEST=$<TARGET_FILE:HoroPackagedExtensionActivation>"
         "-DHORO_TEST_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/extension-scaffolds"
         "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
@@ -122,8 +122,7 @@ set_tests_properties(HoroExtensionAuthorCiTest PROPERTIES LABELS "extensions;sdk
 # compile the contract using only its owning target's usage requirements.
 horo_add_public_header_consumer_targets()
 target_sources(HoroAssetsPublicHeaderConsumer PRIVATE support/AssetSelectedCapturePublicContract.cpp)
-target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PhysicsInspectorPublicContract.cpp)
-target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PartitionedWorldPublicContract.cpp)
+target_sources(HoroEditorModelPublicHeaderConsumer PRIVATE support/PartitionedWorldPublicContract.cpp support/NavigationInspectorPublicContract.cpp support/PhysicsInspectorPublicContract.cpp)
 target_sources(HoroPrefabAuthoringPublicHeaderConsumer PRIVATE support/PrefabValueOverridePublicContract.cpp)
 target_sources(HoroPCGPublicHeaderConsumer PRIVATE support/PCGNodeCatalogPublicHeaderConsumer.cpp)
 target_sources(HoroShaderBuildPublicHeaderConsumer PRIVATE support/ShaderBuildPublicHeaderConsumer.cpp)
@@ -1795,6 +1794,9 @@ add_test(NAME HoroPrefabTemplateProviderPublicHeaderConsumer COMMAND HoroPrefabT
 set_tests_properties(HoroPrefabTemplateProviderPublicHeaderConsumer PROPERTIES LABELS "unit;prefab;headless")
 
 add_executable(HoroPrefabTests
+        unit/runtime/prefab/PrefabComponentResolutionTests.cpp
+        unit/runtime/prefab/PrefabComponentCodecTests.cpp
+        unit/runtime/prefab/PrefabComponentSchemaTests.cpp
         unit/runtime/prefab/PrefabDependencyGraphTests.cpp
         unit/runtime/prefab/PrefabDiagnosticsTests.cpp
         unit/runtime/prefab/PrefabDocumentTests.cpp
@@ -2230,6 +2232,7 @@ if (HORO_BUILD_EDITOR_GUI)
 endif ()
 add_executable(HoroEditorLocalizationServiceTests
         unit/editor/LocalizationServiceTests.cpp
+        unit/editor/NavigationInspectorLocalizationTests.cpp
         unit/editor/PhysicsInspectorLocalizationTests.cpp
         unit/editor/WorldSourceLocalizationTests.cpp
 )
@@ -2642,6 +2645,7 @@ target_include_directories(HoroWorkspaceSplitterInteractionTests PRIVATE
 target_link_libraries(HoroWorkspaceSplitterInteractionTests PRIVATE HoroEngine::EditorServices)
 if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorWorkspaceControllerTests
+            support/AllocationProbe.cpp
             unit/editor/EditorWorkspaceControllerTests.cpp
             unit/editor/WorldSourceControllerTests.cpp
             unit/editor/EditorWorkspaceWorldResidencyTests.cpp
@@ -2666,6 +2670,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp
             unit/editor/EditorWorkspaceStreamingMountTests.cpp
             unit/editor/WorkspaceReadSourcesTests.cpp
+            unit/editor/EditorWorkspaceNavigationInspectorTests.cpp
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
@@ -2776,6 +2781,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroInspectorPanelRenderTests
             unit/editor/InspectorPanelRenderTests.cpp
+            unit/editor/NavigationInspectorRenderTests.cpp
             unit/editor/PhysicsInspectorRenderTests.cpp
     )
 
@@ -2792,6 +2798,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/InspectorEditSessionTests.cpp
             unit/editor/InspectorCharacterEditSessionTests.cpp
             unit/editor/InspectorAudioComponentTests.cpp
+            unit/editor/NavigationInspectorSessionTests.cpp
             unit/editor/PhysicsInspectorSessionTests.cpp
     )
 
@@ -2866,10 +2873,13 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/ColliderViewportRenderTests.cpp
+            support/ViewportPanelRenderSupport.h
     )
 
     target_compile_features(HoroViewportPanelRenderTests PRIVATE cxx_std_20)
     target_include_directories(HoroViewportPanelRenderTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
     )
     target_link_libraries(HoroViewportPanelRenderTests
@@ -3079,9 +3089,12 @@ target_include_directories(HoroImmutableFileStorageTests PRIVATE ${PROJECT_SOURC
 horo_register_catch_test(HoroImmutableFileStorageTests LABELS "unit;platform;filesystem;headless;ci-windows;sonar-coverage")
 
 add_executable(HoroPlatformTests
+        support/AllocationProbe.cpp
+        unit/platform/NativeProjectIoOwnersTests.cpp
         unit/foundation/PlatformTests.cpp
         unit/foundation/PlatformPublicationLockTests.cpp
         unit/foundation/PublicationReadTests.cpp
+        unit/platform/NativePublicationFileSystemTests.cpp
 )
 
 add_executable(HoroProcessTestChild helpers/platform/ProcessTreeChild.cpp)
@@ -3091,7 +3104,7 @@ add_dependencies(HoroPlatformTests HoroProcessTestChild)
 target_compile_definitions(HoroPlatformTests PRIVATE HORO_PROCESS_TEST_CHILD="$<TARGET_FILE:HoroProcessTestChild>")
 
 target_compile_features(HoroPlatformTests PRIVATE cxx_std_20)
-target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform)
+target_link_libraries(HoroPlatformTests PRIVATE HoroEngine::Platform HoroEngine::PlatformProjectIo)
 add_executable(HoroPlatformRequestTests
         support/AllocationProbe.cpp
         unit/platform_services/AchievementDefinitionRegistryTests.cpp
@@ -3174,7 +3187,10 @@ add_executable(HoroSceneDocumentTests
         unit/editor/NavigationSettingsSceneReloadTests.cpp
         unit/editor/SceneDocumentTests.cpp
         unit/editor/CharacterAuthoringTests.cpp
+        unit/editor/NavigationPrefabInspectorTests.cpp
+        unit/editor/NavigationInspectorTests.cpp
         unit/editor/PhysicsInspectorTests.cpp
+        unit/editor/ColliderEditingTests.cpp
         unit/editor/SceneDocumentDuplicateIdentityTests.cpp
         unit/editor/SceneDocumentEditingTests.cpp
         unit/editor/AudioListenerAuthoringTests.cpp
@@ -4813,6 +4829,7 @@ if (HORO_BUILD_RENDER_OPENGL)
                 HoroEngine::EditorViewportOpenGL
                 HoroEngine::RenderFrontend
                 HoroThirdParty::Glad
+                HoroThirdParty::ImGuiOpenGL
         )
 
         if (HORO_ENABLE_GPU_SMOKE_TESTS)
@@ -4907,6 +4924,25 @@ if (HORO_BUILD_RENDER_METAL)
         add_test(NAME HoroMetalGraphExecutionSmoke COMMAND HoroMetalGraphExecutionSmoke)
         set_tests_properties(HoroMetalGraphExecutionSmoke PROPERTIES LABELS "gpu;metal;renderer")
     endif ()
+    if (HORO_ENABLE_GPU_SMOKE_TESTS)
+        find_program(HORO_METAL_FIXTURE_XCRUN xcrun REQUIRED)
+        set(metal_preparation_fixture "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.metallib")
+        add_custom_command(OUTPUT "${metal_preparation_fixture}"
+                COMMAND "${HORO_METAL_FIXTURE_XCRUN}" -sdk macosx metal -std=macos-metal2.4 -mmacosx-version-min=14.0
+                        -c "${CMAKE_CURRENT_SOURCE_DIR}/integration/renderer/MetalPreparationFixture.metal"
+                        -o "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.air"
+                COMMAND "${HORO_METAL_FIXTURE_XCRUN}" -sdk macosx metallib "${CMAKE_CURRENT_BINARY_DIR}/MetalPreparationFixture.air"
+                        -o "${metal_preparation_fixture}"
+                DEPENDS integration/renderer/MetalPreparationFixture.metal VERBATIM)
+        add_executable(HoroMetalShaderPreparationSmoke integration/renderer/MetalShaderPreparationSmoke.mm "${metal_preparation_fixture}")
+        target_compile_features(HoroMetalShaderPreparationSmoke PRIVATE cxx_std_20)
+        target_compile_options(HoroMetalShaderPreparationSmoke PRIVATE -fobjc-arc)
+        target_compile_definitions(HoroMetalShaderPreparationSmoke PRIVATE HORO_METAL_PREPARATION_FIXTURE="${metal_preparation_fixture}")
+        target_include_directories(HoroMetalShaderPreparationSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/support)
+        target_link_libraries(HoroMetalShaderPreparationSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
+        add_test(NAME HoroMetalShaderPreparationSmoke COMMAND HoroMetalShaderPreparationSmoke)
+        set_tests_properties(HoroMetalShaderPreparationSmoke PROPERTIES LABELS "gpu;metal;shader;material" TIMEOUT 60 RUN_SERIAL TRUE)
+    endif ()
     add_executable(HoroRenderMetalTests
             unit/runtime/renderer/MetalPresentationFeedbackTests.cpp
             unit/runtime/renderer/MetalParallelWorkTests.cpp
@@ -4922,7 +4958,12 @@ if (HORO_BUILD_RENDER_METAL)
     )
 
     target_compile_features(HoroRenderMetalTests PRIVATE cxx_std_20)
-    target_compile_options(HoroRenderMetalTests PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    # These .mm files use the CXX driver but share ARC-owned types with production.
+    set_source_files_properties(
+            unit/runtime/renderer/MetalParallelCompletionTests.mm
+            unit/runtime/renderer/MetalResourceFormatsTests.mm
+            PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
+    )
     target_include_directories(HoroRenderMetalTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/tests/support
@@ -5284,7 +5325,7 @@ add_executable(HoroNavigationHostErrorTests unit/application/navigation/Navigati
 target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
-target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::CliHost HoroEngine::HostErrors
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
     HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 
@@ -5354,7 +5395,7 @@ add_test(NAME HoroSceneAllocationJunitPathContract
     COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/scene_junit_path_contract"
         "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
         "-DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}"
-        "-DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_scene_allocation_qualification.py"
+        "-DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/dev.py"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/SceneAllocationJunitPathContract.cmake")
 set_tests_properties(HoroSceneAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
 
@@ -5362,7 +5403,7 @@ add_test(NAME HoroCharacterAllocationJunitPathContract
     COMMAND "${CMAKE_COMMAND}" "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/character_junit_path_contract"
         "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
         -DPYTHON_EXECUTABLE=${Python3_EXECUTABLE}
-        -DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/ci/run_character_allocation_qualification.py
+        -DVERIFIER=${PROJECT_SOURCE_DIR}/scripts/dev.py
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/CharacterAllocationJunitPathContract.cmake")
 set_tests_properties(HoroCharacterAllocationJunitPathContract PROPERTIES LABELS "unit;headless" TIMEOUT 30)
 

@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <numeric>
-#include <type_traits>
 
 namespace Horo::Editor {
     namespace {
@@ -24,46 +23,62 @@ namespace Horo::Editor {
                 return sum + layer.name.size();
             });
         }
+
+        /** @brief Inserts an explicitly identified layer into detached candidate storage after resource admission. */
+        Result<void> ApplyLayerIntent(const CreateWorldLayer &intent, PartitionedWorldSnapshot &candidate,
+                                      const WorldDocumentLimits &limits) {
+            auto &layers = candidate.document.layers;
+            if (layers.size() >= limits.maximumLayers || intent.layer.name.size() > limits.maximumLayerNameBytes)
+                return Reject<void>(WorldDocumentErrors::Capacity);
+            if (intent.position > layers.size())
+                return Reject<void>(WorldDocumentErrors::Invalid);
+            layers.insert(layers.begin() + static_cast<std::ptrdiff_t>(intent.position), intent.layer);
+            return Result<void>::Success();
+        }
+
+        /** @brief Moves one stable source layer to its final complete-document ordinal. */
+        Result<void> ApplyLayerIntent(const ReorderWorldLayer &intent, PartitionedWorldSnapshot &candidate, const WorldDocumentLimits &) {
+            auto &layers = candidate.document.layers;
+            const auto found = std::ranges::find(layers, intent.layer, &WS::WorldLayerDescriptor::id);
+            if (!intent.layer.IsValid() || found == layers.end() || intent.position >= layers.size())
+                return Reject<void>(WorldDocumentErrors::Invalid);
+            if (const auto old = static_cast<std::size_t>(found - layers.begin()); old < intent.position)
+                std::rotate(found, found + 1, layers.begin() + static_cast<std::ptrdiff_t>(intent.position + 1));
+            else if (old > intent.position)
+                std::rotate(layers.begin() + static_cast<std::ptrdiff_t>(intent.position), found, found + 1);
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates a bounded transient filter before assigning any candidate presentation state. */
+        Result<void> ApplyLayerIntent(const FilterWorldLayers &intent, PartitionedWorldSnapshot &candidate, const WorldDocumentLimits &) {
+            if (intent.filter.name.size() > MaximumFilterBytes)
+                return Reject<void>(WorldDocumentErrors::Capacity);
+            if (intent.filter.ownership && *intent.filter.ownership > WS::WorldLayerOwnership::NetworkReplication)
+                return Reject<void>(WorldDocumentErrors::Unsupported);
+            if (intent.filter.name.find('\0') != std::string::npos || !IsValidUtf8ScalarSequence(intent.filter.name))
+                return Reject<void>(WorldDocumentErrors::Invalid);
+            candidate.layerFilter = intent.filter;
+            return Result<void>::Success();
+        }
+
+        /** @brief Selects only an admitted stable layer or explicitly clears authoring context. */
+        Result<void> ApplyLayerIntent(const SetCurrentWorldLayer &intent, PartitionedWorldSnapshot &candidate,
+                                      const WorldDocumentLimits &) {
+            if (intent.layer && (!intent.layer->IsValid() || std::ranges::none_of(candidate.document.layers, [&intent](const auto &layer) {
+                return layer.id == *intent.layer;
+            })))
+                return Reject<void>(WorldDocumentErrors::Invalid);
+            candidate.currentLayer = intent.layer;
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc PartitionedWorldWorkspace::ApplyLayerCommand */
     Result<void> PartitionedWorldWorkspace::ApplyLayerCommand(const WorldLayerCommand &command, PartitionedWorldSnapshot &candidate) const {
         if (command.valueless_by_exception())
             return Reject<void>(WorldDocumentErrors::Unsupported);
-        return std::visit([&](const auto &intent) -> Result<void> {
-            using Intent = std::decay_t<decltype(intent)>;
-            auto &layers = candidate.document.layers;
-            if constexpr (std::is_same_v<Intent, CreateWorldLayer>) {
-                if (layers.size() >= limits_.maximumLayers || intent.layer.name.size() > limits_.maximumLayerNameBytes)
-                    return Reject<void>(WorldDocumentErrors::Capacity);
-                if (intent.position > layers.size())
-                    return Reject<void>(WorldDocumentErrors::Invalid);
-                layers.insert(layers.begin() + static_cast<std::ptrdiff_t>(intent.position), intent.layer);
-            } else if constexpr (std::is_same_v<Intent, ReorderWorldLayer>) {
-                const auto found = std::ranges::find(layers, intent.layer, &WS::WorldLayerDescriptor::id);
-                if (!intent.layer.IsValid() || found == layers.end() || intent.position >= layers.size())
-                    return Reject<void>(WorldDocumentErrors::Invalid);
-                const auto old = static_cast<std::size_t>(found - layers.begin());
-                if (old < intent.position)
-                    std::rotate(found, found + 1, layers.begin() + static_cast<std::ptrdiff_t>(intent.position + 1));
-                else if (old > intent.position)
-                    std::rotate(layers.begin() + static_cast<std::ptrdiff_t>(intent.position), found, found + 1);
-            } else if constexpr (std::is_same_v<Intent, FilterWorldLayers>) {
-                if (intent.filter.name.size() > MaximumFilterBytes)
-                    return Reject<void>(WorldDocumentErrors::Capacity);
-                if (intent.filter.ownership && *intent.filter.ownership > WS::WorldLayerOwnership::NetworkReplication)
-                    return Reject<void>(WorldDocumentErrors::Unsupported);
-                if (intent.filter.name.find('\0') != std::string::npos || !IsValidUtf8ScalarSequence(intent.filter.name))
-                    return Reject<void>(WorldDocumentErrors::Invalid);
-                candidate.layerFilter = intent.filter;
-            } else {
-                if (intent.layer && (!intent.layer->IsValid() || std::ranges::none_of(layers, [&](const auto &layer) {
-                    return layer.id == *intent.layer;
-                })))
-                    return Reject<void>(WorldDocumentErrors::Invalid);
-                candidate.currentLayer = intent.layer;
-            }
-            return Result<void>::Success();
+        return std::visit([this, &candidate]<typename Intent>(const Intent &intent) {
+            return ApplyLayerIntent(intent, candidate, limits_);
         }, command);
     }
 

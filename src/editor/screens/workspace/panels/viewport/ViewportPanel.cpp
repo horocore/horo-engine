@@ -123,7 +123,8 @@ namespace Horo::Editor {
         if (hasRenderedViewport && width > 0.0F && height > 0.0F) {
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
             DrawViewportStreamingPreview(drawList, origin, {width, height}, viewModel, context, viewportRenderer_->ClipDepthRange());
-        }
+        } else
+            interaction_.CancelForUnavailableSurface(command);
 
         const ViewportOverlayAction overlay =
             DrawViewportOverlay(origin, {width, height},
@@ -274,9 +275,13 @@ namespace Horo::Editor {
             CancelAssetPlacementPreview(command);
         const bool assetDragActive =
             inputEligible && surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, context, depthRange);
-        const bool sourceToolActive =
-            worldSourceTool_.Draw(drawList, layout.origin, {layout.width, layout.height}, viewModel, command, context, depthRange,
-                                  inputEligible && !interaction_.IsActive() && !assetDragActive);
+        const WorldSourceViewportTool::Frame sourceFrame{drawList,
+                                                         layout.origin,
+                                                         ImVec2(layout.width, layout.height),
+                                                         viewModel,
+                                                         depthRange,
+                                                         inputEligible && !interaction_.IsActive() && !assetDragActive};
+        const bool sourceToolActive = worldSourceTool_.Draw(sourceFrame, command, context);
         const Result<std::optional<SceneObjectId>> clickedLight =
             DrawViewportLightMarkers({.drawList = drawList,
                                       .origin = layout.origin,
@@ -284,7 +289,8 @@ namespace Horo::Editor {
                                       .height = layout.height,
                                       .camera = viewModel.viewportCamera,
                                       .depthRange = depthRange,
-                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !sourceToolActive},
+                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !sourceToolActive &&
+                                                     viewModel.selectedColliders.empty()},
                                      viewModel.viewportLights, viewModel.primarySelection);
         if (!inputEligible)
             static_cast<void>(interaction_.ConsumePendingCancellation(command));

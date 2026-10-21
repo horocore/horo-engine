@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Horo Engine Pre-Push Hook
-# Runs CI parity check before pushing to remote repository
-
-python3 scripts/dev.py check

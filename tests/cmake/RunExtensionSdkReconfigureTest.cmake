@@ -24,9 +24,7 @@ foreach(source_file IN ITEMS
         include/Horo/Extensions/EditorActivityAbi.h
         include/Horo/Extensions/EditorPageAbi.h
         include/Horo/Extensions/EditorInspectorAbi.h
-        scripts/scaffold_extension.py
-        scripts/bootstrap_extension_ci.py
-        scripts/run_extension_author_ci.py
+        scripts/project.py
         sdk/ExtensionSdkREADME.md.in
         sdk/CompatibilityMatrix.json.in
         sdk/MigrationGuide.md.in
@@ -79,15 +77,13 @@ list(SORT staged_files)
 set(expected_files
     LICENSE
     README.md
-    bin/horo-extension-author-ci.py
-    bin/horo-scaffold-extension.py
+    bin/project.py
     include/Horo/Extensions/ExtensionAbi.h
     include/Horo/Extensions/EditorActivityAbi.h
         include/Horo/Extensions/EditorPageAbi.h
         include/Horo/Extensions/EditorInspectorAbi.h
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfig.cmake
     lib/cmake/HoroEngineExtensionSdk/HoroEngineExtensionSdkConfigVersion.cmake
-    share/horo/extension-sdk/ci/bootstrap.py
     share/horo/extension-sdk/ci/extension-author-ci.yml
     share/horo/extension-sdk/ci/extension-ci.lock.json
     share/horo/extension-sdk/extension-manifest-v1.schema.json
