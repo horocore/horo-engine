@@ -30,7 +30,7 @@ namespace Horo::Extensions {
             }
         }
         const float target = enabled ? 1.0F : 0.0F;
-        const float duration = MotionFor(theme, EditorThemeMotionRole::Focus);
+        const float duration = MotionFor(theme, plot.base.custom.value_or(EditorUiCustomPresentation{}).motion);
         if (!std::isfinite(state.emphasis))
             state.emphasis = 0;
         if (duration <= 0)

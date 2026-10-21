@@ -156,7 +156,12 @@ namespace Horo::Editor {
         auto &jobs = composition.jobs;
         std::vector<std::string> capabilities{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY};
         importerCatalogCandidate_ = std::make_unique<Assets::AssetImporterCatalog>();
-        editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        const auto uiPolicy =
+            composition.extensionUiPolicy.revision ? composition.extensionUiPolicy : Extensions::ExtensionAdmissionPolicy{.revision = 1};
+        editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs, uiPolicy);
+        if (std::ranges::find(composition.extensionUiPolicy.availableCapabilities, Extensions::EditorCustomCompositionCapability) !=
+            composition.extensionUiPolicy.availableCapabilities.end())
+            capabilities.emplace_back(HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY);
         services_.Register<Extensions::EditorActivityHost>(*editorActivityHost_);
         InitializeExtensionPages(composition, capabilities);
         InitializeExtensionInspectors(composition, capabilities);

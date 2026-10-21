@@ -28,13 +28,13 @@ namespace Horo::Extensions::Tests {
 
             Horo::Tests::EditorActivityPackage package;
             JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
-            std::shared_ptr<EditorActivityHost> host{std::make_shared<EditorActivityHost>(jobs)};
+            std::shared_ptr<EditorActivityHost> host{std::make_shared<EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy())};
             ExtensionManager manager;
 
             NativeRecoveryFixture()
                 : manager{nullptr,
                           ExtensionHostProfile::Interactive,
-                          {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                          {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                           Horo::Tests::CreateAcceptingArtifactGate(),
                           [this](const std::string &path) {
                               if (measurement_)

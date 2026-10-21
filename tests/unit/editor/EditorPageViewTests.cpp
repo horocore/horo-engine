@@ -67,6 +67,8 @@ namespace Horo::Editor::Tests {
         const auto revision = capture.Frame()->revision;
         CHECK(revision != 0);
         CHECK(capture.Frame()->icons.strokeWidth == 0);
+        CHECK(capture.Frame()->motion.focusSeconds == Theme::GetActiveTokens().motion.focus);
+        CHECK(capture.Frame()->accessibility.reduceMotion == Theme::GetActiveTokens().motion.reduceMotion);
         CHECK(capture.Frame()->interaction.focusRingWidth == 0);
         REQUIRE(capture.Update(gui.context).HasValue());
         CHECK(capture.Frame()->revision == revision);

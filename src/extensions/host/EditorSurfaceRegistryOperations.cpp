@@ -51,6 +51,12 @@ namespace Horo::Extensions {
 
         /** @brief Admits form text and interactions only through the exact surface context allowlists. */
         [[nodiscard]] bool AllowsForm(const EditorSurfaceContext &context, const EditorUiForm &form) {
+            if (RequiresEditorUiComposition(form)) {
+                if (std::ranges::find(context.Surface().requiredCapabilities, EditorCustomCompositionCapability) ==
+                        context.Surface().requiredCapabilities.end() ||
+                    context.AcquireCapabilityUse(EditorCustomCompositionCapability).HasError())
+                    return false;
+            }
             if (!AllowsText(context, form.title) || !AllowsText(context, form.description))
                 return false;
             return std::ranges::all_of(form.nodes, [&context](const auto &node) {

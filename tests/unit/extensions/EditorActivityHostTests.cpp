@@ -76,11 +76,11 @@ namespace Horo::Extensions::Tests {
               "[Extensions][EditorSurface][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
         JobSystem jobs;
-        auto host = std::make_shared<EditorActivityHost>(jobs);
+        auto host = std::make_shared<EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
         const EditorActivityHost &commands = *host;
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
-                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
@@ -92,7 +92,7 @@ namespace Horo::Extensions::Tests {
         REQUIRE(initial.icon);
         CHECK(initial.icon->pixels.size() == 48U * 48U * 4U);
         REQUIRE(initial.surface.form);
-        CHECK(initial.surface.form->nodes.size() == 3);
+        CHECK(initial.surface.form->nodes.size() == 4);
         CHECK(host->LocalizedText(initial.surface.descriptor.provider, "fixture.label", "tr-TR") == "Deneme cekmecesi");
         REQUIRE(host->Registry().ToggleActivity(initial.surface.descriptor.provider, "fixture.activity").HasValue());
         host->Update();
@@ -151,10 +151,10 @@ namespace Horo::Extensions::Tests {
         REQUIRE(hold);
         REQUIRE(published);
         JobSystem jobs;
-        auto host = std::make_shared<EditorActivityHost>(jobs);
+        auto host = std::make_shared<EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
-                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
@@ -203,7 +203,7 @@ namespace Horo::Extensions::Tests {
                                R"("requiredCapabilities":["editor.activity_item"])");
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
-                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
@@ -227,7 +227,7 @@ namespace Horo::Extensions::Tests {
         RewriteFixtureManifest(package, R"("roles":["editor-presentation"])", R"("roles":["backend-capability","editor-presentation"])");
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Headless,
-                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
@@ -238,8 +238,13 @@ namespace Horo::Extensions::Tests {
     }
 
     void CheckMissingTrust(const Horo::Tests::EditorActivityPackage &package, const std::shared_ptr<EditorActivityHost> &host) {
-        ExtensionManager manager{nullptr, ExtensionHostProfile::Interactive,       {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY}, {}, {},
-                                 {},      ExtensionEditorHosts{.activities = host}};
+        ExtensionManager manager{nullptr,
+                                 ExtensionHostProfile::Interactive,
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
+                                 {},
+                                 {},
+                                 {},
+                                 ExtensionEditorHosts{.activities = host}};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
         host->Update();
         CHECK(host->Prepared().empty());
@@ -249,7 +254,7 @@ namespace Horo::Extensions::Tests {
         package.Icon(R"(<svg xmlns="http://www.w3.org/2000/svg"><image href="file:///etc/passwd"/></svg>)");
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
-                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
@@ -262,7 +267,7 @@ namespace Horo::Extensions::Tests {
     void CheckMissingHost(const Horo::Tests::EditorActivityPackage &package) {
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
-                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                  Horo::Tests::CreateAcceptingArtifactGate()};
         CHECK(manager.LoadExtension(package.root.string()).HasError());
     }
@@ -271,7 +276,7 @@ namespace Horo::Extensions::Tests {
               "[Extensions][EditorSurface][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
         JobSystem jobs;
-        auto host = std::make_shared<EditorActivityHost>(jobs);
+        auto host = std::make_shared<EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
         SECTION("contribution-point spelling is not a canonical host capability") {
             CheckInvalidCapability(package, host);
         }
@@ -297,10 +302,10 @@ namespace Horo::Extensions::Tests {
     TEST_CASE("A failed custom activation withdraws its surface and rejects late commands", "[Extensions][Activity][Plot][Failure]") {
         Horo::Tests::EditorActivityPackage package;
         JobSystem jobs;
-        auto host = std::make_shared<EditorActivityHost>(jobs);
+        auto host = std::make_shared<EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
         ExtensionManager manager{nullptr,
                                  ExtensionHostProfile::Interactive,
-                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                  Horo::Tests::CreateAcceptingArtifactGate(),
                                  {},
                                  {},
@@ -323,4 +328,22 @@ namespace Horo::Extensions::Tests {
         CHECK(host->Prepared().empty());
         CHECK(host->QueueAction(provider, "fixture.activity", "fixture.plot", "fixture.inspect", 1).HasError());
     }
+
+    TEST_CASE("Advanced activity schema requires a separate host capability grant", "[Extensions][Activity][Composition][Admission]") {
+        Horo::Tests::EditorActivityPackage package;
+        JobSystem jobs;
+        auto host = std::make_shared<EditorActivityHost>(jobs);
+        ExtensionManager manager{nullptr,
+                                 ExtensionHostProfile::Interactive,
+                                 {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
+                                 Horo::Tests::CreateAcceptingArtifactGate(),
+                                 {},
+                                 {},
+                                 ExtensionEditorHosts{.activities = host}};
+        CHECK(manager.LoadExtension(package.root.string()).HasError());
+        host->Update();
+        CHECK(host->Prepared().empty());
+        CHECK(host->Registry().Snapshot().empty());
+    }
+
 }  // namespace Horo::Extensions::Tests

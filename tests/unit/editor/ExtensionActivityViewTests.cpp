@@ -110,10 +110,10 @@ namespace {
               "[unit][editor][Activity][ownership]") {
         Horo::Tests::EditorActivityPackage package;
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
-        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
         Extensions::ExtensionManager manager{nullptr,
                                              Extensions::ExtensionHostProfile::Interactive,
-                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                              Horo::Tests::CreateAcceptingArtifactGate(),
                                              {},
                                              {},
@@ -308,10 +308,10 @@ namespace {
               "[unit][editor][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
         JobSystem jobs;
-        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
         Extensions::ExtensionManager manager{nullptr,
                                              Extensions::ExtensionHostProfile::Interactive,
-                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                              Horo::Tests::CreateAcceptingArtifactGate(),
                                              {},
                                              {},
@@ -339,6 +339,15 @@ namespace {
         REQUIRE(view.TakeNativePanelClear() == Extensions::EditorActivitySide::Left);
         CheckDrawerFocusAndNarrowFrames(view);
         CheckCustomPlotThemes(view);
+        const auto semantic = view.Accessibility("fixture.activity");
+        REQUIRE(semantic.size() == 4);
+        const auto plot = std::ranges::find(semantic, Extensions::EditorUiAccessibleRole::Plot, &Extensions::EditorUiAccessibleNode::role);
+        REQUIRE(plot != semantic.end());
+        CHECK(plot->name.value == "fixture.label");
+        CHECK(plot->itemCount == 4);
+        CHECK(plot->focusable);
+        REQUIRE(plot->value);
+        CHECK(std::get<Extensions::EditorUiVectorValue>(*plot->value).dimension == 2);
         CheckRailKeyboardFocus(view);
         CHECK(renderer.creates == 1);
         CHECK(renderer.destroys == 0);

@@ -30,7 +30,9 @@ namespace Horo::Extensions {
     class EditorActivityHost final {
     public:
         /** @brief Composes a bounded surface authority. @param jobs Application scheduler that outlives the host and its admitted work. */
-        explicit EditorActivityHost(JobSystem &jobs);
+        explicit EditorActivityHost(JobSystem &jobs, ExtensionAdmissionPolicy policy = {.revision = 1});
+        /** @brief Borrows sealed custom-composition admission; empty grants support standard activity controls only. */
+        [[nodiscard]] const ExtensionAdmissionPolicy &AdmissionPolicy() const noexcept;
         ~EditorActivityHost();
         EditorActivityHost(const EditorActivityHost &) = delete;
         EditorActivityHost &operator=(const EditorActivityHost &) = delete;

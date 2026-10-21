@@ -335,4 +335,69 @@ namespace Horo::Editor::Tests {
         CHECK(owner.Value() == 9007199254740993LL);
     }
 
+    TEST_CASE("Custom scalar native gesture uses the approved document transaction with undo redo and retirement",
+              "[editor][inspector][composition][undo]") {
+        using namespace Extensions;
+        auto definition = InspectorControllerSupport::Presentation(EditorInspectorFieldKind::Number);
+        definition.fields.front().minimumNumber = 0.0;
+        definition.fields.front().maximumNumber = 100.0;
+        auto &number = std::get<EditorUiNumberNode>(definition.form.nodes.front().payload);
+        number.minimum = 0.0;
+        number.maximum = 100.0;
+        number.base.custom = EditorUiCustomPresentation{.widget = EditorUiCustomWidget::ScalarDial,
+                                                        .font = EditorThemeFontRole::SansEmphasis,
+                                                        .icon = EditorThemeIconRole::Info};
+        InspectorControllerSupport::Fixture owner{std::move(definition), "25.0"};
+        owner.Approve();
+        Gui gui;
+        InspectorContributionView view{owner.provider.host, *gui.capture.Frame()};
+        EditorWorkspaceViewCommandData command;
+        Frame(view, owner, gui, command);
+        const auto geometry = Frame(view, owner, gui, command);
+        const auto semantic = view.Accessibility("fixture.inspector");
+        REQUIRE(semantic.size() == 1);
+        CHECK(semantic.front().role == EditorUiAccessibleRole::ScalarDial);
+        const auto value = [&] {
+            return std::get<double>(owner.controller->ViewModel().objects.front().components.behaviors.front().fields.front().value);
+        };
+        CHECK(value() == 25.0);
+        const auto before = owner.controller->ViewModel().documentRevision;
+        auto &io = ImGui::GetIO();
+        io.AddMousePosEvent(geometry.center.x, geometry.center.y);
+        io.AddMouseButtonEvent(0, true);
+        Frame(view, owner, gui, command);
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
+        CHECK(view.Accessibility("fixture.inspector").front().preview);
+        view.SetInputAdmitted(false);
+        io.AddMouseButtonEvent(0, false);
+        Frame(view, owner, gui, command);
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
+        CHECK_FALSE(view.Accessibility("fixture.inspector").front().preview);
+        CHECK(value() == 25.0);
+        view.SetInputAdmitted(true);
+        Frame(view, owner, gui, command);
+        Click(geometry.center, view, owner, gui, command);
+        REQUIRE(command.command == EditorWorkspaceViewCommand::UpdateInspectorBehaviorField);
+        REQUIRE(command.inspectorEdit);
+        const auto proposed = std::get<double>(command.inspectorEdit->value);
+        CHECK(proposed > 40.0);
+        CHECK(proposed < 60.0);
+        CHECK(value() == 25.0);
+        owner.Process(command);
+        CHECK(value() == proposed);
+        CHECK(owner.controller->ViewModel().documentRevision.value == before.value + 1);
+        command = {};
+        command.command = EditorWorkspaceViewCommand::UndoScene;
+        owner.Process(command);
+        CHECK(value() == 25.0);
+        command.command = EditorWorkspaceViewCommand::RedoScene;
+        owner.Process(command);
+        CHECK(value() == proposed);
+        owner.provider.registration->Reset();
+        command = {};
+        Frame(view, owner, gui, command);
+        CHECK(view.Accessibility("fixture.inspector").empty());
+        CHECK(command.command == EditorWorkspaceViewCommand::None);
+    }
+
 }  // namespace Horo::Editor::Tests

@@ -166,6 +166,11 @@ namespace Horo::Editor {
                    approval.behaviorRegistryRevision == model.inspectorBehaviorRegistryRevision &&
                    approval.declaration == contribution.definition && approval.fields == entry.covered;
         });
+        for (std::size_t index = 0; index < entry.form.nodes.size(); ++index) {
+            const auto &base = EditorUiNodeBaseOf(entry.form.nodes[index]);
+            if (base.custom && base.custom->widget == EditorUiCustomWidget::ScalarDial)
+                entry.scalars.emplace_back(index, EditorUiScalarState{});
+        }
         return entry;
     }
 

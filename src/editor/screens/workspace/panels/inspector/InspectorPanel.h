@@ -92,6 +92,7 @@ namespace Horo::Editor {
 
         std::unique_ptr<InspectorContributionView> m_contributions;
         Input::InputRouter *m_inputRouter{nullptr};
+        Input::InputContextToken *m_workspaceInputContext{}; /**< Borrowed only for this attachment. */
         Input::InputContextToken m_nameInputContext;
         InspectorEditSession m_editSession;
         std::shared_ptr<const PrefabHierarchyProjection> m_prefabPresentation;

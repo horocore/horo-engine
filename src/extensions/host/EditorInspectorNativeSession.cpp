@@ -34,12 +34,13 @@ namespace Horo::Extensions {
             const auto code = retirement.lock();
             if (!live || !code || revoked || !admission)
                 return Result<void>::Failure(MakeError(ExtensionErrors::CapabilityRevoked));
-            const auto capability =
-                descriptor.surface.kind == EditorSurfaceKind::Inspector ? EditorInspectorCapability : EditorPropertyDrawerCapability;
-            auto grant = admission->Grant(capability);
-            if (grant.HasError())
-                return Result<void>::Failure(grant.ErrorValue());
-            const std::array capabilities{std::move(grant).Value()};
+            std::vector<ExtensionCapabilityHandle> capabilities;
+            for (const auto &capability : descriptor.surface.requiredCapabilities) {
+                auto grant = admission->Grant(capability);
+                if (grant.HasError())
+                    return Result<void>::Failure(grant.ErrorValue());
+                capabilities.push_back(std::move(grant).Value());
+            }
             auto attached = contexts.Attach(descriptor, admission->ActivationLease(), capabilities);
             if (attached.HasError())
                 return Result<void>::Failure(attached.ErrorValue());
@@ -113,6 +114,13 @@ namespace Horo::Extensions {
             if (definition.HasError())
                 return Result<std::shared_ptr<EditorInspectorNativeSession>>::Failure(definition.ErrorValue());
             session->definition = std::move(definition).Value();
+            if (RequiresEditorUiComposition(session->definition.form)) {
+                if (std::ranges::find(load.extensionModule->requiredCapabilities, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY) ==
+                    load.extensionModule->requiredCapabilities.end())
+                    return Result<std::shared_ptr<EditorInspectorNativeSession>>::Failure(
+                        MakeError(ExtensionErrors::CapabilityUnavailable));
+                session->descriptor.surface.requiredCapabilities.push_back(EditorCustomCompositionCapability);
+            }
             if (auto valid = ValidateEditorInspectorDefinition(session->descriptor.surface, session->definition); valid.HasError())
                 return Result<std::shared_ptr<EditorInspectorNativeSession>>::Failure(valid.ErrorValue());
             for (const auto &message : session->definition.messages)
@@ -120,13 +128,13 @@ namespace Horo::Extensions {
                     session->descriptor.localization.end())
                     session->descriptor.localization.emplace_back(message.key);
             const auto &surface = session->descriptor.surface;
-            const auto capability =
-                surface.kind == EditorSurfaceKind::Inspector ? EditorInspectorCapability : EditorPropertyDrawerCapability;
-            auto admitted = ExtensionCapabilityAdmission::Evaluate({surface.provider.extensionId,
-                                                                    surface.provider.moduleId,
-                                                                    surface.provider.activationGeneration,
-                                                                    {{capability, surface.requiredPermissions}}},
-                                                                   load.inspectorHost->AdmissionPolicy());
+            ExtensionAdmissionRequest request{surface.provider.extensionId,
+                                              surface.provider.moduleId,
+                                              surface.provider.activationGeneration,
+                                              {}};
+            for (const auto &capability : surface.requiredCapabilities)
+                request.capabilities.push_back({capability, surface.requiredPermissions});
+            auto admitted = ExtensionCapabilityAdmission::Evaluate(request, load.inspectorHost->AdmissionPolicy());
             if (admitted.HasError())
                 return Result<std::shared_ptr<EditorInspectorNativeSession>>::Failure(admitted.ErrorValue());
             session->admission.emplace(std::move(admitted).Value());

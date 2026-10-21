@@ -4,6 +4,7 @@
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/design_system/components/EditorUiCustomResources.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 
 #include <algorithm>
@@ -84,13 +85,20 @@ namespace Horo::Editor {
                    entry.projection.surface.descriptor.provider == projection.surface.descriptor.provider;
         });
         Entry entry{.projection = projection};
-        if (previous != entries_.end() && projection.surface.form && previous->projection.surface.form) {
-            const auto &oldNodes = previous->projection.surface.form->nodes;
+        if (previous != entries_.end())
+            entry.offeredWidth = previous->offeredWidth;
+        if (projection.surface.form) {
             for (std::size_t i = 0; i < projection.surface.form->nodes.size(); ++i) {
-                const auto &id = Extensions::EditorUiNodeBaseOf(projection.surface.form->nodes[i]).id;
-                for (std::size_t j = 0; j < oldNodes.size(); ++j)
-                    if (Extensions::EditorUiNodeBaseOf(oldNodes[j]).id == id)
-                        entry.plots[i] = previous->plots[j];
+                if (!std::holds_alternative<Extensions::EditorUiPlotNode>(projection.surface.form->nodes[i].payload))
+                    continue;
+                Extensions::EditorUiPlotState state;
+                if (previous != entries_.end() && previous->projection.surface.form) {
+                    const auto &id = Extensions::EditorUiNodeBaseOf(projection.surface.form->nodes[i]).id;
+                    for (const auto &[oldIndex, oldState] : previous->plots)
+                        if (Extensions::EditorUiNodeBaseOf(previous->projection.surface.form->nodes[oldIndex]).id == id)
+                            state = oldState;
+                }
+                entry.plots.emplace_back(i, state);
             }
         }
         const auto &descriptor = projection.surface.descriptor;
@@ -98,6 +106,7 @@ namespace Horo::Editor {
         entry.tooltip = host_->LocalizedText(descriptor.provider, descriptor.tooltipLocalizationKey, locale);
         PrepareNodeText(entry, locale);
         PrepareResources(entry, previous != entries_.end() ? std::to_address(previous) : nullptr);
+        PrepareLayout(entry);
         return entry;
     }
 
@@ -192,6 +201,12 @@ namespace Horo::Editor {
     /** @copydoc ExtensionActivityView::SetInputAdmitted */
     void ExtensionActivityView::SetInputAdmitted(const bool admitted) noexcept {
         inputAdmitted_ = admitted;
+        for (auto &entry : entries_)
+            if (entry.render)
+                for (std::size_t i = 0; i < entry.render->nodes.size(); ++i) {
+                    entry.render->accessibility[i].enabled = admitted && entry.render->nodes[i].enabled;
+                    entry.render->accessibility[i].focusable = admitted && entry.render->nodes[i].focusable;
+                }
         if (host_)
             host_->SetInputAdmitted(admitted);
     }
@@ -204,8 +219,11 @@ namespace Horo::Editor {
         ApplyPendingMove();
         const auto revision = host_->Registry().Revision();
         const auto &locale = context_.settings.settings.languageTag;
-        if (revision == revision_ && locale == locale_)
+        if (revision == revision_ && locale == locale_) {
+            for (auto &entry : entries_)
+                PrepareLayout(entry);
             return;
+        }
         std::vector<Entry> next;
         next.reserve(host_->Prepared().size());
         for (const auto &projection : host_->Prepared()) {
@@ -380,33 +398,76 @@ namespace Horo::Editor {
                 static_cast<void>(host_->Registry().Close(entry.projection.surface.descriptor.id));
     }
 
+    /** @copydoc ExtensionActivityView::PrepareLayout */
+    void ExtensionActivityView::PrepareLayout(Entry &entry) {
+        const auto theme = themeCapture_.Frame();
+        if (!theme || !entry.projection.surface.form)
+            return;
+        if (entry.render && entry.render->themeRevision == theme->revision && entry.render->availableWidth == entry.offeredWidth)
+            return;
+        auto render = Extensions::BuildEditorUiRenderSnapshot(*entry.projection.surface.form, *theme, entry.offeredWidth / theme->uiScale);
+        if (render.HasValue())
+            entry.render.emplace(std::move(render).Value());
+        else
+            entry.render.reset();
+    }
+
+    /** @copydoc ExtensionActivityView::Accessibility */
+    std::span<const Extensions::EditorUiAccessibleNode> ExtensionActivityView::Accessibility(std::string_view surface) const noexcept {
+        for (const auto &entry : entries_)
+            if (entry.render && entry.projection.surface.descriptor.id == surface && host_ &&
+                host_->IsLive(entry.projection.surface.descriptor.provider))
+                return entry.render->accessibility;
+        return {};
+    }
+
+    /** @copydoc ExtensionActivityView::DrawFormNode */
+    void ExtensionActivityView::DrawFormNode(Entry &entry, std::size_t index, float width, bool enabled) {
+        const auto &surface = entry.projection.surface;
+        const auto &node = surface.form->nodes[index];
+        const auto &base = Extensions::EditorUiNodeBaseOf(node);
+        const auto &geometry = entry.render->nodes[index];
+        const auto fonts = Ui::EditorUiFonts(context_.theme.fonts, geometry.font);
+        if (const auto *plot = std::get_if<Extensions::EditorUiPlotNode>(&node.payload)) {
+            DrawPlot(entry, *plot, index, enabled);
+        } else if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
+            if (Ui::Button(
+                    {.label = entry.nodeText[index].c_str(), .size = {width, geometry.height}, .enabled = enabled, .font = fonts.sans}))
+                static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
+                                                     action->action.value, entry.projection.revision));
+        } else if (std::holds_alternative<Extensions::EditorUiContainerNode>(node.payload)) {
+            if (!entry.nodeText[index].empty())
+                Ui::SectionTitle(entry.nodeText[index].c_str(), fonts);
+        } else
+            Ui::Hint(entry.nodeText[index].c_str(), fonts);
+    }
+
     /** @copydoc ExtensionActivityView::DrawForm */
     void ExtensionActivityView::DrawForm(Entry &entry) {
         const auto &surface = entry.projection.surface;
-        if (!surface.form)
+        if (!surface.form || !entry.render)
             return;
+        entry.offeredWidth = std::max(ImGui::GetContentRegionAvail().x, 1.0F);
+        const auto origin = ImGui::GetCursorScreenPos();
+        float bottom{};
         for (std::size_t index = 0; index < surface.form->nodes.size(); ++index) {
             const auto &node = surface.form->nodes[index];
             const auto &base = Extensions::EditorUiNodeBaseOf(node);
+            const auto &geometry = entry.render->nodes[index];
+            const float width = std::max(1.0F, std::min(geometry.width, entry.offeredWidth - geometry.x));
+            ImGui::SetCursorScreenPos({origin.x + geometry.x, origin.y + geometry.y});
+            ImGui::PushClipRect({origin.x + geometry.x, origin.y + geometry.y},
+                                {origin.x + geometry.x + width, origin.y + geometry.y + geometry.height}, true);
             ImGui::PushID(base.id.value.c_str());
-            ImGui::BeginDisabled(!inputAdmitted_ || !surface.activity.enabled || !base.enabled);
-            if (const auto *plot = std::get_if<Extensions::EditorUiPlotNode>(&node.payload)) {
-                DrawPlot(entry, *plot, index);
-            } else if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
-                if (Ui::Button({.label = entry.nodeText[index].c_str(),
-                                .enabled = base.enabled,
-                                .font = context_.theme.fonts.sans,
-                                .style = {.width = Ui::StyleWidth::FillAvailable}}))
-                    static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
-                                                         action->action.value, entry.projection.revision));
-            } else if (std::holds_alternative<Extensions::EditorUiContainerNode>(node.payload)) {
-                if (!entry.nodeText[index].empty())
-                    Ui::SectionTitle(entry.nodeText[index].c_str(), context_.theme.fonts);
-            } else
-                Ui::Hint(entry.nodeText[index].c_str(), context_.theme.fonts);
+            const bool enabled = inputAdmitted_ && surface.activity.enabled && Extensions::IsEditorUiNodeEnabled(*surface.form, base.id);
+            ImGui::BeginDisabled(!enabled);
+            DrawFormNode(entry, index, width, enabled);
             ImGui::EndDisabled();
             ImGui::PopID();
+            ImGui::PopClipRect();
+            bottom = std::max(bottom, geometry.y + geometry.height);
         }
+        ImGui::SetCursorScreenPos({origin.x, origin.y + bottom});
     }
 
     void ExtensionActivityView::DrawDrawer(const Extensions::EditorActivitySide side, const ImVec2 position, const ImVec2 size) {

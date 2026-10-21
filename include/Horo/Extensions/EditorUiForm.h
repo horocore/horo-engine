@@ -124,6 +124,31 @@ namespace Horo::Extensions {
     /** @brief Closed value vocabulary used in host-routed value-change requests. */
     using EditorUiValue = std::variant<bool, std::int64_t, double, std::string, EditorUiColorValue, EditorUiVectorValue>;
 
+    /** @brief Closed advanced presentation catalog; extensions cannot register executable painters. */
+    enum class EditorUiCustomWidget : std::uint8_t {
+        Standard,
+        ScalarDial
+    };
+
+    /** @brief Host-clipped semantic presentation shared by custom compositions, not a drawing command stream. */
+    struct EditorUiCustomPresentation final {
+        std::uint32_t schemaVersion{1};
+        EditorUiCustomWidget widget{EditorUiCustomWidget::Standard};
+        EditorThemeFontRole font{EditorThemeFontRole::Sans};
+        EditorThemeIconRole icon{EditorThemeIconRole::None};
+        EditorThemeColorRole accent{EditorThemeColorRole::Accent};
+        EditorThemeMotionRole motion{EditorThemeMotionRole::Focus};
+        std::uint8_t controlRows{3}; /**< Theme-relative custom surface height, bounded to1..8 rows. */
+    };
+
+    /** @brief Host-owned finite resource policy. Custom providers receive no callbacks, subscriptions or native resources. */
+    struct EditorUiCompositionBudget final {
+        std::size_t maximumCustomWidgets{16};
+        std::size_t maximumPlotSamples{4096};
+        std::size_t maximumPresentationStateBytes{4096};
+        std::size_t maximumDrawSegments{8192};
+    };
+
     /** @brief Common identity, text, state, and accessibility metadata for one form node. */
     struct EditorUiNodeBase final {
         EditorUiId id;                /**< Stable node identity; it is never derived only from visible text. */
@@ -134,8 +159,9 @@ namespace Horo::Extensions {
         EditorUiComponentSize size{EditorUiComponentSize::Medium};
         EditorUiSemanticTone tone{EditorUiSemanticTone::Neutral};
         EditorUiFocusPolicy focusPolicy{EditorUiFocusPolicy::Automatic};
-        bool enabled{true}; /**< Disabled nodes remain visible but cannot receive input. */
-        bool readOnly{};    /**< Value fields may display a value without accepting edits. */
+        bool enabled{true};                               /**< Disabled nodes remain visible but cannot receive input. */
+        bool readOnly{};                                  /**< Value fields may display a value without accepting edits. */
+        std::optional<EditorUiCustomPresentation> custom; /**< Versioned host presentation request; no authority or resources. */
     };
 
     /** @brief Display-only label primitive. */
@@ -376,6 +402,7 @@ namespace Horo::Extensions {
         std::size_t maximumChoices{64};
         std::size_t maximumChoiceLabelBytes{256};
         std::size_t maximumValidationMessages{32};
+        EditorUiCompositionBudget composition;
     };
 
     /** @brief Complete owned form schema; value persistence remains outside this projection. */
@@ -386,6 +413,12 @@ namespace Horo::Extensions {
         EditorUiText description;
         std::vector<EditorUiNode> nodes;
     };
+
+    /** @brief Resolves inherited enabled state without callbacks, allocation or host access.
+     * @param form Copied form. @param id Stable node identity to resolve.
+     * @return False for missing/cyclic/over-depth ancestry or any disabled node/ancestor.
+     */
+    [[nodiscard]] bool IsEditorUiNodeEnabled(const EditorUiForm &form, const EditorUiId &id) noexcept;
 
     /**
      * @brief Validates one typed node without registering, rendering, or invoking extension code.
@@ -479,6 +512,75 @@ namespace Horo::Extensions {
      */
     [[nodiscard]] EditorUiThemeToken ResolveEditorUiThemeToken(EditorUiThemeToken requested, const EditorUiThemeFrame &frame) noexcept;
 
+    /** @brief Host-owned scalar gesture state. Draft preview never becomes document state without a routed commit. */
+    struct EditorUiScalarState final {
+        double preview{};
+        float emphasis{};
+        bool editing{};
+    };
+
+    /** @brief Semantic custom interaction vocabulary, scoped by the owning host's focus/modal and provider context. */
+    enum class EditorUiScalarInput : std::uint8_t {
+        None,
+        Begin,
+        Preview,
+        Commit,
+        Cancel,
+        Increment,
+        Decrement
+    };
+
+    /** @brief Applies a bounded scalar gesture without allocation, callbacks or domain mutation.
+     * @param node Admitted decimal dial with finite range. @param state Host transient state.
+     * @param input Scoped semantic gesture. @param normalizedValue Host hit-tested position in[0,1].
+     * @param admitted Exact provider/focus/modal gate. @param theme Current immutable semantic frame.
+     * @param elapsedSeconds Frame duration. @return A proposed scalar only on commit; the owner must revalidate and execute its command.
+     */
+    [[nodiscard]] std::optional<double> UpdateEditorUiScalar(const EditorUiNumberNode &node, EditorUiScalarState &state,
+                                                             EditorUiScalarInput input, double normalizedValue, bool admitted,
+                                                             const EditorThemeFrame &theme, float elapsedSeconds) noexcept;
+
+    /** @brief Closed semantic accessibility roles exposed equally to GUI, tests and future native adapters. */
+    enum class EditorUiAccessibleRole : std::uint8_t {
+        Text,
+        Group,
+        Action,
+        Field,
+        Plot,
+        ScalarDial
+    };
+
+    /** @brief Copied accessibility record; localized names remain typed intents resolved by the owning host. */
+    struct EditorUiAccessibleNode final {
+        EditorUiId id;
+        EditorUiId parent;
+        EditorUiText name;
+        EditorUiText description;
+        EditorUiAccessibleRole role{EditorUiAccessibleRole::Text};
+        bool enabled{};
+        bool readOnly{};
+        bool focusable{};
+        std::uint32_t focusOrder{};
+        std::optional<EditorUiValue> value;
+        std::uint32_t itemCount{}; /**< Bounded plot sample count; zero for other roles. */
+        std::optional<std::uint32_t> selectedIndex;
+        bool preview{}; /**< Local uncommitted presentation value, never authored state. */
+    };
+
+    /** @brief Validates one custom presentation request without performing host admission.
+     * @param node Candidate node and presentation metadata. @return Success or typed unsupported form rejection.
+     */
+    [[nodiscard]] Result<void> ValidateEditorUiCustomPresentation(const EditorUiNode &node);
+
+    /** @brief Reports whether a form requests any specialized drawing or explicit custom presentation.
+     * @param form Copied semantic graph. @return True when the custom-composition capability is required at registration and use.
+     */
+    [[nodiscard]] bool RequiresEditorUiComposition(const EditorUiForm &form) noexcept;
+    /** @brief Validates shared custom presentation, resource budgets and closed widget/type compatibility.
+     * @param form Copied graph. @param budget Host-owned finite bounds. @return Success or a typed form/capacity rejection.
+     */
+    [[nodiscard]] Result<void> ValidateEditorUiComposition(const EditorUiForm &form, const EditorUiCompositionBudget &budget = {});
+
     /** @brief One backend-neutral render record shared by editor and headless adapters. */
     struct EditorUiRenderNode final {
         EditorUiId id;
@@ -497,6 +599,10 @@ namespace Horo::Extensions {
         float y{};
         float width{};
         float height{};
+        EditorThemeFontRole font{EditorThemeFontRole::Sans};
+        EditorThemeIconRole icon{EditorThemeIconRole::None};
+        EditorThemeColorRole accent{EditorThemeColorRole::Accent};
+        EditorThemeMotionRole motion{EditorThemeMotionRole::None};
     };
 
     /** @brief Deterministic render projection with semantic styles and scaled layout geometry. */
@@ -508,7 +614,14 @@ namespace Horo::Extensions {
         float availableWidth{};
         EditorThemeFrame theme;
         std::vector<EditorUiRenderNode> nodes;
+        std::vector<EditorUiAccessibleNode> accessibility; /**< Complete stable semantic tree, without a native accessibility claim. */
     };
+
+    /** @brief Builds one stable semantic accessibility record from the canonical form and render geometry.
+     * @param node Copied node. @param render Exact current resolved geometry/state for that node.
+     * @return Owned semantic metadata; no native accessibility support is implied.
+     */
+    [[nodiscard]] EditorUiAccessibleNode BuildEditorUiAccessibleNode(const EditorUiNode &node, const EditorUiRenderNode &render);
 
     /**
      * @brief Projects one validated form into a deterministic adapter-neutral render snapshot.

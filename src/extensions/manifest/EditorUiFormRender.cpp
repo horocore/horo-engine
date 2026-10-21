@@ -137,7 +137,7 @@ namespace Horo::Extensions {
             }
         }
 
-        [[nodiscard]] ResolvedStyle StyleForNode(const EditorUiNode &node, const EditorUiThemeFrame &theme) noexcept {
+        [[nodiscard]] ResolvedStyle StyleForNode(const EditorUiNode &node, const EditorUiThemeFrame &theme, const bool enabled) noexcept {
             using enum EditorUiThemeToken;
             const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
             const EditorUiNodeBase &base = BaseOf(node);
@@ -162,7 +162,7 @@ namespace Horo::Extensions {
             }
             if (base.tone != EditorUiSemanticTone::Neutral && kind != EditorUiNodeKind::Validation)
                 style.border = ToneToken(base.tone);
-            if (!base.enabled) {
+            if (!enabled) {
                 style.foreground = TextDisabled;
                 style.background = SurfaceSubtle;
             }
@@ -277,14 +277,15 @@ namespace Horo::Extensions {
                 using enum EditorUiLayoutKind;
                 if (ChildCount(container.base.id) == 0)
                     return metrics_.textLineHeight;
+                const float header = container.base.label.value.empty() ? 0.0F : metrics_.textLineHeight + metrics_.rowGap;
                 switch (container.layout) {
                     case Group:
                     case Stack:
-                        return MeasureVertical(container.base.id, width);
+                        return header + MeasureVertical(container.base.id, width);
                     case Row:
-                        return MeasureRow(container.base.id, width);
+                        return header + MeasureRow(container.base.id, width);
                     case Grid:
-                        return MeasureGrid(container, width);
+                        return header + MeasureGrid(container, width);
                     default:
                         return metrics_.textLineHeight;
                 }
@@ -295,7 +296,15 @@ namespace Horo::Extensions {
                 const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
                 const EditorUiNodeBase &base = BaseOf(node);
                 const float baseHeight = NodeHeight(kind, base.size, metrics_);
-                float height = baseHeight;
+                const float customHeight = base.custom && base.custom->widget == EditorUiCustomWidget::ScalarDial
+                                               ? metrics_.largeControlHeight * static_cast<float>(base.custom->controlRows) +
+                                                     2.0F * (metrics_.textLineHeight + metrics_.rowGap)
+                                               : baseHeight;
+                float height = customHeight;
+                if (kind == EditorUiNodeKind::Plot)
+                    height =
+                        metrics_.largeControlHeight * static_cast<float>(base.custom.value_or(EditorUiCustomPresentation{}).controlRows) +
+                        (metrics_.textLineHeight + metrics_.rowGap) * 2.0F;
                 if (IsContainer(kind))
                     height = MeasureContainer(std::get<EditorUiContainerNode>(node.payload), width);
                 else if (ChildCount(base.id) != 0)
@@ -375,16 +384,17 @@ namespace Horo::Extensions {
                 }
                 const auto &container = std::get<EditorUiContainerNode>(node.payload);
                 using enum EditorUiLayoutKind;
+                const float contentY = y + (container.base.label.value.empty() ? 0.0F : metrics_.textLineHeight + metrics_.rowGap);
                 switch (container.layout) {
                     case Group:
                     case Stack:
-                        PlaceVertical(container, x, y, width);
+                        PlaceVertical(container, x, contentY, width);
                         return;
                     case Row:
-                        PlaceRow(container, x, y, width);
+                        PlaceRow(container, x, contentY, width);
                         return;
                     case Grid:
-                        PlaceGrid(container, x, y, width);
+                        PlaceGrid(container, x, contentY, width);
                         return;
                     default:
                         return;
@@ -408,6 +418,7 @@ namespace Horo::Extensions {
                                             .theme = theme};
             try {
                 snapshot.nodes.reserve(form.nodes.size());
+                snapshot.accessibility.reserve(form.nodes.size());
             } catch (const std::bad_alloc &) {
                 return Result<EditorUiRenderSnapshot>::Failure(
                     MakeError(ExtensionErrors::EditorUiFormCapacityExceeded, "Editor UI render snapshot storage could not be reserved."));
@@ -415,13 +426,14 @@ namespace Horo::Extensions {
             return Result<EditorUiRenderSnapshot>::Success(std::move(snapshot));
         }
 
-        void AppendRenderNode(EditorUiRenderSnapshot &snapshot, const std::vector<EditorUiNode> &nodes, const std::size_t index,
+        void AppendRenderNode(EditorUiRenderSnapshot &snapshot, const EditorUiForm &form, const std::size_t index,
                               const EditorUiThemeFrame &theme, const LayoutPlan &layout, std::uint32_t &focusOrder) {
-            const EditorUiNode &node = nodes[index];
+            const EditorUiNode &node = form.nodes[index];
             const EditorUiNodeBase &base = BaseOf(node);
             const EditorUiNodeKind kind = EditorUiNodeKindOf(node);
+            const bool enabled = IsEditorUiNodeEnabled(form, base.id);
             const LayoutBounds &bounds = layout.Bounds(index);
-            const ResolvedStyle style = StyleForNode(node, theme);
+            const ResolvedStyle style = StyleForNode(node, theme, enabled);
             EditorUiRenderNode renderNode{.id = base.id,
                                           .parent = base.parent,
                                           .kind = kind,
@@ -430,17 +442,22 @@ namespace Horo::Extensions {
                                           .foregroundToken = style.foreground,
                                           .backgroundToken = style.background,
                                           .borderToken = style.border,
-                                          .enabled = base.enabled,
+                                          .enabled = enabled,
                                           .readOnly = base.readOnly,
-                                          .focusable =
-                                              base.enabled && base.focusPolicy == EditorUiFocusPolicy::Automatic && IsInteractive(kind),
+                                          .focusable = enabled && base.focusPolicy == EditorUiFocusPolicy::Automatic && IsInteractive(kind),
                                           .focusOrder = 0,
                                           .x = bounds.x * theme.uiScale,
                                           .y = bounds.y * theme.uiScale,
                                           .width = bounds.width * theme.uiScale,
                                           .height = bounds.height * theme.uiScale};
+            const EditorUiCustomPresentation requested = base.custom.value_or(EditorUiCustomPresentation{});
+            renderNode.font = ResolveEditorThemeFontRole(requested.font, theme);
+            renderNode.icon = ResolveEditorThemeIconRole(requested.icon, theme);
+            renderNode.accent = ResolveEditorThemeColorRole(requested.accent, theme);
+            renderNode.motion = ResolveEditorThemeMotionRole(requested.motion, theme);
             if (renderNode.focusable)
                 renderNode.focusOrder = ++focusOrder;
+            snapshot.accessibility.push_back(BuildEditorUiAccessibleNode(node, renderNode));
             snapshot.nodes.push_back(std::move(renderNode));
         }
     }  // namespace
@@ -475,8 +492,12 @@ namespace Horo::Extensions {
                 MakeError(ExtensionErrors::EditorUiFormCapacityExceeded, "Editor UI layout storage could not be reserved."));
         }
         std::uint32_t focusOrder = 0;
-        for (std::size_t index = 0; index < form.nodes.size(); ++index) {
-            AppendRenderNode(snapshot, form.nodes, index, theme, *layout, focusOrder);
+        try {
+            for (std::size_t index = 0; index < form.nodes.size(); ++index)
+                AppendRenderNode(snapshot, form, index, theme, *layout, focusOrder);
+        } catch (const std::bad_alloc &) {
+            return Result<EditorUiRenderSnapshot>::Failure(
+                MakeError(ExtensionErrors::EditorUiFormCapacityExceeded, "Editor UI semantic projection storage could not be copied."));
         }
         return Result<EditorUiRenderSnapshot>::Success(std::move(snapshot));
     }

@@ -241,8 +241,7 @@ namespace Horo::Editor {
                 if (base.label.value.empty())
                     continue;
                 Ui::FieldLabel(Text(base.label.value), context_.theme.fonts);
-                extra += ImGui::GetCursorScreenPos().y - before;
-                bottom = std::max(bottom, geometry.y + extra);
+                bottom = std::max(bottom, geometry.y + geometry.height + extra);
                 continue;
             }
             DrawNode(page.form.nodes[i], page, i);

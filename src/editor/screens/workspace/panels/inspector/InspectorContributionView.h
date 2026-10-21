@@ -13,6 +13,8 @@ namespace Horo::Editor {
         /** @brief Borrows explicit composed host and current immutable-theme view for this panel attachment. */
         InspectorContributionView(Extensions::EditorInspectorHost &host, const Extensions::EditorThemeFrame &theme);
         /** @brief Rebuilds only on actual owner/selection/provider revisions, before default controls decide their fallback coverage. */
+        /** @brief Applies the real panel/workspace input decision and discards previews when ownership is withdrawn. */
+        void SetInputAdmitted(bool admitted) noexcept;
         void Synchronize(const EditorWorkspaceViewModel &model, std::span<const SceneObjectId> selection);
         /** @brief Prepares validated current geometry before allowing custom fields to replace their generic controls.
          * @param attachment Primary attachment identity. @param context Current actual GUI context.
@@ -24,6 +26,8 @@ namespace Horo::Editor {
                   const EditorGuiContext &context);
         /** @brief Draws actual common selected behavior schemas for multi-edit; ambiguous repeated attachments stay unsupported. */
         void DrawMulti(const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
+        /** @brief Borrows current semantic hooks until synchronization; revoked providers expose no records. */
+        [[nodiscard]] std::span<const Extensions::EditorUiAccessibleNode> Accessibility(std::string_view surface) const;
 
     private:
         struct Entry final {
@@ -35,6 +39,7 @@ namespace Horo::Editor {
             std::vector<std::string> covered;
             std::array<std::string, 256> buffers;
             std::array<bool, 256> mixed{};
+            std::vector<std::pair<std::size_t, Extensions::EditorUiScalarState>> scalars;
             std::optional<Extensions::EditorUiRenderSnapshot> render;
             std::array<std::size_t, 256> order{};
             bool enabled{};
@@ -60,6 +65,10 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<Extensions::EditorInspectorScalar> DrawValue(Entry &entry, std::size_t index,
                                                                                  const Extensions::EditorInspectorField &field,
                                                                                  const EditorGuiContext &context);
+        /** @brief Uses the same admitted scalar binding with a host-owned custom presenter and retained local preview. */
+        [[nodiscard]] std::optional<Extensions::EditorInspectorScalar> DrawScalar(Entry &entry, std::size_t index,
+                                                                                  const Extensions::EditorInspectorField &field,
+                                                                                  const EditorGuiContext &context);
         /** @brief Validates a typed interaction against copied constraints, then emits a complete owner-fenced command. */
         void Queue(Entry &entry, const Extensions::EditorInspectorField &field, Extensions::EditorInspectorScalar value,
                    const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command) const;
@@ -74,6 +83,7 @@ namespace Horo::Editor {
         Extensions::EditorInspectorHost &host_;
         const Extensions::EditorThemeFrame &theme_;
         std::vector<Entry> entries_;
+        bool inputAdmitted_{true};
         std::uint64_t documentRevision_{};
         std::uint64_t documentGeneration_{};
         std::uint64_t selectionRevision_{};

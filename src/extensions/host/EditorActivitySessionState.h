@@ -15,9 +15,10 @@
 
 namespace Horo::Extensions {
     struct EditorActivityHost::State final {
-        explicit State(JobSystem &scheduler) : jobs(scheduler) {}
+        State(JobSystem &scheduler, ExtensionAdmissionPolicy evidence) : jobs(scheduler), policy(std::move(evidence)) {}
 
         JobSystem &jobs;
+        const ExtensionAdmissionPolicy policy;
         EditorSurfaceRegistry registry;
         std::vector<std::weak_ptr<EditorActivitySession>> sessions;
         std::vector<EditorActivityProjection> prepared;
@@ -34,6 +35,7 @@ namespace Horo::Extensions {
         std::thread::id owner{std::this_thread::get_id()};
         EditorSurfaceContextProvider contexts;
         std::optional<ExtensionCapabilityAdmission> admission;
+        std::optional<ExtensionCapabilityHandle> customGrant;
         std::optional<EditorSurfaceRegistration> drawerRegistration;
         std::optional<EditorSurfaceRegistration> activityRegistration;
         EditorSurfaceContextDescriptor drawer;
@@ -63,6 +65,8 @@ namespace Horo::Extensions {
             std::optional<EditorUiForm> form;
             EditorActivityPresentation presentation;
             std::uint64_t revision{};
+            std::optional<ExtensionCapabilityUseLease> customUse;
+            bool customAllowed{};
             bool failed{}; /**< Published before ready; read only after its acquire load. */
             std::atomic_bool ready{};
         };
@@ -97,10 +101,11 @@ namespace Horo::Extensions {
 
         /** @brief Copies updates only on the owning lane and rejects stale revisions after teardown. */
         HoroExtensionStatus Publish(const HoroEditorActivitySnapshot &input) {
-            if (revoked || owner != std::this_thread::get_id() || input.revision <= revision)
+            if (revoked || owner != std::this_thread::get_id() || input.revision <= revision ||
+                (input.schemaVersion == HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION && (!customGrant || !customGrant->IsUsable())))
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             auto copied = Detail::CopyActivityForm(input, drawer.surface.id, drawer.surface.labelLocalizationKey);
-            if (copied.HasError())
+            if (copied.HasError() || (RequiresEditorUiComposition(copied.Value()) && (!customGrant || !customGrant->IsUsable())))
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             const EditorActivityPresentation next{(input.presentationFlags & HORO_EDITOR_ACTIVITY_HIDDEN) == 0,
                                                   (input.presentationFlags & HORO_EDITOR_ACTIVITY_DISABLED) == 0, input.badgeCount};
@@ -121,14 +126,17 @@ namespace Horo::Extensions {
             const auto activeHost = host.lock();
             if (!activeHost || revoked || !admission)
                 return Result<void>::Failure(MakeError(ExtensionErrors::ContributionRejected));
-            auto drawerContext = contexts.Attach(drawer, admission->ActivationLease());
+            std::vector<ExtensionCapabilityHandle> grants;
+            if (customGrant)
+                grants.push_back(*customGrant);
+            auto drawerContext = contexts.Attach(drawer, admission->ActivationLease(), grants);
             if (drawerContext.HasError())
                 return Result<void>::Failure(drawerContext.ErrorValue());
             auto registeredDrawer = activeHost->Registry().Register(std::move(drawerContext).Value());
             if (registeredDrawer.HasError())
                 return Result<void>::Failure(registeredDrawer.ErrorValue());
             drawerRegistration.emplace(std::move(registeredDrawer).Value());
-            auto activityContext = contexts.Attach(activity, admission->ActivationLease());
+            auto activityContext = contexts.Attach(activity, admission->ActivationLease(), grants);
             if (activityContext.HasError())
                 return Result<void>::Failure(activityContext.ErrorValue());
             auto registeredActivity = activeHost->Registry().Register(std::move(activityContext).Value());

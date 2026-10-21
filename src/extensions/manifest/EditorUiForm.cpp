@@ -341,6 +341,8 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] Result<void> ValidateNodeInternal(const EditorUiNode &node, const EditorUiFormLimits &limits) {
+            if (auto custom = ValidateEditorUiCustomPresentation(node); custom.HasError())
+                return custom;
             return std::visit([&]<typename T>(const T &typed) {
                 if (const Result<void> base = ValidateBase(typed.base, limits); base.HasError())
                     return base;
@@ -464,6 +466,24 @@ namespace Horo::Extensions {
 
     }  // namespace
 
+    /** @copydoc IsEditorUiNodeEnabled */
+    bool IsEditorUiNodeEnabled(const EditorUiForm &form, const EditorUiId &id) noexcept {
+        if (!id.IsValid())
+            return false;
+        std::size_t index = FindNodeIndex(form.nodes, id);
+        for (std::size_t depth = 0; depth < form.nodes.size(); ++depth) {
+            if (index == form.nodes.size())
+                return false;
+            const auto &base = BaseOf(form.nodes[index]);
+            if (!base.enabled)
+                return false;
+            if (!base.parent.IsValid())
+                return true;
+            index = FindNodeIndex(form.nodes, base.parent);
+        }
+        return false;
+    }
+
     /** @copydoc EditorUiColorValue::IsValid */
     bool EditorUiColorValue::IsValid() const noexcept {
         return std::isfinite(red) && std::isfinite(green) && std::isfinite(blue) && std::isfinite(alpha) && red >= 0.0F && red <= 1.0F &&
@@ -529,7 +549,7 @@ namespace Horo::Extensions {
             return Invalid("Editor UI value-binding identities must be unique and canonical.");
         if (!IsUniqueCanonical(actionIds, limits.maximumActionIdentityBytes))
             return Invalid("Editor UI action identities must be unique and canonical.");
-        return Result<void>::Success();
+        return ValidateEditorUiComposition(form, limits.composition);
     }
 
     /** @copydoc EditorUiFormBuilder::Create */

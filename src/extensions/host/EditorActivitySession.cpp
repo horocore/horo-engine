@@ -131,8 +131,9 @@ namespace Horo::Extensions {
         session->drawer.localization.emplace_back(session->activity.surface.labelLocalizationKey);
         for (const auto &node : copied.Value().nodes) {
             const auto &base = EditorUiNodeBaseOf(node);
-            if (!base.label.value.empty())
-                session->drawer.localization.emplace_back(base.label.value);
+            for (const auto *key : {&base.label, &base.description, &base.accessibleLabel})
+                if (!key->value.empty())
+                    session->drawer.localization.emplace_back(key->value);
             std::visit([&](const auto &typed) {
                 if constexpr (requires { typed.action; })
                     session->drawer.commands.emplace_back(typed.action.value);
@@ -141,6 +142,7 @@ namespace Horo::Extensions {
                         session->drawer.localization.emplace_back(typed.text.value);
             }, node.payload);
         }
+        session->form = std::move(copied).Value();
         auto &keys = session->drawer.localization;
         std::ranges::sort(keys, {}, &EditorSurfaceLocalizationKey::value);
         keys.erase(std::ranges::unique(keys).begin(), keys.end());
@@ -173,6 +175,34 @@ namespace Horo::Extensions {
         return HORO_EXTENSION_SUCCESS;
     }
 
+    /** @brief Seals the explicit custom feature grant before publication; basic UI support confers no advanced authority. */
+    static HoroExtensionStatus AdmitComposition(const std::shared_ptr<EditorActivitySession> &session,
+                                                AssetImporterRegistrationSession &load, const HoroEditorActivityDescriptor &descriptor) {
+        const bool custom = std::ranges::find(load.extensionModule->requiredCapabilities, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY) !=
+                            load.extensionModule->requiredCapabilities.end();
+        if ((descriptor.initialSnapshot.schemaVersion == HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION ||
+             RequiresEditorUiComposition(session->form)) &&
+            !custom)
+            return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+        ExtensionAdmissionRequest request{load.manifest->id, load.extensionModule->id, load.editorGeneration, {}};
+        if (custom) {
+            request.capabilities.push_back({EditorCustomCompositionCapability, {}});
+            session->drawer.surface.requiredCapabilities.push_back(EditorCustomCompositionCapability);
+            session->activity.surface.requiredCapabilities.push_back(EditorCustomCompositionCapability);
+        }
+        auto admission = ExtensionCapabilityAdmission::Evaluate(request, load.editorHost->AdmissionPolicy());
+        if (admission.HasError())
+            return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+        session->admission.emplace(std::move(admission).Value());
+        if (custom) {
+            auto grant = session->admission->Grant(EditorCustomCompositionCapability);
+            if (grant.HasError())
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
+            session->customGrant.emplace(std::move(grant).Value());
+        }
+        return HORO_EXTENSION_SUCCESS;
+    }
+
     /** @brief Validates and copies one complete ABI contribution before admission. */
     static HoroExtensionStatus RegisterEditorActivityImpl(AssetImporterRegistrationSession &load,
                                                           const HoroEditorActivityDescriptor *descriptor,
@@ -193,17 +223,11 @@ namespace Horo::Extensions {
             std::string resource;
             if (const auto status = CopyDescriptors(session, load, descriptor, resource); status != HORO_EXTENSION_SUCCESS)
                 return status;
-            const auto generation = load.editorGeneration;
-            auto admission = ExtensionCapabilityAdmission::Evaluate({.extensionId = load.manifest->id,
-                                                                     .moduleId = load.extensionModule->id,
-                                                                     .activationGeneration = generation},
-                                                                    {.revision = 1});
-            if (admission.HasError())
-                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
-            session->admission.emplace(std::move(admission).Value());
             if (CopyFormPermissions(session, descriptor) != HORO_EXTENSION_SUCCESS ||
                 CopyMessages(session, descriptor) != HORO_EXTENSION_SUCCESS)
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
+            if (AdmitComposition(session, load, *descriptor) != HORO_EXTENSION_SUCCESS)
+                return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             auto raster = ReadIcon(*load.manifest, resource);
             if (raster.HasError())
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
@@ -213,8 +237,8 @@ namespace Horo::Extensions {
                 !load.retirement->RegisterContribution(load.extensionModule->id, session))
                 return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
             load.lifetime->editorActivities.push_back(session);
-            *api = {sizeof(HoroEditorActivitySessionApi), HORO_EDITOR_ACTIVITY_SESSION_VERSION, 63U, session.get(),
-                    HoroPublishActivitySession};
+            *api = {sizeof(HoroEditorActivitySessionApi), HORO_EDITOR_ACTIVITY_SESSION_VERSION, session->customGrant ? 255U : 31U,
+                    session.get(), HoroPublishActivitySession};
             return HORO_EXTENSION_SUCCESS;
         } catch (...) {
             return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
@@ -265,7 +289,13 @@ namespace Horo::Extensions {
         return Result<void>::Success();
     }
 
-    EditorActivityHost::EditorActivityHost(JobSystem &jobs) : state_(std::make_unique<State>(jobs)) {}
+    EditorActivityHost::EditorActivityHost(JobSystem &jobs, ExtensionAdmissionPolicy policy)
+        : state_(std::make_unique<State>(jobs, std::move(policy))) {}
+
+    /** @copydoc EditorActivityHost::AdmissionPolicy */
+    const ExtensionAdmissionPolicy &EditorActivityHost::AdmissionPolicy() const noexcept {
+        return state_->policy;
+    }
 
     EditorActivityHost::~EditorActivityHost() {
         BeginShutdown();
@@ -282,6 +312,7 @@ namespace Horo::Extensions {
             const auto session = weak.lock();
             return session && session->committed && !session->revoked && session->activity.surface.provider == provider &&
                    session->admission && session->admission->ActivationLease().IsUsable() &&
+                   (!session->customGrant || session->customGrant->IsUsable()) &&
                    state_->registry.IsAvailable(provider, session->activity.surface.id) &&
                    state_->registry.IsAvailable(provider, session->drawer.surface.id);
         });
@@ -289,24 +320,6 @@ namespace Horo::Extensions {
 
     std::span<const EditorActivityProjection> EditorActivityHost::Prepared() const noexcept {
         return state_->prepared;
-    }
-
-    /** @brief Applies all copied ancestor restrictions before admitting a specialized or standard action. */
-    static bool ActionNodeEnabled(const EditorUiNode &node, const EditorUiForm &form) {
-        const auto *base = &EditorUiNodeBaseOf(node);
-        for (std::size_t depth = 0; depth <= 16; ++depth) {
-            if (!base->enabled || base->readOnly)
-                return false;
-            if (!base->parent.IsValid())
-                return true;
-            const auto parent = std::ranges::find_if(form.nodes, [&](const auto &candidate) {
-                return EditorUiNodeBaseOf(candidate).id == base->parent;
-            });
-            if (parent == form.nodes.end())
-                return false;
-            base = &EditorUiNodeBaseOf(*parent);
-        }
-        return false;
     }
 
     Result<void> EditorActivityHost::QueueAction(const EditorSurfaceProviderIdentity &provider, const std::string_view activityId,
@@ -324,7 +337,8 @@ namespace Horo::Extensions {
             for (const auto &node : session->form.nodes) {
                 const bool matches = std::visit([&](const auto &typed) {
                     if constexpr (requires { typed.action; })
-                        return typed.base.id.value == nodeId && typed.action.value == actionId && ActionNodeEnabled(node, session->form);
+                        return typed.base.id.value == nodeId && typed.action.value == actionId && !typed.base.readOnly &&
+                               IsEditorUiNodeEnabled(session->form, typed.base.id);
                     else
                         return false;
                 }, node.payload);

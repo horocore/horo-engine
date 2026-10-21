@@ -231,22 +231,44 @@ namespace Horo::Extensions::Tests {
                                             .revision = 1,
                                             .nodes = reinterpret_cast<const HoroEditorActivityNode *>(&node),
                                             .nodeCount = 1};
-        auto copied = Detail::CopyActivityForm(snapshot, "drawer", "title");
+        auto copied = Detail::CopyActivityForm(snapshot, "drawer", "fixture.title");
+        INFO(copied.HasError() ? copied.ErrorValue().message : std::string{});
         REQUIRE(copied.HasValue());
         samples[1].y = 0;
         const auto &plot = std::get<EditorUiPlotNode>(copied.Value().nodes.front().payload);
         CHECK(plot.samples.back().y == 1);
         snapshot.schemaVersion = HORO_EDITOR_ACTIVITY_SCHEMA_VERSION;
-        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "fixture.title").HasError());
         snapshot.schemaVersion = HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION;
         node.sampleCount = 257;
-        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "fixture.title").HasError());
         node.sampleCount = 2;
         samples[1].x = std::numeric_limits<float>::quiet_NaN();
-        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "fixture.title").HasError());
         samples[1].x = 0;
-        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "fixture.title").HasError());
         node.samples = nullptr;
-        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "title").HasError());
+        CHECK(Detail::CopyActivityForm(snapshot, "drawer", "fixture.title").HasError());
     }
+
+    TEST_CASE("Custom scalar gesture state advances with allocation forbidden", "[Extensions][Composition][Allocation]") {
+        EditorUiNumberNode number{.base = {.id = {"dial"},
+                                           .custom = EditorUiCustomPresentation{.widget = EditorUiCustomWidget::ScalarDial}},
+                                  .binding = {"gain"},
+                                  .value = 25.0,
+                                  .minimum = 0.0,
+                                  .maximum = 100.0};
+        EditorUiScalarState state;
+        EditorThemeFrame theme;
+        std::optional<double> proposed;
+        {
+            Horo::Tests::AllocationProbe::ScopedFailure failure;
+            static_cast<void>(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01));
+            proposed = UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, true, theme, .01);
+        }
+        REQUIRE(proposed);
+        CHECK(*proposed == 75.0);
+        CHECK(std::get<double>(number.value) == 25.0);
+    }
+
 }  // namespace Horo::Extensions::Tests

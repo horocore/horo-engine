@@ -34,6 +34,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool HasDrawer(Extensions::EditorActivitySide side) const noexcept;
         void DrawDrawer(Extensions::EditorActivitySide side, ImVec2 position, ImVec2 size);
         void Close(Extensions::EditorActivitySide side);
+        /** @brief Borrows live host semantic records until the next owner update; no platform accessibility handle crosses the boundary. */
+        [[nodiscard]] std::span<const Extensions::EditorUiAccessibleNode> Accessibility(std::string_view surface) const noexcept;
 
     private:
         /** @brief Move-only UI-thread release owner; the borrowed renderer outlives the view and all its candidate entries. */
@@ -66,7 +68,9 @@ namespace Horo::Editor {
             std::string label;
             std::string tooltip;
             std::vector<std::string> nodeText;
-            std::array<Extensions::EditorUiPlotState, 256> plots{};
+            std::vector<std::pair<std::size_t, Extensions::EditorUiPlotState>> plots;
+            std::optional<Extensions::EditorUiRenderSnapshot> render;
+            float offeredWidth{320};
             bool focusPending{};
             bool requestNativePanelClear{};
             std::uint64_t token{};
@@ -96,8 +100,12 @@ namespace Horo::Editor {
         void PrepareNodeText(Entry &entry, const std::string &locale);
         /** @brief Draws the admitted form using retained text and queues typed actions without invoking providers. */
         void DrawForm(Entry &entry);
+        /** @brief Draws one copied semantic node inside its inherited native input and clipping scopes. */
+        void DrawFormNode(Entry &entry, std::size_t index, float width, bool enabled);
+        /** @brief Allocates layout and semantic snapshots only at owner updates on declaration, width or live-theme change. */
+        void PrepareLayout(Entry &entry);
         /** @brief Host-owned specialized plot; consumes copied data and current tokens without provider callbacks. */
-        void DrawPlot(Entry &entry, const Extensions::EditorUiPlotNode &plot, std::size_t index);
+        void DrawPlot(Entry &entry, const Extensions::EditorUiPlotNode &plot, std::size_t index, bool enabled);
         /** @brief Presents localized destination and insertion actions for one retained control. */
         void DrawPlacementMenu(const Entry &entry, std::size_t group);
         /** @brief Presents durable user visibility choices for the current activity rail. */

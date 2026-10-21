@@ -496,8 +496,10 @@ namespace Horo::Extensions {
         EditorUiPlotNode plot{.base = {.id = {"plot"}, .label = {EditorUiTextKind::LocalizationKey, "plot.label"}},
                               .action = {"inspect"},
                               .samples = {{0, 0.2F}, {0.5F, 0.8F}, {1, 0.3F}}};
-        EditorUiForm form{.id = {"custom"}, .nodes = {{plot}}};
-        REQUIRE(ValidateEditorUiForm(form).HasValue());
+        EditorUiForm form{.id = {"custom"}, .title = {EditorUiTextKind::LocalizationKey, "plot.title"}, .nodes = {{plot}}};
+        const auto valid = ValidateEditorUiForm(form);
+        INFO(valid.HasError() ? valid.ErrorValue().message : std::string{});
+        REQUIRE(valid.HasValue());
         EditorThemeFrame theme;
         auto first = BuildEditorUiRenderSnapshot(form, theme, 80);
         REQUIRE(first.HasValue());
@@ -528,4 +530,82 @@ namespace Horo::Extensions {
         plot.samples.resize(MaximumEditorUiPlotSamples + 1);
         CHECK(ValidateEditorUiNode({plot}).HasError());
     }
+}  // namespace Horo::Extensions
+
+namespace Horo::Extensions {
+    TEST_CASE("Disabled ancestors remove custom input and focus from the common projection", "[Extensions][Form][Plot][Input]") {
+        EditorUiContainerNode parent{.base = {.id = {"parent"}, .focusPolicy = EditorUiFocusPolicy::Never, .enabled = false}};
+        EditorUiPlotNode plot{.base = {.id = {"plot"}, .parent = {"parent"}, .label = {EditorUiTextKind::LocalizationKey, "plot.label"}},
+                              .action = {"inspect"},
+                              .samples = {{0, 0}, {1, 1}}};
+        EditorUiForm form{.id = {"custom"}, .title = {EditorUiTextKind::LocalizationKey, "plot.title"}, .nodes = {{parent}, {plot}}};
+        const auto valid = ValidateEditorUiForm(form);
+        INFO(valid.HasError() ? valid.ErrorValue().message : std::string{});
+        REQUIRE(valid.HasValue());
+        CHECK_FALSE(IsEditorUiNodeEnabled(form, {"plot"}));
+        auto snapshot = BuildEditorUiRenderSnapshot(form, {}, 80);
+        REQUIRE(snapshot.HasValue());
+        CHECK_FALSE(snapshot.Value().nodes.back().enabled);
+        CHECK_FALSE(snapshot.Value().nodes.back().focusable);
+        CHECK(snapshot.Value().nodes.back().foregroundToken == EditorThemeColorRole::TextDisabled);
+        std::get<EditorUiContainerNode>(form.nodes.front().payload).base.enabled = true;
+        CHECK(IsEditorUiNodeEnabled(form, {"plot"}));
+        CHECK_FALSE(IsEditorUiNodeEnabled(form, {"missing"}));
+        std::get<EditorUiContainerNode>(form.nodes.front().payload).base.parent = {"plot"};
+        CHECK_FALSE(IsEditorUiNodeEnabled(form, {"plot"}));
+    }
+
+    TEST_CASE("Custom scalar presentation preserves canonical values and exposes bounded semantic hooks",
+              "[extensions][form][composition][accessibility]") {
+        EditorUiNumberNode number{.base = {.id = {"dial"},
+                                           .label = Localized("dial.label"),
+                                           .accessibleLabel = Localized("dial.accessible"),
+                                           .custom = EditorUiCustomPresentation{.widget = EditorUiCustomWidget::ScalarDial,
+                                                                                .font = EditorThemeFontRole::SansEmphasis,
+                                                                                .icon = EditorThemeIconRole::Info}},
+                                  .binding = {"gain"},
+                                  .value = 25.0,
+                                  .minimum = 0.0,
+                                  .maximum = 100.0};
+        EditorUiForm form{.id = {"custom.form"}, .title = Localized("custom.title"), .nodes = {{number}}};
+        REQUIRE(ValidateEditorUiForm(form).HasValue());
+        CHECK(RequiresEditorUiComposition(form));
+        EditorThemeFrame theme;
+        auto rendered = BuildEditorUiRenderSnapshot(form, theme, 180);
+        REQUIRE(rendered.HasValue());
+        REQUIRE(rendered.Value().accessibility.size() == 1);
+        const auto &semantic = rendered.Value().accessibility.front();
+        CHECK(semantic.role == EditorUiAccessibleRole::ScalarDial);
+        CHECK(semantic.name.value == "dial.accessible");
+        CHECK(semantic.focusable);
+        CHECK(std::get<double>(*semantic.value) == 25.0);
+        EditorUiScalarState state;
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01));
+        CHECK(state.editing);
+        CHECK(state.preview == 75.0);
+        CHECK(std::get<double>(number.value) == 25.0);
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, false, theme, .01));
+        CHECK_FALSE(state.editing);
+        CHECK(state.preview == 25.0);
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .75, true, theme, .01));
+        const auto proposed = UpdateEditorUiScalar(number, state, EditorUiScalarInput::Commit, .75, true, theme, .01);
+        REQUIRE(proposed);
+        CHECK(*proposed == 75.0);
+        CHECK(std::get<double>(number.value) == 25.0);
+        theme.accessibility.reduceMotion = true;
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, .5, true, theme, .001));
+        CHECK(state.emphasis == 1.0F);
+        EditorUiFormLimits limits;
+        limits.composition.maximumCustomWidgets = 0;
+        CHECK(ValidateEditorUiForm(form, limits).HasError());
+        limits = {};
+        limits.composition.maximumPresentationStateBytes = 1;
+        CHECK(ValidateEditorUiForm(form, limits).HasError());
+        limits = {};
+        limits.composition.maximumDrawSegments = 0;
+        CHECK(ValidateEditorUiForm(form, limits).HasError());
+        std::get<EditorUiNumberNode>(form.nodes.front().payload).base.custom->schemaVersion = 99;
+        CHECK(ValidateEditorUiForm(form).HasError());
+    }
+
 }  // namespace Horo::Extensions
