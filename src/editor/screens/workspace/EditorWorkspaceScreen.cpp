@@ -405,7 +405,8 @@ namespace Horo::Editor {
                     OpenPackagesModal();
                     return true;
                 }
-                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
+                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
+                    !controller_->CurrentScenePath().has_value())
                     action = EditorMenuAction::SaveSceneAs;
                 if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
                     EditorWorkspaceViewCommandData command;
@@ -702,10 +703,9 @@ namespace Horo::Editor {
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
-                                                   .pcgCatalog = std::move(pcgCatalog.document),
-                                                   .pcgPreviewCatalog = pcgCatalog.executable,
+                                                   .pcg = std::move(pcgCatalog),
                                                    .pcgPreviewInputs = std::move(pcgPreview).Value(),
-                                                   .pcgPalette = std::move(pcgCatalog.palette),
+
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
@@ -982,6 +982,9 @@ namespace Horo::Editor {
                     command.command = EditorWorkspaceViewCommand::UndoScene;
                 } else if (pressed(kActionSave)) {
                     command.command = EditorWorkspaceViewCommand::SaveScene;
+                } else if (controller_->HasActivePCGDocument()) {
+                    if (pressed(kActionDelete))
+                        command.command = EditorWorkspaceViewCommand::DeleteSelectedObjects;
                 } else if (pressed(kActionToolSelect)) {
                     command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
                     command.transformToolPayload = EditorTransformTool::Select;

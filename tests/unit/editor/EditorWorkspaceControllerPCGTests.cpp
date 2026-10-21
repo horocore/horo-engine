@@ -45,7 +45,7 @@ namespace Horo::Editor {
                                              {.mutations = &project.mutations,
                                               .durableFiles = &project.files,
                                               .documentSessionOwner = Asset(9),
-                                              .pcgCatalog = Catalog()});
+                                              .pcg = {.document = Catalog()}});
         EditorWorkspaceViewCommandData open;
         open.command = EditorWorkspaceViewCommand::OpenSourceFile;
         open.sourceOpenRequest = SourceOpenRequest{.path = project.path, .mode = SourceOpenMode::EmbeddedOnly};
@@ -476,5 +476,29 @@ namespace Horo::Editor {
         ErrorIs(PreparePCGEdit(request, graph.Value(), palette.Value().palette),
                 PCGDocumentError(PCGDocumentCommandFailureReason::Exhausted));
         CHECK(graph.Value().Data().nodes.size() == 2);
+    }
+
+    TEST_CASE("Active PCG document routes keyboard removal independently of scene selection", "[unit][editor][pcg][canvas]") {
+        CanvasWorkspace fixture;
+        CHECK(fixture.controller->HasActivePCGDocument());
+        const auto sceneDirty = fixture.controller->ViewModel().isDirty;
+        auto selection = fixture.Request();
+        selection.presentation.selection = {Id<PCG::NodeId>(1)};
+        fixture.Send(selection);
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::DeleteSelectedObjects;
+        fixture.controller->ProcessCommand(command);
+        REQUIRE_FALSE(fixture.View().error);
+        CHECK(fixture.View().snapshot.source->Data().nodes.size() == 1);
+        CHECK(fixture.controller->ViewModel().isDirty == sceneDirty);
+        command.command = EditorWorkspaceViewCommand::UndoScene;
+        fixture.controller->ProcessCommand(command);
+        REQUIRE_FALSE(fixture.View().error);
+        CHECK_FALSE(fixture.View().snapshot.dirty);
+        command.command = EditorWorkspaceViewCommand::ChangeActivePanel;
+        command.targetIndex = 3;
+        command.stringPayload = "horo.viewport";
+        fixture.controller->ProcessCommand(command);
+        CHECK_FALSE(fixture.controller->HasActivePCGDocument());
     }
 }  // namespace Horo::Editor

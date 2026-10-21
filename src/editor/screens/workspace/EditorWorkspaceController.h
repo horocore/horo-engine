@@ -84,10 +84,9 @@ namespace Horo::Editor {
         Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
         IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
         PrefabHierarchySourceCapture prefabSources;        /**< Explicit host loader; never discovered by panels. */
-        PCGDocumentCatalog pcgCatalog{.revision = 1};      /**< Empty support preserves graph nodes inert until a catalog is composed. */
-        PCG::PCGNodeCatalogSnapshot pcgPreviewCatalog;     /**< Exact executable root matching source support. */
+        PCGEditorCatalog pcg{.document = {.revision = 1}}; /**< One host-composed source-support and creation-recipe generation. */
         std::optional<PCGPreviewInputs> pcgPreviewInputs;  /**< Explicit detached provider; absent rejects preview. */
-        std::vector<PCGPaletteEntry> pcgPalette;           /**< Host-owned recipes matching pcgCatalog; copied into workspace. */
+
         std::optional<SceneSource::TriggerVolumeConversionContext>
             triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
     };
@@ -162,6 +161,10 @@ namespace Horo::Editor {
         [[nodiscard]] const std::optional<Result<bool>> &SourceCloseOutcome() const noexcept {
             return m_sourceCloseOutcome;
         }
+
+        /** @brief Reports whether common workspace input belongs to a live PCG document.
+         * @return True only when the active instance has a canonical graph projection. */
+        [[nodiscard]] bool HasActivePCGDocument() const noexcept;
 
         /** @brief Queries workspace-owned PCG source without lending mutable roots. @return Owner-thread immutable query service. */
         [[nodiscard]] const PCGGraphDocumentService &PCGDocuments() const noexcept {

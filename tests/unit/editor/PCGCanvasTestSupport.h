@@ -49,14 +49,13 @@ namespace Horo::Editor::PCGCanvasTestSupport {
                                                                                         .durableFiles = &project.files,
                                                                                         .jobs = jobs.get(),
                                                                                         .documentSessionOwner = Asset(9),
-                                                                                        .pcgCatalog = catalog.document,
-                                                                                        .pcgPreviewCatalog = catalog.executable,
+                                                                                        .pcg = std::move(catalog),
                                                                                         .pcgPreviewInputs =
                                                                                             preview
                                                                                                 ? std::optional{CreatePCGPreviewSandbox()
                                                                                                                     .Value()}
-                                                                                                : std::nullopt,
-                                                                                        .pcgPalette = catalog.palette});
+                                                                                                : std::nullopt});
+
             Open();
         }
 

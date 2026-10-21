@@ -176,10 +176,19 @@ namespace Horo::Editor {
         m_pcgAutosaveErrorPresented = false;
     }
 
+    /** @copydoc EditorWorkspaceController::HasActivePCGDocument */
+    bool EditorWorkspaceController::HasActivePCGDocument() const noexcept {
+        const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
+        return std::ranges::any_of(m_viewModel.pcgDocuments, [active](const auto &entry) {
+            return active == entry.snapshot.identity.instance;
+        });
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessPCGDocumentShortcut */
     bool EditorWorkspaceController::ProcessPCGDocumentShortcut(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
-        if (command.command != UndoScene && command.command != RedoScene && command.command != SaveScene)
+        if (command.command != UndoScene && command.command != RedoScene && command.command != SaveScene &&
+            command.command != DeleteSelectedObjects)
             return false;
         const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
         const auto found = std::ranges::find_if(m_viewModel.pcgDocuments, [active](const auto &entry) {
@@ -195,12 +204,15 @@ namespace Horo::Editor {
             action = PCGEditorAction::Undo;
         else if (command.command == RedoScene)
             action = PCGEditorAction::Redo;
+        else if (command.command == DeleteSelectedObjects)
+            action = PCGEditorAction::RemoveSelection;
         routed.pcgRequest = PCGEditorRequest{.action = action, .fence = Fence(found->snapshot), .presentation = found->canvas};
         return ProcessPCGDocumentCommand(routed);
     }
 
     /** @copydoc EditorWorkspaceController::ApplyPCGEditorRequest */
     Result<void> EditorWorkspaceController::ApplyPCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request) {
+        using enum PCGDocumentCommandFailureReason;
         const auto instance = document.snapshot.identity.instance;
         const auto current = m_pcgDocuments.Snapshot(instance);
         if (current.HasError())
@@ -209,11 +221,11 @@ namespace Horo::Editor {
         const auto &fence = request.fence;
         if (m_viewModel.workspacePanelHost.ActiveDocument() != instance || snapshot.session != fence.session ||
             snapshot.revision != fence.expectedRevision || snapshot.catalogRevision != fence.catalogRevision)
-            return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Stale)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Stale)));
         if (fence.cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Cancelled)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Cancelled)));
         if (!fence.operations.empty())
-            return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Invalid)));
+            return Result<void>::Failure(MakeError(PCGDocumentError(Invalid)));
         if (const auto valid = ValidatePCGCanvas(request.presentation, *snapshot.source); valid.HasError())
             return valid;
         return ExecutePCGEditorRequest(document, request, snapshot);
@@ -222,21 +234,22 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::ExecutePCGEditorRequest */
     Result<void> EditorWorkspaceController::ExecutePCGEditorRequest(PCGWorkspaceDocument &document, const PCGEditorRequest &request,
                                                                     const PCGDocumentSnapshot &snapshot) {
+        using enum PCGEditorAction;
         const auto instance = snapshot.identity.instance;
-        if (request.action == PCGEditorAction::Present) {
+        if (request.action == Present) {
             document.canvas = request.presentation;
             return Result<void>::Success();
         }
-        if (request.action == PCGEditorAction::PreviewRefresh)
+        if (request.action == PreviewRefresh)
             return RequestPCGPreview(instance, request.fence.cancellation);
-        if (request.action == PCGEditorAction::PreviewCancel) {
+        if (request.action == PreviewCancel) {
             const auto owner = std::ranges::find(m_pcgPreviews, instance, &PCGPreviewOwner::document);
             if (owner != m_pcgPreviews.end())
                 static_cast<void>(owner->session->Cancel());
             UpdatePCGPreviews();
             return Result<void>::Success();
         }
-        if (request.action == PCGEditorAction::Save) {
+        if (request.action == Save) {
             const auto saved = SavePCGDocument(instance, request.fence);
             if (saved.HasError())
                 return Result<void>::Failure(saved.ErrorValue());
@@ -244,13 +257,13 @@ namespace Horo::Editor {
                 return Result<void>::Failure(*saved.Value().durabilityError);
             return Result<void>::Success();
         }
-        if (request.action == PCGEditorAction::Undo || request.action == PCGEditorAction::Redo)
-            return ReplayPCGDocument(instance, request.fence, request.action == PCGEditorAction::Redo);
+        if (request.action == Undo || request.action == Redo)
+            return ReplayPCGDocument(instance, request.fence, request.action == Redo);
         const auto edit = PreparePCGEdit(request, *snapshot.source, m_viewModel.pcgPalette);
         if (edit.HasError())
             return Result<void>::Failure(edit.ErrorValue());
         const auto executed = ExecutePCGDocument(instance, edit.Value());
-        if (executed.HasValue() && request.action == PCGEditorAction::CreateNode) {
+        if (executed.HasValue() && request.action == CreateNode) {
             const auto id = std::get<PutPCGNode>(edit.Value().operations.front()).value.id;
             document.canvas.selection = {id};
             const auto placement = std::ranges::find(document.canvas.placements, id, &PCGNodePlacement::node);
@@ -267,10 +280,11 @@ namespace Horo::Editor {
         if (!command.documentInstance || !command.pcgRequest)
             return true;
         auto &documents = m_viewModel.pcgDocuments;
-        const auto found = std::ranges::find(documents, *command.documentInstance, [](const auto &entry) {
+        if (const auto found = std::ranges::find(documents, *command.documentInstance,
+                                                 [](const auto &entry) {
             return entry.snapshot.identity.instance;
         });
-        if (found != documents.end()) {
+            found != documents.end()) {
             const auto result = ApplyPCGEditorRequest(*found, *command.pcgRequest);
             found->error = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
         }
