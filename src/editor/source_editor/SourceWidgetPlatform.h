@@ -54,6 +54,8 @@ namespace Horo::Editor {
         /** @brief Draws source glyphs using semantic color/font roles; non-source chrome retains its supplied style. */
         void DrawChars(Zep::ZepFont &font, const Zep::NVec2f &position, const Zep::NVec4f &color, const uint8_t *begin,
                        const uint8_t *end = nullptr) const override;
+        /** @brief Retains the exact Zep clip for canonical ImGui glyph emission. @param rect Current private draw clip. */
+        void SetClipRect(const Zep::NRectf &rect) override;
         /** @brief Records the insertion caret for the platform IME bridge. */
         void DrawRectFilled(const Zep::NRectf &rect, const Zep::NVec4f &color) const override;
 
@@ -70,6 +72,7 @@ namespace Horo::Editor {
         std::shared_ptr<Zep::ZepFont_ImGui> emphasis_;
         int fontPixels_{};
         SourceEditorTheme theme_;
+        Zep::NRectf clip_;
         const Zep::ZepBuffer *buffer_{}; /**< Borrowed only by the owning synchronous Draw call. */
         const SourceSyntax *syntax_{};   /**< Borrowed validated display coordinates for the same mirror. */
     };

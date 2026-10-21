@@ -13,7 +13,7 @@ namespace Horo::Extensions {
                    (requirements.requiredFunctions &
                     ~uint32_t{HORO_EXTENSION_REQUIRES_ASSET_IMPORTER | HORO_EXTENSION_REQUIRES_PLATFORM_PROVIDER |
                               HORO_EXTENSION_REQUIRES_EDITOR_ACTIVITY | HORO_EXTENSION_REQUIRES_EDITOR_PAGE |
-                              HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR}) == 0;
+                              HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR | HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT}) == 0;
         }
 
         /** @brief Checks optional interactive transport prefixes without granting absent callbacks through older negotiations. */
@@ -39,6 +39,14 @@ namespace Horo::Extensions {
             if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR) != 0 &&
                 !HoroExtensionHasEditorInspectorTransport(&host))
                 return HORO_EXTENSION_ERROR_INVALID_ARGS;
+            if ((requirements.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT) != 0) {
+                if (requirements.minimumHostMinor < 7 ||
+                    requirements.requiredHostApiSize <
+                        offsetof(HoroExtensionHostApi, registerEditorViewport) + sizeof(host.registerEditorViewport))
+                    return HORO_EXTENSION_ERROR_VERSION_MISMATCH;
+                if (!HoroExtensionHasEditorViewportTransport(&host))
+                    return HORO_EXTENSION_ERROR_INVALID_ARGS;
+            }
             return HORO_EXTENSION_SUCCESS;
         }
     }  // namespace

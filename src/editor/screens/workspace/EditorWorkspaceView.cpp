@@ -456,6 +456,7 @@ namespace Horo::Editor {
             m_panelDragContext.Reset();
             m_panelDragCandidateId.clear();
         }
+        m_extensions.SetInputAdmitted(m_inputRouter.IsContextActive(m_workspaceInputContext));
         m_extensionRecovery.Draw();
         const ImVec2 display{contentRegion.width, contentRegion.height};
 

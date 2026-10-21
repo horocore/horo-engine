@@ -5,6 +5,7 @@
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
+#include "Horo/Extensions/EditorViewportHost.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
@@ -70,6 +71,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
             .networkDebuggerControl = panelServices_.networkDebuggerControl,
             .extensionInspectors = services_.TryGet<Extensions::EditorInspectorHost>(),
+            .extensionViewport = services_.TryGet<Extensions::EditorViewportHost>(),
             .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
         };
         contributions_.panels.AttachAll(panelContext);

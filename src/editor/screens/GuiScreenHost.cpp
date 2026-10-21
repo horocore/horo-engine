@@ -17,6 +17,8 @@
 #include "Horo/Extensions/EditorInspectorHost.h"
 #include "Horo/Extensions/EditorPageAbi.h"
 #include "Horo/Extensions/EditorPageHost.h"
+#include "Horo/Extensions/EditorViewportAbi.h"
+#include "Horo/Extensions/EditorViewportHost.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionManager.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
@@ -156,10 +158,19 @@ namespace Horo::Editor {
         auto &jobs = composition.jobs;
         std::vector<std::string> capabilities{HORO_EDITOR_ACTIVITY_HOST_CAPABILITY};
         importerCatalogCandidate_ = std::make_unique<Assets::AssetImporterCatalog>();
-        editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        const auto uiPolicy =
+            composition.extensionUiPolicy.revision ? composition.extensionUiPolicy : Extensions::ExtensionAdmissionPolicy{.revision = 1};
+        editorActivityHost_ = std::make_shared<Extensions::EditorActivityHost>(jobs, uiPolicy);
+        capabilities.emplace_back(HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY);
         services_.Register<Extensions::EditorActivityHost>(*editorActivityHost_);
         InitializeExtensionPages(composition, capabilities);
         InitializeExtensionInspectors(composition, capabilities);
+        if (composition.extensionViewportPolicy.revision) {
+            editorViewportHost_ =
+                std::make_shared<Extensions::EditorViewportHost>(editorActivityHost_->Registry(), composition.extensionViewportPolicy);
+            services_.Register<Extensions::EditorViewportHost>(*editorViewportHost_);
+            capabilities.emplace_back(HORO_EDITOR_VIEWPORT_HOST_CAPABILITY);
+        }
         extensionManager_ =
             std::make_unique<Extensions::ExtensionManager>(importerCatalogCandidate_.get(), Extensions::ExtensionHostProfile::Interactive,
                                                            std::move(capabilities), composition.extensionArtifactGate,
@@ -167,7 +178,8 @@ namespace Horo::Editor {
                                                            Extensions::ExtensionPlatformProviderCommit{},
                                                            Extensions::ExtensionEditorHosts{.activities = editorActivityHost_,
                                                                                             .pages = editorPageHost_,
-                                                                                            .inspectors = editorInspectorHost_});
+                                                                                            .inspectors = editorInspectorHost_,
+                                                                                            .viewports = editorViewportHost_});
         ActivateBuiltInImporters(*importerCatalogCandidate_, extensionInventory_);
         if (extensionInventory_ != nullptr) {
             ActivateUserExtensions(*extensionManager_, *extensionInventory_);
@@ -299,6 +311,8 @@ namespace Horo::Editor {
             activeScreen_->OnLeave();
             activeScreen_.reset();
         }
+        if (editorViewportHost_)
+            editorViewportHost_->BeginShutdown();
         if (editorInspectorHost_)
             editorInspectorHost_->BeginShutdown();
         if (editorPageHost_)

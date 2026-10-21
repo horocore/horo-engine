@@ -323,6 +323,8 @@ namespace Horo::Editor {
             if (focused) {
                 ImGui::SetActiveID(inputId, ImGui::GetCurrentWindow());
                 ImGui::KeepAliveID(inputId);
+                // Native text controls allow pointer handoff while no selection gesture is held.
+                ImGui::GetCurrentContext()->ActiveIdAllowOverlap = !ImGui::GetIO().MouseDown[ImGuiMouseButton_Left];
                 ImGui::GetCurrentContext()->WantTextInputNextFrame = 1;
                 ImGui::SetNextFrameWantCaptureKeyboard(true);
                 if (HasTextInput()) {

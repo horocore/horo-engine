@@ -21,7 +21,7 @@ namespace Horo::Extensions::Tests {
         CHECK(fixture.registry.Save().surfaces.empty());
     }
 
-    TEST_CASE("Inspector profile rejects malformed duplicate oversized localization and unsupported layouts",
+    TEST_CASE("Inspector profile rejects malformed duplicate oversized localization and invalid layouts",
               "[Extensions][Inspector][schema]") {
         InspectorSupport::Fixture fixture;
         const auto surface = fixture.Contribution().context.Surface();
@@ -44,9 +44,13 @@ namespace Horo::Extensions::Tests {
         definition.form.nodes.emplace(definition.form.nodes.begin(),
                                       EditorUiContainerNode{.base = {.id = {"root"}, .focusPolicy = EditorUiFocusPolicy::Never},
                                                             .layout = EditorUiLayoutKind::Row});
-        CHECK(ValidateEditorInspectorDefinition(surface, definition).HasError());
+        CHECK(ValidateEditorInspectorDefinition(surface, definition).HasValue());
         auto &root = std::get<EditorUiContainerNode>(definition.form.nodes.front().payload);
+        root.layout = EditorUiLayoutKind::Grid;
+        root.columns = 0;
+        CHECK(ValidateEditorInspectorDefinition(surface, definition).HasError());
         root.layout = EditorUiLayoutKind::Stack;
+        root.columns = 1;
         root.base.enabled = false;
         REQUIRE(ValidateEditorInspectorDefinition(surface, definition).HasValue());
         CHECK_FALSE(CanEditEditorInspectorField(definition, definition.fields.front()));
@@ -72,6 +76,7 @@ namespace Horo::Extensions::Tests {
               "[Extensions][Inspector][lifecycle]") {
         InspectorSupport::Fixture fixture;
         const auto retained = fixture.Contribution();
+        CHECK(fixture.host.IsAvailable(retained));
         const auto version = fixture.host.Revision();
         const auto registryVersion = fixture.registry.Revision();
         EditorSurfaceWorkspaceState workspace{.surfaces = {{"unrelated.panel", {"other.package", "other.module"}, true, false, {1}}}};
@@ -87,6 +92,7 @@ namespace Horo::Extensions::Tests {
         fixture.registration->Reset();
         CHECK(fixture.host.Revision() != version);
         CHECK_FALSE(retained.context.IsUsable());
+        CHECK_FALSE(fixture.host.IsAvailable(retained));
         CHECK(fixture.host.Contributions("game.fixture.counter", 3).Value().empty());
         fixture.host.BeginShutdown();
         CHECK(fixture.host.Revision() == 0);

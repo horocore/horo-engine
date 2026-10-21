@@ -1,3 +1,4 @@
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/Platform.h"
 #include "SourceEditorSession.h"
@@ -375,4 +376,45 @@ TEST_CASE("Native Backspace and Delete emit scalar aligned document edits", "[ed
     const auto erase = fixture.Frame(fixture.first);
     REQUIRE(erase);
     CHECK(fixture.Apply(*erase).Text() == "a");
+}
+
+TEST_CASE("Source focus hands pointer input back to a shared text control", "[editor][source][widget]") {
+    WidgetFixture fixture;
+    const auto source = fixture.Open("code.cpp", "unchanged");
+    fixture.first.Publish(source);
+    std::string query;
+    ImVec2 target;
+    bool hovered{};
+    const auto frame = [&](const bool focus) {
+        fixture.gui.BeginFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({700, 500});
+        ImGui::Begin("Source focus handoff", nullptr, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove);
+        static_cast<void>(Ui::InputTextControl("##query", query, 64, Theme::Fonts{}));
+        target = ImGui::GetItemRectMin();
+        target.x += 20;
+        target.y += 10;
+        hovered = ImGui::IsItemHovered();
+        CHECK_FALSE(fixture.first.Draw({620, 350, 1, focus, true}));
+        ImGui::End();
+        fixture.gui.EndFrame();
+    };
+    frame(true);
+    REQUIRE(fixture.first.OwnsInput());
+    auto &io = ImGui::GetIO();
+    io.AddMousePosEvent(target.x, target.y);
+    frame(false);
+    REQUIRE(hovered);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+    frame(false);
+    io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+    frame(false);
+    REQUIRE_FALSE(fixture.first.OwnsInput());
+    io.AddInputCharactersUTF8("query");
+    frame(false);
+    CHECK(query == "query");
+    CHECK(fixture.documents.Documents().Snapshot(source.Identity().instance).Value().Revision() == source.Revision());
+    CHECK(source.Text() == "unchanged");
+    frame(true);
+    CHECK(fixture.first.OwnsInput());
 }

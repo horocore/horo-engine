@@ -138,6 +138,10 @@ namespace Horo::Extensions {
          */
         [[nodiscard]] Result<std::vector<EditorInspectorContribution>> Contributions(std::string_view behaviorType,
                                                                                      std::uint32_t schemaVersion) const;
+        /** @brief Checks current owner identity, publication and every required capability without allocating a discovery list.
+         * @param contribution Previously captured exact declaration. @return True while this host still admits its presentation.
+         */
+        [[nodiscard]] bool IsAvailable(const EditorInspectorContribution &contribution) const noexcept;
         /** @brief Resolves only copied admitted package text with explicit en-US fallback.
          * @param contribution Exact live context and declaration. @param key Approved localization key. @param locale Current host locale.
          * @return Borrowed copied text or original key; valid while contribution retains its immutable definition.

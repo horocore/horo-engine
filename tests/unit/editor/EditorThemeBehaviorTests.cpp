@@ -104,6 +104,7 @@ TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "
                 "heading": 23.0,
                 "display": 30.0
             },
+            "motion": {"focus": 0.75, "reduceMotion": true, "slow": -1},
             "radii": {"control": 3.0, "card": 7.0, "modal": 11.0},
             "layoutSpacing": {"propertyRowGap": 10.0},
             "styleSpacing": {"xs": 2.0, "s": 4.0, "m": 8.0, "l": 12.0, "xl": 20.0},
@@ -128,6 +129,9 @@ TEST_CASE("Custom theme parsing accepts supported colors and token overrides", "
     REQUIRE(custom.designTokens.typography.display == 30.0F);
     REQUIRE(Horo::Editor::DesignSystem::MetricsFor(custom.designTokens, Horo::Editor::DesignSystem::ComponentSize::Medium).fontSize ==
             16.0F);
+    REQUIRE(custom.designTokens.motion.focus == 0.75F);
+    REQUIRE(custom.designTokens.motion.reduceMotion);
+    REQUIRE(custom.designTokens.motion.slow == defaults.motion.slow);
     REQUIRE(custom.designTokens.radii.modal == 11.0F);
     REQUIRE(custom.designTokens.spacing.propertyRowGap == 10.0F);
 

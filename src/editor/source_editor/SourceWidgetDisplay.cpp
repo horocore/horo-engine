@@ -108,10 +108,25 @@ namespace Horo::Editor {
             const auto &style = theme_.styles[static_cast<std::size_t>(role)];
             Zep::ZepFont &face = style.font == SourceFontRole::MonospaceEmphasis && emphasis_ ? *emphasis_ : font;
             const auto &foreground = Selected(*offset) ? style.selectedColor : style.color;
-            Zep::ZepDisplay_ImGui::DrawChars(face, position, NativeColor(foreground), begin, end);
+            auto *drawList = ImGui::GetWindowDrawList();
+            const bool clipped = clip_.Width() != 0;
+            if (clipped)
+                drawList->PushClipRect(Zep::toImVec2(clip_.topLeftPx), Zep::toImVec2(clip_.bottomRightPx));
+            const auto glyphColor = ImGui::GetColorU32(ImVec4{foreground[0], foreground[1], foreground[2], foreground[3]});
+            drawList->AddText(static_cast<Zep::ZepFont_ImGui &>(face).GetImFont(), static_cast<float>(face.GetPixelHeight()),
+                              Zep::toImVec2(position), glyphColor, reinterpret_cast<const char *>(begin),
+                              reinterpret_cast<const char *>(end));
+            if (clipped)
+                drawList->PopClipRect();
         } else {
             Zep::ZepDisplay_ImGui::DrawChars(font, position, color, begin, end);
         }
+    }
+
+    /** @copydoc WidgetDisplay::SetClipRect */
+    void WidgetDisplay::SetClipRect(const Zep::NRectf &rect) {
+        clip_ = rect;
+        Zep::ZepDisplay_ImGui::SetClipRect(rect);
     }
 
     /** @copydoc WidgetDisplay::DrawRectFilled */

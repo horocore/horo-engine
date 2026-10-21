@@ -68,6 +68,7 @@ namespace Horo::Editor {
                   const GuiContentRegion &contentRegion);
 
         [[nodiscard]] std::optional<Extensions::EditorActivitySide> UpdateExtensionActivities() {
+            m_extensions.SetInputAdmitted(m_inputRouter.IsContextActive(m_workspaceInputContext));
             m_extensions.Update();
             m_extensionRecovery.Update();
             return m_extensions.TakeNativePanelClear();

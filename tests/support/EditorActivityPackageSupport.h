@@ -1,4 +1,5 @@
 #pragma once
+#include "Horo/Extensions/EditorSurfaceContext.h"
 #include "OwnedTestDirectory.h"
 
 #include <filesystem>
@@ -6,6 +7,11 @@
 #include <string_view>
 
 namespace Horo::Tests {
+    /** @brief Explicit test-host opt-in, separate from standard activity admission. */
+    inline Extensions::ExtensionAdmissionPolicy EditorCompositionPolicy() {
+        return {.revision = 1, .availableCapabilities = {Extensions::EditorCustomCompositionCapability}};
+    }
+
     struct EditorActivityPackage final {
         OwnedTestDirectory directory{"horo107 package fixture"};
         const std::filesystem::path root = directory.Path();
@@ -18,7 +24,7 @@ namespace Horo::Tests {
             manifest
                 << R"({"id":"fixture.package","version":"1.0.0","modules":[{"id":"fixture.module","version":"1.0.0","kind":"native","roles":["editor-presentation"],"entry":")"
                 << library.filename().string()
-                << R"(","abi":{"major":1,"minimumMinor":4},"requiredCapabilities":["editor.activity"]}],"contributions":[{"type":"editor.activity_item","id":"fixture.activity","module":"fixture.module"},{"type":"editor.panel","id":"fixture.drawer","module":"fixture.module"}]})";
+                << R"(","abi":{"major":1,"minimumMinor":4},"requiredCapabilities":["editor.activity","editor.custom-composition"]}],"contributions":[{"type":"editor.activity_item","id":"fixture.activity","module":"fixture.module"},{"type":"editor.panel","id":"fixture.drawer","module":"fixture.module"}]})";
             Icon(
                 R"(<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><path fill="#ffffff" d="M4 4 H44 V44 H4 Z"/></svg>)");
         }
