@@ -157,7 +157,9 @@ world-tab composition is delivered by HORO-1630; until that composition is integ
 the source toolbar reports unavailable and does not synthesize a document.
 
 The viewport popup creates all four shapes and edits intent, target state, priority
-and debug color using shared controls and localized copy. Canonical control-point
+and debug color using shared controls and localized copy. Shape forms expose exact
+millimeter radii/extents, all six frustum plane normals/distances with explicit
+normalization, and bounded path vertex addition/removal. Canonical control-point
 gizmos use fixed-capacity point sets without draw-time point allocation and
 preview only in panel-owned transient storage; release submits one ordinary
 source command. Escape, focus loss, input revocation, document replacement, origin

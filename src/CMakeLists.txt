@@ -2778,10 +2778,12 @@ target_include_directories(HoroPrefabHierarchyInternal INTERFACE
 add_library(HoroEditorModel STATIC
         editor/document/WorldStreamingPreview.cpp
         editor/document/WorldStreamingPreviewHost.cpp
+        editor/document/WorldStreamingPreviewRuntime.cpp
         editor/document/WorldCompositionBrowser.cpp
         editor/document/PartitionedWorldSource.cpp
         editor/document/PartitionedWorldWorkspace.cpp
         editor/document/PartitionedWorldSourceAuthoring.cpp
+        editor/document/WorldSourceValidation.cpp
         editor/document/WorldSourceGizmo.cpp
         editor/document/WorldLayerCommands.cpp
         editor/document/PartitionedWorldResidency.cpp
@@ -3197,6 +3199,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
             editor/screens/workspace/panels/viewport/WorldSourceViewportTool.cpp
+            editor/screens/workspace/panels/viewport/WorldSourceShapeControls.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
             editor/screens/workspace/panels/viewport/ViewportStreamingPreview.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp

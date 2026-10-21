@@ -2663,6 +2663,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp
+            unit/editor/EditorWorkspaceStreamingMountTests.cpp
             unit/editor/EditorWorkspaceControllerNavigationSettingsTests.cpp
             unit/editor/EditorWorkspaceControllerFilesystemTestSupport.h
             unit/editor/EditorWorkspaceControllerPolicyTests.cpp
@@ -2805,6 +2806,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputPaneTests.cpp
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
+            unit/editor/WorldSourceViewportRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
             unit/editor/PlayTopologyModalTests.cpp
     )
@@ -5415,7 +5417,9 @@ foreach(_horo_cache_consumer IN ITEMS
     endif()
 endforeach()
 
-add_executable(HoroWorldStreamingPreviewTests unit/editor/WorldStreamingPreviewTests.cpp)
+add_executable(HoroWorldStreamingPreviewTests
+        unit/editor/WorldStreamingPreviewTests.cpp
+        unit/editor/WorldStreamingPreviewRuntimeTests.cpp)
 target_link_libraries(HoroWorldStreamingPreviewTests PRIVATE HoroEngine::EditorModel)
 target_include_directories(HoroWorldStreamingPreviewTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support")
 horo_register_catch_test(HoroWorldStreamingPreviewTests LABELS "unit;headless;streaming_preview")

@@ -12,6 +12,7 @@
 #include "Horo/Editor/PCGGraphDocumentService.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Editor/WorldStreamingPreviewRuntime.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/document/SceneDocumentComparison.h"
@@ -82,6 +83,7 @@ namespace Horo::Editor {
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
+        const WorldStreamingPreviewRuntimePolicy *streamingPreviewPolicy{}; /**< Explicit app-owned index inspection profile. */
         WorldStreamingPreviewHost *streamingPreview{}; /**< Application-owned read-only native capture bridge; outlives this workspace. */
         PartitionedWorldWorkspace *partitionedWorld{}; /**< Borrowed host-owned canonical world; outlives this session. */
         std::shared_ptr<const Platform::IProjectReadFiles> worldSourceFiles; /**< Host-composed retained project root; no draw-path I/O. */
@@ -106,6 +108,16 @@ namespace Horo::Editor {
         void RefreshWorldSourceProjection();
         /** @brief Refreshes native streaming evidence and immutable overlay geometry from the canonical active view. */
         void RefreshWorldStreamingPreview();
+        /** @brief Prepares an explicit project-local cooked index inspection mount without mutating its bytes or policy.
+         * @param relativePath Root-contained world.index artifact. @param expected Exact active document fence.
+         * @return Prepared native owner or typed failure preserving the current mount. */
+        [[nodiscard]] Result<void> MountWorldStreamingPreview(std::string_view relativePath, WorldDocumentFence expected);
+        /** @brief Unbinds the exact owned epoch before native shutdown; never revokes a foreign mount. */
+        void StopWorldStreamingPreview() noexcept;
+        /** @brief Advances a finite native planner quantum, commits ready replacements, and binds actual owner references. */
+        void ServiceWorldStreamingPreview();
+        /** @brief Executes explicit mount/unmount intents through the canonical document fence. */
+        [[nodiscard]] bool ProcessWorldStreamingPreviewCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Binds an active host view to the composed canonical document after validating the exact immutable root.
          * @param binding Current root, exact global origin and monotonic view incarnation.
          * @return Typed rejection for stale roots/views; no hidden replacement or ownership transfer. */
@@ -353,8 +365,14 @@ namespace Horo::Editor {
         PCGGraphDocumentService m_pcgDocuments;
         PrefabHierarchySourceCapture m_prefabSourceCapture;
         Assets::AssetId m_workspaceSession;
+        const WorldStreamingPreviewRuntimePolicy *m_streamingPreviewPolicy{};
         WorldStreamingPreviewHost *m_streamingPreview{};
+        std::unique_ptr<WorldStreamingPreviewRuntime> m_streamingRuntime;
+        std::unique_ptr<WorldStreamingPreviewRuntime> m_pendingStreamingRuntime;
+        std::string m_pendingStreamingPath;
         std::shared_ptr<const Platform::IProjectReadFiles> m_worldSourceFiles;
+        /** @brief Atomically rebinds a fully prepared native replacement and retires the prior exact owner. */
+        [[nodiscard]] Result<void> CommitPendingWorldStreamingPreview();
         std::uint64_t m_prefabPublication{};
         std::uint64_t m_prefabObservedDocumentEpoch{};
         std::optional<PrefabHierarchySources> m_prefabSources;

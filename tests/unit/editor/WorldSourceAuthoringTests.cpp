@@ -274,4 +274,60 @@ namespace {
         CHECK(root->openPages == std::vector<Assets::AssetId>{Owner()});
     }
 
+    TEST_CASE("Full path capacity and no-op quantized frustum handles preserve exact source values", "[editor][world_document][gizmo]") {
+        auto source = Source();
+        SECTION("every admitted path vertex is editable") {
+            WS::StreamingSourcePathVolume path{.pointCount = WS::StreamingSourceRangeLimits::MaximumPathPointCount,
+                                               .halfExtentMillimeters = 100};
+            for (std::size_t index = 0; index < path.pointCount; ++index)
+                path.points[index] = Point::FromMillimeters(static_cast<std::int64_t>(index) * 1000, 0, 0);
+            source.shape = path;
+            const auto points = WorldSourceGizmoPoints(source);
+            REQUIRE(points.HasValue());
+            CHECK(points.Value().Points().size() == path.pointCount + 1);
+            const auto moved = MoveWorldSourceGizmo(source, path.pointCount - 1, Point::FromMillimeters(15001, 1, 0));
+            REQUIRE(moved.HasValue());
+            CHECK(std::get<WS::StreamingSourcePathVolume>(moved.Value().shape).points[path.pointCount - 1] ==
+                  Point::FromMillimeters(15001, 1, 0));
+            path.pointCount = path.points.size() + 1;
+            source.shape = path;
+            CHECK(WorldSourceGizmoPoints(source).HasError());
+        }
+        SECTION("non-axis-aligned planes do not drift when the pointer does not move") {
+            WS::StreamingSourceFrustum frustum{.maximumExtentMillimeters = 2000};
+            const auto diagonal = Math::TryNormalize(Math::Vec3{1, 1, 0}).Value();
+            const auto perpendicular = Math::TryNormalize(Math::Vec3{1, -1, 0}).Value();
+            const std::array<Math::Vec3, 6> normals{diagonal,       -diagonal,           perpendicular,
+                                                    -perpendicular, Math::Vec3{0, 0, 1}, Math::Vec3{0, 0, -1}};
+            for (std::size_t index = 0; index < normals.size(); ++index)
+                frustum.planes[index] = {normals[index], 1000.25F};
+            source.shape = frustum;
+            const auto handles = WorldSourceGizmoPoints(source);
+            REQUIRE(handles.HasValue());
+            for (std::size_t index = 0; index < handles.Value().Points().size(); ++index) {
+                const auto moved = MoveWorldSourceGizmo(source, index, handles.Value().Points()[index]);
+                REQUIRE(moved.HasValue());
+                CHECK(moved.Value() == source);
+            }
+        }
+    }
+
+    TEST_CASE("Complete document commits preserve source revision authority", "[editor][world_document][source]") {
+        auto document = Document();
+        document.sources.push_back(Source());
+        PartitionedWorldWorkspace workspace{Owner()};
+        const auto root = workspace.Open(document).Value();
+        document.sources[0].priority = WS::StreamingSourcePriority::Create(9).Value();
+        ErrorIs(workspace.Commit(document, root->fence), "world_document.stale");
+        CHECK(workspace.Snapshot().Value() == root);
+        document.sources[0].revision = WS::StreamingSourceRevision::Create(10).Value();
+        const auto committed = workspace.Commit(document, root->fence);
+        REQUIRE(committed.HasValue());
+        auto edit = committed.Value()->document.sources[0];
+        edit.priority = WS::StreamingSourcePriority::Create(11).Value();
+        const auto successor = workspace.EditSource({committed.Value()->fence, edit.id, edit});
+        REQUIRE(successor.HasValue());
+        CHECK(successor.Value()->document.sources[0].revision.Value() == 11);
+    }
+
 }  // namespace

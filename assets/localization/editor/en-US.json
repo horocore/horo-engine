@@ -1343,6 +1343,17 @@
     "workspace.streaming.visible_counts": {"text": "Visible / outside precision window"},
     "workspace.streaming.capacity": {"text": "Streaming preview exceeds its cell or geometry budget"},
     "workspace.streaming.stale": {"text": "Streaming preview publications are stale; waiting for a coherent capture"},
+    "workspace.streaming.inspection": {"text": "Mount a cooked index for read-only streaming inspection. No cell loading or budget usage is inferred."},
+    "workspace.streaming.index_path": {"text": "Project-relative path to world.index"},
+    "workspace.streaming.mount": {"text": "Mount streaming preview"},
+    "workspace.streaming.unmount": {"text": "Stop streaming preview"},
+    "workspace.streaming.preparing": {"text": "Preparing the actual bounded source plan…"},
+    "workspace.streaming.mount_failed": {"text": "Streaming preview mount failed; current mount was preserved when possible"},
+    "workspace.streaming.stability": {"text": "Planner retention reason"},
+    "workspace.streaming.retained": {"text": "Retained demand"},
+    "workspace.streaming.lingering": {"text": "Linger interval after source exit"},
+    "workspace.streaming.cooldown": {"text": "Reload cooldown"},
+    "workspace.streaming.watching": {"text": "Watching boundary history"},
     "workspace.streaming.legend": {"text": "Streaming: boundary = desired, dot = actual; hover a dot for reasons"},
     "workspace.streaming.unavailable": {"text": "Streaming preview unavailable: no current mounted runtime capture"},
     "workspace.streaming.unknown": {"text": "Unknown / not observed"},
@@ -1708,14 +1719,38 @@
     "workspace.value.on": {"text": "On"},
     "workspace.value.off": {"text": "Off"},
     "workspace.value.static": {"text": "✓ Static"},
+    "workspace.world_sources.radius": {
+      "text": "Radius (mm)"
+    },
+    "workspace.world_sources.maximum_extent": {
+      "text": "Maximum extent (mm)"
+    },
+    "workspace.world_sources.half_extent": {
+      "text": "Half extent (mm)"
+    },
+    "workspace.world_sources.plane_normal": {
+      "text": "Plane normal"
+    },
+    "workspace.world_sources.plane_distance": {
+      "text": "Plane distance (mm)"
+    },
+    "workspace.world_sources.normalize": {
+      "text": "Normalize normal"
+    },
+    "workspace.world_sources.add_point": {
+      "text": "Add path point"
+    },
+    "workspace.world_sources.remove_point": {
+      "text": "Remove last point"
+    },
     "workspace.world_sources.title": {
       "text": "Streaming sources"
     },
     "workspace.world_sources.unavailable": {
-      "text": "Open a partitioned world through the world document host to author sources."
+      "text": "Open a partitioned world to edit streaming sources."
     },
     "workspace.world_sources.authoring_only": {
-      "text": "Source metadata authoring. Handles use the editor scene origin; distant global points require world viewport composition."
+      "text": "Edit source shapes and streaming demand. Drag handles to change positions and dimensions."
     },
     "workspace.world_sources.sphere": {
       "text": "Create sphere"

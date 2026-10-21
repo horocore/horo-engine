@@ -1,6 +1,7 @@
 #include "Horo/Editor/WorldStreamingPreview.h"
 
 #include <algorithm>
+#include <limits>
 
 namespace Horo::Editor {
     namespace {
@@ -104,6 +105,32 @@ namespace Horo::Editor {
         return Result<Geometry>::Success(std::move(geometry));
     }
 
+    /** @copydoc WorldStreamingPreviewHost::IssueMountIdentity */
+    Result<WS::StreamingRuntimeOwnerToken> WorldStreamingPreviewHost::IssueMountIdentity(const WS::WorldPartitionId partition) {
+        using Output = WS::StreamingRuntimeOwnerToken;
+        if (std::this_thread::get_id() != thread_)
+            return Result<Output>::Failure(MakeError(WorldDocumentErrors::WrongThread));
+        if (!partition.IsValid())
+            return Result<Output>::Failure(MakeError(WorldDocumentErrors::Invalid));
+        if (identities_.size() >= 512)
+            return Result<Output>::Failure(MakeError(WorldDocumentErrors::Capacity));
+        std::uint64_t epoch{};
+        for (const auto &identity : identities_)
+            if (identity.partition == partition)
+                epoch = std::max(epoch, identity.epoch.Value());
+        while (nextOwner_ != 0 && std::ranges::any_of(identities_, [&](const auto &value) {
+            return value.owner.Value() == nextOwner_;
+        }))
+            ++nextOwner_;
+        if (nextOwner_ == 0 || epoch == std::numeric_limits<std::uint64_t>::max())
+            return Result<Output>::Failure(MakeError(WorldDocumentErrors::Exhausted));
+        const Output owner{partition, WS::PartitionEpoch::Create(epoch + 1).Value(),
+                           WS::StreamingRuntimeOwnerId::Create(nextOwner_).Value()};
+        identities_.push_back(owner);
+        ++nextOwner_;
+        return Result<Output>::Success(owner);
+    }
+
     /** @copydoc WorldStreamingPreviewHost::BindRuntime */
     Result<void> WorldStreamingPreviewHost::BindRuntime(const WS::WorldPartitionRegistry &registry,
                                                         const WS::StreamingSourcePlanner &planner,
@@ -121,6 +148,11 @@ namespace Horo::Editor {
             return captured;
         if (registry_ && owner_ != diagnostics.Owner())
             return Result<void>::Failure(MakeError(WorldDocumentErrors::Conflict));
+        if (std::ranges::find(identities_, diagnostics.Owner()) == identities_.end()) {
+            if (identities_.size() >= 512)
+                return Result<void>::Failure(MakeError(WorldDocumentErrors::Capacity));
+            identities_.push_back(diagnostics.Owner());
+        }
         registry_ = &registry;
         planner_ = &planner;
         diagnostics_ = &diagnostics;

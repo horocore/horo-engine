@@ -1,5 +1,6 @@
 #include "Horo/Editor/PartitionedWorldWorkspace.h"
 #include "Horo/Editor/WorldStreamingPreview.h"
+#include "Horo/Editor/WorldStreamingPreviewRuntime.h"
 
 #include <type_traits>
 #include <utility>
@@ -71,3 +72,11 @@ static_assert(!std::is_copy_constructible_v<Horo::Editor::WorldStreamingPreviewH
 static_assert(std::is_same_v<decltype(std::declval<Horo::Editor::WorldStreamingPreviewHost &>().Refresh(
                                  std::declval<const Horo::Editor::WorldViewportBinding &>())),
                              Horo::Result<std::shared_ptr<const Horo::Editor::WorldStreamingPreviewGeometry>>>);
+static_assert(std::is_same_v<decltype(Horo::Editor::WorldSourceGizmoPoints(Horo::Editor::PartitionedWorldSource{})),
+                             Horo::Result<Horo::Editor::WorldSourceGizmoPointSet>>);
+
+static_assert(!std::is_copy_constructible_v<Horo::Editor::WorldStreamingPreviewRuntime>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::WorldStreaming::WorldStreamingDiagnosticSnapshot &>().BudgetPolicy()),
+                             const Horo::WorldStreaming::StreamingBudgetPolicy *>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::WorldStreaming::WorldStreamingDiagnosticSnapshot &>().BudgetSample()),
+                             const Horo::WorldStreaming::StreamingBudgetSample *>);

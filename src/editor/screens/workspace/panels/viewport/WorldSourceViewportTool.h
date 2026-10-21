@@ -3,6 +3,8 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
+#include <imgui.h>
+
 namespace Horo::Editor {
     /** @brief Transient viewport gesture/popup only; publication and history belong to the composed world owner. */
     class WorldSourceViewportTool final {
@@ -35,12 +37,26 @@ namespace Horo::Editor {
         void DrawSourceProperties(const EditorGuiContext &context);
         /** @brief Selects a stable source into the detached property draft. */
         void DrawSourceList(const EditorWorkspaceViewModel &view);
+        /** @brief Rejects camera, surface or depth changes before reprojecting transient pointer input. */
+        [[nodiscard]] bool MatchesProjection(const EditorViewportCamera &camera, ImVec2 origin, ImVec2 extent,
+                                             Math::ClipDepthRange depth) const;
         void DrawPopup(const EditorWorkspaceViewModel &view, EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
         bool DrawHandles(ImDrawList &draw, ImVec2 origin, ImVec2 size, const EditorWorkspaceViewModel &view,
                          EditorWorkspaceViewCommandData &command, Math::ClipDepthRange depth, bool eligible);
         std::optional<PartitionedWorldSource> draft_;
+        std::optional<PartitionedWorldSource> dragOriginal_;
         std::optional<Error> previewError_;
         WorldDocumentFence fence_;
+
+        /** @brief Read-only projection capture; camera/origin authority remains in the host. */
+        struct ProjectionCapture {
+            EditorViewportCamera camera;
+            ImVec2 origin;
+            ImVec2 extent;
+            Math::ClipDepthRange depth;
+        };
+
+        std::optional<ProjectionCapture> projection_;
         Math::WorldCoordinate64 origin_;
         std::uint64_t viewRevision_{};
         std::optional<std::size_t> dragged_;

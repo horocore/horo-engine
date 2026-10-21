@@ -94,6 +94,8 @@ namespace Horo::Editor {
         WorldLayerAuthoring,
         OpenCreateWorldLayer,
 
+        MountWorldStreamingPreview,
+        UnmountWorldStreamingPreview,
         OpenWorldCompositionSource,
         QueryWorldComposition,
         CloseWorldComposition,
@@ -346,6 +348,9 @@ namespace Horo::Editor {
         WorldViewportBinding worldViewport;
         std::shared_ptr<const WorldStreamingPreviewGeometry> worldStreamingPreview;
         std::optional<Error> worldStreamingPreviewError;
+        std::optional<Error> worldStreamingMountError;
+        std::string worldStreamingIndexPath;
+        bool worldStreamingPreparing{};
         std::optional<Error> worldSourceError;
         std::optional<Error> worldLayerFailure; /**< Canonical layer failure; presentation resolves localized copy. */
 

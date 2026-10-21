@@ -83,11 +83,32 @@ namespace Horo::Editor {
             return event.transition ? RuntimeKey(event.transition->current) : "workspace.streaming.unknown";
         }
 
+        /** @brief Resolves actual planner retention reasons, including source-free linger and cooldown. */
+        const char *StabilityKey(const WS::StreamingCellStabilityPhase phase) {
+            switch (phase) {
+                case WS::StreamingCellStabilityPhase::Unloaded:
+                    return "workspace.streaming.unloaded";
+                case WS::StreamingCellStabilityPhase::Resident:
+                    return "workspace.streaming.retained";
+                case WS::StreamingCellStabilityPhase::Lingering:
+                    return "workspace.streaming.lingering";
+                case WS::StreamingCellStabilityPhase::Cooldown:
+                    return "workspace.streaming.cooldown";
+                case WS::StreamingCellStabilityPhase::Watching:
+                    return "workspace.streaming.watching";
+                default:
+                    return "workspace.streaming.unknown";
+            }
+        }
+
         /** @brief Shows source provenance and stability evidence separately from actual runtime decisions. */
         void SourceDetails(const WorldStreamingPreviewCell &cell, const EditorGuiContext &context) {
             const auto label = [&](const char *key) {
                 return context.localization.Get("editor", key).c_str();
             };
+            if (cell.desired)
+                Ui::DrawPropRow(label("workspace.streaming.stability"), label(StabilityKey(cell.desired->stability.phase)),
+                                context.theme.fonts);
             if (cell.desired && cell.desired->pinnedFloor)
                 Ui::DrawPropRow(label("workspace.streaming.pinned"), label(DesiredKey(*cell.desired->pinnedFloor)), context.theme.fonts);
             for (std::size_t index = 0; index < std::min<std::size_t>(cell.contributions.size(), 4); ++index) {

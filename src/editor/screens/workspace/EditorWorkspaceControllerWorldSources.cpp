@@ -29,6 +29,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::DetachWorldSourceOwner */
     void EditorWorkspaceController::DetachWorldSourceOwner() noexcept {
+        StopWorldStreamingPreview();
         m_viewModel.worldStreamingPreview.reset();
         m_viewModel.worldStreamingPreviewError.reset();
         if (m_streamingPreview)

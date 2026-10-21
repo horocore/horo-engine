@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "WorldSourceShapeControls.h"
 #include "editor/renderer/EditorViewportScene.h"
 
 #include <algorithm>
@@ -14,6 +15,14 @@ namespace Horo::Editor {
     namespace {
         namespace WS = WorldStreaming;
         using Point = Math::WorldCoordinate64;
+
+        /** @brief Detects camera pose/projection changes inside the same host view before reprojecting a gesture. */
+        bool SameCamera(const EditorViewportCamera &left, const EditorViewportCamera &right) {
+            return left.projection == right.projection && left.position == right.position && left.target == right.target &&
+                   left.up == right.up && left.verticalFovRadians == right.verticalFovRadians &&
+                   left.orthographicHeight == right.orthographicHeight && left.nearPlane == right.nearPlane &&
+                   left.farPlane == right.farPlane;
+        }
 
         /** @brief Rejects distant points with exact unsigned differences before constructing any per-frame error value. */
         bool FitsViewportWindow(Point point, Point origin) {
@@ -112,6 +121,8 @@ namespace Horo::Editor {
     /** @copydoc WorldSourceViewportTool::Cancel */
     void WorldSourceViewportTool::Cancel() {
         draft_.reset();
+        projection_.reset();
+        dragOriginal_.reset();
         dragged_.reset();
         previewError_.reset();
         fence_ = {};
@@ -141,6 +152,12 @@ namespace Horo::Editor {
             draft_->intent = static_cast<WS::StreamingSourceIntent>(intent);
         static_cast<void>(
             Ui::DrawColor3PropRow(label("workspace.world_sources.color"), "##source_color", draft_->debugColor, context.theme.fonts));
+        const auto previousShape = draft_->shape;
+        const auto shape = DrawWorldSourceShapeControls(*draft_, context);
+        if (shape.HasError())
+            previewError_ = shape.ErrorValue();
+        else if (previousShape != draft_->shape)
+            previewError_.reset();
     }
 
     /** @copydoc WorldSourceViewportTool::DrawSourceList */
@@ -150,6 +167,7 @@ namespace Horo::Editor {
             const std::string name = std::to_string(source.id.Value());
             if (Ui::Button({.label = name.c_str(), .variant = Ui::ButtonVariant::Secondary})) {
                 draft_ = source;
+                projection_.reset();
                 previewError_.reset();
                 fence_ = fence;
                 origin_ = view.worldViewport.globalOrigin;
@@ -186,7 +204,7 @@ namespace Horo::Editor {
         DrawSourceList(view);
         if (draft_) {
             DrawSourceProperties(context);
-            if (Ui::Button({.label = label("workspace.world_sources.apply")}))
+            if (Ui::Button({.label = label("workspace.world_sources.apply"), .enabled = !previewError_ && draft_->priority.IsValid()}))
                 Emit(command, WorldSourceToolAction::Edit, fence_, view.worldViewport, draft_);
             if (Ui::Button({.label = label("workspace.world_sources.remove"), .variant = Ui::ButtonVariant::Secondary}))
                 Emit(command, WorldSourceToolAction::Remove, fence_, view.worldViewport, draft_);
@@ -203,6 +221,16 @@ namespace Horo::Editor {
             ImGui::TextWrapped("%s: %s", label("workspace.world_sources.rejected"), error->code.Value().c_str());
     }
 
+    /** @copydoc WorldSourceViewportTool::MatchesProjection */
+    bool WorldSourceViewportTool::MatchesProjection(const EditorViewportCamera &camera, ImVec2 origin, ImVec2 extent,
+                                                    Math::ClipDepthRange depth) const {
+        if (!projection_)
+            return true;
+        const auto &captured = *projection_;
+        return SameCamera(captured.camera, camera) && captured.origin.x == origin.x && captured.origin.y == origin.y &&
+               captured.extent.x == extent.x && captured.extent.y == extent.y && captured.depth == depth;
+    }
+
     /** @copydoc WorldSourceViewportTool::Draw */
     bool WorldSourceViewportTool::Draw(ImDrawList &draw, ImVec2 origin, ImVec2 size, const EditorWorkspaceViewModel &view,
                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context, Math::ClipDepthRange depth,
@@ -210,10 +238,12 @@ namespace Horo::Editor {
         if (!view.worldViewport.snapshot ||
             (draft_ && (fence_ != view.worldViewport.snapshot->fence || origin_ != view.worldViewport.globalOrigin ||
                         viewRevision_ != view.worldViewport.viewRevision)) ||
-            view.playState != EditorPlayState::Idle || (!eligible && dragged_))
+            !MatchesProjection(view.viewportCamera, origin, size, depth) || view.playState != EditorPlayState::Idle ||
+            (!eligible && dragged_))
             Cancel();
+        const bool canEdit = eligible && view.playState == EditorPlayState::Idle;
         ImGui::SetCursorScreenPos({origin.x + Theme::Layout::BodyPadX, origin.y + size.y - ImGui::GetFrameHeightWithSpacing()});
-        ImGui::BeginDisabled(!eligible);
+        ImGui::BeginDisabled(!canEdit);
         if (Ui::Button({.label = context.localization.Get("editor", "workspace.world_sources.title").c_str(),
                         .variant = Ui::ButtonVariant::Secondary}))
             ImGui::OpenPopup("##WorldSources");
@@ -226,7 +256,7 @@ namespace Horo::Editor {
             ImGui::EndPopup();
         }
         const bool handles =
-            view.worldViewport.snapshot && DrawHandles(draw, origin, size, view, command, depth, eligible && !popup && !toolbarHovered);
+            view.worldViewport.snapshot && DrawHandles(draw, origin, size, view, command, depth, canEdit && !popup && !toolbarHovered);
         return popup || toolbarHovered || handles;
     }
 
@@ -239,8 +269,11 @@ namespace Horo::Editor {
         const auto intersection = PointerPoint(frame.origin, frame.size, frame.view.viewportCamera, frame.depth, normal.Value(), local);
         if (!intersection)
             return;
-        draft_ = source;
+        if (!draft_ || draft_->id != source.id)
+            draft_ = source;
+        dragOriginal_ = draft_;
         fence_ = frame.view.worldViewport.snapshot->fence;
+        projection_ = ProjectionCapture{frame.view.viewportCamera, frame.origin, frame.size, frame.depth};
         origin_ = frame.view.worldViewport.globalOrigin;
         viewRevision_ = frame.view.worldViewport.viewRevision;
         dragged_ = handle;
@@ -277,7 +310,7 @@ namespace Horo::Editor {
             const ImVec2 mouse = ImGui::GetMousePos();
             const float dx = mouse.x - pixel.x;
             const float dy = mouse.y - pixel.y;
-            const bool hovered = dx * dx + dy * dy <= 64;
+            const bool hovered = frame.eligible && dx * dx + dy * dy <= 64;
             frame.draw.AddCircleFilled(pixel, hovered ? 6 : 4, color);
             if (frame.eligible && hovered && !dragged_ && (!draft_ || draft_->id == authored.id) &&
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left))
@@ -297,7 +330,7 @@ namespace Horo::Editor {
         if (pointer) {
             const auto position = WorldSourceViewportGlobal(dragStart_, *pointer - dragIntersection_);
             if (position.HasValue()) {
-                const auto value = MoveWorldSourceGizmo(*draft_, *dragged_, position.Value());
+                const auto value = MoveWorldSourceGizmo(*dragOriginal_, *dragged_, position.Value());
                 previewError_ = value.HasError() ? std::optional<Error>{value.ErrorValue()} : std::nullopt;
                 if (value.HasValue())
                     draft_ = value.Value();
@@ -311,6 +344,7 @@ namespace Horo::Editor {
             if (!previewError_) {
                 Emit(command, WorldSourceToolAction::Edit, fence_, frame.view.worldViewport, draft_);
                 dragged_.reset();
+                dragOriginal_.reset();
             } else {
                 const auto error = previewError_;
                 Cancel();

@@ -14,32 +14,34 @@ refresh reads the native capture, using its existing `WorldViewportBinding` and
 canonical document owner. The registered `ViewportPanel` consumes the resulting
 immutable geometry. It does not query runtime services or allocate cell geometry.
 
-A native mounted-world producer supplies its existing owners to:
+World Composition exposes an explicit project-relative `world.index` path and
+Mount/Stop actions. The controller reads exact bytes through its retained project
+file authority, enforces the artifact/time bounds, decodes and verifies the
+canonical index, and requires the active source partition and supported coordinate
+convention. It prepares a `WorldStreamingPreviewRuntime` privately. That owner
+instantiates the actual canonical registry, source planner, source registrations,
+scheduler and residency ledger. This is the sole inspection streaming owner; it
+does not duplicate the viewport, camera or editable document authority.
 
-```cpp
-bridge.BindRuntime(registry, planner, diagnostics);
-```
+The runtime uses the application-composed bounded inspection profile and the
+native steady clock. It registers the canonical authored relevance sources with
+the real planner and services finite quanta. Only after an actual publication is
+ready does the controller call `BindRuntime` with this owner's actual registry,
+planner and diagnostic value. Explicit stop, document replacement/close and
+workspace teardown call `UnbindRuntime(runtime.Owner())` before native shutdown.
+Replacement prepares the new owner first, unbinds the exact old generation,
+binds the candidate, then retires the old owner. Failed parse/preparation preserves
+the prior active mount. Stale unmounts cannot revoke a newer owner. Source changes
+withdraw actual native registrations before recomputation and invalidate the old
+planner publication.
 
-`registry` is the actual `WorldPartitionRegistry`; `planner` is the actual
-`StreamingSourcePlanner`; `diagnostics` is the authority-owned
-`WorldStreamingDiagnosticSnapshot` whose address remains stable while its revision
-advances. All three remain alive until the native mount calls
-`bridge.UnbindRuntime(exactOwner)` before destroying them. Bind, capture, publication
-replacement and unbind occur on the bridge's constructing lane, after the streaming
-safe point and before editor presentation. The bridge reads `Snapshot()` and
-`Plan()` directly, and checks their owner/publication correlation. It owns no
-planner, source registration, camera, residency ledger, package policy or loader.
-A different mounted owner requires explicit unbind; stale unmounts cannot revoke a
-new owner. Failed capture clears the displayed cache while retaining native
-anti-rollback revision floors. Historical immutable leases remain readable.
-
-Opening `.horoworld` source metadata does not mount cooked runtime content. An
-unbound native runtime is explicitly unavailable, not an empty observation asserted
-as unloaded. This repository's source-open path has no native mount invocation:
-that mount must call the contract above when it exists. This is a production
-producer prerequisite, not evidence that the source-open route supplies residency.
-The PR must remain draft without closing HORO-1634 until that live producer and
-current-head validation have been qualified.
+Inspection does not perform cell I/O or activation and does not mutate packaged
+policy. Actual residency is read from the canonical ledger; absent records remain
+unobserved rather than fabricated Unloaded/Resident/Active. The owner has no
+payload-budget observation capability, so its canonical state-only diagnostic
+snapshot retains no budget policy or sample. No measured zero or fabricated
+sampling window is substituted. An external native world with full observations
+may still bind its actual canonical owners to the same bridge.
 
 ## Evidence and geometry
 
@@ -66,12 +68,18 @@ exact handle and returns the existing spatial index's inclusive millimeter bound
 New viewport consumers reuse that authority instead of repeating grid/LOD/overflow
 arithmetic. Existing registry consumers need no migration. Public ownership remains
 WorldStreaming; projection, geometry and the host bridge belong to EditorModel.
-Public-header consumer coverage includes the additive API and immutable bridge
-result. Native types and backend handles do not cross this boundary.
+`WorldStreamingDiagnosticSnapshot::BudgetPolicy()` and `BudgetSample()` now return
+nullable const pointers. This deliberate public API evolution prevents inspection
+from inventing policy/sample facts. The only repository getter callers were two
+assertions in `WorldStreamingDiagnosticSnapshotTests.cpp`; they now verify presence
+before dereferencing. New native tests require both getters to be null for the
+state-only capture. Existing measured-budget `Create`/`Replace` inputs retain their
+strict validation. Public-header consumer coverage includes these pointer contracts,
+the additive ledger-record view and the immutable bridge result. Native types and backend handles do not cross this boundary.
 
 ## Verification limits
 
-Regression sources exercise real planner publication and residency-ledger failure
+Regression sources exercise native file-to-index mount/replacement/unbind, real planner publication and residency-ledger failure
 transitions, ownership after unmount, source withdrawal, shutdown, wrong-thread
 access, stale/invalid/capacity/cancellation rejection, controller detach, canonical
 origin geometry and both supported locales. No local configure/build/test or GPU

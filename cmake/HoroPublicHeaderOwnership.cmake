@@ -1208,6 +1208,7 @@ horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
     Horo/Editor/WorldStreamingPreview.h
+    Horo/Editor/WorldStreamingPreviewRuntime.h
     Horo/Editor/PartitionedWorldWorkspace.h
     Horo/Editor/NavigationDefinitionDocument.h
     Horo/Editor/NavigationSettingsWorkflow.h

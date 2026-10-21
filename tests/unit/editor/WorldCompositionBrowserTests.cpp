@@ -44,7 +44,7 @@ namespace Horo::Editor {
 
         template <typename T> void BrowserError(const Result<T> &result, const ErrorCodeDescriptor &error) {
             REQUIRE(result.HasError());
-            REQUIRE(result.ErrorValue().code == error.code);
+            REQUIRE(result.ErrorValue().code.Value() == error.code.Value());
         }
     }  // namespace
 

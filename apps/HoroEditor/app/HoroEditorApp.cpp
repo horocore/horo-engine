@@ -39,6 +39,7 @@
 #include "Horo/Editor/WelcomeController.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Editor/WorldStreamingPreview.h"
+#include "Horo/Editor/WorldStreamingPreviewRuntime.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -1806,6 +1807,12 @@ namespace Horo::Editor {
             const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
             WorldStreamingPreviewHost streamingPreview;
+            auto streamingPolicy = MakeWorldStreamingPreviewRuntimePolicy();
+            if (streamingPolicy.HasError()) {
+                LOG_ERROR("editor.streaming", "Cannot compose streaming inspection policy: %s",
+                          streamingPolicy.ErrorValue().message.c_str());
+                return std::nullopt;
+            }
             GuiScreenHost
                 screenHost{guiContext,
                            GuiScreenHostComposition{.modalHost = p.modalHost,
@@ -1852,6 +1859,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<IEditorGuiRenderer>(p.presentation.guiRenderer);
             screenHost.Services().Register<EditorViewportSceneState>(viewportSceneState);
             screenHost.Services().Register<WorldStreamingPreviewHost>(streamingPreview);
+            screenHost.Services().RegisterConst<WorldStreamingPreviewRuntimePolicy>(streamingPolicy.Value());
             screenHost.Services().Register<Runtime::RuntimeSceneService>(*runtimeSceneService);
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);

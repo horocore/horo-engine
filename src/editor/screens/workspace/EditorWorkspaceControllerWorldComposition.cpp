@@ -13,6 +13,7 @@ namespace Horo::Editor {
         const auto lease = current.HasValue() ? current.Value() : PartitionedWorldSnapshotLease{};
         if (m_viewModel.worldViewport.snapshot != lease)
             RefreshWorldSourceProjection();
+        ServiceWorldStreamingPreview();
         RefreshWorldStreamingPreview();
         if (!forceQuery && m_viewModel.worldDocument == lease)
             return;

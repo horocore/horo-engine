@@ -729,6 +729,20 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
     ImGui::DestroyContext();
 }
 
+namespace {
+    void DrawWorldCompositionFrame(Horo::Editor::WorldCompositionTab &tab, const Horo::Editor::EditorWorkspaceViewModel &vm,
+                                   const Horo::Editor::EditorGuiContext &context, const float width) {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize({width, 600});
+        ImGui::Begin("WorldCompositionRender", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        Horo::Editor::EditorWorkspaceViewCommandData command;
+        tab.DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), vm, command, context);
+        ImGui::End();
+        ImGui::Render();
+        CHECK(command.command == Horo::Editor::EditorWorkspaceViewCommand::None);
+    }
+}  // namespace
+
 TEST_CASE("World Composition renders empty populated filtered error and narrow localized states", "[unit][editor][gui][world_browser]") {
     using namespace Horo;
     using namespace Horo::Editor;
@@ -772,16 +786,8 @@ TEST_CASE("World Composition renders empty populated filtered error and narrow l
             vm.worldDocument.reset();
             vm.worldBrowser.reset();
         }
-        for (const float width : {260.0F, 900.0F}) {
-            ImGui::NewFrame();
-            ImGui::SetNextWindowSize({width, 600});
-            ImGui::Begin("WorldCompositionRender", nullptr, ImGuiWindowFlags_NoSavedSettings);
-            EditorWorkspaceViewCommandData command;
-            tab.DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), vm, command, context);
-            ImGui::End();
-            ImGui::Render();
-            CHECK(command.command == EditorWorkspaceViewCommand::None);
-        }
+        for (const float width : {260.0F, 900.0F})
+            DrawWorldCompositionFrame(tab, vm, context, width);
     }
     tab.OnDetach();
     ImGui::DestroyContext();

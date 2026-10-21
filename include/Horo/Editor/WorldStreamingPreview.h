@@ -139,6 +139,9 @@ namespace Horo::Editor {
         WorldStreamingPreviewHost() = default;
         WorldStreamingPreviewHost(const WorldStreamingPreviewHost &) = delete;
         WorldStreamingPreviewHost &operator=(const WorldStreamingPreviewHost &) = delete;
+        /** @brief Issues a never-reused mounted identity within this explicitly composed application host.
+         * @param partition Exact admitted world identity. @return Fresh owner/epoch, or bounded capacity/exhaustion/thread failure. */
+        [[nodiscard]] Result<WorldStreaming::StreamingRuntimeOwnerToken> IssueMountIdentity(WorldStreaming::WorldPartitionId partition);
         /**
          * @brief Binds actual native owners after checking one coherent publication; failed replacement preserves the old binding.
          * @param registry Existing mounted registry, borrowed until explicit unbind.
@@ -166,6 +169,8 @@ namespace Horo::Editor {
             const WorldStreaming::StreamingSourcePlanView &plan);
         /** @brief Revokes stale presentation while preserving the native anti-rollback publication floor. */
         [[nodiscard]] Result<std::shared_ptr<const WorldStreamingPreviewGeometry>> CaptureFailure(const Error &error);
+        std::vector<WorldStreaming::StreamingRuntimeOwnerToken> identities_;
+        std::uint64_t nextOwner_{1};
         const std::thread::id thread_{std::this_thread::get_id()};
         const WorldStreaming::WorldPartitionRegistry *registry_{};
         const WorldStreaming::StreamingSourcePlanner *planner_{};

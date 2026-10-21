@@ -275,4 +275,9 @@ namespace Horo::WorldStreaming {
     std::size_t StreamingCellStateLedger::TrackedAttemptCount() const noexcept {
         return records_.size();
     }
+
+    /** @copydoc StreamingCellStateLedger::Records */
+    std::span<const StreamingCellStateRecord> StreamingCellStateLedger::Records() const noexcept {
+        return records_;
+    }
 }  // namespace Horo::WorldStreaming

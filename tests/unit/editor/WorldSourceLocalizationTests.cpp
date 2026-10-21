@@ -11,9 +11,11 @@ TEST_CASE("World source authoring messages exist in both supported locales", "[u
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     REQUIRE(service.LoadCatalogFile(root / "en-US.json", &error));
     REQUIRE(service.LoadCatalogFile(root / "tr-TR.json", &error));
-    constexpr std::array keys{"title",   "unavailable", "authoring_only", "sphere",    "box",    "frustum", "path",     "priority",
-                              "target",  "unloaded",    "loaded",         "activated", "intent", "camera",  "gameplay", "network",
-                              "preload", "color",       "apply",          "remove",    "cancel", "undo",    "redo",     "rejected"};
+    constexpr std::array keys{"radius",       "maximum_extent", "half_extent", "plane_normal",   "plane_distance", "normalize", "add_point",
+                              "remove_point", "title",          "unavailable", "authoring_only", "sphere",         "box",       "frustum",
+                              "path",         "priority",       "target",      "unloaded",       "loaded",         "activated", "intent",
+                              "camera",       "gameplay",       "network",     "preload",        "color",          "apply",     "remove",
+                              "cancel",       "undo",           "redo",        "rejected"};
     for (const auto locale : {"en-US", "tr-TR"}) {
         REQUIRE(service.Prepare(LocaleTag{locale}, &error));
         REQUIRE(service.ActivatePrepared(&error));
@@ -56,10 +58,12 @@ TEST_CASE("Streaming preview messages exist in both supported locales", "[unit][
     const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
     REQUIRE(service.LoadCatalogFile(root / "en-US.json", &error));
     REQUIRE(service.LoadCatalogFile(root / "tr-TR.json", &error));
-    constexpr std::array keys{"legend",  "unavailable", "unknown", "unloaded",        "loaded",    "activated", "loading",  "resident",
-                              "active",  "evicting",    "failed",  "succeeded",       "cancelled", "replaced",  "shutdown", "cell",
-                              "desired", "runtime",     "reason",  "evidence_counts", "no_demand", "accepted",  "deferred", "rejected",
-                              "pinned",  "predicted",   "source",  "visible_counts",  "capacity",  "stale"};
+    constexpr std::array keys{"legend",       "unavailable", "unknown",    "unloaded",   "loaded",    "activated",       "loading",
+                              "resident",     "active",      "evicting",   "failed",     "succeeded", "cancelled",       "replaced",
+                              "shutdown",     "cell",        "desired",    "runtime",    "reason",    "evidence_counts", "no_demand",
+                              "accepted",     "deferred",    "rejected",   "pinned",     "predicted", "source",          "visible_counts",
+                              "capacity",     "stale",       "inspection", "index_path", "mount",     "unmount",         "preparing",
+                              "mount_failed", "stability",   "retained",   "lingering",  "cooldown",  "watching"};
     for (const auto locale : {"en-US", "tr-TR"}) {
         REQUIRE(service.Prepare(LocaleTag{locale}, &error));
         REQUIRE(service.ActivatePrepared(&error));
