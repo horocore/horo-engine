@@ -1,41 +1,18 @@
 #include "../../support/AllocationProbe.h"
+#include "../../support/SourceDocumentTestProject.h"
 #include "Horo/Editor/SourceEditingCommands.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
-#include <chrono>
-#include <fstream>
 #include <thread>
 
 namespace {
     using namespace Horo;
     using namespace Horo::Editor;
 
-    struct SourceProject final {
-        std::filesystem::path directory = std::filesystem::temp_directory_path() /
-                                          ("horo-document-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
-
-        SourceProject() {
-            std::filesystem::create_directory(directory);
-        }
-
-        ~SourceProject() {
-            std::error_code error;
-            std::filesystem::remove_all(directory, error);
-        }
-
-        void Put(std::string_view bytes, const char *name = "code.cpp") const {
-            std::ofstream stream(directory / name, std::ios::binary);
-            stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-            REQUIRE(stream.good());
-        }
-
-        DocumentIdentity Identity(const char *name = "code.cpp", std::uint64_t instance = 1) const {
-            return {{DocumentKind::Source, SourceDocumentId::Parse(name).Value()}, DocumentInstanceId::Create(instance).Value()};
-        }
-    };
+    using Horo::TestSupport::SourceProject;
 
     template <class T> void ErrorIs(const Result<T> &result, const ErrorCodeDescriptor &descriptor) {
         REQUIRE(result.HasError());
@@ -529,4 +506,25 @@ TEST_CASE("Source multiline clipboard and newline plans form single undo entries
     CHECK(owner.History(id).Value().undoEntries == 1);
     REQUIRE(owner.Undo(id, 4).HasValue());
     CHECK(owner.Snapshot(id).Value().Text() == snapshot.Text());
+}
+
+TEST_CASE("Source navigation clamps scalar columns at every logical newline family", "[unit][editor][source][editing]") {
+    SourceProject project;
+    project.Put("\xef\xbb\xbf\xc3\xa9\xf0\x9f\x98\x80\r\nb\rc\n");
+    SourceDocumentService owner(project.directory);
+    const auto snapshot = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+    CHECK_FALSE(NavigateSourceLine({}, 1));
+    CHECK_FALSE(NavigateSourceLine(snapshot, 0));
+    CHECK_FALSE(NavigateSourceLine(snapshot, 1, 0));
+    CHECK(NavigateSourceLine(snapshot, 1, 1)->caret == 3);
+    CHECK(NavigateSourceLine(snapshot, 1, 2)->caret == 5);
+    CHECK(NavigateSourceLine(snapshot, 1, 3)->caret == 9);
+    CHECK(NavigateSourceLine(snapshot, 1, 100)->caret == 9);
+    CHECK(NavigateSourceLine(snapshot, 2)->caret == 11);
+    CHECK(NavigateSourceLine(snapshot, 3)->caret == 13);
+    CHECK(NavigateSourceLine(snapshot, 4)->caret == 15);
+    CHECK(NavigateSourceLine(snapshot, 100, 100)->caret == 15);
+    ErrorIs(PlanSourceReplacement(snapshot, {4, 4, 0}, "x"), SourceDocumentErrors::Invalid);
+    ErrorIs(PlanSourceReplacement(snapshot, {6, 6, 0}, "x"), SourceDocumentErrors::Invalid);
+    ErrorIs(PlanSourceReplacement(snapshot, {10, 10, 0}, "x"), SourceDocumentErrors::Invalid);
 }

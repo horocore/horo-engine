@@ -46,7 +46,7 @@ namespace Horo::Editor {
     }  // namespace Detail
 
     /** @copydoc SourceDocumentService::SourceDocumentService */
-    SourceDocumentService::SourceDocumentService(const std::filesystem::path &projectRoot, const SourceDocumentLimits limits)
+    SourceDocumentService::SourceDocumentService(const std::filesystem::path &projectRoot, const SourceDocumentLimits &limits)
         : storage_(std::make_unique<Storage>()) {
         storage_->limits = limits;
         std::error_code error;

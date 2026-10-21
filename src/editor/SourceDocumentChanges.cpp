@@ -95,10 +95,9 @@ namespace Horo::Editor {
                            edit.beforeView.value_or(SourceEditingView{edit.offset, edit.offset, 0}),
                            edit.afterView.value_or(
                                SourceEditingView{edit.offset + edit.insert.size(), edit.offset + edit.insert.size(), 0})};
-        const auto validView = [](const SourceEditingView &view, const std::string_view bytes) {
+        if (const auto validView = [](const SourceEditingView &view, const std::string_view bytes) {
             return IsBoundary(bytes, view.anchor) && IsBoundary(bytes, view.caret) && std::isfinite(view.scrollLines);
-        };
-        if (!validView(entry.before, before) || !validView(entry.after, after.bytes) || entry.before.viewId != entry.after.viewId)
+        }; !validView(entry.before, before) || !validView(entry.after, after.bytes) || entry.before.viewId != entry.after.viewId)
             return Failure<HistoryEntry>(SourceDocumentErrors::Invalid);
         if (limits.maximumHistoryEntries != 0 && entry.Bytes() <= limits.maximumHistoryBytes)
             record.history.reserve(record.historyPosition + 1);
@@ -260,8 +259,7 @@ namespace Horo::Editor {
                                                                      const std::uint64_t expectedRevision, const bool redo,
                                                                      const CancellationToken cancellation) {
         try {
-            const auto current = Snapshot(instance);
-            if (current.HasError())
+            if (const auto current = Snapshot(instance); current.HasError())
                 return Result<SourceHistoryResult>::Failure(current.ErrorValue());
             auto &record = *storage_->Find(instance);
             if (expectedRevision != record.root->revision)

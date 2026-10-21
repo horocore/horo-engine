@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <new>
 
 namespace Horo::Editor {
@@ -16,12 +17,12 @@ namespace Horo::Editor {
         /** @brief Validates scalar, BOM and CRLF cursor boundaries. */
         bool Boundary(const std::string_view text, const std::size_t at) {
             return at >= TextStart(text) && at <= text.size() &&
-                   (at == text.size() || (static_cast<unsigned char>(text[at]) & 0xc0) != 0x80) &&
+                   (at == text.size() || (static_cast<std::byte>(text[at]) & std::byte{0xc0}) != std::byte{0x80}) &&
                    !(at > 0 && at < text.size() && text[at - 1] == '\r' && text[at] == '\n');
         }
 
         /** @brief Validates an exact view without allowing nonfinite scroll positions. */
-        bool ValidView(const SourceDocumentSnapshot &snapshot, const SourceEditingView view) {
+        bool ValidView(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view) {
             return snapshot.Revision() != 0 && Boundary(snapshot.Text(), view.anchor) && Boundary(snapshot.Text(), view.caret) &&
                    std::isfinite(view.scrollLines);
         }
@@ -57,8 +58,7 @@ namespace Horo::Editor {
         /** @brief Captures the local newline family, falling back to the document's uniform family. */
         std::string NewlineAt(const SourceDocumentSnapshot &snapshot, const std::size_t at) {
             const auto text = snapshot.Text();
-            const auto end = text.find_first_of("\r\n", at);
-            if (end != std::string_view::npos) {
+            if (const auto end = text.find_first_of("\r\n", at); end != std::string_view::npos) {
                 if (text[end] == '\n')
                     return "\n";
                 return end + 1 < text.size() && text[end + 1] == '\n' ? "\r\n" : "\r";
@@ -81,7 +81,7 @@ namespace Horo::Editor {
         /** @brief Advances one complete scalar in already validated UTF-8 text. */
         std::size_t NextScalar(const std::string_view text, std::size_t at) {
             ++at;
-            while (at < text.size() && (static_cast<unsigned char>(text[at]) & 0xc0) == 0x80)
+            while (at < text.size() && (static_cast<std::byte>(text[at]) & std::byte{0xc0}) == std::byte{0x80})
                 ++at;
             return at;
         }
@@ -147,15 +147,15 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PlanSourceReplacement */
-    Result<SourceEditingPlan> PlanSourceReplacement(const SourceDocumentSnapshot &snapshot, const SourceEditingView view,
+    Result<SourceEditingPlan> PlanSourceReplacement(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view,
                                                     const std::string_view text) {
         try {
             if (!ValidView(snapshot, view) || !ValidText(text))
                 return Failure(SourceDocumentErrors::Invalid);
             const auto begin = std::min(view.anchor, view.caret);
             const auto end = std::max(view.anchor, view.caret);
-            const auto retained = snapshot.Text().size() - (end - begin);
-            if (text.size() > SourceDocumentLimits{}.maximumDocumentBytes - retained)
+            if (const auto retained = snapshot.Text().size() - (end - begin);
+                text.size() > SourceDocumentLimits{}.maximumDocumentBytes - retained)
                 return Failure(SourceDocumentErrors::TooLarge);
             const SourceEditingView after{begin + text.size(), begin + text.size(), view.scrollLines, view.viewId};
             return Result<SourceEditingPlan>::Success({snapshot.Revision(), begin, end - begin, std::string(text), view, after});
@@ -165,7 +165,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PlanSourceNewline */
-    Result<SourceEditingPlan> PlanSourceNewline(const SourceDocumentSnapshot &snapshot, const SourceEditingView view) {
+    Result<SourceEditingPlan> PlanSourceNewline(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view) {
         try {
             if (!ValidView(snapshot, view))
                 return Failure(SourceDocumentErrors::Invalid);
@@ -184,7 +184,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PlanSourceIndentation */
-    Result<SourceEditingPlan> PlanSourceIndentation(const SourceDocumentSnapshot &snapshot, const SourceEditingView view,
+    Result<SourceEditingPlan> PlanSourceIndentation(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view,
                                                     const unsigned width, const bool outdent) {
         try {
             if (!ValidView(snapshot, view) || width == 0 || width > 8)
@@ -219,8 +219,8 @@ namespace Horo::Editor {
                 removedTotal += removed;
                 at = next;
             } while (at < last);
-            const auto retained = text.size() - (last - first);
-            if (replacement.size() > SourceDocumentLimits{}.maximumDocumentBytes - retained)
+            if (const auto retained = text.size() - (last - first);
+                replacement.size() > SourceDocumentLimits{}.maximumDocumentBytes - retained)
                 return Failure(SourceDocumentErrors::TooLarge);
             return Result<SourceEditingPlan>::Success(
                 {snapshot.Revision(), first, last - first, std::move(replacement), view, {anchor, caret, view.scrollLines, view.viewId}});
@@ -230,7 +230,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc FindSourceText */
-    std::optional<SourceEditingView> FindSourceText(const SourceDocumentSnapshot &snapshot, const SourceEditingView view,
+    std::optional<SourceEditingView> FindSourceText(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view,
                                                     const std::string_view query, const SourceSearchDirection direction, const bool wrap) {
         if (!ValidView(snapshot, view) || query.empty() || !ValidText(query))
             return {};
@@ -245,7 +245,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PlanSourceReplaceAll */
-    Result<SourceEditingPlan> PlanSourceReplaceAll(const SourceDocumentSnapshot &snapshot, const SourceEditingView view,
+    Result<SourceEditingPlan> PlanSourceReplaceAll(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view,
                                                    const std::string_view query, const std::string_view replacement) {
         try {
             if (!ValidView(snapshot, view) || query.empty() || !ValidText(query) || !ValidText(replacement))
@@ -288,10 +288,15 @@ namespace Horo::Editor {
             return {};
         const auto text = snapshot.Text();
         auto at = TextStart(text);
-        for (std::size_t current = 1; current < line && at < text.size(); ++current)
+        auto remainingLines = line - 1;
+        while (remainingLines != 0 && at < text.size()) {
             at = NextLine(text, at);
-        for (std::size_t current = 1; current < column && at < text.size() && text[at] != '\r' && text[at] != '\n'; ++current) {
+            --remainingLines;
+        }
+        auto remainingColumns = column - 1;
+        while (remainingColumns != 0 && at < text.size() && text[at] != '\r' && text[at] != '\n') {
             at = NextScalar(text, at);
+            --remainingColumns;
         }
         return SourceEditingView{at, at, 0};
     }
