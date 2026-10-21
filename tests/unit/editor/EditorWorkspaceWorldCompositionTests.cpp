@@ -77,6 +77,34 @@ namespace Horo::Editor::WorldCompositionTests {
         CHECK(controller.ViewModel().worldViewport.viewRevision != 0);
     }
 
+    TEST_CASE("World source open command routes payload and preserves publication on missing input",
+              "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        const auto original = controller.WorldDocuments().Snapshot().Value();
+        EditorWorkspaceViewCommandData open;
+        open.command = EditorWorkspaceViewCommand::OpenWorldCompositionSource;
+        open.worldDocumentFence = original->fence;
+        SECTION("valid payload") {
+            open.stringPayload = "world ü space.horoworld";
+            controller.ProcessCommand(open);
+            const auto reopened = controller.WorldDocuments().Snapshot().Value();
+            CHECK(reopened->fence.generation != original->fence.generation);
+            CHECK(controller.ViewModel().worldDocument == reopened);
+            CHECK(controller.ViewModel().worldViewport.snapshot == reopened);
+            REQUIRE(controller.ViewModel().worldBrowser);
+            CHECK(controller.ViewModel().worldBrowser->source == reopened);
+            CHECK(controller.ViewModel().activeDocumentPanelId == "horo.world_composition");
+        }
+        SECTION("missing payload") {
+            controller.ProcessCommand(open);
+            REQUIRE(controller.ViewModel().worldDocumentError);
+            CHECK(controller.ViewModel().worldDocumentError->code.Value() == WorldDocumentErrors::Invalid.code.Value());
+            CHECK(controller.WorldDocuments().Snapshot().Value() == original);
+            CHECK(controller.ViewModel().worldViewport.snapshot == original);
+        }
+    }
+
     TEST_CASE("Actual viewport producer and dirty guards retain the same opened world", "[editor][world_browser][controller]") {
         WorldProject project;
         auto &controller = *project.controller;

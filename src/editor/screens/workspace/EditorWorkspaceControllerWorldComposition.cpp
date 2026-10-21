@@ -77,15 +77,15 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessWorldCompositionCommand */
     bool EditorWorkspaceController::ProcessWorldCompositionCommand(const EditorWorkspaceViewCommandData &command) {
-        using enum EditorWorkspaceViewCommand;
-        if (command.command == OpenWorldCompositionSource) {
+        if (command.command == EditorWorkspaceViewCommand::OpenWorldCompositionSource) {
             const auto opened = command.stringPayload ? OpenWorldCompositionSource(*command.stringPayload, command.worldDocumentFence)
                                                       : Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
             if (opened.HasError())
                 m_viewModel.worldDocumentError = opened.ErrorValue();
             return true;
         }
-        if (command.command != QueryWorldComposition && command.command != CloseWorldComposition)
+        if (command.command != EditorWorkspaceViewCommand::QueryWorldComposition &&
+            command.command != EditorWorkspaceViewCommand::CloseWorldComposition)
             return false;
         auto &world = m_partitionedWorld ? *m_partitionedWorld : WorldDocuments();
         const auto current = world.Snapshot();
@@ -93,7 +93,7 @@ namespace Horo::Editor {
             m_viewModel.worldDocumentError = MakeError(WorldDocumentErrors::Stale);
             return true;
         }
-        if (command.command == CloseWorldComposition) {
+        if (command.command == EditorWorkspaceViewCommand::CloseWorldComposition) {
             const auto closed = world.Close(*command.worldDocumentFence);
             if (closed.HasError())
                 m_viewModel.worldDocumentError = closed.ErrorValue();
