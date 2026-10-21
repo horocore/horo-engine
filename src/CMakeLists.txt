@@ -2975,6 +2975,7 @@ target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_IN
 target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
 
 add_library(HoroEditorServices STATIC
+        editor/navigation/NavigationViewportSnapshot.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
@@ -3057,7 +3058,7 @@ target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
-target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices
@@ -3259,6 +3260,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
+            editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
         editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.cpp
@@ -3268,6 +3270,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.cpp
             editor/screens/workspace/panels/viewport/navigation/ViewportNavigationController.cpp
             editor/screens/workspace/WorkspacePanelRegistry.cpp
+            editor/navigation/NavigationTab.cpp
+            editor/navigation/NavigationBakeCancelModal.cpp
             editor/screens/workspace/DefaultWorkspacePanels.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPanel.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.cpp

@@ -93,6 +93,8 @@ namespace Horo::Editor {
     void ViewportPanel::OnAttach(PanelContext &context) {
         contributions_ = context.extensionViewport;
         viewportRenderer_ = context.viewportRenderer;
+        navigationOverlays_ = context.navigationOverlays;
+        navigationProjectRoot_ = context.projectRoot;
         inputRouter_ = context.inputRouter;
         workspaceInputContext_ = context.workspaceInputContext;
         if (context.inputRouter != nullptr && context.workspaceInputContext != nullptr)
@@ -108,6 +110,9 @@ namespace Horo::Editor {
         workspaceInputContext_ = nullptr;
         viewportRenderer_ = nullptr;
         gridOverride_.reset();
+        navigationOverlays_ = nullptr;
+        navigationLayer_ = {};
+        navigationProjectRoot_.clear();
     }
 
     /** @copydoc ViewportPanel::OnPresentationHidden */
@@ -159,6 +164,15 @@ namespace Horo::Editor {
         const bool hasRenderedViewport = viewportRenderer_ != nullptr && viewportRenderer_->IsReady() && textureView.IsValid();
         DrawViewportSurface(drawList, surfaceLayout, textureView, hasRenderedViewport);
 
+        if (navigationOverlays_ && hasRenderedViewport)
+            navigationLayer_.Draw(*navigationOverlays_, {.projectRoot = navigationProjectRoot_,
+                                                         .scenePath = viewModel.navigationScenePath,
+                                                         .camera = viewModel.viewportCamera,
+                                                         .origin = origin,
+                                                         .size = {width, height},
+                                                         .depthRange = viewportRenderer_->ClipDepthRange(),
+                                                         .gui = context,
+                                                         .dirty = viewModel.isDirty || viewModel.sceneExternalConflict});
         if (activeContribution_ && (!hasRenderedViewport || width <= 0 || height <= 0)) {
             interaction_.CancelContribution();
             static_cast<void>(interaction_.ConsumePendingCancellation(command));
@@ -354,7 +368,8 @@ namespace Horo::Editor {
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
         const ImVec2 pointer = ImGui::GetMousePos();
-        const bool pointerOverControls = pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F;
+        const bool pointerOverControls =
+            navigationLayer_.CapturesPointer() || (pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F);
         const bool inputEligible = ViewportInputEligible();
         const bool surfaceInteractive = !pointerOverControls || interaction_.IsActive();
         const bool surfaceHovered = PrepareViewportInput(layout, inputEligible, surfaceInteractive);
