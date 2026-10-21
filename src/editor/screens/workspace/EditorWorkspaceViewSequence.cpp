@@ -147,9 +147,7 @@ namespace Horo::Editor {
             found = m_sourceWidgets.try_emplace(source.Identity().instance.Value(), SourceEditingViewId{m_nextSourceWidgetViewId++}).first;
         }
         auto &widget = found->second.widget;
-        widget.Publish(source);
-        if (found->second.syntax.Publish(source) || !widget.HasHighlight(source.Revision()))
-            static_cast<void>(widget.Highlight(source.Revision(), found->second.syntax.Syntax()));
+        found->second.Publish(source);
         if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
             static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
         auto toolIntent = found->second.tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);

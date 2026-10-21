@@ -125,6 +125,15 @@ namespace Horo::Editor {
         struct SourceView final {
             explicit SourceView(SourceEditingViewId identity) : widget(identity) {}
 
+            /** @brief Reconciles one publication into the interaction mirror and its independent lexical cache.
+             * @param source Current authoritative source publication.
+             */
+            void Publish(const SourceDocumentSnapshot &source) {
+                widget.Publish(source);
+                if (syntax.Publish(source) || !widget.HasHighlight(source.Revision()))
+                    static_cast<void>(widget.Highlight(source.Revision(), syntax.Syntax()));
+            }
+
             SourceEditorWidget widget;
             SourceEditorTools tools;
             SourceSyntaxCache syntax;
