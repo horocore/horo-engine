@@ -67,31 +67,31 @@ namespace Horo::Editor {
      * @param snapshot Current source lease. @param view View-local byte selection and scroll.
      * @param text Exact UTF-8 insertion. @return Atomic proposal or invalid/oversized input error.
      */
-    [[nodiscard]] Result<SourceEditingPlan> PlanSourceReplacement(const SourceDocumentSnapshot &snapshot, SourceEditingView view,
+    [[nodiscard]] Result<SourceEditingPlan> PlanSourceReplacement(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view,
                                                                   std::string_view text);
     /** @brief Replaces the selection with the local newline family and current line's leading indentation.
      * @param snapshot Current source. @param view Exact view selection. @return One atomic auto-indented newline proposal.
      */
-    [[nodiscard]] Result<SourceEditingPlan> PlanSourceNewline(const SourceDocumentSnapshot &snapshot, SourceEditingView view);
+    [[nodiscard]] Result<SourceEditingPlan> PlanSourceNewline(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view);
     /** @brief Indents or unindents all selected logical lines, preserving BOM and newline families.
      * @param snapshot Current source. @param view Selection; a selection ending at line start excludes that line.
      * @param width Spaces per indentation step, from one through eight. @param outdent Remove one tab or up to width spaces.
      * @return One atomic proposal and adjusted selection; a collapsed caret remains collapsed.
      */
-    [[nodiscard]] Result<SourceEditingPlan> PlanSourceIndentation(const SourceDocumentSnapshot &snapshot, SourceEditingView view,
+    [[nodiscard]] Result<SourceEditingPlan> PlanSourceIndentation(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view,
                                                                   unsigned width, bool outdent);
     /** @brief Finds one literal, case-sensitive UTF-8 match without allocating a match list.
      * @param snapshot Current source. @param view Starting selection. @param query Nonempty valid UTF-8 literal.
      * @param direction Search order. @param wrap Search the complementary interval once.
      * @return Matching selection preserving scroll, or empty when no valid match/request exists.
      */
-    [[nodiscard]] std::optional<SourceEditingView> FindSourceText(const SourceDocumentSnapshot &snapshot, SourceEditingView view,
+    [[nodiscard]] std::optional<SourceEditingView> FindSourceText(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view,
                                                                   std::string_view query, SourceSearchDirection direction, bool wrap);
     /** @brief Plans bounded nonoverlapping literal replacements as one undo step, without mutating source on failure.
      * @param snapshot Current source. @param view Current view. @param query Nonempty UTF-8 literal.
      * @param replacement Valid UTF-8 insertion. @return Atomic proposal limited to the document byte ceiling.
      */
-    [[nodiscard]] Result<SourceEditingPlan> PlanSourceReplaceAll(const SourceDocumentSnapshot &snapshot, SourceEditingView view,
+    [[nodiscard]] Result<SourceEditingPlan> PlanSourceReplaceAll(const SourceDocumentSnapshot &snapshot, const SourceEditingView &view,
                                                                  std::string_view query, std::string_view replacement);
     /** @brief Locates a one-based logical line and Unicode scalar column; oversized values clamp to end.
      * @param snapshot Current source. @param line One-based line. @param column One-based scalar column.

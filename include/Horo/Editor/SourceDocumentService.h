@@ -199,7 +199,7 @@ namespace Horo::Editor {
         /** @brief Creates a project-contained source owner. @param projectRoot Explicit existing authorized directory.
          * @param limits Finite limits no larger than defaults. @throws std::bad_alloc On owner allocation failure.
          */
-        explicit SourceDocumentService(const std::filesystem::path &projectRoot, SourceDocumentLimits limits = {});
+        explicit SourceDocumentService(const std::filesystem::path &projectRoot, const SourceDocumentLimits &limits = {});
         ~SourceDocumentService();
         SourceDocumentService(SourceDocumentService &&) noexcept;
         SourceDocumentService &operator=(SourceDocumentService &&) noexcept;
