@@ -25,7 +25,19 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {
             CancelAssetPlacementPreview();
         }
+        if (!m_viewModel.selectedColliders.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
+            cmd.command != EditorWorkspaceViewCommand::SelectPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::CommitPhysicsColliders &&
+            cmd.command != EditorWorkspaceViewCommand::NavigateViewport && cmd.command != EditorWorkspaceViewCommand::AlignViewportToAxis &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeViewportProjection &&
+            cmd.command != EditorWorkspaceViewCommand::FocusViewportSelection &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformTool &&
+            cmd.command != EditorWorkspaceViewCommand::ChangeTransformSpace) {
+            m_viewModel.selectedColliders.clear();
+            ++m_viewModel.colliderSelectionRevision;
+        }
         DispatchWorkspaceCommand(cmd);
+        RefreshSourceDocumentProjection();
     }
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
@@ -38,23 +50,24 @@ namespace Horo::Editor {
             RefreshWorldDocumentProjection();
             return;
         }
-        static_cast<void>(ProcessWorldCompositionCommand(cmd) || ProcessWorldSourceCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
-                          ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) ||
-                          ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
-                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
-                          ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
+        static_cast<void>(ProcessWorldCompositionCommand(cmd) || ProcessWorldSourceCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) ||
+                          ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
+                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
+                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
+                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
         RefreshWorldDocumentProjection();
     }
 
     /** @copydoc EditorWorkspaceController::ApplyWorldLayerIntent */
     Result<PartitionedWorldSnapshotLease> EditorWorkspaceController::ApplyWorldLayerIntent(const WorldLayerOutlinerIntent &intent) {
+        using enum WorldLayerOutlinerAction;
         switch (intent.action) {
-            case WorldLayerOutlinerAction::Execute:
+            case Execute:
                 return intent.command ? m_worldDocuments.ExecuteLayerCommand(*intent.command, intent.expected)
                                       : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
-            case WorldLayerOutlinerAction::Undo:
-            case WorldLayerOutlinerAction::Redo:
-                return m_worldDocuments.ReplayLayerCommand(intent.action == WorldLayerOutlinerAction::Redo, intent.expected);
+            case Undo:
+            case Redo:
+                return m_worldDocuments.ReplayLayerCommand(intent.action == Redo, intent.expected);
             default:
                 return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Unsupported));
         }

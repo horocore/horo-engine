@@ -4,7 +4,7 @@ import importlib.util
 from pathlib import Path
 import sys
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "pr_annotations.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / 'dev.py'
 SPEC = importlib.util.spec_from_file_location("pr_annotations", SCRIPT)
 if SPEC is None or SPEC.loader is None:
     raise ImportError("cannot load the annotation validator for regression tests")

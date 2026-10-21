@@ -5,6 +5,7 @@
 #define NOMINMAX
 #endif
 #include <algorithm>
+#include <bit>
 #include <cstddef>
 #include <iterator>
 #include <limits>
@@ -51,6 +52,34 @@ namespace Horo::Platform::ProjectReadNative {
             return Result<std::wstring>::Success(std::move(result));
         }
 
+        /** @brief Open one bounded native relative name against the retained object; caller validates user-facing segments. */
+        Result<Handle> OpenRelative(const Handle &parent, std::wstring &spelling, const bool directory) {
+            const auto module = GetModuleHandleW(L"ntdll.dll");
+            const auto create = module ? std::bit_cast<CreateRelativeFile>(GetProcAddress(module, "NtCreateFile")) : nullptr;
+            if (!create)
+                return Result<Handle>::Failure(MakeError(ProjectReadErrors::Unavailable));
+            if (spelling.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t))
+                return Result<Handle>::Failure(MakeError(ProjectReadErrors::Capacity));
+            const auto byteLength = static_cast<USHORT>(spelling.size() * sizeof(wchar_t));
+            UNICODE_STRING nativeName{byteLength, byteLength, spelling.data()};
+            OBJECT_ATTRIBUTES attributes{};
+            attributes.Length = sizeof(attributes);
+            attributes.RootDirectory = parent.Get();
+            attributes.ObjectName = &nativeName;
+            attributes.Attributes = CaseInsensitive;
+            IO_STATUS_BLOCK status{};
+            HANDLE opened{};
+            const ULONG options = OpenReparsePoint | SynchronousIo | BackupIntent | (directory ? DirectoryOnly : 0);
+            // Each name is a single segment relative to an owned directory. No absolute descendant reopen is permitted.
+            const auto result =
+                create(&opened, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attributes, &status, nullptr, FILE_ATTRIBUTE_NORMAL,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, OpenExisting, options, nullptr, 0);
+            if (result < 0)
+                return Result<Handle>::Failure(MakeError(ProjectReadErrors::ReadFailed, "Retained relative open failed; NTSTATUS " +
+                                                                                            std::to_string(static_cast<ULONG>(result))));
+            return Result<Handle>::Success(Handle{opened});
+        }
+
         /** @brief Captures an opened handle's object type and mutation identity without following a path. */
         Result<FileInfo> CaptureInfo(const HANDLE handle) {
             BY_HANDLE_FILE_INFORMATION file{};
@@ -94,34 +123,14 @@ namespace Horo::Platform::ProjectReadNative {
     Result<Handle> OpenChild(const Handle &parent, const std::string_view name, const bool directory, const bool allowRegularHardlinks) {
         if (name.empty() || name.find_first_of("/\\\0", 0, 3) != std::string_view::npos || name == "." || name == "..")
             return Result<Handle>::Failure(MakeError(ProjectReadErrors::UnsafePath));
-        const auto module = GetModuleHandleW(L"ntdll.dll");
-        const auto create = module ? reinterpret_cast<CreateRelativeFile>(GetProcAddress(module, "NtCreateFile")) : nullptr;
-        if (!create)
-            return Result<Handle>::Failure(MakeError(ProjectReadErrors::Unavailable));
         auto wide = Wide(name);
         if (wide.HasError())
             return Result<Handle>::Failure(wide.ErrorValue());
-        auto spelling = std::move(wide).Value();
-        if (spelling.size() > std::numeric_limits<USHORT>::max() / sizeof(wchar_t))
-            return Result<Handle>::Failure(MakeError(ProjectReadErrors::Capacity));
-        const auto byteLength = static_cast<USHORT>(spelling.size() * sizeof(wchar_t));
-        UNICODE_STRING nativeName{byteLength, byteLength, spelling.data()};
-        OBJECT_ATTRIBUTES attributes{};
-        attributes.Length = sizeof(attributes);
-        attributes.RootDirectory = parent.Get();
-        attributes.ObjectName = &nativeName;
-        attributes.Attributes = CaseInsensitive;
-        IO_STATUS_BLOCK status{};
-        HANDLE opened{};
-        const ULONG options = OpenReparsePoint | SynchronousIo | BackupIntent | (directory ? DirectoryOnly : 0);
-        // Each name is a single segment relative to an owned directory. No absolute descendant reopen is permitted.
-        const auto result =
-            create(&opened, FILE_READ_DATA | FILE_READ_ATTRIBUTES | SYNCHRONIZE, &attributes, &status, nullptr, FILE_ATTRIBUTE_NORMAL,
-                   FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, OpenExisting, options, nullptr, 0);
-        if (result < 0)
-            return Result<Handle>::Failure(MakeError(ProjectReadErrors::ReadFailed));
-        Handle child{opened};
-        return AdmitChild(std::move(child), directory, allowRegularHardlinks);
+        std::wstring spelling = std::move(wide).Value();
+        auto child = OpenRelative(parent, spelling, directory);
+        if (child.HasError())
+            return child;
+        return AdmitChild(std::move(child).Value(), directory, allowRegularHardlinks);
     }
 
     /** @copydoc OpenAnchor */
@@ -146,20 +155,17 @@ namespace Horo::Platform::ProjectReadNative {
             return Result<Handle>::Failure(
                 MakeError(ProjectReadErrors::Unavailable,
                           "Retained directory identity query failed; Win32 code " + std::to_string(GetLastError())));
-        // Reopen the retained object directly; extended file-ID opens depend on the volume's identifier format.
-        Handle copy{ReOpenFile(directory.Get(), FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                               FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                               FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)};
-        if (!copy.IsValid())
-            return Result<Handle>::Failure(
-                MakeError(ProjectReadErrors::Unavailable,
-                          "Retained directory cursor reopen failed; Win32 code " + std::to_string(GetLastError())));
+        // An empty native relative name opens this retained object itself with an independent enumeration cursor.
+        std::wstring spelling;
+        auto copy = OpenRelative(directory, spelling, true);
+        if (copy.HasError())
+            return Result<Handle>::Failure(WrapError(ProjectReadErrors::Unavailable, copy.ErrorValue()));
         FILE_ID_INFO after{};
-        if (!GetFileInformationByHandleEx(copy.Get(), FileIdInfo, &after, sizeof(after)) ||
+        if (!GetFileInformationByHandleEx(copy.Value().Get(), FileIdInfo, &after, sizeof(after)) ||
             before.VolumeSerialNumber != after.VolumeSerialNumber ||
             !std::equal(std::begin(before.FileId.Identifier), std::end(before.FileId.Identifier), std::begin(after.FileId.Identifier)))
             return Result<Handle>::Failure(MakeError(ProjectReadErrors::Stale));
-        return AdmitChild(std::move(copy), true);
+        return AdmitChild(std::move(copy).Value(), true);
     }
 
     /** @copydoc Read */

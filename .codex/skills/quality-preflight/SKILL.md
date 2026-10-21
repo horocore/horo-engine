@@ -7,12 +7,12 @@ metadata:
 
 # Quality preflight
 
-Use the repository's `scripts/quality_preflight.py` from the checkout containing
+Use the repository's `scripts/analyze.py` from the checkout containing
 the implementation. Select the target worktree explicitly when inspecting another
 checkout; do not assume this chat's working directory is the PR worktree.
 
 ```sh
-python3 scripts/quality_preflight.py check --worktree <path> --base <PR-target-ref>
+python3 scripts/analyze.py check --worktree <path> --base <PR-target-ref>
 ```
 
 The default base is `origin/main`. Use the actual PR target for stacked branches.
@@ -45,6 +45,13 @@ After an authorized fix, rerun the same worktree and scope. This skill grants no
 commit, push, branch-change, issue mutation, or upload permission. Managed Sonar
 sessions are limited to two per repository; `stop` closes only verified idle
 sessions owned by this helper. User VS Code windows remain untouched.
+
+Windows and Linux use OS-specific process/lock adapters; other platforms fail
+explicitly. On Windows, use an initialized native compiler environment, install
+`scripts/requirements.txt`, and prefer a verified existing
+`--compile-commands` database from the exact target worktree. Workspace Trust must
+remain enabled; an unauthenticated or restricted IDE is incomplete, never clean.
+CLI/API tokens do not establish IDE connected-mode authentication.
 
 For setup, result limitations, and troubleshooting, read
 `docs/guides/sonarqube-mcp-local-analysis.md` in the repository.

@@ -40,7 +40,7 @@ migration definitions
 sha256:3382b3c37fe16c263b13da2ef81a76c9d1c8ea2b5026a35ef17ed2c102487c24,
 and recovery contract
 sha256:ccca65a3a1fab86ad116098c3d5c1b8499118137470761e50eb174b7de121acb.
-generate_project_compatibility.py hashes that descriptor canonically (omitting
+`scripts/project.py compatibility` hashes that descriptor canonically (omitting
 the release marker) and verifies frozen manifest identities. Therefore an
 unlisted new Navigation record would evade the old descriptor inventory, not
 prove existing compatibility. That inventory gap is not permission to reuse

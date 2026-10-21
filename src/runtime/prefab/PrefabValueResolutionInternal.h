@@ -30,5 +30,8 @@ namespace Horo::Prefab::ValueDetail {
     [[nodiscard]] Result<void> CaptureBindings(ResolutionState &state);
     [[nodiscard]] ValueBinding *FindBinding(ResolutionState &state, const PrefabValueOverrideTarget &target);
     [[nodiscard]] Result<void> WriteBinding(ResolutionState &state, ValueBinding &binding, const PrefabOverrideValue &value);
+    [[nodiscard]] Result<void> ValidateComponentObject(const ResolvedPrefabObject &object, const PrefabValueSchemaSnapshot &schemas);
+    [[nodiscard]] Result<void> ResolveComponentIntents(ResolutionState &state, const PrefabValueOverrideSet &set,
+                                                       PrefabValueOverrideResolution &result);
     [[nodiscard]] Result<void> FinishPayloads(ResolutionState &state);
 }  // namespace Horo::Prefab::ValueDetail

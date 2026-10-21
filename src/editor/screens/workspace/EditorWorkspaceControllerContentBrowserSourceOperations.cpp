@@ -72,12 +72,18 @@ namespace Horo::Editor {
         bool navigated = false;
         if (m_sourceOpenNavigator) {
             navigated = m_sourceOpenNavigator(result);
+        } else if (result.route == SourceOpenRoute::EmbeddedWorkspace && result.sourceSnapshot &&
+                   request.origin != SourceOpenOrigin::DiagnosticNavigation) {
+            navigated = true;
         } else {
             navigated = m_diagnosticSourceNavigator(DiagnosticSourceRequest{
                 .absolutePath = result.location.absolutePath,
                 .line = result.line,
                 .column = result.column,
             });
+        }
+        if (navigated && result.route == SourceOpenRoute::EmbeddedWorkspace && result.sourceSnapshot) {
+            navigated = m_viewModel.workspacePanelHost.OpenDocument(result.document->identity.key).HasValue();
         }
         if (!navigated) {
             // SourceFileOpenService opens an identity before dispatching the validated

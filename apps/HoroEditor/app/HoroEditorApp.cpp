@@ -1107,7 +1107,7 @@ namespace Horo::Editor {
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                         qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiRender);
 #endif
-                        return p_->presentation.guiRenderer.RenderDrawData();
+                        return frame_->ComposeGui(p_->presentation.guiRenderer, pacing_.hostCancellation.value_or(CancellationToken{}));
                     case Runtime::RuntimePhase::Presentation:
                         return PresentFrame();
                     case Runtime::RuntimePhase::CommitDeferredLifecycleChanges:

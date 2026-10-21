@@ -103,6 +103,7 @@ horo_configure_target_header_boundary(HoroMcpRegistry PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroProjectReadFilesApi PUBLIC_HEADERS Horo/Platform/ProjectReadFiles.h)
 horo_configure_target_header_boundary(HoroPlatformProjectReadFiles PUBLIC_HEADERS Horo/Platform/NativeProjectReadFiles.h)
 horo_configure_target_header_boundary(HoroPlatformImmutableFileStorage PUBLIC_HEADERS Horo/Platform/NativeImmutableFileStorage.h)
+horo_configure_target_header_boundary(HoroPlatformProjectIo PUBLIC_HEADERS Horo/Platform/NativeProjectIoOwners.h)
 horo_configure_target_header_boundary(HoroProjectCodeQuery PUBLIC_HEADERS
     Horo/Application/ProjectCodeQuery.h
     Horo/Application/CodeQueryStoreProviders.h)
@@ -117,6 +118,7 @@ horo_configure_target_header_boundary(HoroOpenTelemetry PUBLIC_HEADERS
     Horo/Foundation/Telemetry/OpenTelemetrySink.h)
 
 horo_configure_target_header_boundary(HoroPlatform PUBLIC_HEADERS
+    Horo/Platform/NativePublicationFileSystem.h
     Horo/Platform/NativeFileSystemErrors.h
     Horo/Platform/AndroidLifecycle.h
     Horo/Platform/AndroidStorage.h
@@ -1065,6 +1067,7 @@ horo_configure_target_header_boundary(HoroPrefabRuntime PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroPrefabOverrideModel PUBLIC_HEADERS
+    Horo/Prefab/PrefabComponentOverrideTypes.h
     Horo/Prefab/PrefabSourceRevision.h
     Horo/Prefab/PrefabValueOverrideTypes.h
 )
@@ -1212,6 +1215,7 @@ horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
     Horo/Editor/NavigationSettingsWorkflow.h
     Horo/Editor/SceneDocumentTransaction.h
     Horo/Editor/InspectorBehaviorBinding.h
+    Horo/Editor/NavigationInspector.h
     Horo/Editor/PhysicsInspector.h
     Horo/Editor/EditorDataBus.h
 )

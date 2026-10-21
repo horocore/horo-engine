@@ -4,7 +4,7 @@ applyTo: "**/*"
 
 # SonarQube local-analysis policy
 
-Use `python3 scripts/quality_preflight.py check --base <PR-target-ref>` before
+Use `python3 scripts/analyze.py check --base <PR-target-ref>` before
 preparing a PR. It runs the supported managed Sonar IDE C/C++ analysis, local CLI
 secrets scanning and Codacy preflight with one worktree change selection. Use
 `--dirty` for only current edits or `--files <paths...>` for a narrow diagnosis.

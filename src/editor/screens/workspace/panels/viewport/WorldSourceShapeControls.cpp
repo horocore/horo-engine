@@ -36,8 +36,8 @@ namespace Horo::Editor {
             for (std::size_t index = 0; index < frustum.planes.size(); ++index) {
                 ImGui::PushID(static_cast<int>(index));
                 auto &plane = frustum.planes[index];
-                std::array<float, 3> normal{plane.inwardNormal.x, plane.inwardNormal.y, plane.inwardNormal.z};
-                if (Ui::DrawFloat3PropRow(context.localization.Get("editor", "workspace.world_sources.plane_normal").c_str(),
+                if (std::array<float, 3> normal{plane.inwardNormal.x, plane.inwardNormal.y, plane.inwardNormal.z};
+                    Ui::DrawFloat3PropRow(context.localization.Get("editor", "workspace.world_sources.plane_normal").c_str(),
                                           "##plane_normal", normal, context.theme.fonts)
                         .changed)
                     plane.inwardNormal = {normal[0], normal[1], normal[2]};
@@ -80,10 +80,11 @@ namespace Horo::Editor {
 
     /** @copydoc DrawWorldSourceShapeControls */
     Result<void> DrawWorldSourceShapeControls(PartitionedWorldSource &source, const EditorGuiContext &context) {
-        const auto edited = std::visit([&](auto &shape) {
+        if (const auto edited = std::visit(
+                [&]<typename Shape>(Shape &shape) {
             return DrawGeometry(shape, context);
         }, source.shape);
-        if (edited.HasError())
+            edited.HasError())
             return edited;
         return WS::ValidateStreamingSourceShape(source.shape);
     }

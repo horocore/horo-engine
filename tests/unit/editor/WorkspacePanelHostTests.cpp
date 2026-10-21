@@ -55,15 +55,15 @@ namespace {
         REQUIRE((host.Layout().Validate().empty()));
     }
 
-    TEST_CASE("Closing the last document tab leaves its fixed stack available", "[unit][editor]") {
+    TEST_CASE("Viewport remains pinned across panel close move and dock requests", "[unit][editor][documents]") {
         WorkspacePanelHost host;
-        REQUIRE(host.ClosePanel("horo.viewport").Succeeded());
+        REQUIRE_FALSE(host.ClosePanel("horo.viewport").Succeeded());
+        REQUIRE_FALSE(host.MovePanel("horo.viewport", {"workspace.left", 0}).Succeeded());
+        REQUIRE_FALSE(host.DockPanel("horo.viewport", "workspace.left", WorkspacePanelHost::DropKind::TabCenter).Succeeded());
         const TabStackNode *document = host.Layout().FindTabStack("workspace.document");
         REQUIRE(document != nullptr);
-        REQUIRE(document->tabs.empty());
-        REQUIRE_FALSE(document->activeTab.has_value());
-        REQUIRE(host.OpenPanel("horo.viewport", "workspace.document").Succeeded());
         REQUIRE(document->activeTab == "horo.viewport");
+        REQUIRE(document->tabs == std::vector<std::string>{"horo.viewport"});
     }
 
     TEST_CASE("Opens typed document tabs once and guards dirty close", "[unit][editor][documents]") {
@@ -116,5 +116,59 @@ namespace {
         REQUIRE(host.DocumentTabs().front().identity.instance != opened.Value().identity.instance);
         REQUIRE(host.DocumentTabs().front().identity.key == key);
         std::filesystem::remove(path);
+    }
+
+    TEST_CASE("Document reordering persists identity order and close selects a neighbor", "[unit][editor][documents]") {
+        WorkspacePanelHost host;
+        const auto open = [&](const char *path) {
+            const auto result = host.OpenDocument({DocumentKind::Source, SourceDocumentId::Parse(path).Value()});
+            REQUIRE(result.HasValue());
+            return result.Value().identity;
+        };
+        const auto first = open("code/First.cpp");
+        const auto second = open("code/Second.cpp");
+        const auto third = open("code/Third.cpp");
+        REQUIRE(host.MoveDocument(third.instance, second.instance).HasValue());
+        CHECK(host.ActiveDocument() == third.instance);
+        CHECK(host.DocumentTabs()[1].identity == third);
+        CHECK(host.Layout().openDocuments[1] == SerializeDocumentOpenKey(third.key).Value());
+        REQUIRE(host.CloseDocument(third.instance).HasValue());
+        CHECK(host.ActiveDocument() == second.instance);
+        const auto stale = host.MoveDocument(third.instance, first.instance);
+        REQUIRE(stale.HasError());
+        CHECK(host.DocumentTabs().front().identity == first);
+        REQUIRE(host.MoveDocument(first.instance, std::nullopt).HasValue());
+        CHECK(host.DocumentTabs().back().identity == first);
+        const Horo::Tests::OwnedTestDirectory directory{"workspace-document-order"};
+        Horo::NativeDurableFileSystem files;
+        Horo::AtomicFileReplacementReceipt receipt;
+        const auto path = directory.Path() / "layout.json";
+        REQUIRE(host.SaveLayout(files, receipt, path));
+        REQUIRE(host.RestoreLayout(path));
+        CHECK(host.DocumentTabs()[0].identity.key == second.key);
+        CHECK(host.DocumentTabs()[1].identity.key == first.key);
+        CHECK(host.DocumentTabs()[0].identity.instance != second.instance);
+    }
+
+    TEST_CASE("Document projection follows owner retarget and close without reviving state", "[unit][editor][documents]") {
+        DocumentIdentityRegistry registry;
+        WorkspacePanelHost host;
+        host.AttachDocumentIdentityRegistry(registry);
+        const auto key = DocumentOpenKey{DocumentKind::Source, SourceDocumentId::Parse("old.cpp").Value()};
+        const auto opened = host.OpenDocument(key).Value().identity;
+        CHECK(registry.IsCurrent(opened));
+        const auto renamed = DocumentOpenKey{DocumentKind::Source, SourceDocumentId::Parse("new.cpp").Value()};
+        REQUIRE(registry.RetargetSource(opened.instance, renamed).HasValue());
+        CHECK_FALSE(registry.IsCurrent(opened));
+        host.RefreshDocuments();
+        REQUIRE(host.DocumentTabs().front().identity.key == renamed);
+        CHECK(registry.IsCurrent(host.DocumentTabs().front().identity));
+        CHECK(host.Layout().openDocuments.front() == SerializeDocumentOpenKey(renamed).Value());
+        REQUIRE(registry.Close(opened.instance).HasValue());
+        CHECK_FALSE(registry.IsCurrent(opened));
+        host.RefreshDocuments();
+        CHECK(host.DocumentTabs().empty());
+        CHECK_FALSE(host.ActiveDocument());
+        CHECK(host.Layout().openDocuments.empty());
     }
 }  // namespace

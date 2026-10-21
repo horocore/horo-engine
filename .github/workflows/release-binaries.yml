@@ -63,7 +63,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: python3 scripts/verify_release_notes.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --tag "$RELEASE_TAG"
+        run: python3 scripts/dev.py verify-release-notes --snapshot build/release/generated/ReleaseNotesSnapshot.json --tag "$RELEASE_TAG"
 
       - name: Build
         run: cmake --build --preset release --target HoroEditor horopak --parallel
@@ -94,7 +94,7 @@ jobs:
           tar -czf HoroEngine-linux-x86_64.tar.gz HoroEngine-linux-x86_64
 
       - name: Verify packaged release notes
-        run: python3 scripts/verify_release_archive.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --archive HoroEngine-linux-x86_64.tar.gz
+        run: python3 scripts/dev.py verify-release-archive --snapshot build/release/generated/ReleaseNotesSnapshot.json --archive HoroEngine-linux-x86_64.tar.gz
 
       - name: Verify package
         run: |
@@ -177,7 +177,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: python3 scripts/verify_release_notes.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --tag "$RELEASE_TAG"
+        run: python3 scripts/dev.py verify-release-notes --snapshot build/release/generated/ReleaseNotesSnapshot.json --tag "$RELEASE_TAG"
 
       - name: Build HoroEditor
         run: cmake --build --preset release --target HoroEditor --parallel
@@ -201,7 +201,7 @@ jobs:
           tar -czf "${DIST}.tar.gz" "$DIST"
 
       - name: Verify packaged release notes
-        run: python3 scripts/verify_release_archive.py --snapshot build/release/generated/ReleaseNotesSnapshot.json --archive HoroEngine-macos-arm64.tar.gz
+        run: python3 scripts/dev.py verify-release-archive --snapshot build/release/generated/ReleaseNotesSnapshot.json --archive HoroEngine-macos-arm64.tar.gz
 
       - name: Upload to release
         env:
@@ -264,7 +264,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
-        run: python3 scripts/verify_release_notes.py --snapshot build/release-msvc/generated/ReleaseNotesSnapshot.json --tag $env:RELEASE_TAG
+        run: python3 scripts/dev.py verify-release-notes --snapshot build/release-msvc/generated/ReleaseNotesSnapshot.json --tag $env:RELEASE_TAG
 
       - name: Build HoroEditor
         run: cmake --build build/release-msvc --config Release --target HoroEditor --parallel
@@ -295,7 +295,7 @@ jobs:
 
       - name: Verify packaged release notes
         shell: pwsh
-        run: python3 scripts/verify_release_archive.py --snapshot build/release-msvc/generated/ReleaseNotesSnapshot.json --archive HoroEngine-windows-x64.zip
+        run: python3 scripts/dev.py verify-release-archive --snapshot build/release-msvc/generated/ReleaseNotesSnapshot.json --archive HoroEngine-windows-x64.zip
 
       - name: Upload to release
         shell: pwsh

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <type_traits>
 
 namespace Horo::Editor {
     namespace {
@@ -11,7 +10,7 @@ namespace Horo::Editor {
         using Point = Math::WorldCoordinate64;
 
         /** @brief Rejects unrepresentable handle coordinates before integer conversion. */
-        Result<Point> Offset(Point origin, long double x, long double y, long double z) {
+        Result<Point> Offset(const Point &origin, long double x, long double y, long double z) {
             const auto base = origin.Millimeters();
             std::array<std::int64_t, 3> result{};
             const std::array<long double, 3> offset{x, y, z};
@@ -29,7 +28,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Computes differences without signed integer overflow. */
-        std::array<long double, 3> Difference(Point left, Point right) {
+        std::array<long double, 3> Difference(const Point &left, const Point &right) {
             const auto a = left.Millimeters();
             const auto b = right.Millimeters();
             std::array<long double, 3> delta{};
@@ -42,7 +41,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Moves a frustum anchor or its signed plane distance without admitting unbounded deltas. */
-        Result<void> MoveFrustum(WS::StreamingSourceFrustum &shape, std::size_t handle, Point position) {
+        Result<void> MoveFrustum(WS::StreamingSourceFrustum &shape, std::size_t handle, const Point &position) {
             if (handle == 0) {
                 shape.anchor = position;
                 return Result<void>::Success();
@@ -60,10 +59,98 @@ namespace Horo::Editor {
             plane.distanceMillimeters = static_cast<float>(distance);
             return Result<void>::Success();
         }
+
+        /** @brief Appends one exact positive-axis extent handle after admitted shape points. */
+        Result<std::size_t> AppendExtent(std::span<Point> points, std::size_t count, const Point &origin, std::int64_t extent) {
+            const auto point = Offset(origin, extent, 0, 0);
+            if (point.HasError())
+                return Result<std::size_t>::Failure(point.ErrorValue());
+            points[count] = point.Value();
+            return Result<std::size_t>::Success(count + 1);
+        }
+
+        /** @brief Emits the two authored box corners. */
+        Result<std::size_t> FillPoints(const WS::StreamingSourceBox &shape, std::span<Point> points) {
+            points[0] = shape.minimum;
+            points[1] = shape.maximum;
+            return Result<std::size_t>::Success(2);
+        }
+
+        /** @brief Emits the anchor and all six bounded signed-plane handles. */
+        Result<std::size_t> FillPoints(const WS::StreamingSourceFrustum &shape, std::span<Point> points) {
+            std::size_t count{};
+            points[count++] = shape.anchor;
+            for (const auto &plane : shape.planes) {
+                const auto point =
+                    Offset(shape.anchor, -plane.inwardNormal.x * plane.distanceMillimeters,
+                           -plane.inwardNormal.y * plane.distanceMillimeters, -plane.inwardNormal.z * plane.distanceMillimeters);
+                if (point.HasError())
+                    return Result<std::size_t>::Failure(point.ErrorValue());
+                points[count++] = point.Value();
+            }
+            return Result<std::size_t>::Success(count);
+        }
+
+        /** @brief Emits a sphere center and its radius handle. */
+        Result<std::size_t> FillPoints(const WS::StreamingSourceSphere &shape, std::span<Point> points) {
+            points[0] = shape.center;
+            return AppendExtent(points, 1, shape.center, shape.radiusMillimeters);
+        }
+
+        /** @brief Emits the validated path prefix and one half-extent handle. */
+        Result<std::size_t> FillPoints(const WS::StreamingSourcePathVolume &shape, std::span<Point> points) {
+            std::copy_n(shape.points.begin(), shape.pointCount, points.begin());
+            return AppendExtent(points, shape.pointCount, shape.points[0], shape.halfExtentMillimeters);
+        }
+
+        /** @brief Admits only a positive bounded X-axis extent before integer conversion. */
+        Result<std::int64_t> ExtentFromHandle(const Point &position, const Point &origin) {
+            const auto delta = Difference(position, origin);
+            if (delta[0] < 1 || delta[0] > WS::StreamingSourceRangeLimits::MaximumExtentMillimeters)
+                return Result<std::int64_t>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            return Result<std::int64_t>::Success(static_cast<std::int64_t>(delta[0]));
+        }
+
+        /** @brief Moves one admitted box corner; common validation follows the visitor. */
+        Result<void> MoveGeometry(WS::StreamingSourceBox &shape, std::size_t handle, const Point &position) {
+            (handle == 0 ? shape.minimum : shape.maximum) = position;
+            return Result<void>::Success();
+        }
+
+        /** @brief Moves a frustum through its bounded plane-distance kernel. */
+        Result<void> MoveGeometry(WS::StreamingSourceFrustum &shape, std::size_t handle, const Point &position) {
+            return MoveFrustum(shape, handle, position);
+        }
+
+        /** @brief Moves the sphere center or admits its exact positive radius. */
+        Result<void> MoveGeometry(WS::StreamingSourceSphere &shape, std::size_t handle, const Point &position) {
+            if (handle == 0) {
+                shape.center = position;
+                return Result<void>::Success();
+            }
+            const auto extent = ExtentFromHandle(position, shape.center);
+            if (extent.HasError())
+                return Result<void>::Failure(extent.ErrorValue());
+            shape.radiusMillimeters = extent.Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Moves an admitted path vertex or its exact positive half-extent. */
+        Result<void> MoveGeometry(WS::StreamingSourcePathVolume &shape, std::size_t handle, const Point &position) {
+            if (handle < shape.pointCount) {
+                shape.points[handle] = position;
+                return Result<void>::Success();
+            }
+            const auto extent = ExtentFromHandle(position, shape.points[0]);
+            if (extent.HasError())
+                return Result<void>::Failure(extent.ErrorValue());
+            shape.halfExtentMillimeters = extent.Value();
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc WorldSourceViewportPoint */
-    Result<Math::Vec3> WorldSourceViewportPoint(Point point, Point origin) {
+    Result<Math::Vec3> WorldSourceViewportPoint(const Point &point, const Point &origin) {
         const auto delta = Difference(point, origin);
         if (std::ranges::any_of(delta, [](long double value) {
             return std::abs(value) > 8'000'000;
@@ -74,7 +161,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc WorldSourceViewportGlobal */
-    Result<Math::WorldCoordinate64> WorldSourceViewportGlobal(Point origin, Math::Vec3 local) {
+    Result<Math::WorldCoordinate64> WorldSourceViewportGlobal(const Point &origin, Math::Vec3 local) {
         if (!std::isfinite(local.x) || !std::isfinite(local.y) || !std::isfinite(local.z) || std::abs(local.x) > 8000 ||
             std::abs(local.y) > 8000 || std::abs(local.z) > 8000)
             return Result<Point>::Failure(MakeError(WorldDocumentErrors::Unsupported));
@@ -84,49 +171,21 @@ namespace Horo::Editor {
 
     /** @copydoc WorldSourceGizmoPoints */
     Result<WorldSourceGizmoPointSet> WorldSourceGizmoPoints(const PartitionedWorldSource &source) {
-        using Points = WorldSourceGizmoPointSet;
         if (const auto valid = WS::ValidateStreamingSourceShape(source.shape); valid.HasError())
-            return Result<Points>::Failure(valid.ErrorValue());
-        return std::visit([](const auto &shape) -> Result<Points> {
-            using T = std::decay_t<decltype(shape)>;
-            Points points;
-            if constexpr (std::is_same_v<T, WS::StreamingSourceBox>) {
-                points.points_[points.count_++] = shape.minimum;
-                points.points_[points.count_++] = shape.maximum;
-            } else if constexpr (std::is_same_v<T, WS::StreamingSourceFrustum>) {
-                points.points_[points.count_++] = shape.anchor;
-                for (const auto &plane : shape.planes) {
-                    const auto point =
-                        Offset(shape.anchor, -plane.inwardNormal.x * plane.distanceMillimeters,
-                               -plane.inwardNormal.y * plane.distanceMillimeters, -plane.inwardNormal.z * plane.distanceMillimeters);
-                    if (point.HasError())
-                        return Result<Points>::Failure(point.ErrorValue());
-                    points.points_[points.count_++] = point.Value();
-                }
-            } else {
-                Point origin;
-                std::int64_t extent{};
-                if constexpr (std::is_same_v<T, WS::StreamingSourceSphere>) {
-                    origin = shape.center;
-                    extent = shape.radiusMillimeters;
-                    points.points_[points.count_++] = origin;
-                } else {
-                    origin = shape.points[0];
-                    extent = shape.halfExtentMillimeters;
-                    for (std::size_t index = 0; index < shape.pointCount; ++index)
-                        points.points_[points.count_++] = shape.points[index];
-                }
-                const auto point = Offset(origin, extent, 0, 0);
-                if (point.HasError())
-                    return Result<Points>::Failure(point.ErrorValue());
-                points.points_[points.count_++] = point.Value();
-            }
-            return Result<Points>::Success(std::move(points));
+            return Result<WorldSourceGizmoPointSet>::Failure(valid.ErrorValue());
+        WorldSourceGizmoPointSet points;
+        const auto count = std::visit([&]<typename Shape>(const Shape &shape) {
+            return FillPoints(shape, points.points_);
         }, source.shape);
+        if (count.HasError())
+            return Result<WorldSourceGizmoPointSet>::Failure(count.ErrorValue());
+        points.count_ = count.Value();
+        return Result<WorldSourceGizmoPointSet>::Success(std::move(points));
     }
 
     /** @copydoc MoveWorldSourceGizmo */
-    Result<PartitionedWorldSource> MoveWorldSourceGizmo(const PartitionedWorldSource &source, const std::size_t handle, Point position) {
+    Result<PartitionedWorldSource> MoveWorldSourceGizmo(const PartitionedWorldSource &source, const std::size_t handle,
+                                                        const Point &position) {
         const auto points = WorldSourceGizmoPoints(source);
         if (points.HasError())
             return Result<PartitionedWorldSource>::Failure(points.ErrorValue());
@@ -135,42 +194,14 @@ namespace Horo::Editor {
         if (points.Value().Points()[handle] == position)
             return Result<PartitionedWorldSource>::Success(source);
         auto candidate = source;
-        const auto changed = std::visit([&](auto &shape) -> Result<void> {
-            using T = std::decay_t<decltype(shape)>;
-            if constexpr (std::is_same_v<T, WS::StreamingSourceBox>) {
-                (handle == 0 ? shape.minimum : shape.maximum) = position;
-            } else if constexpr (std::is_same_v<T, WS::StreamingSourceFrustum>) {
-                if (const auto moved = MoveFrustum(shape, handle, position); moved.HasError())
-                    return moved;
-            } else {
-                Point origin;
-                bool extentHandle{};
-                if constexpr (std::is_same_v<T, WS::StreamingSourceSphere>) {
-                    if (handle == 0)
-                        shape.center = position;
-                    origin = shape.center;
-                    extentHandle = handle == 1;
-                } else {
-                    if (handle < shape.pointCount)
-                        shape.points[handle] = position;
-                    origin = shape.points[0];
-                    extentHandle = handle == shape.pointCount;
-                }
-                if (extentHandle) {
-                    const auto delta = Difference(position, origin);
-                    if (delta[0] < 1 || delta[0] > WS::StreamingSourceRangeLimits::MaximumExtentMillimeters)
-                        return Result<void>::Failure(MakeError(WorldDocumentErrors::Invalid));
-                    const auto extent = static_cast<std::int64_t>(delta[0]);
-                    if constexpr (std::is_same_v<T, WS::StreamingSourceSphere>)
-                        shape.radiusMillimeters = extent;
-                    else
-                        shape.halfExtentMillimeters = extent;
-                }
-            }
-            return WS::ValidateStreamingSourceShape(candidate.shape);
+        if (const auto changed = std::visit(
+                [&]<typename Shape>(Shape &shape) {
+            return MoveGeometry(shape, handle, position);
         }, candidate.shape);
-        if (changed.HasError())
+            changed.HasError())
             return Result<PartitionedWorldSource>::Failure(changed.ErrorValue());
+        if (const auto valid = WS::ValidateStreamingSourceShape(candidate.shape); valid.HasError())
+            return Result<PartitionedWorldSource>::Failure(valid.ErrorValue());
         return Result<PartitionedWorldSource>::Success(std::move(candidate));
     }
 }  // namespace Horo::Editor

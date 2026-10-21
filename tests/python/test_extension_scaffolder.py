@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 
-SCRIPT = Path(__file__).parents[2] / "scripts" / "scaffold_extension.py"
+SCRIPT = Path(__file__).parents[2] / "scripts" / 'project.py'
 SPEC = importlib.util.spec_from_file_location("horo_extension_scaffolder", SCRIPT)
 assert SPEC is not None
 assert SPEC.loader is not None
@@ -22,7 +22,7 @@ def run_scaffolder(monkeypatch, output: Path, shape: str, package_id: str = "com
         [str(SCRIPT), "--shape", shape, "--id", package_id,
          "--name", "Example Tools", "--output", str(output)],
     )
-    return SCAFFOLDER.main()
+    return SCAFFOLDER.scaffold_main()
 
 
 def canonical_id(length: int) -> str:
@@ -80,14 +80,14 @@ def test_manifest_validation_rules_match_host_contract(monkeypatch, tmp_path):
         [str(SCRIPT), "--shape", "backend", "--id", "com.example.tools", "--name", "x" * 4097,
          "--output", str(tmp_path / "long-name")],
     )
-    assert SCAFFOLDER.main() == 2
+    assert SCAFFOLDER.scaffold_main() == 2
     monkeypatch.setattr(
         sys,
         "argv",
         [str(SCRIPT), "--shape", "backend", "--id", "com.example.tools", "--name", "", "--version", "1.2.3-rc.1",
          "--output", str(tmp_path / "valid")],
     )
-    assert SCAFFOLDER.main() == 0
+    assert SCAFFOLDER.scaffold_main() == 0
 
 
 def test_derived_identifier_boundaries_cover_every_shape():
@@ -154,7 +154,7 @@ def test_derived_limits_reject_before_output_creation(monkeypatch, tmp_path):
         [str(SCRIPT), "--shape", "gui", "--id", canonical_id(187), "--name", "Boundary",
          "--version", maximum_version, "--output", str(archive_output)],
     )
-    assert SCAFFOLDER.main() == 2
+    assert SCAFFOLDER.scaffold_main() == 2
     assert not archive_output.exists()
 
 
@@ -172,7 +172,7 @@ def test_keyboard_interrupt_removes_staging_and_is_re_raised(monkeypatch, tmp_pa
     def interrupt(*_args, **_kwargs):
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(SCAFFOLDER, "write_project", interrupt)
+    monkeypatch.setattr(SCAFFOLDER, "scaffold_write_project", interrupt)
     output = tmp_path / "cancelled"
     with pytest.raises(KeyboardInterrupt):
         run_scaffolder(monkeypatch, output, "backend")

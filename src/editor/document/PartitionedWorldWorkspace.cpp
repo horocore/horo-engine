@@ -259,7 +259,7 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc PartitionedWorldWorkspace::PartitionedWorldWorkspace */
-    PartitionedWorldWorkspace::PartitionedWorldWorkspace(Assets::AssetId owner, WorldDocumentLimits limits)
+    PartitionedWorldWorkspace::PartitionedWorldWorkspace(Assets::AssetId owner, const WorldDocumentLimits &limits)
         : owner_(owner), limits_(limits) {}
 
     /** @copydoc PartitionedWorldWorkspace::Open */
@@ -307,7 +307,7 @@ namespace Horo::Editor {
 
     /** @copydoc PartitionedWorldWorkspace::Commit */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::Commit(const PartitionedWorldDocument &document,
-                                                                            const WorldDocumentFence expected,
+                                                                            const WorldDocumentFence &expected,
                                                                             const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
@@ -326,8 +326,8 @@ namespace Horo::Editor {
         auto candidate = std::make_shared<PartitionedWorldSnapshot>(*snapshot_);
         candidate->document = document;
         candidate->dirty = true;
-        std::erase_if(candidate->openPages, [&](const auto &page) {
-            return std::ranges::none_of(document.pages, [&](const auto &record) {
+        std::erase_if(candidate->openPages, [&document](const auto &page) {
+            return std::ranges::none_of(document.pages, [&page](const auto &record) {
                 return record.head.sourceAsset == page;
             });
         });
@@ -410,8 +410,8 @@ namespace Horo::Editor {
         if (published.HasValue()) {
             ClearLayerHistory();
             ClearSourceHistory();
-            for (const auto &source : snapshot_->document.sources)
-                sourceRevision_ = std::max(sourceRevision_, source.revision.Value());
+            for (const auto &authoredSource : snapshot_->document.sources)
+                sourceRevision_ = std::max(sourceRevision_, authoredSource.revision.Value());
         }
         return published;
     }
@@ -422,7 +422,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PartitionedWorldWorkspace::CheckFence */
-    Result<void> PartitionedWorldWorkspace::CheckFence(const WorldDocumentFence expected) const {
+    Result<void> PartitionedWorldWorkspace::CheckFence(const WorldDocumentFence &expected) const {
         if (std::this_thread::get_id() != thread_)
             return Failure<void>(WorldDocumentErrors::WrongThread);
         if (state_ != WS::WorldAuthoringOwnerState::Active || !snapshot_)
@@ -446,7 +446,7 @@ namespace Horo::Editor {
 
     /** @copydoc PartitionedWorldWorkspace::SetWorkingSet */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::SetWorkingSet(const std::span<const Assets::AssetId> pages,
-                                                                                   const WorldDocumentFence expected,
+                                                                                   const WorldDocumentFence &expected,
                                                                                    const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
@@ -473,31 +473,33 @@ namespace Horo::Editor {
 
     /** @copydoc PartitionedWorldWorkspace::Replace */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::Replace(const PartitionedWorldDocument &document,
-                                                                             const WorldDocumentFence expected,
+                                                                             const WorldDocumentFence &expected,
                                                                              const WorldDocumentDisposition disposition,
                                                                              const std::stop_token cancellation) {
+        using enum WorldDocumentDisposition;
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
         if (cancellation.stop_requested())
             return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Cancelled);
-        if (disposition != WorldDocumentDisposition::Preserve && disposition != WorldDocumentDisposition::Discard)
+        if (disposition != Preserve && disposition != Discard)
             return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Unsupported);
-        if (snapshot_->dirty && disposition != WorldDocumentDisposition::Discard)
+        if (snapshot_->dirty && disposition != Discard)
             return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Dirty);
         return Install(document, cancellation);
     }
 
     /** @copydoc PartitionedWorldWorkspace::Close */
-    Result<void> PartitionedWorldWorkspace::Close(const WorldDocumentFence expected, const WorldDocumentDisposition disposition) {
+    Result<void> PartitionedWorldWorkspace::Close(const WorldDocumentFence &expected, const WorldDocumentDisposition disposition) {
+        using enum WorldDocumentDisposition;
         if (std::this_thread::get_id() != thread_)
             return Failure<void>(WorldDocumentErrors::WrongThread);
         if (!snapshot_ || state_ == WS::WorldAuthoringOwnerState::Closed)
             return Failure<void>(WorldDocumentErrors::Lifecycle);
         if (expected != snapshot_->fence)
             return Failure<void>(WorldDocumentErrors::Stale);
-        if (disposition != WorldDocumentDisposition::Preserve && disposition != WorldDocumentDisposition::Discard)
+        if (disposition != Preserve && disposition != Discard)
             return Failure<void>(WorldDocumentErrors::Unsupported);
-        if (snapshot_->dirty && disposition != WorldDocumentDisposition::Discard)
+        if (snapshot_->dirty && disposition != Discard)
             return Failure<void>(WorldDocumentErrors::Dirty);
         snapshot_.reset();
         ClearLayerHistory();
@@ -516,9 +518,10 @@ namespace Horo::Editor {
 
     /** @copydoc PartitionedWorldWorkspace::Shutdown */
     Result<void> PartitionedWorldWorkspace::Shutdown(const WorldDocumentDisposition disposition) {
+        using enum WorldDocumentDisposition;
         if (std::this_thread::get_id() != thread_)
             return Failure<void>(WorldDocumentErrors::WrongThread);
-        if (disposition != WorldDocumentDisposition::Preserve && disposition != WorldDocumentDisposition::Discard)
+        if (disposition != Preserve && disposition != Discard)
             return Failure<void>(WorldDocumentErrors::Unsupported);
         if (snapshot_) {
             if (const auto closed = Close(snapshot_->fence, disposition); closed.HasError())

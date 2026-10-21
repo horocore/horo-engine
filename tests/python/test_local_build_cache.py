@@ -15,7 +15,7 @@ import sys
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("horo_local_build_cache", ROOT / "scripts" / "local_build_cache.py")
+SPEC = importlib.util.spec_from_file_location("horo_local_build_cache", ROOT / "scripts" / 'dev.py')
 assert SPEC is not None
 assert SPEC.loader is not None
 cache = importlib.util.module_from_spec(SPEC)
@@ -41,9 +41,9 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, P
     commit = git(repo, "rev-parse", "HEAD")
     git(repo, "update-ref", "refs/remotes/origin/main", commit)
     root = tmp_path / "cache with spaces türkçe"
-    monkeypatch.setattr(cache, "cache_directory", lambda _: root)
+    monkeypatch.setattr(cache, 'cache_directory', lambda _: root)
     original_which = shutil.which
-    monkeypatch.setattr(cache.shutil, "which", lambda name: "/tools/ccache" if name == "ccache" else original_which(name))
+    monkeypatch.setattr(cache.shutil, 'which', lambda name: "/tools/ccache" if name == "ccache" else original_which(name))
     return repo, root, commit
 
 
@@ -233,7 +233,7 @@ def test_missing_ccache_preserves_ordinary_build_miss(
     repository: tuple[Path, Path, str], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     repo, root, _ = repository
-    monkeypatch.setattr(cache.shutil, "which", lambda _: None)
+    monkeypatch.setattr(cache.shutil, 'which', lambda _: None)
     with cache.automatic_cache(repo) as binding:
         assert binding is None
     with pytest.raises(cache.CacheError, match="install ccache"):
@@ -333,7 +333,7 @@ def test_repository_identity_is_shared_by_linked_worktrees(
 ) -> None:
     repo, peer = peer_worktree
     # Load a fresh module to recover the unpatched cache-directory implementation.
-    spec = importlib.util.spec_from_file_location("horo_cache_identity", ROOT / "scripts" / "local_build_cache.py")
+    spec = importlib.util.spec_from_file_location("horo_cache_identity", ROOT / "scripts" / 'dev.py')
     assert spec is not None
     assert spec.loader is not None
     independent = importlib.util.module_from_spec(spec)
@@ -348,7 +348,7 @@ def test_cache_inside_peer_source_is_rejected(
 ) -> None:
     repo, peer = peer_worktree
     root = peer / "user-cache"
-    monkeypatch.setattr(cache, "cache_directory", lambda _: root)
+    monkeypatch.setattr(cache, 'cache_directory', lambda _: root)
     with pytest.raises(cache.CacheError, match="outside source"):
         cache.prepare_cache(repo, successful_build)
     assert not root.exists()
@@ -395,7 +395,7 @@ def test_cleanup_latch_created_after_gc_guard_preserves_generation(
                 injected = True
             yield lease
 
-    monkeypatch.setattr(cache, "_FileLock", inject_on_exclusive_generation_entry)
+    monkeypatch.setattr(cache, '_FileLock', inject_on_exclusive_generation_entry)
     assert cache.prepare_cache(repo, successful_build) == 0
     assert injected
     assert cache.status(repo)["generation"] != old.name
