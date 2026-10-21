@@ -16,9 +16,10 @@ namespace Horo::Editor {
     /** @brief Routes eligible workspace input, preserving application Save before text/popup scene-action suppression.
      * @param router Canonical action router. @param context Exact live workspace context. @param model Current document/selection
      * projection.
-     * @param command Frame command containing the current source ownership carrier. @param capture Current GUI capture facts.
+     * @param command Frame command containing the current source ownership carrier.
+     * @param activePCGDocument Canonical controller reports an active graph document. @param capture Current GUI capture facts.
      */
     void RouteWorkspaceInputAction(Input::InputRouter &router, const Input::InputContextToken &context,
-                                   const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
+                                   const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command, bool activePCGDocument,
                                    WorkspaceInputCapture capture);
 }  // namespace Horo::Editor

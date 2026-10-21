@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <fstream>
+#include <tuple>
 
 TEST_CASE("Actual workspace carries first-frame source ownership when Delete and navigation produce no edit",
           "[editor][source][widget][input]") {
@@ -39,7 +40,7 @@ TEST_CASE("Actual workspace carries first-frame source ownership when Delete and
     gui.imgui.BeginFrame();
     EditorWorkspaceViewCommandData command;
     view.Draw(controller.ViewModel(), command, {.width = 1280, .height = 800});
-    RouteWorkspaceInputAction(gui.input, inputContext, controller.ViewModel(), command, {});
+    RouteWorkspaceInputAction(gui.input, inputContext, controller.ViewModel(), command, false, {});
     gui.imgui.EndFrame();
     CHECK(command.command == EditorWorkspaceViewCommand::None);
     CHECK(command.sourceTextInputOwned);
@@ -71,7 +72,7 @@ TEST_CASE("Actual workspace shortcut router suppresses scene edits for source ow
     EditorWorkspaceViewCommandData captured;
     const auto capture = GENERATE(0, 1, 2);
     captured.sourceTextInputOwned = capture == 0;
-    RouteWorkspaceInputAction(input, context, model, captured, {.textInputRequested = capture == 1, .popupOpen = capture == 2});
+    RouteWorkspaceInputAction(input, context, model, captured, false, {.textInputRequested = capture == 1, .popupOpen = capture == 2});
     CHECK(captured.command == EditorWorkspaceViewCommand::None);
     collector.BeginFrame(2);
     collector.SetKey(key, false);
@@ -80,7 +81,7 @@ TEST_CASE("Actual workspace shortcut router suppresses scene edits for source ow
     collector.SetKey(key, true);
     input.BeginFrame(collector.Commit());
     EditorWorkspaceViewCommandData scene;
-    RouteWorkspaceInputAction(input, context, model, scene, {});
+    RouteWorkspaceInputAction(input, context, model, scene, false, {});
     CHECK(scene.command != EditorWorkspaceViewCommand::None);
     collector.BeginFrame(4);
     collector.SetKey(key, false);
@@ -89,7 +90,7 @@ TEST_CASE("Actual workspace shortcut router suppresses scene edits for source ow
     input.BeginFrame(collector.Commit());
     EditorWorkspaceViewCommandData save;
     save.sourceTextInputOwned = true;
-    RouteWorkspaceInputAction(input, context, model, save, {.textInputRequested = true, .popupOpen = true});
+    RouteWorkspaceInputAction(input, context, model, save, false, {.textInputRequested = true, .popupOpen = true});
     CHECK(save.command == EditorWorkspaceViewCommand::SaveScene);
 }
 
@@ -116,11 +117,37 @@ TEST_CASE("Application Save remains source-document scoped while first-frame sou
     input.BeginFrame(collector.Commit());
     EditorWorkspaceViewCommandData command;
     command.sourceTextInputOwned = true;
-    RouteWorkspaceInputAction(input, context, controller.ViewModel(), command, {.textInputRequested = true});
+    RouteWorkspaceInputAction(input, context, controller.ViewModel(), command, false, {.textInputRequested = true});
     CHECK(command.command == EditorWorkspaceViewCommand::SaveSourceDocument);
     REQUIRE(command.sourceSave);
     CHECK(command.sourceSave->instance == controller.ViewModel().sourceDocuments.front().Identity().instance);
     controller.ProcessCommand(command);
     REQUIRE(controller.SourceSaveOutcome());
     CHECK(controller.SourceSaveOutcome()->HasValue());
+}
+
+TEST_CASE("Graph shortcuts retain source capture and route through the graph-owning controller", "[editor][source][widget][input][pcg]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    using Command = EditorWorkspaceViewCommand;
+    using Case = std::tuple<Input::Key, bool, bool, Command>;
+    const auto [key, control, shift, expected] =
+        GENERATE(Case{Input::Key::Delete, false, false, Command::DeleteSelectedObjects},
+                 Case{Input::Key::Z, true, false, Command::UndoScene}, Case{Input::Key::Z, true, true, Command::RedoScene},
+                 Case{Input::Key::W, false, false, Command::None}, Case{Input::Key::S, true, false, Command::SaveScene});
+    Input::InputRouter input;
+    REQUIRE(input.SetActionMap(BuildEditorInputActions()).HasValue());
+    auto context = input.PushContext(Input::InputContextId{kEditorWorkspaceInputContext}, Input::InputContextKind::EditorWorkspace);
+    Input::RawInputCollector collector;
+    collector.BeginFrame(1);
+    collector.SetModifiers({.control = control, .shift = shift});
+    collector.SetKey(key, true);
+    input.BeginFrame(collector.Commit());
+    EditorWorkspaceViewModel model;
+    model.primarySelection = SceneObjectId{7};
+    EditorWorkspaceViewCommandData command;
+    command.sourceTextInputOwned = GENERATE(false, true);
+    RouteWorkspaceInputAction(input, context, model, command, true, {});
+    CHECK(command.command == (command.sourceTextInputOwned && key != Input::Key::S ? Command::None : expected));
+    CHECK_FALSE(command.objectPayload);
 }

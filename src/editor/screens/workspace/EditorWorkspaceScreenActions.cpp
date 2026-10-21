@@ -109,7 +109,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
         if (HandleSourceMenuAction(action))
             return true;
-        if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
+        if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
+            !controller_->CurrentScenePath().has_value())
             action = EditorMenuAction::SaveSceneAs;
         if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
             EditorWorkspaceViewCommandData command;

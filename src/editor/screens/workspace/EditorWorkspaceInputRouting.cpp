@@ -9,7 +9,7 @@ namespace Horo::Editor {
     namespace {
         /** @brief Runs scene shortcuts only after the workspace's application/text/popup priority has admitted them. */
         void RouteSceneInput(Input::InputRouter &router, const Input::InputContextToken &context, const EditorWorkspaceViewModel &model,
-                             EditorWorkspaceViewCommandData &command) {
+                             EditorWorkspaceViewCommandData &command, const bool activePCGDocument) {
             const auto pressed = [&](const char *id) {
                 return router.ReadAction(context, Input::ActionId{id}).pressed;
             };
@@ -19,6 +19,11 @@ namespace Horo::Editor {
             }
             if (pressed(kActionUndo)) {
                 command.command = EditorWorkspaceViewCommand::UndoScene;
+                return;
+            }
+            if (activePCGDocument) {
+                if (pressed(kActionDelete))
+                    command.command = EditorWorkspaceViewCommand::DeleteSelectedObjects;
                 return;
             }
             constexpr std::array tools{std::pair{kActionToolSelect, EditorTransformTool::Select},
@@ -47,7 +52,7 @@ namespace Horo::Editor {
     /** @copydoc RouteWorkspaceInputAction */
     void RouteWorkspaceInputAction(Input::InputRouter &router, const Input::InputContextToken &context,
                                    const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
-                                   const WorkspaceInputCapture capture) {
+                                   const bool activePCGDocument, const WorkspaceInputCapture capture) {
         const auto pressed = [&](const char *id) {
             return router.ReadAction(context, Input::ActionId{id}).pressed;
         };
@@ -65,6 +70,6 @@ namespace Horo::Editor {
         // Text owners route their own edit shortcuts; application save remains available above.
         if (command.sourceTextInputOwned || capture.textInputRequested || capture.popupOpen)
             return;
-        RouteSceneInput(router, context, model, command);
+        RouteSceneInput(router, context, model, command, activePCGDocument);
     }
 }  // namespace Horo::Editor
