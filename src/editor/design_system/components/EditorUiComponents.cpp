@@ -1791,6 +1791,23 @@ namespace Horo::Editor::Ui {
     // ── Modal shell ──────────────────────────────────────────────────────
 
     namespace {
+        /** @brief Applies placement and dragging before Begin initializes the window's content and clipping rectangles. */
+        ImVec2 ResolveModalPosition(const char *id, const ImVec2 regionPosition, const ImVec2 regionSize, const ImVec2 size) {
+            ImVec2 position{regionPosition.x + (regionSize.x - size.x) * 0.5F, regionPosition.y + (regionSize.y - size.y) * 0.5F};
+            const ImGuiWindow *window = ImGui::FindWindowByName(id);
+            if (window != nullptr && window->WasActive) {
+                position = window->Pos;
+                const ImGuiID draggingStateId = ImHashStr("##ModalHeaderDragging", 0, window->ID);
+                if (window->StateStorage.GetBool(draggingStateId) && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    const ImVec2 delta = ImGui::GetIO().MouseDelta;
+                    position.x += delta.x;
+                    position.y += delta.y;
+                }
+            }
+            return {std::clamp(position.x, regionPosition.x, regionPosition.x + std::max(0.0F, regionSize.x - size.x)),
+                    std::clamp(position.y, regionPosition.y, regionPosition.y + std::max(0.0F, regionSize.y - size.y))};
+        }
+
         /** @brief Measured title chrome reserves independent space for branding and the close action. */
         struct ModalHeaderLayout {
             float closeRightInset{};
@@ -1827,12 +1844,9 @@ namespace Horo::Editor::Ui {
                                        std::min(ScaledLayoutValue(props.minimumWidth), availableWidth), availableWidth);
         const float height = std::clamp(ScaledLayoutValue(props.requestedSize.y),
                                         std::min(ScaledLayoutValue(props.minimumHeight), availableHeight), availableHeight);
-        const ImVec2 position{
-            regionPosition.x + (regionSize.x - width) * 0.5F,
-            regionPosition.y + (regionSize.y - height) * 0.5F,
-        };
-
-        ImGui::SetNextWindowPos(position, ImGuiCond_Appearing);
+        const ImVec2 position = ResolveModalPosition(props.id, regionPosition, regionSize, {width, height});
+        // Moving after Begin leaves its work/clip rectangles at the previous position.
+        ImGui::SetNextWindowPos(position, ImGuiCond_Always);
         ImGui::SetNextWindowSize({width, height}, ImGuiCond_Always);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0F, 0.0F});
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, Theme::GetActiveTokens().radii.modal);
@@ -1843,12 +1857,7 @@ namespace Horo::Editor::Ui {
                      ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                          ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-        const ImVec2 previousPosition = ImGui::GetWindowPos();
-        const ImVec2 modalPosition{
-            std::clamp(previousPosition.x, regionPosition.x, regionPosition.x + std::max(0.0F, regionSize.x - width)),
-            std::clamp(previousPosition.y, regionPosition.y, regionPosition.y + std::max(0.0F, regionSize.y - height)),
-        };
-        ImGui::SetWindowPos(modalPosition, ImGuiCond_Always);
+        const ImVec2 modalPosition = ImGui::GetWindowPos();
         const float headerPadding = ScaledLayoutValue(props.headerHorizontalPadding);
         constexpr float iconSize = 20.0F;
         constexpr ImVec2 closeSize{28.0F, 28.0F};
@@ -1902,17 +1911,6 @@ namespace Horo::Editor::Ui {
         }
         if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
             windowStorage->SetBool(draggingStateId, false);
-        if (windowStorage->GetBool(draggingStateId)) {
-            const ImVec2 delta = ImGui::GetIO().MouseDelta;
-            const float maximumX = regionPosition.x + regionSize.x - width;
-            const float maximumY = regionPosition.y + regionSize.y - height;
-            const ImVec2 draggedPosition{
-                std::clamp(modalPosition.x + delta.x, regionPosition.x, maximumX),
-                std::clamp(modalPosition.y + delta.y, regionPosition.y, maximumY),
-            };
-            ImGui::SetWindowPos(draggedPosition, ImGuiCond_Always);
-        }
-
         bodyHeight_ = std::max(0.0F, ImGui::GetWindowHeight() - headerHeight - footerHeight_);
         footerStartY_ = ImGui::GetWindowContentRegionMax().y - footerHeight_;
         // Region placement is explicit, but descendants retain the active theme's

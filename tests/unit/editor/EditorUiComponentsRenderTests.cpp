@@ -44,6 +44,17 @@ namespace {
         Horo::Editor::Theme::Fonts fonts;
     };
 
+    /** @brief Verifies that moving a modal leaves no stale content extents in its root or child windows. */
+    void CheckModalScrollBounds(const std::string_view prefix) {
+        for (const auto *window : ImGui::GetCurrentContext()->Windows) {
+            if (!window->Active || !std::string_view{window->Name}.starts_with(prefix))
+                continue;
+            INFO(window->Name);
+            CHECK(window->ScrollMax.x == 0.0F);
+            CHECK(window->ScrollMax.y == 0.0F);
+        }
+    }
+
     struct SiblingSubmenuHoverState {
         ImVec2 firstRowCenter{};
         ImVec2 secondRowCenter{};
@@ -760,6 +771,7 @@ TEST_CASE("Shared modal shell supports full-header dragging and remains inside t
     REQUIRE(window != nullptr);
     REQUIRE(window->Pos.x == Catch::Approx(ImGui::GetMainViewport()->WorkPos.x));
     REQUIRE(window->Pos.y == Catch::Approx(ImGui::GetMainViewport()->WorkPos.y));
+    CheckModalScrollBounds("MovableModalShellTest");
 
     // The right side of the header remains draggable outside the close action.
     io.AddMousePosEvent(window->Pos.x + window->Size.x - 80.0F, window->Pos.y + 24.0F);
@@ -776,6 +788,7 @@ TEST_CASE("Shared modal shell supports full-header dragging and remains inside t
                              ImGui::GetMainViewport()->WorkPos.y + ImGui::GetMainViewport()->WorkSize.y - window->Size.y};
     REQUIRE(window->Pos.x == Catch::Approx(workMaximum.x));
     REQUIRE(window->Pos.y == Catch::Approx(workMaximum.y));
+    CheckModalScrollBounds("MovableModalShellTest");
 }
 
 TEST_CASE("Selectable text block copies a selection spanning multiple lines", "[unit][editor][gui][design-system]") {
