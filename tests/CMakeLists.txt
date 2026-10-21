@@ -1439,7 +1439,8 @@ target_link_libraries(HoroXRActionBindingTests PRIVATE HoroEngine::XRInputBindin
 horo_register_catch_test(HoroXRActionBindingTests LABELS "unit;xr;input;headless;lifecycle")
 
 if(HORO_BUILD_XR_OPENXR)
-    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRActionBindingsTests.cpp)
+    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRActionBindingsTests.cpp
+        unit/runtime/xr/OpenXRSwapchainTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
@@ -5015,6 +5016,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             unit/runtime/renderer/VulkanShaderRuntimeTests.cpp
             unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
             unit/runtime/renderer/VulkanGraphRuntimeTests.cpp
+            unit/runtime/renderer/VulkanExternalImageTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
     target_include_directories(HoroRenderVulkanTests PRIVATE
@@ -5025,9 +5027,17 @@ if (HORO_BUILD_RENDER_VULKAN)
             Catch2::Catch2WithMain
             HoroEngine::RenderFrontend
             HoroEngine::RenderVulkan
+            HoroRenderVulkanExternalImagesInterface
             ${CMAKE_DL_LIBS}
             Vulkan::Headers
     )
+    if (HORO_BUILD_XR_OPENXR)
+        target_sources(HoroRenderVulkanTests PRIVATE unit/runtime/xr/OpenXRVulkanIntegrationTests.cpp)
+        add_library(HoroXROpenXRVulkanHostInterfaceConsumer OBJECT public_headers/OpenXRVulkanSwapchainConsumer.cpp)
+        target_link_libraries(HoroXROpenXRVulkanHostInterfaceConsumer PRIVATE HoroXROpenXRVulkanHostInterface)
+        add_dependencies(HoroRenderVulkanTests HoroXROpenXRVulkanHostInterfaceConsumer)
+        target_link_libraries(HoroRenderVulkanTests PRIVATE HoroXROpenXRVulkanHostInterface HoroXROpenXRVulkan)
+    endif ()
     horo_register_catch_test(HoroRenderVulkanTests LABELS "native;renderer;vulkan;qualification")
     if (HORO_ENABLE_GPU_SMOKE_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(HoroVulkanCommandExecutionSmoke integration/renderer/VulkanCommandExecutionSmoke.cpp)

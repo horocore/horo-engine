@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <limits>
 #include <tuple>
 
@@ -56,6 +57,11 @@ namespace Horo::Render {
             const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
                 return MatchesLightCulling(request, pass, *culling);
+            if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
+                return pass.kind == RenderPassKind::Graphics && std::isfinite(depth->clearDepth) && depth->clearDepth >= 0.0F &&
+                       depth->clearDepth <= 1.0F && uses.size() == 1 && uses[0].resource == depth->texture &&
+                       uses[0].kind == RenderGraphUsageKind::DepthStencilAttachment && uses[0].access == Write;
+            }
             if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
                 return pass.kind == RenderPassKind::Graphics && color->operations.IsValid() && !color->operations.outputColor &&
                        color->operations.loadOperation != AttachmentLoadOperation::DontCare &&

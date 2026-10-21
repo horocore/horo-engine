@@ -50,13 +50,14 @@ namespace Horo::Render::Detail {
             AllocationResource &operator=(const AllocationResource &) = delete;
 
             ~AllocationResource() {
-                if (handle != VK_NULL_HANDLE)
+                if (handle != VK_NULL_HANDLE && !borrowed)
                     destroy(device, handle, nullptr);
                 if (memory != VK_NULL_HANDLE)
                     freeMemory(device, memory, nullptr);
             }
 
             RenderResourceNativeLifetime lifetime;
+            bool borrowed{false};
             VkDevice device{VK_NULL_HANDLE};
             NativeHandle handle{VK_NULL_HANDLE};
             VkDeviceMemory memory{VK_NULL_HANDLE};
@@ -70,12 +71,15 @@ namespace Horo::Render::Detail {
         };
 
         struct Texture final : AllocationResource<VkImage, PFN_vkDestroyImage> {
+            const IVulkanExternalTextureSource *externalSource{};
             RenderTextureDescriptor descriptor;
             VulkanGraphResourceState graphState;
             VkImageView colorView{VK_NULL_HANDLE};
             PFN_vkDestroyImageView destroyView{};
 
             ~Texture() {
+                if (externalSource != nullptr)
+                    externalSource->RecordNativeRetirement(graphState.logical, graphState.hasNativeState);
                 if (colorView != VK_NULL_HANDLE)
                     destroyView(this->device, colorView, nullptr);
             }
@@ -518,17 +522,20 @@ namespace Horo::Render::Detail {
         if (descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
             descriptor.layerCount == 1 && descriptor.sampleCount == 1 && descriptor.format == RenderTextureFormat::Rgba8Unorm &&
             HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment)) {
+            const VkImageAspectFlags colorAspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             const VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                                              .image = texture->handle,
                                              .viewType = VK_IMAGE_VIEW_TYPE_2D,
                                              .format = VulkanResourceConversion::TextureFormat(descriptor.format),
-                                             .subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1}};
+                                             .subresourceRange = {colorAspectMask, 0, 1, 0, 1}};
             if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(
                     ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing a native graph color attachment view failed."));
         }
         return impl_->Register(impl_->textures, std::move(texture));
     }
+
+#include "VulkanExternalImageRegistration.inl"
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateTextureView(const RenderTextureViewDescriptor &descriptor,
                                                                    const std::uint64_t textureIdentity,

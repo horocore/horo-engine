@@ -135,7 +135,7 @@ jobs:
           set -o pipefail
           cmake --preset ci-linux-debug -B build/ci-vulkan-commands -DBUILD_TESTING=ON \
             -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF \
-            -DHORO_BUILD_EDITOR_GUI=OFF -DHORO_ENABLE_GPU_SMOKE_TESTS=ON \
+            -DHORO_BUILD_EDITOR_GUI=OFF -DHORO_ENABLE_GPU_SMOKE_TESTS=ON -DHORO_BUILD_XR_OPENXR=ON \
             -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF \
             2>&1 | tee build/vulkan-command-evidence/configure.txt
       - name: Build actual native command owner and common contract consumers
@@ -143,12 +143,15 @@ jobs:
           set -o pipefail
           cmake --build build/ci-vulkan-commands --parallel 2 --target HoroRenderVulkanTests \
             HoroVulkanCommandExecutionSmoke HoroRenderGraphTests HoroRenderFrontendTests HoroRenderBackendRegistryTests \
+            HoroXROpenXRTests HoroXROpenXRHostInterfaceConsumer \
             2>&1 | tee build/vulkan-command-evidence/build.txt
       - name: Run portable contracts and actual installed-driver native commands
         run: |
           set -o pipefail
-          ctest --test-dir build/ci-vulkan-commands --output-on-failure --parallel 1 \
-            -R '^((HoroRenderVulkanTests|HoroRenderGraphTests|HoroRenderFrontendTests|HoroRenderBackendRegistryTests)(::.+)?|HoroVulkanCommandExecutionSmoke)$' \
+          ctest --test-dir build/ci-vulkan-commands --show-only=json-v1 > build/vulkan-command-evidence/inventory.json
+          python3 -c "import json; data=json.load(open('build/vulkan-command-evidence/inventory.json')); assert any(t['name'].startswith('HoroRenderVulkanTests::OpenXR production swapchain adapter') for t in data['tests']), 'XR/Vulkan integration test is absent from this composition'"
+          ctest --test-dir build/ci-vulkan-commands --output-on-failure --parallel 1 --no-tests=error \
+            -R '^((HoroRenderVulkanTests|HoroRenderGraphTests|HoroRenderFrontendTests|HoroRenderBackendRegistryTests|HoroXROpenXRTests)(::.+)?|HoroVulkanCommandExecutionSmoke)$' \
             --output-junit ../vulkan-command-evidence/tests.xml \
             2>&1 | tee build/vulkan-command-evidence/test.txt
       - name: Upload native command qualification evidence

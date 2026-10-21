@@ -144,8 +144,9 @@ namespace Horo::Render {
         public:
             SynchronizationCompiler(const RenderGraph &graph, const RenderGraphSchedule &schedule,
                                     const std::span<const RenderQueueAssignment> queues,
-                                    const std::span<const RenderGraphImportedState> importedStates)
-                : graph_(graph), schedule_(schedule), queues_(queues), importedStates_(importedStates),
+                                    const std::span<const RenderGraphImportedState> importedStates,
+                                    const std::span<const RenderGraphFinalState> finalStates)
+                : graph_(graph), schedule_(schedule), queues_(queues), importedStates_(importedStates), finalStates_(finalStates),
                   initialStates_(graph.Resources().size()), scheduled_(graph.Passes().size(), false), usesByPass_(graph.Passes().size()),
                   current_(graph.Resources().size()) {
                 transitions_.reserve(graph.Usages().size());
@@ -164,7 +165,13 @@ namespace Horo::Render {
                 }
                 GroupUses();
                 SeedInitialStates();
-                return EmitTransitions();
+                if (auto emitted = EmitTransitions(); emitted.HasError())
+                    return emitted;
+                return EmitExternalReleases();
+            }
+
+            [[nodiscard]] std::vector<RenderGraphExternalRelease> TakeExternalReleases() noexcept {
+                return std::move(externalReleases_);
             }
 
             [[nodiscard]] std::vector<RenderGraphTransition> TakeTransitions() noexcept {
@@ -330,10 +337,36 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            /** @brief Validates complete external obligations before publishing any synchronization plan. */
+            [[nodiscard]] Result<void> EmitExternalReleases() {
+                if (finalStates_.size() > graph_.Resources().size())
+                    return Result<void>::Failure(MakeError(RenderGraphSynchronizationErrors::InvalidExternalRelease));
+                externalReleases_.reserve(finalStates_.size());
+                std::vector<bool> seen(graph_.Resources().size(), false);
+                for (const auto &final : finalStates_) {
+                    if (final.resource.owner != graph_.Owner() || final.resource.value == 0 ||
+                        final.resource.value > graph_.Resources().size())
+                        return Result<void>::Failure(
+                            ContextError(RenderGraphSynchronizationErrors::InvalidExternalRelease, final.resource));
+                    const std::size_t index = final.resource.value - 1;
+                    const auto &resource = graph_.Resources()[index];
+                    if (seen[index] || resource.resourceClass != RenderGraphResourceClass::External || !current_[index]->pass.IsValid() ||
+                        !IsStateValid(final.state, resource.kind) || final.state.access == RenderGraphSynchronizationAccess::None ||
+                        final.state.scope != RenderGraphPipelineScope::External)
+                        return Result<void>::Failure(
+                            ContextError(RenderGraphSynchronizationErrors::InvalidExternalRelease, final.resource));
+                    seen[index] = true;
+                    externalReleases_.push_back({final.resource, current_[index]->pass, current_[index]->state, final.state});
+                }
+                return Result<void>::Success();
+            }
+
             const RenderGraph &graph_;
             const RenderGraphSchedule &schedule_;
             std::span<const RenderQueueAssignment> queues_;
             std::span<const RenderGraphImportedState> importedStates_;
+            std::span<const RenderGraphFinalState> finalStates_;
+            std::vector<RenderGraphExternalRelease> externalReleases_;
             std::array<std::optional<RenderQueueId>, 3> queuesByRole_;
             std::vector<std::optional<RenderGraphLogicalState>> initialStates_;
             std::vector<bool> scheduled_;
@@ -349,15 +382,18 @@ namespace Horo::Render {
                                                                    std::vector<RenderQueueAssignment> queueAssignments,
                                                                    std::vector<RenderGraphTransition> transitions,
                                                                    std::vector<RenderGraphOwnershipTransfer> transfers,
-                                                                   std::vector<RenderGraphImportedState> importedStates) noexcept
+                                                                   std::vector<RenderGraphImportedState> importedStates,
+                                                                   std::vector<RenderGraphExternalRelease> externalReleases) noexcept
         : owner_(owner), queueAssignments_(std::move(queueAssignments)), transitions_(std::move(transitions)),
-          transfers_(std::move(transfers)), importedStates_(std::move(importedStates)) {}
+          transfers_(std::move(transfers)), importedStates_(std::move(importedStates)), externalReleases_(std::move(externalReleases)) {}
 
     /** @copydoc RenderGraphSynchronizationPlan::RenderGraphSynchronizationPlan */
     RenderGraphSynchronizationPlan::RenderGraphSynchronizationPlan(RenderGraphSynchronizationPlan &&other) noexcept
         : owner_(std::exchange(other.owner_, {})), queueAssignments_(std::move(other.queueAssignments_)),
           transitions_(std::move(other.transitions_)), transfers_(std::move(other.transfers_)),
-          importedStates_(std::move(other.importedStates_)) {}
+          importedStates_(std::move(other.importedStates_)),
+
+          externalReleases_(std::move(other.externalReleases_)) {}
 
     /** @copydoc RenderGraphSynchronizationPlan::operator= */
     RenderGraphSynchronizationPlan &RenderGraphSynchronizationPlan::operator=(RenderGraphSynchronizationPlan &&other) noexcept {
@@ -367,6 +403,7 @@ namespace Horo::Render {
             transitions_ = std::move(other.transitions_);
             transfers_ = std::move(other.transfers_);
             importedStates_ = std::move(other.importedStates_);
+            externalReleases_ = std::move(other.externalReleases_);
         }
         return *this;
     }
@@ -396,16 +433,21 @@ namespace Horo::Render {
         return transfers_;
     }
 
+    /** @copydoc RenderGraphSynchronizationPlan::ExternalReleases */
+    std::span<const RenderGraphExternalRelease> RenderGraphSynchronizationPlan::ExternalReleases() const noexcept {
+        return externalReleases_;
+    }
+
     /** @copydoc SynthesizeRenderGraphSynchronization */
     Result<RenderGraphSynchronizationPlan> SynthesizeRenderGraphSynchronization(
         const RenderGraph &graph, const RenderGraphSchedule &schedule, const std::span<const RenderQueueAssignment> queues,
-        const std::span<const RenderGraphImportedState> importedStates) {
+        const std::span<const RenderGraphImportedState> importedStates, const std::span<const RenderGraphFinalState> finalStates) {
         if (!graph.Owner().IsValid() || schedule.Owner() != graph.Owner()) {
             return Result<RenderGraphSynchronizationPlan>::Failure(MakeError(RenderGraphSynchronizationErrors::InvalidSchedule));
         }
 
         try {
-            SynchronizationCompiler compiler{graph, schedule, queues, importedStates};
+            SynchronizationCompiler compiler{graph, schedule, queues, importedStates, finalStates};
             if (auto compiled = compiler.Compile(); compiled.HasError()) {
                 return Result<RenderGraphSynchronizationPlan>::Failure(compiled.ErrorValue());
             }
@@ -415,7 +457,7 @@ namespace Horo::Render {
             });
             return Result<RenderGraphSynchronizationPlan>::Success(
                 RenderGraphSynchronizationPlan{graph.Owner(), compiler.TakeQueueAssignments(), compiler.TakeTransitions(),
-                                               compiler.TakeTransfers(), std::move(ownedImports)});
+                                               compiler.TakeTransfers(), std::move(ownedImports), compiler.TakeExternalReleases()});
         } catch (const std::bad_alloc &) {
             return Result<RenderGraphSynchronizationPlan>::Failure(MakeError(RenderGraphSynchronizationErrors::AllocationFailed));
         }

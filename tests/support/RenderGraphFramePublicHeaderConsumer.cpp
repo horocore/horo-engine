@@ -49,3 +49,7 @@ static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::RenderFro
                              Horo::Result<Horo::Render::RenderPresentationOutput>>);
 
 static_assert(Horo::Render::RenderOutputColor{}.matching == Horo::Render::RenderOutputColorMatching::Unmanaged);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::CompiledRenderGraphExecution &>().ExternalReleases()),
+                             std::span<const Horo::Render::RenderGraphExternalRelease>>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::RenderGraphSynchronizationPlan &>().ExternalReleases()),
+                             std::span<const Horo::Render::RenderGraphExternalRelease>>);

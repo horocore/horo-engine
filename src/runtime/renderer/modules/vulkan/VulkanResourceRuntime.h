@@ -2,6 +2,7 @@
 
 #include "VulkanBackendModule.h"
 #include "VulkanCommandRuntime.h"
+#include "VulkanExternalImages.h"
 #include "VulkanShaderRuntime.h"
 
 #include <cstdint>
@@ -46,7 +47,9 @@ namespace Horo::Render::Detail {
     };
 
     /** @brief Device-owned Vulkan resource allocator and identity registry. */
-    class VulkanResourceRuntime final : public IRenderResourceBackend, public IMaterialBindingBackend {
+    class VulkanResourceRuntime final : public IRenderResourceBackend,
+                                        public IMaterialBindingBackend,
+                                        public IRenderExternalTextureBackend {
     public:
         /**
          * @brief Creates an inert resource runtime with a bounded backend-private identity range.
@@ -97,6 +100,12 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t colorAttachment,
                                                                std::uint64_t depthAttachment,
                                                                RenderResourceNativeLifetime lifetime = {}) override;
+
+        /** @brief Borrows the retained native source for serialized graph preparation; invalid after actual registration retirement. */
+        [[nodiscard]] const IVulkanExternalTextureSource *ExternalTextureSource(std::uint64_t instance) const noexcept;
+        /** @brief Registers a qualified runtime image without allocating or adopting its backing. */
+        [[nodiscard]] Result<std::uint64_t> ImportExternalTexture(const IRenderExternalTextureSource &source,
+                                                                  RenderResourceNativeLifetime lifetime) override;
         void DestroyBuffer(std::uint64_t backendInstance) noexcept override;
         void DestroyMesh(std::uint64_t backendInstance) noexcept override;
         void DestroyTexture(std::uint64_t backendInstance) noexcept override;

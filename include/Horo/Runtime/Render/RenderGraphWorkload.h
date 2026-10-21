@@ -17,6 +17,12 @@ namespace Horo::Render {
         PrimaryOutputAttachment operations; /**< Clear/Load and Store are required to preserve declared graph contents. */
     };
 
+    /** @brief Clears and preserves one whole depth attachment, including every admitted array layer. */
+    struct RenderGraphDepthAttachment {
+        RenderGraphResourceId texture;
+        float clearDepth{1.0F}; /**< Finite normalized depth in [0,1]; graph use must declare a depth write. */
+    };
+
     /** @brief Copies a finite byte range between two distinct graph buffers. */
     struct RenderGraphBufferCopy {
         RenderGraphResourceId source;
@@ -43,7 +49,7 @@ namespace Horo::Render {
 
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
     using RenderGraphWorkload = std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy,
-                                             RenderGraphLightCulling, RenderGraphVfx>;
+                                             RenderGraphLightCulling, RenderGraphVfx, RenderGraphDepthAttachment>;
 
     /** @brief Explicit operation for one retained pass in compiled order. */
     struct RenderGraphPassWorkload {

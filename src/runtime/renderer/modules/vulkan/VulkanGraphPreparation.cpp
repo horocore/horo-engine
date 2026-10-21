@@ -3,6 +3,8 @@
 #include <algorithm>
 
 namespace Horo::Render::Detail {
+#include "VulkanGraphExternalReleases.inl"
+
     /** @brief Validates exact imported generation evidence against native committed state. */
     Result<void> VulkanGraphRuntime::Impl::InitialStates(const RenderGraphExecutionRequest &request) {
         const auto graphResources = request.graph.Resources();
@@ -18,6 +20,8 @@ namespace Horo::Render::Detail {
             const auto *initial = &imported[index];
             if (initial->resource != resource.id)
                 return Result<void>::Failure(Invalid("Canonical imported generation state is missing or foreign."));
+            if (auto external = ValidateExternalAcquisition(request, index); external.HasError())
+                return external;
             states[index] = *bindings[index].state;
             discarded[index] = initial->contents == RenderGraphInitialContents::Discarded;
             if (discarded[index]) {
@@ -156,6 +160,8 @@ namespace Horo::Render::Detail {
         prepared.after.offset = barriers.size();
         if (auto transitions = PrepareTransitions(request, pass, true); transitions.HasError())
             return transitions;
+        if (auto external = PrepareExternalReleases(request, pass); external.HasError())
+            return external;
         prepared.after.count = barriers.size() - prepared.after.offset;
         return Result<void>::Success();
     }
