@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 import pytest
 
@@ -14,9 +16,9 @@ def repository_root() -> Path:
 @pytest.fixture
 def compatibility_generator(repository_root: Path) -> Path:
     """Return the project compatibility catalog generator entry point."""
-    return repository_root / "scripts" / "generate_project_compatibility.py"
+    return repository_root / "scripts" / 'project.py'
 
 @pytest.fixture
 def migration_generator(repository_root: Path) -> Path:
     """Return the project migration catalog generator entry point."""
-    return repository_root / "scripts" / "generate_project_migration_catalog.py"
+    return repository_root / "scripts" / 'project.py'

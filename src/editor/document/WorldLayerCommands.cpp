@@ -42,8 +42,7 @@ namespace Horo::Editor {
             const auto found = std::ranges::find(layers, intent.layer, &WS::WorldLayerDescriptor::id);
             if (!intent.layer.IsValid() || found == layers.end() || intent.position >= layers.size())
                 return Reject<void>(WorldDocumentErrors::Invalid);
-            const auto old = static_cast<std::size_t>(found - layers.begin());
-            if (old < intent.position)
+            if (const auto old = static_cast<std::size_t>(found - layers.begin()); old < intent.position)
                 std::rotate(found, found + 1, layers.begin() + static_cast<std::ptrdiff_t>(intent.position + 1));
             else if (old > intent.position)
                 std::rotate(layers.begin() + static_cast<std::ptrdiff_t>(intent.position), found, found + 1);

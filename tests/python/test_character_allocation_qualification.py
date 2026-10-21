@@ -1,4 +1,8 @@
+
+import sys
 """The Windows Release Character route requires actual exact, non-skipped CTest cases."""
+
+import dev
 
 import importlib.util
 import re
@@ -11,11 +15,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 PARSER_STEP_ID = "id: qualification_python"
 SPEC = importlib.util.spec_from_file_location(
-    "character_allocation_qualification", ROOT / "scripts/ci/run_character_allocation_qualification.py"
+    "character_allocation_qualification", ROOT / 'scripts/dev.py'
 )
 QUALIFICATION = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = QUALIFICATION
 SPEC.loader.exec_module(QUALIFICATION)
-EVIDENCE = QUALIFICATION.EVIDENCE
+
 
 
 @pytest.fixture(autouse=True)
@@ -26,12 +31,12 @@ def evidence_workspace(tmp_path, monkeypatch):
 
 def discovery(names=None):
     return {"tests": [{"name": name, "properties": []} for name in (
-        sorted(QUALIFICATION.CASES) if names is None else names
+        sorted(QUALIFICATION.CHARACTER_CASES) if names is None else names
     )]}
 
 
 def junit(tmp_path, names=None):
-    cases = sorted(QUALIFICATION.CASES) if names is None else names
+    cases = sorted(QUALIFICATION.CHARACTER_CASES) if names is None else names
     body = "".join(f'<testcase name="{escape(name, quote=True)}" status="run" time="0.001"/>' for name in cases)
     path = tmp_path / "results.xml"
     path.write_text(f'<testsuite failures="0" errors="0" skipped="0">{body}</testsuite>', encoding="utf-8")
@@ -39,32 +44,32 @@ def junit(tmp_path, names=None):
 
 
 def test_exact_preparation_release_case_is_accepted(tmp_path):
-    assert len(QUALIFICATION.CASES) == 1
-    QUALIFICATION.verify_discovery(discovery())
-    QUALIFICATION.verify_junit(junit(tmp_path))
+    assert len(QUALIFICATION.CHARACTER_CASES) == 1
+    QUALIFICATION.character_verify_discovery(discovery())
+    QUALIFICATION.character_verify_junit(junit(tmp_path))
 
 
-@pytest.mark.parametrize("names", [[], sorted(QUALIFICATION.CASES)[1:],
-                                   sorted(QUALIFICATION.CASES) + [sorted(QUALIFICATION.CASES)[0]]])
+@pytest.mark.parametrize("names", [[], sorted(QUALIFICATION.CHARACTER_CASES)[1:],
+                                   sorted(QUALIFICATION.CHARACTER_CASES) + [sorted(QUALIFICATION.CHARACTER_CASES)[0]]])
 def test_missing_zero_or_duplicate_discovery_is_rejected(names):
     document = discovery(names)
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_discovery(document)
+        QUALIFICATION.character_verify_discovery(document)
 
 
 def test_disabled_release_case_is_rejected():
     document = discovery()
     document["tests"][0]["properties"] = [{"name": "DISABLED", "value": True}]
     with pytest.raises(ValueError, match="disabled"):
-        QUALIFICATION.verify_discovery(document)
+        QUALIFICATION.character_verify_discovery(document)
 
 
-@pytest.mark.parametrize("names", [[], sorted(QUALIFICATION.CASES)[1:],
-                                   sorted(QUALIFICATION.CASES) + ["unexpected case"]])
+@pytest.mark.parametrize("names", [[], sorted(QUALIFICATION.CHARACTER_CASES)[1:],
+                                   sorted(QUALIFICATION.CHARACTER_CASES) + ["unexpected case"]])
 def test_missing_zero_or_extra_junit_cases_are_rejected(tmp_path, names):
     path = junit(tmp_path, names)
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_junit(path)
+        QUALIFICATION.character_verify_junit(path)
 
 
 @pytest.mark.parametrize("tag", ["failure", "error", "skipped"])
@@ -73,15 +78,15 @@ def test_failed_or_skipped_case_cannot_qualify(tmp_path, tag):
     text = path.read_text(encoding="utf-8")
     path.write_text(text.replace("/>", f"><{tag}/></testcase>", 1), encoding="utf-8")
     with pytest.raises(ValueError, match="did not pass"):
-        QUALIFICATION.verify_junit(path)
+        QUALIFICATION.character_verify_junit(path)
 
 
 def test_renamed_template_instance_cannot_replace_expected_case(tmp_path):
-    names = sorted(QUALIFICATION.CASES)
+    names = sorted(QUALIFICATION.CHARACTER_CASES)
     names[0] += " renamed"
     path = junit(tmp_path, names)
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_junit(path)
+        QUALIFICATION.character_verify_junit(path)
 
 
 def test_release_step_is_independent_of_debug_test_outcome():
@@ -91,7 +96,7 @@ def test_release_step_is_independent_of_debug_test_outcome():
     assert "!cancelled()" in block
     assert "steps.mcp_release_build.outcome == 'success'" in block
     assert "debug" not in block.lower()
-    assert "run_character_allocation_qualification.py" in block
+    assert 'dev.py' in block
     install = workflow.split(PARSER_STEP_ID, 1)[1]
     install = install.split("\n      - name:", 1)[0]
     assert "defusedxml==0.7.1" in install
@@ -100,11 +105,11 @@ def test_release_step_is_independent_of_debug_test_outcome():
 
 
 def test_unexpected_template_instantiation_is_not_silently_omitted():
-    names = sorted(QUALIFICATION.CASES)
-    names.append(QUALIFICATION.PREFIX + "Character preparation allocation failures roll back every retained storage stage - ExtraVariant")
+    names = sorted(QUALIFICATION.CHARACTER_CASES)
+    names.append(QUALIFICATION.CHARACTER_PREFIX + "Character preparation allocation failures roll back every retained storage stage - ExtraVariant")
     document = discovery(names)
     with pytest.raises(ValueError):
-        QUALIFICATION.verify_discovery(document)
+        QUALIFICATION.character_verify_discovery(document)
 
 
 def test_actual_ctest_path_contract_is_registered_and_matches_workflow():
@@ -117,6 +122,9 @@ def test_actual_ctest_path_contract_is_registered_and_matches_workflow():
     assert '--test-dir "build/ci-audio-release"' in cmake
     assert '--output-junit "character-allocation-ctest.xml"' in cmake
     assert 'WORKING_DIRECTORY "${TEST_ROOT}"' in cmake
+    for report in ('"character-allocation-ctest.xml"', '"${report}"'):
+        assert ('COMMAND "${PYTHON_EXECUTABLE}" "${VERIFIER}" qualify-character '
+                f'--output-junit {report}') in cmake
     registration = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert registration.index("add_test(NAME HoroCharacterAllocationJunitPathContract") < registration.index(
         "horo_finalize_ci_suites()"
@@ -128,8 +136,8 @@ def test_cli_paths_cannot_escape_workspace(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     outside = tmp_path.parent / "outside.xml"
     with pytest.raises(ArgumentTypeError):
-        EVIDENCE["workspace_path"](outside)
-    assert EVIDENCE["workspace_path"]("inside.xml") == tmp_path / "inside.xml"
+        dev.evidence_workspace_path(outside)
+    assert dev.evidence_workspace_path("inside.xml") == tmp_path / "inside.xml"
 
 
 def test_cli_paths_reject_symlink_escape(tmp_path, monkeypatch):
@@ -141,7 +149,7 @@ def test_cli_paths_reject_symlink_escape(tmp_path, monkeypatch):
         pytest.skip("Host does not permit test symlink creation")
     escaped = link / "evidence.xml"
     with pytest.raises(ArgumentTypeError):
-        EVIDENCE["workspace_path"](escaped)
+        dev.evidence_workspace_path(escaped)
 
 
 @pytest.mark.parametrize("absolute", [False, True])
@@ -152,7 +160,7 @@ def test_actual_cli_reads_workspace_junit_with_spaces(tmp_path, monkeypatch, abs
     report = junit(folder)
     argument = str(report if absolute else report.relative_to(tmp_path))
     monkeypatch.setattr("sys.argv", ["qualification", "--output-junit", argument])
-    QUALIFICATION.main()
+    QUALIFICATION.character_main()
 
 
 @pytest.mark.parametrize("absolute", [False, True])
@@ -162,7 +170,7 @@ def test_actual_cli_rejects_outside_evidence(tmp_path, monkeypatch, absolute):
     argument = str(outside) if absolute else "../outside.xml"
     monkeypatch.setattr("sys.argv", ["qualification", "--output-junit", argument])
     with pytest.raises(SystemExit) as rejected:
-        QUALIFICATION.main()
+        QUALIFICATION.character_main()
     assert rejected.value.code == 2
 
 
@@ -184,7 +192,7 @@ def test_direct_reader_accepts_workspace_reports_with_spaces(tmp_path, absolute)
     folder = tmp_path / "direct evidence with spaces"
     folder.mkdir()
     report = junit(folder)
-    QUALIFICATION.verify_junit(report if absolute else report.relative_to(tmp_path))
+    QUALIFICATION.character_verify_junit(report if absolute else report.relative_to(tmp_path))
 
 
 @pytest.mark.parametrize("absolute", [False, True])
@@ -194,7 +202,7 @@ def test_direct_reader_rejects_outside_reports(tmp_path, absolute):
     report = junit(folder)
     argument = report if absolute else Path("..") / folder.name / report.name
     with pytest.raises(ValueError, match="inside the current workspace"):
-        QUALIFICATION.verify_junit(argument)
+        QUALIFICATION.character_verify_junit(argument)
 
 
 def test_direct_reader_rejects_symlink_escape(tmp_path):
@@ -207,7 +215,7 @@ def test_direct_reader_rejects_symlink_escape(tmp_path):
     except OSError:
         pytest.skip("Host does not permit test symlink creation")
     with pytest.raises(ValueError, match="inside the current workspace"):
-        QUALIFICATION.verify_junit(link)
+        QUALIFICATION.character_verify_junit(link)
 
 
 def test_native_reader_reuses_the_installed_parser_interpreter():
@@ -228,9 +236,9 @@ def test_direct_regex_writer_accepts_workspace_paths_with_spaces(tmp_path, absol
     folder = tmp_path / "regex evidence with spaces"
     folder.mkdir()
     destination = folder / "selection.txt"
-    QUALIFICATION.write_regex(destination if absolute else destination.relative_to(tmp_path))
+    QUALIFICATION.character_write_regex(destination if absolute else destination.relative_to(tmp_path))
     pattern = destination.read_text(encoding="utf-8")
-    for name in QUALIFICATION.CASES:
+    for name in QUALIFICATION.CHARACTER_CASES:
         assert re.fullmatch(pattern, name)
     assert not re.fullmatch(pattern, "unexpected allocation test")
 
@@ -241,7 +249,7 @@ def test_direct_regex_writer_rejects_outside_paths_without_mutation(tmp_path, ab
     destination.write_text("retained evidence", encoding="utf-8")
     argument = destination if absolute else Path("..") / destination.name
     with pytest.raises(ValueError, match="inside the current workspace"):
-        QUALIFICATION.write_regex(argument)
+        QUALIFICATION.character_write_regex(argument)
     assert destination.read_text(encoding="utf-8") == "retained evidence"
 
 
@@ -254,7 +262,7 @@ def test_direct_regex_writer_rejects_symlink_escape_without_mutation(tmp_path):
     except OSError:
         pytest.skip("Host does not permit test symlink creation")
     with pytest.raises(ValueError, match="inside the current workspace"):
-        QUALIFICATION.write_regex(link)
+        QUALIFICATION.character_write_regex(link)
     assert destination.read_text(encoding="utf-8") == "retained evidence"
 
 
@@ -267,6 +275,6 @@ def test_actual_discovery_cli_writes_exact_workspace_regex(tmp_path, monkeypatch
     destination = folder / "selection.txt"
     arguments = [source, destination] if absolute else [source.relative_to(tmp_path), destination.relative_to(tmp_path)]
     monkeypatch.setattr("sys.argv", ["qualification", "--discovery", str(arguments[0]), "--regex-output", str(arguments[1])])
-    QUALIFICATION.main()
+    QUALIFICATION.character_main()
     pattern = destination.read_text(encoding="utf-8")
-    assert all(re.fullmatch(pattern, name) for name in QUALIFICATION.CASES)
+    assert all(re.fullmatch(pattern, name) for name in QUALIFICATION.CHARACTER_CASES)

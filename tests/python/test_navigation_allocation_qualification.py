@@ -1,3 +1,5 @@
+
+import sys
 """Require exhaustive Navigation fault sweeps in the existing Windows Release route."""
 
 import importlib.util
@@ -8,9 +10,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location(
-    "navigation_allocation_route", ROOT / "scripts/ci/run_scene_allocation_qualification.py"
+    "navigation_allocation_route", ROOT / 'scripts/dev.py'
 )
 ROUTE = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = ROUTE
 SPEC.loader.exec_module(ROUTE)
 
 
@@ -45,10 +48,10 @@ def report(tmp_path, marker="complete", dropped=None, status="run"):
 def test_all_three_cases_and_every_measured_position_qualify(tmp_path):
     assert len(ROUTE.NAVIGATION_CASES) == 3
     discovery = {"tests": [{"name": name, "properties": []} for name in ROUTE.NAVIGATION_CASES]}
-    ROUTE.verify_discovery(discovery, ROUTE.NAVIGATION_CASES)
-    ROUTE.verify_junit(report(tmp_path), ROUTE.NAVIGATION_CASES)
+    ROUTE.scene_verify_discovery(discovery, ROUTE.NAVIGATION_CASES)
+    ROUTE.scene_verify_junit(report(tmp_path), ROUTE.NAVIGATION_CASES)
     pattern = tmp_path / "navigation-regex.txt"
-    ROUTE.write_regex(pattern, ROUTE.NAVIGATION_CASES)
+    ROUTE.scene_write_regex(pattern, ROUTE.NAVIGATION_CASES)
     assert pattern.read_text().startswith("^(")
     assert pattern.read_text().endswith(")$")
 
@@ -57,22 +60,22 @@ def test_all_three_cases_and_every_measured_position_qualify(tmp_path):
 def test_sampled_or_unexercised_fault_sweeps_fail_closed(tmp_path, marker):
     receipt = report(tmp_path, marker)
     with pytest.raises(ValueError, match="positions incomplete"):
-        ROUTE.verify_junit(receipt, ROUTE.NAVIGATION_CASES)
+        ROUTE.scene_verify_junit(receipt, ROUTE.NAVIGATION_CASES)
 
 
 @pytest.mark.parametrize("status", ["notrun", "disabled"])
 def test_unexecuted_cases_cannot_qualify(tmp_path, status):
     receipt = report(tmp_path, status=status)
     with pytest.raises(ValueError, match="did not pass"):
-        ROUTE.verify_junit(receipt, ROUTE.NAVIGATION_CASES)
+        ROUTE.scene_verify_junit(receipt, ROUTE.NAVIGATION_CASES)
 
 
 def test_missing_discovery_or_execution_cannot_replace_a_fault_case(tmp_path):
     with pytest.raises(ValueError, match="discovery differs"):
-        ROUTE.verify_discovery({"tests": []}, ROUTE.NAVIGATION_CASES)
+        ROUTE.scene_verify_discovery({"tests": []}, ROUTE.NAVIGATION_CASES)
     receipt = report(tmp_path, dropped=next(iter(ROUTE.NAVIGATION_CASES)))
     with pytest.raises(ValueError, match="execution differs"):
-        ROUTE.verify_junit(receipt, ROUTE.NAVIGATION_CASES)
+        ROUTE.scene_verify_junit(receipt, ROUTE.NAVIGATION_CASES)
 
 
 def test_route_builds_same_release_target_and_verifies_actual_discovery_and_junit():

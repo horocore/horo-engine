@@ -108,10 +108,12 @@ namespace Horo::Editor {
                           EditorWorkspaceViewCommandData &outCommand);
         /** @brief Draws one persistent document tab and emits its select or close command. */
         void DrawDocumentTab(const std::string &panelId, EditorWorkspaceViewCommandData &outCommand, bool active);
-        /** @brief Draws persistent sequence tabs and their explicit focus/close affordances. */
-        void DrawNavigationDocumentTabs(const EditorWorkspaceViewModel &viewModel) const;
         bool DrawNavigationDocument(const EditorWorkspaceViewModel &viewModel) const;
-        void DrawSequenceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws the host's ordered instance tabs using shared controls and typed lifecycle commands. */
+        void DrawWorkspaceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
+        /** @brief Presents the active immutable source; text editing belongs to the source widget adapter. */
+        bool DrawSourceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        std::optional<DocumentInstanceId> m_lastPresentedDocument;
         /** @brief Resolves theme-sized document chrome, including its overflow affordance. */
         [[nodiscard]] float DocumentTabHeight(WorkspaceDockArea area) const;
         /** @brief Draws either the active document or its explicitly focused native panel. */

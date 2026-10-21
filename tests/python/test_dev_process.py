@@ -11,7 +11,7 @@ import time
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("horo_dev_process", ROOT / "scripts" / "dev_process.py")
+SPEC = importlib.util.spec_from_file_location("horo_dev_process", ROOT / "scripts" / 'dev.py')
 assert SPEC is not None
 assert SPEC.loader is not None
 process = importlib.util.module_from_spec(SPEC)
@@ -61,7 +61,7 @@ def test_interruption_waits_for_root_and_stubborn_descendant(
             raise KeyboardInterrupt
         return snapshot()
 
-    monkeypatch.setattr(process, "_snapshot", interrupt_after_spawn)
+    monkeypatch.setattr(process, '_snapshot', interrupt_after_spawn)
     assert process.run([sys.executable, str(script)], tmp_path) == 130
     table = snapshot()
     root, child_pid = map(int, pid_file.read_text().split())
@@ -72,8 +72,8 @@ def test_interruption_waits_for_root_and_stubborn_descendant(
 def test_reused_pid_is_never_signaled(monkeypatch: pytest.MonkeyPatch) -> None:
     owned = process._Identity(123, 1, 123, "S", "original birth")
     reused = process._Identity(123, 1, 456, "S", "different birth")
-    monkeypatch.setattr(process, "_snapshot", lambda: {123: reused})
-    monkeypatch.setattr(process.os, "kill", lambda *_: pytest.fail("Reused PID must not be signaled"))
+    monkeypatch.setattr(process, '_snapshot', lambda: {123: reused})
+    monkeypatch.setattr(process.os, 'kill', lambda *_: pytest.fail("Reused PID must not be signaled"))
     process._signal(owned, process.signal.SIGTERM)
 
 
@@ -88,13 +88,13 @@ def test_cleanup_failure_never_returns_clean_cancellation(
         def wait(self, **kwargs):
             raise KeyboardInterrupt
 
-    monkeypatch.setattr(process, "validated_command", lambda command, *_: list(command))
-    monkeypatch.setattr(process.subprocess, "Popen", lambda *_, **__: Child())
-    monkeypatch.setattr(process, "_snapshot", lambda: {})
+    monkeypatch.setattr(process, 'validated_command', lambda command, *_: list(command))
+    monkeypatch.setattr(process.subprocess, 'Popen', lambda *_, **__: Child())
+    monkeypatch.setattr(process, '_snapshot', lambda: {})
 
     def failed(*_):
         raise OSError("descendant remains active")
-    monkeypatch.setattr(process, "_cleanup", failed)
+    monkeypatch.setattr(process, '_cleanup', failed)
     with pytest.raises(process.CleanupError, match="cleanup was not confirmed"):
         process.run(["fixture"], tmp_path)
 
@@ -108,8 +108,8 @@ def test_cancellation_during_cleanup_preserves_exception_and_unconfirmed_cause(
     class Child:
         pid = 123
 
-    monkeypatch.setattr(process, "validated_command", lambda command, *_: list(command))
-    monkeypatch.setattr(process.subprocess, "Popen", lambda *_, **__: Child())
+    monkeypatch.setattr(process, 'validated_command', lambda command, *_: list(command))
+    monkeypatch.setattr(process.subprocess, 'Popen', lambda *_, **__: Child())
 
     def fail_inventory():
         raise failure
@@ -117,8 +117,8 @@ def test_cancellation_during_cleanup_preserves_exception_and_unconfirmed_cause(
     def cancel_cleanup(*_):
         raise cancellation
 
-    monkeypatch.setattr(process, "_snapshot", fail_inventory)
-    monkeypatch.setattr(process, "_cleanup", cancel_cleanup)
+    monkeypatch.setattr(process, '_snapshot', fail_inventory)
+    monkeypatch.setattr(process, '_cleanup', cancel_cleanup)
     with pytest.raises(type(cancellation)) as caught:
         process.run(["fixture"], tmp_path)
     assert caught.value is cancellation
@@ -142,8 +142,8 @@ def test_windows_cleanup_cancellation_preserves_exception_and_unconfirmed_cause(
         def terminate(self):
             raise cancellation
 
-    monkeypatch.setattr(process.subprocess, "CREATE_NEW_PROCESS_GROUP", 0, raising=False)
-    monkeypatch.setattr(process.subprocess, "Popen", lambda *_, **__: Child())
+    monkeypatch.setattr(process.subprocess, 'CREATE_NEW_PROCESS_GROUP', 0, raising=False)
+    monkeypatch.setattr(process.subprocess, 'Popen', lambda *_, **__: Child())
     with pytest.raises(type(cancellation)) as caught:
         process._windows_run(["fixture"], tmp_path, None)
     assert caught.value is cancellation
@@ -176,8 +176,8 @@ def test_permission_failure_still_signals_other_owned_children(monkeypatch: pyte
             raise PermissionError("denied child signal")
     # Terminal follow-up verifies that a transient signal denial need not cause false failure.
     inventories = iter([{100: denied, 200: child}, {}])
-    monkeypatch.setattr(process, "_snapshot", lambda: next(inventories))
-    monkeypatch.setattr(process, "_signal", send)
+    monkeypatch.setattr(process, '_snapshot', lambda: next(inventories))
+    monkeypatch.setattr(process, '_signal', send)
 
     class Root:
         pid = 100
@@ -198,13 +198,13 @@ def test_inventory_error_stays_ordinary_after_confirmed_cleanup(
 
     class Root:
         pid = 100
-    monkeypatch.setattr(process, "validated_command", lambda command, *_: list(command))
-    monkeypatch.setattr(process.subprocess, "Popen", lambda *_, **__: Root())
+    monkeypatch.setattr(process, 'validated_command', lambda command, *_: list(command))
+    monkeypatch.setattr(process.subprocess, 'Popen', lambda *_, **__: Root())
 
     def failed():
         raise OSError("inventory unavailable")
-    monkeypatch.setattr(process, "_snapshot", failed)
-    monkeypatch.setattr(process, "_cleanup", lambda *_: None)
+    monkeypatch.setattr(process, '_snapshot', failed)
+    monkeypatch.setattr(process, '_cleanup', lambda *_: None)
     with pytest.raises(OSError, match="inventory unavailable") as error:
         process.run(["fixture"], tmp_path)
     assert not isinstance(error.value, process.CleanupError)

@@ -20,7 +20,7 @@ else()
     set(host_platform linux-x64)
 endif()
 execute_process(
-    COMMAND "${PYTHON_EXECUTABLE}" "${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-scaffold-extension.py"
+    COMMAND "${PYTHON_EXECUTABLE}" "${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/project.py" extension
         --shape backend --id com.horo.fixture.author --name "CI Fixture" --output "${source_dir}"
     RESULT_VARIABLE scaffold_result)
 if(NOT scaffold_result EQUAL 0)
@@ -28,7 +28,7 @@ if(NOT scaffold_result EQUAL 0)
 endif()
 
 execute_process(
-    COMMAND "${PYTHON_EXECUTABLE}" "${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/horo-extension-author-ci.py"
+    COMMAND "${PYTHON_EXECUTABLE}" "${HORO_EXTENSION_SDK_PACKAGE_DIR}/bin/project.py" extension-ci
         --sdk "${HORO_EXTENSION_SDK_PACKAGE_DIR}"
         --project "${source_dir}"
         --output "${output_dir}"

@@ -133,6 +133,96 @@ namespace Horo::Render::Detail {
                 return resources_.UpdateLightFrame(update);
             }
 
+            /** @copydoc IRenderResourceBackend::QueryPipelineDeviceIdentity */
+            Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<RenderPipelineDeviceIdentity>::Failure(access.ErrorValue());
+                return resources_.QueryPipelineDeviceIdentity();
+            }
+
+            /** @copydoc IRenderResourceBackend::QueryShaderModuleMemoryCost */
+            Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &descriptor,
+                                                                     std::size_t cookedBytes) const override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<RenderMemoryCostPlan>::Failure(access.ErrorValue());
+                return resources_.QueryShaderModuleMemoryCost(descriptor, cookedBytes);
+            }
+
+            /** @copydoc IRenderResourceBackend::QueryGraphicsPipelineMemoryCost */
+            Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &descriptor,
+                                                                         std::uint64_t vertex, std::uint64_t fragment) const override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<RenderMemoryCostPlan>::Failure(access.ErrorValue());
+                return resources_.QueryGraphicsPipelineMemoryCost(descriptor, vertex, fragment);
+            }
+
+            /** @copydoc IRenderResourceBackend::QuerySamplerMemoryCost */
+            Result<RenderMemoryCostPlan> QuerySamplerMemoryCost(const RenderSamplerDescriptor &descriptor) const override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<RenderMemoryCostPlan>::Failure(access.ErrorValue());
+                return resources_.QuerySamplerMemoryCost(descriptor);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateShaderModule */
+            Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &descriptor,
+                                                     std::span<const std::uint8_t> cookedCode,
+                                                     const RenderMemoryPlacement &placement) override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<std::uint64_t>::Failure(access.ErrorValue());
+                return resources_.CreateShaderModule(descriptor, cookedCode, placement);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateGraphicsPipeline */
+            Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescriptor &descriptor, std::uint64_t vertex,
+                                                         std::uint64_t fragment, const RenderMemoryPlacement &placement) override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<std::uint64_t>::Failure(access.ErrorValue());
+                return resources_.CreateGraphicsPipeline(descriptor, vertex, fragment, placement);
+            }
+
+            /** @copydoc IRenderResourceBackend::CreateSampler */
+            Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &descriptor,
+                                                const RenderMemoryPlacement &placement) override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<std::uint64_t>::Failure(access.ErrorValue());
+                return resources_.CreateSampler(descriptor, placement);
+            }
+
+            /** @copydoc IMaterialBindingBackend::QueryMaterialParameterBufferSize */
+            Result<std::size_t> QueryMaterialParameterBufferSize(std::uint64_t pipeline, const MaterialBindingDescriptor &descriptor,
+                                                                 ShaderBindingId binding) const override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<std::size_t>::Failure(access.ErrorValue());
+                return resources_.QueryMaterialParameterBufferSize(pipeline, descriptor, binding);
+            }
+
+            /** @copydoc IMaterialBindingBackend::RealizeResolved */
+            Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(
+                const MaterialBindingDescriptor &descriptor, std::uint64_t pipeline,
+                std::span<const MaterialResidentResource> resources) override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<std::unique_ptr<IResidentMaterialBinding>>::Failure(access.ErrorValue());
+                return resources_.RealizeResolved(descriptor, pipeline, resources);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroyShaderModule */
+            void DestroyShaderModule(std::uint64_t instance) noexcept override {
+                if (std::this_thread::get_id() == ownerThread_)
+                    resources_.DestroyShaderModule(instance);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroyGraphicsPipeline */
+            void DestroyGraphicsPipeline(std::uint64_t instance) noexcept override {
+                if (std::this_thread::get_id() == ownerThread_)
+                    resources_.DestroyGraphicsPipeline(instance);
+            }
+
+            /** @copydoc IRenderResourceBackend::DestroySampler */
+            void DestroySampler(std::uint64_t instance) noexcept override {
+                if (std::this_thread::get_id() == ownerThread_)
+                    resources_.DestroySampler(instance);
+            }
+
             Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override {
                 return resources_.QueryBufferMemoryCost(descriptor);
             }
@@ -456,6 +546,24 @@ namespace Horo::Render::Detail {
             }
 
         private:
+            /**
+             * @brief Admits preparation without reading native state from a foreign thread.
+             * Initialization and shutdown are externally serialized owner lifecycle operations.
+             * Foreign preparation queries may run only while that lifecycle remains stable;
+             * callers must join them before owner shutdown. This is not concurrent-shutdown admission.
+             */
+            [[nodiscard]] Result<void> ValidatePreparationAccess() const {
+                if (ownerThread_ == std::thread::id{})
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ == nil)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
+                if (commandBuffer_ != nil)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::FrameActive));
+                return Result<void>::Success();
+            }
+
             /** @brief Configures the admitted native presentation layer before publishing graphics access. */
             void ConfigurePresentationLayer(const std::uint32_t maxFramesInFlight) {
                 layer_.device = device_;

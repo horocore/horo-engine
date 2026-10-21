@@ -22,6 +22,7 @@ namespace Horo {
      */
 
     class NativeExternalProcessRunner;
+    class PublicationLockAccess;
 
     /** @brief Reports availability of optional platform facilities for a composed host. */
     struct PlatformCapabilities {
@@ -66,6 +67,7 @@ namespace Horo {
 
     private:
         friend class NativeDurableFileSystem;
+        friend class PublicationLockAccess;
         explicit ExclusiveFileLock(std::unique_ptr<State> state) noexcept;
         std::unique_ptr<State> state_;
     };

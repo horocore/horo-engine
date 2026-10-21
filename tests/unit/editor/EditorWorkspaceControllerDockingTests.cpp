@@ -29,7 +29,7 @@ namespace {
     using TestWorkspaceController = HoroEditorWorkspaceControllerPolicyTests::FocusedWorkspaceController;
     using namespace HoroEditorWorkspaceControllerFilesystemTests;
 
-    TEST_CASE("Document tabs open, activate and close without losing the center dock", "[unit][editor]") {
+    TEST_CASE("Document tabs open activate and close while Viewport stays pinned", "[unit][editor][documents]") {
         TestWorkspaceController controller;
         EditorWorkspaceViewCommandData open;
         open.command = EditorWorkspaceViewCommand::ChangeActivePanel;
@@ -52,8 +52,9 @@ namespace {
 
         close.stringPayload = "horo.viewport";
         controller.ProcessCommand(close);
-        REQUIRE(document->tabs.empty());
-        REQUIRE(model.activeDocumentPanelId.empty());
+        REQUIRE(document->tabs.size() == 1);
+        REQUIRE(document->tabs.front() == "horo.viewport");
+        REQUIRE(model.activeDocumentPanelId == "horo.viewport");
 
         open.stringPayload = "horo.viewport";
         controller.ProcessCommand(open);

@@ -137,7 +137,7 @@ namespace Horo::Editor {
             RequireError(workspace.Snapshot(), "world_document.lifecycle");
         }
 
-        TEST_CASE("Partitioned world admission enforces metadata ceilings before ownership", "[unit][editor][world_document]") {
+        TEST_CASE("Partitioned world admission owns metadata ceilings independently of caller limits", "[unit][editor][world_document]") {
             WorldDocumentLimits limits;
             auto document = Document();
             document.pages.front().objects.push_back(Object());
@@ -160,6 +160,7 @@ namespace Horo::Editor {
                 limits.maximumLayerNameBytes = 2;
             }
             PartitionedWorldWorkspace workspace{Asset(9), limits};
+            limits = {};
             RequireError(workspace.Open(document), "world_document.capacity");
             RequireError(workspace.Snapshot(), "world_document.lifecycle");
         }

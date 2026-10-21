@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import sys
+
 import importlib.util
 from pathlib import Path
 
 import pytest
 
 
-GENERATOR_PATH = Path(__file__).resolve().parents[2] / "scripts" / "generate_gameplay_behavior_bundle.py"
+GENERATOR_PATH = Path(__file__).resolve().parents[2] / "scripts" / 'project.py'
 GENERATOR_SPEC = importlib.util.spec_from_file_location("horo_gameplay_descriptor_generator", GENERATOR_PATH)
 if GENERATOR_SPEC is None or GENERATOR_SPEC.loader is None:
     raise RuntimeError(f"could not load gameplay descriptor generator from {GENERATOR_PATH}")
 generator = importlib.util.module_from_spec(GENERATOR_SPEC)
+sys.modules[GENERATOR_SPEC.name] = generator
 GENERATOR_SPEC.loader.exec_module(generator)
 
 

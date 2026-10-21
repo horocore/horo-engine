@@ -21,7 +21,7 @@ target_link_libraries(my_extension PRIVATE HoroEngine::ExtensionSdk)
 Create a portable starter project with:
 
 ```text
-python bin/horo-scaffold-extension.py --shape backend --id com.example.tools --name "Example Tools" --output example-tools
+python bin/project.py extension --shape backend --id com.example.tools --name "Example Tools" --output example-tools
 ```
 
 Supported shapes are `gui`, `backend`, `script`, and `hybrid`. Generated
@@ -50,9 +50,12 @@ checks the downloaded SDK version against the lock. The author repository needs
 no engine source checkout. The workflow pins action commits, Python and CMake
 versions, uses read-only permissions, and never receives signing credentials.
 The SDK CI runner parses bounded CTest JUnit input with DTD and entity declarations
-disabled; it has no extra Python package dependency.
+disabled using `defusedxml==0.7.1`, installed by the shipped workflow. For standalone
+use of `bin/project.py extension-ci`, install this dependency into the same Python
+environment first: `python -m pip install defusedxml==0.7.1`. Scaffolding does not
+require this package; JUnit validation does.
 
-The SDK's `bin/horo-extension-author-ci.py` then configures and builds the
+The SDK's `bin/project.py extension-ci` then configures and builds the
 project, runs all CTest tests, installs the package root, validates
 `extension.json`, checks every native module's ABI, packs a canonical
 `.horopkg`, and verifies archive integrity. It publishes the package, JUnit

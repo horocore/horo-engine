@@ -3,8 +3,7 @@
 #include "Horo/Assets/NavMeshAssetType.h"
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Navigation/Backends/RecastDetourProvider.h"
-#include "Horo/Platform/NativeImmutableFileStorage.h"
-#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Platform/NativeProjectIoOwners.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "ProjectProtocolIdentity.h"
 
@@ -35,15 +34,6 @@ namespace Horo::Application::Internal {
             if (error)
                 return Result<std::filesystem::path>::Failure(MakeError(Platform::ProjectReadErrors::ReadFailed));
             return Result<std::filesystem::path>::Success(std::move(root));
-        }
-
-        /** @brief Refuses redirected existing output ancestors before the existing durable writer can create missing descendants. */
-        Result<std::filesystem::path> Output(const std::filesystem::path &root, const std::filesystem::path &relative) {
-            const auto path = root / relative;
-            std::error_code error;
-            if (const auto resolved = std::filesystem::weakly_canonical(path, error); error || resolved != path)
-                return Result<std::filesystem::path>::Failure(MakeError(Platform::ProjectReadErrors::UnsafePath));
-            return Result<std::filesystem::path>::Success(path);
         }
 
         /** @brief Generates only private operation namespace UUIDs from native entropy, never authored asset identities. */
@@ -80,7 +70,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Defines the one native headless output namespace, provider and bounded bake budget. */
         NavigationBakeServiceConfig ServiceConfig(Assets::AssetId definition, std::shared_ptr<const ImmutableFileStorage> cache,
-                                                  const std::filesystem::path &output,
+                                                  std::shared_ptr<DurableFileSystem> publication, const std::filesystem::path &output,
                                                   std::shared_ptr<const Navigation::INavigationMeshBuilder> builder) {
             return {.definition = definition,
                     .artifactType = Assets::AssetTypeId::Parse(Assets::NavMeshAssetTypeName).Value(),
@@ -88,7 +78,7 @@ namespace Horo::Application::Internal {
                     .cacheFiles = std::move(cache),
                     .targetRoot = output,
                     .builder = std::move(builder),
-                    .files = std::make_shared<NativeDurableFileSystem>(),
+                    .files = std::move(publication),
                     .budget = {1, 512ULL * 1024ULL * 1024ULL, 128ULL * 1024ULL * 1024ULL, 8, 1024ULL * 1024ULL * 1024ULL,
                                Duration::FromMilliseconds(30'000)},
                     .sourceAuthority = std::make_shared<NavigationBakeSourceAuthority>(),
@@ -153,30 +143,28 @@ namespace Horo::Application::Internal {
             (compatibility.status != ProjectCompatibilityStatus::Current &&
              compatibility.status != ProjectCompatibilityStatus::CompatibleReleaseLine))
             return Return::Failure(compatibility.diagnostic.value_or(MakeError(Nav::NavigationErrors::BakeInputInvalid)));
-        auto files = Platform::CreateNativeProjectReadFiles(root.Value(), compatibility.metadata->projectId, 1);
-        if (files.HasError())
-            return Return::Failure(files.ErrorValue());
         const auto relative = std::filesystem::path{definition.Value().ToString()} / "headless-null";
-        auto cache = Output(root.Value(), std::filesystem::path{".horo/cache/navigation"} / relative);
-        auto output = Output(root.Value(), std::filesystem::path{".horo/cooked/navigation"} / relative);
-        if (cache.HasError() || output.HasError())
-            return Return::Failure(cache.HasError() ? cache.ErrorValue() : output.ErrorValue());
-        auto cacheFiles =
-            Platform::CreateNativeImmutableFileStorage(root.Value(),
-                                                       (std::filesystem::path{".horo/cache/navigation"} / relative).generic_string());
-        if (cacheFiles.HasError())
-            return Return::Failure(cacheFiles.ErrorValue());
+        const auto cacheNamespace = (std::filesystem::path{".horo/cache/navigation"} / relative).generic_string();
+        const auto publicationNamespace = (std::filesystem::path{".horo/cooked/navigation"} / relative).generic_string();
+        auto owners =
+            Platform::CreateNativeProjectIoOwners(root.Value(), compatibility.metadata->projectId, 1, cacheNamespace, publicationNamespace);
+        if (owners.HasError())
+            return Return::Failure(owners.ErrorValue());
+        const auto output = root.Value() / std::filesystem::path{publicationNamespace};
+        if (const auto admitted = owners.Value().publication->InspectEntry(output); admitted.HasError())
+            return Return::Failure(admitted.ErrorValue());
         auto builder = Nav::CreateRecastDetourNavigationMeshBuilder();
         if (builder.HasError())
             return Return::Failure(builder.ErrorValue());
         identity_ = ProjectProtocolIdentity(root.Value());
         const auto maximumDeadline = context.AbsoluteDeadline().value_or(std::chrono::steady_clock::time_point::max());
         NavigationBakeApplicationConfig
-            config{.service = ServiceConfig(definition.Value(), std::move(cacheFiles).Value(), output.Value(), std::move(builder).Value()),
+            config{.service = ServiceConfig(definition.Value(), owners.Value().cache, owners.Value().publication, output,
+                                            std::move(builder).Value()),
                    .compatibility = {.provider = Digest(HORO_NAVIGATION_BUILD_FINGERPRINT),
                                      .schemas = Digest("horo.navigation.automation.v1;scene3;navdef1;hnt2;hns4;canonical-rh-y-up-meters"),
                                      .settings = Digest("horo.navigation.command.v1;headless-null;recast_detour")},
-                   .captureSource = CaptureSource(std::move(files).Value(), compatibility, maximumDeadline, closed_)};
+                   .captureSource = CaptureSource(std::move(owners).Value().source, compatibility, maximumDeadline, closed_)};
         jobs_.emplace(JobSystemConfig{.workerCount = 2, .maxQueuedJobs = 32, .ioWorkerCount = 1});
         auto created = NavigationBakeApplication::Create(std::move(config), operations_, *jobs_);
         if (created.HasError())

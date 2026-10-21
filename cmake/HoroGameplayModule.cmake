@@ -5,7 +5,7 @@ if(NOT HORO_GAMEPLAY_MODULE_CMAKE_DIR)
 endif()
 if(NOT HORO_GAMEPLAY_CODEGEN_SCRIPT)
     get_filename_component(HORO_GAMEPLAY_ENGINE_ROOT "${HORO_GAMEPLAY_MODULE_CMAKE_DIR}" DIRECTORY)
-    set(HORO_GAMEPLAY_CODEGEN_SCRIPT "${HORO_GAMEPLAY_ENGINE_ROOT}/scripts/generate_gameplay_behavior_bundle.py")
+    set(HORO_GAMEPLAY_CODEGEN_SCRIPT "${HORO_GAMEPLAY_ENGINE_ROOT}/scripts/project.py")
 endif()
 set_property(GLOBAL PROPERTY HORO_GAMEPLAY_MODULE_CMAKE_DIR "${HORO_GAMEPLAY_MODULE_CMAKE_DIR}")
 set_property(GLOBAL PROPERTY HORO_GAMEPLAY_CODEGEN_SCRIPT "${HORO_GAMEPLAY_CODEGEN_SCRIPT}")
@@ -16,6 +16,7 @@ set_property(GLOBAL PROPERTY HORO_GAMEPLAY_SDK_FINGERPRINT "${HORO_GAMEPLAY_SDK_
 # It contains data, never package-provided CMake code or targets. Source libraries become
 # part of the primary project's single generated descriptor bundle and native module.
 function(horo_collect_gameplay_source_libraries output_sources output_roots)
+    string(ASCII 13 _horo_cr)
     set(sources)
     set(roots)
     if(HORO_GAMEPLAY_LIBRARY_MANIFEST)
@@ -34,7 +35,7 @@ function(horo_collect_gameplay_source_libraries output_sources output_roots)
             foreach(index RANGE 0 ${last})
                 string(JSON root GET "${manifest}" libraries ${index} includeRoot)
                 string(JSON source_count LENGTH "${manifest}" libraries ${index} sources)
-                if(source_count LESS 1 OR source_count GREATER 256 OR root MATCHES "[;\r\n]")
+                if(source_count LESS 1 OR source_count GREATER 256 OR root MATCHES "[;${_horo_cr}\n]")
                     message(FATAL_ERROR "Gameplay source library inventory is invalid")
                 endif()
                 file(REAL_PATH "${root}" canonical_root)
@@ -48,7 +49,7 @@ function(horo_collect_gameplay_source_libraries output_sources output_roots)
                     file(REAL_PATH "${source}" canonical_source)
                     cmake_path(IS_PREFIX canonical_root "${canonical_source}" NORMALIZE contained)
                     if(NOT contained OR NOT source STREQUAL canonical_source OR NOT EXISTS "${source}" OR
-                       source MATCHES "[;\r\n]" OR NOT source MATCHES "\\.(cpp|cc|cxx)$" OR source IN_LIST sources)
+                       source MATCHES "[;${_horo_cr}\n]" OR NOT source MATCHES "\\.(cpp|cc|cxx)$" OR source IN_LIST sources)
                         message(FATAL_ERROR "Gameplay source library contains an unavailable, duplicate or escaping source")
                     endif()
                     list(APPEND sources "${source}")
@@ -118,7 +119,7 @@ function(horo_add_gameplay_module target)
     set(generated_revision "${CMAKE_CURRENT_BINARY_DIR}/${target}_generated_behavior_bundle.revision")
     add_custom_command(
         OUTPUT "${generated}" "${generated_revision}"
-        COMMAND "${gameplay_python_executable}" "${gameplay_codegen_script}"
+        COMMAND "${gameplay_python_executable}" "${gameplay_codegen_script}" gameplay
                 --output "${generated}"
                 --revision-output "${generated_revision}"
                 --output-root "${CMAKE_CURRENT_BINARY_DIR}"

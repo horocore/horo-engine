@@ -1,7 +1,7 @@
 #pragma once
-
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/IWorkspacePanel.h"
+#include "NavigationInspectorSession.h"
 #include "editor/screens/workspace/panels/inspector/InspectorEditSession.h"
 #include "editor/screens/workspace/panels/inspector/PhysicsInspectorSession.h"
 
@@ -10,6 +10,16 @@
 
 namespace Horo::Editor {
     class InspectorContributionView;
+
+    /**
+     * @brief Render shared typed navigation controls for the complete selection or exact Prefab member.
+     * @param session Panel-owned detached drafts, invalidated when their owner or selection changes.
+     * @param view Current immutable workspace projection.
+     * @param command Receives an explicit Apply gesture for host validation and publication.
+     * @param context Shared localization, fonts and UI services.
+     */
+    void DrawNavigationInspector(NavigationInspectorSession &session, const EditorWorkspaceViewModel &view,
+                                 EditorWorkspaceViewCommandData &command, const EditorGuiContext &context);
 
     class InspectorPanel final : public IWorkspacePanel {
     public:
@@ -97,6 +107,7 @@ namespace Horo::Editor {
         std::shared_ptr<const PrefabHierarchyProjection> m_prefabPresentation;
         std::optional<PrefabHierarchyTarget> m_prefabPresentedTarget;
         const PrefabHierarchyEntry *m_prefabEntry{}; /**< Borrowed only while m_prefabPresentation pins this exact cache. */
+        NavigationInspectorSession m_navigationSession;
         PhysicsInspectorSession m_physicsSession;
         bool m_physicsInputError{};
         int m_activeTab{0};

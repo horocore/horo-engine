@@ -50,7 +50,7 @@ def _run_generator(
         definition_hash: str | None = None,
         migration_catalog: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    command = [sys.executable, str(script), str(releases), version, str(output)]
+    command = [sys.executable, str(script), "compatibility", str(releases), version, str(output)]
     if definition_hash is not None:
         command.append(definition_hash)
     if migration_catalog is not None:

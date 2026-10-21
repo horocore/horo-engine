@@ -4,6 +4,7 @@
 #include "editor/renderer/EditorGuiRenderer.h"
 
 #include <SDL3/SDL.h>
+#include <thread>
 #include <vector>
 
 namespace Horo::Editor {
@@ -26,6 +27,11 @@ namespace Horo::Editor {
         void Shutdown() noexcept override;
 
     private:
+        /** @brief Rejects a different thread or a context/window that is no longer current. */
+        [[nodiscard]] Result<void> ValidateContext() const;
+        /** @brief Releases a view before its backing texture without losing cleanup on upload failure. */
+        void ReleaseTextureResources(Render::RenderTextureHandle texture, Render::RenderTextureViewHandle view) noexcept;
+        const std::thread::id ownerThread_{std::this_thread::get_id()};
         SDL_Window *window_{nullptr};
         SDL_GLContext context_{nullptr};
         Render::RenderFrontend *frontend_{nullptr};
