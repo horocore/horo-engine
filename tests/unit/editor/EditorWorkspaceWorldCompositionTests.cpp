@@ -1,5 +1,6 @@
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "OwnedTestDirectory.h"
+#include "PartitionedWorldResidencyTestSupport.h"
 #include "WorldCompositionSourceTestSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -25,6 +26,11 @@ namespace Horo::Editor::WorldCompositionTests {
                                                                          EditorWorkspaceDependencies{.worldSourceFiles = files.Value(),
                                                                                                      .documentSessionOwner = owner});
                 REQUIRE(controller->OpenWorldCompositionSource("world ü space.horoworld").HasValue());
+            }
+
+            void CaptureFrame() {
+                controller->RefreshWorldSourceProjection();
+                controller->RefreshWorldDocumentProjection();
             }
 
             std::filesystem::path Path() const {
@@ -146,5 +152,59 @@ namespace Horo::Editor::WorldCompositionTests {
         CHECK_FALSE(controller.ViewModel().worldDocument);
         CHECK_FALSE(controller.ViewModel().worldBrowser);
         CHECK(current->document.pages.size() == 1);
+    }
+
+    TEST_CASE("Real page payload residency updates the same browser and viewport frame", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        auto &world = controller.WorldDocuments();
+        const auto initial = world.Snapshot().Value();
+        const auto &page = initial->document.pages.front().head;
+        REQUIRE(world.LoadPage(page, WorldResidencyTests::Source(), initial->fence).HasValue());
+        project.CaptureFrame();
+        const auto loaded = world.Snapshot().Value();
+        REQUIRE(loaded->loadedPages.front().content.Objects().size() == 1);
+        REQUIRE(controller.ViewModel().worldBrowser->cells.size() == 3);
+        for (const auto &cell : controller.ViewModel().worldBrowser->cells)
+            CHECK(cell.openObjects == 1);
+        CHECK(controller.ViewModel().worldBrowser->source == loaded);
+        CHECK(controller.ViewModel().worldViewport.snapshot == loaded);
+        REQUIRE(world.UnloadPage(page.sourceAsset, loaded->fence).HasValue());
+        project.CaptureFrame();
+        const auto closed = world.Snapshot().Value();
+        REQUIRE(controller.ViewModel().worldBrowser->cells.size() == 3);
+        for (const auto &cell : controller.ViewModel().worldBrowser->cells)
+            CHECK(cell.openObjects == 0);
+        CHECK(controller.ViewModel().worldBrowser->source == closed);
+        CHECK(controller.ViewModel().worldViewport.snapshot == closed);
+        CHECK(closed->document.pages.size() == 1);
+        CHECK_FALSE(closed->dirty);
+        CHECK(loaded->loadedPages.front().content.Objects().size() == 1);
+    }
+
+    TEST_CASE("Page-aware selection prevents unload without changing browser publication", "[editor][world_browser][controller]") {
+        WorldProject project;
+        auto &controller = *project.controller;
+        auto &world = controller.WorldDocuments();
+        const auto initial = world.Snapshot().Value();
+        const auto &page = initial->document.pages.front().head;
+        REQUIRE(world.LoadPage(page, WorldResidencyTests::Source(), initial->fence).HasValue());
+        const auto loaded = world.Snapshot().Value();
+        const std::array addresses{WorldStreaming::WorldAuthoringObjectAddress{page.sourceAsset, 1}};
+        const auto selected = controller.SelectWorldObjects(addresses, addresses.front(), loaded->fence);
+        REQUIRE(selected.HasValue());
+        project.CaptureFrame();
+        WorldResidencyTests::ErrorIs(world.UnloadPage(page.sourceAsset, selected.Value()->fence), "world_document.conflict");
+        project.CaptureFrame();
+        CHECK(world.Snapshot().Value() == selected.Value());
+        CHECK(controller.ViewModel().worldBrowser->source == selected.Value());
+        CHECK(controller.ViewModel().worldViewport.snapshot == selected.Value());
+        CHECK(controller.ViewModel().worldDocument->primary == addresses.front());
+        const auto cleared = controller.SelectWorldObjects({}, std::nullopt, selected.Value()->fence);
+        REQUIRE(cleared.HasValue());
+        REQUIRE(world.UnloadPage(page.sourceAsset, cleared.Value()->fence).HasValue());
+        project.CaptureFrame();
+        CHECK(controller.ViewModel().worldDocument->selectedObjects.empty());
+        CHECK(controller.ViewModel().worldDocument->loadedPages.empty());
     }
 }  // namespace Horo::Editor::WorldCompositionTests

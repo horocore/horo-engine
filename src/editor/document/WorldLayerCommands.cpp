@@ -69,7 +69,7 @@ namespace Horo::Editor {
 
     /** @copydoc PartitionedWorldWorkspace::ExecuteLayerCommand */
     Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::ExecuteLayerCommand(const WorldLayerCommand &command,
-                                                                                         const WorldDocumentFence expected,
+                                                                                         const WorldDocumentFence &expected,
                                                                                          const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
@@ -113,7 +113,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PartitionedWorldWorkspace::CreateLayer */
-    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::CreateLayer(std::string name, const WorldDocumentFence expected,
+    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::CreateLayer(std::string name, const WorldDocumentFence &expected,
                                                                                  const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
@@ -132,7 +132,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc PartitionedWorldWorkspace::ReplayLayerCommand */
-    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::ReplayLayerCommand(const bool redo, const WorldDocumentFence expected,
+    Result<PartitionedWorldSnapshotLease> PartitionedWorldWorkspace::ReplayLayerCommand(const bool redo, const WorldDocumentFence &expected,
                                                                                         const std::stop_token cancellation) {
         if (const auto valid = CheckFence(expected); valid.HasError())
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
