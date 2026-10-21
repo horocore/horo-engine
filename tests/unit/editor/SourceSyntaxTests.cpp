@@ -92,7 +92,7 @@ TEST_CASE("Lexical offsets preserve UTF8 bytes CRLF and half-open boundaries", "
     REQUIRE(syntax.RoleAt(offset + 4) == SourceSyntaxRole::Keyword);
     REQUIRE(syntax.RoleAt(offset + 5) == SourceSyntaxRole::Text);
     for (const auto &span : syntax.spans) {
-        REQUIRE_FALSE(span.end > 0 && span.end < text.size() && text[span.end - 1] == '\r' && text[span.end] == '\n');
+        REQUIRE_FALSE((span.end > 0 && span.end < text.size() && text[span.end - 1] == '\r' && text[span.end] == '\n'));
     }
     REQUIRE(syntax.RoleAt(text.size()) == SourceSyntaxRole::Text);
     REQUIRE(syntax.RoleAt(static_cast<std::size_t>(-1)) == SourceSyntaxRole::Text);
