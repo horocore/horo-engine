@@ -3294,6 +3294,9 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
+            editor/screens/workspace/EditorWorkspaceScreenActions.cpp
+            editor/screens/workspace/EditorWorkspaceScreenComposition.cpp
+            editor/screens/workspace/EditorWorkspaceScreenLifecycle.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
         editor/screens/EditorPageFileStore.cpp
