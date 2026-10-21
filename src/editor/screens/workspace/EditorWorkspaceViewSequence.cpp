@@ -5,38 +5,12 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstddef>
 #include <span>
 
 namespace Horo::Editor {
     namespace {
-        /** @brief Emits only source-local semantic edits from a virtualized shared-control list. */
-        void DrawPrefabSourceFields(const PrefabDocumentSnapshot &source, EditorWorkspaceViewCommandData &outCommand,
-                                    const EditorGuiContext &context) {
-            // Each field emits a source-local semantic transaction; no SceneDocument or runtime entity mutation is exposed.
-            ImGui::BeginChild("##prefab_source", {0, ImGui::GetContentRegionAvail().y / 3.0F});
-            ImGuiListClipper clipper;
-            clipper.Begin(static_cast<int>(source.source->Data().objects.size()));
-            while (clipper.Step())
-                for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
-                    const auto &object = source.source->Data().objects[static_cast<std::size_t>(index)];
-                    const auto id = std::to_string(object.localId.value);
-                    ImGui::PushID(id.c_str());
-                    std::string name = object.name;
-                    ImGui::BeginDisabled(source.externalConflict);
-                    if (Ui::InputTextControl("##name", name, Prefab::MaximumPrefabObjectNameBytes, context.theme.fonts,
-                                             {.hint = context.localization.Get("editor", "workspace.prefab_document.name").c_str(),
-                                              .componentSize = Ui::ComponentSize::Medium})) {
-                        outCommand.command = EditorWorkspaceViewCommand::PrefabDocument;
-                        outCommand.prefabFence = source.fence;
-                        outCommand.prefabEdit = RenamePrefabObject{object.localId, std::move(name)};
-                    }
-                    ImGui::EndDisabled();
-                    ImGui::PopID();
-                }
-            ImGui::EndChild();
-        }
-
         /** @brief Emits stable-neighbor reorder requests for the active document tab. */
         void DrawDocumentReorderActions(const ILocalizationService &localization, const std::span<const WorkspaceDocumentTab> tabs,
                                         const std::size_t index, EditorWorkspaceViewCommandData &outCommand) {
@@ -72,7 +46,17 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceView::DrawDockContent */
     void EditorWorkspaceView::DrawDockContent(const WorkspaceDockArea area, const std::shared_ptr<IWorkspacePanel> &panel,
                                               const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const {
-        if (area == WorkspaceDockArea::Document && DrawPrefabDocument(panel, viewModel, outCommand))
+        const bool prefab = std::ranges::any_of(viewModel.prefabDocuments, [&](const auto &entry) {
+            return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        });
+        if (area != WorkspaceDockArea::Document && prefab && panel &&
+            (panel->GetId() == "horo.hierarchy" || panel->GetId() == "horo.inspector")) {
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                            m_context.localization.Get("editor", "workspace.prefab_document.source_controls"), Theme::Muted(),
+                            m_context.theme.fonts);
+            return;
+        }
+        if (area == WorkspaceDockArea::Document && DrawPrefabDocument(viewModel, outCommand))
             return;
         if (area == WorkspaceDockArea::Document && DrawSourceDocument(viewModel, outCommand))
             return;
@@ -167,8 +151,55 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @copydoc EditorWorkspaceView::RefreshPrefabNameDrafts */
+    void EditorWorkspaceView::RefreshPrefabNameDrafts(const PrefabDocumentSnapshot &source) const {
+        if (m_prefabNameFence && m_prefabNameFence->owner == source.fence.owner && m_prefabNameFence->instance == source.fence.instance &&
+            m_prefabNameFence->revision == source.fence.revision)
+            return;
+        m_prefabNameDrafts.resize(source.source->Data().objects.size());
+        for (std::size_t index = 0; index < m_prefabNameDrafts.size(); ++index) {
+            auto &draft = m_prefabNameDrafts[index];
+            draft.fill('\0');
+            const auto &name = source.source->Data().objects[index].name;
+            std::copy(name.begin(), name.end(), draft.begin());
+        }
+        m_prefabNameScope = source.fence.owner.ToString() + "/" + std::to_string(source.fence.instance.Value());
+        m_prefabNameFence = source.fence;
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawPrefabSourceFields */
+    void EditorWorkspaceView::DrawPrefabSourceFields(const PrefabDocumentSnapshot &source,
+                                                     EditorWorkspaceViewCommandData &outCommand) const {
+        RefreshPrefabNameDrafts(source);
+        ImGui::PushID(m_prefabNameScope.c_str());
+        ImGui::BeginChild("##prefab_source", {0, ImGui::GetContentRegionAvail().y / 3.0F});
+        ImGuiListClipper clipper;
+        clipper.Begin(static_cast<int>(source.source->Data().objects.size()));
+        while (clipper.Step())
+            for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; ++index) {
+                const auto slot = static_cast<std::size_t>(index);
+                const auto &object = source.source->Data().objects[slot];
+                auto &draft = m_prefabNameDrafts[slot];
+                std::array<char, 16> id{};
+                const auto converted = std::to_chars(id.data(), id.data() + id.size(), object.localId.value);
+                ImGui::PushID(id.data(), converted.ptr);
+                ImGui::BeginDisabled(source.externalConflict);
+                if (Ui::InputTextControl("##name", draft.data(), draft.size(), m_context.theme.fonts,
+                                         {.hint = m_context.localization.Get("editor", "workspace.prefab_document.name").c_str(),
+                                          .componentSize = Ui::ComponentSize::Medium})) {
+                    outCommand.command = EditorWorkspaceViewCommand::PrefabDocument;
+                    outCommand.prefabFence = source.fence;
+                    outCommand.prefabEdit = RenamePrefabObject{object.localId, std::string{draft.data()}};
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+        ImGui::EndChild();
+        ImGui::PopID();
+    }
+
     /** @copydoc EditorWorkspaceView::DrawPrefabDocument */
-    bool EditorWorkspaceView::DrawPrefabDocument(const std::shared_ptr<IWorkspacePanel> &panel, const EditorWorkspaceViewModel &viewModel,
+    bool EditorWorkspaceView::DrawPrefabDocument(const EditorWorkspaceViewModel &viewModel,
                                                  EditorWorkspaceViewCommandData &outCommand) const {
         const auto found = std::ranges::find_if(viewModel.prefabDocuments, [&](const auto &entry) {
             return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
@@ -198,10 +229,14 @@ namespace Horo::Editor {
         if (source.externalConflict)
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.prefab_document.conflict"),
                             Theme::ConsoleWarning(), m_context.theme.fonts);
-        DrawPrefabSourceFields(source, outCommand, m_context);
-        if (source.stageActive && panel) {
+        DrawPrefabSourceFields(source, outCommand);
+        const auto &panels = m_panelRegistry.GetAllPanels();
+        const auto viewport = std::ranges::find_if(panels, [](const auto &entry) {
+            return entry->GetId() == "horo.viewport";
+        });
+        if (source.stageActive && viewport != panels.end()) {
             EditorWorkspaceViewCommandData previewOnly;
-            panel->DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), viewModel, previewOnly, m_context);
+            (*viewport)->DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), viewModel, previewOnly, m_context);
         } else
             Ui::WrappedText(ImGui::GetContentRegionAvail().x,
                             m_context.localization.Get("editor", "workspace.prefab_document.preview_unavailable"), Theme::Muted(),

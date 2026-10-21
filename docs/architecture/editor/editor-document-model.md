@@ -348,7 +348,11 @@ scene. It never changes the Scene document or starts gameplay callbacks. The
 reserved `0x4000000000000000` runtime identity namespace is separate from ordinary
 scene previews and Play; a workspace advances identities for each attempt. Stage resources and
 renderer extraction leases retire on edit, switch, reload, close and shutdown.
-Retained immutable source snapshots remain readable. Failed required component or
+Retained immutable source snapshots remain readable. Source widgets retain bounded
+transient name buffers per publication rather than copying/resizing strings on every
+draw. Scene hierarchy/inspector controls are inactive while the isolated source stage
+is focused; navigation, document switching and workspace layout remain available.
+Failed required component or
 asset preparation produces an explicit unavailable preview, preserving source and
 recovery rather than publishing a partial hierarchy. The application explicitly
 injects the same project/native/committed-asset composition used by Scene into a

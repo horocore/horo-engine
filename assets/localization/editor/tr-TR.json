@@ -4,6 +4,7 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab_document.source_controls": { "text": "Prefab kaynak kontrolleri belgededir. Sahneyi düzenlemek için Sahne görünümüne dönün." },
     "workspace.prefab_document.undo": { "text": "Kaynak düzenlemesini geri al" },
     "workspace.prefab_document.redo": { "text": "Kaynak düzenlemesini yinele" },
     "workspace.prefab_document.reload": { "text": "Kaydedilmiş kaynağı yeniden yükle" },

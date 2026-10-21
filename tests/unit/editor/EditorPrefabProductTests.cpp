@@ -218,12 +218,14 @@ namespace Horo::Application::PrefabEditorProductTest {
         auto prepared = factory.create(fixture.project.dir.path, Editor::EditorFirstPrefabStage, definition.Value());
         REQUIRE(prepared.HasValue());
         auto &host = *prepared.Value();
-        REQUIRE(host.Scenes().Startup({}).HasValue());
+        CancellationSource cancellation;
+        const auto token = cancellation.Token();
+        REQUIRE(host.Scenes().Startup(token).HasValue());
         REQUIRE(host.Scenes().QueuePreparation(definition.Value()).HasValue());
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         std::uint64_t frame = 1;
         while (!host.Scenes().ActiveScene() && std::chrono::steady_clock::now() < deadline) {
-            REQUIRE(host.CommitSceneChanges({.frameNumber = frame++}).HasValue());
+            REQUIRE(host.CommitSceneChanges({.frameNumber = frame++, .cancellation = token}).HasValue());
             REQUIRE_FALSE(host.Scenes().TakeOperationError().has_value());
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
         }

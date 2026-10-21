@@ -105,6 +105,23 @@ namespace Horo::Editor {
         CHECK_FALSE(fixture.document->Execute(initial.fence, RenamePrefabObject{{0}, "Stale"}).HasValue());
     }
 
+    TEST_CASE("Prefab source accepts its full UTF8 byte boundary and keeps no-op edits out of history", "[editor][prefab][session]") {
+        Fixture fixture;
+        std::string boundary;
+        while (boundary.size() + 2 <= Prefab::MaximumPrefabObjectNameBytes)
+            boundary += "\xc5\x9f";
+        boundary.append(Prefab::MaximumPrefabObjectNameBytes - boundary.size(), 'x');
+        fixture.Rename(boundary);
+        const auto accepted = fixture.document->Snapshot();
+        CHECK(accepted.source->Data().objects.front().name.size() == Prefab::MaximumPrefabObjectNameBytes);
+        fixture.Rename(accepted.source->Data().objects.front().name);
+        CHECK(fixture.document->Snapshot().fence.revision == accepted.fence.revision);
+        auto saved = fixture.document->Save(accepted.fence, fixture.project.mutations, fixture.project.files);
+        REQUIRE(saved.HasValue());
+        REQUIRE(fixture.document->Reload(fixture.document->Snapshot().fence, false).HasValue());
+        CHECK(fixture.document->Snapshot().source->Data().objects.front().name == boundary);
+    }
+
     TEST_CASE("Prefab malformed and foreign edits publish no state or history", "[editor][prefab][session]") {
         Fixture fixture;
         const auto before = fixture.document->Snapshot();

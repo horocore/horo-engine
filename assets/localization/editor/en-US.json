@@ -4,6 +4,7 @@
   "locale": "en-US",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab_document.source_controls": { "text": "Prefab source controls are in the document. Return to the Scene viewport to edit the Scene." },
     "workspace.prefab_document.undo": { "text": "Undo source edit" },
     "workspace.prefab_document.redo": { "text": "Redo source edit" },
     "workspace.prefab_document.reload": { "text": "Reload saved source" },

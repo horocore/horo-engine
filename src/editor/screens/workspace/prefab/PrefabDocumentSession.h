@@ -70,6 +70,12 @@ namespace Horo::Editor {
                                                                                  Prefab::PrefabLimitProfile limits);
         /** @brief Captures immutable presentation state. @return Owned source lease and distinct revisions. */
         [[nodiscard]] PrefabDocumentSnapshot Snapshot() const;
+
+        /** @brief Reads session-local instance identity without copying a source path. @return Shared registry-issued identity. */
+        [[nodiscard]] DocumentInstanceId Instance() const noexcept {
+            return identity_.instance;
+        }
+
         /** @brief Applies one semantic transaction. @param fence Exact source admission. @param edit Source-owned edit.
          * @return Success or zero-mutation validation/history/stale error. */
         [[nodiscard]] Result<void> Execute(PrefabDocumentFence fence, const PrefabSourceEdit &edit);
