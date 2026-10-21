@@ -323,7 +323,8 @@ namespace Horo::Editor {
     }  // namespace
 
     TEST_CASE("Assets prefab drops share canonical placement history dirty save and undo", "[editor][prefab][asset-drop][native]") {
-        Workspace workspace;
+        const std::u8string_view sourceName = u8"köprü_日本 prefab with spaces";
+        Workspace workspace{std::string{sourceName.begin(), sourceName.end()}};
         auto &owner = *workspace.controller;
         auto drop = Drop(workspace, AssetSceneDropTarget::HierarchyRoot);
         SECTION("hierarchy child") {

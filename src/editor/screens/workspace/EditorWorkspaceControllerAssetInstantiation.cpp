@@ -7,6 +7,7 @@
 #include <format>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 
 namespace Horo::Editor {
@@ -19,18 +20,23 @@ namespace Horo::Editor {
             return std::filesystem::path{viewModel.projectRoot} / record.sourcePath.String();
         }
 
+        /** @brief Preserves explicit UTF-8 source identity when constructing native paths, including Windows wide paths. */
+        std::filesystem::path SourcePathFromUtf8(const std::string_view encoded) {
+            return std::filesystem::path{std::u8string{encoded.begin(), encoded.end()}};
+        }
+
         /** @brief Requires the process-local source path to still name the exact registered project source. */
         bool MatchesPrefabDropSource(const EditorWorkspaceViewModel &model, const AssetSceneDropRequest &request,
                                      const Assets::AssetRecord &record) {
             if (request.absoluteAssetPath.empty() || (request.target == AssetSceneDropTarget::Viewport && request.parent))
                 return false;
             std::error_code error;
-            const auto expected = std::filesystem::weakly_canonical(std::filesystem::path{model.projectRoot} /
-                                                                        std::filesystem::u8path(record.sourcePath.String()),
-                                                                    error);
+            const auto expected =
+                std::filesystem::weakly_canonical(std::filesystem::path{model.projectRoot} / SourcePathFromUtf8(record.sourcePath.String()),
+                                                  error);
             if (error)
                 return false;
-            const auto dragged = std::filesystem::weakly_canonical(std::filesystem::u8path(request.absoluteAssetPath), error);
+            const auto dragged = std::filesystem::weakly_canonical(SourcePathFromUtf8(request.absoluteAssetPath), error);
             return !error && dragged == expected;
         }
     }  // namespace
@@ -145,7 +151,7 @@ namespace Horo::Editor {
                                        1024U * 1024U, m_prefabCancellation.Token());
         if (projectMetadata.HasError())
             return Result<void>::Failure(projectMetadata.ErrorValue());
-        m_prefabDrop.emplace(request.fence, record.id, m_assetRegistry.Revision(), std::move(captured.Value().sources),
+        m_prefabDrop.emplace(request.fence, record.id, m_assetRegistry.Revision(), std::move(captured).Value().sources,
                              std::move(geometry).Value(), projectMetadata.Value().identity);
         return Result<void>::Success();
     }
@@ -158,13 +164,12 @@ namespace Horo::Editor {
         auto lease = m_mutations->TryAcquire({m_viewModel.projectRoot, ProjectMutationOwner::Asset, "editor.prefab.drop"});
         if (lease.HasError())
             return lease;
-        const auto unchanged = m_prefabDrop->sources.inputs.VerifyUnchanged(m_prefabCancellation.Token());
-        if (unchanged.HasError())
+        if (const auto unchanged = m_prefabDrop->sources.inputs.VerifyUnchanged(m_prefabCancellation.Token()); unchanged.HasError())
             return Return::Failure(unchanged.ErrorValue());
-        const auto projectMetadata =
-            Assets::CaptureAssetSource(m_viewModel.projectRoot, std::filesystem::path{m_viewModel.projectRoot} / ".horo/project.json",
-                                       1024U * 1024U, m_prefabCancellation.Token());
-        if (projectMetadata.HasError() || projectMetadata.Value().identity != m_prefabDrop->projectMetadata)
+        if (const auto projectMetadata =
+                Assets::CaptureAssetSource(m_viewModel.projectRoot, std::filesystem::path{m_viewModel.projectRoot} / ".horo/project.json",
+                                           1024U * 1024U, m_prefabCancellation.Token());
+            projectMetadata.HasError() || projectMetadata.Value().identity != m_prefabDrop->projectMetadata)
             return Return::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
         if (m_defaultScenePath) {
             const auto current = InspectProjectSceneFingerprint(m_viewModel.projectRoot, *m_defaultScenePath);
@@ -176,8 +181,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::PlacePrefabAsset */
     void EditorWorkspaceController::PlacePrefabAsset(const AssetSceneDropRequest &request, const Assets::AssetRecord &record) {
-        auto prepared = PreparePrefabDrop(request, record);
-        if (prepared.HasError()) {
+        if (const auto prepared = PreparePrefabDrop(request, record); prepared.HasError()) {
             HandleInstantiatedAssetCommand(Result<SceneCommandResult>::Failure(prepared.ErrorValue()));
             m_prefabDrop.reset();
             return;

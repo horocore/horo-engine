@@ -165,7 +165,7 @@ namespace Horo::Editor {
                     return Result<PrefabDropGeometry>::Failure(Error{.message = "Prefab preview parent order is invalid."});
                 world = Math::Multiply(parent->second, world);
             }
-            worlds.emplace(entity.object, world);
+            worlds.try_emplace(entity.object, world);
             if (!entity.primitiveMesh)
                 continue;
             auto acquired = meshes.Acquire(*entity.primitiveMesh);
