@@ -4,9 +4,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
-#include <algorithm>
 #include <array>
-#include <cstring>
 
 namespace Horo::Editor {
     namespace {
@@ -28,8 +26,12 @@ namespace Horo::Editor {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, layer.name, Theme::Text(), context.theme.fonts);
             const auto &font = context.theme.fonts;
             const auto current = context.localization.Get("editor", "workspace.world_layers.current");
-            if (selected)
+            if (selected) {
+                // Badge deliberately leaves an inline cursor; this row owns a separate status line.
+                ImGui::BeginGroup();
                 Ui::Badge({.label = current.c_str(), .tone = Ui::BadgeTone::Accent}, font);
+                ImGui::EndGroup();
+            }
             if (Action("workspace.world_layers.set_current", intent.action == WorldLayerOutlinerAction::None && !selected, context)) {
                 intent.action = WorldLayerOutlinerAction::Execute;
                 intent.command = SetCurrentWorldLayer{layer.id};
@@ -51,14 +53,12 @@ namespace Horo::Editor {
         /** @brief Emits only one filter intent from shared text and ownership controls. */
         void DrawLayerFilters(const PartitionedWorldSnapshot &snapshot, const EditorGuiContext &context, WorldLayerOutlinerIntent &intent) {
             const auto &fonts = context.theme.fonts;
-            std::array<char, 1025> filter{};
-            const auto size = std::min(snapshot.layerFilter.name.size(), filter.size() - 1);
-            std::memcpy(filter.data(), snapshot.layerFilter.name.data(), size);
+            std::string filter = snapshot.layerFilter.name;
             const auto hint = context.localization.Get("editor", "workspace.world_layers.filter");
             ImGui::BeginDisabled(intent.action != WorldLayerOutlinerAction::None);
-            if (Ui::InputTextControl("##WorldLayerFilter", filter.data(), filter.size(), fonts, {.hint = hint.c_str()})) {
+            if (Ui::InputTextControl("##WorldLayerFilter", filter, 1025, fonts, {.hint = hint.c_str()})) {
                 intent.action = WorldLayerOutlinerAction::Execute;
-                intent.command = FilterWorldLayers{{filter.data(), snapshot.layerFilter.ownership}};
+                intent.command = FilterWorldLayers{{std::move(filter), snapshot.layerFilter.ownership}};
             }
             ImGui::EndDisabled();
             const std::array<std::string, 4> ownershipLabels{context.localization.Get("editor", "workspace.world_layers.all_owners"),

@@ -570,8 +570,7 @@ namespace Horo::Editor {
             /** @brief Rechecks exact world consent after operations on other owners that may run host callbacks. */
             Result<void> ValidateLeaveWorld() const {
                 const auto world = controller_->WorldDocuments().Snapshot();
-                const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt;
-                if (fence != leaveWorldFence_)
+                if (const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt; fence != leaveWorldFence_)
                     return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 return Result<void>::Success();
             }

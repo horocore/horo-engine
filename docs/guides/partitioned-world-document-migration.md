@@ -387,3 +387,30 @@ remain available as `EditorWorkspaceViewModel::worldLayerFailure`; the world tab
 resolves localized failure copy. The layer controller regression target exercises
 real loaded Scene content, page pinning, the single selection/primary root, stale
 command rejection and loaded-page dirty/history isolation.
+
+The selection/query entry points synchronously borrow `WorldDocumentFence` and the
+optional primary address by const reference. These larger input values are never
+retained by reference; publications copy their owned state before returning.
+Ordinary calls, including temporary/null primary values, are unchanged. Consumers
+storing member-function pointers must use the const-reference parameter types;
+the standalone public consumer asserts those exact signatures. Rebuild consumers
+with this in-memory API evolution; no source-file or serialized identity changes.
+
+The new LoadPage, CommitLoadedPage, UnloadPage and SetPagePinned methods borrow
+their page descriptors and world fences by const reference for the synchronous call.
+Selection adapters likewise borrow the optional primary and fence. Consumers rebuild against
+the updated declarations; ordinary value and temporary arguments remain supported,
+and no borrowed reference is stored. The selection adapter captures an owned fence
+before publication because the argument may alias the immutable root being replaced.
+The public-header consumer checks the exact manual load/unload signatures, and the
+selection regression exercises a fence backed solely by that owner root. Decoded Scene
+source is transferred out of its successful Result before moving its vectors into
+the actual document; moving from the immutable lvalue Result view would copy instead.
+
+Layer command, name-only creation and replay entry points likewise borrow the exact
+fence for the synchronous operation. They never retain it or access it after root
+publication. The layer consumer asserts the exact const-reference member signatures,
+in addition to the canonical selection/query/manual-page signatures. Existing value
+and temporary arguments continue working; consumers storing member pointers rebuild
+against these updated in-memory declarations. Modal drafts and queued presentation
+intents still own their fence values across frames.
