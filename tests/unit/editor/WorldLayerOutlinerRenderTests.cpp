@@ -108,7 +108,7 @@ TEST_CASE("World layer creation modal cancellation replacement and shutdown neve
         harness.Activate(locale);
         REQUIRE(harness.modals
                     .OpenRoot(std::make_unique<CreateWorldLayerModal>(harness.context, WorldDocumentFence{},
-                                                                      [&](std::string, WorldDocumentFence) {
+                                                                      [&](std::string, const WorldDocumentFence &) {
             ++submissions;
             return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Stale));
         })).HasValue());

@@ -15,13 +15,13 @@ namespace Horo::Editor {
     class CreateWorldLayerModal final : public EditorModal {
     public:
         /** @brief Exact fenced host capability; failure keeps this draft open and preserves authored state. */
-        using Create = std::function<Result<PartitionedWorldSnapshotLease>(std::string, WorldDocumentFence)>;
+        using Create = std::function<Result<PartitionedWorldSnapshotLease>(std::string, const WorldDocumentFence &)>;
 
         /** @brief Captures the opening publication and host submission port.
-         * @param context GUI services outliving the modal. @param expected Exact source publication.
+         * @param context GUI services outliving the modal. @param expected Exact source publication, copied into the owned draft.
          * @param create Owner-lane host capability outliving the modal; never a borrowed raw document pointer.
          */
-        CreateWorldLayerModal(const EditorGuiContext &context, WorldDocumentFence expected, Create create);
+        CreateWorldLayerModal(const EditorGuiContext &context, const WorldDocumentFence &expected, Create create);
         /** @brief Stable modal workflow identity. @return Layer-creation modal ID. */
         [[nodiscard]] ModalId Id() const override;
         /** @brief Compact exclusive presentation. @return Host surface policy. */

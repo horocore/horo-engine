@@ -46,13 +46,14 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ApplyWorldLayerIntent */
     Result<PartitionedWorldSnapshotLease> EditorWorkspaceController::ApplyWorldLayerIntent(const WorldLayerOutlinerIntent &intent) {
+        using enum WorldLayerOutlinerAction;
         switch (intent.action) {
-            case WorldLayerOutlinerAction::Execute:
+            case Execute:
                 return intent.command ? m_worldDocuments.ExecuteLayerCommand(*intent.command, intent.expected)
                                       : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
-            case WorldLayerOutlinerAction::Undo:
-            case WorldLayerOutlinerAction::Redo:
-                return m_worldDocuments.ReplayLayerCommand(intent.action == WorldLayerOutlinerAction::Redo, intent.expected);
+            case Undo:
+            case Redo:
+                return m_worldDocuments.ReplayLayerCommand(intent.action == Redo, intent.expected);
             default:
                 return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Unsupported));
         }

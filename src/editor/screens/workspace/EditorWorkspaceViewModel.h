@@ -338,7 +338,7 @@ namespace Horo::Editor {
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
         WorldViewportBinding worldViewport;
         std::optional<Error> worldSourceError;
-        std::optional<Error> worldLayerFailure; /**< Canonical layer failure; presentation resolves localized copy. */
+        std::optional<Error> worldLayerFailure; /**< Exact canonical failure; visible copy is resolved by the presentation adapter. */
         bool audioPreviewAvailable{};
         std::optional<AudioComponentPreviewSnapshot> audioPreview;
         std::optional<Error> audioPreviewFailure;
