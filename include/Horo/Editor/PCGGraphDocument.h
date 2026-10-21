@@ -8,6 +8,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/SemanticDocumentHistory.h"
 #include "Horo/PCG/PCGGraphAsset.h"
+#include "Horo/PCG/PCGNodeCatalog.h"
 
 namespace Horo::Editor {
     /** @brief Closed zero-mutation command/lifecycle rejection vocabulary. */
@@ -111,6 +112,41 @@ namespace Horo::Editor {
         std::shared_ptr<const PCG::PCGGraphAsset> source;
         bool dirty{};
         bool externalConflict{};
+    };
+
+    /** @brief Transient typed property draft, never a source or history authority. */
+    struct PCGNodePropertyDraft final {
+        PCG::NodeId node;
+        std::optional<PCG::PCGNodeAuthoringSettings> settings;
+        std::optional<Error> diagnostic; /**< Unknown/malformed nodes stay visible and unchanged. */
+    };
+
+    /** @brief One explicit inspector gesture captured against exact document and catalog lifetimes.
+     * @details Apply emits a single coalesced command; cancel destroys the draft. Reload, history,
+     * catalog replacement and close invalidate application through the existing document fences.
+     * Presentation fields may contain invalid intermediate values; no authored state changes until Execute succeeds. */
+    struct PCGGraphAuthoringDraft final {
+        PCGDocumentSnapshot baseline;
+        std::uint64_t executableCatalogGeneration{};
+        PCG::PCGGraphSourceData values;
+        std::vector<PCGNodePropertyDraft> properties;
+
+        /** @brief Captures owned typed controls without repairing unknown settings.
+         * @param snapshot Exact source root. @param catalog Host-composed executable schema snapshot.
+         * @return Detached draft or invalid capture failure. */
+        [[nodiscard]] static Result<PCGGraphAuthoringDraft> Capture(const PCGDocumentSnapshot &snapshot,
+                                                                    const PCG::PCGNodeCatalogSnapshot &catalog);
+        /** @brief Checks all document, source and schema fences.
+         * @param snapshot Current owner snapshot. @param catalog Current executable schemas.
+         * @return True only while this gesture can still be applied. */
+        [[nodiscard]] bool Matches(const PCGDocumentSnapshot &snapshot, const PCG::PCGNodeCatalogSnapshot &catalog) const noexcept;
+        /** @brief Validates schema, capabilities, tier and values before emitting one atomic command.
+         * @param current Current owner root. @param catalog Current executable schemas.
+         * @param canEdit Explicit writable capability. @return One command or zero-mutation rejection.
+         * @details Unsupported modes are preserved in the draft and rejected, never downgraded.
+         * Unknown node payloads round-trip unchanged; unrelated supported edits remain possible. */
+        [[nodiscard]] Result<PCGDocumentCommand> Command(const PCGDocumentSnapshot &current, const PCG::PCGNodeCatalogSnapshot &catalog,
+                                                         bool canEdit) const;
     };
 
     /** @brief Private exact save capture, shared by source publication and recovery storage. */
