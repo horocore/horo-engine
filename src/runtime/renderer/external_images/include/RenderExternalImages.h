@@ -69,6 +69,11 @@ namespace Horo::Render {
             [[nodiscard]] static Result<bool> RetirementComplete(const RenderFrontend &frontend, RenderTextureHandle texture);
             /** @brief Reads exact current source/allocation/state facts without adopting an image or retaining a native source pointer. */
             [[nodiscard]] static Result<RenderExternalTextureFacts> Describe(const RenderFrontend &frontend, RenderTextureHandle texture);
+
+        private:
+            /** @brief Validates thread, lifecycle, device, source and native backend admission before reserving a registry slot. */
+            [[nodiscard]] static Result<IRenderExternalTextureBackend *> ValidateImport(
+                const RenderFrontend &frontend, const std::shared_ptr<const IRenderExternalTextureSource> &source);
         };
     }  // namespace Detail
 }  // namespace Horo::Render

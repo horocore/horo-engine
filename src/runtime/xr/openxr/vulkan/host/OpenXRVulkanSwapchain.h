@@ -25,6 +25,8 @@ namespace Horo::XR::OpenXRInternal {
         OpenXRVulkanSwapchainImages(Render::RenderFrontend &frontend, IOpenXRGraphicsBinding &graphics,
                                     const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue);
         ~OpenXRVulkanSwapchainImages() override;
+        OpenXRVulkanSwapchainImages(const OpenXRVulkanSwapchainImages &) = delete;
+        OpenXRVulkanSwapchainImages &operator=(const OpenXRVulkanSwapchainImages &) = delete;
         /** @brief Binds once before native creation; owner and translator share the same control thread. */
         [[nodiscard]] Result<void> Bind(OpenXRSwapchain &owner);
         [[nodiscard]] Result<void> Validate(const NativeSwapchainRequest &request) const override;

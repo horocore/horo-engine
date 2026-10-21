@@ -5,22 +5,31 @@
 #include "RenderResourceRegistry.h"
 
 namespace Horo::Render::Detail {
+    /** @copydoc RenderExternalTextureAccess::ValidateImport */
+    Result<IRenderExternalTextureBackend *> RenderExternalTextureAccess::ValidateImport(
+        const RenderFrontend &frontend, const std::shared_ptr<const IRenderExternalTextureSource> &source) {
+        if (std::this_thread::get_id() != frontend.preparationOwner_ || frontend.activeFrameScope_ != nullptr || !source)
+            return Result<IRenderExternalTextureBackend *>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
+        if (frontend.closing_ || source->DeviceIncarnation() == 0 ||
+            source->DeviceIncarnation() != frontend.backend_->Capabilities().support.deviceIncarnation)
+            return Result<IRenderExternalTextureBackend *>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
+        if (auto valid = source->Validate(); valid.HasError())
+            return Result<IRenderExternalTextureBackend *>::Failure(valid.ErrorValue());
+        if (!source->Descriptor().IsValid())
+            return Result<IRenderExternalTextureBackend *>::Failure(MakeError(FrontendErrors::InvalidTextureDescriptor));
+        auto *backend = dynamic_cast<IRenderExternalTextureBackend *>(frontend.backend_.get());
+        if (backend == nullptr)
+            return Result<IRenderExternalTextureBackend *>::Failure(MakeError(FrontendErrors::ResourceUnsupported));
+        return Result<IRenderExternalTextureBackend *>::Success(backend);
+    }
+
     /** @copydoc RenderExternalTextureAccess::Import */
     Result<RenderTextureHandle> RenderExternalTextureAccess::Import(RenderFrontend &frontend,
                                                                     std::shared_ptr<const IRenderExternalTextureSource> source) {
         using Outcome = Result<RenderTextureHandle>;
-        if (std::this_thread::get_id() != frontend.preparationOwner_ || frontend.activeFrameScope_ != nullptr || !source)
-            return Outcome::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
-        if (frontend.closing_ || source->DeviceIncarnation() == 0 ||
-            source->DeviceIncarnation() != frontend.backend_->Capabilities().support.deviceIncarnation)
-            return Outcome::Failure(MakeError(FrontendErrors::ResourceUnsupported));
-        if (auto valid = source->Validate(); valid.HasError())
-            return Outcome::Failure(valid.ErrorValue());
-        if (!source->Descriptor().IsValid())
-            return Outcome::Failure(MakeError(FrontendErrors::InvalidTextureDescriptor));
-        auto *backend = dynamic_cast<IRenderExternalTextureBackend *>(frontend.backend_.get());
-        if (backend == nullptr)
-            return Outcome::Failure(MakeError(FrontendErrors::ResourceUnsupported));
+        const auto backend = ValidateImport(frontend, source);
+        if (backend.HasError())
+            return Outcome::Failure(backend.ErrorValue());
         auto reservation = frontend.resourceRegistry_->Reserve(RenderResourceClass::Texture);
         if (reservation.HasError())
             return Outcome::Failure(reservation.ErrorValue());
@@ -41,7 +50,7 @@ namespace Horo::Render::Detail {
                 frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
                 return Outcome::Failure(lifetime.ErrorValue());
             }
-            auto imported = backend->ImportExternalTexture(*source, std::move(lifetime.Value()));
+            auto imported = backend.Value()->ImportExternalTexture(*source, std::move(lifetime.Value()));
             if (imported.HasError()) {
                 frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
                 return Outcome::Failure(imported.ErrorValue());

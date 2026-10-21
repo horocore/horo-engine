@@ -93,6 +93,8 @@ namespace Horo::Render::Detail {
                                                VulkanCommandRetention &retention);
         [[nodiscard]] Result<void> PrepareTransitions(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                                       bool releases);
+        /** @brief Validates exact foreign acquisition/final-state obligations before generic state initialization. */
+        [[nodiscard]] Result<void> ValidateExternalAcquisition(const RenderGraphExecutionRequest &request, std::size_t index) const;
         /** @brief Prepares native post-producer release barriers from exact external acquisition evidence. */
         [[nodiscard]] Result<void> PrepareExternalReleases(const RenderGraphExecutionRequest &request,
                                                            const RenderGraphExecutionPass &pass);
