@@ -111,13 +111,17 @@ TEST_CASE("Zep views render different publications and retain independent select
     fixture.second.Publish(b);
     REQUIRE(fixture.first.Select({1, 3}));
     REQUIRE(fixture.second.Select({2, 4}));
-    fixture.gui.BeginFrame();
-    ImGui::Begin("Two source views");
-    static_cast<void>(fixture.first.Draw({320, 250, 1, false, true}));
-    ImGui::SameLine();
-    static_cast<void>(fixture.second.Draw({320, 250, 2, false, true}));
-    ImGui::End();
-    fixture.gui.EndFrame();
+    for (unsigned frame = 0; frame < 2; ++frame) {
+        fixture.gui.BeginFrame();
+        ImGui::SetNextWindowPos({0, 0});
+        ImGui::SetNextWindowSize({700, 400});
+        ImGui::Begin("Two source views", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        static_cast<void>(fixture.first.Draw({320, 250, 1, false, true}));
+        ImGui::SameLine();
+        static_cast<void>(fixture.second.Draw({320, 250, 2, false, true}));
+        ImGui::End();
+        fixture.gui.EndFrame();
+    }
     CHECK(fixture.first.Selection() == SourceWidgetSelection{1, 3});
     CHECK(fixture.second.Selection() == SourceWidgetSelection{2, 4});
     REQUIRE(ImGui::GetDrawData());

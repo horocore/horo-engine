@@ -81,9 +81,16 @@ namespace {
                                        const float width) {
         using namespace Horo::Editor;
         ImGuiID saveId{};
-        for (const auto *window : ImGui::GetCurrentContext()->Windows)
-            if (std::string_view{window->Name}.find("##DockDocument/##DockContent") != std::string_view::npos)
-                saveId = ImHashStr(fixture.localization.Get("editor", "workspace.documents.save").c_str(), 0, window->IDStack.back());
+        for (const auto *window : ImGui::GetCurrentContext()->Windows) {
+            const std::string_view name{window->Name};
+            constexpr std::string_view content{"##DockDocument/##DockContent"};
+            const auto position = name.find(content);
+            // Descendant widget windows inherit this prefix but own a different ID stack.
+            if (position != std::string_view::npos && name.find('/', position + content.size()) == std::string_view::npos) {
+                REQUIRE(saveId == 0);
+                saveId = window->GetID(fixture.localization.Get("editor", "workspace.documents.save").c_str());
+            }
+        }
         REQUIRE(saveId != 0);
         ImGui::ActivateItemByID(saveId);
         EditorWorkspaceViewCommandData save;

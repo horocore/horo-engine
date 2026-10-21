@@ -325,6 +325,12 @@ namespace Horo::Editor {
             return command && (ImGui::IsKeyPressed(ImGuiKey_X) || ImGui::IsKeyPressed(ImGuiKey_V));
         }
 
+        /** @brief Allows this surface's pointer/wheel hit test past its own active text ID, preserving other input owners. */
+        bool Hovered() const {
+            const bool ownActiveItem = ImGui::GetActiveID() == ImGui::GetCurrentWindow()->GetID("text-input");
+            return ImGui::IsWindowHovered(ownActiveItem ? ImGuiHoveredFlags_AllowWhenBlockedByActiveItem : ImGuiHoveredFlags_None);
+        }
+
         /** @brief Acquires keyboard focus only from host handoff or a click in this enabled surface. */
         bool AcquireFocus(const bool enabled, const bool request, const bool hovered) {
             auto *guiWindow = ImGui::GetCurrentWindow();
@@ -466,7 +472,7 @@ namespace Horo::Editor {
         const bool inputEnabled = frame.inputEnabled && !(ImGui::GetCurrentContext()->CurrentItemFlags & ImGuiItemFlags_Disabled) &&
                                   !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
         if (visible) {
-            const bool hovered = ImGui::IsWindowHovered();
+            const bool hovered = state.Hovered();
             const bool focused = state.AcquireFocus(inputEnabled, frame.requestFocus, hovered);
             const auto origin = ImGui::GetCursorScreenPos();
             const auto extent = ImGui::GetContentRegionAvail();
