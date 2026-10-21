@@ -3081,7 +3081,7 @@
     "workspace.navigation_bake.retry": {"text": "Retry with fresh source"},
     "workspace.navigation_bake.cancel": {"text": "Request cancellation…"},
     "workspace.navigation_bake.saved_source": {"text": "Bakes capture saved project source. Save definition and Scene edits first. Closing or hiding this panel leaves accepted work running."},
-    "workspace.navigation_bake.preparing": {"text": "Preparing project navigation…"}
+    "workspace.navigation_bake.preparing": {"text": "Preparing project navigation…"},
     "workspace.navigation_inspector.surface": {
       "text": "Navigation surface"
     },

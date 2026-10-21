@@ -3081,7 +3081,7 @@
     "workspace.navigation_bake.retry": {"text": "Güncel kaynakla yeniden dene"},
     "workspace.navigation_bake.cancel": {"text": "İptal iste…"},
     "workspace.navigation_bake.saved_source": {"text": "Üretimler kaydedilmiş proje kaynağını yakalar. Önce tanım ve Sahne düzenlemelerini kaydedin. Bu panelin kapanması veya gizlenmesi kabul edilmiş işi sürdürür."},
-    "workspace.navigation_bake.preparing": {"text": "Proje gezinmesi hazırlanıyor…"}
+    "workspace.navigation_bake.preparing": {"text": "Proje gezinmesi hazırlanıyor…"},
     "workspace.navigation_inspector.surface": {
       "text": "Gezinme yüzeyi"
     },
