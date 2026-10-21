@@ -44,6 +44,7 @@ namespace Horo::Editor {
         if (ctx.extensionInspectors && ctx.extensionTheme)
             m_contributions = std::make_unique<InspectorContributionView>(*ctx.extensionInspectors, *ctx.extensionTheme);
         m_inputRouter = ctx.inputRouter;
+        m_workspaceInputContext = ctx.workspaceInputContext;
     }
 
     void InspectorPanel::OnDetach() {
@@ -55,6 +56,7 @@ namespace Horo::Editor {
         m_physicsSession.Clear();
         m_navigationSession.Clear();
         m_inputRouter = nullptr;
+        m_workspaceInputContext = nullptr;
     }
 
     void InspectorPanel::DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, const ImU32 color) {
@@ -121,8 +123,11 @@ namespace Horo::Editor {
 
     void InspectorPanel::DrawSelection(const EditorWorkspaceViewModel &viewModel, const std::span<const SceneObjectId> selectedObjects,
                                        EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
-        if (m_contributions)
+        if (m_contributions) {
+            m_contributions->SetInputAdmitted(m_inputRouter && m_workspaceInputContext &&
+                                              m_inputRouter->IsContextActive(*m_workspaceInputContext));
             m_contributions->Synchronize(viewModel, selectedObjects);
+        }
         AdoptCommand(command, m_editSession.BeginSelection(viewModel.objects, selectedObjects, viewModel.primarySelection,
                                                            viewModel.documentRevision));
         const SceneObject *primaryObject = FindSelectedObject(viewModel);

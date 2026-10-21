@@ -1265,6 +1265,10 @@ User interaction becomes a typed action request to an approved backend capabilit
 The GUI frame renders the latest host-owned immutable snapshot and does not call
 module code during widget traversal or draw submission.
 
+The implemented [custom composition boundary](./editor-custom-composition.md)
+adds a schema2 plot alongside the standard activity controls, with host-owned
+selection, animation, theme capture, clipping and action routing.
+
 #### 2. Registered specialized typed views
 
 Graphical tools use registered plot, timeline, node-graph, image/canvas annotation

@@ -361,3 +361,11 @@ before using the appended registration callback. The 1.5 page prefix and 1.4
 activity prefix retain their negotiated behavior. Declaration permission never
 grants document ownership: the application must explicitly approve the current
 provider for the exact behavior schema and fields before typed edits are admitted.
+
+## External C ABI 1.6 → 1.7
+
+Viewport providers use `EditorViewportAbi.h`, negotiate the complete appended
+`registerEditorViewport` prefix and `HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT`,
+and require interactive `editor.viewport` support. Existing field offsets remain
+unchanged. See the repository guide `docs/guides/extension-viewport-migration.md`
+for permissions, copied geometry budgets, canonical transform binding and teardown.

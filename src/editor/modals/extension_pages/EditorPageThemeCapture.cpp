@@ -137,6 +137,11 @@ namespace Horo::Editor {
                 color(value);
             color(style.Colors[ImGuiCol_ModalWindowDimBg]);
             HashGeometry(hash, t, style);
+            const auto &motion = t.motion;
+            const std::array durations{motion.fast, motion.normal, motion.slow, motion.hover, motion.press, motion.focus, motion.modal};
+            static_cast<void>(hash.Update(std::as_bytes(std::span{durations})));
+            const std::array policy{static_cast<std::uint8_t>(motion.reduceMotion)};
+            static_cast<void>(hash.Update(std::as_bytes(std::span{policy})));
             for (const auto &size : t.components.sizes) {
                 const std::array values{size.fontSize, size.paddingX, size.paddingY, size.minimumHeight, size.iconSize};
                 static_cast<void>(hash.Update(std::as_bytes(std::span{values})));
@@ -181,12 +186,11 @@ namespace Horo::Editor {
         candidate.revision = revision_ + 1;
         candidate.colors = Colors(tokens.colors, style);
         Geometry(candidate, tokens);
-        // Current shared controls publish no motion/accessibility override authority; unsupported motion/font roles remain explicit.
-        candidate.supportedMotionMask = 0;
-        candidate.motion = {0, 0, 0, 0, 0, 0, 0, 0};
+        const auto &motion = tokens.motion;
+        candidate.motion = {0, motion.fast, motion.normal, motion.slow, motion.hover, motion.press, motion.focus, motion.modal};
         candidate.supportedFontMask &= ~EditorThemeFontRoleBit(EditorThemeFontRole::Monospace);
         candidate.interaction = {0, 0, style.DisabledAlpha, style.FrameBorderSize / tokens.sizes.uiScale, 0, 1, true};
-        candidate.accessibility = {false, false, false, 1, EditorThemeColorVisionMode::None, 1};
+        candidate.accessibility = {false, motion.reduceMotion, false, 1, EditorThemeColorVisionMode::None, 1};
         if (auto valid = ValidateEditorThemeFrame(candidate); valid.HasError()) {
             frame_->revision = 0;
             return valid;

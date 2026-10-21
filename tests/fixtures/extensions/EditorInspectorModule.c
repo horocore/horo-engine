@@ -80,7 +80,25 @@ HORO_EXTENSION_EXPORT HoroExtensionStatus horo_extension_load(const HoroExtensio
                                                       .permissionCount = 1};
     if (!HoroEditorInspectorDescriptorShape(&descriptor))
         return HORO_EXTENSION_ERROR_INVALID_ARGS;
-    const HoroExtensionStatus result = host->registerEditorInspector(host->hostContext, &descriptor);
+    HoroExtensionStatus result;
+    if (queryMode == 4) {
+        const HoroEditorActivityNodeV2 layout = {.node = nodes[0]};
+        const HoroEditorInspectorPresentation style = {.nodeId = TEXT("fixture.number"),
+                                                       .presentation = {sizeof(HoroEditorUiCustomPresentation), 1,
+                                                                        HORO_EDITOR_UI_SCALAR_DIAL, HORO_EDITOR_UI_FONT_SANS_EMPHASIS,
+                                                                        HORO_EDITOR_UI_ICON_INFO, HORO_EDITOR_UI_COLOR_ACCENT,
+                                                                        HORO_EDITOR_UI_MOTION_FOCUS, 3}};
+        HoroEditorInspectorDescriptorV2 extended = {.base = descriptor, .presentations = &style, .presentationCount = 1};
+        extended.base.structSize = sizeof(extended);
+        extended.base.schemaVersion = HORO_EDITOR_INSPECTOR_COMPOSITION_SCHEMA_VERSION;
+        extended.base.presentationNodes = (const HoroEditorActivityNode *)&layout;
+        extended.base.fields = fields + 2;
+        extended.base.fieldCount = 1;
+        if (!HoroEditorInspectorDescriptorShape(&extended.base))
+            return HORO_EXTENSION_ERROR_INVALID_ARGS;
+        result = host->registerEditorInspector(host->hostContext, &extended.base);
+    } else
+        result = host->registerEditorInspector(host->hostContext, &descriptor);
     if (result != HORO_EXTENSION_SUCCESS)
         return result;
     *module = (HoroExtensionModuleApi){.structSize = sizeof(*module), .moduleId = TEXT("fixture.module"), .moduleVersion = TEXT("1.0.0")};
