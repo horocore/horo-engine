@@ -102,6 +102,41 @@ namespace {
         CHECK(lease.releases == 1);
     }
 
+    TEST_CASE("Vulkan views over borrowed images retain Horo ownership during explicit and cascading retirement",
+              "[unit][runtime][renderer][vulkan][external]") {
+        NativeResourceScope native;
+        ExternalNativeLease imageLease;
+        ExternalNativeLease viewLease;
+        ExternalNativeSource source;
+        Detail::VulkanResourceRuntime runtime;
+        InitializeNativeResourceRuntime(runtime);
+        const auto imported = runtime.ImportExternalTexture(source, RenderResourceNativeLifetime{imageLease});
+        REQUIRE(imported.HasValue());
+        const RenderTextureViewDescriptor descriptor{.texture = {{41}, 1, 1},
+                                                     .layerCount = 2,
+                                                     .dimension = RenderTextureViewDimension::TwoDArray};
+        const auto explicitView = runtime.CreateTextureView(descriptor, imported.Value(), RenderResourceNativeLifetime{viewLease});
+        const auto cascadingView = runtime.CreateTextureView(descriptor, imported.Value());
+        REQUIRE(explicitView.HasValue());
+        REQUIRE(cascadingView.HasValue());
+        CHECK(native.state.createViewCount == 3);
+        runtime.DestroyTextureView(explicitView.Value());
+        CHECK(native.state.destroyViewCount == 1);
+        CHECK(viewLease.releases == 1);
+        CHECK(imageLease.releases == 0);
+        CHECK(native.state.destroyImageCount == 0);
+        runtime.DestroyTexture(imported.Value());
+        CHECK(native.state.destroyViewCount == 3);
+        CHECK(imageLease.releases == 1);
+        CHECK(source.releaseStateProved);
+        CHECK(native.state.destroyImageCount == 0);
+        CHECK(native.state.freeCount == 0);
+        runtime.ShutdownResources();
+        CHECK(native.state.destroyViewCount == 3);
+        CHECK(viewLease.releases == 1);
+        CHECK(imageLease.releases == 1);
+    }
+
     TEST_CASE("Vulkan external image admission rejects foreign stale duplicate and failed view imports",
               "[unit][runtime][renderer][vulkan][external]") {
         NativeResourceScope native;

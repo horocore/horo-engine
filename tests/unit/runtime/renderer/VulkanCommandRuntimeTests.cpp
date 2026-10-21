@@ -12,7 +12,7 @@ namespace Horo::Render::VulkanTest {
             };
             const auto result = fixture.runtime.Initialize(NativeHandle<VkDevice>(1), fixture.queues, 2, 1024, 11, missing);
             REQUIRE(result.HasError());
-            CHECK(result.ErrorValue().code == VulkanBackendErrors::EntryPointMissing.code);
+            CHECK(result.ErrorValue().code.Value() == VulkanBackendErrors::EntryPointMissing.code.Value());
             CHECK(fixture.state.createdPools == 0);
         }
         SECTION("second pool failure") {
@@ -115,7 +115,7 @@ namespace Horo::Render::VulkanTest {
         CHECK(fixture.state.waitCalls == 0);
         const auto timeout = fixture.runtime.Observe({{{1}, 1}, RenderCpuWaitPurpose::DeterministicTest, std::chrono::nanoseconds{1}, 11});
         REQUIRE(timeout.HasError());
-        CHECK(timeout.ErrorValue().code == VulkanBackendErrors::CompletionTimeout.code);
+        CHECK(timeout.ErrorValue().code.Value() == VulkanBackendErrors::CompletionTimeout.code.Value());
         CHECK(fixture.runtime.IsActive());
         CHECK(fixture.state.waitCalls == 1);
         fixture.state.waitResult = VK_SUCCESS;
@@ -141,7 +141,7 @@ namespace Horo::Render::VulkanTest {
         const auto before = fixture.state.counterCalls;
         const auto stale = fixture.runtime.Observe({{{1}, 1}, RenderCpuWaitPurpose::Poll, std::chrono::nanoseconds{0}, first.Value()});
         REQUIRE(stale.HasError());
-        CHECK(stale.ErrorValue().code == VulkanBackendErrors::TimelineInvalid.code);
+        CHECK(stale.ErrorValue().code.Value() == VulkanBackendErrors::TimelineInvalid.code.Value());
         CHECK(fixture.state.counterCalls == before);
         const auto active = fixture.runtime.Observe({{{1}, 1}, RenderCpuWaitPurpose::Poll, std::chrono::nanoseconds{0}, second.Value()});
         REQUIRE(active.HasValue());
@@ -160,10 +160,10 @@ namespace Horo::Render::VulkanTest {
             const auto poll = fixture.runtime.Poll();
             const auto close = fixture.runtime.BeginShutdown();
             const auto finish = fixture.runtime.Finish(ticket);
-            rejected = {begin.HasError() && begin.ErrorValue().code == VulkanBackendErrors::WrongThread.code,
-                        poll.HasError() && poll.ErrorValue().code == VulkanBackendErrors::WrongThread.code,
-                        close.HasError() && close.ErrorValue().code == VulkanBackendErrors::WrongThread.code,
-                        finish.HasError() && finish.ErrorValue().code == VulkanBackendErrors::WrongThread.code};
+            rejected = {begin.HasError() && begin.ErrorValue().code.Value() == VulkanBackendErrors::WrongThread.code.Value(),
+                        poll.HasError() && poll.ErrorValue().code.Value() == VulkanBackendErrors::WrongThread.code.Value(),
+                        close.HasError() && close.ErrorValue().code.Value() == VulkanBackendErrors::WrongThread.code.Value(),
+                        finish.HasError() && finish.ErrorValue().code.Value() == VulkanBackendErrors::WrongThread.code.Value()};
         });
         foreign.join();
         CHECK(std::ranges::all_of(rejected, [](const bool value) {
@@ -186,7 +186,7 @@ namespace Horo::Render::VulkanTest {
             fixture.state.submitResult = VK_ERROR_OUT_OF_HOST_MEMORY;
             const auto failed = fixture.runtime.Submit(ticket, {{1}, {1}, {}, {{1}, 1}});
             REQUIRE(failed.HasError());
-            CHECK(failed.ErrorValue().code == VulkanBackendErrors::NativeCallFailed.code);
+            CHECK(failed.ErrorValue().code.Value() == VulkanBackendErrors::NativeCallFailed.code.Value());
             CHECK(fixture.runtime.IsActive());
             fixture.runtime.Abort(ticket);
             CHECK(fixture.lease.releases == 1);
@@ -195,7 +195,7 @@ namespace Horo::Render::VulkanTest {
             fixture.state.submitResult = VK_ERROR_DEVICE_LOST;
             const auto failed = fixture.runtime.Submit(ticket, {{1}, {1}, {}, {{1}, 1}});
             REQUIRE(failed.HasError());
-            CHECK(failed.ErrorValue().code == VulkanBackendErrors::DeviceLost.code);
+            CHECK(failed.ErrorValue().code.Value() == VulkanBackendErrors::DeviceLost.code.Value());
             CHECK_FALSE(fixture.runtime.IsActive());
             CHECK(fixture.lease.releases == 0);
             fixture.runtime.Abort(ticket);

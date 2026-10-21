@@ -93,7 +93,7 @@ namespace Horo::Render::Detail {
             View &operator=(const View &) = delete;
 
             ~View() {
-                if (handle != VK_NULL_HANDLE && !borrowed)
+                if (handle != VK_NULL_HANDLE)
                     destroy(device, handle, nullptr);
             }
 
