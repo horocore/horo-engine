@@ -316,9 +316,8 @@ namespace Horo::Editor {
         std::shared_ptr<NavigationDefinitionEditorState> editor;
     };
 
-    struct EditorWorkspaceViewModel {
+    struct EditorWorkspaceViewModel {           // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
         std::optional<Error> worldLayerFailure; /**< Exact canonical failure; visible copy is resolved by the presentation adapter. */
-                                                // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
         bool audioPreviewAvailable{};
         std::optional<AudioComponentPreviewSnapshot> audioPreview;
         std::optional<Error> audioPreviewFailure;

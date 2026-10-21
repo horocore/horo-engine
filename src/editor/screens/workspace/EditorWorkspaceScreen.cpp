@@ -876,9 +876,9 @@ namespace Horo::Editor {
             }
 
             /** @brief Composes the transient name workflow over the controller's canonical world owner. */
-            void OpenWorldLayerCreation(const WorldDocumentFence expected) {
+            void OpenWorldLayerCreation(const WorldDocumentFence &expected) {
                 const auto opened = modalHost_.OpenRoot(
-                    std::make_unique<CreateWorldLayerModal>(context_, expected, [this](std::string name, const WorldDocumentFence fence) {
+                    std::make_unique<CreateWorldLayerModal>(context_, expected, [this](std::string name, const WorldDocumentFence &fence) {
                     if (!controller_)
                         return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Lifecycle));
                     return controller_->WorldDocuments().CreateLayer(std::move(name), fence);
