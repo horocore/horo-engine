@@ -3,7 +3,7 @@
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Foundation/DataBus.h"
-#include "ViewportRenderTestSupport.h"
+#include "ViewportPanelRenderSupport.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/panels/viewport/ViewportOverlay.h"
 #include "editor/screens/workspace/panels/viewport/ViewportPanel.h"
@@ -16,58 +16,11 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 
 namespace {
-    using TestLocalization = Horo::Tests::ViewportRenderLocalization;
-
-    class FakeViewportRenderer final : public Horo::Editor::IEditorViewportRenderer {
-    public:
-        void RequestExtent(const Horo::Editor::EditorViewportExtent extent) noexcept override {
-            requestedExtent = extent;
-        }
-
-        void RequestGrid(const Horo::Editor::EditorViewportGridOptions &options) noexcept override {
-            gridOptions = options;
-        }
-
-        void RequestLightVisualizer(const Horo::Editor::EditorViewportLightVisualizerOptions &options) noexcept override {
-            lightVisualizerOptions = std::move(options);
-        }
-
-        [[nodiscard]] Horo::Editor::EditorViewportExtent RequestedExtent() const noexcept override {
-            return requestedExtent;
-        }
-
-        [[nodiscard]] Horo::Math::ClipDepthRange ClipDepthRange() const noexcept override {
-            return depthRange;
-        }
-
-        [[nodiscard]] Horo::Result<void> ExecuteStaticMeshPass(const Horo::Render::StaticMeshPassDescriptor &) override {
-            return Horo::Result<void>::Success();
-        }
-
-        [[nodiscard]] Horo::Editor::EditorViewportTextureView TextureView() const noexcept override {
-            return Horo::Editor::EditorViewportTextureView{
-                .textureId = textureId,
-                .u0 = 0.25F,
-                .v0 = 0.75F,
-                .u1 = 0.75F,
-                .v1 = 0.25F,
-            };
-        }
-
-        [[nodiscard]] bool IsReady() const noexcept override {
-            return true;
-        }
-
-        Horo::Editor::EditorViewportExtent requestedExtent{};
-        Horo::Editor::EditorViewportGridOptions gridOptions{};
-        Horo::Editor::EditorViewportLightVisualizerOptions lightVisualizerOptions{};
-        Horo::Math::ClipDepthRange depthRange{Horo::Math::ClipDepthRange::ZeroToOne};
-        static constexpr std::uintptr_t textureId = 42;
-    };
+    using TestLocalization = Horo::Editor::Tests::ViewportRenderSupport::TestLocalization;
+    using FakeViewportRenderer = Horo::Editor::Tests::ViewportRenderSupport::FakeViewportRenderer;
 }  // namespace
 
 TEST_CASE("Viewport Panel Render Tests", "[unit][editor]") {

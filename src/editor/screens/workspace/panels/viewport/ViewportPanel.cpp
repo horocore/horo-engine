@@ -166,6 +166,8 @@ namespace Horo::Editor {
         }
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
+        else
+            interaction_.CancelForUnavailableSurface(command);
 
         const ViewportOverlayAction overlay =
             DrawViewportOverlay(origin, {width, height},
@@ -359,7 +361,7 @@ namespace Horo::Editor {
         if (!surfaceInteractive)
             CancelAssetPlacementPreview(command);
         const auto tool = static_cast<Extensions::EditorViewportTool>(viewModel.activeTransformTool);
-        const bool editable = ContributionSelectionEditable(viewModel);
+        const bool editable = viewModel.selectedColliders.empty() && ContributionSelectionEditable(viewModel);
         if (CancelUnavailableContribution(tool, editable && inputEligible, command))
             return;
         const auto contributedPick =
@@ -374,7 +376,8 @@ namespace Horo::Editor {
                                       .height = layout.height,
                                       .camera = viewModel.viewportCamera,
                                       .depthRange = depthRange,
-                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !contributedPick},
+                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !contributedPick &&
+                                                     viewModel.selectedColliders.empty()},
                                      viewModel.viewportLights, viewModel.primarySelection);
         if (!inputEligible)
             static_cast<void>(interaction_.ConsumePendingCancellation(command));

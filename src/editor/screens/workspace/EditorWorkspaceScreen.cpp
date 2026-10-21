@@ -98,6 +98,18 @@ namespace Horo::Editor {
             };
         }
 
+        /** @brief Issues one never-reused host incarnation before workspace document composition. */
+        Result<Assets::AssetId> CreateDocumentSessionOwner() {
+            std::array<std::uint8_t, 16> sessionBytes{};
+            const auto entropy = Platform::CreateNativeSecureRandomSource();
+            if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(sessionBytes))); generated.HasError())
+                return Result<Assets::AssetId>::Failure(generated.ErrorValue());
+            const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
+            if (!sessionOwner.IsValid())
+                return Result<Assets::AssetId>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
+            return Result<Assets::AssetId>::Success(sessionOwner);
+        }
+
         struct WorkspacePublishedRevisions {
             DocumentRevision scene{};
             SelectionRevision selection{};
@@ -394,7 +406,8 @@ namespace Horo::Editor {
                     OpenPackagesModal();
                     return true;
                 }
-                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
+                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
+                    !controller_->CurrentScenePath().has_value())
                     action = EditorMenuAction::SaveSceneAs;
                 if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
                     EditorWorkspaceViewCommandData command;
@@ -654,16 +667,16 @@ namespace Horo::Editor {
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =
                     services_.TryGet<Application::GameplayBuildEnvironment>();
-                std::array<std::uint8_t, 16> sessionBytes{};
-                const auto entropy = Platform::CreateNativeSecureRandomSource();
-                if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(sessionBytes))); generated.HasError())
-                    return Result<void>::Failure(generated.ErrorValue());
-                const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
-                if (!sessionOwner.IsValid())
-                    return Result<void>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
-                auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
+                const auto session = CreateDocumentSessionOwner();
+                if (session.HasError())
+                    return Result<void>::Failure(session.ErrorValue());
+                auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, session.Value().ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
+                auto pcgComposition = CreatePCGEditorCatalog();
+                if (pcgComposition.HasError())
+                    return Result<void>::Failure(pcgComposition.ErrorValue());
+                auto pcgCatalog = std::move(pcgComposition).Value();
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -685,10 +698,11 @@ namespace Horo::Editor {
                                                    .localization = &context_.localization,
                                                    .engineEvents = &context_.engineEvents,
                                                    .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
-                                                   .documentSessionOwner = sessionOwner,
+                                                   .documentSessionOwner = session.Value(),
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
+                                                   .pcg = std::move(pcgCatalog),
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
@@ -965,6 +979,9 @@ namespace Horo::Editor {
                     command.command = EditorWorkspaceViewCommand::UndoScene;
                 } else if (pressed(kActionSave)) {
                     command.command = EditorWorkspaceViewCommand::SaveScene;
+                } else if (controller_->HasActivePCGDocument()) {
+                    if (pressed(kActionDelete))
+                        command.command = EditorWorkspaceViewCommand::DeleteSelectedObjects;
                 } else if (pressed(kActionToolSelect)) {
                     command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
                     command.transformToolPayload = EditorTransformTool::Select;

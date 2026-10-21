@@ -11,14 +11,22 @@ namespace Horo::Editor {
         capture_.Detach();
         navigation_.Reset();
         gizmo_.Reset();
+        colliders_.Reset();
     }
 
     bool ViewportInteractionController::IsActive() const noexcept {
-        return navigation_.IsActive() || gizmo_.IsActive();
+        return navigation_.IsActive() || gizmo_.IsActive() || colliders_.IsActive();
     }
 
     bool ViewportInteractionController::ConsumePendingCancellation(EditorWorkspaceViewCommandData &command) noexcept {
-        return gizmo_.ConsumePendingCancellation(command);
+        return colliders_.ConsumePendingCancellation() || gizmo_.ConsumePendingCancellation(command);
+    }
+
+    /** @copydoc ViewportInteractionController::CancelForUnavailableSurface */
+    void ViewportInteractionController::CancelForUnavailableSurface(EditorWorkspaceViewCommandData &command) noexcept {
+        capture_.Cancel(Input::CaptureCancellationReason::Explicit);
+        OnViewportCaptureCancelled(Input::CaptureCancellationReason::Explicit);
+        static_cast<void>(ConsumePendingCancellation(command));
     }
 
     /** @copydoc ViewportInteractionController::CancelContribution */
@@ -42,7 +50,8 @@ namespace Horo::Editor {
                 .contributedAxis = context.contributedAxis,
                 .depthRange = context.depthRange,
             };
-            gizmo_.Draw(context.drawList, gizmoContext, capture_))
+            colliders_.Draw(context.drawList, gizmoContext, capture_, context.gui) ||
+            (context.viewModel.selectedColliders.empty() && gizmo_.Draw(context.drawList, gizmoContext, capture_)))
             return;
         navigation_.Update(
             ViewportNavigationUpdateContext{
@@ -63,5 +72,6 @@ namespace Horo::Editor {
     void ViewportInteractionController::OnViewportCaptureCancelled(const Input::CaptureCancellationReason) noexcept {
         navigation_.Reset();
         gizmo_.OnCaptureCancelled();
+        colliders_.OnCaptureCancelled();
     }
 }  // namespace Horo::Editor

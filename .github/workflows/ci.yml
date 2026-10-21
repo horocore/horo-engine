@@ -184,6 +184,17 @@ jobs:
         id: debug_build
         run: cmake --build --preset "${{ matrix.preset }}"
 
+      - name: Qualify OpenGL editor GUI composition with Mesa
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+        run: >-
+          xvfb-run --auto-servernum --server-args="-screen 0 640x480x24"
+          build/ci/tests/HoroEditorViewportOpenGLSmoke
+          --reporter junit --out build/ci/opengl-editor-composition.xml
+
       - name: Cook Metal fixture and run native smoke when a device is available
         if: ${{ !cancelled() && runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
         env:
