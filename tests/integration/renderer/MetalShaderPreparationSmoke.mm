@@ -1,3 +1,4 @@
+#include "../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "../../unit/runtime/renderer/RenderMemoryTestSupport.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "runtime/renderer/modules/metal/MetalBackendInternal.h"
@@ -125,7 +126,7 @@ namespace Horo::Render::Detail {
             }
 
             void CheckOwnerShutdown() {
-                runtime->Shutdown();
+                Horo::Render::Test::RequireDrainedOwner(*runtime);
                 CHECK(bridge.Device() == nullptr);
                 CHECK(bridge.CommandQueue() == nullptr);
                 CHECK(bridge.CurrentCommandBuffer() == nullptr);

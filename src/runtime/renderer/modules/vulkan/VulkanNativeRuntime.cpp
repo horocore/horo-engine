@@ -1,11 +1,14 @@
 #include "VulkanNativeRuntime.h"
 
+#include "VulkanGraphRuntime.h"
 #include "VulkanRenderBackendErrors.h"
+#include "VulkanResourceConversions.h"
 #include "VulkanResourceRuntime.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <exception>
 #include <format>
 #include <iterator>
 #include <limits>
@@ -69,7 +72,9 @@ namespace Horo::Render {
             return native;
         }
 
-        class VulkanNativeRuntime final : public IVulkanRuntimePort, public IVulkanResourcePort {  // NOSONAR(cpp:S1448)
+        class VulkanNativeRuntime final : public IVulkanRuntimePort,
+                                          public IVulkanResourcePort,
+                                          public IVulkanCommandPort {  // NOSONAR(cpp:S1448)
         public:
             explicit VulkanNativeRuntime(IVulkanLoaderPort &loaderPort) noexcept : loaderPort_(&loaderPort) {}
 
@@ -200,18 +205,18 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(VulkanBackendErrors::AdapterNotFound));
                 }
                 constexpr float priority{1.0F};
-                std::array<VkDeviceQueueCreateInfo, 2> queueInfos{};
-                std::uint32_t queueInfoCount{1};
-                queueInfos[0] = VkDeviceQueueCreateInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                                        .queueFamilyIndex = request.graphicsQueueFamily,
-                                                        .queueCount = 1,
-                                                        .pQueuePriorities = &priority};
-                if (request.presentationQueueFamily != request.graphicsQueueFamily) {
-                    queueInfos[1] = VkDeviceQueueCreateInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                                            .queueFamilyIndex = request.presentationQueueFamily,
-                                                            .queueCount = 1,
-                                                            .pQueuePriorities = &priority};
-                    queueInfoCount = 2;
+                std::array<VkDeviceQueueCreateInfo, 3> queueInfos{};
+                std::uint32_t queueInfoCount{0};
+                const std::array families{request.graphicsQueueFamily, request.presentationQueueFamily, request.transferQueueFamily};
+                for (const auto family : families) {
+                    if (std::ranges::any_of(std::span{queueInfos}.first(queueInfoCount), [family](const VkDeviceQueueCreateInfo &info) {
+                        return info.queueFamilyIndex == family;
+                    }))
+                        continue;
+                    queueInfos[queueInfoCount++] = VkDeviceQueueCreateInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                                                                           .queueFamilyIndex = family,
+                                                                           .queueCount = 1,
+                                                                           .pQueuePriorities = &priority};
                 }
                 const std::vector<const char *> extensionNames = NativeNames(request.enabledExtensions);
                 VkPhysicalDeviceVulkan13Features features13{
@@ -240,21 +245,96 @@ namespace Horo::Render {
                 }
                 VkPhysicalDeviceMemoryProperties memoryProperties{};
                 getPhysicalDeviceMemoryProperties_(selected->device, &memoryProperties);
-                return resources_.Initialize(memoryProperties, device_, getDeviceProcAddr_);
+                auto resources = resources_.Initialize(memoryProperties, device_, getDeviceProcAddr_);
+                if (resources.HasError())
+                    return resources;
+                VkPhysicalDeviceMaintenance3Properties allocationLimits{.sType =
+                                                                            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES};
+                VkPhysicalDeviceTimelineSemaphoreProperties timeline{.sType =
+                                                                         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES,
+                                                                     .pNext = &allocationLimits};
+                VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &timeline};
+                getPhysicalDeviceProperties2_(selected->device, &properties);
+                std::vector<Detail::VulkanCommandQueue> queues;
+                for (const auto &assignment : request.queueAssignments) {
+                    if (std::ranges::any_of(queues, [&assignment](const Detail::VulkanCommandQueue &queue) {
+                        return queue.identity == assignment.queue;
+                    }))
+                        continue;
+                    const bool graphics =
+                        assignment.role == RenderQueueRole::Graphics || request.transferQueueFamily == request.graphicsQueueFamily;
+                    queues.push_back({assignment.queue, graphics ? request.graphicsQueueFamily : request.transferQueueFamily,
+                                      graphics ? graphicsQueue_ : transferQueue_, graphics});
+                }
+                const auto incarnation = AcquireRenderDeviceIncarnation();
+                if (incarnation.HasError())
+                    return Result<void>::Failure(incarnation.ErrorValue());
+                auto prepared = graph_.Initialize(device_, queues, request.maxFramesInFlight, timeline.maxTimelineSemaphoreValueDifference,
+                                                  incarnation.Value(), resources_, getDeviceProcAddr_);
+                if (prepared.HasError())
+                    return prepared;
+                return PublishResourceCapabilities(selected->device, properties.properties, allocationLimits.maxMemoryAllocationSize,
+                                                   incarnation.Value());
             }
 
             IRenderResourceBackend *ResourceBackend() noexcept override {
                 return &resources_;
             }
 
+            RenderCapabilitySnapshot ResourceCapabilities() const noexcept override {
+                return resourceCapabilities_;
+            }
+
+            Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
+                if (!descriptor.outputExtent.IsValid() || nextFrame_ == std::numeric_limits<std::uint64_t>::max())
+                    return Result<FrameToken>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                const FrameToken frame{nextFrame_};
+                auto begun = graph_.BeginFrame(frame);
+                if (begun.HasError())
+                    return Result<FrameToken>::Failure(std::move(begun).ErrorValue());
+                ++nextFrame_;
+                return Result<FrameToken>::Success(frame);
+            }
+
+            Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+                return graph_.ExecuteGraph(request);
+            }
+
+            Result<void> SubmitFrame(const FrameToken frame) override {
+                return graph_.SubmitFrame(frame);
+            }
+
+            void AbortFrame(const FrameToken frame) noexcept override {
+                graph_.AbortFrame(frame);
+            }
+
+            Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
+                return graph_.ObserveSubmission(wait);
+            }
+
+            Result<void> BeginShutdownCommands() override {
+                return graph_.BeginShutdown();
+            }
+
+            Result<RenderBackendDrainProgress> PollCommandDrain() override {
+                return graph_.PollDrain();
+            }
+
             void DestroyDevice() noexcept override {
+                // Private rollback is legal only after explicit terminal drain or before any submission.
+                const auto closing = graph_.BeginShutdown();
+                const auto drained = graph_.PollDrain();
+                if (closing.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
                 resources_.ShutdownResources();
+                resourceCapabilities_ = {};
                 if (device_ != VK_NULL_HANDLE && destroyDevice_ != nullptr) {
                     destroyDevice_(device_, nullptr);
                 }
                 device_ = VK_NULL_HANDLE;
                 graphicsQueue_ = VK_NULL_HANDLE;
                 presentationQueue_ = VK_NULL_HANDLE;
+                transferQueue_ = VK_NULL_HANDLE;
                 destroyDevice_ = nullptr;
             }
 
@@ -283,6 +363,53 @@ namespace Horo::Render {
                 RenderAdapterId id;
                 VkPhysicalDevice device{VK_NULL_HANDLE};
             };
+
+            /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
+            Result<void> PublishResourceCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties,
+                                                     const VkDeviceSize allocationLimit, const std::uint64_t incarnation) {
+                auto &snapshot = resourceCapabilities_;
+                snapshot = {.deviceIncarnation = incarnation,
+                            .capabilityRevision = 1,
+                            .synthetic = false,
+                            .features = {},
+                            .queues = {.graphics = true, .compute = false, .copy = true, .present = false},
+                            .limits = {.maxBufferBytes = allocationLimit,
+                                       .maxTextureDimension2D = properties.limits.maxImageDimension2D,
+                                       .maxColorAttachments = std::min(1U, properties.limits.maxColorAttachments),
+                                       .maxVertexAttributes = properties.limits.maxVertexInputAttributes,
+                                       .maxFramesInFlight = 8},
+                            .formats = {}};
+                for (const auto capability :
+                     {RenderCapability::BufferResources, RenderCapability::MeshResources, RenderCapability::TextureResources,
+                      RenderCapability::RenderTargetResources, RenderCapability::OffscreenTargets})
+                    snapshot.features.Enable(capability);
+                const auto query = LoadInstanceFunction<PFN_vkGetPhysicalDeviceFormatProperties>(getInstanceProcAddr_, instance_,
+                                                                                                 "vkGetPhysicalDeviceFormatProperties");
+                if (query == nullptr) {
+                    snapshot = {};
+                    return Result<void>::Failure(
+                        MakeError(VulkanBackendErrors::EntryPointMissing,
+                                  "vkGetPhysicalDeviceFormatProperties is required to publish native resource capabilities."));
+                }
+                snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
+                for (const auto format :
+                     {RenderTextureFormat::Rgba8Unorm, RenderTextureFormat::Depth24Stencil8, RenderTextureFormat::Depth32Float}) {
+                    VkFormatProperties native{};
+                    query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);
+                    auto usage = RenderTextureUsage::None;
+                    if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0)
+                        usage = usage | RenderTextureUsage::Sampled;
+                    if ((native.optimalTilingFeatures &
+                         (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0)
+                        usage = usage | RenderTextureUsage::RenderAttachment;
+                    if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) != 0)
+                        usage = usage | RenderTextureUsage::CopySource;
+                    if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0)
+                        usage = usage | RenderTextureUsage::CopyDestination;
+                    snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
+                }
+                return Result<void>::Success();
+            }
 
             template <typename Property, typename Enumerator, typename Name>
             [[nodiscard]] Result<std::vector<std::string>> EnumerateNames(const Enumerator &enumerate, const Name &name,
@@ -437,6 +564,9 @@ namespace Horo::Render {
                         .index = index,
                         .supportsGraphics = properties[index].queueCount > 0 && (properties[index].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0,
                         .supportsPresentation = properties[index].queueCount > 0 && presentation.Value(),
+                        .supportsTransfer =
+                            properties[index].queueCount > 0 &&
+                            (properties[index].queueFlags & (VK_QUEUE_TRANSFER_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0,
                     });
                 }
                 return Result<std::vector<VulkanQueueFamily>>::Success(std::move(queues));
@@ -450,7 +580,8 @@ namespace Horo::Render {
                 }
                 getDeviceQueue(device_, request.graphicsQueueFamily, 0, &graphicsQueue_);
                 getDeviceQueue(device_, request.presentationQueueFamily, 0, &presentationQueue_);
-                if (graphicsQueue_ == VK_NULL_HANDLE || presentationQueue_ == VK_NULL_HANDLE) {
+                getDeviceQueue(device_, request.transferQueueFamily, 0, &transferQueue_);
+                if (graphicsQueue_ == VK_NULL_HANDLE || presentationQueue_ == VK_NULL_HANDLE || transferQueue_ == VK_NULL_HANDLE) {
                     return Result<void>::Failure(
                         MakeError(VulkanBackendErrors::NativeCallFailed, "Vulkan returned a null required queue."));
                 }
@@ -487,8 +618,12 @@ namespace Horo::Render {
             VkDevice device_{VK_NULL_HANDLE};
             VkQueue graphicsQueue_{VK_NULL_HANDLE};
             VkQueue presentationQueue_{VK_NULL_HANDLE};
+            VkQueue transferQueue_{VK_NULL_HANDLE};
+            std::uint64_t nextFrame_{1};
             PFN_vkDestroyDevice destroyDevice_{nullptr};
+            RenderCapabilitySnapshot resourceCapabilities_;
             Detail::VulkanResourceRuntime resources_;
+            Detail::VulkanGraphRuntime graph_;
         };
     }  // namespace
 

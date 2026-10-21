@@ -66,6 +66,7 @@ namespace Horo::Render {
         std::uint32_t index{0};
         bool supportsGraphics{false};
         bool supportsPresentation{false};
+        bool supportsTransfer{false};
     };
 
     /** @brief Native-free Vulkan physical-device facts returned by the platform runtime seam. */
@@ -111,8 +112,11 @@ namespace Horo::Render {
         RenderAdapterId adapter;
         std::uint32_t graphicsQueueFamily{0};
         std::uint32_t presentationQueueFamily{0};
+        std::uint32_t transferQueueFamily{0};
         VulkanRequiredFeatures enabledFeatures;
         std::vector<std::string> enabledExtensions;
+        std::vector<RenderQueueAssignment> queueAssignments;
+        std::uint32_t maxFramesInFlight{2};
     };
 
     /**
@@ -155,6 +159,30 @@ namespace Horo::Render {
 
         /** @brief Returns the device-owned backend after logical-device initialization. */
         [[nodiscard]] virtual IRenderResourceBackend *ResourceBackend() noexcept = 0;
+
+        /** @brief Exact selected-device resource facts; empty means no published generic resource capability. */
+        [[nodiscard]] virtual RenderCapabilitySnapshot ResourceCapabilities() const noexcept {
+            return {};
+        }
+    };
+
+    /** @brief Optional production device command owner; fake admission-only runtimes need not claim execution. */
+    class IVulkanCommandPort {
+    public:
+        virtual ~IVulkanCommandPort() = default;
+        /** @brief Starts an offscreen frame in preallocated native storage. */
+        [[nodiscard]] virtual Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) = 0;
+        /** @brief Encodes exact typed graph submissions, retaining the frontend's one completion lease. */
+        [[nodiscard]] virtual Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) = 0;
+        /** @brief Submits the active offscreen frame without CPU waiting. */
+        [[nodiscard]] virtual Result<void> SubmitFrame(FrameToken frame) = 0;
+        /** @brief Discards only unsent active-frame command tickets. */
+        virtual void AbortFrame(FrameToken frame) noexcept = 0;
+        [[nodiscard]] virtual Result<bool> ObserveSubmission(const RenderCpuWait &wait) = 0;
+        /** @brief Closes native command admission and cancels unsent work. */
+        [[nodiscard]] virtual Result<void> BeginShutdownCommands() = 0;
+        /** @brief Polls exact command retirement before device/instance destruction. */
+        [[nodiscard]] virtual Result<RenderBackendDrainProgress> PollCommandDrain() = 0;
     };
 
     /** @brief Returns inert native-free module metadata for host window planning. */

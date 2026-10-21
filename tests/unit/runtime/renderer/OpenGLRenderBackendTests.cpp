@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLRenderTestSupport.h"
@@ -108,7 +109,9 @@ namespace Horo::Render::OpenGLBackendTests {
         CHECK(state.destroyCount == 0);
         state.failure = PortFailure::None;
         REQUIRE(backend->Resize({1920, 1080}).HasValue());
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        CHECK((state.contextCreated));
+        backend.reset();
         CHECK(state.destroyCount == 1);
     }
 
@@ -129,8 +132,9 @@ namespace Horo::Render::OpenGLBackendTests {
 
         CheckInitializedBackend(*backend, portState);
         CheckFrameLifecycle(*backend, portState);
-        backend->Shutdown();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        backend.reset();
         Check(portState.destroyCount == 1);
     }
 
@@ -150,7 +154,7 @@ namespace Horo::Render::OpenGLBackendTests {
 
             portState.failure = None;
             Check(backend->Initialize(RenderBackendConfig{}).HasValue());
-            backend->Shutdown();
+            Horo::Render::Test::RequireDrainedOwner(*backend);
             Check(portState.destroyCount == (failure == Create ? 1 : 2));
         }
     }
@@ -205,7 +209,7 @@ namespace Horo::Render::OpenGLBackendTests {
         FakePresentationPort newerPort{newerState};
         std::unique_ptr<IRenderBackend> newerBackend = CreateBackend(newerPort);
         Check(newerBackend->Initialize(RenderBackendConfig{}).HasValue());
-        newerBackend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*newerBackend);
     }
 
     TEST_CASE("Optional Debug Context Failure Retries Once After Complete Rollback", "[unit][runtime][renderer][lifecycle]") {
@@ -218,7 +222,8 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(state.debugCreateCount == 1);
         Check(state.destroyCount == 1);
         Check(!state.descriptor.enableDebugContext);
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        backend.reset();
         Check(state.destroyCount == 2);
     }
 
@@ -242,15 +247,23 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(backend->Initialize(RenderBackendConfig{}).HasValue());
 
         std::string errorCode;
-        std::jthread worker{[&backend, &errorCode] {
+        std::string closeError;
+        std::string drainError;
+        std::jthread worker{[&backend, &errorCode, &closeError, &drainError] {
             const Result<FrameToken> begun = backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {64, 64}});
             errorCode = begun.HasError() ? begun.ErrorValue().code.Value() : std::string{};
-            backend->Shutdown();
+            const auto closing = backend->BeginShutdown();
+            const auto drained = backend->PollDrain();
+            closeError = closing.HasError() ? closing.ErrorValue().code.Value() : std::string{};
+            drainError = drained.HasError() ? drained.ErrorValue().code.Value() : std::string{};
         }};
         worker.join();
         Check(errorCode == "render.opengl.wrong_thread");
+        Check(closeError == "render.opengl.wrong_thread");
+        Check(drainError == "render.opengl.wrong_thread");
         Check(state.destroyCount == 0);
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        backend.reset();
         Check(state.destroyCount == 1);
     }
 

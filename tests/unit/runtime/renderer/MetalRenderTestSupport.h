@@ -31,6 +31,7 @@ namespace Horo::Render::MetalBackendTests {
         int destroyCount{0};
         int resourceCreateCount{0};
         int resourceDestroyCount{0};
+        std::uint32_t pendingDrainPolls{};
         MetalPresentationDescriptor descriptor{};
         FramebufferExtent frameExtent{};
         FramebufferExtent resizedExtent{};
@@ -78,6 +79,7 @@ namespace Horo::Render::MetalBackendTests {
             state_->descriptor = descriptor;
             const Result<void> created = presentationPort_->CreateSurface();
             initialized_ = created.HasValue();
+            closing_ = false;
             if (created.HasError()) {
                 return Result<Detail::MetalDeviceCapabilities>::Failure(created.ErrorValue());
             }
@@ -114,30 +116,34 @@ namespace Horo::Render::MetalBackendTests {
             return Result<RenderMemoryCostPlan>::Success(TestSupport::DedicatedMemoryCost(bytes, 2));
         }
 
-        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>,
-                                           const RenderMemoryPlacement &) override {
+        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>, const RenderMemoryPlacement &,
+                                           RenderResourceNativeLifetime lifetime = {}) override {
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
-        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {  // NOSONAR(cpp:S4144)
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t,
+                                         RenderResourceNativeLifetime lifetime = {}) override {  // NOSONAR(cpp:S4144)
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
         Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>,  // NOSONAR(cpp:S4144)
-                                            const RenderMemoryPlacement &) override {                     // NOSONAR(cpp:S4144)
+                                            const RenderMemoryPlacement &,
+                                            RenderResourceNativeLifetime lifetime = {}) override {  // NOSONAR(cpp:S4144)
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
-        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t) override {  // NOSONAR(cpp:S4144)
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t,
+                                                RenderResourceNativeLifetime lifetime = {}) override {  // NOSONAR(cpp:S4144)
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
 
         Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t,  // NOSONAR(cpp:S4144)
-                                                 std::uint64_t) override {                       // NOSONAR(cpp:S4144)
+                                                 std::uint64_t,
+                                                 RenderResourceNativeLifetime lifetime = {}) override {  // NOSONAR(cpp:S4144)
             ++state_->resourceCreateCount;
             return Result<std::uint64_t>::Success(nextResourceIdentity_++);
         }
@@ -206,12 +212,24 @@ namespace Horo::Render::MetalBackendTests {
             return Result<void>::Success();
         }
 
-        void Shutdown() noexcept override {
+        Result<void> BeginShutdown() override {
+            closing_ = true;
             AbortFrame();
+            return Result<void>::Success();
+        }
+
+        Result<RenderBackendDrainProgress> PollDrain() override {
+            if (!closing_)
+                return Result<RenderBackendDrainProgress>::Failure(MakeError(MetalBackendErrors::InvalidConfig));
+            if (state_->pendingDrainPolls != 0) {
+                --state_->pendingDrainPolls;
+                return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Pending);
+            }
             if (initialized_) {
                 presentationPort_->DestroySurface();
                 initialized_ = false;
             }
+            return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
         }
 
     private:
@@ -220,6 +238,7 @@ namespace Horo::Render::MetalBackendTests {
         IRenderGraphResourceLease *graphLease_{nullptr};
         std::uint64_t nextResourceIdentity_{1};
         bool initialized_{false};
+        bool closing_{false};
     };
 
     class FakeMetalRuntimeFactory final : public Detail::IMetalRuntimeFactory {

@@ -97,6 +97,71 @@ jobs:
           #include <Horo/Platform/AndroidStorage.h>
           CPP
 
+  vulkan-commands:
+    name: Vulkan 1.3 · Linux native commands
+    needs: tooling
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      CC: gcc
+      CXX: g++
+      HORO_COMPILER_LAUNCHER: ccache
+      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - name: Setup build tools
+        uses: ./.github/actions/setup-build-tools
+      - name: Restore dependency and compiler caches
+        uses: ./.github/actions/restore-native-cache
+        with:
+          profile: native-tests-v1
+          mode: Debug
+          max-size: 2G
+      - name: Install native Vulkan qualification driver and validation layer
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends libvulkan1 mesa-vulkan-drivers vulkan-tools vulkan-validationlayers
+      - name: Record selected native driver provenance
+        run: |
+          mkdir -p build/vulkan-command-evidence
+          git rev-parse HEAD > build/vulkan-command-evidence/checkout.txt
+          printf '%s\n' '${{ github.event.pull_request.head.sha || github.sha }}' > build/vulkan-command-evidence/source-head.txt
+          dpkg-query -W libvulkan1 mesa-vulkan-drivers vulkan-tools vulkan-validationlayers > build/vulkan-command-evidence/packages.txt
+          sha256sum "$VK_DRIVER_FILES" > build/vulkan-command-evidence/icd.sha256
+          vulkaninfo --summary > build/vulkan-command-evidence/driver.txt 2>&1
+      - name: Configure exact headless Vulkan command composition
+        run: |
+          set -o pipefail
+          cmake --preset ci-linux-debug -B build/ci-vulkan-commands -DBUILD_TESTING=ON \
+            -DHORO_BUILD_RENDER_VULKAN=ON -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF \
+            -DHORO_BUILD_EDITOR_GUI=OFF -DHORO_ENABLE_GPU_SMOKE_TESTS=ON \
+            -DHORO_BUILD_PHYSICS_NATIVE=OFF -DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF \
+            2>&1 | tee build/vulkan-command-evidence/configure.txt
+      - name: Build actual native command owner and common contract consumers
+        run: |
+          set -o pipefail
+          cmake --build build/ci-vulkan-commands --parallel 2 --target HoroRenderVulkanTests \
+            HoroVulkanCommandExecutionSmoke HoroRenderGraphTests HoroRenderFrontendTests HoroRenderBackendRegistryTests \
+            2>&1 | tee build/vulkan-command-evidence/build.txt
+      - name: Run portable contracts and actual installed-driver native commands
+        run: |
+          set -o pipefail
+          ctest --test-dir build/ci-vulkan-commands --output-on-failure --parallel 1 \
+            -R '^(HoroRenderVulkanTests|HoroVulkanCommandExecutionSmoke|HoroRenderGraphTests|HoroRenderFrontendTests|HoroRenderBackendRegistryTests)$' \
+            --output-junit ../vulkan-command-evidence/tests.xml \
+            2>&1 | tee build/vulkan-command-evidence/test.txt
+      - name: Upload native command qualification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vulkan-command-qualification
+          path: |
+            build/vulkan-command-evidence/
+            build/ci-vulkan-commands/CMakeCache.txt
+            build/ci-vulkan-commands/compile_commands.json
+          if-no-files-found: warn
+
   test:
     name: Test · ${{ matrix.name }}
     needs: tooling
@@ -183,6 +248,17 @@ jobs:
       - name: Build Debug
         id: debug_build
         run: cmake --build --preset "${{ matrix.preset }}"
+
+      - name: Qualify OpenGL editor GUI composition with Mesa
+        if: ${{ !cancelled() && runner.os == 'Linux' && steps.debug_build.outcome == 'success' }}
+        timeout-minutes: 2
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          GALLIUM_DRIVER: llvmpipe
+        run: >-
+          xvfb-run --auto-servernum --server-args="-screen 0 640x480x24"
+          build/ci/tests/HoroEditorViewportOpenGLSmoke
+          --reporter junit --out build/ci/opengl-editor-composition.xml
 
       - name: Cook Metal fixture and run native smoke when a device is available
         if: ${{ !cancelled() && runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}

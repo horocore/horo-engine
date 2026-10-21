@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Runtime/Render/RenderBackend.h"
+#include "RenderBackendDrainTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -75,8 +76,8 @@ namespace Horo::Render::Test {
             REQUIRE(backend->Present(frame).HasError());
             REQUIRE(backend->Resize(FramebufferExtent{1920, 1080}).HasValue());
 
-            backend->Shutdown();
-            backend->Shutdown();
+            RequireDrainedOwner(*backend);
+            RequireDrainedOwner(*backend);
             RequireErrorCode(backend->BeginFrame(descriptor), "render.backend.not_initialized", expectations.errorDomain);
         }
     }
@@ -91,7 +92,7 @@ namespace Horo::Render::Test {
             std::unique_ptr<IRenderBackend> backend = CreateInitializedBackend(expectations, createBackend);
             const Result<FrameToken> zeroExtent = backend->BeginFrame(FrameDescriptor{.frameNumber = 2, .outputExtent = {0, 720}});
             RequireErrorCode(zeroExtent, "render.backend.invalid_frame_descriptor", expectations.errorDomain);
-            backend->Shutdown();
+            RequireDrainedOwner(*backend);
         }
     }
 
@@ -120,7 +121,7 @@ namespace Horo::Render::Test {
             REQUIRE(reused.HasValue());
             REQUIRE(reused.Value() != frame);
             backend->AbortFrame(reused.Value());
-            backend->Shutdown();
+            RequireDrainedOwner(*backend);
         }
     }
 
@@ -140,7 +141,7 @@ namespace Horo::Render::Test {
             RequireErrorCode(backend->Execute(RenderExecutionPlan{.frame = begun.Value(), .orderedPasses = unsupportedPass}),
                              expectations.unsupportedPassCode, expectations.errorDomain);
             backend->AbortFrame(begun.Value());
-            backend->Shutdown();
+            RequireDrainedOwner(*backend);
         }
     }
 

@@ -6,6 +6,13 @@ namespace Horo::Render::FrontendErrors {
         const ErrorDomainId Domain{"render.frontend"};
     }  // namespace
 
+    const ErrorCodeDescriptor Closing{Domain, ErrorCode{"render.frontend.closing"}, ErrorSeverity::Error,
+                                      "Renderer admission is closed for shutdown.",
+                                      "Retain and poll the closing owner; create a new owner only after Drained."};
+    const ErrorCodeDescriptor WrongThread{Domain, ErrorCode{"render.frontend.wrong_thread"}, ErrorSeverity::Error,
+                                          "Renderer lifecycle work was requested on a foreign thread.",
+                                          "Use the initializing render owner thread."};
+
     const ErrorCodeDescriptor AmbiguousPassWorkload{.domain = Domain,
                                                     .code = ErrorCode{"render.frontend.ambiguous_pass_workload"},
                                                     .defaultSeverity = ErrorSeverity::Error,
@@ -13,6 +20,21 @@ namespace Horo::Render::FrontendErrors {
                                                     .remediationHint = "Provide exactly one supported workload for the pass.",
                                                     .retryable = false,
                                                     .userActionable = false};
+
+    const ErrorCodeDescriptor GuiAlreadyComposed{.domain = Domain,
+                                                 .code = ErrorCode{"render.frontend.gui_already_composed"},
+                                                 .defaultSeverity = ErrorSeverity::Error,
+                                                 .summary = "GUI output has already been composed for this frame.",
+                                                 .remediationHint = "Compose GUI output once after execution and before presentation.",
+                                                 .retryable = false,
+                                                 .userActionable = false};
+    const ErrorCodeDescriptor GuiCancelled{.domain = Domain,
+                                           .code = ErrorCode{"render.frontend.gui_cancelled"},
+                                           .defaultSeverity = ErrorSeverity::Error,
+                                           .summary = "GUI composition was cancelled before encoding.",
+                                           .remediationHint = "Begin a new frame after cancellation is resolved.",
+                                           .retryable = true,
+                                           .userActionable = false};
 
     const ErrorCodeDescriptor ExecutorChangeDuringFrame{.domain = Domain,
                                                         .code = ErrorCode{"render.frontend.executor_change_during_frame"},

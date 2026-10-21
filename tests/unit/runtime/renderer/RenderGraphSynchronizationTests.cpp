@@ -228,4 +228,44 @@ namespace Horo::Render {
 
         RequireError(Synthesize(compiled.graph, compiled.schedule, initial), "render.graph.synchronization.state_unsupported");
     }
+
+    TEST_CASE("Discarded imported contents require an exact undefined state and first write", "[renderer][render-graph][sync]") {
+        auto builder = RequireBuilder();
+        const auto pass = RequirePass(builder, RenderPassKind::Copy, RenderQueueRole::Transfer);
+        const auto resource = RequireResource(builder.ImportBuffer(BufferHandle(), RenderGraphResourceClass::Persistent));
+        bool read = false;
+        SECTION("first write") {}
+        SECTION("first read rejected") {
+            read = true;
+        }
+        RequireUsage(builder, {pass, resource, read ? RenderGraphAccess::Read : RenderGraphAccess::Write,
+                               read ? RenderGraphUsageKind::CopySource : RenderGraphUsageKind::CopyDestination});
+        auto compiled = RequireCompiledGraph(builder);
+        std::array initial{RenderGraphImportedState{resource, {}, RenderGraphInitialContents::Discarded}};
+        const auto synthesized = Synthesize(compiled.graph, compiled.schedule, initial);
+        if (read) {
+            REQUIRE(synthesized.HasError());
+        } else {
+            REQUIRE(synthesized.HasValue());
+            REQUIRE(synthesized.Value().Transitions().size() == 1);
+            CHECK(synthesized.Value().Transitions()[0].oldState == RenderGraphLogicalState{});
+            CHECK(synthesized.Value().ImportedStates()[0].contents == RenderGraphInitialContents::Discarded);
+        }
+        initial[0].state.queue = {1};
+        CHECK(Synthesize(compiled.graph, compiled.schedule, initial).HasError());
+        initial[0].state = {};
+        initial[0].contents = static_cast<RenderGraphInitialContents>(255);
+        CHECK(Synthesize(compiled.graph, compiled.schedule, initial).HasError());
+    }
+
+    TEST_CASE("Discarded imported buffer storage cannot begin with read-write access", "[renderer][render-graph][sync]") {
+        auto builder = RequireBuilder();
+        const auto pass = RequirePass(builder, RenderPassKind::Compute, RenderQueueRole::Compute);
+        const auto resource = RequireResource(builder.ImportBuffer(BufferHandle(), RenderGraphResourceClass::Persistent));
+        RequireUsage(builder, {pass, resource, RenderGraphAccess::ReadWrite, RenderGraphUsageKind::Storage});
+        auto compiled = RequireCompiledGraph(builder);
+        const std::array initial{RenderGraphImportedState{resource, {}, RenderGraphInitialContents::Discarded}};
+        CHECK(Synthesize(compiled.graph, compiled.schedule, initial).HasError());
+    }
+
 }  // namespace Horo::Render

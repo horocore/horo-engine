@@ -1,0 +1,90 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
+#include "RenderFrontendTestSupport.h"
+
+#include <chrono>
+#include <thread>
+
+namespace Horo::Tests::RenderFrontendTesting {
+    TEST_CASE("Frontend submission observation rejects stale devices and active-frame blocking before backend work",
+              "[renderer][frontend][submission]") {
+        lifecycleState = {};
+        lifecycleState.supportsSubmissionObservation = true;
+        auto frontend = CreateTrackingFrontend();
+        const auto incarnation = frontend->Capabilities().support.deviceIncarnation;
+        RenderCpuWait wait{{{1}, 1}, RenderCpuWaitPurpose::Poll, std::chrono::nanoseconds{0}, incarnation};
+        auto stale = wait;
+        stale.expectedDeviceIncarnation = 0;
+        REQUIRE(frontend->ObserveSubmission(stale).HasError());
+        ++stale.expectedDeviceIncarnation;
+        if (stale.expectedDeviceIncarnation == incarnation)
+            ++stale.expectedDeviceIncarnation;
+        REQUIRE(frontend->ObserveSubmission(stale).HasError());
+        CHECK(lifecycleState.submissionObservations == 0);
+        auto begun = frontend->BeginFrame({.frameNumber = 1, .outputExtent = {16, 16}});
+        REQUIRE(begun.HasValue());
+        auto frame = std::move(begun).Value();
+        wait.purpose = RenderCpuWaitPurpose::DeterministicTest;
+        wait.timeout = std::chrono::milliseconds{1};
+        REQUIRE(frontend->ObserveSubmission(wait).HasError());
+        CHECK(lifecycleState.submissionObservations == 0);
+        wait.purpose = RenderCpuWaitPurpose::Poll;
+        wait.timeout = std::chrono::nanoseconds{0};
+        REQUIRE(frontend->ObserveSubmission(wait).HasValue());
+        CHECK(lifecycleState.submissionObservations == 1);
+        frame.Abort();
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
+    }
+
+    TEST_CASE("Frontend retains closing owner through pending drain and permits bounded completion recovery",
+              "[renderer][frontend][shutdown]") {
+        lifecycleState = {};
+        lifecycleState.supportsSubmissionObservation = true;
+        auto frontend = CreateTrackingFrontend();
+        const RenderCpuWait wait{{{1}, 1},
+                                 RenderCpuWaitPurpose::Poll,
+                                 std::chrono::nanoseconds{0},
+                                 frontend->Capabilities().support.deviceIncarnation};
+        lifecycleState.drainPending = true;
+        REQUIRE(frontend->BeginShutdown().HasValue());
+        REQUIRE(frontend->PollDrain().Value() == RenderBackendDrainProgress::Pending);
+        CHECK(lifecycleState.shutdownCount == 0);
+        CHECK(frontend->BeginFrame({.frameNumber = 1, .outputExtent = {16, 16}}).HasError());
+        CHECK(frontend->CreateBuffer({.byteSize = 16, .usage = RenderBufferUsage::CopySource}, {}).HasError());
+        const auto pending = frontend->ObserveSubmission(wait);
+        REQUIRE(pending.HasValue());
+        CHECK_FALSE(pending.Value());
+        bool foreignRejected = false;
+        std::thread worker{[&] {
+            const auto closing = frontend->BeginShutdown();
+            const auto drain = frontend->PollDrain();
+            const auto observation = frontend->ObserveSubmission(wait);
+            foreignRejected = closing.HasError() && drain.HasError() && observation.HasError();
+        }};
+        worker.join();
+        CHECK(foreignRejected);
+        lifecycleState.drainPending = false;
+        const auto completed = frontend->ObserveSubmission(wait);
+        REQUIRE(completed.HasValue());
+        CHECK(completed.Value());
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
+        CHECK(lifecycleState.shutdownCount == 1);
+        CHECK(frontend->ObserveSubmission(wait).HasError());
+    }
+
+    TEST_CASE("Selected devices use one non-reused incarnation producer across owner recreation", "[renderer][frontend][submission]") {
+        lifecycleState = {};
+        auto first = CreateTrackingFrontend();
+        const auto original = first->Capabilities().support.deviceIncarnation;
+        Horo::Render::Test::RequireDrainedOwner(*first);
+        first.reset();
+        const auto interveningPeer = AcquireRenderDeviceIncarnation();
+        REQUIRE(interveningPeer.HasValue());
+        auto second = CreateTrackingFrontend();
+        const auto recreated = second->Capabilities().support.deviceIncarnation;
+        CHECK(original != 0);
+        CHECK(original != interveningPeer.Value());
+        CHECK(recreated != original);
+        CHECK(recreated != interveningPeer.Value());
+        Horo::Render::Test::RequireDrainedOwner(*second);
+    }
+}  // namespace Horo::Tests::RenderFrontendTesting

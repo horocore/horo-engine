@@ -14,6 +14,13 @@
 #include <string>
 
 namespace Horo::Render {
+    /** @brief Acquires the one process-wide non-reused device incarnation for concrete backend initialization.
+     * @return Positive identity, or typed exhaustion before wraparound.
+     * @details Only explicit native-owner initialization calls this producer. All concrete
+     * peers share it; metadata descriptors remain inert. The atomic protects uniqueness
+     * across concurrently initializing render owners. Shutdown never resets the counter. */
+    [[nodiscard]] Result<std::uint64_t> AcquireRenderDeviceIncarnation();
+
     /** @brief Independently reported renderer capabilities. */
     enum class RenderCapability : std::uint8_t {
         Presentation,

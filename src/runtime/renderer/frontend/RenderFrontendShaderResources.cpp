@@ -307,6 +307,8 @@ namespace Horo::Render {
         using Realization = Result<std::unique_ptr<IResidentMaterialBinding>>;
         if (std::this_thread::get_id() != preparationOwner_)
             return Realization::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
+        if (closing_)
+            return Realization::Failure(MakeError(FrontendErrors::Closing));
         if (activeFrameScope_)
             return Realization::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
         if (const auto validated = ValidateMaterialBindingDescriptor(descriptor, resourceRegistry_->Owner()); validated.HasError())
@@ -355,6 +357,8 @@ namespace Horo::Render {
     Result<RenderPipelineDeviceIdentity> RenderFrontend::QueryPipelineDeviceIdentity() const {
         if (std::this_thread::get_id() != preparationOwner_)
             return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
+        if (closing_)
+            return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(FrontendErrors::Closing));
         if (activeFrameScope_ != nullptr)
             return Result<RenderPipelineDeviceIdentity>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
         return backend_->QueryPipelineDeviceIdentity();
@@ -366,6 +370,8 @@ namespace Horo::Render {
         using Creation = ResourceCreation<RenderShaderModuleHandle>;
         if (std::this_thread::get_id() != preparationOwner_)
             return Result<Creation>::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
+        if (closing_)
+            return Result<Creation>::Failure(MakeError(FrontendErrors::Closing));
         if (activeFrameScope_ != nullptr)
             return Result<Creation>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
         if (const auto valid = ValidateRenderShaderModuleDescriptor(descriptor); valid.HasError())
@@ -404,6 +410,8 @@ namespace Horo::Render {
         using Creation = ResourceCreation<RenderPipelineHandle>;
         if (std::this_thread::get_id() != preparationOwner_)
             return Result<Creation>::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
+        if (closing_)
+            return Result<Creation>::Failure(MakeError(FrontendErrors::Closing));
         if (activeFrameScope_ != nullptr)
             return Result<Creation>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
         if (const auto valid = ValidateRenderGraphicsPipelineDescriptor(descriptor); valid.HasError())
@@ -440,6 +448,8 @@ namespace Horo::Render {
         using Creation = ResourceCreation<RenderSamplerHandle>;
         if (std::this_thread::get_id() != preparationOwner_)
             return Result<Creation>::Failure(MakeError(RenderShaderResourceErrors::WrongThread));
+        if (closing_)
+            return Result<Creation>::Failure(MakeError(FrontendErrors::Closing));
         if (activeFrameScope_ != nullptr)
             return Result<Creation>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
         if (const auto valid = ValidateRenderSamplerDescriptor(descriptor); valid.HasError())

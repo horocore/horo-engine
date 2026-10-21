@@ -28,14 +28,17 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const;
         [[nodiscard]] Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> initialData,
-                                                         const RenderMemoryPlacement &placement);
+                                                         const RenderMemoryPlacement &placement,
+                                                         RenderResourceNativeLifetime lifetime = {});
         [[nodiscard]] Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertexBuffer,
-                                                       std::uint64_t indexBuffer);
+                                                       std::uint64_t indexBuffer, RenderResourceNativeLifetime lifetime = {});
         [[nodiscard]] Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, std::span<const std::byte> initialData,
-                                                          const RenderMemoryPlacement &placement);
-        [[nodiscard]] Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture);
+                                                          const RenderMemoryPlacement &placement,
+                                                          RenderResourceNativeLifetime lifetime = {});
+        [[nodiscard]] Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture,
+                                                              RenderResourceNativeLifetime lifetime = {});
         [[nodiscard]] Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t colorAttachment,
-                                                               std::uint64_t depthAttachment);
+                                                               std::uint64_t depthAttachment, RenderResourceNativeLifetime lifetime = {});
         /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
         /** @brief Selected-device owner-thread preparation; no compilation, fallback or frame work. */
@@ -89,6 +92,8 @@ namespace Horo::Render::Detail {
         void TrackParallelGraphUse(void *finalCommands, std::span<const RenderGraphResourceInstance> resources) noexcept;
         /** @brief Non-blockingly drains at most 64 native-complete retired instances. */
         void DrainGraphRetirements() noexcept;
+        /** @brief Observes every submitted staging buffer without waiting; native failures remain typed terminal evidence. */
+        [[nodiscard]] Result<bool> PollUploadDrain() const;
         void Shutdown() noexcept;
 
     private:

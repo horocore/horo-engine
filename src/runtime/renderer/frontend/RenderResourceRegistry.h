@@ -8,9 +8,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <optional>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace Horo::Render {
@@ -69,8 +71,8 @@ namespace Horo::Render::Detail {
     class RenderResourceRegistry final {
     public:
         RenderResourceRegistry(RenderResourceOwnerId owner, const RenderResourceRegistryLimits &limits,
-                               BackendResourceRelease releaseBackendResource = {});
-        ~RenderResourceRegistry() = default;
+                               BackendResourceRelease releaseBackendResource = {}, RenderMemoryBudget *memoryBudget = nullptr);
+        ~RenderResourceRegistry();
 
         RenderResourceRegistry(const RenderResourceRegistry &) = delete;
         RenderResourceRegistry &operator=(const RenderResourceRegistry &) = delete;
@@ -79,6 +81,18 @@ namespace Horo::Render::Detail {
 
         [[nodiscard]] Result<ResourceReservation> Reserve(RenderResourceClass resourceClass,
                                                           std::span<const RenderResourceIdentity> dependencies = {});
+        /** @brief Claims stable native-retirement evidence for one exact pending creation and its existing charge. */
+        [[nodiscard]] Result<RenderResourceNativeLifetime> PrepareNativeLifetime(RenderResourceClass resourceClass,
+                                                                                 RenderResourceIdentity identity,
+                                                                                 RenderMemoryReservationId memoryReservation,
+                                                                                 RenderMemoryBudget *memoryBudget = nullptr);
+        /** @brief Attaches native ownership before publication/commit rollback can fail. */
+        [[nodiscard]] Result<void> AttachNativeCreation(RenderResourceClass resourceClass, RenderResourceIdentity identity,
+                                                        std::uint64_t backendInstance,
+                                                        std::optional<RenderMemoryAllocationId> allocation = std::nullopt);
+        /** @brief Reports retained native ownership that prevents registry destruction, including failed creation without an instance. */
+        [[nodiscard]] bool HasPendingNativeRetirements() const noexcept;
+        [[nodiscard]] bool HasNativeLifetime(RenderResourceIdentity identity) const noexcept;
         [[nodiscard]] Result<void> Publish(RenderResourceClass resourceClass, RenderResourceIdentity identity,
                                            std::uint64_t backendInstance,
                                            std::optional<RenderMemoryAllocationId> memoryAllocation = std::nullopt);
@@ -111,6 +125,27 @@ namespace Horo::Render::Detail {
         [[nodiscard]] RenderResourceOwnerId Owner() const noexcept;
 
     private:
+        /** @brief Callback only marks owner-thread evidence; registry/budget mutation happens later in Retire. */
+        struct NativeLease final : IRenderResourceRetirementLease {
+            bool claimed{false};
+            bool released{true};
+            std::thread::id owner;
+
+            void Claim() noexcept override {
+                if (claimed || !released)
+                    std::terminate();
+                owner = std::this_thread::get_id();
+                claimed = true;
+                released = false;
+            }
+
+            void Release() noexcept override {
+                if (!claimed || released || owner != std::this_thread::get_id())
+                    std::terminate();
+                released = true;
+            }
+        };
+
         struct Entry {
             RenderResourceClass resourceClass{RenderResourceClass::Buffer};
             RenderResourceState state{RenderResourceState::Retired};
@@ -119,6 +154,10 @@ namespace Horo::Render::Detail {
             std::uint32_t submissionPins{0};
             std::uint64_t backendInstance{0};
             std::optional<RenderMemoryAllocationId> memoryAllocation;
+            RenderMemoryReservationId memoryReservation;
+            NativeLease nativeLease;
+            bool nativeDestroyRequested{false};
+            bool memoryRetirementBegun{false};
             ResourceOperationId operation;
             std::vector<RenderResourceIdentity> dependencies;
             bool generationExhausted{false};
@@ -155,7 +194,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] const Entry *FindExact(RenderResourceIdentity identity) const noexcept;
         void CompleteOperation(ResourceOperationId operation, std::optional<Error> error) noexcept;
         void QueueRetirementIfEligible(std::size_t slot);
-        void Retire(std::size_t slot, BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative) noexcept;
+        [[nodiscard]] bool Retire(std::size_t slot,
+                                  BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative) noexcept;
 
         RenderResourceOwnerId owner_;
         RenderResourceRegistryLimits limits_;
@@ -173,6 +213,7 @@ namespace Horo::Render::Detail {
         std::uint32_t activeSubmissionPins_{0};
         bool acceptingRequests_{true};
         BackendResourceRelease releaseBackendResource_;
+        RenderMemoryBudget *memoryBudget_{};
     };
 
     /** @brief Rolls back an unpublished registry generation and optional valid memory claim on the owner thread. */

@@ -16,7 +16,8 @@ namespace Horo::Render {
     [[nodiscard]] RenderTextureViewHandle TextureViewHandle(Detail::RenderResourceIdentity identity) noexcept;
     [[nodiscard]] RenderTargetHandle TargetHandle(Detail::RenderResourceIdentity identity) noexcept;
     [[nodiscard]] bool FitsBuffer(std::uint32_t elementSize, std::uint32_t elementCount, std::size_t bufferSize) noexcept;
-    [[nodiscard]] Result<std::uint64_t> RealizeResourceRequest(IRenderBackend &backend, const Detail::RenderResourceRegistry &registry,
+    [[nodiscard]] Result<std::uint64_t> RealizeResourceRequest(IRenderBackend &backend, RenderMemoryBudget &memoryBudget,
+                                                               Detail::RenderResourceRegistry &registry,
                                                                const Detail::RenderResourceUploadQueue::Request &request,
                                                                std::span<const std::byte> initialData);
     void CompleteResourceRequest(IRenderBackend &backend, RenderMemoryBudget &memoryBudget, Detail::RenderResourceRegistry &registry,
