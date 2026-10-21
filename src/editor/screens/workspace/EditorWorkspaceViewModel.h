@@ -19,6 +19,7 @@
 #include "editor/screens/workspace/ContentBrowserModel.h"
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
+#include "editor/screens/workspace/PCGWorkspace.h"
 #include "editor/screens/workspace/WorldLayerOutliner.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
 
@@ -106,6 +107,7 @@ namespace Horo::Editor {
         FocusSequenceDocument,
         CloseSequenceDocument,
         UpdateSequenceTimeline,
+        EditPCGGraph,
         ReturnToWelcome,
         SaveSourceDocument,
         SaveSourceDocumentAs,
@@ -308,6 +310,7 @@ namespace Horo::Editor {
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
         std::optional<SequenceTimelineState> sequenceTimeline;
+        std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;
         std::optional<PrefabHierarchyCommand> prefabHierarchy;
@@ -453,6 +456,8 @@ namespace Horo::Editor {
         BottomDockMode bottomDockMode = BottomDockMode::Full;
         std::string activeDocumentPanelId = "horo.viewport";
         std::vector<SequenceWorkspaceDocument> sequenceDocuments;
+        std::vector<PCGWorkspaceDocument> pcgDocuments;
+        std::vector<PCGPaletteEntry> pcgPalette;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
 
         float leftPanelWidth = 268.0F;
