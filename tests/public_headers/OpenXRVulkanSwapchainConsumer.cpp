@@ -1,3 +1,4 @@
+#include "OpenXRMultiviewGraph.h"
 #include "OpenXRVulkanSwapchain.h"
 
 #include <type_traits>

@@ -24,6 +24,7 @@ namespace Horo::Render {
 
 namespace Horo::Render::Detail {
     class IRenderExternalTextureSource;
+    struct RenderExternalTextureFacts;
 
     enum class RenderResourceClass : std::uint8_t {
         Buffer,
@@ -108,6 +109,8 @@ namespace Horo::Render::Detail {
                                                            RenderGraphResourceId resource) const;
         /** @brief Observes exact previously issued external registration retirement, including generation advance. */
         [[nodiscard]] Result<bool> ExternalRetirementComplete(RenderResourceIdentity identity) const;
+        /** @brief Revalidates and copies the sole external source's exact immutable allocation/acquisition/release facts. */
+        [[nodiscard]] Result<RenderExternalTextureFacts> DescribeExternalTexture(RenderResourceIdentity identity) const;
         [[nodiscard]] Result<void> Publish(RenderResourceClass resourceClass, RenderResourceIdentity identity,
                                            std::uint64_t backendInstance,
                                            std::optional<RenderMemoryAllocationId> memoryAllocation = std::nullopt);

@@ -4,12 +4,13 @@
  * @brief Bounded immutable scene extraction and view-index mapping shared by XR rendering paths.
  */
 #include "Horo/Math/SceneMath.h"
-#include "Horo/Runtime/Render/MaterialBinding.h"
+#include "Horo/Runtime/Render/MaterialBindingIdentity.h"
 
 #include <array>
 #include <span>
 
 namespace Horo::Render {
+    struct RenderCapabilitySnapshot;
     /** @brief Explicit rendering policy; fallback never changes the selected backend. */
     enum class MultiviewExecutionPolicy : std::uint8_t {
         Multipass,
@@ -42,6 +43,11 @@ namespace Horo::Render {
         bool indexedShaders{};
         bool instancedTargetRouting{};
     };
+
+    /** @brief Projects the selected renderer's actual immutable capability publication into multiview admission.
+     * @param capabilities Exact current selected-device facts, not XR runtime discovery.
+     * @return Effective bounded draw/index/layer support; invalid facts return an unsupported empty set. */
+    [[nodiscard]] MultiviewCapabilities ResolveMultiviewCapabilities(const RenderCapabilitySnapshot &capabilities) noexcept;
 
     /** @brief One runtime-ordered view expressed in renderer math, independent of native eye enums. */
     struct MultiviewSceneView final {

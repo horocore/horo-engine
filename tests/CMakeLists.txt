@@ -3386,6 +3386,7 @@ add_executable(HoroStandardPbrMaterialTests
 )
 add_executable(HoroMultiviewSceneExtractionTests
         unit/runtime/renderer/MultiviewSceneExtractionTests.cpp
+        unit/runtime/renderer/MultiviewShaderParameterTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroMultiviewSceneExtractionTests PRIVATE cxx_std_20)
@@ -5020,7 +5021,9 @@ if (HORO_BUILD_RENDER_VULKAN)
     add_executable(HoroRenderVulkanTests
             unit/runtime/renderer/VulkanRenderBackendTests.cpp
             unit/runtime/renderer/VulkanResourceRuntimeTests.cpp
+            unit/runtime/renderer/VulkanShaderRuntimeTests.cpp
             unit/runtime/renderer/VulkanCommandRuntimeTests.cpp
+            unit/runtime/renderer/VulkanGraphRuntimeTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
     target_include_directories(HoroRenderVulkanTests PRIVATE
@@ -5032,6 +5035,7 @@ if (HORO_BUILD_RENDER_VULKAN)
             HoroEngine::RenderFrontend
             HoroEngine::RenderVulkan
             HoroRenderVulkanExternalImagesInterface
+            ${CMAKE_DL_LIBS}
             Vulkan::Headers
     )
     if (HORO_BUILD_XR_OPENXR)

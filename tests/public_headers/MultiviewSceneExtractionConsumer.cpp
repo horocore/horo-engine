@@ -1,5 +1,7 @@
 #include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
+#include "Horo/Runtime/Render/MultiviewGraphWorkload.h"
 #include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
+#include "Horo/Runtime/Render/MultiviewShaderParameters.h"
 
 #include <type_traits>
 

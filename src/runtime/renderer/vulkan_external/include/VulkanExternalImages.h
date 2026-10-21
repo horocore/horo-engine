@@ -29,6 +29,6 @@ namespace Horo::Render::Detail {
          * never a second completion timeline, counter or synthesized GPU-completion receipt. */
         virtual void RecordNativeRetirement(const RenderGraphLogicalState &state, bool hasNativeState) const noexcept = 0;
         /** @brief Returns actual native acquisition layout/queue evidence; contents may be undefined. */
-        [[nodiscard]] virtual RenderGraphLogicalState AcquiredState() const noexcept = 0;
+        [[nodiscard]] RenderGraphLogicalState AcquiredState() const noexcept override = 0;
     };
 }  // namespace Horo::Render::Detail

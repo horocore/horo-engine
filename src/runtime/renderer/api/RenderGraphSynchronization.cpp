@@ -28,7 +28,7 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] constexpr bool IsKnown(const RenderGraphSynchronizationOperation value) noexcept {
-            return static_cast<std::uint8_t>(value) <= static_cast<std::uint8_t>(RenderGraphSynchronizationOperation::CopyDestination);
+            return static_cast<std::uint8_t>(value) <= static_cast<std::uint8_t>(RenderGraphSynchronizationOperation::GraphicsInputBuffer);
         }
 
         [[nodiscard]] constexpr bool IsKnown(const RenderGraphPipelineScope value) noexcept {
@@ -44,6 +44,9 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] constexpr RenderGraphSynchronizationOperation OperationFor(const RenderGraphUsageKind usage) noexcept {
+            if (usage == RenderGraphUsageKind::VertexBuffer || usage == RenderGraphUsageKind::IndexBuffer ||
+                usage == RenderGraphUsageKind::UniformBuffer)
+                return RenderGraphSynchronizationOperation::GraphicsInputBuffer;
             return static_cast<RenderGraphSynchronizationOperation>(static_cast<std::uint8_t>(usage) + 1);
         }
 
@@ -114,6 +117,10 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] bool IsDefinedStateValid(const RenderGraphLogicalState &state, const RenderGraphResourceKind kind) noexcept {
+            if (state.operation == RenderGraphSynchronizationOperation::GraphicsInputBuffer &&
+                (kind != RenderGraphResourceKind::Buffer || state.access != RenderGraphSynchronizationAccess::Read ||
+                 state.scope != RenderGraphPipelineScope::Graphics))
+                return false;
             return state.operation != RenderGraphSynchronizationOperation::None && state.queue.IsValid() &&
                    state.layout == LayoutFor(kind, state.operation);
         }

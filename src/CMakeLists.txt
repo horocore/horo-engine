@@ -2008,6 +2008,7 @@ add_library(HoroXRApi STATIC
         runtime/xr/api/XRSpacePose.cpp
         runtime/xr/api/XRTrackingSnapshot.cpp
         runtime/xr/api/XRViewRenderPlan.cpp
+        runtime/xr/api/XRMultiviewScene.cpp
 )
 add_library(HoroEngine::XRApi ALIAS HoroXRApi)
 target_compile_features(HoroXRApi PUBLIC cxx_std_20)
@@ -2414,6 +2415,8 @@ target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::Ru
 
 add_library(HoroRenderApi STATIC
         runtime/renderer/api/MultiviewSceneExtraction.cpp
+        runtime/renderer/api/MultiviewGraphWorkload.cpp
+        runtime/renderer/api/MultiviewShaderParameters.cpp
         runtime/renderer/api/MultiviewExtractionErrors.cpp
         runtime/renderer/api/PostProcessErrors.cpp
         runtime/renderer/api/PostProcessSettings.cpp
@@ -2537,6 +2540,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrameParallelExecution.cpp
         runtime/renderer/frontend/RenderFrameGraphResources.cpp
         runtime/renderer/frontend/RenderFrameMaterialExecution.cpp
+        runtime/renderer/frontend/RenderMultiviewResources.cpp
         runtime/renderer/frontend/RenderGraphTransientResourcePool.cpp
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
@@ -2747,13 +2751,20 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanNativeRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanResourceConversions.cpp
             runtime/renderer/modules/vulkan/VulkanResourceRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanShaderRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanPipelineResources.cpp
+            runtime/renderer/modules/vulkan/VulkanMaterialResources.cpp
             runtime/renderer/modules/vulkan/VulkanCommandRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanCommandSubmission.cpp
             runtime/renderer/modules/vulkan/VulkanGraphRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanMaterialCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanMultiviewEncoding.cpp
+            runtime/renderer/modules/vulkan/VulkanMultiviewPreparation.cpp
             runtime/renderer/modules/vulkan/VulkanGraphBarriers.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackend.cpp
+        runtime/renderer/modules/vulkan/VulkanBackendAdmission.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.cpp
     )
     add_library(HoroEngine::RenderVulkan ALIAS HoroRenderVulkan)
@@ -2771,8 +2782,10 @@ if (HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN)
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/xr/openxr/vulkan/host>")
     target_compile_definitions(HoroXROpenXRVulkanHostInterface INTERFACE XR_USE_GRAPHICS_API_VULKAN)
     target_link_libraries(HoroXROpenXRVulkanHostInterface INTERFACE
-        HoroXROpenXRHostInterface HoroRenderVulkanExternalImagesInterface)
-    add_library(HoroXROpenXRVulkan STATIC runtime/xr/openxr/vulkan/OpenXRVulkanSwapchain.cpp)
+        HoroXROpenXRHostInterface HoroRenderVulkanExternalImagesInterface HoroEngine::RenderFrontend)
+    add_library(HoroXROpenXRVulkan STATIC
+        runtime/xr/openxr/vulkan/OpenXRVulkanSwapchain.cpp
+        runtime/xr/openxr/vulkan/OpenXRMultiviewGraph.cpp)
     target_link_libraries(HoroXROpenXRVulkan PRIVATE HoroXROpenXRVulkanHostInterface
         HoroEngine::XROpenXR HoroEngine::RenderFrontend HoroEngine::RenderVulkan)
     target_compile_features(HoroXROpenXRVulkan PRIVATE cxx_std_20)

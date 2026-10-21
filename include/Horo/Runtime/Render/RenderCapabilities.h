@@ -33,8 +33,10 @@ namespace Horo::Render {
         MeshResources,
         TextureResources,
         RenderTargetResources,
-        LightCulling, /**< Cooked native light-culling operation; does not imply general compute dispatch. */
-        Count,        /**< Number of defined capabilities; not itself a capability bit. */
+        LightCulling,         /**< Cooked native light-culling operation; does not imply general compute dispatch. */
+        ViewIndexedShaders,   /**< Real indexed-draw shader execution through the selected backend. */
+        InstancedViewRouting, /**< Enabled native layer routing for the same immutable multiview scene. */
+        Count,                /**< Number of defined capabilities; not itself a capability bit. */
     };
 
     /** @brief Bounded bitset of backend-neutral renderer capabilities. */
@@ -130,13 +132,14 @@ namespace Horo::Render {
         std::uint32_t maxColorAttachments{0};   /**< Maximum simultaneous color attachments. */
         std::uint32_t maxVertexAttributes{0};   /**< Maximum vertex attributes per vertex layout. */
         std::uint32_t maxFramesInFlight{0};     /**< Maximum bounded frames retained by the backend. */
+        std::uint32_t maxMultiviewViews{0};     /**< Zero means unsupported; finite complete-view admission otherwise. */
 
         /**
          * @brief Reports whether the limits are bounded and structurally valid.
          * @return `true` when the limits satisfy the shared contract.
          */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return maxFramesInFlight <= 8;
+            return maxFramesInFlight <= 8 && maxMultiviewViews <= 32;
         }
 
         /**

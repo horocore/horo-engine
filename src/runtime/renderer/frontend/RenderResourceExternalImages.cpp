@@ -79,4 +79,19 @@ namespace Horo::Render::Detail {
         return Result<bool>::Success(entry.state == RenderResourceState::Retired && entry.nativeLease.claimed &&
                                      entry.nativeLease.released);
     }
+
+    /** @copydoc RenderResourceRegistry::DescribeExternalTexture */
+    Result<RenderExternalTextureFacts> RenderResourceRegistry::DescribeExternalTexture(const RenderResourceIdentity identity) const {
+        const auto validated = Validate(RenderResourceClass::Texture, identity);
+        if (validated.HasError())
+            return Result<RenderExternalTextureFacts>::Failure(validated.ErrorValue());
+        const auto &entry = entries_[validated.Value()];
+        if (entry.state != RenderResourceState::Ready || !entry.externalSource)
+            return Result<RenderExternalTextureFacts>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+        if (const auto live = entry.externalSource->Validate(); live.HasError())
+            return Result<RenderExternalTextureFacts>::Failure(live.ErrorValue());
+        return Result<RenderExternalTextureFacts>::Success({entry.externalSource->Descriptor(), entry.externalSource->AcquiredState(),
+                                                            entry.externalSource->RequiredFinalState(),
+                                                            entry.externalSource->DeviceIncarnation()});
+    }
 }  // namespace Horo::Render::Detail

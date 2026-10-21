@@ -3,6 +3,7 @@
 #include "VulkanBackendModule.h"
 #include "VulkanCommandRuntime.h"
 #include "VulkanExternalImages.h"
+#include "VulkanShaderRuntime.h"
 
 #include <cstdint>
 #include <functional>
@@ -29,8 +30,33 @@ namespace Horo::Render::Detail {
         VulkanGraphResourceState *state{nullptr};
     };
 
+    /** @brief Captured whole-image offscreen attachments; command retention owns their native backing. */
+    struct VulkanMaterialTarget {
+        VulkanGraphResource color;
+        VulkanGraphResource depth;
+        VkImageView colorView{VK_NULL_HANDLE};
+        VkImageView depthView{VK_NULL_HANDLE};
+        FramebufferExtent extent;
+    };
+
+    /** @brief Exact MeshVertex/index source snapshot, independent of registry discovery after capture. */
+    struct VulkanMaterialMesh {
+        VulkanGraphResource vertex;
+        VulkanGraphResource index;
+        RenderMeshDescriptor descriptor;
+    };
+
+    /** @brief Exact device-private image-view provenance, including its immutable subresource range. */
+    struct VulkanDrawViewBinding {
+        VkImageView view{VK_NULL_HANDLE};
+        VkImage image{VK_NULL_HANDLE};
+        RenderTextureViewDescriptor descriptor;
+    };
+
     /** @brief Device-owned Vulkan resource allocator and identity registry. */
-    class VulkanResourceRuntime final : public IRenderResourceBackend, public IRenderExternalTextureBackend {
+    class VulkanResourceRuntime final : public IRenderResourceBackend,
+                                        public IRenderExternalTextureBackend,
+                                        public IMaterialBindingBackend {
     public:
         /**
          * @brief Creates an inert resource runtime with a bounded backend-private identity range.
@@ -43,6 +69,28 @@ namespace Horo::Render::Detail {
 
         [[nodiscard]] Result<void> Initialize(const VkPhysicalDeviceMemoryProperties &memoryProperties, VkDevice device,
                                               const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver);
+        /** @brief Attaches the shader owner to this registry after native device creation. */
+        [[nodiscard]] Result<void> InitializeShaders(const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
+                                                     const VulkanShaderRuntime::Resolver &resolver, std::uint64_t deviceIncarnation = 0,
+                                                     bool vertexLayerEnabled = false);
+        [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const override;
+        [[nodiscard]] Result<RenderMemoryCostPlan> QueryShaderModuleMemoryCost(const RenderShaderModuleDescriptor &,
+                                                                               std::size_t) const override;
+        [[nodiscard]] Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphicsPipelineDescriptor &, std::uint64_t,
+                                                                                   std::uint64_t) const override;
+        [[nodiscard]] Result<RenderMemoryCostPlan> QuerySamplerMemoryCost(const RenderSamplerDescriptor &) const override;
+        [[nodiscard]] Result<std::uint64_t> CreateShaderModule(const RenderShaderModuleDescriptor &, std::span<const std::uint8_t>,
+                                                               const RenderMemoryPlacement &) override;
+        [[nodiscard]] Result<std::uint64_t> CreateGraphicsPipeline(const RenderGraphicsPipelineDescriptor &, std::uint64_t, std::uint64_t,
+                                                                   const RenderMemoryPlacement &) override;
+        [[nodiscard]] Result<std::uint64_t> CreateSampler(const RenderSamplerDescriptor &, const RenderMemoryPlacement &) override;
+        void DestroyShaderModule(std::uint64_t) noexcept override;
+        void DestroyGraphicsPipeline(std::uint64_t) noexcept override;
+        void DestroySampler(std::uint64_t) noexcept override;
+        [[nodiscard]] Result<std::size_t> QueryMaterialParameterBufferSize(std::uint64_t, const MaterialBindingDescriptor &,
+                                                                           ShaderBindingId) const override;
+        [[nodiscard]] Result<std::unique_ptr<IResidentMaterialBinding>> RealizeResolved(const MaterialBindingDescriptor &, std::uint64_t,
+                                                                                        std::span<const MaterialResidentResource>) override;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const override;
         [[nodiscard]] Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &descriptor) const override;
         [[nodiscard]] Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &bufferDescriptor,
@@ -72,6 +120,14 @@ namespace Horo::Render::Detail {
         void DestroyTextureView(std::uint64_t backendInstance) noexcept override;
         void DestroyRenderTarget(std::uint64_t backendInstance) noexcept override;
         void ShutdownResources() noexcept;
+        /** @brief Captures whole single-sample attachments and retains the target's transitive backing.
+         * @param identity Exact registry target. @param retention Prepared command pin storage.
+         * @return Native snapshot or typed stale/unsupported/capacity failure before recording. */
+        [[nodiscard]] Result<VulkanMaterialTarget> CaptureMaterialTarget(std::uint64_t identity, VulkanCommandRetention &retention);
+        /** @brief Captures exact indexed mesh buffers and retains all three native registry owners.
+         * @param identity Exact registry mesh. @param retention Prepared command pin storage.
+         * @return Native snapshot or typed stale/capacity failure before recording. */
+        [[nodiscard]] Result<VulkanMaterialMesh> CaptureMaterialMesh(std::uint64_t identity, VulkanCommandRetention &retention);
         /** @brief Captures exact native namespaces and pins actual resources into preallocated graph retention.
          * @param request Portable-validated exact frontend resource mapping.
          * @param destination Prepared snapshot storage, at least graph resource count.
@@ -80,9 +136,12 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> CaptureGraphResources(const RenderGraphExecutionRequest &request,
                                                          std::span<VulkanGraphResource> destination,
                                                          VulkanCommandRetention &retention) const;
+        /** @brief Resolves exact image-view source and subresource metadata without native calls or allocation on success. */
+        [[nodiscard]] Result<VulkanDrawViewBinding> ResolveDrawView(std::uint64_t view) const;
 
     private:
         struct Impl;
         std::unique_ptr<Impl> impl_;
+        VulkanShaderRuntime shaders_;
     };
 }  // namespace Horo::Render::Detail

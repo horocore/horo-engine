@@ -7,6 +7,8 @@ namespace Horo::Render::Detail {
 
     /** @brief Validates native descriptor roles and contents before recording; unsupported adjacent capabilities remain explicit. */
     Result<void> VulkanGraphRuntime::Impl::ValidateWorkload(const RenderGraphWorkload &workload, const RenderQueueId queue) {
+        if (std::holds_alternative<RenderGraphMultiview>(workload))
+            return Result<void>::Success();  // Complete native scene admission is performed with the full request in PreparePass.
         if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload))
             return ValidateDepthAttachment(*depth, queue);
         if (std::holds_alternative<std::monostate>(workload))
@@ -66,6 +68,10 @@ namespace Horo::Render::Detail {
 
     /** @brief Encodes only a workload already proven against exact resident descriptors. */
     void VulkanGraphRuntime::Impl::Encode(const VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept {
+        if (std::holds_alternative<RenderGraphMultiview>(workload)) {
+            multiview.Encode(command);
+            return;
+        }
         if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
             EncodeDepthAttachment(command, *depth);
         } else if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {

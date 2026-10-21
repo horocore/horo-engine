@@ -1,4 +1,5 @@
 #include "Horo/XR/XRErrors.h"
+#include "Horo/XR/XRMultiviewScene.h"
 #include "Horo/XR/XRViewRenderPlan.h"
 #include "support/AllocationProbe.h"
 #include "support/TypedIdentityTestSupport.h"
@@ -373,6 +374,102 @@ namespace Horo::XR {
             RequireFailureIdentity(ValidateXRViewRenderPlan(plan, fixture.session, fixture.configurationId, fixture.revision,
                                                             fixture.origin, std::span<const XRSwapchainImageId>{}),
                                    XRErrors::OperationUnavailable);
+        }
+
+        /** @brief Exact per-view reference-to-world evidence, without an implicit local/stage-to-world conversion. */
+        [[nodiscard]] XRPoseSample OriginSample(const PlanFixture &fixture, const std::size_t view, const float x = 3.0F) {
+            auto descriptor = fixture.views[view].pose;
+            descriptor.source = descriptor.target;
+            descriptor.target = Space(fixture.session, XRSpaceKind::World, 99);
+            descriptor.components.positionMeters.value = Math::Vec3{x, 0.0F, 0.0F};
+            auto sample = XRPoseSample::Create(descriptor, fixture.session, fixture.origin);
+            REQUIRE(sample.HasValue());
+            return sample.Value();
+        }
+
+        [[nodiscard]] XRMultiviewOwnerState MultiviewOwner(const PlanFixture &fixture) {
+            return {.session = fixture.session,
+                    .configuration = fixture.configurationId,
+                    .configurationRevision = fixture.revision,
+                    .originRevision = fixture.origin,
+                    .acquiredImages = std::span{fixture.acquired}.first(fixture.acquiredCount),
+                    .renderer = {1, 2, fixture.origin.Value(), fixture.revision.Value(), 3, 4},
+                    .capabilities = {XRHardLimits::MaximumViews, true, true, false}};
+        }
+
+        TEST_CASE("XR multiview converts actual asymmetric projections and declared reference poses", "[unit][xr][multiview]") {
+            PlanFixture fixture;
+            fixture.views[0].projection = {-0.5F, 1.5F, -1.0F, 1.0F};
+            const auto plan = fixture.Create();
+            const auto active = MultiviewOwner(fixture);
+            const std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1)};
+            const XRMultiviewSceneInput input{.plan = plan, .referenceToWorld = origins, .publication = active.renderer};
+            const auto result = XRMultiviewScene::Create(input, active);
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().Plan().Targets()[0].image == fixture.acquired[0]);
+            CHECK(result.Value().Scene().Mode() == Render::MultiviewExecutionMode::Multipass);
+            REQUIRE(result.Value().Scene().Views().size() == 2);
+            const auto &clip = result.Value().Scene().Views()[0].worldToClip;
+            CHECK(Math::NearlyEqual(clip.At(0, 2), 0.5F));
+            CHECK(Math::NearlyEqual(clip.At(0, 3), -3.0F));
+            const auto nearPoint = Math::TryTransformPoint(clip, {3.0F, 1.7F, -input.nearPlane});
+            const auto farPoint = Math::TryTransformPoint(clip, {3.0F, 1.7F, -input.farPlane});
+            REQUIRE(nearPoint.HasValue());
+            REQUIRE(farPoint.HasValue());
+            CHECK(Math::NearlyEqual(nearPoint.Value().z, 0.0F));
+            CHECK(Math::NearlyEqual(farPoint.Value().z, 1.0F));
+            CHECK(result.Value().Validate(active).HasValue());
+            auto lost = active;
+            lost.acquiredImages = {};
+            RequireFailureIdentity(result.Value().Validate(lost), XRErrors::OperationUnavailable);
+            lost = active;
+            lost.session.slot.generation++;
+            RequireFailureIdentity(result.Value().Validate(lost), XRErrors::IdentityStale);
+        }
+
+        TEST_CASE("XR multiview conversion rejects mismatched origin time and invalid projection atomically", "[unit][xr][multiview]") {
+            PlanFixture fixture;
+            const auto plan = fixture.Create();
+            const auto active = MultiviewOwner(fixture);
+            std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1)};
+            XRMultiviewSceneInput input{.plan = plan, .referenceToWorld = origins, .publication = active.renderer};
+            SECTION("Missing explicit origin conversion") {
+                input.referenceToWorld = {};
+                RequireFailureIdentity(XRMultiviewScene::Create(input, active), XRErrors::CoordinateSpaceIncompatible);
+            }
+            SECTION("World origin revision differs") {
+                ++input.publication.originRevision;
+                RequireFailureIdentity(XRMultiviewScene::Create(input, active), XRErrors::OriginRevisionStale);
+            }
+            SECTION("Wrong time evidence") {
+                auto descriptor = fixture.views[1].pose;
+                descriptor.source = descriptor.target;
+                descriptor.target = Space(fixture.session, XRSpaceKind::World, 99);
+                descriptor.time.runtimeSample = Horo::Tests::IdentityValue<XRRuntimeTime>(91);
+                auto replacement = XRPoseSample::Create(descriptor, fixture.session, fixture.origin);
+                REQUIRE(replacement.HasValue());
+                origins[1] = replacement.Value();
+                RequireFailureIdentity(XRMultiviewScene::Create(input, active), XRErrors::TimeDomainIncompatible);
+            }
+            SECTION("Invalid finite projection interval") {
+                input.farPlane = input.nearPlane;
+                RequireFailureIdentity(XRMultiviewScene::Create(input, active), XRErrors::ViewPlanInvalid);
+            }
+        }
+
+        TEST_CASE("XR multiview conversion retains immutable values without heap allocation", "[unit][xr][multiview][allocation]") {
+            PlanFixture fixture;
+            const auto plan = fixture.Create();
+            const auto active = MultiviewOwner(fixture);
+            const std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1)};
+            const XRMultiviewSceneInput input{.plan = plan, .referenceToWorld = origins, .publication = active.renderer};
+            const auto before = Tests::AllocationProbe::Count();
+            const auto result = XRMultiviewScene::Create(input, active);
+            const auto after = Tests::AllocationProbe::Count();
+            REQUIRE(result.HasValue());
+            CHECK(after == before);
+            fixture.views[0].pose.components.positionMeters.value = Math::Vec3{99.0F, 0.0F, 0.0F};
+            CHECK(result.Value().Scene().Views()[0].worldToClip.At(0, 3) == -3.0F);
         }
 
         TEST_CASE("XR view plan construction and hot revalidation allocate no heap storage", "[unit][xr][allocation]") {

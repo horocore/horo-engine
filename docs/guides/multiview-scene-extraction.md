@@ -45,25 +45,85 @@ dense shader index zero is not an assertion that a view is the left eye.
 view count is never truncated. Capabilities are effective backend facts for the
 captured device/capability generations, not feature claims made by this extractor.
 
-## Integration still required for HORO-2095
+## XR conversion and real native consumption
 
-The extraction core and tests do not complete the ticket's native render/shader
-acceptance. The remaining integration must:
+`XRMultiviewScene` belongs to `HoroEngine::XRApi`. It retains the exact view plan,
+validates session/configuration/origin/acquisition identities, composes each
+presentation pose with an explicit reference-to-world sample, and builds finite
+asymmetric right-handed projections. `ExtractInstances` lets a host prepare view
+uniforms before extracting ready canonical mesh/material generations once. These
+are presentation copies; neither API acquires simulation or tracking authority.
 
-- Consume HORO-2094's acquired external-image lease, exact subresource ranges,
-  initial/final state and completion evidence. Renderer borrows the image and never
-  destroys or releases the runtime allocation.
-- Extend the existing material draw/execution request with bounded instance count,
-  dense view mapping, exact target subresources and prevalidated transform bindings.
-- Realize and consume reflected per-view matrix/array packing in actual shaders;
-  merely selecting an enum or adding a shader fixture is insufficient.
-- Qualify native instanced execution and admitted multipass fallback against the
-  same immutable presentation. Resolve stale resources and complete all input
-  admission before encoding any view of the frame.
-- Use HORO-326's existing submission validator/timelines and
-  `BeginShutdown`/`PollDrain` completion authority. Preserved/discarded graph contents
-  do not prove a foreign native image import or matched external queue release.
+`RenderGraphMultiview` adds one bounded complete graphics workload to RenderApi.
+Targets name exact graph images, independent color/depth layers, rectangles and
+prepared single-layer views. Geometry names the same canonical instance index,
+resident material generation and explicit vertex/index/uniform graph dependencies.
+Every target and draw must pass admission before any native recording. The
+frontend resolves actual mesh/view generations and pins them and material leases
+through its existing graph completion lease. No parallel resource registry or
+completion ledger is introduced.
 
-No completion, native support, visual parity or performance qualification is claimed
-by the source-only extraction tests. A full local build is not authorized for this
-worktree; executable evidence must be recorded separately when granted or hosted.
+The non-installed `OpenXRMultiviewGraph` is host composition in
+`HoroXROpenXRVulkanHostInterface`/`HoroXROpenXRVulkan`. Create runs before an active
+frame, receives ready resources and the host's actual graphics queue, and resolves
+`OpenXRSwapchain::Current` rather than treating graph contents policy as a native
+import. It copies actual external-source acquired/final states and compiles their
+mandatory releases. Execute rechecks actual owners and the frontend capability
+publication and forwards the host scheduler's supplied order/waits/signal to
+`ExecuteSubmittedGraph`. Host code still owns Present, ObserveSubmission,
+PollRelease, frame lifecycle, and orderly shutdown. CPU graph destruction never
+releases a runtime image. Owners/frontends outlive the prepared graph.
+
+The Vulkan recorder shares the canonical graph command buffer, submission
+validator, mesh capture, native retention and drain authority. Multipass renders
+each ordered view through its exact single-layer attachment view and supplies the
+dense view index through firstInstance. Instanced routing uses one compatible
+complete layered tuple and contiguous visible-mask runs. Each draw retains its
+own material/object transform; view index never substitutes for object identity.
+Both paths enforce primitive-work budgets in addition to extraction bounds.
+Single-sample color and optional depth-only D16/D32 attachments, MeshVertex
+triangles and zero-to-one clip depth are the currently admitted native envelope.
+Unsupported tuples fail before recording without silently changing device/backend.
+
+The shipped `assets/shaders/runtime/multiview_mesh.hlsl` uses SV_InstanceID to
+select WorldToClip and a per-object LocalToWorld. Separate cooked
+HORO_MULTIVIEW_LAYER_ROUTING=0/1 variants use single-layer views or
+SV_RenderTargetArrayIndex. `PackMultiviewShaderParameters` only adapts typed
+mathematical values; `PackMaterialParameterBinding` remains the sole reflected
+matrix/array offset/order/stride/overlap/padding authority. Prepare/upload outside
+an active frame. Its returned generic byte extent can need native block-tail
+padding: allocate/bind the actual selected pipeline's queried parameter block
+size and zero the remaining bytes. Do not infer an ABI from a C++ struct layout.
+
+Vertex-layer routing is optional and does not raise Vulkan baseline admission.
+The device explicitly enables supported shaderOutputLayer; effective draw
+capabilities also require complete dispatch. Native shader admission verifies
+actual SPIR-V Layer decorations against enabled device support and the declared
+pipeline routing. Routing contributes to the pipeline state digest; the existing
+SingleView digest retains its previous reserved-zero encoding. OpenGL and Metal
+reject this new workload/routing until they implement and advertise it explicitly.
+
+## Public contract migration and evidence
+
+The additive headers are owned by RenderApi or XRApi in the ownership registry.
+MaterialBindingGenerationId moves to the narrow MaterialBindingIdentity header;
+existing MaterialBinding includes continue to expose the same type and identity.
+RenderGraphWorkload appends its alternative, preserving existing alternative
+indices. Mesh/view mappings are trailing execution-request fields; legacy callers
+remain valid. Graphics input usages map to the existing shared GraphicsInputBuffer
+synchronization state rather than creating competing native state authorities.
+
+Extraction/XR conversion success remains bounded and allocation-free. Prepared
+CPU graphs, shared presentation/material storage and packed upload bytes allocate
+before frame admission. Native recording is bounded, with no queue idle or
+command-completion wait. Canonical leases retain submitted resources independently
+of logical handle release, and BeginShutdown/PollDrain are the sole drain protocol.
+
+Regression sources cover asymmetric origins/projections, unchanged source
+snapshots, reflected row/column packing, ordered indexed multipass/instanced calls,
+late invalid inputs and bounded work, completion lifetime, actual acquired-image
+host graph composition, final-state release and stale reacquisition. The focused
+Vulkan shader qualification workflow builds XR/OpenXR/Vulkan and the affected
+public-header consumers on Linux/Windows. Source presence is not an executed test
+receipt. Record current-head hosted results separately; no headset, visual parity
+or performance claim follows from injected dispatch tests.

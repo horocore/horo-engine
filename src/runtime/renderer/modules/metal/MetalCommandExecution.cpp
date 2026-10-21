@@ -36,7 +36,8 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(
                 MakeError(MetalBackendErrors::InvalidExecutionPlan, "Graph operation, bindings or declared resource uses are invalid."));
         for (const auto &binding : request.workloads) {
-            if (std::holds_alternative<RenderGraphDepthAttachment>(binding.workload))
+            if (std::holds_alternative<RenderGraphDepthAttachment>(binding.workload) ||
+                std::holds_alternative<RenderGraphMultiview>(binding.workload))
                 return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
             if (const auto valid = runtime.ValidateGraphWorkload(binding.workload, request.resources); valid.HasError()) {
                 return valid;

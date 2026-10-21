@@ -70,4 +70,12 @@ namespace Horo::Render::Detail {
         static_cast<void>(frontend.resourceRegistry_->DrainRetirements());
         return frontend.resourceRegistry_->ExternalRetirementComplete(Identity(texture));
     }
+
+    /** @copydoc RenderExternalTextureAccess::Describe */
+    Result<RenderExternalTextureFacts> RenderExternalTextureAccess::Describe(const RenderFrontend &frontend,
+                                                                             const RenderTextureHandle texture) {
+        if (std::this_thread::get_id() != frontend.preparationOwner_)
+            return Result<RenderExternalTextureFacts>::Failure(MakeError(FrontendErrors::ResourceChangeDuringFrame));
+        return frontend.resourceRegistry_->DescribeExternalTexture(Identity(texture));
+    }
 }  // namespace Horo::Render::Detail

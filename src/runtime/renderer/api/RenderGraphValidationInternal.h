@@ -10,7 +10,7 @@ namespace Horo::Render::Detail {
     }
 
     [[nodiscard]] constexpr bool IsKnown(const RenderGraphUsageKind kind) noexcept {
-        return static_cast<std::uint8_t>(kind) <= static_cast<std::uint8_t>(RenderGraphUsageKind::CopyDestination);
+        return static_cast<std::uint8_t>(kind) <= static_cast<std::uint8_t>(RenderGraphUsageKind::UniformBuffer);
     }
 
     [[nodiscard]] constexpr bool IsKnown(const RenderGraphDependencyKind kind) noexcept {

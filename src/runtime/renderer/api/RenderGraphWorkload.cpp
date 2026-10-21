@@ -55,6 +55,8 @@ namespace Horo::Render {
                                            const RenderGraphWorkload &workload) {
             using enum RenderGraphAccess;
             const auto uses = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
+            if (std::holds_alternative<RenderGraphMultiview>(workload))
+                return true;  // The outer admission preserves the original typed multiview failure before recording uses.
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
                 return MatchesLightCulling(request, pass, *culling);
             if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
@@ -278,9 +280,20 @@ namespace Horo::Render {
             graph.Passes().size() > RenderGraphLimits::HardMaxPasses || request.workloads.size() != graph.Passes().size() ||
             request.resources.size() != graph.Resources().size())
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
-        for (const auto &binding : request.workloads)
+        std::size_t multiviewCount = 0;
+        for (std::size_t index = 0; index < request.workloads.size(); ++index) {
+            const auto &binding = request.workloads[index];
             if (std::holds_alternative<RenderGraphVfx>(binding.workload))
                 return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::VfxExecutionUnavailable));
+            if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
+                if (++multiviewCount > 1)
+                    return Result<void>::Failure(
+                        MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
+                                  "One graph admits one complete multiview scene contribution within its fixed native scratch envelope."));
+                if (const auto valid = ValidateMultiviewGraphWorkload(request, graph.Passes()[index], *scene); valid.HasError())
+                    return valid;
+            }
+        }
         if (request.submissions.empty() && (!graph.ReleaseTransfers().empty() || !graph.AcquireTransfers().empty()))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
                                                    "Single-queue workload admission does not implement ownership transfers."));

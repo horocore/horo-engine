@@ -139,6 +139,9 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> CreateQueue(Queue &queue, std::uint32_t slots);
         [[nodiscard]] Result<void> ValidateSubmission(const Queue &queue, const RenderQueueSubmission &submission) const;
 
+        [[nodiscard]] Result<void> ValidateWaits(std::span<const RenderTimelinePoint> waits,
+                                                 std::span<const RenderGraphQueueSubmission> earlier) const;
+
         [[nodiscard]] bool HasPending() const noexcept {
             return std::ranges::any_of(queues, [](const Queue &queue) {
                 return std::ranges::any_of(queue.slots, [](const Slot &slot) {

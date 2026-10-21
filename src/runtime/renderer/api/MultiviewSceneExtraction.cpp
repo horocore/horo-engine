@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
 
 #include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
+#include "Horo/Runtime/Render/RenderCapabilities.h"
 
 #include <algorithm>
 #include <bit>
@@ -145,6 +146,15 @@ namespace Horo::Render {
             return SelectMode(policy, capabilities);
         }
     }  // namespace
+
+    /** @copydoc ResolveMultiviewCapabilities */
+    MultiviewCapabilities ResolveMultiviewCapabilities(const RenderCapabilitySnapshot &capabilities) noexcept {
+        if (!capabilities.IsValid())
+            return {};
+        const bool indexed = capabilities.features.Supports(RenderCapability::ViewIndexedShaders);
+        return {capabilities.limits.maxMultiviewViews, indexed, indexed,
+                indexed && capabilities.features.Supports(RenderCapability::InstancedViewRouting)};
+    }
 
     /** @copydoc MultiviewPublication::IsValid */
     bool MultiviewPublication::IsValid() const noexcept {

@@ -161,6 +161,7 @@ namespace Horo::Render {
         bool supportsRenderTargetResources{false};
         /** @brief Consumes exact frontend-authored graph partitions, GPU waits and timeline signals. */
         bool supportsExplicitGraphSubmissions{false};
+        bool supportsExplicitMaterialSubmissions{false}; /**< Implements material passes through canonical queue/timeline records. */
         bool supportsSubmissionObservation{false};
         /**
          * @brief Admits exact-descriptor transient object reuse on one effective queue.

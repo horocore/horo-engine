@@ -33,11 +33,23 @@ namespace Horo::Render::Detail {
         }
     }
 
+    /** @brief Loads optional material command dispatch without changing graph-only admission. */
+    void VulkanGraphRuntime::Impl::LoadMaterialDispatch(VkDevice device, const VulkanShaderRuntime::Resolver &resolver) {
+        native.bindPipeline = std::bit_cast<PFN_vkCmdBindPipeline>(resolver(device, "vkCmdBindPipeline"));
+        native.bindSets = std::bit_cast<PFN_vkCmdBindDescriptorSets>(resolver(device, "vkCmdBindDescriptorSets"));
+        native.bindVertices = std::bit_cast<PFN_vkCmdBindVertexBuffers>(resolver(device, "vkCmdBindVertexBuffers"));
+        native.bindIndex = std::bit_cast<PFN_vkCmdBindIndexBuffer>(resolver(device, "vkCmdBindIndexBuffer"));
+        native.viewport = std::bit_cast<PFN_vkCmdSetViewport>(resolver(device, "vkCmdSetViewport"));
+        native.scissor = std::bit_cast<PFN_vkCmdSetScissor>(resolver(device, "vkCmdSetScissor"));
+        native.drawIndexed = std::bit_cast<PFN_vkCmdDrawIndexed>(resolver(device, "vkCmdDrawIndexed"));
+    }
+
     /** @copydoc VulkanGraphRuntime::Initialize */
     Result<void> VulkanGraphRuntime::Initialize(const VkDevice device, const std::span<const VulkanCommandQueue> queues,
                                                 const std::uint32_t frames, const std::uint64_t timelineDifference,
                                                 const std::uint64_t deviceIncarnation, VulkanResourceRuntime &resources,
-                                                const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver) {
+                                                const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver,
+                                                const bool vertexLayerEnabled) {
         if (impl_->owner != std::thread::id{} || frames == 0 || frames > 8 || !resolver)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidConfig));
         for (std::size_t index = 0; index < queues.size(); ++index)
@@ -65,7 +77,7 @@ namespace Horo::Render::Detail {
             impl_->submissions.reserve(RenderGraphSubmissionLimits::MaximumSubmissions);
             impl_->retention.resize(frames);
             for (auto &pins : impl_->retention)
-                pins.resources.reserve(RenderGraphLimits::HardMaxResources);
+                pins.resources.reserve(RenderGraphLimits::HardMaxResources + MultiviewExtractionLimits::HardMaximumInstances * 3);
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::ResourceCreationFailed, "Bounded graph storage allocation failed."));
@@ -75,6 +87,8 @@ namespace Horo::Render::Detail {
         if (initialized.HasError())
             return initialized;
         impl_->native = dispatch;
+        impl_->LoadMaterialDispatch(device, resolver);
+        impl_->multiview.Initialize(device, deviceIncarnation, vertexLayerEnabled, resolver);
         impl_->resources = &resources;
         impl_->deviceIncarnation = deviceIncarnation;
         impl_->owner = std::this_thread::get_id();
@@ -92,6 +106,7 @@ namespace Horo::Render::Detail {
         if (auto polled = impl_->commands.Poll(); polled.HasError())
             return polled;
         impl_->frame = frame;
+        impl_->multiview.Reset();
         return Result<void>::Success();
     }
 
@@ -120,7 +135,7 @@ namespace Horo::Render::Detail {
             free->resources.clear();
             return captured;
         }
-        auto prepared = impl_->Prepare(request);
+        auto prepared = impl_->Prepare(request, *free);
         if (prepared.HasError()) {
             free->resources.clear();
             return prepared;
@@ -158,6 +173,7 @@ namespace Horo::Render::Detail {
     }
 
     void VulkanGraphRuntime::Impl::Abort() noexcept {
+        multiview.Reset();
         for (const auto &submission : submissions)
             commands.Abort(submission.ticket);
         submissions.clear();
@@ -179,6 +195,11 @@ namespace Horo::Render::Detail {
             return Result<bool>::Failure(
                 MakeError(VulkanBackendErrors::TimelineInvalid, "An active frame cannot issue a blocking CPU wait."));
         return impl_->commands.Observe(wait);
+    }
+
+    /** @copydoc VulkanGraphRuntime::MultiviewSupport */
+    MultiviewCapabilities VulkanGraphRuntime::MultiviewSupport() const noexcept {
+        return impl_->owner == std::thread::id{} ? MultiviewCapabilities{} : impl_->multiview.Capabilities();
     }
 
     /** @copydoc VulkanGraphRuntime::BeginShutdown */

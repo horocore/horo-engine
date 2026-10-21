@@ -146,7 +146,8 @@ Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphic
         return Result<RenderMemoryCostPlan>::Failure(
             MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
                       "Graphics pipeline references stale native modules or a different cooked artifact/interface/target."));
-    if (descriptor.state.sampleCount != 1 || descriptor.state.colorFormat != RenderTextureFormat::Rgba8Unorm ||
+    if (descriptor.state.viewRouting != RenderViewRouting::SingleView || descriptor.state.sampleCount != 1 ||
+        descriptor.state.colorFormat != RenderTextureFormat::Rgba8Unorm ||
         (descriptor.state.depthFormat && *descriptor.state.depthFormat != RenderTextureFormat::Depth24Stencil8 &&
          *descriptor.state.depthFormat != RenderTextureFormat::Depth32Float) ||
         !descriptor.manifest.inlineConstants.empty() || !descriptor.manifest.specializationInputs.empty())

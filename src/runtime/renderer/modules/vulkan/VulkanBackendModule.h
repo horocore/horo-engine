@@ -5,6 +5,7 @@
  * @brief Private Vulkan loader, adapter, device, and queue composition contracts.
  */
 
+#include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
 
 #include <cstdint>
@@ -83,6 +84,7 @@ namespace Horo::Render {
         bool standardApiVariant{true};
         bool portabilitySubset{false};
         bool driverAllowed{true};
+        bool vertexLayerRouting{false}; /**< Queried optional shaderOutputLayer feature; never part of baseline admission. */
     };
 
     /** @brief One bounded physical-device enumeration and its non-zero revision. */
@@ -117,6 +119,7 @@ namespace Horo::Render {
         std::vector<std::string> enabledExtensions;
         std::vector<RenderQueueAssignment> queueAssignments;
         std::uint32_t maxFramesInFlight{2};
+        bool enableVertexLayerRouting{false}; /**< Exact optional feature request captured before VkDevice creation. */
     };
 
     /**
@@ -174,6 +177,17 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) = 0;
         /** @brief Encodes exact typed graph submissions, retaining the frontend's one completion lease. */
         [[nodiscard]] virtual Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) = 0;
+
+        /** @brief Reports native material commands independently of graph-only fake ports. */
+        [[nodiscard]] virtual bool SupportsMaterialCommands() const noexcept {
+            return false;
+        }
+
+        /** @brief Records reflected draws through this same device command owner. */
+        [[nodiscard]] virtual Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &) {
+            return Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported));
+        }
+
         /** @brief Submits the active offscreen frame without CPU waiting. */
         [[nodiscard]] virtual Result<void> SubmitFrame(FrameToken frame) = 0;
         /** @brief Discards only unsent active-frame command tickets. */
