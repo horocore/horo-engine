@@ -120,6 +120,41 @@ namespace Horo::Render::Detail {
         return impl_->ParameterBytes(pipeline->second->material, binding);
     }
 
+    /** @brief Allocates and updates descriptor sets only after every slot and backing is validated. */
+    Result<void> VulkanShaderRuntime::Impl::FinalizeMaterialSets(const Pipeline &pipeline, VulkanPreparedMaterialBinding &table,
+                                                                 const MaterialBindingDescriptor &descriptor,
+                                                                 const std::span<VkWriteDescriptorSet> writes,
+                                                                 const std::map<VkDescriptorType, std::uint32_t> &counts) const {
+        if (!pipeline.sets.empty()) {
+            if (const auto allocated = AllocateMaterialSets(pipeline, table, counts); allocated.HasError())
+                return Result<void>::Failure(allocated.ErrorValue());
+            for (std::size_t i = 0; i < writes.size(); ++i) {
+                const auto mapping =
+                    std::ranges::find(descriptor.layout.targetBindings, descriptor.resources[i].binding, &ShaderTargetBindingMapEntry::id);
+                writes[i].dstSet = table.sets[mapping->nativeSpace];
+            }
+            updateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+        }
+        return Result<void>::Success();
+    }
+
+    /** @brief Retains exact immutable backing alongside descriptor storage before publication. */
+    Result<void> VulkanShaderRuntime::Impl::RetainMaterialResource(VulkanPreparedMaterialBinding &table,
+                                                                   const MaterialBindingLayout &layout,
+                                                                   const MaterialResourceBinding &logical,
+                                                                   const MaterialResidentResource &resident) const {
+        const auto kind = std::ranges::find(layout.resources, logical.binding, &ShaderReflectedBinding::id)->kind;
+        if (kind == ShaderResourceKind::Sampler)
+            table.samplerBackings.push_back(samplers.at(resident.instance));
+        else {
+            auto backing = resolve(resident, kind);
+            if (backing.HasError())
+                return Result<void>::Failure(backing.ErrorValue());
+            table.resources.push_back(backing.Value());
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc VulkanShaderRuntime::RealizeResolved */
     Result<std::unique_ptr<IResidentMaterialBinding>> VulkanShaderRuntime::RealizeResolved(
         const MaterialBindingDescriptor &descriptor, std::uint64_t id, std::span<const MaterialResidentResource> resources) {
@@ -151,29 +186,14 @@ namespace Horo::Render::Detail {
                 const auto slot = impl_->ResolveSlot(descriptor.layout, descriptor.resources[i], resources[i], buffers[i], images[i]);
                 if (slot.HasError())
                     return Outcome::Failure(slot.ErrorValue());
-                const auto kind =
-                    std::ranges::find(descriptor.layout.resources, descriptor.resources[i].binding, &ShaderReflectedBinding::id)->kind;
-                if (kind == ShaderResourceKind::Sampler)
-                    table->samplerBackings.push_back(impl_->samplers.at(resources[i].instance));
-                else {
-                    auto backing = impl_->resolve(resources[i], kind);
-                    if (backing.HasError())
-                        return Outcome::Failure(backing.ErrorValue());
-                    table->resources.push_back(backing.Value());
-                }
+                if (const auto retained = impl_->RetainMaterialResource(*table, descriptor.layout, descriptor.resources[i], resources[i]);
+                    retained.HasError())
+                    return Outcome::Failure(retained.ErrorValue());
                 writes[i] = slot.Value();
                 ++counts[writes[i].descriptorType];
             }
-            if (!pipeline->sets.empty()) {
-                if (const auto allocated = impl_->AllocateMaterialSets(*pipeline, *table, counts); allocated.HasError())
-                    return Outcome::Failure(allocated.ErrorValue());
-                for (std::size_t i = 0; i < writes.size(); ++i) {
-                    const auto mapping = std::ranges::find(descriptor.layout.targetBindings, descriptor.resources[i].binding,
-                                                           &ShaderTargetBindingMapEntry::id);
-                    writes[i].dstSet = table->sets[mapping->nativeSpace];
-                }
-                impl_->updateDescriptorSets(impl_->device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
-            }
+            if (const auto finalized = impl_->FinalizeMaterialSets(*pipeline, *table, descriptor, writes, counts); finalized.HasError())
+                return Outcome::Failure(finalized.ErrorValue());
             return Outcome::Success(std::move(table));
         } catch (const std::bad_alloc &) {
             return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));

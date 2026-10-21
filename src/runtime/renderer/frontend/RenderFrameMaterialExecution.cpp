@@ -12,6 +12,11 @@
 
 namespace Horo::Render {
     namespace {
+        /** @brief Checks the bounded immutable draw envelope before any frontend lease is acquired. */
+        bool ValidMaterialDrawEnvelope(const RenderMaterialPass &pass) {
+            return pass.color.IsValid() && !pass.draws.empty() && pass.draws.size() <= RenderMaterialPass::MaximumDraws;
+        }
+
         /** @brief Allocation-free evidence that execution unwound after its frame cleanup. */
         struct MaterialExecutionExceptionTag {};
     }  // namespace
@@ -76,8 +81,7 @@ namespace Horo::Render {
         try {
             if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
                 return MaterialExecutionOutcome{admitted};
-            if (!owner_->IsLiveTarget(pass.target, pass.extent) || !pass.color.IsValid() || pass.draws.empty() ||
-                pass.draws.size() > RenderMaterialPass::MaximumDraws) {
+            if (!owner_->IsLiveTarget(pass.target, pass.extent) || !ValidMaterialDrawEnvelope(pass)) {
                 Abort();
                 return MaterialExecutionOutcome{Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady))};
             }

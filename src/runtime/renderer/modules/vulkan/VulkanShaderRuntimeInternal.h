@@ -117,6 +117,10 @@ namespace Horo::Render::Detail {
         Result<VkDescriptorImageInfo> ImageBinding(ShaderResourceKind, const MaterialResidentResource &) const;
         Result<VkWriteDescriptorSet> ResolveSlot(const MaterialBindingLayout &, const MaterialResourceBinding &,
                                                  const MaterialResidentResource &, VkDescriptorBufferInfo &, VkDescriptorImageInfo &) const;
+        Result<void> FinalizeMaterialSets(const Pipeline &, VulkanPreparedMaterialBinding &, const MaterialBindingDescriptor &,
+                                          std::span<VkWriteDescriptorSet>, const std::map<VkDescriptorType, std::uint32_t> &) const;
+        Result<void> RetainMaterialResource(VulkanPreparedMaterialBinding &, const MaterialBindingLayout &, const MaterialResourceBinding &,
+                                            const MaterialResidentResource &) const;
         Result<void> AllocateMaterialSets(const Pipeline &, VulkanPreparedMaterialBinding &,
                                           const std::map<VkDescriptorType, std::uint32_t> &) const;
 

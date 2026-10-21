@@ -42,19 +42,22 @@ The current graphics envelope is single-sample MeshVertex triangles, read-only
 uniform buffers, sampled images and separate non-comparison samplers, four sets
 and 128 logical descriptors, at most 4096 resident objects per kind, and a 64 MiB
 stage artifact. Inline constants have no value-submission field in the material
-contract; unsupported storage/inline/multisample/packed-matrix or packed-array
-requests fail with typed actionable errors. Descriptor arrays of supported resources
+contract; unsupported storage/inline/multisample requests fail with typed actionable
+errors. Matrix and parameter arrays use the shared final-artifact material ABI. Descriptor arrays of supported resources
 are populated element by element. Valid logical texture/sampler pairing is preserved,
 but combined native coordinates require a separate combined-descriptor ABI and
-fail with an actionable recook result before Vulkan layout calls. This preparation implementation does not claim
-Vulkan frame rendering, image upload/transitions or presentation ownership.
+fail with an actionable recook result before Vulkan layout calls. The offscreen consumer records through the HORO-326 command owner, preserving its
+exact queue/timeline and retirement authority. Presentation remains outside this capability.
 
 Qualification separates injected native-call failure/lifecycle coverage on Linux
 and Windows from the opt-in Linux real-device preparation smoke. The latter cooks
 GLSL fixtures to SPIR-V 1.6, initializes the production native runtime, and creates
 shader modules, pipeline/layout/cache, host-visible uniform backing, sampled texture/view and sampler objects, and
 complete descriptor sets. Logical paired-sampler metadata is preserved while
-native Vulkan descriptors stay separate. It does not submit frame work and requires no display. The hosted workflow
+native Vulkan descriptors stay separate. A second fixture submits an indexed offscreen draw with a view-indexed array of
+nonidentity matrices, using the shared typed material packer, then observes the exact
+completion and native retirement. It requires no display. No pixel readback is performed;
+submission success is not proof of rendered transform pixel values. The hosted workflow
 fails if its explicitly requested Vulkan device is unavailable. The ordinary suite
 skips this smoke unless both fixture paths are supplied. macOS is not a supported
 Vulkan product platform and supplies no native Vulkan qualification evidence.
@@ -86,3 +89,54 @@ CMake owner is introduced. The RenderApi descriptor/cache tests, existing public
 header consumer, Vulkan override/cache tests and Linux native smoke cover the
 migration. Both hosted Vulkan matrix jobs build the affected public consumer and
 cache/permutation test targets; general renderer CI qualifies peer compositions.
+
+## Canonical parameter packing and material submission migration
+
+`MaterialParameterValue` borrows typed scalar spans using existing `ShaderValueType`
+and `ShaderParameterId` identities. Values are array-major, then row-major; callers
+flatten Horo matrices explicitly according to that documented component order.
+`PackMaterialParameterBinding` uses only `MaterialBindingLayout::parameters` from
+normalized final-artifact reflection for byte offsets, matrix order, matrix stride
+and array stride. It rejects incomplete/duplicate/type-mismatched parameters,
+overlapping occupied bytes and overflow, and zeroes padding. The returned block
+uses the minimum reflected extent. Frontend-created packed uniform backing explicitly
+uses HostVisible access for synchronous CPU initialization; no hidden transfer queue
+is created for device-local uploads. `ComputeMaterialParameterBufferByteSize` exposes
+that same calculation to adapters; Vulkan applies its 16-byte uniform block tail
+alignment and device range limit. Producers must not memcpy native C++ matrix
+objects or invent an XR-specific byte/reflection schema.
+
+The existing RenderApi header owner is unchanged. Generic packing regressions,
+Vulkan matrix-array admission tests and the material public header consumer cover
+this additive API. All consumers rebuild; no stable binary ABI is promised.
+
+`RenderMaterialPass::submission` and the matching resolved request field optionally
+carry the existing `RenderQueueSubmission`. Vulkan requires a record, the active
+frame identity and the frontend completion lease/transfer receipt. The frontend
+rejects explicit records for peers that do not advertise
+`supportsExplicitMaterialSubmissions`; legacy peer passes with no record retain
+their current contract. Native admission copies all borrowed waits. It never
+issues orders, timeline values or implicit queue remaps on the caller's behalf.
+
+Vulkan uses `VulkanGraphRuntime`'s existing `VulkanCommandRuntime` tickets,
+`SubmitFrame`, abort, timeline observation and terminal drain. It adds no queue,
+semaphore, submission or retirement owner. Native tables retain pipeline/sampler
+and buffer/view backing; views retain images and captured targets retain their
+views. Submitted tickets retain exact mesh/attachment backing and the one frontend
+lease. Registry removal cannot destroy backing still referenced by accepted work.
+State changes commit only after successful queue submission. Preparation is
+owner-thread load-time work and is rejected during an active frame.
+
+`RenderGraphSynchronizationOperation::GraphicsInputBuffer` records conservative
+read-only whole-buffer uniform/vertex/index access, allowing subsequent graph
+transitions to preserve write-after-read ordering. Texture or writable uses of
+this operation fail generic admission. Material execution accepts one graphics
+queue and rejects cross-queue ownership without the graph's matched release/acquire
+path; it does not synthesize external release work. The pass currently requires
+single-sample whole-image attachments and preserved Store, with defined contents
+for Load and sampled reads.
+
+Remaining scope gaps are inline-constant value transport, graphics storage
+bindings, MSAA, combined image/sampler native coordinates, WSI presentation and
+image upload. These are explicit unsupported outcomes, not completed capabilities.
+Hardware pixel-readback qualification and Windows GPU execution remain unproven.

@@ -25,6 +25,10 @@ static_assert(!ForgedConstructionKey<Horo::Render::ResidentMaterialBinding>);
 
 static_assert(std::is_same_v<decltype(Horo::Render::MaterialParameterValue{}.parameter), Horo::Render::ShaderParameterId>);
 
+static_assert(std::is_same_v<decltype(Horo::Render::RenderMaterialPass{}.submission), std::optional<Horo::Render::RenderQueueSubmission>>);
+static_assert(Horo::Render::RenderGraphSynchronizationOperation::GraphicsInputBuffer !=
+              Horo::Render::RenderGraphSynchronizationOperation::Storage);
+
 int main() {
     const Horo::Render::MaterialBindingLimits limits;
     Horo::Render::IMaterialBindingBackend unsupported;

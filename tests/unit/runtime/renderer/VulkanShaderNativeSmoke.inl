@@ -1,4 +1,5 @@
 #if defined(__linux__)
+#include <chrono>
 #include <cstdlib>
 #include <dlfcn.h>
 #include <fstream>
@@ -61,6 +62,23 @@ namespace {
         Fixture metadata;
         std::uint64_t vertex{}, fragment{}, native{}, buffer{}, texture{}, view{}, sampler{};
 
+        ~NativePreparationFixture() {
+            if (!backend)
+                return;
+            const auto closing = backend->BeginShutdown();
+            if (closing.HasError())
+                std::terminate();
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            for (;;) {
+                const auto drained = backend->PollDrain();
+                if (drained.HasValue() && drained.Value() == RenderBackendDrainProgress::Drained)
+                    break;
+                if (std::chrono::steady_clock::now() >= deadline)
+                    std::terminate();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }
+
         void Initialize() {
             REQUIRE(RegisterVulkanRenderBackend(registry, loader).HasValue());
             REQUIRE(registry.Seal().HasValue());
@@ -84,8 +102,9 @@ namespace {
             return result.Value();
         }
 
-        void PrepareShaders(const char *vertexPath, const char *fragmentPath) {
-            metadata.UseSampledMaterial();
+        void PrepareShaders(const char *vertexPath, const char *fragmentPath, bool sampled = true) {
+            if (sampled)
+                metadata.UseSampledMaterial();
             metadata.Reflect();
             const auto vertexBytes = ReadShader(vertexPath), fragmentBytes = ReadShader(fragmentPath);
             std::vector<std::uint8_t> artifactBytes = vertexBytes;
@@ -103,6 +122,12 @@ namespace {
                                                       .manifest = metadata.manifest,
                                                       .target = metadata.target,
                                                       .reflection = metadata.reflection};
+            if (metadata.matrixParameters) {
+                pipeline.state.depthFormat.reset();
+                pipeline.state.depthTest = false;
+                pipeline.state.depthWrite = false;
+                pipeline.state.cull = RenderCullMode::None;
+            }
             pipeline.compatibility = {.schemaVersion = 1,
                                       .backend = identity.Value().backend,
                                       .backendModuleVersion = identity.Value().backendModuleVersion,
@@ -196,5 +221,7 @@ TEST_CASE("Vulkan native device consumes compiled SPIR-V pipeline and material d
     fixture.PreparePipeline();
     fixture.PrepareMaterialAndShutdown();
 }
+
+#include "VulkanTransformNativeSmoke.inl"
 
 #endif

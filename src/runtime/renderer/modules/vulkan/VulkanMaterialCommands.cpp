@@ -4,6 +4,34 @@
 #include <cmath>
 
 namespace Horo::Render::Detail {
+    namespace {
+        /** @brief Requires defined read contents and preserves the graph's queue-ownership authority. */
+        Result<void> ValidateMaterialPriorState(const VulkanGraphResourceState &state, RenderQueueId queue, bool requireContents) {
+            if (requireContents && !state.contentsDefined)
+                return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid,
+                                                       "Material read or attachment Load requires defined native contents."));
+            if (state.hasNativeState && state.logical.queue != queue)
+                return Result<void>::Failure(
+                    MakeError(VulkanBackendErrors::UnsupportedOperation,
+                              "Material queue ownership requires an explicit graph release/acquire before the pass."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Checks the complete offscreen attachment policy independently of state mutation. */
+        bool ValidMaterialAttachmentRequest(const RenderMaterialExecutionRequest &request) {
+            const bool validDepth =
+                !request.depthClear || (std::isfinite(*request.depthClear) && *request.depthClear >= 0 && *request.depthClear <= 1);
+            return request.color.IsValid() && request.color.storeOperation == AttachmentStoreOperation::Store &&
+                   request.color.loadOperation != AttachmentLoadOperation::DontCare && validDepth;
+        }
+
+        /** @brief Builds the conservative whole-buffer read state used for all fixed graphics inputs. */
+        RenderGraphLogicalState MaterialInputState(RenderQueueId queue) {
+            return {RenderGraphSynchronizationAccess::Read, RenderGraphSynchronizationOperation::GraphicsInputBuffer,
+                    RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable, queue};
+        }
+    }  // namespace
+
     /** @brief Prepares one whole-resource state; queue transfers require the graph's explicit matched release path. */
     Result<void> VulkanGraphRuntime::Impl::MaterialState(const VulkanGraphResource &resource, const RenderGraphLogicalState next,
                                                          const RenderQueueSubmission &submission, const bool requireContents) {
@@ -16,11 +44,8 @@ namespace Horo::Render::Detail {
         if (updates.size() == RenderGraphLimits::HardMaxResources)
             return Result<void>::Failure(Invalid("Material resource-state storage is full."));
         const auto &before = *resource.state;
-        if (requireContents && !before.contentsDefined)
-            return Result<void>::Failure(Invalid("Material read or attachment Load requires defined native contents."));
-        if (before.hasNativeState && before.logical.queue != submission.queue)
-            return Result<void>::Failure(
-                Unsupported("Material queue ownership requires an explicit graph release/acquire before the pass."));
+        if (auto valid = ValidateMaterialPriorState(before, submission.queue, requireContents); valid.HasError())
+            return valid;
         auto barrier = TranslateVulkanGraphBarrier(resource, before.hasNativeState ? before.logical : RenderGraphLogicalState{}, next,
                                                    VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, false, false, false);
         if (barrier.HasError())
@@ -30,20 +55,15 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
-    /** @brief Captures every backing and validates immutable attachment/input contracts before recording. */
-    Result<void> VulkanGraphRuntime::Impl::PrepareMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins) {
-        barriers.clear();
-        updates.clear();
-        submissions.clear();
+    /** @brief Captures attachments and validates preservation before draw resources are inspected. */
+    Result<void> VulkanGraphRuntime::Impl::PrepareMaterialTarget(const RenderMaterialExecutionRequest &request,
+                                                                 VulkanCommandRetention &pins) {
         const auto &submission = *request.submission;
         const auto target = resources->CaptureMaterialTarget(request.target, pins);
         if (target.HasError())
             return Result<void>::Failure(target.ErrorValue());
         materialTarget = target.Value();
-        if (materialTarget.extent != request.extent || !request.color.IsValid() ||
-            request.color.storeOperation != AttachmentStoreOperation::Store ||
-            request.color.loadOperation == AttachmentLoadOperation::DontCare ||
-            (request.depthClear && (!std::isfinite(*request.depthClear) || *request.depthClear < 0 || *request.depthClear > 1)))
+        if (materialTarget.extent != request.extent || !ValidMaterialAttachmentRequest(request))
             return Result<void>::Failure(Invalid("Material extent, attachment preservation or depth clear is invalid."));
         const RenderGraphLogicalState color{RenderGraphSynchronizationAccess::ReadWrite,
                                             RenderGraphSynchronizationOperation::ColorAttachment, RenderGraphPipelineScope::Graphics,
@@ -60,48 +80,78 @@ namespace Horo::Render::Detail {
             if (auto prepared = MaterialState(materialTarget.depth, depth, submission, !request.depthClear); prepared.HasError())
                 return prepared;
         }
-        const RenderGraphLogicalState input{RenderGraphSynchronizationAccess::Read,
-                                            RenderGraphSynchronizationOperation::GraphicsInputBuffer, RenderGraphPipelineScope::Graphics,
-                                            RenderGraphTextureLayout::NotApplicable, submission.queue};
-        for (std::size_t index = 0; index < request.draws.size(); ++index) {
-            auto &draw = materialDraws[index];
-            draw.material = dynamic_cast<const VulkanPreparedMaterialBinding *>(request.draws[index].material);
-            if (!draw.material || draw.material->deviceIncarnation != deviceIncarnation || !draw.material->owner ||
-                !draw.material->pipelineBacking || !draw.material->pipeline || !draw.material->layout)
-                return Result<void>::Failure(Invalid("Material belongs to a different or retired selected-device incarnation."));
-            const auto &state = draw.material->state;
-            const auto depthFormat = materialTarget.depthView ? std::optional{materialTarget.depth.textureDescriptor.format} : std::nullopt;
-            if (state.colorFormat != materialTarget.color.textureDescriptor.format || state.depthFormat != depthFormat ||
-                state.sampleCount != 1)
-                return Result<void>::Failure(Invalid("Material pipeline attachment formats differ from the captured target."));
-            const auto mesh = resources->CaptureMaterialMesh(request.draws[index].mesh, pins);
-            if (mesh.HasError())
-                return Result<void>::Failure(mesh.ErrorValue());
-            draw.mesh = mesh.Value();
-            if (draw.mesh.descriptor.vertexStride != sizeof(MeshVertex))
-                return Result<void>::Failure(Invalid("Material mesh does not use the canonical MeshVertex layout."));
-            if (auto prepared = MaterialState(draw.mesh.vertex, input, submission, true); prepared.HasError())
-                return prepared;
-            if (auto prepared = MaterialState(draw.mesh.index, input, submission, true); prepared.HasError())
-                return prepared;
-            for (const auto &resource : draw.material->resources) {
-                if (!resource.backing)
-                    return Result<void>::Failure(Invalid("Material descriptor has no retained native backing."));
-                VulkanGraphResource captured{.kind = resource.image ? RenderGraphResourceKind::Texture : RenderGraphResourceKind::Buffer,
-                                             .buffer = resource.buffer,
-                                             .image = resource.image,
-                                             .bufferDescriptor = resource.bufferDescriptor,
-                                             .textureDescriptor = resource.textureDescriptor,
-                                             .state = resource.state};
-                auto next = input;
-                if (resource.image) {
-                    next.operation = RenderGraphSynchronizationOperation::Sampled;
-                    next.layout = RenderGraphTextureLayout::ShaderReadOnly;
-                }
-                if (auto prepared = MaterialState(captured, next, submission, true); prepared.HasError())
-                    return prepared;
+        return Result<void>::Success();
+    }
+
+    /** @brief Validates each immutable descriptor backing and prepares its exact read state. */
+    Result<void> VulkanGraphRuntime::Impl::PrepareMaterialResources(const VulkanPreparedMaterialBinding &material,
+                                                                    const RenderQueueSubmission &submission) {
+        const auto input = MaterialInputState(submission.queue);
+        for (const auto &resource : material.resources) {
+            if (!resource.backing)
+                return Result<void>::Failure(Invalid("Material descriptor has no retained native backing."));
+            VulkanGraphResource captured{.kind = resource.image ? RenderGraphResourceKind::Texture : RenderGraphResourceKind::Buffer,
+                                         .buffer = resource.buffer,
+                                         .image = resource.image,
+                                         .bufferDescriptor = resource.bufferDescriptor,
+                                         .textureDescriptor = resource.textureDescriptor,
+                                         .state = resource.state};
+            auto next = input;
+            if (resource.image) {
+                next.operation = RenderGraphSynchronizationOperation::Sampled;
+                next.layout = RenderGraphTextureLayout::ShaderReadOnly;
             }
+            if (auto prepared = MaterialState(captured, next, submission, true); prepared.HasError())
+                return prepared;
         }
+        return Result<void>::Success();
+    }
+
+    /** @brief Checks pipeline/target compatibility and captures the exact indexed mesh backing. */
+    Result<void> VulkanGraphRuntime::Impl::PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
+                                                               const RenderQueueSubmission &submission, VulkanCommandRetention &pins) {
+        const auto input = MaterialInputState(submission.queue);
+        draw.material = dynamic_cast<const VulkanPreparedMaterialBinding *>(source.material);
+        if (!draw.material)
+            return Result<void>::Failure(Invalid("Material has no Vulkan native binding."));
+        const std::array validIdentity{draw.material->deviceIncarnation == deviceIncarnation, draw.material->owner != nullptr,
+                                       draw.material->pipelineBacking != nullptr, draw.material->pipeline != VK_NULL_HANDLE,
+                                       draw.material->layout != VK_NULL_HANDLE};
+        if (!std::ranges::all_of(validIdentity, [](bool valid) {
+            return valid;
+        }))
+            return Result<void>::Failure(Invalid("Material belongs to a different or retired selected-device incarnation."));
+        const auto &state = draw.material->state;
+        const auto depthFormat = materialTarget.depthView ? std::optional{materialTarget.depth.textureDescriptor.format} : std::nullopt;
+        const std::array formats{state.colorFormat == materialTarget.color.textureDescriptor.format, state.depthFormat == depthFormat,
+                                 state.sampleCount == 1};
+        if (!std::ranges::all_of(formats, [](bool valid) {
+            return valid;
+        }))
+            return Result<void>::Failure(Invalid("Material pipeline attachment formats differ from the captured target."));
+        const auto mesh = resources->CaptureMaterialMesh(source.mesh, pins);
+        if (mesh.HasError())
+            return Result<void>::Failure(mesh.ErrorValue());
+        draw.mesh = mesh.Value();
+        if (draw.mesh.descriptor.vertexStride != sizeof(MeshVertex))
+            return Result<void>::Failure(Invalid("Material mesh does not use the canonical MeshVertex layout."));
+        if (auto prepared = MaterialState(draw.mesh.vertex, input, submission, true); prepared.HasError())
+            return prepared;
+        if (auto prepared = MaterialState(draw.mesh.index, input, submission, true); prepared.HasError())
+            return prepared;
+        return PrepareMaterialResources(*draw.material, submission);
+    }
+
+    /** @brief Captures every backing and validates immutable attachment/input contracts before recording. */
+    Result<void> VulkanGraphRuntime::Impl::PrepareMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins) {
+        barriers.clear();
+        updates.clear();
+        submissions.clear();
+        if (auto target = PrepareMaterialTarget(request, pins); target.HasError())
+            return target;
+        for (std::size_t index = 0; index < request.draws.size(); ++index)
+            if (auto draw = PrepareMaterialDraw(request.draws[index], materialDraws[index], *request.submission, pins); draw.HasError())
+                return draw;
         return Result<void>::Success();
     }
 
@@ -154,24 +204,71 @@ namespace Horo::Render::Detail {
         native.endRendering(command);
     }
 
+    /** @brief Checks active frame, borrowed envelope and required native graphics dispatch. */
+    Result<void> VulkanGraphRuntime::Impl::ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const {
+        if (!frame.IsValid() || frame != request.frame || recorded)
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+        if (!request.submission)
+            return Result<void>::Failure(Invalid("Material requires explicit submission evidence."));
+        const std::array validRequest{request.lease != nullptr, request.transfer != nullptr, !request.draws.empty(),
+                                      request.draws.size() <= RenderMaterialPass::MaximumDraws,
+                                      request.submission->waits.size() <= RenderGraphSubmissionLimits::MaximumQueues};
+        if (!std::ranges::all_of(validRequest, [](bool valid) {
+            return valid;
+        }))
+            return Result<void>::Failure(Invalid("Material execution requires bounded draws and a completion lease."));
+        const std::array dispatch{native.bindPipeline != nullptr, native.bindSets != nullptr, native.bindVertices != nullptr,
+                                  native.bindIndex != nullptr,    native.viewport != nullptr, native.scissor != nullptr,
+                                  native.drawIndexed != nullptr};
+        if (!std::ranges::all_of(dispatch, [](bool valid) {
+            return valid;
+        }))
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::EntryPointMissing));
+        const auto *queue = Queue(request.submission->queue);
+        if (!queue || !queue->supportsGraphics)
+            return Result<void>::Failure(Unsupported("Material execution requires the admitted graphics queue."));
+        return Result<void>::Success();
+    }
+
+    /** @brief Transfers the one frontend lease only after native ticket retention has succeeded. */
+    Result<void> VulkanGraphRuntime::Impl::RecordMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins) {
+        auto reserved = commands.Begin(request.submission->queue);
+        if (reserved.HasError()) {
+            pins.resources.clear();
+            return Result<void>::Failure(reserved.ErrorValue());
+        }
+        submissions.emplace_back();
+        auto &submission = submissions.back();
+        submission.ticket = reserved.Value();
+        submission.value = *request.submission;
+        std::ranges::copy(request.submission->waits, submission.waits.begin());
+        submission.value.waits = std::span{submission.waits}.first(request.submission->waits.size());
+        submission.updates = {0, updates.size()};
+        const auto fail = [&](Result<void> result) {
+            Abort();
+            pins.resources.clear();
+            return result;
+        };
+        if (auto retained = commands.Retain(submission.ticket, pins); retained.HasError())
+            return fail(retained);
+        pins.lease = request.lease;
+        request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
+        auto command = commands.RecordingBuffer(submission.ticket);
+        if (command.HasError())
+            return fail(Result<void>::Failure(command.ErrorValue()));
+        EncodeMaterial(command.Value(), request);
+        if (auto finished = commands.Finish(submission.ticket); finished.HasError())
+            return fail(finished);
+        recorded = true;
+        return Result<void>::Success();
+    }
+
     /** @copydoc VulkanGraphRuntime::ExecuteMaterialPass */
     Result<void> VulkanGraphRuntime::ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) {
         if (auto access = impl_->Access(); access.HasError())
             return access;
-        if (!impl_->frame.IsValid() || impl_->frame != request.frame || impl_->recorded)
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
-        if (!request.submission || !request.lease || !request.transfer || request.draws.empty() ||
-            request.draws.size() > RenderMaterialPass::MaximumDraws ||
-            request.submission->waits.size() > RenderGraphSubmissionLimits::MaximumQueues)
-            return Result<void>::Failure(
-                Impl::Invalid("Material execution requires bounded draws, completion lease and explicit submission."));
-        const auto &native = impl_->native;
-        if (!native.bindPipeline || !native.bindSets || !native.bindVertices || !native.bindIndex || !native.viewport || !native.scissor ||
-            !native.drawIndexed)
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::EntryPointMissing));
-        const auto *queue = impl_->Queue(request.submission->queue);
-        if (!queue || !queue->supportsGraphics)
-            return Result<void>::Failure(Impl::Unsupported("Material execution requires the admitted graphics queue."));
+        if (auto valid = impl_->ValidateMaterialAdmission(request); valid.HasError())
+            return valid;
         const RenderGraphQueueSubmission record{*request.submission, {0, 1}};
         if (auto timelines = impl_->commands.ValidateBatch(std::span{&record, 1}); timelines.HasError())
             return timelines;
@@ -185,34 +282,6 @@ namespace Horo::Render::Detail {
             pins->resources.clear();
             return prepared;
         }
-        auto reserved = impl_->commands.Begin(request.submission->queue);
-        if (reserved.HasError()) {
-            pins->resources.clear();
-            return Result<void>::Failure(reserved.ErrorValue());
-        }
-        impl_->submissions.emplace_back();
-        auto &submission = impl_->submissions.back();
-        submission.ticket = reserved.Value();
-        submission.value = *request.submission;
-        std::ranges::copy(request.submission->waits, submission.waits.begin());
-        submission.value.waits = std::span{submission.waits}.first(request.submission->waits.size());
-        submission.updates = {0, impl_->updates.size()};
-        const auto fail = [&](Result<void> result) {
-            impl_->Abort();
-            pins->resources.clear();
-            return result;
-        };
-        if (auto retained = impl_->commands.Retain(submission.ticket, *pins); retained.HasError())
-            return fail(retained);
-        pins->lease = request.lease;
-        request.transfer->authority = RenderGraphLeaseAuthority::BackendCompletion;
-        auto command = impl_->commands.RecordingBuffer(submission.ticket);
-        if (command.HasError())
-            return fail(Result<void>::Failure(command.ErrorValue()));
-        impl_->EncodeMaterial(command.Value(), request);
-        if (auto finished = impl_->commands.Finish(submission.ticket); finished.HasError())
-            return fail(finished);
-        impl_->recorded = true;
-        return Result<void>::Success();
+        return impl_->RecordMaterial(request, *pins);
     }
 }  // namespace Horo::Render::Detail

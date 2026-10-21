@@ -115,6 +115,18 @@ namespace Horo::Render {
             return parameter.byteOffset + size;
         }
 
+        /** @brief Selects active parameters of the requested canonical block. */
+        bool IsBlockParameter(const ShaderReflectedParameter &parameter, ShaderBindingId binding) {
+            return parameter.active && parameter.binding == binding;
+        }
+
+        /** @brief Rejects duplicate canonical parameter identities within a block. */
+        bool UniqueParameter(const MaterialBindingLayout &layout, const ShaderReflectedParameter &parameter) {
+            return std::ranges::count_if(layout.parameters, [&](const auto &other) {
+                return IsBlockParameter(other, parameter.binding) && other.id == parameter.id;
+            }) == 1;
+        }
+
         /** @brief Verifies the required packed extent for every resource array element. */
         [[nodiscard]] bool CoversBinding(const std::span<const MaterialResourceBinding> bindings, const ShaderBindingId id,
                                          const std::size_t end) {
@@ -161,7 +173,7 @@ namespace Horo::Render {
             return Result<std::size_t>::Failure(Invalid());
         std::size_t bytes = 0;
         for (const auto &parameter : layout.parameters) {
-            if (!parameter.active || parameter.binding != binding)
+            if (!IsBlockParameter(parameter, binding))
                 continue;
             const auto end = ParameterEnd(parameter, limits.maximumParameterBytes);
             if (!parameter.id.IsValid() || !end.has_value())
@@ -231,16 +243,13 @@ namespace Horo::Render {
             std::vector<bool> occupied(packed.bytes.size(), false);
             std::size_t count = 0;
             for (const auto &parameter : layout.parameters) {
-                if (!parameter.active || parameter.binding != binding)
+                if (!IsBlockParameter(parameter, binding))
                     continue;
                 ++count;
                 const auto value = std::ranges::find(values, parameter.id, &MaterialParameterValue::parameter);
                 if (value == values.end() || std::ranges::count(values, parameter.id, &MaterialParameterValue::parameter) != 1 ||
-                    std::ranges::count_if(layout.parameters,
-                                          [&](const auto &other) {
-                    return other.active && other.binding == binding && other.id == parameter.id;
-                }) != 1 ||
-                    !MatchesParameter(*value, parameter) || !PackParameter(parameter, *value, packed, occupied))
+                    !UniqueParameter(layout, parameter) || !MatchesParameter(*value, parameter) ||
+                    !PackParameter(parameter, *value, packed, occupied))
                     return false;
             }
             return count == values.size();

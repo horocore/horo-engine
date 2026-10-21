@@ -27,6 +27,20 @@ namespace Horo::Render::Detail {
         });
     }
 
+    /** @brief Validates bounded, unique adapter enumeration metadata before selection. */
+    [[nodiscard]] Result<void> ValidateEnumeration(const VulkanAdapterEnumeration &enumeration);
+    /** @brief Resolves the exact explicit adapter/revision without fallback. */
+    [[nodiscard]] Result<const VulkanAdapterCandidate *> SelectExplicitCandidate(const RenderBackendConfig &config,
+                                                                                 const VulkanAdapterEnumeration &enumeration);
+    /** @brief Selects the deterministic eligible adapter when no explicit identity was requested. */
+    [[nodiscard]] const VulkanAdapterCandidate *SelectAutomaticCandidate(const RenderBackendConfig &config,
+                                                                         const VulkanAdapterEnumeration &enumeration);
+    /** @brief Selects admitted graphics/presentation families from actual metadata. */
+    [[nodiscard]] std::pair<std::uint32_t, std::uint32_t> SelectQueues(const VulkanAdapterCandidate &candidate, bool requirePresentation);
+    /** @brief Preserves explicit effective queue identity; a distinct transfer role requires a distinct family. */
+    [[nodiscard]] Result<std::uint32_t> SelectTransferQueue(const VulkanAdapterCandidate &candidate, const RenderBackendConfig &config,
+                                                            std::uint32_t graphics);
+
     /** @brief Test seam that shares registration implementation with host composition. */
     [[nodiscard]] Result<void> RegisterVulkanRenderBackendWithRuntimePort(RenderBackendRegistry &registry, IVulkanRuntimePort &runtimePort);
     /** @brief Registration seam that retains one backend-owned native runtime. */

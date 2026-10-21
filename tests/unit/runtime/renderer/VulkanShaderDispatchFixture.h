@@ -30,6 +30,7 @@ namespace {
             allocationResult{VK_SUCCESS};
         std::string_view missing;
         std::uint32_t specialization{};
+        std::size_t uniformRange{16};
         bool depthTestEnabled{}, depthWriteEnabled{};
         VkCompareOp depthCompare{};
     };
@@ -134,7 +135,7 @@ namespace {
         for (std::uint32_t index = 0; index < count; ++index) {
             if (writes[index].descriptorType == VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER) {
                 REQUIRE(writes[index].pBufferInfo != nullptr);
-                CHECK(writes[index].pBufferInfo->range == 16);
+                CHECK(writes[index].pBufferInfo->range == driver->uniformRange);
             } else {
                 REQUIRE(writes[index].pImageInfo != nullptr);
                 if (writes[index].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE)

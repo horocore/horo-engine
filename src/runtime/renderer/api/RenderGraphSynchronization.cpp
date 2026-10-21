@@ -114,6 +114,10 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] bool IsDefinedStateValid(const RenderGraphLogicalState &state, const RenderGraphResourceKind kind) noexcept {
+            if (state.operation == RenderGraphSynchronizationOperation::GraphicsInputBuffer &&
+                (kind != RenderGraphResourceKind::Buffer || state.access != RenderGraphSynchronizationAccess::Read ||
+                 state.scope != RenderGraphPipelineScope::Graphics))
+                return false;
             return state.operation != RenderGraphSynchronizationOperation::None && state.queue.IsValid() &&
                    state.layout == LayoutFor(kind, state.operation);
         }

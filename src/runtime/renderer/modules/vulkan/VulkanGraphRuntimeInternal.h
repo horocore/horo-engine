@@ -81,6 +81,7 @@ namespace Horo::Render::Detail {
         bool closing{false};
         bool failedSubmission{false};
 
+        void LoadMaterialDispatch(VkDevice device, const VulkanShaderRuntime::Resolver &resolver);
         [[nodiscard]] Result<void> Access(bool admission = true) const;
         [[nodiscard]] const VulkanCommandQueue *Queue(RenderQueueId id) const noexcept;
         [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request);
@@ -92,6 +93,13 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
         void Encode(VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept;
         void Barriers(VkCommandBuffer command, RenderGraphExecutionRange range) const noexcept;
+        [[nodiscard]] Result<void> ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const;
+        [[nodiscard]] Result<void> RecordMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
+        [[nodiscard]] Result<void> PrepareMaterialTarget(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
+        [[nodiscard]] Result<void> PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
+                                                       const RenderQueueSubmission &submission, VulkanCommandRetention &pins);
+        [[nodiscard]] Result<void> PrepareMaterialResources(const VulkanPreparedMaterialBinding &material,
+                                                            const RenderQueueSubmission &submission);
         [[nodiscard]] Result<void> PrepareMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
         [[nodiscard]] Result<void> MaterialState(const VulkanGraphResource &resource, RenderGraphLogicalState next,
                                                  const RenderQueueSubmission &submission, bool requireContents);

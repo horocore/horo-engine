@@ -21,7 +21,8 @@ Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialView(
         return Result<VulkanMaterialResource>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
     const auto &descriptor = view->texture->descriptor;
     if (view->aspect == RenderTextureAspect::Color && HasTextureUsage(descriptor.usage, RenderTextureUsage::Sampled) &&
-        descriptor.sampleCount == 1 && descriptor.dimension == RenderTextureDimension::TwoD && descriptor.layerCount == 1)
+        descriptor.sampleCount == 1 && descriptor.dimension == RenderTextureDimension::TwoD && descriptor.layerCount == 1 &&
+        view->descriptor.dimension == RenderTextureViewDimension::TwoD)
         return Result<VulkanMaterialResource>::Success({.view = view->handle,
                                                         .image = view->texture->handle,
                                                         .textureDescriptor = descriptor,

@@ -1,9 +1,9 @@
 /** @brief Enforces owner-thread load-time preparation outside an active command frame. */
 Result<void> ShaderPreparationAccess() const {
-    if (ownerThread_ != std::this_thread::get_id())
-        return Result<void>::Failure(MakeError(VulkanBackendErrors::WrongThread));
     if (!initialized_ || closing_)
         return Result<void>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
+    if (ownerThread_ != std::this_thread::get_id())
+        return Result<void>::Failure(MakeError(VulkanBackendErrors::WrongThread));
     if (activeFrame_.IsValid())
         return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
     return Result<void>::Success();

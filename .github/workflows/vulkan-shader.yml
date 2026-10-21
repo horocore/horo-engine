@@ -3,12 +3,17 @@ on:
   pull_request:
     paths:
       - 'src/runtime/renderer/modules/vulkan/**'
+      - 'include/Horo/Runtime/Render/MaterialBinding.h'
       - 'include/Horo/Runtime/Render/RenderShaderResources.h'
+      - 'src/runtime/renderer/api/MaterialBindingValidation.cpp'
+      - 'src/runtime/renderer/frontend/RenderFrameMaterialExecution.cpp'
+      - 'tests/unit/runtime/renderer/MaterialBindingTests.cpp'
       - 'src/runtime/renderer/api/RenderShaderResources.cpp'
       - 'tests/unit/runtime/renderer/RenderShaderResourceDescriptorTests.cpp'
       - 'tests/support/MaterialBindingPublicHeaderConsumer.cpp'
       - 'tests/unit/runtime/renderer/Vulkan*'
       - 'tests/integration/renderer/VulkanPreparation.*'
+      - 'tests/integration/renderer/VulkanTransform.*'
       - 'src/CMakeLists.txt'
       - 'tests/CMakeLists.txt'
       - '.github/workflows/vulkan-shader.yml'
@@ -63,14 +68,18 @@ jobs:
           -DHORO_BUILD_RENDER_OPENGL=OFF -DHORO_BUILD_RENDER_METAL=OFF
           -DHORO_BUILD_AUDIO_SDL3=OFF -DHORO_ENABLE_OPENTELEMETRY=OFF
       - name: Build native Vulkan contracts
-        run: cmake --build build/ci --target HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingPublicHeaderConsumer --parallel 2
+        run: cmake --build build/ci --target HoroRenderVulkanTests HoroPipelineCacheTests HoroShaderPermutationTests HoroMaterialBindingTests HoroMaterialBindingPublicHeaderConsumer --parallel 2
       - name: Run Vulkan native-call and lifecycle regressions
-        run: ctest --test-dir build/ci --no-tests=error -R '^(HoroRenderVulkanTests::|HoroPipelineCacheTests::|HoroShaderPermutationTests::|HoroMaterialBindingPublicHeaderConsumer$)' --output-on-failure
+        run: ctest --test-dir build/ci --no-tests=error -R '^(HoroRenderVulkanTests::|HoroPipelineCacheTests::|HoroShaderPermutationTests::|HoroMaterialBindingTests::|HoroMaterialBindingPublicHeaderConsumer$)' --output-on-failure
       - name: Cook final SPIR-V and qualify real Linux native device preparation
         if: runner.os == 'Linux'
         run: |
           glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanPreparation.vert -o "$RUNNER_TEMP/preparation.vert.spv"
           glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanPreparation.frag -o "$RUNNER_TEMP/preparation.frag.spv"
+          glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanTransform.vert -o "$RUNNER_TEMP/transform.vert.spv"
+          glslangValidator --target-env vulkan1.3 -V tests/integration/renderer/VulkanTransform.frag -o "$RUNNER_TEMP/transform.frag.spv"
+          HORO_VULKAN_TRANSFORM_VERTEX="$RUNNER_TEMP/transform.vert.spv" \
+          HORO_VULKAN_TRANSFORM_FRAGMENT="$RUNNER_TEMP/transform.frag.spv" \
           HORO_VULKAN_VERTEX_FIXTURE="$RUNNER_TEMP/preparation.vert.spv" \
           HORO_VULKAN_FRAGMENT_FIXTURE="$RUNNER_TEMP/preparation.frag.spv" \
           build/ci/tests/HoroRenderVulkanTests '[native-smoke]'

@@ -333,18 +333,19 @@ TEST_CASE("Canonical material packing transposes matrix arrays from typed row-ma
     REQUIRE(ComputeMaterialParameterBufferByteSize(layout, {1}).Value() == 120);
     auto packed = PackMaterialParameterBinding(layout, {1}, values);
     REQUIRE(packed.HasValue());
-    const auto read = [&](std::size_t offset) {
+    const auto floatAt = [&](std::size_t offset) {
+        REQUIRE(offset <= packed.Value().bytes.size() - 4);
         std::array<std::byte, 4> bytes;
         std::copy_n(packed.Value().bytes.begin() + offset, 4, bytes.begin());
         return std::bit_cast<float>(bytes);
     };
-    REQUIRE(read(16) == 1);
-    REQUIRE(read(20) == 4);
-    REQUIRE(read(32) == 2);
-    REQUIRE(read(52) == 6);
-    REQUIRE(read(80) == 7);
-    REQUIRE(read(116) == 12);
-    REQUIRE(read(24) == 0);
+    REQUIRE(floatAt(16) == 1);
+    REQUIRE(floatAt(20) == 4);
+    REQUIRE(floatAt(32) == 2);
+    REQUIRE(floatAt(52) == 6);
+    REQUIRE(floatAt(80) == 7);
+    REQUIRE(floatAt(116) == 12);
+    REQUIRE(floatAt(24) == 0);
     SECTION("row-major reflected target") {
         layout.parameters[0].columnMajor = false;
         auto rowMajor = PackMaterialParameterBinding(layout, {1}, values);

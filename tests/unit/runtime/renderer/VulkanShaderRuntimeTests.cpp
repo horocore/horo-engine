@@ -28,6 +28,8 @@ namespace {
         std::uint32_t maximumStageUniformDescriptors{128};
         std::uint32_t maximumBoundSets{4};
         bool pairedSampler{false};
+        bool matrixParameters{false};
+        std::size_t resolvedBufferBytes{16};
         ShaderTargetRequirement target{.backend = ShaderTargetBackend::Vulkan,
                                        .payloadFormat = ShaderPayloadFormat::SpirV16,
                                        .descriptorVersion = 1,
@@ -61,6 +63,7 @@ namespace {
         }
 
         Result<void> Initialize() {
+            state.uniformRange = resolvedBufferBytes;
             VkPhysicalDeviceProperties properties{};
             properties.limits.minUniformBufferOffsetAlignment = 16;
             properties.limits.maxUniformBufferRange = 65536;
@@ -76,13 +79,13 @@ namespace {
             return runtime.Initialize(Handle<VkDevice>(1), properties, RenderAdapterId{"vulkan:test"}, Resolve,
                                       [this]() -> std::optional<std::uint64_t> {
                 return next++;
-            }, [](const MaterialResidentResource &r, ShaderResourceKind kind) -> Result<VulkanMaterialResource> {
+            }, [this](const MaterialResidentResource &r, ShaderResourceKind kind) -> Result<VulkanMaterialResource> {
                 if (r.instance == 98 && kind == ShaderResourceKind::SampledTexture && r.kind == MaterialResidentResourceKind::TextureView &&
                     r.offset == 0 && r.byteCount == 0)
                     return Result<VulkanMaterialResource>::Success({.view = Handle<VkImageView>(98)});
                 if (r.instance != 99 || kind != ShaderResourceKind::UniformBuffer || r.kind != MaterialResidentResourceKind::Buffer)
                     return Result<VulkanMaterialResource>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
-                return Result<VulkanMaterialResource>::Success({.buffer = Handle<VkBuffer>(99), .bytes = 16});
+                return Result<VulkanMaterialResource>::Success({.buffer = Handle<VkBuffer>(99), .bytes = resolvedBufferBytes});
             });
         }
 
@@ -94,10 +97,24 @@ namespace {
             pairedSampler = true;
         }
 
+        void UseMatrixParameters() {
+            matrixParameters = true;
+            manifest.bindings[0].stages = ShaderStageVisibility::Vertex | ShaderStageVisibility::Fragment;
+            manifest.parameters.push_back({{2}, {1}, ShaderValueType::Uint32, 1, 1, 1});
+            manifest.parameters.push_back({{3}, {1}, ShaderValueType::Float32, 4, 4, 2});
+            resolvedBufferBytes = 160;
+        }
+
         void Reflect() {
             ShaderReflectionCandidate candidate{.backend = ShaderTargetBackend::Vulkan,
                                                 .interfaceSchemaVersion = 1,
                                                 .parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1, 0, 0, 0, true, true}}};
+            if (matrixParameters) {
+                candidate.stageInterface.push_back(
+                    {ShaderStage::Vertex, ShaderInterfaceDirection::Input, 0, ShaderValueType::Float32, 1, 3, 1});
+                candidate.parameters.push_back({{2}, {1}, ShaderValueType::Uint32, 1, 1, 1, 16, 0, 0, true, true});
+                candidate.parameters.push_back({{3}, {1}, ShaderValueType::Float32, 4, 4, 2, 32, 64, 16, true, true});
+            }
             for (const auto &binding : manifest.bindings) {
                 candidate.bindings.push_back({binding.id, binding.kind, binding.access, binding.arrayCount, binding.stages, true});
                 candidate.targetBindings.push_back({binding.id, 0, 0, binding.id.value - 1, "", {}, true});
@@ -165,7 +182,7 @@ namespace {
                     .revision = 1,
                     .pipeline = {{1}, 3, 1},
                     .layout = layout.Value(),
-                    .resources = {{{1}, 0, MaterialParameterBinding{std::vector<std::byte>(16)}}}};
+                    .resources = {{{1}, 0, MaterialParameterBinding{std::vector<std::byte>(resolvedBufferBytes)}}}};
         }
     };
 }  // namespace
@@ -195,6 +212,23 @@ TEST_CASE("Vulkan realizes shaders pipeline specialization cache and immutable m
     f.runtime.Shutdown();
     CHECK(f.state.destroyedShaders == 2);
     CHECK(f.runtime.QueryPipelineDeviceIdentity().HasError());
+}
+
+TEST_CASE("Vulkan material matrix arrays use canonical reflected extents", "[vulkan][material][matrix]") {
+    Fixture f;
+    f.UseMatrixParameters();
+    f.Prepare();
+    const auto pipeline = f.Pipeline();
+    REQUIRE(pipeline.HasValue());
+    auto material = f.Material();
+    REQUIRE(f.runtime.QueryMaterialParameterBufferSize(pipeline.Value(), material, {1}).Value() == 160);
+    const std::array resources{MaterialResidentResource{MaterialResidentResourceKind::Buffer, 99, 0, 160}};
+    auto table = f.runtime.RealizeResolved(material, pipeline.Value(), resources);
+    REQUIRE(table.HasValue());
+    f.runtime.DestroyGraphicsPipeline(pipeline.Value());
+    REQUIRE(f.state.destroyedPipelines == 0);
+    std::move(table).Value().reset();
+    REQUIRE(f.state.destroyedPipelines == 1);
 }
 
 TEST_CASE("Vulkan pipeline specialization overrides reach the declared native SpecId", "[vulkan][pipeline][specialization]") {

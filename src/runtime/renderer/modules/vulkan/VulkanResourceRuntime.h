@@ -103,13 +103,19 @@ namespace Horo::Render::Detail {
         void DestroyTextureView(std::uint64_t backendInstance) noexcept override;
         void DestroyRenderTarget(std::uint64_t backendInstance) noexcept override;
         void ShutdownResources() noexcept;
+        /** @brief Captures whole single-sample attachments and retains the target's transitive backing.
+         * @param identity Exact registry target. @param retention Prepared command pin storage.
+         * @return Native snapshot or typed stale/unsupported/capacity failure before recording. */
+        [[nodiscard]] Result<VulkanMaterialTarget> CaptureMaterialTarget(std::uint64_t identity, VulkanCommandRetention &retention);
+        /** @brief Captures exact indexed mesh buffers and retains all three native registry owners.
+         * @param identity Exact registry mesh. @param retention Prepared command pin storage.
+         * @return Native snapshot or typed stale/capacity failure before recording. */
+        [[nodiscard]] Result<VulkanMaterialMesh> CaptureMaterialMesh(std::uint64_t identity, VulkanCommandRetention &retention);
         /** @brief Captures exact native namespaces and pins actual resources into preallocated graph retention.
          * @param request Portable-validated exact frontend resource mapping.
          * @param destination Prepared snapshot storage, at least graph resource count.
          * @param retention Free owner-thread slot with prepared resource-reference capacity.
          * @return Success or typed stale/unsupported/capacity failure, before native commands. */
-        [[nodiscard]] Result<VulkanMaterialTarget> CaptureMaterialTarget(std::uint64_t identity, VulkanCommandRetention &retention);
-        [[nodiscard]] Result<VulkanMaterialMesh> CaptureMaterialMesh(std::uint64_t identity, VulkanCommandRetention &retention);
         [[nodiscard]] Result<void> CaptureGraphResources(const RenderGraphExecutionRequest &request,
                                                          std::span<VulkanGraphResource> destination,
                                                          VulkanCommandRetention &retention) const;

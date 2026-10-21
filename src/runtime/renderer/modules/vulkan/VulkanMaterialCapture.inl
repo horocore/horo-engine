@@ -1,15 +1,35 @@
+/** @brief Restricts offscreen material attachments to whole single-sample images. */
+template <typename View> bool WholeMaterialView(const View &view) {
+    if (!view)
+        return true;
+    const auto &texture = view->texture->descriptor;
+    const auto &descriptor = view->descriptor;
+    const bool stencil =
+        texture.format == RenderTextureFormat::Depth24Stencil8 || texture.format == RenderTextureFormat::Depth32FloatStencil8;
+    const bool validAspect = view->aspect == RenderTextureAspect::Color ||
+                             view->aspect == (stencil ? RenderTextureAspect::DepthStencil : RenderTextureAspect::Depth);
+    const std::array valid{texture.dimension == RenderTextureDimension::TwoD,
+                           descriptor.dimension == RenderTextureViewDimension::TwoD,
+                           texture.sampleCount == 1,
+                           texture.layerCount == 1,
+                           texture.mipCount == 1,
+                           descriptor.baseMip == 0,
+                           descriptor.baseLayer == 0,
+                           descriptor.mipCount == 1,
+                           descriptor.layerCount == 1,
+                           validAspect};
+    return std::ranges::all_of(valid, [](bool value) {
+        return value;
+    });
+}
+
 /** @copydoc VulkanResourceRuntime::CaptureMaterialTarget */
 Result<VulkanMaterialTarget> VulkanResourceRuntime::CaptureMaterialTarget(const std::uint64_t identity, VulkanCommandRetention &retention) {
     const auto found = impl_->targets.find(identity);
     if (found == impl_->targets.end() || !found->second->color || retention.resources.size() == retention.resources.capacity())
         return Result<VulkanMaterialTarget>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
     const auto &target = *found->second;
-    const auto whole = [](const auto &view) {
-        return !view || (view->texture->descriptor.sampleCount == 1 && view->texture->descriptor.layerCount == 1 &&
-                         view->texture->descriptor.mipCount == 1 && view->descriptor.baseMip == 0 && view->descriptor.baseLayer == 0 &&
-                         view->descriptor.mipCount == 1 && view->descriptor.layerCount == 1);
-    };
-    if (!whole(target.color) || !whole(target.depth))
+    if (!WholeMaterialView(target.color) || !WholeMaterialView(target.depth))
         return Result<VulkanMaterialTarget>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported));
     VulkanMaterialTarget result;
     const auto capture = [](const auto &view) {

@@ -14,6 +14,12 @@ PRESETS = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
 TERRAIN_RENDER_TARGETS = {"HoroTerrainRenderIntegrationTests", "HoroTerrainRenderIntegrationPublicHeaderConsumer"}
 
 
+def workflow_job(name: str) -> str:
+    match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [a-z-]+:\n|\Z)", WORKFLOW, re.M | re.S)
+    assert match, f"Missing workflow job: {name}"
+    return match.group(1)
+
+
 def preset(kind: str, name: str) -> dict:
     return next(item for item in PRESETS[kind] if item["name"] == name)
 
@@ -383,9 +389,12 @@ def test_fracture_consumer_extends_the_owned_header_boundary_target() -> None:
 
 
 def test_audio_keeps_both_modes_and_all_platforms() -> None:
-    assert set(re.findall(r"^  ([a-z-]+):$", WORKFLOW.split("jobs:\n", 1)[1], re.M)) == {"tooling", "android-storage", "test"}
+    # Independent native qualification jobs do not change the audio matrix contract.
+    audio_job = workflow_job("test")
     for platform in ("Linux / GCC", "macOS / Clang", "Windows / MSVC"):
-        assert f"name: {platform}" in WORKFLOW
+        assert f"name: {platform}" in audio_job
+    assert "Build Release audio checks" in audio_job
+    assert "Test Release audio checks" in audio_job
     assert targets("HORO_CI_AUDIO_TARGETS") == {
         "HoroAudioRealtimeSafetyHarnessTests", "HoroAudioWatchdogTests", "HoroAudioNullTests",
         "HoroAudioDspTests", "HoroCoreAudioDspTests", "HoroAudioCommandTests", "HoroAudioMixerTests",
@@ -400,6 +409,29 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
     for name in ("ci-linux-debug", "ci-macos-debug"):
         assert "targets" not in preset("buildPresets", name)  # Debug builds audio with all native targets.
         assert preset("testPresets", name)["filter"]["exclude"]["label"] == "gui|tooling"
+
+
+def test_vulkan_native_commands_have_a_bounded_independent_build_and_execution_closure() -> None:
+    native_job = workflow_job("vulkan-commands")
+    assert "runs-on: ubuntu-24.04" in native_job
+    assert "timeout-minutes: 90" in native_job
+    assert "-DHORO_BUILD_RENDER_VULKAN=ON" in native_job
+    assert "-DHORO_BUILD_EDITOR_GUI=OFF" in native_job
+    assert "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON" in native_job
+    assert "cmake --build build/ci-vulkan-commands" in native_job
+    assert "ctest --test-dir build/ci-vulkan-commands" in native_job
+    for target in ("HoroRenderVulkanTests", "HoroVulkanCommandExecutionSmoke", "HoroRenderGraphTests",
+                   "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests"):
+        assert native_job.count(target) == 2, f"Native job must build and select {target}"
+    assert "vulkan-validationlayers" in native_job
+    assert "VK_DRIVER_FILES:" in native_job
+    assert 'sha256sum "$VK_DRIVER_FILES"' in native_job
+    assert "vulkaninfo --summary" in native_job
+    assert "--output-junit" in native_job
+    assert "continue-on-error" not in native_job
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
+    assert 'FAIL_REGULAR_EXPRESSION "Validation Error;VUID-"' in tests_cmake
 
 
 def test_required_checks_and_sdl_composition_are_preserved() -> None:
@@ -571,3 +603,18 @@ def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> Non
         registration = re.search(rf'set_tests_properties\({consumer} PROPERTIES LABELS "([^"]+)"\)', tests_cmake)
         assert registration is not None
         assert "ci-windows" in registration.group(1).split(";")
+
+
+def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform_draws() -> None:
+    shader_workflow = (ROOT / ".github/workflows/vulkan-shader.yml").read_text(encoding="utf-8")
+    assert "ubuntu-24.04" in shader_workflow
+    assert "windows-2022" in shader_workflow
+    for target in ("HoroRenderVulkanTests", "HoroMaterialBindingTests", "HoroPipelineCacheTests",
+                   "HoroShaderPermutationTests", "HoroMaterialBindingPublicHeaderConsumer"):
+        assert shader_workflow.count(target) == 2
+    assert "--no-tests=error" in shader_workflow
+    assert "VulkanTransform.vert" in shader_workflow
+    assert "VulkanTransform.frag" in shader_workflow
+    assert "HORO_VULKAN_TRANSFORM_VERTEX" in shader_workflow
+    assert "'[native-smoke]'" in shader_workflow
+    assert "continue-on-error" not in shader_workflow
