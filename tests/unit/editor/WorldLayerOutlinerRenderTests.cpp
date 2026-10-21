@@ -85,7 +85,9 @@ TEST_CASE("World layer outliner renders narrow localized long names without muta
                     CHECK(intent.action == WorldLayerOutlinerAction::None);
                     CHECK(intent.expected == source.fence);
                     CHECK_FALSE(intent.command.has_value());
-                    CHECK(ImGui::GetCurrentWindow()->ScrollMax.x == 0);
+                    const auto *window = ImGui::GetCurrentWindow();
+                    CHECK(window->DC.CursorMaxPos.x <= window->WorkRect.Max.x);
+                    CHECK(window->ScrollMax.x == 0);
                     ImGui::End();
                     ImGui::Render();
                     CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);

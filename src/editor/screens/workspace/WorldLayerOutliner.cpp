@@ -26,8 +26,12 @@ namespace Horo::Editor {
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, layer.name, Theme::Text(), context.theme.fonts);
             const auto &font = context.theme.fonts;
             const auto current = context.localization.Get("editor", "workspace.world_layers.current");
-            if (selected)
+            if (selected) {
+                // Badge deliberately leaves an inline cursor; this row owns a separate status line.
+                ImGui::BeginGroup();
                 Ui::Badge({.label = current.c_str(), .tone = Ui::BadgeTone::Accent}, font);
+                ImGui::EndGroup();
+            }
             if (Action("workspace.world_layers.set_current", intent.action == WorldLayerOutlinerAction::None && !selected, context)) {
                 intent.action = WorldLayerOutlinerAction::Execute;
                 intent.command = SetCurrentWorldLayer{layer.id};
