@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <format>
+#include <string_view>
 #include <thread>
 
 namespace Horo::Editor {
@@ -307,12 +308,23 @@ namespace Horo::Editor {
         auto object = Project::Object();
         object.components.navigationSurface->id = Navigation::TestSupport::Id<Navigation::SurfaceId>(99);
         object.components.navigationSurface->localBounds = Runtime::NavigationLocalBounds{{4, 0, 4}, {4, 1, 4}};
+        const auto invalidScope = Runtime::ValidateNavigationSurfaceComponent(*object.components.navigationSurface);
+        REQUIRE(invalidScope.HasError());
+        CHECK(invalidScope.ErrorValue().code.Value() == Navigation::NavigationErrors::SceneComponentInvalid.code.Value());
+        object.components.navigationSurface->bakeScope = Runtime::NavigationBakeScope::LocalBounds;
+        REQUIRE(Runtime::ValidateNavigationSurfaceComponent(*object.components.navigationSurface).HasValue());
         object.components.navigationSources.front().surface = object.components.navigationSurface->id;
         project.Scenes(object);
         const auto retried = access.retry(root, first.Value());
         REQUIRE(retried.HasValue());
         CHECK(retried.Value() != first.Value());
         const auto recovered = Finished(host, access, root);
+        INFO("Retry error domain: " << (recovered.operation->diagnostic ? recovered.operation->diagnostic->domain.Value()
+                                                                        : std::string_view{}));
+        INFO(
+            "Retry error code: " << (recovered.operation->diagnostic ? recovered.operation->diagnostic->code.Value() : std::string_view{}));
+        INFO("Retry error reason: " << (recovered.operation->diagnostic ? std::string_view{recovered.operation->diagnostic->message}
+                                                                        : std::string_view{}));
         REQUIRE(recovered.operation->state == OperationState::Succeeded);
         REQUIRE(recovered.overlays);
         CHECK(access.overlays(root) == recovered.overlays);

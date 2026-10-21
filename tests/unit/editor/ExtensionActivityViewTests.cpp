@@ -10,11 +10,14 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "SecurityTestSupport.h"
+#include "editor/design_system/components/EditorUiCustomResources.h"
 #include "editor/renderer/EditorGuiRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/ExtensionActivityView.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <memory>
@@ -110,10 +113,10 @@ namespace {
               "[unit][editor][Activity][ownership]") {
         Horo::Tests::EditorActivityPackage package;
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8}};
-        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
         Extensions::ExtensionManager manager{nullptr,
                                              Extensions::ExtensionHostProfile::Interactive,
-                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                              Horo::Tests::CreateAcceptingArtifactGate(),
                                              {},
                                              {},
@@ -173,6 +176,94 @@ namespace {
             CHECK(ImGui::GetDrawData()->TotalVtxCount > 0);
             view.Update();
         }
+    }
+
+    /** @brief Draws the real native fixture through palette changes without rebuilding the provider. */
+    void CheckCustomPlotThemes(ExtensionActivityView &view) {
+        struct RestoreTheme {
+            Theme::Preset previous{Theme::GetThemePreset()};
+
+            ~RestoreTheme() {
+                Theme::SetThemePreset(previous);
+                Theme::ApplyCurrentTheme();
+            }
+        } restore;
+
+        for (const auto preset : {Theme::Preset::HoroDark, Theme::Preset::Light}) {
+            Theme::SetThemePreset(preset);
+            Theme::ApplyCurrentTheme();
+            view.Update();
+            ImGui::NewFrame();
+            view.DrawDrawer(Extensions::EditorActivitySide::Left, {42, 0}, {320, 420});
+            const auto accent = ImGui::GetColorU32(Theme::Accent());
+            ImGui::Render();
+            const auto *data = ImGui::GetDrawData();
+            REQUIRE(data);
+            bool found{};
+            for (int list = 0; list < data->CmdListsCount; ++list)
+                for (const auto &vertex : data->CmdLists[list]->VtxBuffer)
+                    found = found || vertex.col == accent;
+            CHECK(found);  // The specialized line adopts the live host accent in the same surface as the Horo button.
+        }
+    }
+
+    /** @brief Reads the same live semantic hooks exposed to a host accessibility adapter. */
+    void CheckPlotAccessibility(const ExtensionActivityView &view) {
+        const auto semantic = view.Accessibility("fixture.activity");
+        REQUIRE(semantic.size() == 4);
+        const auto plot = std::ranges::find(semantic, Extensions::EditorUiAccessibleRole::Plot, &Extensions::EditorUiAccessibleNode::role);
+        REQUIRE(plot != semantic.end());
+        CHECK(plot->name.value == "fixture.label");
+        CHECK(plot->itemCount == 4);
+        CHECK(plot->focusable);
+        REQUIRE(plot->value);
+        CHECK(std::get<Extensions::EditorUiVectorValue>(*plot->value).dimension == 2);
+    }
+
+    /** @brief Fractional DPI must not turn a stable physical-width cache into per-frame layout allocations. */
+    void CheckStableLayoutCache(ExtensionActivityView &view) {
+        struct RestoreScale {
+            int previous{static_cast<int>(std::lround(Theme::GetActiveTokens().sizes.uiScale * 100))};
+
+            ~RestoreScale() {
+                Theme::SetUiScalePercent(previous);
+                Theme::ApplyCurrentTheme();
+            }
+        } restore;
+
+        Theme::SetUiScalePercent(133);
+        Theme::ApplyCurrentTheme();
+        for (int warmup = 0; warmup < 3; ++warmup) {
+            view.Update();
+            ImGui::NewFrame();
+            view.DrawDrawer(Extensions::EditorActivitySide::Left, {42, 0}, {259, 420});
+            ImGui::Render();
+        }
+        view.Update();
+        bool retained{true};
+        {
+            Horo::Tests::AllocationProbe::ScopedFailure failure;
+            try {
+                view.Update();
+            } catch (const std::bad_alloc &) {
+                retained = false;
+            }
+        }
+        CHECK(retained);
+        CHECK_FALSE(view.Accessibility("fixture.activity").empty());
+    }
+
+    /** @brief The actual rail controls obey the same modal input admission as their custom drawer content. */
+    void CheckActivityModalInput(ExtensionActivityView &view) {
+        view.SetInputAdmitted(false);
+        ImGui::NewFrame();
+        ImGui::Begin("rail");
+        CHECK_FALSE(view.DrawItems(false, 0, {1, 8}, 40, 470));
+        CHECK((GImGui->LastItemData.ItemFlags & ImGuiItemFlags_Disabled) != 0);
+        ImGui::End();
+        view.DrawDrawer(Extensions::EditorActivitySide::Left, {42, 0}, {320, 420});
+        ImGui::Render();
+        view.SetInputAdmitted(true);
     }
 
     void CheckRailKeyboardFocus(ExtensionActivityView &view) {
@@ -279,10 +370,10 @@ namespace {
               "[unit][editor][Activity][ABI]") {
         Horo::Tests::EditorActivityPackage package;
         JobSystem jobs;
-        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs);
+        auto host = std::make_shared<Extensions::EditorActivityHost>(jobs, Horo::Tests::EditorCompositionPolicy());
         Extensions::ExtensionManager manager{nullptr,
                                              Extensions::ExtensionHostProfile::Interactive,
-                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY},
+                                             {HORO_EDITOR_ACTIVITY_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
                                              Horo::Tests::CreateAcceptingArtifactGate(),
                                              {},
                                              {},
@@ -309,6 +400,11 @@ namespace {
         REQUIRE(view.HasDrawer(Extensions::EditorActivitySide::Left));
         REQUIRE(view.TakeNativePanelClear() == Extensions::EditorActivitySide::Left);
         CheckDrawerFocusAndNarrowFrames(view);
+        CheckCustomPlotThemes(view);
+        CheckPlotAccessibility(view);
+        CheckActivityModalInput(view);
+        CheckStableLayoutCache(view);
+        view.Update();
         CheckRailKeyboardFocus(view);
         CHECK(renderer.creates == 1);
         CHECK(renderer.destroys == 0);
@@ -316,4 +412,30 @@ namespace {
         CheckBottomMouseActivation(view, host, workspace, leftPanel);
         CheckQueuedMoveRetirement(view, host, provider, manager, renderer);
     }
+
+    TEST_CASE("Native custom identities retain every provider generation and owner epoch bit", "[editor][Composition][Identity]") {
+        Gui gui;
+        ImGui::NewFrame();
+        ImGui::Begin("identity");
+        const auto outer = ImGui::GetID("outside");
+        Extensions::EditorSurfaceProviderIdentity provider{"identity.package", "identity.module", 1};
+        const auto identity = [&](const auto &owner, std::string_view surface, std::uint64_t epoch) {
+            const Ui::ScopedEditorUiIdentity scope{owner, surface, epoch};
+            return ImGui::GetID("widget");
+        };
+        const auto first = identity(provider, "surface", 1);
+        CHECK(first == identity(provider, "surface", 1));
+        CHECK(first != identity(provider, "other.surface", 1));
+        CHECK(first != identity(provider, "surface", (std::uint64_t{1} << 32) + 1));
+        provider.activationGeneration = (std::uint64_t{1} << 32) + 1;
+        CHECK(first != identity(provider, "surface", 1));
+        provider = {"other.package", "identity.module", 1};
+        CHECK(first != identity(provider, "surface", 1));
+        provider = {"identity.package", "other.module", 1};
+        CHECK(first != identity(provider, "surface", 1));
+        CHECK(ImGui::GetID("outside") == outer);
+        ImGui::End();
+        ImGui::Render();
+    }
+
 }  // namespace

@@ -291,6 +291,21 @@ namespace Horo::Extensions {
             return Result<void>::Success();
         }
 
+        /** @brief Rejects unbounded, nonfinite or ambiguous sample data before host publication. */
+        [[nodiscard]] Result<void> ValidatePlotNode(const EditorUiPlotNode &node, const EditorUiFormLimits &limits) {
+            if (!HasAccessibleName(node.base) || !IsValidAction(node.action, limits) || node.base.readOnly || node.samples.size() < 2 ||
+                node.samples.size() > MaximumEditorUiPlotSamples)
+                return Invalid("Plot identity, accessibility, action or sample budget is invalid.");
+            float previous = -1.0F;
+            for (const auto &sample : node.samples) {
+                if (!std::isfinite(sample.x) || !std::isfinite(sample.y) || sample.x < 0 || sample.x > 1 || sample.y < 0 || sample.y > 1 ||
+                    sample.x <= previous)
+                    return Invalid("Plot samples must be finite normalized data with strictly increasing x.");
+                previous = sample.x;
+            }
+            return Result<void>::Success();
+        }
+
         template <typename T> [[nodiscard]] Result<void> ValidateNodePayload(const T &node, const EditorUiFormLimits &limits) {
             using Node = std::decay_t<T>;
             if constexpr (std::is_same_v<Node, EditorUiLabelNode>)
@@ -313,6 +328,8 @@ namespace Horo::Extensions {
                 return ValidateColorNode(node, limits);
             else if constexpr (std::is_same_v<Node, EditorUiVectorNode>)
                 return ValidateVectorNode(node, limits);
+            else if constexpr (std::is_same_v<Node, EditorUiPlotNode>)
+                return ValidatePlotNode(node, limits);
             else if constexpr (std::is_same_v<Node, EditorUiActionNode>)
                 return ValidateActionNode(node, limits);
             else if constexpr (std::is_same_v<Node, EditorUiValidationNode>)
@@ -324,6 +341,8 @@ namespace Horo::Extensions {
         }
 
         [[nodiscard]] Result<void> ValidateNodeInternal(const EditorUiNode &node, const EditorUiFormLimits &limits) {
+            if (auto custom = ValidateEditorUiCustomPresentation(node); custom.HasError())
+                return custom;
             return std::visit([&]<typename T>(const T &typed) {
                 if (const Result<void> base = ValidateBase(typed.base, limits); base.HasError())
                     return base;
@@ -378,10 +397,9 @@ namespace Horo::Extensions {
                     return CapacityExceeded("Editor UI validation message count exceeds its configured bound.");
             }
             std::visit([&]<typename T>(const T &typed) {
-                using Node = std::decay_t<T>;
                 if constexpr (requires { typed.binding.value; })
                     bindingIds.push_back(typed.binding.value);
-                else if constexpr (std::is_same_v<Node, EditorUiActionNode>)
+                else if constexpr (requires { typed.action; })
                     actionIds.push_back(typed.action.value);
             }, node.payload);
             return Result<void>::Success();
@@ -423,6 +441,8 @@ namespace Horo::Extensions {
                 return Color;
             else if constexpr (std::is_same_v<Node, EditorUiVectorNode>)
                 return Vector;
+            else if constexpr (std::is_same_v<Node, EditorUiPlotNode>)
+                return Plot;
             else if constexpr (std::is_same_v<Node, EditorUiActionNode>)
                 return Action;
             else if constexpr (std::is_same_v<Node, EditorUiValidationNode>)
@@ -445,6 +465,26 @@ namespace Horo::Extensions {
         }
 
     }  // namespace
+
+    /** @copydoc IsEditorUiNodeEnabled */
+    bool IsEditorUiNodeEnabled(const EditorUiForm &form, const EditorUiId &id) noexcept {
+        if (!id.IsValid())
+            return false;
+        std::size_t index = FindNodeIndex(form.nodes, id);
+        std::size_t remaining = form.nodes.size();
+        while (remaining != 0) {
+            --remaining;
+            if (index == form.nodes.size())
+                return false;
+            const auto &base = BaseOf(form.nodes[index]);
+            if (!base.enabled)
+                return false;
+            if (!base.parent.IsValid())
+                return true;
+            index = FindNodeIndex(form.nodes, base.parent);
+        }
+        return false;
+    }
 
     /** @copydoc EditorUiColorValue::IsValid */
     bool EditorUiColorValue::IsValid() const noexcept {
@@ -511,7 +551,7 @@ namespace Horo::Extensions {
             return Invalid("Editor UI value-binding identities must be unique and canonical.");
         if (!IsUniqueCanonical(actionIds, limits.maximumActionIdentityBytes))
             return Invalid("Editor UI action identities must be unique and canonical.");
-        return Result<void>::Success();
+        return ValidateEditorUiComposition(form, limits.composition);
     }
 
     /** @copydoc EditorUiFormBuilder::Create */

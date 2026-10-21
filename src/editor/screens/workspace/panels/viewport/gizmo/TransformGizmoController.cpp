@@ -114,8 +114,11 @@ namespace Horo::Editor {
             if (geometry.HasError())
                 return HandleGeometryFailure(geometry.ErrorValue(), context.command, capture);
             geometryFailureReported_ = false;
-            rotationCenter = geometry.Value().center;
-            const Result<void> begun = TryBeginDrag(geometry.Value(), worldTransform, *selectedObject, context, capture);
+            auto frameGeometry = std::move(geometry).Value();
+            rotationCenter = frameGeometry.center;
+            if (context.hovered && context.contributedAxis.has_value())
+                frameGeometry.hoveredAxis = context.contributedAxis;
+            const Result<void> begun = TryBeginDrag(frameGeometry, worldTransform, *selectedObject, context, capture);
             if (begun.HasError()) {
                 LOG_ERROR("editor.viewport_gizmo", "Gizmo drag rejected: %s", begun.ErrorValue().message.c_str());
             }

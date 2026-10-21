@@ -31,6 +31,7 @@ namespace Horo {
 
 namespace Horo::Extensions {
     class EditorInspectorHost;
+    class EditorViewportHost;
     struct EditorThemeFrame;
 }  // namespace Horo::Extensions
 
@@ -60,6 +61,7 @@ namespace Horo::Editor {
         Application::INetworkDebuggerControl *networkDebuggerControl{};
         Extensions::EditorInspectorHost *extensionInspectors{}; /**< Explicit owner-lane host, outliving panel attachment. */
         const NavigationViewportAccess *navigationOverlays{};   /**< Explicit owner-lane saved/cooked geometry query. */
+        Extensions::EditorViewportHost *extensionViewport{};    /**< Explicit owner of viewport publication and picking. */
         const Extensions::EditorThemeFrame *extensionTheme{};   /**< Current host theme capture; no panel-owned authority. */
     };
 
@@ -85,6 +87,14 @@ namespace Horo::Editor {
 
         /** @brief Called once before the registry unmounts the panel. */
         virtual void OnDetach() = 0;
+
+        /** @brief Withdraws transient presentation when another document owns this panel's region.
+         * @param command Current frame command; an existing document action retains priority.
+         * @details Default preserves panels without transient input. Owners must release only their own capture and cancel drafts.
+         */
+        virtual void OnPresentationHidden(EditorWorkspaceViewCommandData &command) {
+            static_cast<void>(command);
+        }
 
         /** @brief Draws the 24x24 icon for the Activity Bar. */
         virtual void DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, ImU32 color) = 0;

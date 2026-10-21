@@ -3,6 +3,9 @@
 #include "Horo/Extensions/EditorSurfaceRegistry.h"
 
 namespace Horo::Extensions::Detail {
+    /** @brief Copies one optional checked semantic profile; no native or provider pointer survives the call. */
+    [[nodiscard]] Result<std::optional<EditorUiCustomPresentation>> CopyCustomPresentation(const HoroEditorUiCustomPresentation *input);
+
     /** @brief Copies one bounded versioned ABI snapshot without calling provider code or publishing state. */
     [[nodiscard]] Result<EditorUiForm> CopyActivityForm(const HoroEditorActivitySnapshot &snapshot, std::string_view drawerId,
                                                         std::string_view titleKey);

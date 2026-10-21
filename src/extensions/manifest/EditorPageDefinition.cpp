@@ -44,7 +44,7 @@ namespace Horo::Extensions {
         bool SupportedProfile(const EditorUiForm &form) {
             return std::ranges::all_of(form.nodes, [](const auto &node) {
                 const auto &base = EditorUiNodeBaseOf(node);
-                if (base.size != EditorUiComponentSize::Medium || base.tone != EditorUiSemanticTone::Neutral)
+                if (base.custom || base.size != EditorUiComponentSize::Medium || base.tone != EditorUiSemanticTone::Neutral)
                     return false;
                 return std::visit([&]<typename T>(const T &typed) {
                     if constexpr (requires { typed.binding; } || requires { typed.action; })

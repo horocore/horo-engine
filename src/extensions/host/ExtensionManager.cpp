@@ -4,6 +4,7 @@
 #include "EditorActivitySession.h"
 #include "EditorInspectorNativeSession.h"
 #include "EditorPageNativeSession.h"
+#include "EditorViewportNativeSession.h"
 #include "ExtensionAbiValidation.h"
 #include "ExtensionActivationTransaction.h"
 #include "ExtensionModuleSelection.h"
@@ -314,7 +315,8 @@ namespace Horo::Extensions {
                     .registerPlatformServicesProvider = allowPlatformProvider ? &RegisterPlatformProvider : nullptr,
                     .registerEditorActivity = registration.editorHost ? &RegisterExternalEditorActivity : nullptr,
                     .registerEditorPage = registration.pageHost ? &RegisterExternalEditorPage : nullptr,
-                    .registerEditorInspector = registration.inspectorHost ? &RegisterExternalEditorInspector : nullptr};
+                    .registerEditorInspector = registration.inspectorHost ? &RegisterExternalEditorInspector : nullptr,
+                    .registerEditorViewport = registration.viewportHost ? &RegisterExternalEditorViewport : nullptr};
         }
 
         /** @brief Validates the returned module table and exact activity/drawer declarations before activation publication. */
@@ -337,6 +339,8 @@ namespace Horo::Extensions {
                                                        "Native module did not register every declared activity/drawer pair."));
             if (auto inspectors = ValidateEditorInspectorClaims(registration); inspectors.HasError())
                 return inspectors;
+            if (auto viewports = ValidateEditorViewportClaims(registration); viewports.HasError())
+                return viewports;
             return ValidateEditorPageClaims(registration);
         }
 
@@ -356,6 +360,14 @@ namespace Horo::Extensions {
                 if (negotiated.minimumHostMinor == 4 &&
                     negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorPage))
                     hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorPage);
+            }
+            registration.viewportTransportNegotiated =
+                negotiated.minimumHostMinor >= 7 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_VIEWPORT) != 0;
+            if (!registration.viewportTransportNegotiated) {
+                hostApi.registerEditorViewport = nullptr;
+                if (negotiated.minimumHostMinor == 6 &&
+                    negotiated.requiredHostApiSize <= offsetof(HoroExtensionHostApi, registerEditorViewport))
+                    hostApi.structSize = offsetof(HoroExtensionHostApi, registerEditorViewport);
             }
             registration.inspectorTransportNegotiated =
                 negotiated.minimumHostMinor >= 6 && (negotiated.requiredFunctions & HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR) != 0;
@@ -399,6 +411,7 @@ namespace Horo::Extensions {
                 .editorHost = editorHosts.activities,
                 .pageHost = editorHosts.pages,
                 .inspectorHost = editorHosts.inspectors,
+                .viewportHost = editorHosts.viewports,
             };
             HoroExtensionHostApi hostApi = MakeHostApi(registration, allowPlatformProvider);
             if (auto negotiated = NegotiateActivation(*library, hostApi, registration); negotiated.HasError())
@@ -598,6 +611,8 @@ namespace Horo::Extensions {
                                                            Assets::AssetImporterCatalog *catalog) {
             if (auto editor = CommitEditorActivities(transaction.Lifetimes()); editor.HasError())
                 return editor;
+            if (auto viewports = CommitEditorViewports(transaction.Lifetimes()); viewports.HasError())
+                return viewports;
             if (auto inspectors = CommitEditorInspectors(transaction.Lifetimes()); inspectors.HasError())
                 return inspectors;
             if (auto pages = CommitEditorPages(transaction.Lifetimes()); pages.HasError())
@@ -642,6 +657,11 @@ namespace Horo::Extensions {
         if (m_hostProfile != ExtensionHostProfile::Interactive ||
             !std::ranges::binary_search(m_hostCapabilities, std::string{HORO_EDITOR_INSPECTOR_HOST_CAPABILITY}))
             m_editorHosts.inspectors.reset();
+        if (m_hostProfile != ExtensionHostProfile::Interactive ||
+            !std::ranges::binary_search(m_hostCapabilities, std::string{HORO_EDITOR_VIEWPORT_HOST_CAPABILITY}))
+            m_editorHosts.viewports.reset();
+        if (!m_editorHosts.viewports)
+            std::erase(m_hostCapabilities, std::string{HORO_EDITOR_VIEWPORT_HOST_CAPABILITY});
         if (!m_editorHosts.inspectors)
             std::erase(m_hostCapabilities, std::string{HORO_EDITOR_INSPECTOR_HOST_CAPABILITY});
         if (!m_libraryLoader)

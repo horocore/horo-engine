@@ -20,6 +20,7 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
+#include "Horo/Extensions/EditorViewportHost.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -626,6 +627,7 @@ namespace Horo::Editor {
                     .networkDebuggerControl = panelServices_.networkDebuggerControl,
                     .extensionInspectors = services_.TryGet<Extensions::EditorInspectorHost>(),
                     .navigationOverlays = services_.TryGetConst<NavigationViewportAccess>(),
+                    .extensionViewport = services_.TryGet<Extensions::EditorViewportHost>(),
                     .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
                 };
                 contributions_.panels.AttachAll(panelContext);
