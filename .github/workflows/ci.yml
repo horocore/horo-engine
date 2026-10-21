@@ -151,7 +151,7 @@ jobs:
           ctest --test-dir build/ci-vulkan-commands --show-only=json-v1 > build/vulkan-command-evidence/inventory.json
           python3 -c "import json; data=json.load(open('build/vulkan-command-evidence/inventory.json')); assert any(t['name'].startswith('HoroRenderVulkanTests::OpenXR production swapchain adapter') for t in data['tests']), 'XR/Vulkan integration test is absent from this composition'"
           ctest --test-dir build/ci-vulkan-commands --output-on-failure --parallel 1 --no-tests=error \
-            -R '^(HoroRenderVulkanTests|HoroVulkanCommandExecutionSmoke|HoroRenderGraphTests|HoroRenderFrontendTests|HoroRenderBackendRegistryTests|HoroXROpenXRTests)(::|$)' \
+            -R '^((HoroRenderVulkanTests|HoroRenderGraphTests|HoroRenderFrontendTests|HoroRenderBackendRegistryTests|HoroXROpenXRTests)(::.+)?|HoroVulkanCommandExecutionSmoke)$' \
             --output-junit ../vulkan-command-evidence/tests.xml \
             2>&1 | tee build/vulkan-command-evidence/test.txt
       - name: Upload native command qualification evidence
