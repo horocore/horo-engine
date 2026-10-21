@@ -81,7 +81,7 @@ namespace {
                                        const float width) {
         using namespace Horo::Editor;
         ImGuiID saveId{};
-        for (const auto *window : ImGui::GetCurrentContext()->Windows) {
+        for (auto *const window : ImGui::GetCurrentContext()->Windows) {
             const std::string_view name{window->Name};
             constexpr std::string_view content{"##DockDocument/##DockContent"};
             const auto position = name.find(content);

@@ -8,6 +8,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <span>
 #include <zep/imgui/display_imgui.h>
 #include <zep/mode_standard.h>
 
@@ -16,7 +17,18 @@ namespace Horo::Editor::Theme {
 }
 
 namespace Horo::Editor {
+    class SourceDocumentSnapshot;
+    struct SourceWidgetDecoration;
     struct SourceWidgetFrame;
+
+    /** @brief Validates and prepares every external marker before replacing the current private projection.
+     * @param buffer This view's LF presentation mirror. @param source Exact authoritative publication.
+     * @param decorations Bounded document byte ranges admitted by the widget's revision fence.
+     * @return False without replacing markers when any decoration is invalid.
+     */
+    [[nodiscard]] bool PublishSourceWidgetDecorations(Zep::ZepBuffer &buffer, const SourceDocumentSnapshot &source,
+                                                      std::span<const SourceWidgetDecoration> decorations);
+
     /** @brief Rejects invalid GUI layout geometry. @param frame Requested viewport and scale.
      * @return Whether dimensions and scale are finite and positive.
      */

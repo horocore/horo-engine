@@ -1,7 +1,6 @@
 #include "SourceEditorWidget.h"
 
 #include "Horo/Editor/EditorTheme.h"
-#include "Horo/Foundation/Utf8.h"
 #include "SourceSyntaxProjection.h"
 #include "SourceWidgetPlatform.h"
 #include "SourceWidgetText.h"
@@ -22,21 +21,6 @@ namespace Horo::Editor {
     using SourceWidgetText::DisplayOffset;
     using SourceWidgetText::DisplayText;
     using SourceWidgetText::RawOffset;
-
-    namespace {
-        /** @brief Validates one external marker before replacing any existing decoration. */
-        bool ValidDecoration(const SourceDocumentSnapshot &source, const SourceWidgetDecoration &decoration) {
-            return decoration.begin <= decoration.end && Boundary(source, decoration.begin) && Boundary(source, decoration.end) &&
-                   decoration.description.size() <= 4096 && IsValidUtf8ScalarSequence(decoration.description);
-        }
-
-        /** @brief Keeps semantic marker color selection outside range validation. */
-        Zep::ThemeColor DecorationColor(const SourceWidgetDecorationKind kind) {
-            if (kind == SourceWidgetDecorationKind::Error)
-                return Zep::ThemeColor::Error;
-            return kind == SourceWidgetDecorationKind::Warning ? Zep::ThemeColor::Warning : Zep::ThemeColor::Info;
-        }
-    }  // namespace
 
     /** @brief One editor per view; Zep owns its components, callbacks, display and denied filesystem. */
     struct SourceEditorWidget::Storage final {
@@ -567,24 +551,6 @@ namespace Horo::Editor {
         auto &state = *storage_;
         if (!state.buffer || revision != state.source.Revision() || decorations.size() > 4096)
             return false;
-        for (const auto &decoration : decorations) {
-            if (!ValidDecoration(state.source, decoration))
-                return false;
-        }
-        std::vector<std::shared_ptr<Zep::RangeMarker>> markers;
-        markers.reserve(decorations.size());
-        for (const auto &decoration : decorations) {
-            auto marker = std::make_shared<Zep::RangeMarker>(*state.buffer);
-            marker->SetRange({static_cast<long>(DisplayOffset(state.source, decoration.begin)),
-                              static_cast<long>(DisplayOffset(state.source, decoration.end))});
-            marker->SetDescription(decoration.description);
-            marker->displayType = Zep::RangeMarkerDisplayType::Underline | Zep::RangeMarkerDisplayType::Tooltip;
-            marker->SetHighlightColor(DecorationColor(decoration.kind));
-            markers.push_back(std::move(marker));
-        }
-        state.buffer->ClearRangeMarkers(Zep::RangeMarkerType::All);
-        for (auto &marker : markers)
-            state.buffer->AddRangeMarker(std::move(marker));
-        return true;
+        return PublishSourceWidgetDecorations(*state.buffer, state.source, decorations);
     }
 }  // namespace Horo::Editor

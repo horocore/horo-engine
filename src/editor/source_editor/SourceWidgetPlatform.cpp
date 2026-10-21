@@ -1,8 +1,11 @@
 #include "SourceWidgetPlatform.h"
 
+#include "Horo/Foundation/Utf8.h"
 #include "SourceEditorWidget.h"
+#include "SourceWidgetText.h"
 
 #include <cmath>
+#include <vector>
 #include <zep/filesystem.h>
 #include <zep/window.h>
 
@@ -14,6 +17,20 @@ namespace Horo::Editor {
     }
 
     namespace {
+        /** @brief Validates one external marker before replacing any existing decoration. */
+        bool ValidDecoration(const SourceDocumentSnapshot &source, const SourceWidgetDecoration &decoration) {
+            return decoration.begin <= decoration.end && SourceWidgetText::Boundary(source, decoration.begin) &&
+                   SourceWidgetText::Boundary(source, decoration.end) && decoration.description.size() <= 4096 &&
+                   IsValidUtf8ScalarSequence(decoration.description);
+        }
+
+        /** @brief Keeps semantic marker color selection outside range validation. */
+        Zep::ThemeColor DecorationColor(const SourceWidgetDecorationKind kind) {
+            if (kind == SourceWidgetDecorationKind::Error)
+                return Zep::ThemeColor::Error;
+            return kind == SourceWidgetDecorationKind::Warning ? Zep::ThemeColor::Warning : Zep::ThemeColor::Info;
+        }
+
         /** @brief Denies every ambient filesystem path, including Zep configuration and save shortcuts. */
         class DeniedFileSystem final : public Zep::IZepFileSystem {
         public:
@@ -73,6 +90,30 @@ namespace Horo::Editor {
         };
 
     }  // namespace
+
+    /** @copydoc PublishSourceWidgetDecorations */
+    bool PublishSourceWidgetDecorations(Zep::ZepBuffer &buffer, const SourceDocumentSnapshot &source,
+                                        const std::span<const SourceWidgetDecoration> decorations) {
+        for (const auto &decoration : decorations) {
+            if (!ValidDecoration(source, decoration))
+                return false;
+        }
+        std::vector<std::shared_ptr<Zep::RangeMarker>> markers;
+        markers.reserve(decorations.size());
+        for (const auto &decoration : decorations) {
+            auto marker = std::make_shared<Zep::RangeMarker>(buffer);
+            marker->SetRange({static_cast<long>(SourceWidgetText::DisplayOffset(source, decoration.begin)),
+                              static_cast<long>(SourceWidgetText::DisplayOffset(source, decoration.end))});
+            marker->SetDescription(decoration.description);
+            marker->displayType = Zep::RangeMarkerDisplayType::Underline | Zep::RangeMarkerDisplayType::Tooltip;
+            marker->SetHighlightColor(DecorationColor(decoration.kind));
+            markers.push_back(std::move(marker));
+        }
+        buffer.ClearRangeMarkers(Zep::RangeMarkerType::All);
+        for (auto &marker : markers)
+            buffer.AddRangeMarker(std::move(marker));
+        return true;
+    }
 
     /** @copydoc WidgetMode::Select */
     void WidgetMode::Select(Zep::ZepBuffer &buffer, const Zep::GlyphIterator anchor, const Zep::GlyphIterator caret) {
