@@ -101,6 +101,8 @@ namespace Horo::Render {
          * @return Immutable view valid for the lifetime of this plan.
          */
         [[nodiscard]] std::span<const RenderGraphOwnershipTransfer> AcquireTransfers() const noexcept;
+        /** @brief Returns owning imported generation state evidence even when no transition was needed. */
+        [[nodiscard]] std::span<const RenderGraphImportedState> ImportedStates() const noexcept;
 
     private:
         friend Result<CompiledRenderGraphExecution> CompileRenderGraphExecution(const RenderGraph &, const RenderGraphSchedule &,
@@ -115,6 +117,7 @@ namespace Horo::Render {
             std::vector<RenderGraphTransition> transitions;
             std::vector<RenderGraphOwnershipTransfer> releaseTransfers;
             std::vector<RenderGraphOwnershipTransfer> acquireTransfers;
+            std::vector<RenderGraphImportedState> importedStates;
         };
 
         /** @brief Adopts fully validated, backend-neutral execution storage. */
@@ -128,6 +131,7 @@ namespace Horo::Render {
         std::vector<RenderGraphTransition> transitions_;
         std::vector<RenderGraphOwnershipTransfer> releaseTransfers_;
         std::vector<RenderGraphOwnershipTransfer> acquireTransfers_;
+        std::vector<RenderGraphImportedState> importedStates_;
     };
 
     /**

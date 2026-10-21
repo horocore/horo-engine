@@ -23,6 +23,8 @@ concept ForgedConstructionKey = requires { T(nullptr, {}); };
 static_assert(!ForgedConstructionKey<Horo::Render::MaterialBindingTable>);
 static_assert(!ForgedConstructionKey<Horo::Render::ResidentMaterialBinding>);
 
+static_assert(std::is_same_v<decltype(Horo::Render::MaterialParameterValue{}.parameter), Horo::Render::ShaderParameterId>);
+
 int main() {
     const Horo::Render::MaterialBindingLimits limits;
     Horo::Render::IMaterialBindingBackend unsupported;

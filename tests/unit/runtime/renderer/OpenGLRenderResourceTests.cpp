@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "BackendTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "OpenGLBackendInternal.h"
@@ -398,7 +399,7 @@ namespace Horo::Render::OpenGLResourceTests {
         CheckCreationAndRollback(*backend, resources, targetDescriptor);
         CheckAllocationFailure(*backend);
         DestroyResources(*backend, resources);
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("OpenGL Texture Views Preserve Parent Lifetime And Distinct Properties", "[unit][runtime][renderer][resource]") {
@@ -445,7 +446,7 @@ namespace Horo::Render::OpenGLResourceTests {
         Check(resourceCommandState.deletedTextures == 1);
 
         CheckRecycledTexture(*backend, depth.Value());
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
 }  // namespace Horo::Render::OpenGLResourceTests

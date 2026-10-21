@@ -28,7 +28,7 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] constexpr bool IsKnown(const RenderGraphSynchronizationOperation value) noexcept {
-            return static_cast<std::uint8_t>(value) <= static_cast<std::uint8_t>(RenderGraphSynchronizationOperation::CopyDestination);
+            return static_cast<std::uint8_t>(value) <= static_cast<std::uint8_t>(RenderGraphSynchronizationOperation::GraphicsInputBuffer);
         }
 
         [[nodiscard]] constexpr bool IsKnown(const RenderGraphPipelineScope value) noexcept {
@@ -210,7 +210,10 @@ namespace Horo::Render {
                 if (initialStates_[resourceIndex].has_value()) {
                     return Result<void>::Failure(ContextError(RenderGraphSynchronizationErrors::DuplicateInitialState, initial.resource));
                 }
-                if (!IsStateValid(initial.state, resource.kind) || initial.state.access == RenderGraphSynchronizationAccess::None) {
+                const bool discarded = initial.contents == RenderGraphInitialContents::Discarded;
+                if ((initial.contents != RenderGraphInitialContents::Preserved && !discarded) ||
+                    !IsStateValid(initial.state, resource.kind) ||
+                    (discarded != (initial.state.access == RenderGraphSynchronizationAccess::None))) {
                     return Result<void>::Failure(ContextError(RenderGraphSynchronizationErrors::InvalidInitialState, initial.resource));
                 }
                 initialStates_[resourceIndex] = initial.state;
@@ -341,14 +344,16 @@ namespace Horo::Render {
     RenderGraphSynchronizationPlan::RenderGraphSynchronizationPlan(RenderGraphOwnerId owner,
                                                                    std::vector<RenderQueueAssignment> queueAssignments,
                                                                    std::vector<RenderGraphTransition> transitions,
-                                                                   std::vector<RenderGraphOwnershipTransfer> transfers) noexcept
+                                                                   std::vector<RenderGraphOwnershipTransfer> transfers,
+                                                                   std::vector<RenderGraphImportedState> importedStates) noexcept
         : owner_(owner), queueAssignments_(std::move(queueAssignments)), transitions_(std::move(transitions)),
-          transfers_(std::move(transfers)) {}
+          transfers_(std::move(transfers)), importedStates_(std::move(importedStates)) {}
 
     /** @copydoc RenderGraphSynchronizationPlan::RenderGraphSynchronizationPlan */
     RenderGraphSynchronizationPlan::RenderGraphSynchronizationPlan(RenderGraphSynchronizationPlan &&other) noexcept
         : owner_(std::exchange(other.owner_, {})), queueAssignments_(std::move(other.queueAssignments_)),
-          transitions_(std::move(other.transitions_)), transfers_(std::move(other.transfers_)) {}
+          transitions_(std::move(other.transitions_)), transfers_(std::move(other.transfers_)),
+          importedStates_(std::move(other.importedStates_)) {}
 
     /** @copydoc RenderGraphSynchronizationPlan::operator= */
     RenderGraphSynchronizationPlan &RenderGraphSynchronizationPlan::operator=(RenderGraphSynchronizationPlan &&other) noexcept {
@@ -357,6 +362,7 @@ namespace Horo::Render {
             queueAssignments_ = std::move(other.queueAssignments_);
             transitions_ = std::move(other.transitions_);
             transfers_ = std::move(other.transfers_);
+            importedStates_ = std::move(other.importedStates_);
         }
         return *this;
     }
@@ -369,6 +375,11 @@ namespace Horo::Render {
     /** @copydoc RenderGraphSynchronizationPlan::QueueAssignments */
     std::span<const RenderQueueAssignment> RenderGraphSynchronizationPlan::QueueAssignments() const noexcept {
         return queueAssignments_;
+    }
+
+    /** @copydoc RenderGraphSynchronizationPlan::ImportedStates */
+    std::span<const RenderGraphImportedState> RenderGraphSynchronizationPlan::ImportedStates() const noexcept {
+        return importedStates_;
     }
 
     /** @copydoc RenderGraphSynchronizationPlan::Transitions */
@@ -394,9 +405,13 @@ namespace Horo::Render {
             if (auto compiled = compiler.Compile(); compiled.HasError()) {
                 return Result<RenderGraphSynchronizationPlan>::Failure(compiled.ErrorValue());
             }
+            std::vector<RenderGraphImportedState> ownedImports{importedStates.begin(), importedStates.end()};
+            std::ranges::sort(ownedImports, {}, [](const RenderGraphImportedState &state) {
+                return state.resource.value;
+            });
             return Result<RenderGraphSynchronizationPlan>::Success(
                 RenderGraphSynchronizationPlan{graph.Owner(), compiler.TakeQueueAssignments(), compiler.TakeTransitions(),
-                                               compiler.TakeTransfers()});
+                                               compiler.TakeTransfers(), std::move(ownedImports)});
         } catch (const std::bad_alloc &) {
             return Result<RenderGraphSynchronizationPlan>::Failure(MakeError(RenderGraphSynchronizationErrors::AllocationFailed));
         }

@@ -7,12 +7,15 @@
 #include <array>
 #include <limits>
 #include <map>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 
 namespace Horo::Render::Detail {
     namespace VulkanShaderDetail {
         inline constexpr std::size_t MaximumObjects = 4096;
+        /** @brief Preserves a native creation operation and VkResult in its typed resource failure. */
+        Error NativeShaderFailure(std::string_view operation, VkResult result);
         RenderMemoryCostPlan Estimate(std::uint64_t kind, std::size_t payload);
         VkShaderStageFlags Stages(ShaderStageVisibility stages);
         VkDescriptorType DescriptorType(ShaderResourceKind kind);
@@ -42,6 +45,7 @@ namespace Horo::Render::Detail {
             std::vector<VkDescriptorSetLayout> sets;
             MaterialBindingLayout material;
             PipelineCacheKey key;
+            RenderGraphicsPipelineState state;
 
             ~Pipeline() {
                 if (handle)
@@ -55,6 +59,17 @@ namespace Horo::Render::Detail {
         };
 
         struct Sampler {
+            VkDevice device{VK_NULL_HANDLE};
+            PFN_vkDestroySampler destroy{nullptr};
+            Sampler() = default;
+            Sampler(const Sampler &) = delete;
+            Sampler &operator=(const Sampler &) = delete;
+
+            ~Sampler() {
+                if (handle)
+                    destroy(device, handle, nullptr);
+            }
+
             VkSampler handle{VK_NULL_HANDLE};
             RenderSamplerDescriptor descriptor;
         };
@@ -72,13 +87,14 @@ namespace Horo::Render::Detail {
         VkDevice device{VK_NULL_HANDLE};
         VkPhysicalDeviceProperties properties{};
         RenderPipelineDeviceIdentity identity;
+        std::uint64_t deviceIncarnation{0};
         IssueIdentity issue;
         ResolveResource resolve;
         std::thread::id owner;
         VkPipelineCache cache{VK_NULL_HANDLE};
         std::unordered_map<std::uint64_t, Shader> shaders;
-        std::unordered_map<std::uint64_t, std::unique_ptr<Pipeline>> pipelines;
-        std::unordered_map<std::uint64_t, Sampler> samplers;
+        std::unordered_map<std::uint64_t, std::shared_ptr<Pipeline>> pipelines;
+        std::unordered_map<std::uint64_t, std::shared_ptr<Sampler>> samplers;
         PFN_vkCreateShaderModule createShaderModule{nullptr};
         PFN_vkDestroyShaderModule destroyShaderModule{nullptr};
         PFN_vkCreateDescriptorSetLayout createDescriptorSetLayout{nullptr};
@@ -136,6 +152,20 @@ namespace Horo::Render::Detail {
         /** @brief Keeps final-artifact mappings in the bounded separate descriptor namespace. */
         static bool MappingSupported(const ShaderTargetBindingMapEntry &map) {
             return map.generatedHelperIndex == 0 && map.nativeSpace < 4 && map.nativeBinding < 128;
+        }
+
+        /** @brief Vulkan's separate image/sampler descriptors cannot alias one set/binding coordinate. */
+        static bool NativeBindingsUnique(std::span<const ShaderTargetBindingMapEntry> mappings) noexcept {
+            for (std::size_t index = 0; index < mappings.size(); ++index) {
+                const auto &entry = mappings[index];
+                if (!entry.active)
+                    continue;
+                for (std::size_t prior = 0; prior < index; ++prior)
+                    if (mappings[prior].active && mappings[prior].nativeSpace == entry.nativeSpace &&
+                        mappings[prior].nativeBinding == entry.nativeBinding)
+                        return false;
+            }
+            return true;
         }
 
         /** @brief Matches the established MeshVertex attribute shape. */
@@ -229,26 +259,23 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(
                     MakeError(VulkanBackendErrors::ResourceUnsupported,
                               "Vulkan graphics requires the established MeshVertex location and component contract."));
+            if (!NativeBindingsUnique(descriptor.reflection.targetBindings))
+                return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceUnsupported,
+                                                       "Vulkan material realization requires separate image/sampler "
+                                                       "coordinates; recook a direct target binding map."));
             return ValidateDescriptorLimits(descriptor.reflection);
         }
 
-        /** @brief Computes bounded scalar/vector packing for frontend-admitted uniform buffers. */
+        /** @brief Applies native block alignment to the shared final-artifact matrix/array packing contract. */
         Result<std::size_t> ParameterBytes(const MaterialBindingLayout &layout, ShaderBindingId id) const {
-            std::size_t bytes = 0;
-            for (const auto &parameter : layout.parameters) {
-                if (!parameter.active || parameter.binding != id)
-                    continue;
-                // Matrices/arrays require complete reflected native tail sizing, not guessed strides.
-                if (parameter.arrayCount != 1 || (parameter.rows != 1 && parameter.columns != 1))
-                    return Result<std::size_t>::Failure(
-                        MakeError(MaterialBindingErrors::Unsupported,
-                                  "Vulkan packed material parameters currently require scalar/vector reflection."));
-                bytes = std::max(bytes, static_cast<std::size_t>(parameter.byteOffset) + 4 * std::max(parameter.rows, parameter.columns));
-            }
-            if (bytes == 0 || bytes > properties.limits.maxUniformBufferRange)
+            auto size = ComputeMaterialParameterBufferByteSize(layout, id);
+            if (size.HasError())
+                return size;
+            const auto bytes = (size.Value() + 15) & ~std::size_t{15};
+            if (bytes > properties.limits.maxUniformBufferRange)
                 return Result<std::size_t>::Failure(
-                    MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Material binding has no finite reflected uniform block."));
-            return Result<std::size_t>::Success((bytes + 15) & ~std::size_t{15});
+                    MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Reflected uniform block exceeds the selected device range."));
+            return Result<std::size_t>::Success(bytes);
         }
     };
 

@@ -17,6 +17,13 @@
 namespace Horo::Render::Detail {
     namespace VulkanShaderDetail {
 
+        /** @copydoc NativeShaderFailure */
+        Error NativeShaderFailure(const std::string_view operation, const VkResult result) {
+            return MakeError(VulkanBackendErrors::ResourceCreationFailed,
+                             std::string(operation) + " failed (VkResult " + std::to_string(result) +
+                                 "). Verify device support and the cooked target artifact; no substitute pipeline was selected.");
+        }
+
         /** @brief Supplies conservative driver-object accounting rather than claiming measured allocation. */
         RenderMemoryCostPlan Estimate(std::uint64_t kind, std::size_t payload) {
             return {.memoryClass = RenderMemoryClass::PersistentDevice,
@@ -166,7 +173,8 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanShaderRuntime::Initialize */
     Result<void> VulkanShaderRuntime::Initialize(VkDevice device, const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
-                                                 const Resolver &resolver, IssueIdentity issue, ResolveResource resolve) {
+                                                 const Resolver &resolver, IssueIdentity issue, ResolveResource resolve,
+                                                 const std::uint64_t deviceIncarnation) {
         if (impl_->device || !device || !resolver || !issue || !resolve || !adapter.IsValid())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidConfig));
         impl_->owner = std::this_thread::get_id();
@@ -174,6 +182,7 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::EntryPointMissing, "Vulkan shader/material dispatch is incomplete."));
         impl_->properties = properties;
+        impl_->deviceIncarnation = deviceIncarnation;
         impl_->issue = std::move(issue);
         impl_->resolve = std::move(resolve);
         Sha256Builder hash;
@@ -187,9 +196,9 @@ namespace Horo::Render::Detail {
                            .driverIdentity = std::to_string(properties.vendorID) + ":" + std::to_string(properties.deviceID),
                            .driverVersion = std::to_string(properties.driverVersion)};
         const VkPipelineCacheCreateInfo info{.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-        if (impl_->createPipelineCache(device, &info, nullptr, &impl_->cache) != VK_SUCCESS) {
+        if (const auto nativeResult = impl_->createPipelineCache(device, &info, nullptr, &impl_->cache); nativeResult != VK_SUCCESS) {
             impl_->cache = VK_NULL_HANDLE;
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed, "vkCreatePipelineCache failed."));
+            return Result<void>::Failure(NativeShaderFailure("vkCreatePipelineCache", nativeResult));
         }
         impl_->device = device;
         return Result<void>::Success();
@@ -201,8 +210,6 @@ namespace Horo::Render::Detail {
         for (auto &[id, shader] : impl_->shaders)
             impl_->destroyShaderModule(impl_->device, shader.handle, nullptr);
         impl_->shaders.clear();
-        for (auto &[id, sampler] : impl_->samplers)
-            impl_->destroySampler(impl_->device, sampler.handle, nullptr);
         impl_->samplers.clear();
         if (impl_->cache)
             impl_->destroyPipelineCache(impl_->device, impl_->cache, nullptr);
@@ -269,9 +276,9 @@ namespace Horo::Render::Detail {
             const VkShaderModuleCreateInfo info{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                                                 .codeSize = code.size(),
                                                 .pCode = words.data()};
-            if (impl_->createShaderModule(impl_->device, &info, nullptr, &shader.handle) != VK_SUCCESS)
-                return Result<std::uint64_t>::Failure(
-                    MakeError(VulkanBackendErrors::ResourceCreationFailed, "vkCreateShaderModule rejected cooked SPIR-V."));
+            if (const auto nativeResult = impl_->createShaderModule(impl_->device, &info, nullptr, &shader.handle);
+                nativeResult != VK_SUCCESS)
+                return Result<std::uint64_t>::Failure(NativeShaderFailure("vkCreateShaderModule", nativeResult));
             try {
                 impl_->shaders.emplace(*id, std::move(shader));
             } catch (...) {
@@ -373,13 +380,18 @@ namespace Horo::Render::Detail {
         const auto id = impl_->issue();
         if (!id)
             return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
-        Impl::Sampler sampler{.descriptor = descriptor};
-        if (impl_->createSampler(impl_->device, &info, nullptr, &sampler.handle) != VK_SUCCESS)
-            return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed, "vkCreateSampler failed."));
         try {
-            impl_->samplers.emplace(*id, sampler);
+            auto sampler = std::make_shared<Impl::Sampler>();
+            sampler->device = impl_->device;
+            sampler->destroy = impl_->destroySampler;
+            sampler->descriptor = descriptor;
+            if (const auto nativeResult = impl_->createSampler(impl_->device, &info, nullptr, &sampler->handle);
+                nativeResult != VK_SUCCESS) {
+                sampler->handle = VK_NULL_HANDLE;
+                return Result<std::uint64_t>::Failure(NativeShaderFailure("vkCreateSampler", nativeResult));
+            }
+            impl_->samplers.emplace(*id, std::move(sampler));
         } catch (const std::bad_alloc &) {
-            impl_->destroySampler(impl_->device, sampler.handle, nullptr);
             return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
         }
         return Result<std::uint64_t>::Success(*id);
@@ -401,11 +413,7 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanShaderRuntime::DestroySampler */
     void VulkanShaderRuntime::DestroySampler(std::uint64_t id) noexcept {
-        const auto found = impl_->samplers.find(id);
-        if (found != impl_->samplers.end()) {
-            impl_->destroySampler(impl_->device, found->second.handle, nullptr);
-            impl_->samplers.erase(found);
-        }
+        impl_->samplers.erase(id);
     }
 
 }  // namespace Horo::Render::Detail

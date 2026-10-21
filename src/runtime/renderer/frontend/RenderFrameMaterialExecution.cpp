@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/MaterialBinding.h"
+#include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
@@ -80,6 +81,10 @@ namespace Horo::Render {
                 Abort();
                 return MaterialExecutionOutcome{Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady))};
             }
+            if (pass.submission.has_value() && !backend_->Capabilities().supportsExplicitMaterialSubmissions) {
+                Abort();
+                return MaterialExecutionOutcome{Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported))};
+            }
             const auto target = owner_->BackendInstance(pass.target);
             if (target.HasError()) {
                 Abort();
@@ -96,9 +101,9 @@ namespace Horo::Render {
                 Abort();
                 return MaterialExecutionOutcome{Result<void>::Failure(retained.ErrorValue())};
             }
-            if (const auto consumed =
-                    ExecuteMaterialRequest({frame_, target.Value(), pass.extent, pass.color, pass.depthClear,
-                                            std::span{instances.draws}.first(pass.draws.size()), retained.Value(), nullptr});
+            if (const auto consumed = ExecuteMaterialRequest({frame_, target.Value(), pass.extent, pass.color, pass.depthClear,
+                                                              std::span{instances.draws}.first(pass.draws.size()), retained.Value(),
+                                                              nullptr, pass.submission});
                 consumed.HasError())
                 return MaterialExecutionOutcome{consumed};
             executed_ = true;

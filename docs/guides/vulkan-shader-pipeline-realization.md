@@ -44,7 +44,9 @@ and 128 logical descriptors, at most 4096 resident objects per kind, and a 64 Mi
 stage artifact. Inline constants have no value-submission field in the material
 contract; unsupported storage/inline/multisample/packed-matrix or packed-array
 requests fail with typed actionable errors. Descriptor arrays of supported resources
-are populated element by element. This preparation implementation does not claim
+are populated element by element. Valid logical texture/sampler pairing is preserved,
+but combined native coordinates require a separate combined-descriptor ABI and
+fail with an actionable recook result before Vulkan layout calls. This preparation implementation does not claim
 Vulkan frame rendering, image upload/transitions or presentation ownership.
 
 Qualification separates injected native-call failure/lifecycle coverage on Linux

@@ -4,7 +4,11 @@ Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialBuffe
     if (resident.kind == MaterialResidentResourceKind::Buffer && buffer &&
         HasBufferUsage(buffer->descriptor.usage, RenderBufferUsage::Uniform) && resident.offset <= buffer->descriptor.byteSize &&
         resident.byteCount <= buffer->descriptor.byteSize - resident.offset)
-        return Result<VulkanMaterialResource>::Success({.buffer = buffer->handle, .bytes = buffer->descriptor.byteSize});
+        return Result<VulkanMaterialResource>::Success({.buffer = buffer->handle,
+                                                        .bytes = buffer->descriptor.byteSize,
+                                                        .bufferDescriptor = buffer->descriptor,
+                                                        .state = &buffers.at(resident.instance)->graphState,
+                                                        .backing = buffers.at(resident.instance)});
     return Result<VulkanMaterialResource>::Failure(
         MakeError(VulkanBackendErrors::ResourceIdentityInvalid,
                   "Material uniform generation, usage or range is incompatible with the selected Vulkan registry."));
@@ -18,7 +22,11 @@ Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialView(
     const auto &descriptor = view->texture->descriptor;
     if (view->aspect == RenderTextureAspect::Color && HasTextureUsage(descriptor.usage, RenderTextureUsage::Sampled) &&
         descriptor.sampleCount == 1 && descriptor.dimension == RenderTextureDimension::TwoD && descriptor.layerCount == 1)
-        return Result<VulkanMaterialResource>::Success({.view = view->handle});
+        return Result<VulkanMaterialResource>::Success({.view = view->handle,
+                                                        .image = view->texture->handle,
+                                                        .textureDescriptor = descriptor,
+                                                        .state = &view->texture->graphState,
+                                                        .backing = views.at(resident.instance)});
     return Result<VulkanMaterialResource>::Failure(
         MakeError(VulkanBackendErrors::ResourceIdentityInvalid,
                   "Material texture view is not an exact sampled single-sample 2D color generation."));
@@ -26,12 +34,13 @@ Result<VulkanMaterialResource> VulkanResourceRuntime::Impl::ResolveMaterialView(
 
 /** @copydoc VulkanResourceRuntime::InitializeShaders */
 Result<void> VulkanResourceRuntime::InitializeShaders(const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
-                                                      const VulkanShaderRuntime::Resolver &resolver) {
+                                                      const VulkanShaderRuntime::Resolver &resolver,
+                                                      const std::uint64_t deviceIncarnation) {
     return shaders_.Initialize(impl_->device, properties, std::move(adapter), resolver, [this] {
         return impl_->IssueIdentity();
     }, [this](const MaterialResidentResource &resident, ShaderResourceKind kind) {
         return kind == ShaderResourceKind::UniformBuffer ? impl_->ResolveMaterialBuffer(resident) : impl_->ResolveMaterialView(resident);
-    });
+    }, deviceIncarnation);
 }
 
 /** @copydoc VulkanResourceRuntime::QueryPipelineDeviceIdentity */

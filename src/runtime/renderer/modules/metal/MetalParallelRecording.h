@@ -61,6 +61,8 @@ namespace Horo::Render::Detail {
         void Commit() noexcept;
         /** @brief Polls every native record, returning failure on any GPU error, never a CPU-only completion. */
         [[nodiscard]] Result<bool> NativeComplete() const;
+        /** @brief Observes terminal completion of every submitted record, including failed commands, without releasing it. */
+        [[nodiscard]] bool NativeTerminal() const noexcept;
 
     private:
         FrameToken frame_;

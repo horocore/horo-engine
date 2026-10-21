@@ -8,6 +8,8 @@ namespace Horo::Render::FrontendErrors {
     extern const ErrorCodeDescriptor FrameAlreadyActive;
     extern const ErrorCodeDescriptor FrameAlreadyExecuted;
     extern const ErrorCodeDescriptor FrameException;
+    extern const ErrorCodeDescriptor GuiAlreadyComposed;
+    extern const ErrorCodeDescriptor GuiCancelled;
     extern const ErrorCodeDescriptor FrameNotActive;
     extern const ErrorCodeDescriptor FrameNotExecuted;
     extern const ErrorCodeDescriptor InitializeException;
@@ -54,4 +56,6 @@ namespace Horo::Render::FrontendErrors {
     extern const ErrorCodeDescriptor StaticMeshExecutorAlreadyAttached;
     extern const ErrorCodeDescriptor StaticMeshExecutorMissing;
     extern const ErrorCodeDescriptor TargetReleaseDuringFrame;
+    extern const ErrorCodeDescriptor Closing;
+    extern const ErrorCodeDescriptor WrongThread;
 }  // namespace Horo::Render::FrontendErrors

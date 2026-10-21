@@ -30,6 +30,7 @@ namespace Horo::Render {
         DepthStencilAttachment,
         CopySource,
         CopyDestination,
+        GraphicsInputBuffer, /**< Read-only uniform, vertex and index inputs; whole-buffer state conservatively covers all three. */
     };
 
     /** @brief Pipeline scope in which one logical resource access occurs. */
@@ -62,10 +63,19 @@ namespace Horo::Render {
         [[nodiscard]] constexpr auto operator<=>(const RenderGraphLogicalState &) const noexcept = default;
     };
 
+    /** @brief Explicit contents policy for one exact imported resident generation. */
+    enum class RenderGraphInitialContents : std::uint8_t {
+        Preserved,
+        Discarded,
+    };
+
     /** @brief Exact initial state evidence for one imported graph resource generation. */
     struct RenderGraphImportedState {
         RenderGraphResourceId resource;
         RenderGraphLogicalState state;
+        RenderGraphInitialContents contents{RenderGraphInitialContents::Preserved};
+        /**< Discarded requires the exact undefined state and a dominating first write;
+         * it grants no permission to discard queue ownership or overlap prior GPU readers. */
     };
 
     /** @brief Independent hazard reasons carried as a complete typed bit set. */
@@ -127,6 +137,8 @@ namespace Horo::Render {
          * @return Immutable role-ordered view valid for the lifetime of this plan.
          */
         [[nodiscard]] std::span<const RenderQueueAssignment> QueueAssignments() const noexcept;
+        /** @brief Returns owned exact imported generation states, including explicit discard policy. */
+        [[nodiscard]] std::span<const RenderGraphImportedState> ImportedStates() const noexcept;
         /** @brief Returns normalized transitions in scheduled-pass and authored-use order. */
         [[nodiscard]] std::span<const RenderGraphTransition> Transitions() const noexcept;
         /** @brief Returns matched ownership transfers in transition order. */
@@ -138,13 +150,14 @@ namespace Horo::Render {
                                                                                            std::span<const RenderGraphImportedState>);
 
         RenderGraphSynchronizationPlan(RenderGraphOwnerId owner, std::vector<RenderQueueAssignment> queueAssignments,
-                                       std::vector<RenderGraphTransition> transitions,
-                                       std::vector<RenderGraphOwnershipTransfer> transfers) noexcept;
+                                       std::vector<RenderGraphTransition> transitions, std::vector<RenderGraphOwnershipTransfer> transfers,
+                                       std::vector<RenderGraphImportedState> importedStates) noexcept;
 
         RenderGraphOwnerId owner_;
         std::vector<RenderQueueAssignment> queueAssignments_;
         std::vector<RenderGraphTransition> transitions_;
         std::vector<RenderGraphOwnershipTransfer> transfers_;
+        std::vector<RenderGraphImportedState> importedStates_;
     };
 
     /**

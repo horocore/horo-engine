@@ -21,7 +21,7 @@ namespace Horo::Render::Detail {
             return valid;
         }))
             return Result<VkDescriptorBufferInfo>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
-        if (std::holds_alternative<MaterialParameterBinding>(logical.value)) {
+        {
             const auto required = ParameterBytes(layout, logical.binding);
             if (required.HasError())
                 return Result<VkDescriptorBufferInfo>::Failure(required.ErrorValue());
@@ -37,9 +37,9 @@ namespace Horo::Render::Detail {
         if (kind == ShaderResourceKind::Sampler) {
             const auto sampler = samplers.find(resident.instance);
             if (resident.kind != MaterialResidentResourceKind::Sampler || resident.offset || resident.byteCount ||
-                sampler == samplers.end() || sampler->second.descriptor.compareEnabled)
+                sampler == samplers.end() || sampler->second->descriptor.compareEnabled)
                 return Result<VkDescriptorImageInfo>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
-            return Result<VkDescriptorImageInfo>::Success({.sampler = sampler->second.handle});
+            return Result<VkDescriptorImageInfo>::Success({.sampler = sampler->second->handle});
         }
         const auto resource = resolve(resident, ShaderResourceKind::SampledTexture);
         if (resource.HasError())
@@ -92,17 +92,17 @@ namespace Horo::Render::Detail {
                                               .maxSets = static_cast<std::uint32_t>(pipeline.sets.size()),
                                               .poolSizeCount = static_cast<std::uint32_t>(sizes.size()),
                                               .pPoolSizes = sizes.data()};
-        if (createDescriptorPool(device, &pool, nullptr, &table.pool) != VK_SUCCESS) {
+        if (const auto nativeResult = createDescriptorPool(device, &pool, nullptr, &table.pool); nativeResult != VK_SUCCESS) {
             table.pool = VK_NULL_HANDLE;
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed, "vkCreateDescriptorPool failed."));
+            return Result<void>::Failure(NativeShaderFailure("vkCreateDescriptorPool", nativeResult));
         }
         table.sets.resize(pipeline.sets.size(), VK_NULL_HANDLE);
         const VkDescriptorSetAllocateInfo allocation{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
                                                      .descriptorPool = table.pool,
                                                      .descriptorSetCount = static_cast<std::uint32_t>(table.sets.size()),
                                                      .pSetLayouts = pipeline.sets.data()};
-        if (allocateDescriptorSets(device, &allocation, table.sets.data()) != VK_SUCCESS)
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed, "vkAllocateDescriptorSets failed."));
+        if (const auto nativeResult = allocateDescriptorSets(device, &allocation, table.sets.data()); nativeResult != VK_SUCCESS)
+            return Result<void>::Failure(NativeShaderFailure("vkAllocateDescriptorSets", nativeResult));
         return Result<void>::Success();
     }
 
@@ -138,6 +138,11 @@ namespace Horo::Render::Detail {
             table->owner = impl_.get();
             table->pipeline = pipeline->handle;
             table->layout = pipeline->layout;
+            table->deviceIncarnation = impl_->deviceIncarnation;
+            table->state = pipeline->state;
+            table->pipelineBacking = impl_->pipelines.at(id);
+            table->resources.reserve(resources.size());
+            table->samplerBackings.reserve(resources.size());
             std::vector<VkDescriptorBufferInfo> buffers(resources.size());
             std::vector<VkDescriptorImageInfo> images(resources.size());
             std::vector<VkWriteDescriptorSet> writes(resources.size());
@@ -146,6 +151,16 @@ namespace Horo::Render::Detail {
                 const auto slot = impl_->ResolveSlot(descriptor.layout, descriptor.resources[i], resources[i], buffers[i], images[i]);
                 if (slot.HasError())
                     return Outcome::Failure(slot.ErrorValue());
+                const auto kind =
+                    std::ranges::find(descriptor.layout.resources, descriptor.resources[i].binding, &ShaderReflectedBinding::id)->kind;
+                if (kind == ShaderResourceKind::Sampler)
+                    table->samplerBackings.push_back(impl_->samplers.at(resources[i].instance));
+                else {
+                    auto backing = impl_->resolve(resources[i], kind);
+                    if (backing.HasError())
+                        return Outcome::Failure(backing.ErrorValue());
+                    table->resources.push_back(backing.Value());
+                }
                 writes[i] = slot.Value();
                 ++counts[writes[i].descriptorType];
             }

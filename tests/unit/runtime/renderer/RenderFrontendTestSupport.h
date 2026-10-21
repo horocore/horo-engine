@@ -46,6 +46,9 @@ namespace Horo::Tests::RenderFrontendTesting {
         int destroyRenderTargetCount{0};
         std::vector<std::byte> lastBufferInitialData;
         std::vector<std::byte> lastTextureInitialData;
+        bool drainPending{false};
+        bool supportsSubmissionObservation{false};
+        int submissionObservations{0};
         bool failPresentation{false};
         bool throwDuringInitialize{false};
         bool throwDuringResize{false};

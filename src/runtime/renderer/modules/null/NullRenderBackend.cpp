@@ -2,9 +2,11 @@
 #include "NullGraphWorkloads.h"
 #include "NullRenderBackendErrors.h"
 
+#include <exception>
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace Horo::Render {
@@ -58,7 +60,8 @@ namespace Horo::Render {
             NullRenderBackend &operator=(NullRenderBackend &&) = delete;
 
             ~NullRenderBackend() override {
-                Shutdown();
+                if (BeginShutdown().HasError() || PollDrain().HasError())
+                    std::terminate();
             }
 
             /** @copydoc IRenderBackend::Initialize */
@@ -76,8 +79,17 @@ namespace Horo::Render {
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Frames in flight must be in the inclusive range [1, 8]."));
                 }
 
+                if (!config.HasSingleEffectiveQueue())
+                    return Result<void>::Failure(MakeBackendError(NullBackendErrors::UnsupportedResourceOperation,
+                                                                  "Null does not implement distinct effective graph queues."));
+                const auto incarnation = AcquireRenderDeviceIncarnation();
+                if (incarnation.HasError())
+                    return Result<void>::Failure(incarnation.ErrorValue());
+                capabilities_.support.deviceIncarnation = incarnation.Value();
+                ownerThread_ = std::this_thread::get_id();
                 config_ = config;
                 initialized_ = true;
+                closing_ = false;
                 return Result<void>::Success();
             }
 
@@ -127,7 +139,8 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::CreateBuffer */
             Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                               const RenderMemoryPlacement &placement) override {
+                                               const RenderMemoryPlacement &placement,
+                                               RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_) {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::NotInitialized, "Renderer backend is not initialized."));
@@ -143,12 +156,12 @@ namespace Horo::Render {
                 const auto instance = NextGraphResourceInstance();
                 if (instance.HasValue())
                     graphResources_.buffers.try_emplace(instance.Value(), descriptor);
-                return instance;
+                return TrackLifetime(instance, std::move(lifetime));
             }
 
             /** @copydoc IRenderBackend::CreateMesh */
             Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
-                                             const std::uint64_t indexBuffer) override {
+                                             const std::uint64_t indexBuffer, RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_) {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::NotInitialized, "Renderer backend is not initialized."));
@@ -158,12 +171,13 @@ namespace Horo::Render {
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null mesh realization request is invalid."));
                 }
-                return NextResourceInstance();
+                return TrackLifetime(NextResourceInstance(), std::move(lifetime));
             }
 
             /** @copydoc IRenderBackend::CreateTexture */
             Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                                const RenderMemoryPlacement &placement) override {
+                                                const RenderMemoryPlacement &placement,
+                                                RenderResourceNativeLifetime lifetime = {}) override {
                 const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
                 const auto cost = QueryTextureMemoryCost(descriptor);
                 if (cost.HasError())
@@ -175,44 +189,48 @@ namespace Horo::Render {
                 const auto instance = NextGraphResourceInstance();
                 if (instance.HasValue())
                     graphResources_.textures.try_emplace(instance.Value(), descriptor);
-                return instance;
+                return TrackLifetime(instance, std::move(lifetime));
             }
 
-            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
+            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture,
+                                                    RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_ || !descriptor.IsValid() || texture == 0)
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null texture-view realization request is invalid."));
-                return NextResourceInstance();
+                return TrackLifetime(NextResourceInstance(), std::move(lifetime));
             }
 
             Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, const std::uint64_t colorAttachment,
-                                                     const std::uint64_t depthAttachment) override {
+                                                     const std::uint64_t depthAttachment,
+                                                     RenderResourceNativeLifetime lifetime = {}) override {
                 if (!initialized_ || !descriptor.IsValid() || (colorAttachment == 0 && depthAttachment == 0))
                     return Result<std::uint64_t>::Failure(
                         MakeBackendError(NullBackendErrors::InvalidConfig, "Null render-target realization request is invalid."));
-                return NextResourceInstance();
+                return TrackLifetime(NextResourceInstance(), std::move(lifetime));
             }
 
             /** @copydoc IRenderBackend::DestroyBuffer */
             void DestroyBuffer(const std::uint64_t instance) noexcept override {
                 graphResources_.buffers.erase(instance);
+                nativeLifetimes_.erase(instance);
             }
 
             /** @copydoc IRenderBackend::DestroyMesh */
-            void DestroyMesh(std::uint64_t) noexcept override {
-                // Null resources are opaque monotonic identities with no native allocation to release.
+            void DestroyMesh(const std::uint64_t instance) noexcept override {
+                nativeLifetimes_.erase(instance);
             }
 
             void DestroyTexture(const std::uint64_t instance) noexcept override {
                 graphResources_.textures.erase(instance);
+                nativeLifetimes_.erase(instance);
             }
 
-            void DestroyTextureView(std::uint64_t) noexcept override {
-                // Null resources are opaque monotonic identities with no native allocation to release.
+            void DestroyTextureView(const std::uint64_t instance) noexcept override {
+                nativeLifetimes_.erase(instance);
             }
 
-            void DestroyRenderTarget(std::uint64_t) noexcept override {
-                // Null resources are opaque monotonic identities with no native allocation to release.
+            void DestroyRenderTarget(const std::uint64_t instance) noexcept override {
+                nativeLifetimes_.erase(instance);
             }
 
             /** @copydoc IRenderBackend::BeginFrame */
@@ -364,18 +382,49 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
-            /** @copydoc IRenderBackend::Shutdown */
-            void Shutdown() noexcept override {
+            /** @copydoc IRenderBackend::BeginShutdown */
+            Result<void> BeginShutdown() override {
+                if (ownerThread_ != std::thread::id{} && ownerThread_ != std::this_thread::get_id())
+                    return Result<void>::Failure(MakeError(NullBackendErrors::WrongThread));
+                closing_ = true;
                 AbortActiveFrame();
+                initialized_ = false;
+                return Result<void>::Success();
+            }
+
+            /** @copydoc IRenderBackend::PollDrain */
+            Result<RenderBackendDrainProgress> PollDrain() override {
+                if (ownerThread_ != std::thread::id{} && ownerThread_ != std::this_thread::get_id())
+                    return Result<RenderBackendDrainProgress>::Failure(MakeError(NullBackendErrors::WrongThread));
+                if (!closing_)
+                    return Result<RenderBackendDrainProgress>::Failure(
+                        MakeError(NullBackendErrors::InvalidExecutionPlan, "BeginShutdown must close Null admission first."));
                 graphResources_.buffers.clear();
                 graphResources_.textures.clear();
+                nativeLifetimes_.clear();
                 initialized_ = false;
                 activeFrame_ = {};
                 extent_ = {};
                 config_ = {};
+                return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
             }
 
         private:
+            [[nodiscard]] Result<std::uint64_t> TrackLifetime(Result<std::uint64_t> instance, RenderResourceNativeLifetime lifetime) {
+                if (instance.HasValue()) {
+                    try {
+                        nativeLifetimes_.try_emplace(instance.Value(), std::move(lifetime));
+                    } catch (const std::bad_alloc &) {
+                        graphResources_.buffers.erase(instance.Value());
+                        graphResources_.textures.erase(instance.Value());
+                        return Result<std::uint64_t>::Failure(MakeError(NullBackendErrors::ResourceInstanceExhausted));
+                    }
+                }
+                return instance;
+            }
+
+            std::unordered_map<std::uint64_t, RenderResourceNativeLifetime> nativeLifetimes_;
+
             /** @brief Bounds headless resource metadata before creating a new exact instance identity. */
             [[nodiscard]] Result<std::uint64_t> NextGraphResourceInstance() {
                 if (graphResources_.buffers.size() + graphResources_.textures.size() >= Detail::NullGraphResources::MaximumResources)
@@ -408,6 +457,8 @@ namespace Horo::Render {
             std::uint64_t nextFrameToken_{1};
             std::uint64_t nextResourceInstance_{1};
             bool initialized_{false};
+            bool closing_{false};
+            std::thread::id ownerThread_;
             bool frameActive_{false};
         };
 

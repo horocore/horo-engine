@@ -1,12 +1,15 @@
+#include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
 #include "VulkanBackendInternal.h"
 #include "VulkanRenderBackendErrors.h"
 
 #include <algorithm>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <set>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace Horo::Render {
@@ -168,6 +171,31 @@ namespace Horo::Render {
             return {graphics, requirePresentation ? presentation : graphics};
         }
 
+        /** @brief Preserves the host's effective topology rather than collapsing distinct queue identities. */
+        [[nodiscard]] Result<std::uint32_t> SelectTransferQueue(const VulkanAdapterCandidate &candidate, const RenderBackendConfig &config,
+                                                                const std::uint32_t graphics) {
+            const auto graphicsRole = std::ranges::find(config.queueAssignments, RenderQueueRole::Graphics, &RenderQueueAssignment::role);
+            const auto transferRole = std::ranges::find(config.queueAssignments, RenderQueueRole::Transfer, &RenderQueueAssignment::role);
+            if (graphicsRole == config.queueAssignments.end() || transferRole == config.queueAssignments.end() ||
+                std::ranges::any_of(config.queueAssignments, [](const auto &queue) {
+                return queue.role == RenderQueueRole::Compute;
+            }))
+                return Result<std::uint32_t>::Failure(
+                    MakeVulkanError(VulkanBackendErrors::UnsupportedOperation,
+                                    "Vulkan command execution requires graphics/transfer roles; compute workloads are separate."));
+            if (graphicsRole->queue == transferRole->queue)
+                return Result<std::uint32_t>::Success(graphics);
+            std::uint32_t transfer = VK_QUEUE_FAMILY_IGNORED;
+            for (const auto &queue : candidate.queueFamilies)
+                if (queue.index != graphics && queue.supportsTransfer && queue.index < transfer)
+                    transfer = queue.index;
+            if (transfer == VK_QUEUE_FAMILY_IGNORED)
+                return Result<std::uint32_t>::Failure(MakeVulkanError(VulkanBackendErrors::GraphicsQueueUnavailable,
+                                                                      "The requested distinct transfer queue has no admitted native "
+                                                                      "family; explicitly alias roles for a single-queue plan."));
+            return Result<std::uint32_t>::Success(transfer);
+        }
+
         struct VulkanRuntimeLease {
             bool claimed{false};
         };
@@ -175,10 +203,14 @@ namespace Horo::Render {
         class VulkanRenderBackend final : public IRenderBackend {  // NOSONAR(cpp:S1448)
         public:
             VulkanRenderBackend(IVulkanRuntimePort &runtimePort, std::shared_ptr<VulkanRuntimeLease> lease) noexcept
-                : runtimePort_(&runtimePort), resourcePort_(dynamic_cast<IVulkanResourcePort *>(&runtimePort)), lease_(std::move(lease)) {}
+                : runtimePort_(&runtimePort), resourcePort_(dynamic_cast<IVulkanResourcePort *>(&runtimePort)),
+                  commandPort_(dynamic_cast<IVulkanCommandPort *>(&runtimePort)), lease_(std::move(lease)) {}
 
             ~VulkanRenderBackend() override {
-                Shutdown();
+                const auto begun = BeginShutdown();
+                const auto drained = PollDrain();
+                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
             }
 
             const RenderBackendCapabilities &Capabilities() const noexcept override {
@@ -212,31 +244,40 @@ namespace Horo::Render {
             }
 
             Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> bytes,
-                                               const RenderMemoryPlacement &placement) override {
-                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateBuffer(descriptor, bytes, placement)
-                                                                   : Unsupported<std::uint64_t>();
+                                               const RenderMemoryPlacement &placement,
+                                               RenderResourceNativeLifetime lifetime = {}) override {
+                return resourceBackend_ != nullptr && initialized_
+                           ? resourceBackend_->CreateBuffer(descriptor, bytes, placement, std::move(lifetime))
+                           : Unsupported<std::uint64_t>();
             }
 
-            Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertex, std::uint64_t index) override {
-                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateMesh(descriptor, vertex, index)
-                                                                   : Unsupported<std::uint64_t>();
+            Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertex, std::uint64_t index,
+                                             RenderResourceNativeLifetime lifetime = {}) override {
+                return resourceBackend_ != nullptr && initialized_
+                           ? resourceBackend_->CreateMesh(descriptor, vertex, index, std::move(lifetime))
+                           : Unsupported<std::uint64_t>();
             }
 
             Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, std::span<const std::byte> bytes,
-                                                const RenderMemoryPlacement &placement) override {
-                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateTexture(descriptor, bytes, placement)
-                                                                   : Unsupported<std::uint64_t>();
+                                                const RenderMemoryPlacement &placement,
+                                                RenderResourceNativeLifetime lifetime = {}) override {
+                return resourceBackend_ != nullptr && initialized_
+                           ? resourceBackend_->CreateTexture(descriptor, bytes, placement, std::move(lifetime))
+                           : Unsupported<std::uint64_t>();
             }
 
-            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture) override {
-                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateTextureView(descriptor, texture)
-                                                                   : Unsupported<std::uint64_t>();
+            Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture,
+                                                    RenderResourceNativeLifetime lifetime = {}) override {
+                return resourceBackend_ != nullptr && initialized_
+                           ? resourceBackend_->CreateTextureView(descriptor, texture, std::move(lifetime))
+                           : Unsupported<std::uint64_t>();
             }
 
-            Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t color,
-                                                     std::uint64_t depth) override {
-                return resourceBackend_ != nullptr && initialized_ ? resourceBackend_->CreateRenderTarget(descriptor, color, depth)
-                                                                   : Unsupported<std::uint64_t>();
+            Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t color, std::uint64_t depth,
+                                                     RenderResourceNativeLifetime lifetime = {}) override {
+                return resourceBackend_ != nullptr && initialized_
+                           ? resourceBackend_->CreateRenderTarget(descriptor, color, depth, std::move(lifetime))
+                           : Unsupported<std::uint64_t>();
             }
 
             void DestroyBuffer(std::uint64_t identity) noexcept override {
@@ -264,41 +305,133 @@ namespace Horo::Render {
                     resourceBackend_->DestroyRenderTarget(identity);
             }
 
-            Result<FrameToken> BeginFrame(const FrameDescriptor &) override {
-                return Unsupported<FrameToken>();
+            Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return Result<FrameToken>::Failure(access.ErrorValue());
+                auto frame = commandPort_->BeginFrame(descriptor);
+                if (frame.HasValue())
+                    activeFrame_ = frame.Value();
+                return frame;
             }
 
             Result<void> Execute(const RenderExecutionPlan &) override {
                 return UnsupportedVoid();
             }
 
-            Result<void> Present(FrameToken) override {
-                return UnsupportedVoid();
+            Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (request.frame != activeFrame_ || !activeFrame_.IsValid())
+                    return Result<void>::Failure(
+                        MakeVulkanError(VulkanBackendErrors::InvalidCommandState, "Graph frame identity is stale."));
+                return commandPort_->ExecuteGraph(request);
             }
 
-            void AbortFrame(FrameToken) noexcept override {
-                // Frame submission is introduced by RND-006.4; no active frame exists yet.
+            Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (request.frame != activeFrame_ || !activeFrame_.IsValid())
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                return commandPort_->ExecuteMaterialPass(request);
+            }
+
+            Result<void> Present(const FrameToken frame) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (frame != activeFrame_ || !activeFrame_.IsValid())
+                    return Result<void>::Failure(
+                        MakeVulkanError(VulkanBackendErrors::InvalidCommandState, "Submission frame identity is stale."));
+                auto submitted = commandPort_->SubmitFrame(frame);
+                activeFrame_ = {};
+                return submitted;
+            }
+
+            void AbortFrame(const FrameToken frame) noexcept override {
+                if (ownerThread_ == std::this_thread::get_id() && commandPort_ != nullptr && frame == activeFrame_) {
+                    commandPort_->AbortFrame(frame);
+                    activeFrame_ = {};
+                }
             }
 
             void AbortActiveFrame() noexcept override {
-                // Frame submission is introduced by RND-006.4; no active frame exists yet.
+                AbortFrame(activeFrame_);
             }
 
             Result<void> Resize(FramebufferExtent) override {
                 return UnsupportedVoid();
             }
 
-            void Shutdown() noexcept override {
+            Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
+                if (ownerThread_ == std::thread::id{})
+                    return Result<bool>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
+                if (ownerThread_ != std::this_thread::get_id())
+                    return Result<bool>::Failure(MakeError(VulkanBackendErrors::WrongThread));
+                if (!deviceCreated_)
+                    return Result<bool>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
+                if (!wait.IsValid() || (activeFrame_.IsValid() && wait.purpose != RenderCpuWaitPurpose::Poll))
+                    return Result<bool>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid));
+                return commandPort_ != nullptr ? commandPort_->ObserveSubmission(wait)
+                                               : Result<bool>::Failure(MakeError(VulkanBackendErrors::UnsupportedOperation));
+            }
+
+            Result<void> BeginShutdown() override {
+                if (ownerThread_ != std::thread::id{} && ownerThread_ != std::this_thread::get_id())
+                    return Result<void>::Failure(MakeVulkanError(VulkanBackendErrors::WrongThread, {}));
+                closing_ = true;
                 initialized_ = false;
                 capabilities_.presentsToWindow = false;
+                AbortActiveFrame();
+                return commandPort_ != nullptr && deviceCreated_ ? commandPort_->BeginShutdownCommands() : Result<void>::Success();
+            }
+
+            Result<RenderBackendDrainProgress> PollDrain() override {
+                using DrainResult = Result<RenderBackendDrainProgress>;
+                if (ownerThread_ != std::thread::id{} && ownerThread_ != std::this_thread::get_id())
+                    return DrainResult::Failure(MakeVulkanError(VulkanBackendErrors::WrongThread, {}));
+                if (!closing_)
+                    return DrainResult::Failure(
+                        MakeVulkanError(VulkanBackendErrors::InvalidCommandState, "BeginShutdown must close Vulkan admission first."));
+                if (commandPort_ != nullptr && deviceCreated_) {
+                    const auto progress = commandPort_->PollCommandDrain();
+                    if (progress.HasError() || progress.Value() == RenderBackendDrainProgress::Pending)
+                        return progress;
+                }
                 Rollback();
+                ownerThread_ = {};
+                return DrainResult::Success(RenderBackendDrainProgress::Drained);
             }
 
         private:
             void CommitInitialization(const bool presentsToWindow) noexcept {
-                capabilities_.presentsToWindow = presentsToWindow;
+                // Surface/adapter admission does not implement WSI acquisition or presentation.
+                capabilities_.presentsToWindow = false;
                 resourceBackend_ = resourcePort_ != nullptr ? resourcePort_->ResourceBackend() : nullptr;
                 initialized_ = true;
+                capabilities_.supportsExplicitGraphSubmissions = commandPort_ != nullptr;
+                capabilities_.supportsExplicitMaterialSubmissions = commandPort_ && commandPort_->SupportsMaterialCommands();
+                capabilities_.supportsSubmissionObservation = commandPort_ != nullptr;
+                capabilities_.support = resourcePort_ != nullptr ? resourcePort_->ResourceCapabilities() : RenderCapabilitySnapshot{};
+                capabilities_.supportsBufferResources = capabilities_.support.features.Supports(RenderCapability::BufferResources);
+                capabilities_.supportsMeshResources = capabilities_.support.features.Supports(RenderCapability::MeshResources);
+                capabilities_.supportsTextureResources = capabilities_.support.features.Supports(RenderCapability::TextureResources);
+                capabilities_.supportsRenderTargetResources =
+                    capabilities_.support.features.Supports(RenderCapability::RenderTargetResources);
+                capabilities_.supportsOffscreenTargets = capabilities_.support.features.Supports(RenderCapability::OffscreenTargets);
+                requirePresentation_ = presentsToWindow;
+            }
+
+            [[nodiscard]] Result<void> CommandAccess() const {
+                if (ownerThread_ == std::thread::id{})
+                    return Result<void>::Failure(MakeVulkanError(VulkanBackendErrors::NotInitialized, {}));
+                if (ownerThread_ != std::this_thread::get_id())
+                    return Result<void>::Failure(MakeVulkanError(VulkanBackendErrors::WrongThread, {}));
+                if (!initialized_)
+                    return Result<void>::Failure(MakeVulkanError(VulkanBackendErrors::NotInitialized, {}));
+                if (requirePresentation_)
+                    return Result<void>::Failure(
+                        MakeVulkanError(VulkanBackendErrors::PresentationUnsupported,
+                                        "Swapchain acquisition/presentation belongs to RND-006.5; this command path is offscreen."));
+                return commandPort_ != nullptr ? Result<void>::Success() : UnsupportedVoid();
             }
 
             [[nodiscard]] Result<void> PrepareInitialization(const RenderBackendConfig &config) {
@@ -313,6 +446,8 @@ namespace Horo::Render {
                 }
                 lease_->claimed = true;
                 ownsLease_ = true;
+                ownerThread_ = std::this_thread::get_id();
+                closing_ = false;
                 return Result<void>::Success();
             }
 
@@ -358,6 +493,9 @@ namespace Horo::Render {
                 }
                 const VulkanAdapterCandidate *candidate = selected.Value();
                 const auto [graphicsQueue, presentationQueue] = SelectQueues(*candidate, config.requirePresentation);
+                const auto transferQueue = SelectTransferQueue(*candidate, config, graphicsQueue);
+                if (transferQueue.HasError())
+                    return Result<void>::Failure(transferQueue.ErrorValue());
                 std::vector<std::string> deviceExtensions;
                 if (config.requirePresentation) {
                     deviceExtensions.emplace_back(SwapchainExtension);
@@ -367,8 +505,11 @@ namespace Horo::Render {
                     .adapter = candidate->id,
                     .graphicsQueueFamily = graphicsQueue,
                     .presentationQueueFamily = presentationQueue,
+                    .transferQueueFamily = transferQueue.Value(),
                     .enabledFeatures = {.dynamicRendering = true, .synchronization2 = true, .timelineSemaphore = true},
                     .enabledExtensions = std::move(deviceExtensions),
+                    .queueAssignments = config.queueAssignments,
+                    .maxFramesInFlight = config.maxFramesInFlight,
                 });
             }
 
@@ -465,6 +606,7 @@ namespace Horo::Render {
 
             IVulkanRuntimePort *runtimePort_{nullptr};
             IVulkanResourcePort *resourcePort_{nullptr};
+            IVulkanCommandPort *commandPort_{nullptr};
             IRenderResourceBackend *resourceBackend_{nullptr};
             std::shared_ptr<VulkanRuntimeLease> lease_;
             RenderBackendCapabilities capabilities_{.backend = RenderBackendId{"vulkan"}};
@@ -473,6 +615,10 @@ namespace Horo::Render {
             bool instanceCreated_{false};
             bool deviceCreated_{false};
             bool ownsLease_{false};
+            bool closing_{false};
+            bool requirePresentation_{false};
+            std::thread::id ownerThread_;
+            FrameToken activeFrame_;
         };
 
         class VulkanBackendProvider final : public IRenderBackendProvider {

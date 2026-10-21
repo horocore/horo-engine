@@ -140,17 +140,18 @@ namespace Horo::Render::Detail {
             const VkDescriptorSetLayoutCreateInfo info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                                                        .bindingCount = static_cast<std::uint32_t>(bindings[set].size()),
                                                        .pBindings = bindings[set].data()};
-            if (createDescriptorSetLayout(device, &info, nullptr, &pipeline.sets[set]) != VK_SUCCESS) {
+            if (const auto nativeResult = createDescriptorSetLayout(device, &info, nullptr, &pipeline.sets[set]);
+                nativeResult != VK_SUCCESS) {
                 pipeline.sets[set] = VK_NULL_HANDLE;
-                return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed, "vkCreateDescriptorSetLayout failed."));
+                return Result<void>::Failure(NativeShaderFailure("vkCreateDescriptorSetLayout", nativeResult));
             }
         }
         const VkPipelineLayoutCreateInfo layout{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                                                 .setLayoutCount = static_cast<std::uint32_t>(setCount),
                                                 .pSetLayouts = pipeline.sets.data()};
-        if (createPipelineLayout(device, &layout, nullptr, &pipeline.layout) != VK_SUCCESS) {
+        if (const auto nativeResult = createPipelineLayout(device, &layout, nullptr, &pipeline.layout); nativeResult != VK_SUCCESS) {
             pipeline.layout = VK_NULL_HANDLE;
-            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed, "vkCreatePipelineLayout failed."));
+            return Result<void>::Failure(NativeShaderFailure("vkCreatePipelineLayout", nativeResult));
         }
         return Result<void>::Success();
     }
@@ -196,8 +197,9 @@ namespace Horo::Render::Detail {
             const auto material = PrepareMaterialBindingLayout(descriptor.reflection);
             if (material.HasError())
                 return Result<std::uint64_t>::Failure(material.ErrorValue());
-            auto pipeline = std::make_unique<Impl::Pipeline>();
+            auto pipeline = std::make_shared<Impl::Pipeline>();
             pipeline->device = impl_->device;
+            pipeline->state = descriptor.state;
             pipeline->destroy = impl_->destroyPipeline;
             pipeline->destroyLayout = impl_->destroyPipelineLayout;
             pipeline->destroySetLayout = impl_->destroyDescriptorSetLayout;
@@ -213,10 +215,9 @@ namespace Horo::Render::Detail {
             state.ConfigureAttachments(descriptor.state);
             const auto info = state.Info(pipeline->layout, stages.stages);
             // The driver may publish a partial handle on failure; the candidate RAII owner releases it.
-            if (impl_->createGraphicsPipelines(impl_->device, impl_->cache, 1, &info, nullptr, &pipeline->handle) != VK_SUCCESS)
-                return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed,
-                                                                "vkCreateGraphicsPipelines rejected shader linkage or attachment support; "
-                                                                "verify cooked target/device compatibility."));
+            if (const auto nativeResult = impl_->createGraphicsPipelines(impl_->device, impl_->cache, 1, &info, nullptr, &pipeline->handle);
+                nativeResult != VK_SUCCESS)
+                return Result<std::uint64_t>::Failure(NativeShaderFailure("vkCreateGraphicsPipelines", nativeResult));
             const auto id = impl_->issue();
             if (!id)
                 return Result<std::uint64_t>::Failure(

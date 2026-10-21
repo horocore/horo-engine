@@ -10,11 +10,18 @@
 #include <memory>
 
 namespace Horo::Render::Detail {
+    struct VulkanGraphResourceState;
+
     /** @brief Exact resource resolved by the existing device resource registry. */
     struct VulkanMaterialResource {
         VkBuffer buffer{VK_NULL_HANDLE};
         VkImageView view{VK_NULL_HANDLE};
         std::size_t bytes{0};
+        VkImage image{VK_NULL_HANDLE};
+        RenderBufferDescriptor bufferDescriptor;
+        RenderTextureDescriptor textureDescriptor;
+        VulkanGraphResourceState *state{nullptr};
+        std::shared_ptr<const void> backing;
     };
 
     /** @brief Native descriptor lease; frontend pins and the submission lease protect all referenced generations.
@@ -32,6 +39,11 @@ namespace Horo::Render::Detail {
         VkPipelineLayout layout{VK_NULL_HANDLE};
         std::vector<VkDescriptorSet> sets;
         const void *owner{nullptr};
+        std::uint64_t deviceIncarnation{0};
+        RenderGraphicsPipelineState state;
+        std::shared_ptr<const void> pipelineBacking;
+        std::vector<std::shared_ptr<const void>> samplerBackings;
+        std::vector<VulkanMaterialResource> resources;
     };
 
     /** @brief Synchronous load-time owner; caller serializes preparation and cancellation on the render owner thread.
@@ -48,7 +60,8 @@ namespace Horo::Render::Detail {
         VulkanShaderRuntime &operator=(const VulkanShaderRuntime &) = delete;
         /** @brief Attaches exact selected-device facts and borrowed registry callbacks; rolls back on missing dispatch. */
         [[nodiscard]] Result<void> Initialize(VkDevice device, const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
-                                              const Resolver &resolver, IssueIdentity issue, ResolveResource resolve);
+                                              const Resolver &resolver, IssueIdentity issue, ResolveResource resolve,
+                                              std::uint64_t deviceIncarnation = 0);
         /** @brief Releases pipeline/layout/cache/shader/sampler objects after host-owned queue drain and lease release. */
         void Shutdown() noexcept;
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;

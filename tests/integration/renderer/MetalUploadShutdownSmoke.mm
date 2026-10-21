@@ -1,3 +1,4 @@
+#include "../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "editor/renderer/metal/EditorViewportRendererMetal.h"
 #include "editor/renderer/metal/SdlMetalPresentationPort.h"
@@ -44,6 +45,7 @@ TEST_CASE("Metal staging upload drains at shutdown", "[integration][renderer][gp
     std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
 
     QueueUploadImmediatelyBeforeShutdown(*frontend);
+    Horo::Render::Test::RequireDrainedOwner(*frontend);
     frontend.reset();
     SDL_DestroyWindow(window);
     SDL_Quit();

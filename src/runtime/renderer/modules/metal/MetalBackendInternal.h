@@ -86,7 +86,10 @@ namespace Horo::Render::Detail {
 
         virtual void AbortFrame() noexcept = 0;
         [[nodiscard]] virtual Result<void> Resize(FramebufferExtent extent) = 0;
-        virtual void Shutdown() noexcept = 0;
+        /** @brief Closes owner-thread admission and cancels unsent work without waiting or releasing pending parents. */
+        [[nodiscard]] virtual Result<void> BeginShutdown() = 0;
+        /** @brief Polls finite native/CPU inventories; only Drained permits releasing the owning composition. */
+        [[nodiscard]] virtual Result<RenderBackendDrainProgress> PollDrain() = 0;
     };
 
     /** @brief Inert factory seam for constructing a runtime without acquiring native resources. */

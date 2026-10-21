@@ -247,6 +247,18 @@ TEST_CASE("Vulkan realizes separate sampled views and samplers with logical pair
     f.runtime.DestroySampler(sampler.Value());
 }
 
+TEST_CASE("Vulkan rejects combined native coordinates before descriptor layout creation", "[vulkan][material][limits]") {
+    Fixture f;
+    f.UseSampledMaterial();
+    f.Prepare();
+    f.descriptor.reflection.targetBindings[2].nativeBinding = 1;
+    const auto cost = f.runtime.QueryGraphicsPipelineMemoryCost(f.descriptor, f.vertex, f.fragment);
+    REQUIRE(cost.HasError());
+    CHECK(cost.ErrorValue().code.Value() == VulkanBackendErrors::ResourceUnsupported.code.Value());
+    CHECK(f.state.layouts == 0);
+    CHECK(f.state.pipelines == 0);
+}
+
 TEST_CASE("Vulkan shader admission rejects malformed artifacts before native creation", "[vulkan][shader][failure]") {
     Fixture f;
     REQUIRE(f.Initialize().HasValue());
@@ -289,7 +301,7 @@ TEST_CASE("Vulkan device descriptor limits reject before layout creation", "[vul
     f.Prepare();
     const auto cost = f.runtime.QueryGraphicsPipelineMemoryCost(f.descriptor, f.vertex, f.fragment);
     REQUIRE(cost.HasError());
-    CHECK(cost.ErrorValue().code == VulkanBackendErrors::ResourceUnsupported.code);
+    CHECK(cost.ErrorValue().code.Value() == VulkanBackendErrors::ResourceUnsupported.code.Value());
     CHECK(f.state.layouts == 0);
     CHECK(f.state.pipelines == 0);
 }
@@ -303,7 +315,9 @@ TEST_CASE("Vulkan pipeline native failures release partial native objects", "[vu
     SECTION("layout failure") {
         f.state.layoutResult = VK_ERROR_OUT_OF_HOST_MEMORY;
     }
-    CHECK(f.Pipeline().HasError());
+    const auto pipeline = f.Pipeline();
+    REQUIRE(pipeline.HasError());
+    CHECK(pipeline.ErrorValue().message.find("VkResult") != std::string::npos);
     CHECK(f.state.destroyedPipelines == f.state.pipelines);
     if (f.state.layoutResult == VK_SUCCESS)
         CHECK(f.state.destroyedLayouts == f.state.layouts);
