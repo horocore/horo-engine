@@ -141,6 +141,7 @@ namespace Horo::Runtime::Ui {
     struct UiLocalizedArgument final {
         std::string name;
         UiLocalizedArgumentValue value;
+        [[nodiscard]] auto operator<=>(const UiLocalizedArgument &) const noexcept = default;
     };
 
     /** @brief Missing-translation behavior declared by authored Runtime UI data. */
@@ -198,6 +199,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] std::string_view FallbackText() const noexcept;
         /** @brief Returns the declared missing-translation behavior. @return Explicit failure policy. */
         [[nodiscard]] UiLocalizedTextFailurePolicy FailurePolicy() const noexcept;
+        /** @brief Compares authored reference semantics; no resolved text or catalog generation participates. */
+        [[nodiscard]] auto operator<=>(const UiLocalizedText &) const noexcept = default;
 
     private:
         UiLocalizedText(UiMessageKey key, std::vector<UiLocalizedArgument> arguments, std::string fallbackText,

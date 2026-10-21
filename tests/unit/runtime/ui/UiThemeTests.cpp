@@ -161,6 +161,23 @@ namespace Horo::Runtime::Ui {
             REQUIRE(published.Value().render.Commands().size() == 2);
         }
 
+        TEST_CASE("Authored visibility reaches actual surface paint without removing layout", "[runtime_ui][theme][authoring]") {
+            auto tree = Tree();
+            auto owner = Runtime();
+            Frame frame{tree};
+            auto root = CreateUiElement(UiElementKind::Canvas, Stable<UiElementId>(1), {}).Value();
+            auto child = CreateUiElement(UiElementKind::Panel, Stable<UiElementId>(2), Stable<UiElementId>(1)).Value();
+            child.presentation->state.visible = false;
+            frame.surfaces[0] = ProjectUiElementSurface(root, tree.Root().Value().handle).Value();
+            frame.surfaces[1] = ProjectUiElementSurface(child, tree.Find(Stable<UiElementId>(2)).Value()).Value();
+            auto published = owner.Update(tree, frame.request);
+            REQUIRE(published.HasValue());
+            CHECK(published.Value().layout.Get(frame.surfaces[1].style.element).HasValue());
+            CHECK(std::ranges::none_of(published.Value().render.Commands(), [&](const auto &command) {
+                return command.element == frame.surfaces[1].style.element && command.opacity > 0;
+            }));
+        }
+
         TEST_CASE("Theme switch updates real surface layout and paint without replacing retained elements", "[runtime_ui][theme]") {
             auto tree = Tree();
             auto owner = Runtime();

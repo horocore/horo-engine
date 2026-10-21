@@ -37,6 +37,7 @@ namespace Horo::Runtime::Ui {
         UiLayoutIntrinsicSource intrinsic;
         UiLinearColor fill;
         float opacity{1.0F};
+        bool visible{true}; /**< Authored hidden surfaces retain layout while producing zero-opacity paint. */
     };
 
     /** @brief Load-time capacities and exact ownership of one surface-component canvas. */

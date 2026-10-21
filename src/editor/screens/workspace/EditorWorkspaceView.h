@@ -9,10 +9,12 @@
 
 #include <cstdint>
 #include <imgui.h>
+#include <memory>
 #include <string>
 
 namespace Horo::Editor {
     struct GuiContentRegion;
+    class UiCanvasInspectorPanel;
 
     class EditorWorkspaceView final : public Input::IInputCaptureOwner {
     public:
@@ -62,6 +64,9 @@ namespace Horo::Editor {
                             Input::InputRouter &inputRouter, Input::InputContextToken &workspaceInputContext,
                             Extensions::EditorActivityHost *activityHost = nullptr, IEditorGuiRenderer *renderer = nullptr);
 
+        /** @brief Releases transient inspector state before the workspace composition is destroyed. */
+        ~EditorWorkspaceView();
+
         void Draw(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
                   const GuiContentRegion &contentRegion);
 
@@ -77,6 +82,7 @@ namespace Horo::Editor {
         ExtensionActivityView m_extensions;
         ExtensionRecoveryView m_extensionRecovery;
         const EditorGuiContext &m_context;
+        mutable std::unique_ptr<UiCanvasInspectorPanel> m_uiCanvasInspector;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;
         Input::InputRouter &m_inputRouter;

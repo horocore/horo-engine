@@ -411,6 +411,12 @@ namespace Horo::Runtime::Ui {
     /** @brief Public schema synonym for one borrowed core/contributed node declaration. */
     using UiAccessibilityNodeDescriptor = UiAccessibilityNodeInput;
 
+    /** @brief Validates one resolved core/contributed semantic node using the extractor's canonical rules.
+     * @param node Resolved text, owner-produced value/actions and stable element identity.
+     * @return Success or the original typed accessibility schema/value/text/state error; publishes nothing.
+     */
+    [[nodiscard]] Result<void> ValidateUiAccessibilityNodeInput(const UiAccessibilityNodeInput &node);
+
     /** @brief Caller-selected bounded semantic capacities. */
     struct UiAccessibilityLimits final {
         std::uint32_t nodes{};

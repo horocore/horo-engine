@@ -9,6 +9,7 @@
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderScene.h"
@@ -93,6 +94,8 @@ namespace Horo::Editor {
         UiCanvasUndo,
         UiCanvasRedo,
         UiCanvasSave,
+        UiCanvasApplyPresentation,
+        UiCanvasSelectTheme,
         UiCanvasReload,
         SaveScene,
         SaveSceneAs,
@@ -251,6 +254,15 @@ namespace Horo::Editor {
         UiCanvasDocumentStateId state;
         Runtime::Ui::UiElementId root;
         Runtime::Ui::UiElementId selection;
+        std::uint64_t selectionRevision{1};
+        Assets::AssetRegistryRevision inspectorAssets;
+        Runtime::Ui::RuntimeStyleGeneration inspectorStyles;
+        std::uint64_t inspectorResourcePublication{};
+        std::shared_ptr<const std::vector<UiInspectorTheme>> inspectorThemes;
+        Runtime::Ui::RuntimeStyleAssetId inspectorTheme;
+        bool inspectorStylePending{};
+        Runtime::Ui::UiDocumentRevision documentRevision;
+        std::optional<Runtime::Ui::UiDocumentElement> selectedElement;
         std::vector<UiCanvasHierarchyRow> rows;
         std::string search;
         std::optional<Error> diagnostic;
@@ -303,6 +315,13 @@ namespace Horo::Editor {
         Runtime::Ui::UiElementId uiCanvasElement;
         Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
         std::optional<UiCanvasMoveElement> uiCanvasMove;
+        std::optional<UiCanvasSetPresentation> uiCanvasPresentation;
+        std::uint64_t uiCanvasSelectionRevision{};
+        Runtime::Ui::UiDocumentRevision uiCanvasDocumentRevision;
+        Assets::AssetRegistryRevision uiCanvasInspectorAssets;
+        Runtime::Ui::RuntimeStyleGeneration uiCanvasInspectorStyles;
+        std::uint64_t uiCanvasInspectorResourcePublication{};
+        Runtime::Ui::RuntimeStyleAssetId uiCanvasTheme;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;

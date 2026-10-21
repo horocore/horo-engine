@@ -44,6 +44,10 @@ namespace Horo::Runtime::Ui::StyleInternal {
             const auto *dimension = std::get_if<UiStyleDimension>(&value);
             return dimension != nullptr && (descriptor.allowsSignedDimension || dimension->value >= 0);
         }
+        if (descriptor.category == UiStyleValueCategory::Enum) {
+            const auto *enumeration = std::get_if<UiStyleEnumValue>(&value);
+            return enumeration != nullptr && enumeration->value <= descriptor.maximumEnumValue;
+        }
         if (descriptor.category == UiStyleValueCategory::Scalar) {
             const auto *scalar = std::get_if<UiStyleScalar>(&value);
             return scalar != nullptr && scalar->value >= descriptor.minimumScalar && scalar->value <= descriptor.maximumScalar;

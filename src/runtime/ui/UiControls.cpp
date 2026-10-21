@@ -178,11 +178,16 @@ namespace Horo::Runtime::Ui {
         return base.IsValid() && base.payload.Size() < MaximumUiActionArguments;
     }
 
+    /** @copydoc UiControlScalarValues::IsValid */
+    bool UiControlScalarValues::IsValid() const noexcept {
+        return std::isfinite(minimum) && std::isfinite(maximum) && std::isfinite(step) && std::isfinite(value) && minimum <= maximum &&
+               step > 0.0 && value >= minimum && value <= maximum;
+    }
+
     /** @copydoc UiSliderControlDescriptor::IsValid */
     bool UiSliderControlDescriptor::IsValid() const noexcept {
-        return base.IsValid() && base.payload.Size() < MaximumUiActionArguments && std::isfinite(minimum) && std::isfinite(maximum) &&
-               std::isfinite(step) && std::isfinite(initialValue) && minimum <= maximum && step > 0.0 && initialValue >= minimum &&
-               initialValue <= maximum;
+        return base.IsValid() && base.payload.Size() < MaximumUiActionArguments &&
+               UiControlScalarValues{minimum, maximum, step, initialValue}.IsValid();
     }
 
     /** @copydoc UiTextInputControlDescriptor::IsValid */

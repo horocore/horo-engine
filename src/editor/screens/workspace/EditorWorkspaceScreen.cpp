@@ -290,6 +290,7 @@ namespace Horo::Editor {
                         static_cast<void>(packages_.pump(std::filesystem::path{model.projectRoot}, boundary));
                     }
                     controller_->UpdateNavigationSettingsProjection();
+                    controller_->UpdateUiCanvasResources();
                     controller_->UpdateAutosave(dt, settings_.Snapshot().settings.autoSaveIntervalMinutes);
                     controller_->UpdateExternalSceneWatch(dt);
                     controller_->UpdateGameplaySources(dt);
@@ -692,6 +693,14 @@ namespace Horo::Editor {
                 return playSceneFactory;
             }
 
+            /** @brief Compose one explicit resource lease without replacing the prior controller's capability. */
+            Result<std::unique_ptr<UiInspectorResources>> PrepareUiInspectorResources(const std::filesystem::path &root,
+                                                                                      const Assets::AssetId owner) {
+                if (const auto *factory = services_.TryGet<UiInspectorResourcesFactory>())
+                    return (*factory)(root, owner);
+                return Result<std::unique_ptr<UiInspectorResources>>::Success(nullptr);
+            }
+
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
@@ -704,6 +713,10 @@ namespace Horo::Editor {
                 auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, session.Value().ToString(), 1);
                 if (registrySource.HasError())
                     return Result<void>::Failure(registrySource.ErrorValue());
+                auto resources = PrepareUiInspectorResources(projectRoot, session.Value());
+                if (resources.HasError())
+                    return Result<void>::Failure(resources.ErrorValue());
+                auto uiInspectorResources = std::move(resources).Value();
                 auto pcgComposition = CreatePCGEditorCatalog();
                 if (pcgComposition.HasError())
                     return Result<void>::Failure(pcgComposition.ErrorValue());
@@ -712,6 +725,7 @@ namespace Horo::Editor {
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
                                                    .mutableAssetRegistry = projectServices_.assetRegistry,
+                                                   .uiInspectorResources = uiInspectorResources.get(),
                                                    .collision = {.inventory = projectServices_.collisionInventory,
                                                                  .activation = projectServices_.collisionActivation,
                                                                  .previewReceipt = projectServices_.previewCollisionReceipt},
@@ -740,6 +754,7 @@ namespace Horo::Editor {
                     controller_.reset();
                     return Result<void>::Failure(error);
                 }
+                uiInspectorResources_ = std::move(uiInspectorResources);
                 return Result<void>::Success();
             }
 
@@ -1095,6 +1110,7 @@ namespace Horo::Editor {
             WorkspacePanelServices panelServices_{};
             WorkspaceProjectServices projectServices_{};
             WorkspacePublishedRevisions publishedRevisions_{};
+            std::unique_ptr<UiInspectorResources> uiInspectorResources_;
             std::unique_ptr<EditorWorkspaceController> controller_;
             mutable WorkspaceLeaveCapture leaveCapture_;
             mutable std::optional<WorldDocumentFence> leaveWorldFence_;

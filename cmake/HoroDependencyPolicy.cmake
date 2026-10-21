@@ -294,7 +294,7 @@ horo_allow_target_dependencies(TARGET HoroExtensionSdkPackageStage DEPENDENCIES 
 horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
-    DEPENDENCIES
+    DEPENDENCIES HoroEditorUiStyleHostInternal
         HoroEditorSceneProductHost
         HoroEditorPlaySceneHostInternal
         HoroScenePhysicsHost
@@ -395,3 +395,7 @@ horo_allow_target_dependencies(TARGET HoroProjectCollisionSettings
 
 horo_allow_target_dependencies(TARGET HoroCliNavigationAdapters DEPENDENCIES HoroCliHost HoroNavigationBakeAutomation)
 horo_allow_target_dependencies(TARGET HoroMcpNavigationAdapters DEPENDENCIES HoroMcpRegistry HoroNavigationBakeAutomation)
+
+horo_allow_target_dependencies(TARGET HoroUiStyleWorkspaceApplication DEPENDENCIES HoroRuntimeUi HoroAssets)
+horo_allow_target_dependencies(TARGET HoroEditorUiStyleHostInternal
+    DEPENDENCIES HoroEditorServices HoroUiStyleWorkspaceApplication HoroPlatformImmutableFileStorage HoroPlatform HoroProjectMutationGuard)

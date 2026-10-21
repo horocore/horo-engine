@@ -336,6 +336,10 @@ namespace Horo::Runtime::Ui {
             if (auto result = ValidateDocumentEnvelope(schemaVersion, id, revision, canvases, elements, dependencies, routes);
                 result.HasError())
                 return result;
+            if (schemaVersion.minor < 3 && std::ranges::any_of(elements, [](const auto &element) {
+                return element.presentation && element.presentation->UsesAuthoringExtensions();
+            }))
+                return Failure(UiErrors::DocumentSchemaUnsupported);
             if (schemaVersion.minor < 2 && std::ranges::any_of(elements, [](const auto &element) {
                 return element.presentation.has_value();
             }))

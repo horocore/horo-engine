@@ -47,6 +47,8 @@ namespace Horo::Runtime::Ui::ThemeInternal {
             if (property.property == properties.opacity)
                 paint.opacity = std::get<UiStyleScalar>(property.value).value;
         }
+        if (!input.visible)
+            paint.opacity = 0.0F;
         if (!layout.IsValid() || !std::get<UiSolidDraw>(paint.payload).color.IsValid() || !UiStyleScalar{paint.opacity}.IsValid() ||
             paint.opacity < 0.0F || paint.opacity > 1.0F)
             return StyleInternal::Failure(UiErrors::StyleInvalid);

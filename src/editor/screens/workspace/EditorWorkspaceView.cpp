@@ -5,6 +5,7 @@
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/menu/EditorMenuPlatform.h"
+#include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
 
 #include <algorithm>
 #include <array>
@@ -345,13 +346,16 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc EditorWorkspaceView::~EditorWorkspaceView */
+    EditorWorkspaceView::~EditorWorkspaceView() = default;
+
     EditorWorkspaceView::EditorWorkspaceView(const EditorGuiContext &context, const WorkspacePanelRegistry &panelRegistry,
                                              const std::uintptr_t logoTexture, Input::InputRouter &inputRouter,
                                              Input::InputContextToken &workspaceInputContext, Extensions::EditorActivityHost *activityHost,
                                              IEditorGuiRenderer *renderer)
         : m_extensions(context, activityHost, renderer), m_extensionRecovery(context, activityHost ? &activityHost->Registry() : nullptr),
-          m_context(context), m_panelRegistry(panelRegistry), m_logoTexture(logoTexture), m_inputRouter(inputRouter),
-          m_workspaceInputContext(workspaceInputContext) {}
+          m_context(context), m_uiCanvasInspector(std::make_unique<UiCanvasInspectorPanel>()), m_panelRegistry(panelRegistry),
+          m_logoTexture(logoTexture), m_inputRouter(inputRouter), m_workspaceInputContext(workspaceInputContext) {}
 
     bool EditorWorkspaceView::EnsurePanelDragCapture() {
         if (m_panelDragCapture.IsActive()) {

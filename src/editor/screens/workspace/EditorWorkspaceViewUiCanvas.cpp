@@ -1,6 +1,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/screens/workspace/EditorWorkspaceView.h"
+#include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
 
 #include <algorithm>
 #include <array>
@@ -162,11 +163,11 @@ namespace Horo::Editor {
 
         /** @brief Clips cached rows to the visible region without rebuilding source topology during draw work. */
         void DrawHierarchy(const EditorGuiContext &context, const UiCanvasWorkspaceDocument &document,
-                           EditorWorkspaceViewCommandData &output) {
+                           EditorWorkspaceViewCommandData &output, const float height = 0) {
             const auto &tokens = Theme::GetActiveTokens();
             const float rowHeight =
                 DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Medium).minimumHeight + ImGui::GetStyle().ItemSpacing.y;
-            if (ImGui::BeginChild("hierarchy", {0, 0})) {
+            if (ImGui::BeginChild("hierarchy", {0, height})) {
                 ImGuiListClipper clipper;
                 clipper.Begin(static_cast<int>(document.rows.size()), rowHeight);
                 while (clipper.Step())
@@ -186,12 +187,31 @@ namespace Horo::Editor {
         const auto document = std::ranges::find_if(viewModel.uiCanvasDocuments, [&](const auto &entry) {
             return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
         });
-        if (document == viewModel.uiCanvasDocuments.end())
+        if (document == viewModel.uiCanvasDocuments.end()) {
+            m_uiCanvasInspector->Clear();
             return false;
+        }
         ImGui::PushID(static_cast<int>(document->identity.instance.Value()));
         DrawToolbar(m_context, *document, outCommand);
         DrawPalette(m_context, *document, outCommand);
-        DrawHierarchy(m_context, *document, outCommand);
+        const float available = ImGui::GetContentRegionAvail().x;
+        const float minimumColumn = ImGui::CalcTextSize(Text(m_context, "workspace.ui_inspector.title").c_str()).x +
+                                    Theme::GetActiveTokens().spacing.propertyRowGap * 2;
+        if (available >= minimumColumn * 2 &&
+            ImGui::BeginTable("ui_canvas_inspector_split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
+            ImGui::TableNextColumn();
+            DrawHierarchy(m_context, *document, outCommand);
+            ImGui::TableNextColumn();
+            if (ImGui::BeginChild("ui_inspector"))
+                m_uiCanvasInspector->Draw(*document, m_context, outCommand);
+            ImGui::EndChild();
+            ImGui::EndTable();
+        } else {
+            DrawHierarchy(m_context, *document, outCommand, ImGui::GetContentRegionAvail().y * 0.35F);
+            if (ImGui::BeginChild("ui_inspector"))
+                m_uiCanvasInspector->Draw(*document, m_context, outCommand);
+            ImGui::EndChild();
+        }
         ImGui::PopID();
         if (outCommand.command >= EditorWorkspaceViewCommand::UiCanvasSelect &&
             outCommand.command <= EditorWorkspaceViewCommand::UiCanvasReload) {

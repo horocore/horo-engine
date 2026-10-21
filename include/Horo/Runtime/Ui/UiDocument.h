@@ -76,7 +76,7 @@ namespace Horo::Runtime::Ui {
     };
 
     /** @brief Current schema emitted by the Runtime UI document serializer. */
-    inline constexpr UiDocumentSchemaVersion CurrentUiDocumentSchemaVersion{1, 2};
+    inline constexpr UiDocumentSchemaVersion CurrentUiDocumentSchemaVersion{1, 3};
 
     /** @brief Closed semantic presentation band persisted by a route definition. */
     enum class UiPresentationBand : std::uint8_t {
