@@ -874,10 +874,10 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> CreateEditorRenderComposition(SDL_Window &window, const EditorGuiOptions &options,
-                                                                 EditorRenderComposition &composition) {
-            Render::RenderBackendRegistry registry;
-
+        /** @brief Registers only the explicitly selected host backend and retains its native presentation parents. */
+        [[nodiscard]] Result<void> RegisterEditorPresentationBackend(SDL_Window &window, const EditorGuiOptions &options,
+                                                                     EditorRenderComposition &composition,
+                                                                     Render::RenderBackendRegistry &registry) {
             if (options.rendererBackend == "opengl") {
 #if defined(HORO_HAS_RENDER_OPENGL)
                 auto port = std::make_unique<SdlOpenGLPresentationPort>(window);
@@ -913,6 +913,59 @@ namespace Horo::Editor {
                 return Result<void>::Failure(
                     MakeEditorRendererError("editor.renderer.unsupported_backend", "Requested renderer backend is unsupported."));
             }
+            return Result<void>::Success();
+        }
+
+        /** @brief Installs the concrete GUI/viewport pair for the already selected and owned frontend. */
+        [[nodiscard]] Result<void> InstallSelectedEditorRenderers(SDL_Window &window, const EditorGuiOptions &options,
+                                                                  EditorRenderComposition &composition) {
+            if (options.rendererBackend == "opengl") {
+#if defined(HORO_HAS_RENDER_OPENGL)
+                const auto &port = static_cast<const SdlOpenGLPresentationPort &>(*composition.openGlPresentationPort);
+                auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context(), *composition.frontend);
+                auto viewportRenderer = std::make_unique<EditorViewportRendererOpenGL>(*composition.frontend);
+                if (const Result<void> initialized =
+                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
+                    initialized.HasError()) {
+                    return Result<void>::Failure(initialized.ErrorValue());
+                }
+#endif
+            } else {
+#if defined(HORO_HAS_RENDER_METAL)
+                auto &graphicsBridge = *composition.metalGraphicsBridge;
+                auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
+                auto viewportRenderer = std::make_unique<EditorViewportRendererMetal>(*composition.frontend, graphicsBridge);
+                if (const Result<void> initialized =
+                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
+                    initialized.HasError()) {
+                    return Result<void>::Failure(initialized.ErrorValue());
+                }
+#endif
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Starts explicit native readiness preparation only after the caller owns the complete frontend. */
+        [[nodiscard]] Result<void> PrepareInitialEditorPresentation(SDL_Window &window, Render::RenderFrontend &frontend) {
+            int initialWidth = 0;
+            int initialHeight = 0;
+            if (!SDL_GetWindowSizeInPixels(&window, &initialWidth, &initialHeight))
+                return Result<void>::Failure(MakeEditorRendererError("editor.renderer.extent_unavailable", SDL_GetError()));
+            if (initialWidth > 0 && initialHeight > 0) {
+                const auto prepared = frontend.PollPresentationAvailability(
+                    {static_cast<std::uint32_t>(initialWidth), static_cast<std::uint32_t>(initialHeight)});
+                if (prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+            }
+            return Result<void>::Success();
+        }
+
+        [[nodiscard]] Result<void> CreateEditorRenderComposition(SDL_Window &window, const EditorGuiOptions &options,
+                                                                 EditorRenderComposition &composition) {
+            Render::RenderBackendRegistry registry;
+
+            if (const auto registered = RegisterEditorPresentationBackend(window, options, composition, registry); registered.HasError())
+                return registered;
 
             if (const Result<void> sealed = registry.Seal(); sealed.HasError()) {
                 return Result<void>::Failure(sealed.ErrorValue());
@@ -937,40 +990,11 @@ namespace Horo::Editor {
             }
             composition.frontend = std::move(frontendResult).Value();
 
-            int initialWidth = 0;
-            int initialHeight = 0;
-            if (!SDL_GetWindowSizeInPixels(&window, &initialWidth, &initialHeight))
-                return Result<void>::Failure(MakeEditorRendererError("editor.renderer.extent_unavailable", SDL_GetError()));
-            if (initialWidth > 0 && initialHeight > 0) {
-                const auto prepared = composition.frontend->PollPresentationAvailability(
-                    {static_cast<std::uint32_t>(initialWidth), static_cast<std::uint32_t>(initialHeight)});
-                if (prepared.HasError())
-                    return Result<void>::Failure(prepared.ErrorValue());
-            }
+            if (const auto prepared = PrepareInitialEditorPresentation(window, *composition.frontend); prepared.HasError())
+                return prepared;
 
-            if (options.rendererBackend == "opengl") {
-#if defined(HORO_HAS_RENDER_OPENGL)
-                const auto &port = static_cast<const SdlOpenGLPresentationPort &>(*composition.openGlPresentationPort);
-                auto guiRenderer = std::make_unique<EditorGuiRendererOpenGL>(window, port.Context(), *composition.frontend);
-                auto viewportRenderer = std::make_unique<EditorViewportRendererOpenGL>(*composition.frontend);
-                if (const Result<void> initialized =
-                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
-                    initialized.HasError()) {
-                    return Result<void>::Failure(initialized.ErrorValue());
-                }
-#endif
-            } else {
-#if defined(HORO_HAS_RENDER_METAL)
-                auto &graphicsBridge = *composition.metalGraphicsBridge;
-                auto guiRenderer = std::make_unique<EditorGuiRendererMetal>(window, graphicsBridge, *composition.frontend);
-                auto viewportRenderer = std::make_unique<EditorViewportRendererMetal>(*composition.frontend, graphicsBridge);
-                if (const Result<void> initialized =
-                        InstallEditorRenderers(composition, std::move(guiRenderer), std::move(viewportRenderer));
-                    initialized.HasError()) {
-                    return Result<void>::Failure(initialized.ErrorValue());
-                }
-#endif
-            }
+            if (const auto installed = InstallSelectedEditorRenderers(window, options, composition); installed.HasError())
+                return installed;
 
             if (const Result<void> attached = composition.frontend->AttachStaticMeshPassExecutor(*composition.viewportRenderer);
                 attached.HasError()) {
@@ -2317,6 +2341,15 @@ namespace Horo::Editor {
         return 0;
     }
 
+    /** @brief Retires presentation before publishing the session outcome or permitting a renderer restart. */
+    static void RetireEditorSessionPresentation(EditorPresentation &presentation, EditorSessionResult &session) {
+        bool allowRestart = session.rendererRestart.has_value();
+        session.healthy =
+            RetireEditorPresentation(presentation.window, presentation.composition, presentation.textures, allowRestart) && session.healthy;
+        if (!allowRestart)
+            session.rendererRestart.reset();
+    }
+
     // ── public entry ─────────────────────────────────────────────────────────
 
     /** @copydoc RunEditorGuiApp */
@@ -2375,11 +2408,7 @@ namespace Horo::Editor {
             {*prepared, *presentation->window, ImGui::GetIO(), presentation->fonts, presentation->textures, presentation->composition,
              editorTelemetry, *structuredLogStore, buildOutputStore, operationStore, updateHost, std::move(shaderCompiler)});
 
-        bool allowRestart = session.rendererRestart.has_value();
-        session.healthy = RetireEditorPresentation(presentation->window, presentation->composition, presentation->textures, allowRestart) &&
-                          session.healthy;
-        if (!allowRestart)
-            session.rendererRestart.reset();
+        RetireEditorSessionPresentation(*presentation, session);
         saveTelemetry.reset();
         return CompleteEditorSession(*prepared, session, argv[0]);
     }
