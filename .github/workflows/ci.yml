@@ -106,7 +106,6 @@ jobs:
       CC: gcc
       CXX: g++
       HORO_COMPILER_LAUNCHER: ccache
-      VK_DRIVER_FILES: /usr/share/vulkan/icd.d/lvp_icd.x86_64.json
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
@@ -122,6 +121,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends libvulkan1 mesa-vulkan-drivers vulkan-tools vulkan-validationlayers
+      - name: Select installed lavapipe ICD explicitly
+        run: |
+          selected_icd="$(python3 scripts/select_lavapipe_icd.py)"
+          printf 'VK_DRIVER_FILES=%s\n' "$selected_icd" >> "$GITHUB_ENV"
       - name: Record selected native driver provenance
         run: |
           mkdir -p build/vulkan-command-evidence

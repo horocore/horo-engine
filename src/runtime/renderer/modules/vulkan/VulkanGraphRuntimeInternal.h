@@ -15,12 +15,20 @@ namespace Horo::Render::Detail {
         bool texture{false};
     };
 
+    /** @brief Exact native ownership role and discarded-access policy for a single barrier. */
+    struct VulkanGraphBarrierOptions {
+        std::uint32_t sourceFamily{VK_QUEUE_FAMILY_IGNORED};
+        std::uint32_t destinationFamily{VK_QUEUE_FAMILY_IGNORED};
+        bool release{false};
+        bool acquire{false};
+        bool discardPriorAccess{false};
+    };
+
     /** @brief Creates one native dependency without native side effects. */
     [[nodiscard]] Result<VulkanGraphBarrier> TranslateVulkanGraphBarrier(const VulkanGraphResource &resource,
                                                                          const RenderGraphLogicalState &before,
-                                                                         const RenderGraphLogicalState &after, std::uint32_t sourceFamily,
-                                                                         std::uint32_t destinationFamily, bool release, bool acquire,
-                                                                         bool discardPriorAccess);
+                                                                         const RenderGraphLogicalState &after,
+                                                                         const VulkanGraphBarrierOptions &options = {});
 
     struct VulkanGraphRuntime::Impl {
         /** @brief Reserves the fixed graph and canonical retention envelope before any frame admission. */
@@ -56,7 +64,9 @@ namespace Horo::Render::Detail {
             PFN_vkCmdSetViewport viewport{};
             PFN_vkCmdSetScissor scissor{};
             PFN_vkCmdDrawIndexed drawIndexed{};
-        } native;
+        };
+
+        Dispatch native;
 
         struct MaterialDraw {
             VulkanMaterialMesh mesh;
@@ -93,6 +103,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> InitialStates(const RenderGraphExecutionRequest &request);
         [[nodiscard]] Result<void> PreparePass(const RenderGraphExecutionRequest &request, std::size_t index,
                                                VulkanCommandRetention &retention);
+        /** @brief Appends one exact transition and commits only its scratch logical state. */
+        [[nodiscard]] Result<void> AppendTransition(const RenderGraphTransition &transition, bool release, bool acquire);
         [[nodiscard]] Result<void> PrepareTransitions(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                                       bool releases);
         /** @brief Validates exact foreign acquisition/final-state obligations before generic state initialization. */
@@ -106,6 +118,10 @@ namespace Horo::Render::Detail {
         void EncodeDepthAttachment(VkCommandBuffer command, const RenderGraphDepthAttachment &depth) const noexcept;
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphWorkload &workload, RenderQueueId queue);
         [[nodiscard]] Result<void> Record(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
+        /** @brief Records one previously admitted finite native buffer copy. */
+        void EncodeCopy(VkCommandBuffer command, const RenderGraphBufferCopy &operation) const noexcept;
+        /** @brief Records one previously admitted whole-array native color attachment. */
+        void EncodeColor(VkCommandBuffer command, const RenderGraphColorAttachment &operation) const noexcept;
         void Encode(VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept;
         void Barriers(VkCommandBuffer command, RenderGraphExecutionRange range) const noexcept;
         [[nodiscard]] Result<void> ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const;

@@ -5,6 +5,7 @@ struct MaterialPacket {
 
     explicit MaterialPacket(NativeGraphFixture &fixture, const bool layered = false) {
         fixture.resourceState.state.bufferRequirements.size = 256;
+        fixture.resourceState.state.imageRequirements.size = 8 * 8 * 4;
         auto &resources = fixture.resources;
         const std::array<std::byte, sizeof(MeshVertex) * 3> bytes{};
         const auto buffer = [&](const RenderBufferUsage usage) {

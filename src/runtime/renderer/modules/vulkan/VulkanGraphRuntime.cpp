@@ -25,11 +25,17 @@ namespace Horo::Render::Detail {
     VulkanGraphRuntime::VulkanGraphRuntime() : impl_(std::make_unique<Impl>()) {}
 
     VulkanGraphRuntime::~VulkanGraphRuntime() {
-        if (impl_->owner != std::thread::id{}) {
-            auto closing = BeginShutdown();
-            auto drained = PollDrain();
-            if (closing.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
-                std::terminate();
+        try {
+            if (impl_->owner != std::thread::id{}) {
+                auto closing = BeginShutdown();
+                auto drained = PollDrain();
+                if (closing.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
+            }
+
+        } catch (...) {
+            // Destruction cannot release native owners without proven terminal retirement.
+            std::terminate();
         }
     }
 
@@ -90,9 +96,9 @@ namespace Horo::Render::Detail {
                 MakeError(VulkanBackendErrors::EntryPointMissing, "Graph execution requires Vulkan1.3 core command dispatch."));
         if (const auto storage = impl_->ReserveStorage(queues, frames); storage.HasError())
             return storage;
-        auto initialized = impl_->commands.Initialize(device, queues, RenderGraphSubmissionLimits::MaximumSubmissions, timelineDifference,
-                                                      deviceIncarnation, resolver);
-        if (initialized.HasError())
+        if (auto initialized = impl_->commands.Initialize(device, queues, RenderGraphSubmissionLimits::MaximumSubmissions,
+                                                          timelineDifference, deviceIncarnation, resolver);
+            initialized.HasError())
             return initialized;
         impl_->native = dispatch;
         impl_->LoadMaterialDispatch(device, resolver);
@@ -138,18 +144,15 @@ namespace Horo::Render::Detail {
         });
         if (free == impl_->retention.end())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
-        auto captured = impl_->resources->CaptureGraphResources(request, impl_->bindings, *free);
-        if (captured.HasError()) {
+        if (auto captured = impl_->resources->CaptureGraphResources(request, impl_->bindings, *free); captured.HasError()) {
             free->resources.clear();
             return captured;
         }
-        auto prepared = impl_->Prepare(request, *free);
-        if (prepared.HasError()) {
+        if (auto prepared = impl_->Prepare(request, *free); prepared.HasError()) {
             free->resources.clear();
             return prepared;
         }
-        auto recorded = impl_->Record(request, *free);
-        if (recorded.HasError()) {
+        if (auto recorded = impl_->Record(request, *free); recorded.HasError()) {
             impl_->Abort();
             free->resources.clear();
             return recorded;
@@ -164,9 +167,8 @@ namespace Horo::Render::Detail {
             return access;
         if (!frame.IsValid() || frame != impl_->frame)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
-        for (auto &submission : impl_->submissions) {
-            auto accepted = impl_->commands.Submit(submission.ticket, submission.value);
-            if (accepted.HasError()) {
+        for (const auto &submission : impl_->submissions) {
+            if (auto accepted = impl_->commands.Submit(submission.ticket, submission.value); accepted.HasError()) {
                 impl_->failedSubmission = true;
                 impl_->Abort();
                 return accepted;

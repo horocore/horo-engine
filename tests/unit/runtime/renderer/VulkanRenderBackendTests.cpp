@@ -36,7 +36,7 @@ namespace {
         REQUIRE(state.instanceRequest.apiVersion == VulkanApiVersion{1, 3, 0});
         REQUIRE(state.instanceRequest.enableValidation);
         REQUIRE(state.instanceRequest.enabledExtensions ==
-                std::vector<std::string>{"VK_EXT_debug_utils", "VK_KHR_surface", "VK_KHR_xcb_surface"});
+                std::vector<std::string>{"VK_EXT_debug_utils", "VK_KHR_surface", PresentationExtension});
         REQUIRE(state.deviceRequest.adapter == RenderAdapterId{"gpu-a"});
         REQUIRE(state.deviceRequest.graphicsQueueFamily == 0);
         REQUIRE(state.deviceRequest.presentationQueueFamily == 0);

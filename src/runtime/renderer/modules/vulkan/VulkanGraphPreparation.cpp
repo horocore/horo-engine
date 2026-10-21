@@ -11,8 +11,10 @@ namespace Horo::Render::Detail {
         const auto imported = request.graph.ImportedStates();
         if (imported.size() != graphResources.size())
             return Result<void>::Failure(Unsupported("Vulkan graph imports require one exact initial-state record per resident resource."));
-        std::fill(used.begin(), used.end(), false);
-        std::fill(discarded.begin(), discarded.end(), false);
+        for (std::vector<bool>::reference flag : used)
+            flag = false;
+        for (std::vector<bool>::reference flag : discarded)
+            flag = false;
         for (std::size_t index = 0; index < graphResources.size(); ++index) {
             const auto &resource = graphResources[index];
             if (resource.id.value != index + 1 || bindings[index].state == nullptr)
@@ -33,9 +35,7 @@ namespace Horo::Render::Detail {
                         Invalid("Imported generation state differs from the native successfully submitted state."));
                 if (!states[index].hasNativeState && !states[index].contentsDefined)
                     return Result<void>::Failure(Invalid("Fresh undefined native storage cannot claim preserved imported contents."));
-                auto translated = TranslateVulkanGraphBarrier(bindings[index], initial->state, initial->state, VK_QUEUE_FAMILY_IGNORED,
-                                                              VK_QUEUE_FAMILY_IGNORED, false, false, false);
-                if (translated.HasError())
+                if (auto translated = TranslateVulkanGraphBarrier(bindings[index], initial->state, initial->state); translated.HasError())
                     return Result<void>::Failure(std::move(translated).ErrorValue());
                 states[index].logical = initial->state;
             }
@@ -78,32 +78,36 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::AppendTransition */
+    Result<void> VulkanGraphRuntime::Impl::AppendTransition(const RenderGraphTransition &transition, const bool release,
+                                                            const bool acquire) {
+        const auto index = transition.resource.value - 1;
+        const auto *source = Queue(transition.oldState.queue);
+        const auto *destination = Queue(transition.newState.queue);
+        if (destination == nullptr || ((release || acquire) && source == nullptr))
+            return Result<void>::Failure(Unsupported("Cross-graph queue ownership lacks matched native release evidence."));
+        const auto sourceFamily = release || acquire ? source->family : VK_QUEUE_FAMILY_IGNORED;
+        const auto destinationFamily = release || acquire ? destination->family : VK_QUEUE_FAMILY_IGNORED;
+        if (!release && states[index].logical != transition.oldState)
+            return Result<void>::Failure(Invalid("Compiled transition source differs from exact tracked graph state."));
+        const bool priorDiscardedAccess = discarded[index] && !used[index] && bindings[index].state->hasNativeState;
+        auto translated =
+            TranslateVulkanGraphBarrier(bindings[index], transition.oldState, transition.newState,
+                                        VulkanGraphBarrierOptions{sourceFamily, destinationFamily, release, acquire, priorDiscardedAccess});
+        if (translated.HasError())
+            return Result<void>::Failure(std::move(translated).ErrorValue());
+        if (barriers.size() == barriers.capacity())
+            return Result<void>::Failure(Invalid("Prepared native graph barrier capacity was exceeded."));
+        barriers.push_back(translated.Value());
+        if (!release)
+            states[index].logical = transition.newState;
+        return Result<void>::Success();
+    }
+
     /** @brief Preserves matched release/acquire layout and family evidence without synthesizing external release work. */
     Result<void> VulkanGraphRuntime::Impl::PrepareTransitions(const RenderGraphExecutionRequest &request,
                                                               const RenderGraphExecutionPass &pass, const bool releases) {
         const auto &graph = request.graph;
-        const auto append = [&](const RenderGraphTransition &transition, const bool release, const bool acquire) -> Result<void> {
-            const auto index = transition.resource.value - 1;
-            const auto *source = Queue(transition.oldState.queue);
-            const auto *destination = Queue(transition.newState.queue);
-            if (destination == nullptr || ((release || acquire) && source == nullptr))
-                return Result<void>::Failure(Unsupported("Cross-graph queue ownership lacks matched native release evidence."));
-            const auto sourceFamily = release || acquire ? source->family : VK_QUEUE_FAMILY_IGNORED;
-            const auto destinationFamily = release || acquire ? destination->family : VK_QUEUE_FAMILY_IGNORED;
-            if (!release && states[index].logical != transition.oldState)
-                return Result<void>::Failure(Invalid("Compiled transition source differs from exact tracked graph state."));
-            const bool priorDiscardedAccess = discarded[index] && !used[index] && bindings[index].state->hasNativeState;
-            auto translated = TranslateVulkanGraphBarrier(bindings[index], transition.oldState, transition.newState, sourceFamily,
-                                                          destinationFamily, release, acquire, priorDiscardedAccess);
-            if (translated.HasError())
-                return Result<void>::Failure(std::move(translated).ErrorValue());
-            if (barriers.size() == barriers.capacity())
-                return Result<void>::Failure(Invalid("Prepared native graph barrier capacity was exceeded."));
-            barriers.push_back(translated.Value());
-            if (!release)
-                states[index].logical = transition.newState;
-            return Result<void>::Success();
-        };
         if (releases) {
             for (const auto &transfer : graph.ReleaseTransfers().subspan(pass.releaseTransfers.offset, pass.releaseTransfers.count)) {
                 const auto transition = std::ranges::find_if(graph.Transitions(), [&](const RenderGraphTransition &candidate) {
@@ -112,7 +116,7 @@ namespace Horo::Render::Detail {
                 });
                 if (transition == graph.Transitions().end())
                     return Result<void>::Failure(Invalid("Ownership release has no exact matching state transition."));
-                if (auto added = append(*transition, true, false); added.HasError())
+                if (auto added = AppendTransition(*transition, true, false); added.HasError())
                     return added;
             }
         } else {
@@ -122,7 +126,7 @@ namespace Horo::Render::Detail {
                                         [&](const RenderGraphOwnershipTransfer &transfer) {
                     return transfer.resource == transition.resource;
                 });
-                if (auto added = append(transition, false, acquire); added.HasError())
+                if (auto added = AppendTransition(transition, false, acquire); added.HasError())
                     return added;
             }
         }
@@ -137,8 +141,8 @@ namespace Horo::Render::Detail {
         const auto usages = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
         for (const auto &usage : usages) {
             const auto resourceIndex = usage.resource.value - 1;
-            const auto &actual = *bindings[resourceIndex].state;
-            if (!used[resourceIndex] && actual.hasNativeState && actual.logical.queue != pass.queue)
+            if (const auto &actual = *bindings[resourceIndex].state;
+                !used[resourceIndex] && actual.hasNativeState && actual.logical.queue != pass.queue)
                 return Result<void>::Failure(
                     Unsupported("Cross-graph queue change requires matched previous release evidence, which this import does not carry."));
             if (usage.access != RenderGraphAccess::Write && !states[resourceIndex].contentsDefined)
@@ -163,7 +167,7 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(Invalid("Graph use has no exact native ownership/state transition."));
             states[resourceIndex].hasNativeState = true;
             used[resourceIndex] = true;
-            updates.push_back(Update{bindings[resourceIndex].state, states[resourceIndex]});
+            updates.emplace_back(bindings[resourceIndex].state, states[resourceIndex]);
         }
         prepared.after.offset = barriers.size();
         if (auto transitions = PrepareTransitions(request, pass, true); transitions.HasError())

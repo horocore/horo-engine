@@ -43,10 +43,16 @@ namespace Horo::Render {
                 : runtime_(std::move(runtime)), presentationLease_(std::move(presentationLease)) {}
 
             ~MetalRenderBackend() override {
-                const auto begun = BeginShutdown();
-                const auto drained = PollDrain();
-                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                try {
+                    const auto begun = BeginShutdown();
+                    const auto drained = PollDrain();
+                    if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                        std::terminate();
+
+                } catch (...) {
+                    // Destruction cannot release native owners without proven terminal retirement.
                     std::terminate();
+                }
             }
 
             /** @copydoc IRenderBackend::Initialize */

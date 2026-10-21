@@ -46,8 +46,7 @@ namespace Horo::Render::Detail {
         const auto &before = *resource.state;
         if (auto valid = ValidateMaterialPriorState(before, submission.queue, requireContents); valid.HasError())
             return valid;
-        auto barrier = TranslateVulkanGraphBarrier(resource, before.hasNativeState ? before.logical : RenderGraphLogicalState{}, next,
-                                                   VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, false, false, false);
+        auto barrier = TranslateVulkanGraphBarrier(resource, before.hasNativeState ? before.logical : RenderGraphLogicalState{}, next);
         if (barrier.HasError())
             return Result<void>::Failure(barrier.ErrorValue());
         barriers.push_back(barrier.Value());

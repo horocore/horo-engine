@@ -138,12 +138,18 @@ namespace Horo::Render {
 
             /** @brief Releases a remaining OpenGL context as a lifecycle fallback. */
             ~OpenGLRenderBackend() override {
-                const auto begun = BeginShutdown();
-                const auto drained = PollDrain();
-                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                try {
+                    const auto begun = BeginShutdown();
+                    if (const auto drained = PollDrain();
+                        begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                        std::terminate();
+                    DestroyContext();
+                    ownerThread_ = {};
+
+                } catch (...) {
+                    // Destruction cannot release native owners without proven terminal retirement.
                     std::terminate();
-                DestroyContext();
-                ownerThread_ = {};
+                }
             }
 
             OpenGLRenderBackend(const OpenGLRenderBackend &) = delete;
@@ -416,7 +422,7 @@ namespace Horo::Render {
                         MakeError(OpenGLBackendErrors::ResourceCreationFailed,
                                   "Native lifetime storage or a recycled native identity remains owned by pending retirement."));
                 try {
-                    nativeLifetimes_.try_emplace({kind, identity}, NativeLifetimeRecord{std::move(lifetime)});
+                    nativeLifetimes_.try_emplace({kind, identity}, std::move(lifetime));
                 } catch (const std::bad_alloc &) {
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed,
                                                            "Native lifetime tracking allocation failed before upload."));
@@ -444,7 +450,7 @@ namespace Horo::Render {
                 const auto count = std::min(std::size_t{64}, nativeLifetimes_.size());
                 for (std::size_t examined = 0; examined < count && !nativeLifetimes_.empty(); ++examined) {
                     nativeLifetimeCursor_ = current->first;
-                    auto &record = current->second;
+                    const auto &record = current->second;
                     bool complete = false;
                     if (record.retiring) {
                         if (record.fence == 0)

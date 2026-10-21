@@ -210,6 +210,20 @@ namespace Horo::Tests::RenderFrontendTesting {
             if (!capabilities_.supportsSubmissionObservation)
                 return IRenderBackend::ObserveSubmission(wait);
             ++lifecycleState.submissionObservations;
+            switch (lifecycleState.observationFailure) {
+                case ObservationFailure::StandardException:
+                    throw InjectedBackendException{"Injected observation failure."};
+                case ObservationFailure::ForeignException:
+                    throw ObservationFailure::ForeignException;
+                case ObservationFailure::TypedError:
+                    return Result<bool>::Failure(Error{ErrorCode{"render.test.observation"},
+                                                       ErrorDomainId{"horo.render.test"},
+                                                       ErrorSeverity::Error,
+                                                       "Injected typed observation failure.",
+                                                       {}});
+                case ObservationFailure::None:
+                    break;
+            }
             return Result<bool>::Success(!lifecycleState.drainPending);
         }
 

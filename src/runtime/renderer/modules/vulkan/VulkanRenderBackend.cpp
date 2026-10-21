@@ -47,10 +47,16 @@ namespace Horo::Render {
                   commandPort_(dynamic_cast<IVulkanCommandPort *>(&runtimePort)), lease_(std::move(lease)) {}
 
             ~VulkanRenderBackend() override {
-                const auto begun = BeginShutdown();
-                const auto drained = PollDrain();
-                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                try {
+                    const auto begun = BeginShutdown();
+                    const auto drained = PollDrain();
+                    if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                        std::terminate();
+
+                } catch (...) {
+                    // Destruction cannot release native owners without proven terminal retirement.
                     std::terminate();
+                }
             }
 
             const RenderBackendCapabilities &Capabilities() const noexcept override {
@@ -253,6 +259,7 @@ namespace Horo::Render {
 
         private:
             void CommitInitialization(const bool presentsToWindow) noexcept {
+                using enum RenderCapability;
                 // Surface/adapter admission does not implement WSI acquisition or presentation.
                 capabilities_.presentsToWindow = false;
                 resourceBackend_ = resourcePort_ != nullptr ? resourcePort_->ResourceBackend() : nullptr;
@@ -261,12 +268,11 @@ namespace Horo::Render {
                 capabilities_.supportsExplicitMaterialSubmissions = commandPort_ && commandPort_->SupportsMaterialCommands();
                 capabilities_.supportsSubmissionObservation = commandPort_ != nullptr;
                 capabilities_.support = resourcePort_ != nullptr ? resourcePort_->ResourceCapabilities() : RenderCapabilitySnapshot{};
-                capabilities_.supportsBufferResources = capabilities_.support.features.Supports(RenderCapability::BufferResources);
-                capabilities_.supportsMeshResources = capabilities_.support.features.Supports(RenderCapability::MeshResources);
-                capabilities_.supportsTextureResources = capabilities_.support.features.Supports(RenderCapability::TextureResources);
-                capabilities_.supportsRenderTargetResources =
-                    capabilities_.support.features.Supports(RenderCapability::RenderTargetResources);
-                capabilities_.supportsOffscreenTargets = capabilities_.support.features.Supports(RenderCapability::OffscreenTargets);
+                capabilities_.supportsBufferResources = capabilities_.support.features.Supports(BufferResources);
+                capabilities_.supportsMeshResources = capabilities_.support.features.Supports(MeshResources);
+                capabilities_.supportsTextureResources = capabilities_.support.features.Supports(TextureResources);
+                capabilities_.supportsRenderTargetResources = capabilities_.support.features.Supports(RenderTargetResources);
+                capabilities_.supportsOffscreenTargets = capabilities_.support.features.Supports(OffscreenTargets);
                 requirePresentation_ = presentsToWindow;
             }
 

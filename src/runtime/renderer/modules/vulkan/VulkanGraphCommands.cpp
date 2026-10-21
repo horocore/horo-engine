@@ -1,6 +1,7 @@
 #include "VulkanGraphRuntimeInternal.h"
 
 #include <algorithm>
+#include <type_traits>
 
 namespace Horo::Render::Detail {
 #include "VulkanGraphDepthAttachment.inl"
@@ -16,10 +17,11 @@ namespace Horo::Render::Detail {
         if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
             const auto &source = bindings[copy->source.value - 1];
             const auto &destination = bindings[copy->destination.value - 1];
-            const auto fits = [](const std::size_t offset, const std::size_t count, const std::size_t size) {
+            if (const auto fits =
+                    [](const std::size_t offset, const std::size_t count, const std::size_t size) {
                 return offset <= size && count <= size - offset;
             };
-            if (source.kind != RenderGraphResourceKind::Buffer || destination.kind != RenderGraphResourceKind::Buffer ||
+                source.kind != RenderGraphResourceKind::Buffer || destination.kind != RenderGraphResourceKind::Buffer ||
                 source.buffer == VK_NULL_HANDLE || destination.buffer == VK_NULL_HANDLE || source.buffer == destination.buffer ||
                 copy->byteCount == 0 || !HasBufferUsage(source.bufferDescriptor.usage, RenderBufferUsage::CopySource) ||
                 !HasBufferUsage(destination.bufferDescriptor.usage, RenderBufferUsage::CopyDestination) ||
@@ -34,11 +36,11 @@ namespace Horo::Render::Detail {
         }
         if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
             const auto &binding = bindings[color->texture.value - 1];
-            const auto *nativeQueue = Queue(queue);
-            if (nativeQueue == nullptr || !nativeQueue->supportsGraphics || binding.colorView == VK_NULL_HANDLE ||
-                binding.kind != RenderGraphResourceKind::Texture || !color->operations.IsValid() ||
-                color->operations.storeOperation != AttachmentStoreOperation::Store ||
-                color->operations.loadOperation == AttachmentLoadOperation::DontCare)
+            if (const auto *nativeQueue = Queue(queue); nativeQueue == nullptr || !nativeQueue->supportsGraphics ||
+                                                        binding.colorView == VK_NULL_HANDLE ||
+                                                        binding.kind != RenderGraphResourceKind::Texture || !color->operations.IsValid() ||
+                                                        color->operations.storeOperation != AttachmentStoreOperation::Store ||
+                                                        color->operations.loadOperation == AttachmentLoadOperation::DontCare)
                 return Result<void>::Failure(Unsupported(
                     "Color work requires an admitted graphics queue and whole single-sample color attachment with preserved store."));
             auto &state = states[color->texture.value - 1];
@@ -66,46 +68,58 @@ namespace Horo::Render::Detail {
         }
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::EncodeCopy */
+    void VulkanGraphRuntime::Impl::EncodeCopy(const VkCommandBuffer command, const RenderGraphBufferCopy &operation) const noexcept {
+        const VkBufferCopy2 region{.sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
+                                   .srcOffset = operation.sourceOffset,
+                                   .dstOffset = operation.destinationOffset,
+                                   .size = operation.byteCount};
+        const VkCopyBufferInfo2 commandInfo{.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
+                                            .srcBuffer = bindings[operation.source.value - 1].buffer,
+                                            .dstBuffer = bindings[operation.destination.value - 1].buffer,
+                                            .regionCount = 1,
+                                            .pRegions = &region};
+        native.copy(command, &commandInfo);
+    }
+
+    /** @copydoc VulkanGraphRuntime::Impl::EncodeColor */
+    void VulkanGraphRuntime::Impl::EncodeColor(const VkCommandBuffer command, const RenderGraphColorAttachment &operation) const noexcept {
+        const auto &binding = bindings[operation.texture.value - 1];
+        const auto &clear = operation.operations.clearColor;
+        const VkRenderingAttachmentInfo attachment{.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
+                                                   .imageView = binding.colorView,
+                                                   .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                                                   .loadOp = operation.operations.loadOperation == AttachmentLoadOperation::Load
+                                                                 ? VK_ATTACHMENT_LOAD_OP_LOAD
+                                                                 : VK_ATTACHMENT_LOAD_OP_CLEAR,
+                                                   .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+                                                   .clearValue = {.color = {{clear.red, clear.green, clear.blue, clear.alpha}}}};
+        const VkRenderingInfo rendering{.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
+                                        .renderArea = {.offset = {0, 0},
+                                                       .extent = {binding.textureDescriptor.extent.width,
+                                                                  binding.textureDescriptor.extent.height}},
+                                        .layerCount = binding.textureDescriptor.layerCount,
+                                        .colorAttachmentCount = 1,
+                                        .pColorAttachments = &attachment};
+        native.beginRendering(command, &rendering);
+        native.endRendering(command);
+    }
+
     /** @brief Encodes only a workload already proven against exact resident descriptors. */
     void VulkanGraphRuntime::Impl::Encode(const VkCommandBuffer command, const RenderGraphWorkload &workload) const noexcept {
-        if (std::holds_alternative<RenderGraphMultiview>(workload)) {
-            multiview.Encode(command);
-            return;
-        }
-        if (const auto *depth = std::get_if<RenderGraphDepthAttachment>(&workload)) {
-            EncodeDepthAttachment(command, *depth);
-        } else if (const auto *copy = std::get_if<RenderGraphBufferCopy>(&workload)) {
-            const VkBufferCopy2 region{.sType = VK_STRUCTURE_TYPE_BUFFER_COPY_2,
-                                       .srcOffset = copy->sourceOffset,
-                                       .dstOffset = copy->destinationOffset,
-                                       .size = copy->byteCount};
-            const VkCopyBufferInfo2 operation{.sType = VK_STRUCTURE_TYPE_COPY_BUFFER_INFO_2,
-                                              .srcBuffer = bindings[copy->source.value - 1].buffer,
-                                              .dstBuffer = bindings[copy->destination.value - 1].buffer,
-                                              .regionCount = 1,
-                                              .pRegions = &region};
-            native.copy(command, &operation);
-        } else if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
-            const auto &binding = bindings[color->texture.value - 1];
-            const auto &clear = color->operations.clearColor;
-            const VkRenderingAttachmentInfo attachment{.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                                                       .imageView = binding.colorView,
-                                                       .imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                                                       .loadOp = color->operations.loadOperation == AttachmentLoadOperation::Load
-                                                                     ? VK_ATTACHMENT_LOAD_OP_LOAD
-                                                                     : VK_ATTACHMENT_LOAD_OP_CLEAR,
-                                                       .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
-                                                       .clearValue = {.color = {{clear.red, clear.green, clear.blue, clear.alpha}}}};
-            const VkRenderingInfo operation{.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                                            .renderArea = {.offset = {0, 0},
-                                                           .extent = {binding.textureDescriptor.extent.width,
-                                                                      binding.textureDescriptor.extent.height}},
-                                            .layerCount = binding.textureDescriptor.layerCount,
-                                            .colorAttachmentCount = 1,
-                                            .pColorAttachments = &attachment};
-            native.beginRendering(command, &operation);
-            native.endRendering(command);
-        }
+        std::visit([this, command]<typename Operation>(const Operation &operation) noexcept {
+            if constexpr (std::is_same_v<Operation, RenderGraphMultiview>) {
+                multiview.Encode(command);
+            } else if constexpr (std::is_same_v<Operation, RenderGraphDepthAttachment>) {
+                EncodeDepthAttachment(command, operation);
+            } else if constexpr (std::is_same_v<Operation, RenderGraphBufferCopy>) {
+                EncodeCopy(command, operation);
+            } else if constexpr (std::is_same_v<Operation, RenderGraphColorAttachment>) {
+                EncodeColor(command, operation);
+            } else if constexpr (!std::is_same_v<Operation, std::monostate>) {
+                HORO_INVARIANT_MSG(false, "Unsupported native workload passed validation.");
+            }
+        }, workload);
     }
 
     /** @brief Copies submission ownership into preallocated tickets; no graph/request views survive admission. */
@@ -115,8 +129,7 @@ namespace Horo::Render::Detail {
             if (reserved.HasError())
                 return Result<void>::Failure(std::move(reserved).ErrorValue());
             submission.ticket = reserved.Value();
-            auto retained = commands.Retain(submission.ticket, pins);
-            if (retained.HasError())
+            if (auto retained = commands.Retain(submission.ticket, pins); retained.HasError())
                 return retained;
             if (pins.lease == nullptr) {
                 pins.lease = request.lease;

@@ -48,8 +48,7 @@ Result<void> VulkanGraphRuntime::Impl::PrepareExternalReleases(const RenderGraph
             return Result<void>::Failure(Invalid("External final state differs from actual native image ownership or its last producer."));
         auto nativeFinal = release.newState;
         nativeFinal.scope = RenderGraphPipelineScope::Graphics;
-        auto barrier = TranslateVulkanGraphBarrier(bindings[index], release.oldState, nativeFinal, VK_QUEUE_FAMILY_IGNORED,
-                                                   VK_QUEUE_FAMILY_IGNORED, false, false, false);
+        auto barrier = TranslateVulkanGraphBarrier(bindings[index], release.oldState, nativeFinal);
         if (barrier.HasError())
             return Result<void>::Failure(std::move(barrier).ErrorValue());
         if (barriers.size() == barriers.capacity())

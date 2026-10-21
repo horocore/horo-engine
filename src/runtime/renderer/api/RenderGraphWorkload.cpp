@@ -230,8 +230,8 @@ namespace Horo::Render {
                 for (const auto &pass : request.graph.Passes().subspan(offset, record.passes.count))
                     if (pass.queue != submission.queue)
                         return false;
-                const auto issuedQueues = std::span{queues}.first(queueCount);
-                if (std::ranges::find(issuedQueues, submission.queue) == issuedQueues.end()) {
+                if (const auto issuedQueues = std::span{queues}.first(queueCount);
+                    std::ranges::find(issuedQueues, submission.queue) == issuedQueues.end()) {
                     if (queueCount == queues.size())
                         return false;
                     queues[queueCount++] = submission.queue;
@@ -251,12 +251,13 @@ namespace Horo::Render {
             if (releases.size() != acquires.size())
                 return false;
             for (const auto &release : releases) {
-                const auto matches = [&release](const RenderGraphOwnershipTransfer &acquire) {
+                if (const auto matches =
+                        [&release](const RenderGraphOwnershipTransfer &acquire) {
                     return acquire.resource == release.resource && acquire.releaseAfter == release.releaseAfter &&
                            acquire.acquireBefore == release.acquireBefore && acquire.sourceQueue == release.sourceQueue &&
                            acquire.destinationQueue == release.destinationQueue;
                 };
-                if (std::ranges::count_if(acquires, matches) != 1 || !release.sourceQueue.IsValid() ||
+                    std::ranges::count_if(acquires, matches) != 1 || !release.sourceQueue.IsValid() ||
                     !release.destinationQueue.IsValid() || release.sourceQueue == release.destinationQueue ||
                     !HasSubmissionDependency(request, release.releaseAfter, release.acquireBefore))
                     return false;
@@ -266,10 +267,9 @@ namespace Horo::Render {
                     request.submissions[destination].submission.queue != release.destinationQueue)
                     return false;
             }
-            for (const auto &dependency : request.graph.Dependencies())
-                if (!HasSubmissionDependency(request, dependency.before, dependency.after))
-                    return false;
-            return true;
+            return std::ranges::all_of(request.graph.Dependencies(), [&](const auto &dependency) {
+                return HasSubmissionDependency(request, dependency.before, dependency.after);
+            });
         }
     }  // namespace
 

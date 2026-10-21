@@ -28,8 +28,8 @@ namespace Horo::Render {
             if (policy != MultiviewExecutionPolicy::Multipass && policy != MultiviewExecutionPolicy::PreferInstanced &&
                 policy != MultiviewExecutionPolicy::RequireInstanced)
                 return Reject<MultiviewExecutionMode>(MultiviewExtractionErrors::InvalidInput);
-            const bool instanced = capabilities.indexedShaders && capabilities.instancedTargetRouting;
-            if (policy != MultiviewExecutionPolicy::Multipass && instanced)
+            if (const bool instanced = capabilities.indexedShaders && capabilities.instancedTargetRouting;
+                policy != MultiviewExecutionPolicy::Multipass && instanced)
                 return Result<MultiviewExecutionMode>::Success(MultiviewExecutionMode::Instanced);
             if (policy == MultiviewExecutionPolicy::RequireInstanced || !capabilities.multipass)
                 return Reject<MultiviewExecutionMode>(MultiviewExtractionErrors::Unsupported);

@@ -272,7 +272,7 @@ namespace {
         const std::array destroyedBeforeRetirement{native.state.destroyImageCount, native.state.destroyViewCount};
         runtime.DestroyTexture(depth.Value());
         REQUIRE(native.state.destroyImageCount == destroyedBeforeRetirement[0] + 1);
-        REQUIRE(native.state.destroyViewCount == destroyedBeforeRetirement[1] + 1);
+        REQUIRE(native.state.destroyViewCount == destroyedBeforeRetirement[1] + 2);
         REQUIRE(runtime.CreateRenderTarget(targetDescriptor, colorView.Value(), depthView.Value()).HasError());
 
         runtime.ShutdownResources();

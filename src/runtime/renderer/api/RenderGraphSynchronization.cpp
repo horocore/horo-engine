@@ -224,8 +224,8 @@ namespace Horo::Render {
                 if (initialStates_[resourceIndex].has_value()) {
                     return Result<void>::Failure(ContextError(RenderGraphSynchronizationErrors::DuplicateInitialState, initial.resource));
                 }
-                const bool discarded = initial.contents == RenderGraphInitialContents::Discarded;
-                if ((initial.contents != RenderGraphInitialContents::Preserved && !discarded) ||
+                if (const bool discarded = initial.contents == RenderGraphInitialContents::Discarded;
+                    (initial.contents != RenderGraphInitialContents::Preserved && !discarded) ||
                     !IsStateValid(initial.state, resource.kind) ||
                     (discarded != (initial.state.access == RenderGraphSynchronizationAccess::None))) {
                     return Result<void>::Failure(ContextError(RenderGraphSynchronizationErrors::InvalidInitialState, initial.resource));

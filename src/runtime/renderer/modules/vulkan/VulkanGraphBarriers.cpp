@@ -116,12 +116,13 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] VkImageAspectFlags Aspects(const RenderTextureFormat format) noexcept {
+            using enum RenderTextureFormat;
             switch (format) {
-                case RenderTextureFormat::Depth24Stencil8:
-                case RenderTextureFormat::Depth32FloatStencil8:
+                case Depth24Stencil8:
+                case Depth32FloatStencil8:
                     return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-                case RenderTextureFormat::Depth16Unorm:
-                case RenderTextureFormat::Depth32Float:
+                case Depth16Unorm:
+                case Depth32Float:
                     return VK_IMAGE_ASPECT_DEPTH_BIT;
                 default:
                     return VK_IMAGE_ASPECT_COLOR_BIT;
@@ -169,9 +170,12 @@ namespace Horo::Render::Detail {
 
     /** @copydoc TranslateVulkanGraphBarrier */
     Result<VulkanGraphBarrier> TranslateVulkanGraphBarrier(const VulkanGraphResource &resource, const RenderGraphLogicalState &before,
-                                                           const RenderGraphLogicalState &after, const std::uint32_t sourceFamily,
-                                                           const std::uint32_t destinationFamily, const bool release, const bool acquire,
-                                                           const bool discardPriorAccess) {
+                                                           const RenderGraphLogicalState &after, const VulkanGraphBarrierOptions &options) {
+        const auto sourceFamily = options.sourceFamily;
+        const auto destinationFamily = options.destinationFamily;
+        const bool release = options.release;
+        const bool acquire = options.acquire;
+        const bool discardPriorAccess = options.discardPriorAccess;
         const bool texture = resource.kind == RenderGraphResourceKind::Texture;
         auto oldState = Translate(before, texture);
         if (oldState.HasError())

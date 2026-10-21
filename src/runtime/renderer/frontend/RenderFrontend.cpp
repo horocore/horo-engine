@@ -37,6 +37,15 @@ namespace Horo::Render {
             }
         }
 
+        /** @brief Contains arbitrary foreign backend exceptions without allocating a replacement diagnostic. */
+        [[nodiscard]] std::optional<Result<bool>> ObserveBackendSubmission(IRenderBackend &backend, const RenderCpuWait &wait) noexcept {
+            try {
+                return backend.ObserveSubmission(wait);
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+
         [[nodiscard]] Error MakeFrontendError(const ErrorCodeDescriptor &descriptor, std::string message) {
             return MakeError(descriptor, std::move(message));
         }
@@ -495,11 +504,9 @@ namespace Horo::Render {
             return Result<bool>::Failure(MakeError(RenderGraphExecutionErrors::InvalidSynchronization,
                                                    "Active frames permit only zero-time GPU completion polling; "
                                                    "blocking purposes require a valid finite owner policy."));
-        try {
-            return backend_->ObserveSubmission(wait);
-        } catch (...) {
-            return Result<bool>::Failure(MakeError(FrontendErrors::FrameException));
-        }
+        if (auto observed = ObserveBackendSubmission(*backend_, wait); observed.has_value())
+            return std::move(*observed);
+        return Result<bool>::Failure(MakeError(FrontendErrors::FrameException));
     }
 
     /** @copydoc RenderFrontend::BeginShutdown */
@@ -524,25 +531,25 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::PollDrain */
     Result<RenderBackendDrainProgress> RenderFrontend::PollDrain() {
+        using enum RenderBackendDrainProgress;
         using DrainResult = Result<RenderBackendDrainProgress>;
         if (std::this_thread::get_id() != preparationOwner_)
             return DrainResult::Failure(MakeError(FrontendErrors::WrongThread));
         if (drained_)
-            return DrainResult::Success(RenderBackendDrainProgress::Drained);
+            return DrainResult::Success(Drained);
         if (!closing_)
             return DrainResult::Failure(MakeError(FrontendErrors::Closing, "BeginShutdown must close admission before drain polling."));
-        const auto progress = backend_->PollDrain();
-        if (progress.HasError() || progress.Value() == RenderBackendDrainProgress::Pending)
+        if (const auto progress = backend_->PollDrain(); progress.HasError() || progress.Value() == Pending)
             return progress;
         resourceRegistry_->Shutdown(Detail::BackendResourceReleaseMode::NativeAlreadyReleased);
         if (resourceRegistry_->HasPendingNativeRetirements())
-            return DrainResult::Success(RenderBackendDrainProgress::Pending);
+            return DrainResult::Success(Pending);
         while (memoryBudget_->ReclaimEmptyBlocks(memoryConfig_.budget.maximumBlocks) != 0) {
             // Drain every now-empty backing block before invalidating the ledger.
         }
         memoryBudget_->Shutdown();
         drained_ = true;
-        return DrainResult::Success(RenderBackendDrainProgress::Drained);
+        return DrainResult::Success(Drained);
     }
 
     /** @copydoc RenderFrontend::Capabilities */

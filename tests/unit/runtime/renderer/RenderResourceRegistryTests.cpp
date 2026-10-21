@@ -469,6 +469,7 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
             }
             REQUIRE(registry.OperationResult(parent.Value().operation).HasValue());
             if (allocationFailed) {
+                CHECK(registry.OperationState(ResourceOperationId{parent.Value().operation.value + 1}).HasError());
                 const auto retried = registry.Reserve(RenderResourceClass::Texture, dependencies);
                 REQUIRE(retried.HasValue());
                 admitted = retried.Value();
@@ -476,6 +477,8 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
                 successfulAdmissionObserved = true;
             }
             REQUIRE(admitted.has_value());
+            CHECK(admitted->identity.slot == parent.Value().identity.slot + 1);
+            CHECK(admitted->identity.generation == 1);
             CHECK(admitted->operation.value == parent.Value().operation.value + 1);
             REQUIRE(registry.Publish(RenderResourceClass::Texture, admitted->identity, 91).HasValue());
             REQUIRE(registry.Release(RenderResourceClass::Buffer, parent.Value().identity).HasValue());

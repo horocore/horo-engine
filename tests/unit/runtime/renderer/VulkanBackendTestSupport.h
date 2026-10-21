@@ -13,6 +13,11 @@
 #include <vector>
 
 namespace Horo::Render::VulkanBackendTest {
+#if defined(_WIN32)
+    inline constexpr const char *PresentationExtension = "VK_KHR_win32_surface";
+#else
+    inline constexpr const char *PresentationExtension = "VK_KHR_xcb_surface";
+#endif
     [[nodiscard]] inline Error Failure(const char *code) {
         return Error{ErrorCode{code}, ErrorDomainId{"horo.render.test"}, ErrorSeverity::Critical, "Injected failure.", {}};
     }
@@ -41,12 +46,12 @@ namespace Horo::Render::VulkanBackendTest {
         FailureStage failure{FailureStage::None};
         VulkanLoaderCapabilities loader{
             .apiVersion = {1, 3, 280},
-            .instanceExtensions = {"VK_EXT_debug_utils", "VK_KHR_surface", "VK_KHR_xcb_surface"},
+            .instanceExtensions = {"VK_EXT_debug_utils", "VK_KHR_surface", PresentationExtension},
             .layers = {"VK_LAYER_KHRONOS_validation"},
             .hasInstanceVersionQuery = true,
             .standardApiVariant = true,
         };
-        std::vector<std::string> platformExtensions{"VK_KHR_xcb_surface"};
+        std::vector<std::string> platformExtensions{PresentationExtension};
         VulkanAdapterEnumeration enumeration;
         VulkanInstanceRequest instanceRequest;
         VulkanDeviceRequest deviceRequest;

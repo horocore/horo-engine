@@ -7,10 +7,10 @@
 namespace Horo::Render::Detail {
     /** @copydoc RenderResourceRegistry::PrepareExternalNativeLifetime */
     Result<RenderResourceNativeLifetime> RenderResourceRegistry::PrepareExternalNativeLifetime(const RenderResourceIdentity identity) {
-        const auto validated = Validate(RenderResourceClass::Texture, identity);
+        const auto validated = slots_.Validate(RenderResourceClass::Texture, identity);
         if (validated.HasError())
             return Result<RenderResourceNativeLifetime>::Failure(validated.ErrorValue());
-        auto &entry = entries_[validated.Value()];
+        auto &entry = slots_.At(validated.Value());
         if (entry.state != RenderResourceState::Pending || entry.nativeLease.claimed || !entry.externalSource)
             return Result<RenderResourceNativeLifetime>::Failure(MakeError(FrontendErrors::ResourceNotPending));
         // Foreign allocations have no Horo allocation charge but still use the same native lease.
@@ -20,10 +20,10 @@ namespace Horo::Render::Detail {
     /** @copydoc RenderResourceRegistry::AttachExternalSource */
     Result<void> RenderResourceRegistry::AttachExternalSource(const RenderResourceIdentity identity,
                                                               std::shared_ptr<const IRenderExternalTextureSource> source) {
-        const auto validated = Validate(RenderResourceClass::Texture, identity);
+        const auto validated = slots_.Validate(RenderResourceClass::Texture, identity);
         if (validated.HasError())
             return Result<void>::Failure(validated.ErrorValue());
-        auto &entry = entries_[validated.Value()];
+        auto &entry = slots_.At(validated.Value());
         if (entry.state != RenderResourceState::Pending || entry.externalSource || !source)
             return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotPending));
         if (auto current = source->Validate(); current.HasError())
@@ -36,9 +36,9 @@ namespace Horo::Render::Detail {
     Result<void> RenderResourceRegistry::ValidateExternalRelease(const RenderResourceIdentity identity,
                                                                  const CompiledRenderGraphExecution &graph,
                                                                  const RenderGraphResourceId resource) const {
-        if (identity.slot >= entries_.size() || identity.owner != owner_)
+        if (identity.slot >= slots_.Size() || identity.owner != owner_)
             return Result<void>::Failure(MakeError(FrontendErrors::ResourceWrongOwner));
-        const auto &entry = entries_[identity.slot];
+        const auto &entry = slots_.At(identity.slot);
         if (!entry.externalSource)
             return Result<void>::Success();
         if (identity.generation != entry.generation || entry.state != RenderResourceState::Ready)
@@ -63,9 +63,9 @@ namespace Horo::Render::Detail {
 
     /** @copydoc RenderResourceRegistry::ExternalRetirementComplete */
     Result<bool> RenderResourceRegistry::ExternalRetirementComplete(const RenderResourceIdentity identity) const {
-        if (identity.owner != owner_ || identity.slot == 0 || identity.slot >= entries_.size() || identity.generation == 0)
+        if (identity.owner != owner_ || identity.slot == 0 || identity.slot >= slots_.Size() || identity.generation == 0)
             return Result<bool>::Failure(MakeError(FrontendErrors::ResourceHandleMalformed));
-        const auto &entry = entries_[identity.slot];
+        const auto &entry = slots_.At(identity.slot);
         // Canonical registry retirement advances a generation only after its native lease is terminal.
         // The caller must retain the exact external handle issued to it, never synthesize a generation.
         if (identity.generation < entry.generation)
@@ -82,10 +82,10 @@ namespace Horo::Render::Detail {
 
     /** @copydoc RenderResourceRegistry::DescribeExternalTexture */
     Result<RenderExternalTextureFacts> RenderResourceRegistry::DescribeExternalTexture(const RenderResourceIdentity identity) const {
-        const auto validated = Validate(RenderResourceClass::Texture, identity);
+        const auto validated = slots_.Validate(RenderResourceClass::Texture, identity);
         if (validated.HasError())
             return Result<RenderExternalTextureFacts>::Failure(validated.ErrorValue());
-        const auto &entry = entries_[validated.Value()];
+        const auto &entry = slots_.At(validated.Value());
         if (entry.state != RenderResourceState::Ready || !entry.externalSource)
             return Result<RenderExternalTextureFacts>::Failure(MakeError(FrontendErrors::ResourceNotReady));
         if (const auto live = entry.externalSource->Validate(); live.HasError())

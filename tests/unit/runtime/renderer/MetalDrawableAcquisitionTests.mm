@@ -12,7 +12,7 @@ namespace {
     using namespace Horo;
     using namespace Horo::Render;
     using namespace Horo::Render::Detail;
-    using Clock = std::chrono::steady_clock;
+    using AcquisitionClock = std::chrono::steady_clock;
 
     struct SourceState final {
         std::mutex mutex;
@@ -66,20 +66,20 @@ namespace {
 
         ~AcquisitionFixture() {
             Release();
-            const auto deadline = Clock::now() + std::chrono::seconds{2};
-            while ((!worker->Close() || !worker->IsDrained()) && Clock::now() < deadline)
+            const auto deadline = AcquisitionClock::now() + std::chrono::seconds{2};
+            while ((!worker->Close() || !worker->IsDrained()) && AcquisitionClock::now() < deadline)
                 std::this_thread::yield();
             if (!worker->IsDrained())
                 std::terminate();
         }
 
         bool Request(std::uint64_t generation, FramebufferExtent extent) {
-            const auto deadline = Clock::now() + std::chrono::seconds{2};
+            const auto deadline = AcquisitionClock::now() + std::chrono::seconds{2};
             do {
                 if (worker->Request(generation, extent))
                     return true;
                 std::this_thread::yield();
-            } while (Clock::now() < deadline);
+            } while (AcquisitionClock::now() < deadline);
             return false;
         }
 
@@ -97,14 +97,14 @@ namespace {
         }
 
         MetalDrawableResult AwaitResult(std::uint64_t generation) {
-            const auto deadline = Clock::now() + std::chrono::seconds{2};
+            const auto deadline = AcquisitionClock::now() + std::chrono::seconds{2};
             MetalDrawableResult result;
             do {
                 result = worker->Poll(generation);
                 if (result.progress != MetalDrawablePoll::Pending)
                     return result;
                 std::this_thread::yield();
-            } while (Clock::now() < deadline);
+            } while (AcquisitionClock::now() < deadline);
             FAIL("The explicitly released acquisition did not publish within its test budget");
             return result;
         }
@@ -118,8 +118,8 @@ TEST_CASE("Metal acquisition has one nonblocking slot and retains native parents
     CHECK_FALSE(fixture.worker->Request(2, {128, 64}));
     CHECK_FALSE(fixture.worker->Idle());
     CHECK(fixture.worker->Poll(1).progress == MetalDrawablePoll::Pending);
-    const auto closeDeadline = Clock::now() + std::chrono::seconds{2};
-    while (!fixture.worker->Close() && Clock::now() < closeDeadline)
+    const auto closeDeadline = AcquisitionClock::now() + std::chrono::seconds{2};
+    while (!fixture.worker->Close() && AcquisitionClock::now() < closeDeadline)
         std::this_thread::yield();
     CHECK_FALSE(fixture.worker->IsDrained());
     CHECK_FALSE(fixture.worker->Request(2, {128, 64}));
@@ -204,8 +204,8 @@ TEST_CASE("A failed native acquisition remains observable when cancellation race
     fixture.AwaitEntered();
     REQUIRE(fixture.worker->Close());
     fixture.Release();
-    const auto deadline = Clock::now() + std::chrono::seconds{2};
-    while (!fixture.worker->IsDrained() && Clock::now() < deadline)
+    const auto deadline = AcquisitionClock::now() + std::chrono::seconds{2};
+    while (!fixture.worker->IsDrained() && AcquisitionClock::now() < deadline)
         std::this_thread::yield();
     REQUIRE(fixture.worker->IsDrained());
     REQUIRE(fixture.worker->Close());

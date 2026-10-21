@@ -429,7 +429,9 @@ def test_vulkan_native_commands_have_a_bounded_independent_build_and_execution_c
     assert "XR/Vulkan integration test is absent" in native_job
     assert "--no-tests=error" in native_job
     assert "vulkan-validationlayers" in native_job
-    assert "VK_DRIVER_FILES:" in native_job
+    assert "scripts/select_lavapipe_icd.py" in native_job
+    assert "VK_DRIVER_FILES=%s" in native_job
+    assert "lvp_icd.x86_64.json" not in native_job
     assert 'sha256sum "$VK_DRIVER_FILES"' in native_job
     assert "vulkaninfo --summary" in native_job
     assert "--output-junit" in native_job

@@ -5033,6 +5033,11 @@ if (HORO_BUILD_RENDER_VULKAN)
             unit/runtime/renderer/VulkanExternalImageTests.cpp
     )
     target_compile_features(HoroRenderVulkanTests PRIVATE cxx_std_20)
+    if (MSVC)
+        # The integration fixtures retain bounded by-value XR snapshots and their Result temporaries.
+        # Reserve bounded headroom for these snapshots without altering runtime product targets.
+        target_link_options(HoroRenderVulkanTests PRIVATE "/STACK:8388608")
+    endif ()
     target_include_directories(HoroRenderVulkanTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src
             ${PROJECT_SOURCE_DIR}/tests/support

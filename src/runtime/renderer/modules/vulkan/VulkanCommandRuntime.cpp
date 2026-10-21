@@ -7,9 +7,8 @@
 namespace Horo::Render::Detail {
     namespace {
         /** @brief Loads one exact core device command without a legacy extension fallback. */
-        template <typename Function>
-        [[nodiscard]] Function Resolve(const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver, const VkDevice device,
-                                       const char *name) {
+        template <typename Function, typename Resolver>
+        [[nodiscard]] Function Resolve(const Resolver &resolver, const VkDevice device, const char *name) {
             return std::bit_cast<Function>(resolver(device, name));
         }
 
@@ -82,11 +81,17 @@ namespace Horo::Render::Detail {
     VulkanCommandRuntime::VulkanCommandRuntime() : impl_(std::make_unique<Impl>()) {}
 
     VulkanCommandRuntime::~VulkanCommandRuntime() {
-        if (impl_->device != VK_NULL_HANDLE) {
-            const auto begun = BeginShutdown();
-            const auto drained = PollDrain();
-            if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
-                std::terminate();
+        try {
+            if (impl_->device != VK_NULL_HANDLE) {
+                const auto begun = BeginShutdown();
+                const auto drained = PollDrain();
+                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
+            }
+
+        } catch (...) {
+            // Destruction cannot release native owners without proven terminal retirement.
+            std::terminate();
         }
     }
 
@@ -194,13 +199,14 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanCommandRuntime::Abort */
     void VulkanCommandRuntime::Abort(const VulkanCommandTicket ticket) noexcept {
+        using enum Impl::State;
         if (impl_->owner != std::this_thread::get_id())
             return;
         const auto [queue, slot] = impl_->FindTicket(ticket);
         static_cast<void>(queue);
-        if (slot != nullptr && slot->state != Impl::State::Pending && slot->state != Impl::State::Lost) {
+        if (slot != nullptr && slot->state != Pending && slot->state != Lost) {
             slot->ReleaseRetention();
-            slot->state = Impl::State::Idle;
+            slot->state = Idle;
         }
     }
 

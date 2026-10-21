@@ -61,6 +61,26 @@ namespace Horo::Render::VulkanTest {
         CHECK(fixture.state.waitCalls == 0);
     }
 
+    TEST_CASE("Vulkan batch history accepts contiguous signals at capacity and rejects a new discontinuous range",
+              "[unit][renderer][vulkan][submission]") {
+        CommandFixture fixture;
+        fixture.Initialize(1);
+        for (std::uint64_t index = 1; index <= 512; ++index) {
+            const auto ticket = fixture.Record();
+            REQUIRE(fixture.runtime.Submit(ticket, {{1}, {index}, {}, {{1}, index * 2}}).HasValue());
+            fixture.state.Complete();
+            REQUIRE(fixture.runtime.Poll().HasValue());
+        }
+        const std::array contiguous{RenderGraphQueueSubmission{{{1}, {513}, {}, {{1}, 1025}}, {0, 1}}};
+        CHECK(fixture.runtime.ValidateBatch(contiguous).HasValue());
+        const std::array discontinuous{RenderGraphQueueSubmission{{{1}, {513}, {}, {{1}, 1026}}, {0, 1}}};
+        const auto rejected = fixture.runtime.ValidateBatch(discontinuous);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == VulkanBackendErrors::TimelineInvalid.code.Value());
+        CHECK(fixture.runtime.ValidateBatch(contiguous).HasValue());
+        CHECK(fixture.state.accepted.size() == 512);
+    }
+
     TEST_CASE("Vulkan submits exact cross-queue waits and frontend timeline values without CPU waits", "[unit][renderer][vulkan]") {
         CommandFixture fixture;
         fixture.Initialize();

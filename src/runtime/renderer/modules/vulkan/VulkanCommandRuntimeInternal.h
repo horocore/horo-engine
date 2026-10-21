@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <format>
 #include <limits>
 #include <thread>
 
@@ -41,7 +42,8 @@ namespace Horo::Render::Detail {
             std::vector<Slot> slots;
 
             struct IssuedRange {
-                std::uint64_t first{}, last{};
+                std::uint64_t first{};
+                std::uint64_t last{};
             };
 
             std::array<IssuedRange, 512> issued{};
@@ -78,7 +80,9 @@ namespace Horo::Render::Detail {
             PFN_vkQueueSubmit2 submit{};
             PFN_vkGetSemaphoreCounterValue counter{};
             PFN_vkWaitSemaphores wait{};
-        } dispatch;
+        };
+
+        Dispatch dispatch;
 
         VkDevice device{VK_NULL_HANDLE};
         std::thread::id owner;
@@ -109,7 +113,7 @@ namespace Horo::Render::Detail {
                 closed = true;
             }
             return MakeError(result == VK_ERROR_DEVICE_LOST ? VulkanBackendErrors::DeviceLost : VulkanBackendErrors::NativeCallFailed,
-                             std::string{operation} + " returned VkResult " + std::to_string(result) + '.');
+                             std::format("{} returned VkResult {}.", operation, static_cast<int>(result)));
         }
 
         [[nodiscard]] Queue *FindQueue(const RenderQueueId identity) noexcept {
@@ -127,11 +131,12 @@ namespace Horo::Render::Detail {
         }
 
         [[nodiscard]] std::pair<Queue *, Slot *> FindTicket(const VulkanCommandTicket ticket) noexcept {
-            if (ticket.value != 0)
-                for (auto &queue : queues)
-                    for (auto &slot : queue.slots)
-                        if (slot.ticket == ticket && slot.state != State::Idle)
-                            return {&queue, &slot};
+            if (ticket.value == 0)
+                return {};
+            for (auto &queue : queues)
+                for (auto &slot : queue.slots)
+                    if (slot.ticket == ticket && slot.state != State::Idle)
+                        return {&queue, &slot};
             return {};
         }
 

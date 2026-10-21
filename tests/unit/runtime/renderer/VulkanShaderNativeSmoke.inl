@@ -229,7 +229,9 @@ TEST_CASE("Vulkan native device consumes compiled SPIR-V pipeline and material d
     fixture.PrepareMaterialAndShutdown();
 }
 
-#include "VulkanMultiviewNativeSmoke.inl"
 #include "VulkanTransformNativeSmoke.inl"
+
+// Multiview native qualification borrows the transform fixture defined above.
+#include "VulkanMultiviewNativeSmoke.inl"
 
 #endif

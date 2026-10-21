@@ -18,10 +18,11 @@ namespace Horo::Render::Detail {
         for (std::size_t index = 0; index < waits.size(); ++index) {
             const auto wait = waits[index];
             const auto *producer = FindQueue(wait.queue);
-            const bool earlierSignal = std::ranges::any_of(earlier, [&wait](const RenderGraphQueueSubmission &record) {
+            if (const bool earlierSignal = std::ranges::any_of(earlier,
+                                                               [&wait](const RenderGraphQueueSubmission &record) {
                 return record.submission.signal == wait;
             });
-            if (producer == nullptr || (!earlierSignal && !producer->WasIssued(wait.value)))
+                producer == nullptr || (!earlierSignal && !producer->WasIssued(wait.value)))
                 return Result<void>::Failure(
                     MakeError(VulkanBackendErrors::TimelineInvalid, "A GPU wait has no exact issued producer point."));
             for (std::size_t previous = 0; previous < index; ++previous)
@@ -62,9 +63,12 @@ namespace Horo::Render::Detail {
                 value.signal.value - impl_->queues[index].observed > impl_->maximumTimelineDifference)
                 return Result<void>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid,
                                                        "Submission batch differs from admitted timeline history or device bounds."));
-            if ((ranges[index] == 0 || value.signal.value != signaled[index] + 1) && ++ranges[index] > impl_->queues[index].issued.size())
-                return Result<void>::Failure(
-                    MakeError(VulkanBackendErrors::TimelineInvalid, "Bounded issued-point history is exhausted by discontinuous signals."));
+            if (ranges[index] == 0 || value.signal.value != signaled[index] + 1) {
+                ++ranges[index];
+                if (ranges[index] > impl_->queues[index].issued.size())
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::TimelineInvalid,
+                                                           "Bounded issued-point history is exhausted by discontinuous signals."));
+            }
             if (available[index] == 0)
                 return Result<void>::Failure(MakeError(VulkanBackendErrors::SubmissionBusy));
             if (auto waits = impl_->ValidateWaits(value.waits, records.first(recordIndex)); waits.HasError())
@@ -177,8 +181,8 @@ namespace Horo::Render::Detail {
         if (impl_->owner != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::WrongThread));
         impl_->closed = true;
-        for (auto &queue : impl_->queues)
-            for (auto &slot : queue.slots)
+        for (const auto &queue : impl_->queues)
+            for (const auto &slot : queue.slots)
                 if (slot.state == Impl::State::Recording || slot.state == Impl::State::Executable)
                     Abort(slot.ticket);
         return Result<void>::Success();
@@ -186,9 +190,10 @@ namespace Horo::Render::Detail {
 
     /** @copydoc VulkanCommandRuntime::PollDrain */
     Result<RenderBackendDrainProgress> VulkanCommandRuntime::PollDrain() {
+        using enum RenderBackendDrainProgress;
         using DrainResult = Result<RenderBackendDrainProgress>;
         if (impl_->owner == std::thread::id{})
-            return DrainResult::Success(RenderBackendDrainProgress::Drained);
+            return DrainResult::Success(Drained);
         if (impl_->owner != std::this_thread::get_id())
             return DrainResult::Failure(MakeError(VulkanBackendErrors::WrongThread));
         if (!impl_->closed)
@@ -198,8 +203,8 @@ namespace Horo::Render::Detail {
             if (const auto polled = Poll(); polled.HasError())
                 return DrainResult::Failure(polled.ErrorValue());
         if (!impl_->lost && impl_->HasPending())
-            return DrainResult::Success(RenderBackendDrainProgress::Pending);
+            return DrainResult::Success(Pending);
         impl_->DestroyPrepared();
-        return DrainResult::Success(RenderBackendDrainProgress::Drained);
+        return DrainResult::Success(Drained);
     }
 }  // namespace Horo::Render::Detail

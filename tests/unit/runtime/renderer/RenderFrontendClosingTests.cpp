@@ -37,6 +37,32 @@ namespace Horo::Tests::RenderFrontendTesting {
         Horo::Render::Test::RequireDrainedOwner(*frontend);
     }
 
+    TEST_CASE("Frontend observation contains standard and foreign backend exceptions while preserving typed errors",
+              "[renderer][frontend][submission][exceptions]") {
+        lifecycleState = {};
+        lifecycleState.supportsSubmissionObservation = true;
+        auto frontend = CreateTrackingFrontend();
+        const RenderCpuWait wait{{{1}, 1},
+                                 RenderCpuWaitPurpose::Poll,
+                                 std::chrono::nanoseconds{0},
+                                 frontend->Capabilities().support.deviceIncarnation};
+        for (const auto failure : {ObservationFailure::StandardException, ObservationFailure::ForeignException}) {
+            lifecycleState.observationFailure = failure;
+            const auto observed = frontend->ObserveSubmission(wait);
+            REQUIRE(observed.HasError());
+            CHECK(observed.ErrorValue().code.Value() == "render.frontend.frame_exception");
+            CHECK(lifecycleState.shutdownCount == 0);
+        }
+        lifecycleState.observationFailure = ObservationFailure::TypedError;
+        const auto typed = frontend->ObserveSubmission(wait);
+        REQUIRE(typed.HasError());
+        CHECK(typed.ErrorValue().code.Value() == "render.test.observation");
+        CHECK(typed.ErrorValue().message == "Injected typed observation failure.");
+        lifecycleState.observationFailure = ObservationFailure::None;
+        REQUIRE(frontend->ObserveSubmission(wait).Value());
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
+    }
+
     TEST_CASE("Frontend retains closing owner through pending drain and permits bounded completion recovery",
               "[renderer][frontend][shutdown]") {
         lifecycleState = {};
