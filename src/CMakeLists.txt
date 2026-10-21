@@ -2989,6 +2989,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceDocumentSnapshot.cpp
         editor/SourceDocumentText.cpp
         editor/SequenceDocument.cpp
+        editor/ui/UiInspectorDraft.cpp
         editor/UiCanvasDocumentCommands.cpp
         editor/UiCanvasDocument.cpp
         editor/UiCanvasDocumentSerialization.cpp
@@ -3086,6 +3087,11 @@ target_link_libraries(HoroEditorServices
 if (TARGET HoroBuildInfo)
     add_dependencies(HoroEditorServices HoroBuildInfo)
 endif ()
+
+# Non-installed narrow inspector draft/command seam shared with GUI and contract tests.
+add_library(HoroUiInspectorInternal INTERFACE)
+target_include_directories(HoroUiInspectorInternal INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/editor/ui)
+target_link_libraries(HoroUiInspectorInternal INTERFACE HoroEngine::EditorServices)
 
 add_library(HoroEditorPresentationSurfaceInternal STATIC
         editor/renderer/surface/EditorPresentationSurface.cpp
@@ -3287,6 +3293,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerContentBrowserSourceOperations.cpp
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceControllerPCG.cpp
+            editor/screens/workspace/panels/inspector/UiInspectorWidgets.cpp
+            editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.cpp
             editor/screens/workspace/EditorWorkspaceViewUiCanvas.cpp
             editor/screens/workspace/EditorWorkspaceControllerUiCanvas.cpp
             editor/screens/workspace/EditorWorkspaceViewSequence.cpp
@@ -3303,6 +3311,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
+    target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
 
     target_compile_features(HoroGui PUBLIC cxx_std_20)
     target_include_directories(HoroGui

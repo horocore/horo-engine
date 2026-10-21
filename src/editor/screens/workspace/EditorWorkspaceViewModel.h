@@ -90,6 +90,7 @@ namespace Horo::Editor {
         UiCanvasUndo,
         UiCanvasRedo,
         UiCanvasSave,
+        UiCanvasApplyPresentation,
         UiCanvasReload,
         SaveScene,
         SaveSceneAs,
@@ -245,6 +246,9 @@ namespace Horo::Editor {
         UiCanvasDocumentStateId state;
         Runtime::Ui::UiElementId root;
         Runtime::Ui::UiElementId selection;
+        std::uint64_t selectionRevision{1};
+        Runtime::Ui::UiDocumentRevision documentRevision;
+        std::optional<Runtime::Ui::UiDocumentElement> selectedElement;
         std::vector<UiCanvasHierarchyRow> rows;
         std::string search;
         std::optional<Error> diagnostic;
@@ -278,6 +282,9 @@ namespace Horo::Editor {
         Runtime::Ui::UiElementId uiCanvasElement;
         Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
         std::optional<UiCanvasMoveElement> uiCanvasMove;
+        std::optional<UiCanvasSetPresentation> uiCanvasPresentation;
+        std::uint64_t uiCanvasSelectionRevision{};
+        Runtime::Ui::UiDocumentRevision uiCanvasDocumentRevision;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;

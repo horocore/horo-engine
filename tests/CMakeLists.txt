@@ -2612,10 +2612,13 @@ target_compile_features(HoroSourceDocumentPublicHeaderConsumer PRIVATE cxx_std_2
 target_link_libraries(HoroSourceDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
 target_sources(HoroSourceFileOpenServiceTests PRIVATE $<TARGET_OBJECTS:HoroSourceDocumentPublicHeaderConsumer>)
 add_executable(HoroUiCanvasDocumentTests
+        unit/editor/UiInspectorDraftTests.cpp
+        unit/editor/UiCanvasInspectorCommandTests.cpp
         unit/editor/UiCanvasHierarchyTests.cpp
         unit/editor/UiCanvasDocumentTests.cpp
 )
 target_compile_features(HoroUiCanvasDocumentTests PRIVATE cxx_std_20)
+target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroUiInspectorInternal)
 target_link_libraries(HoroUiCanvasDocumentTests PRIVATE HoroEngine::EditorServices nlohmann_json::nlohmann_json)
 add_executable(HoroWorkspaceLayoutPersistenceTests
         unit/editor/WorkspaceSurfacePublicationTests.cpp
@@ -2789,8 +2792,10 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/InspectorCharacterEditSessionTests.cpp
             unit/editor/InspectorAudioComponentTests.cpp
             unit/editor/PhysicsInspectorSessionTests.cpp
+            unit/editor/UiInspectorWidgetsTests.cpp
     )
 
+    target_link_libraries(HoroInspectorEditSessionTests PRIVATE HoroUiInspectorInternal)
     target_compile_features(HoroInspectorEditSessionTests PRIVATE cxx_std_20)
     target_include_directories(HoroInspectorEditSessionTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace

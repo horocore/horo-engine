@@ -1,8 +1,10 @@
 #include "Horo/Foundation/Platform.h"
+#include "UiInspectorDraft.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
 #include <array>
+#include <limits>
 
 namespace Horo::Editor {
     namespace {
@@ -84,7 +86,17 @@ namespace Horo::Editor {
                 projections.push_back({.identity = owner.Identity()});
                 projection = projections.end() - 1;
             }
-            if (projection->state != owner.CurrentState()) {
+            const bool sourceChanged = projection->state != owner.CurrentState();
+            const bool selectionChanged = projection->selection != owner.Selection();
+            if (selectionChanged && projection->selectionRevision != std::numeric_limits<std::uint64_t>::max())
+                ++projection->selectionRevision;
+            if (sourceChanged || selectionChanged) {
+                const auto elements = owner.Document().Elements();
+                const auto selected = std::ranges::find(elements, owner.Selection(), &Runtime::Ui::UiDocumentElement::id);
+                projection->selectedElement = selected == elements.end() ? std::nullopt : std::optional{*selected};
+                projection->documentRevision = owner.Document().Revision();
+            }
+            if (sourceChanged) {
                 auto rows = owner.Hierarchy(projection->search);
                 if (rows.HasValue())
                     projection->rows = std::move(rows).Value();
@@ -135,6 +147,17 @@ namespace Horo::Editor {
         Result<void> result = Result<void>::Success();
         if (command.uiCanvasState != owner->CurrentState()) {
             result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+        } else if (command.command == UiCanvasApplyPresentation) {
+            if (!command.uiCanvasPresentation || projection->selectionRevision == std::numeric_limits<std::uint64_t>::max())
+                result = Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
+            else
+                result = ExecuteUiInspectorPresentation(*owner,
+                                                        {.document = *command.documentInstance,
+                                                         .state = command.uiCanvasState,
+                                                         .revision = command.uiCanvasDocumentRevision,
+                                                         .element = command.uiCanvasElement,
+                                                         .selectionRevision = command.uiCanvasSelectionRevision},
+                                                        projection->selectionRevision, *command.uiCanvasPresentation);
         } else if (command.command == UiCanvasSave) {
             result = SaveUiCanvasSource(*owner);
         } else if (command.command == UiCanvasReload) {
