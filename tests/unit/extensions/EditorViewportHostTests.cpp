@@ -4,6 +4,7 @@
 #include "Horo/Extensions/EditorViewportAbi.h"
 #include "Horo/Extensions/EditorViewportHost.h"
 #include "Horo/Extensions/ExtensionManager.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "OwnedTestDirectory.h"
 #include "SecurityTestSupport.h"
