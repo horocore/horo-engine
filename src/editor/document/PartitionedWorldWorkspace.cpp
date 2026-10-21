@@ -384,8 +384,9 @@ namespace Horo::Editor {
         auto loaded = std::ranges::find(candidate->loadedPages, page.head.sourceAsset, [](const auto &record) {
             return record.head.sourceAsset;
         });
-        prepared.Value().pinned = loaded->pinned;
-        *loaded = std::move(prepared).Value();
+        auto replacement = std::move(prepared).Value();
+        replacement.pinned = loaded->pinned;
+        *loaded = std::move(replacement);
         candidate->document = std::move(document).Value();
         candidate->dirty = true;
         candidate->layerUndoCount = 0;
