@@ -38,7 +38,7 @@ namespace Horo::Editor::WorldResidencyTests {
         const auto retained = current;
         controller.ProcessCommand(command);
         REQUIRE(controller.ViewModel().worldLayerFailure.has_value());
-        CHECK(controller.ViewModel().worldLayerFailure->code == WorldDocumentErrors::Stale.code);
+        CHECK(controller.ViewModel().worldLayerFailure->code.Value() == WorldDocumentErrors::Stale.code.Value());
         CHECK(Current(world) == retained);
         RouteWorldLayerOutlinerIntent({.action = WorldLayerOutlinerAction::Undo, .expected = current->fence}, command);
         controller.ProcessCommand(command);
