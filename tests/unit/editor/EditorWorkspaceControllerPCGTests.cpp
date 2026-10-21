@@ -45,7 +45,7 @@ namespace Horo::Editor {
                                              {.mutations = &project.mutations,
                                               .durableFiles = &project.files,
                                               .documentSessionOwner = Asset(9),
-                                              .pcgCatalog = Catalog()});
+                                              .pcg = {.document = Catalog()}});
         EditorWorkspaceViewCommandData open;
         open.command = EditorWorkspaceViewCommand::OpenSourceFile;
         open.sourceOpenRequest = SourceOpenRequest{.path = project.path, .mode = SourceOpenMode::EmbeddedOnly};

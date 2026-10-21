@@ -36,7 +36,8 @@ namespace Horo::Editor {
             });
             if (recipe == palette.end())
                 return Reject<void>(PCGDocumentCommandFailureReason::Invalid);
-            std::uint64_t nodeId{}, pinId{};
+            std::uint64_t nodeId{};
+            std::uint64_t pinId{};
             for (const auto &node : data.nodes) {
                 nodeId = std::max(nodeId, node.id.Value());
                 for (const auto &pin : node.pins)
@@ -132,10 +133,10 @@ namespace Horo::Editor {
             CancelPCGCanvasGesture(state);
         }
         const auto &data = snapshot.source->Data();
-        std::erase_if(state.placements, [&](const auto &entry) {
+        std::erase_if(state.placements, [&data](const auto &entry) {
             return !HasNode(data, entry.node);
         });
-        std::erase_if(state.selection, [&](auto id) {
+        std::erase_if(state.selection, [&data](auto id) {
             return !HasNode(data, id);
         });
         for (std::size_t index = 0; index < data.nodes.size(); ++index) {

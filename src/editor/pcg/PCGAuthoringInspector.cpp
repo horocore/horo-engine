@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <charconv>
 #include <cmath>
+#include <format>
 #include <limits>
 #include <type_traits>
 
@@ -31,7 +32,7 @@ namespace Horo::Editor {
                 auto [entry, inserted] = state.text.try_emplace(key);
                 if (inserted) {
                     std::array<char, 128> buffer{};
-                    const auto result = [&] {
+                    const auto result = [&buffer, &value] {
                         if constexpr (std::is_floating_point_v<T>)
                             return std::to_chars(buffer.data(), buffer.data() + buffer.size(), value, std::chars_format::general,
                                                  std::numeric_limits<T>::max_digits10);
@@ -104,7 +105,7 @@ namespace Horo::Editor {
                 }
             }
 
-            template <class T, std::size_t N> void Choice(const char *key, T &value, const std::array<const char *, N> &keys) {
+            template <class T, std::size_t N> void Choice(const char *key, T &value, const std::array<const char *, N> &keys) const {
                 Label(key);
                 std::array<std::string, N + 1> labels;
                 std::array<const char *, N + 1> items{};
@@ -114,10 +115,10 @@ namespace Horo::Editor {
                 }
                 labels[N] = Text("unsupported");
                 items[N] = labels[N].c_str();
-                int selected = static_cast<int>(value);
+                auto selected = static_cast<int>(value);
                 if (selected < 0 || selected >= static_cast<int>(N))
                     selected = static_cast<int>(N);
-                const Ui::ComboItemSource source{.label = [&](int index) {
+                const Ui::ComboItemSource source{.label = [&items](int index) {
                     return items[static_cast<std::size_t>(index)];
                 }, .enabled = [](int index) {
                     return index < static_cast<int>(N);
@@ -132,7 +133,7 @@ namespace Horo::Editor {
             }
 
             template <class V> void Value(const char *key, V &value) {
-                std::visit([&]<class T>(T &typed) {
+                std::visit([this, key]<class T>(T &typed) {
                     if constexpr (!std::is_same_v<T, std::monostate>)
                         Field(key, typed);
                     else
@@ -141,7 +142,7 @@ namespace Horo::Editor {
             }
 
             void Predicate(PCG::PCGAttributePredicateValue &value) {
-                int type = static_cast<int>(value.index());
+                auto type = static_cast<int>(value.index());
                 Choice("predicate_type", type, std::array{"boolean", "signed", "unsigned", "scalar", "vector2", "vector3", "vector4"});
                 if (type != static_cast<int>(value.index())) {
                     switch (type) {
@@ -169,10 +170,10 @@ namespace Horo::Editor {
                         default:
                             break;
                     }
-                    std::erase_if(state.text, [&](const auto &entry) {
+                    std::erase_if(state.text, [this](const auto &entry) {
                         return entry.first.starts_with(prefix + "predicate");
                     });
-                    std::erase_if(state.invalid, [&](const auto &entry) {
+                    std::erase_if(state.invalid, [this](const auto &entry) {
                         return entry.starts_with(prefix + "predicate");
                     });
                 }
@@ -180,7 +181,7 @@ namespace Horo::Editor {
             }
 
             /** @brief Draws the exact monostate schema through shared fields. */
-            void SettingsValue(std::monostate &) {
+            void SettingsValue(std::monostate &) const {
                 Ui::Hint(Text("no_properties").c_str(), fonts);
             }
 
@@ -200,7 +201,7 @@ namespace Horo::Editor {
                 Field("volume", value.volume);
                 Label("strata");
                 for (std::size_t axis = 0; axis < 3; ++axis)
-                    Number("strata." + std::to_string(axis), value.strata[axis]);
+                    Number(std::format("strata.{}", axis), value.strata[axis]);
             }
 
             /** @brief Draws the exact PCGPoissonGenerationSettings schema through shared fields. */
@@ -298,16 +299,21 @@ namespace Horo::Editor {
             std::array<std::string, 3> modeLabels;
             for (std::size_t i = 0; i < modes.size(); ++i)
                 modeLabels[i] = fields.Text(modes[i]);
-            int mode = static_cast<int>(draft.values.mode);
+            auto mode = static_cast<int>(draft.values.mode);
             const auto unsupported = fields.Text("unsupported");
-            const Ui::ComboItemSource source{.label = [&](int i) {
+            if (const Ui::ComboItemSource source{.label =
+                                                     [&modeLabels](int i) {
                 return modeLabels[static_cast<std::size_t>(i)].c_str();
-            }, .enabled = [&](int i) {
+            },
+                                                 .enabled =
+                                                     [&catalog, &capabilities](int i) {
                 return catalog.Capabilities().granted.Contains(capabilities[static_cast<std::size_t>(i)]);
-            }, .disabledTooltip = [&](int) {
+            },
+                                                 .disabledTooltip =
+                                                     [&unsupported](int) {
                 return unsupported.c_str();
             }};
-            if (Ui::ComboControl("##mode", &mode, 3, source, fonts))
+                Ui::ComboControl("##mode", &mode, 3, source, fonts))
                 draft.values.mode = static_cast<PCG::PCGGenerationMode>(mode);
             if (mode >= 0 && mode < 3 && !catalog.Capabilities().granted.Contains(capabilities[static_cast<std::size_t>(mode)]))
                 Ui::ErrorText(fields.Text("unsupported").c_str(), fonts);
@@ -320,7 +326,7 @@ namespace Horo::Editor {
             const auto &fonts = fields.fonts;
             std::optional<PCG::ExposedInputId> remove;
             for (auto &input : draft.values.exposedInputs) {
-                fields.prefix = "input." + std::to_string(input.id.Value()) + ".";
+                fields.prefix = std::format("input.{}.", input.id.Value());
                 ImGui::PushID(fields.prefix.c_str());
                 Ui::LabeledSeparator(input.key.c_str(), fonts);
                 fields.Label("input_key");
@@ -330,10 +336,10 @@ namespace Horo::Editor {
                 if (Ui::Button(
                         {.label = fields.Text("remove_input").c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans})) {
                     remove = input.id;
-                    std::erase_if(fields.state.text, [&](const auto &entry) {
+                    std::erase_if(fields.state.text, [&fields](const auto &entry) {
                         return entry.first.starts_with(fields.prefix);
                     });
-                    std::erase_if(fields.state.invalid, [&](const auto &entry) {
+                    std::erase_if(fields.state.invalid, [&fields](const auto &entry) {
                         return entry.starts_with(fields.prefix);
                     });
                 }
@@ -341,27 +347,28 @@ namespace Horo::Editor {
                 ImGui::PopID();
             }
             if (remove)
-                std::erase_if(draft.values.exposedInputs, [&](const auto &input) {
+                std::erase_if(draft.values.exposedInputs, [&remove](const auto &input) {
                     return input.id == *remove;
                 });
         }
 
         /** @brief Exact deterministic zero of one pin type, used only by explicit add-default/expose actions. */
         PCG::PCGGraphValue ZeroFor(PCG::PCGPinType type) {
+            using enum PCG::PCGPinType;
             switch (type) {
-                case PCG::PCGPinType::Boolean:
+                case Boolean:
                     return false;
-                case PCG::PCGPinType::SignedInteger:
+                case SignedInteger:
                     return std::int64_t{};
-                case PCG::PCGPinType::UnsignedInteger:
+                case UnsignedInteger:
                     return std::uint64_t{};
-                case PCG::PCGPinType::Scalar:
+                case Scalar:
                     return double{};
-                case PCG::PCGPinType::Vector2:
+                case Vector2:
                     return Math::Vec2{};
-                case PCG::PCGPinType::Vector3:
+                case Vector3:
                     return Math::Vec3{};
-                case PCG::PCGPinType::Vector4:
+                case Vector4:
                     return Math::Vec4{};
                 default:
                     return std::monostate{};
@@ -370,13 +377,14 @@ namespace Horo::Editor {
 
         /** @brief Exposes one typed source pin in the same pending gesture, bounded before allocation. */
         void DrawInputBinding(Fields &fields, PCGGraphAuthoringDraft &draft, PCG::NodeId node, const PCG::PCGGraphPin &pin) {
-            const bool bound = std::ranges::any_of(draft.values.exposedInputs, [&](const auto &input) {
+            if (const bool bound = std::ranges::any_of(draft.values.exposedInputs,
+                                                       [&pin](const auto &input) {
                 return input.pin == pin.id;
             });
-            if (!Ui::Button({.label = fields.Text("expose_input").c_str(), .enabled = !bound, .font = fields.fonts.sans}))
+                !Ui::Button({.label = fields.Text("expose_input").c_str(), .enabled = !bound, .font = fields.fonts.sans}))
                 return;
-            const auto limits = PCG::GraphSourceLimitsForTier(draft.values.tier);
-            if (limits.HasError() || draft.values.exposedInputs.size() >= limits.Value().maximumExposedInputs) {
+            if (const auto limits = PCG::GraphSourceLimitsForTier(draft.values.tier);
+                limits.HasError() || draft.values.exposedInputs.size() >= limits.Value().maximumExposedInputs) {
                 fields.state.error = MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Limit));
                 return;
             }
@@ -390,8 +398,8 @@ namespace Horo::Editor {
                 return;
             }
             const auto id = PCG::ExposedInputId::Create(maximum + 1).Value();
-            draft.values.exposedInputs.push_back(
-                {id, "graph.input_" + std::to_string(id.Value()), node, pin.id, pin.defaultValue.value_or(ZeroFor(pin.type))});
+            draft.values.exposedInputs.emplace_back(id, std::format("graph.input_{}", id.Value()), node, pin.id,
+                                                    pin.defaultValue.value_or(ZeroFor(pin.type)));
         }
 
         /** @brief Adds/removes a typed pin default only as pending gesture intent. */
@@ -402,10 +410,10 @@ namespace Horo::Editor {
                 if (Ui::Button(
                         {.label = fields.Text("remove_default").c_str(), .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans})) {
                     pin.defaultValue.reset();
-                    std::erase_if(fields.state.text, [&](const auto &entry) {
+                    std::erase_if(fields.state.text, [&fields](const auto &entry) {
                         return entry.first.starts_with(fields.prefix);
                     });
-                    std::erase_if(fields.state.invalid, [&](const auto &entry) {
+                    std::erase_if(fields.state.invalid, [&fields](const auto &entry) {
                         return entry.starts_with(fields.prefix);
                     });
                 }
@@ -419,10 +427,10 @@ namespace Horo::Editor {
                                 const PCG::PCGNodeCatalogSnapshot &catalog) {
             const auto &fonts = fields.fonts;
             auto &node = draft.values.nodes[index];
-            fields.prefix = "node." + std::to_string(node.id.Value()) + ".";
+            fields.prefix = std::format("node.{}.", node.id.Value());
             ImGui::PushID(fields.prefix.c_str());
-            const auto descriptor = catalog.Find(node.type);
-            if (descriptor.HasValue() && descriptor.Value()->determinism != PCG::PCGNodeDeterminism::PortableDeterministic)
+            if (const auto descriptor = catalog.Find(node.type);
+                descriptor.HasValue() && descriptor.Value()->determinism != PCG::PCGNodeDeterminism::PortableDeterministic)
                 Ui::Hint(fields
                              .Text(descriptor.Value()->determinism == PCG::PCGNodeDeterminism::BestEffortPreview ? "non_deterministic"
                                                                                                                  : "profile_deterministic")
@@ -440,7 +448,7 @@ namespace Horo::Editor {
                 if (pin.direction != PCG::PCGPinDirection::Input || pin.type == PCG::PCGPinType::PointSet || !property.settings)
                     continue;
                 const auto prefix = fields.prefix;
-                fields.prefix += "pin." + std::to_string(pin.id.Value()) + ".";
+                fields.prefix += std::format("pin.{}.", pin.id.Value());
                 ImGui::PushID(fields.prefix.c_str());
                 DrawPinDefault(fields, pin);
                 DrawInputBinding(fields, draft, node.id, pin);

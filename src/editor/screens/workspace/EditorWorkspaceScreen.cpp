@@ -663,7 +663,8 @@ namespace Horo::Editor {
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
-                const auto *gameplayEnvironment = services_.TryGet<Application::GameplayBuildEnvironment>();
+                const Application::GameplayBuildEnvironment *gameplayEnvironment =
+                    services_.TryGet<Application::GameplayBuildEnvironment>();
                 const auto session = CreateDocumentSessionOwner();
                 if (session.HasError())
                     return Result<void>::Failure(session.ErrorValue());
@@ -699,9 +700,7 @@ namespace Horo::Editor {
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
-                                                   .pcgCatalog = std::move(pcgCatalog.document),
-                                                   .pcgSchemas = std::move(pcgCatalog.schemas),
-                                                   .pcgPalette = std::move(pcgCatalog.palette),
+                                                   .pcg = std::move(pcgCatalog),
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();

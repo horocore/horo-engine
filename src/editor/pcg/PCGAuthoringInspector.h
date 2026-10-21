@@ -12,8 +12,8 @@ namespace Horo::Editor {
     /** @brief Bounded numeric composition buffers and one cancellable gesture owned by the workspace view. */
     struct PCGAuthoringInspectorState final {
         std::optional<PCGGraphAuthoringDraft> draft;
-        std::map<std::string, std::string> text;
-        std::set<std::string> invalid;
+        std::map<std::string, std::string, std::less<>> text;
+        std::set<std::string, std::less<>> invalid;
         std::optional<Error> error;
     };
 

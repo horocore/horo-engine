@@ -22,7 +22,7 @@ namespace Horo::Editor {
 
         /** @brief Proves explicit generation counts before codec allocation; checked products cannot overflow. */
         bool WithinTier(const PCG::PCGNodeAuthoringSettings &settings, const PCG::PCGTierLimits &tier) {
-            return std::visit([&]<class T>(const T &value) {
+            return std::visit([&tier]<class T>(const T &value) {
                 if constexpr (std::is_same_v<T, PCG::PCGPoissonGenerationSettings>)
                     return value.count <= tier.maximumPointsPerNodeOutput;
                 else if constexpr (std::is_same_v<T, PCG::PCGStratifiedGenerationSettings>) {
@@ -42,28 +42,31 @@ namespace Horo::Editor {
         Result<PCG::PCGGraphNode> PrepareNode(const PCG::PCGGraphNode &node, const PCG::PCGGraphNode &before,
                                               const PCGNodePropertyDraft &property, const PCG::PCGNodeCatalogSnapshot &catalog,
                                               const PCG::PCGTierLimits &tier) {
+            using enum PCGDocumentCommandFailureReason;
             if (!PropertyIdentityMatches(node, before, property))
-                return Result<PCG::PCGGraphNode>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Invalid)));
+                return Result<PCG::PCGGraphNode>::Failure(MakeError(PCGDocumentError(Invalid)));
             if (property.settings) {
                 if (!WithinTier(*property.settings, tier))
-                    return Result<PCG::PCGGraphNode>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Limit)));
+                    return Result<PCG::PCGGraphNode>::Failure(MakeError(PCGDocumentError(Limit)));
                 return catalog.EncodeSettings(node, *property.settings);
             }
             if (node != before)
-                return Result<PCG::PCGGraphNode>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Invalid)));
+                return Result<PCG::PCGGraphNode>::Failure(MakeError(PCGDocumentError(Invalid)));
             return Result<PCG::PCGGraphNode>::Success(node);
         }
 
         /** @brief Maps a persisted mode without selecting a fallback or granting execution. */
         Result<PCG::PCGCapability> ModeCapability(PCG::PCGGenerationMode mode) {
             using Return = Result<PCG::PCGCapability>;
+            using enum PCG::PCGGenerationMode;
+            using enum PCG::PCGCapability;
             switch (mode) {
-                case PCG::PCGGenerationMode::Offline:
-                    return Return::Success(PCG::PCGCapability::OfflineBake);
-                case PCG::PCGGenerationMode::Runtime:
-                    return Return::Success(PCG::PCGCapability::RuntimeEvaluation);
-                case PCG::PCGGenerationMode::Hybrid:
-                    return Return::Success(PCG::PCGCapability::HybridEvaluation);
+                case Offline:
+                    return Return::Success(OfflineBake);
+                case Runtime:
+                    return Return::Success(RuntimeEvaluation);
+                case Hybrid:
+                    return Return::Success(HybridEvaluation);
                 default:
                     return Return::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Invalid)));
             }
@@ -103,18 +106,18 @@ namespace Horo::Editor {
                                        .catalogRevision = current.catalogRevision,
                                        .canEdit = canEdit};
             if (candidate.mode != original.mode || candidate.deterministicSeed != original.deterministicSeed)
-                command.operations.push_back(SetPCGGraphPolicy{candidate.mode, candidate.deterministicSeed});
+                command.operations.emplace_back(SetPCGGraphPolicy{candidate.mode, candidate.deterministicSeed});
             for (std::size_t index = 0; index < candidate.nodes.size(); ++index)
                 if (candidate.nodes[index] != original.nodes[index])
-                    command.operations.push_back(PutPCGNode{candidate.nodes[index]});
+                    command.operations.emplace_back(PutPCGNode{candidate.nodes[index]});
             for (const auto &input : candidate.exposedInputs) {
                 const auto before = std::ranges::find(original.exposedInputs, input.id, &PCG::PCGExposedInput::id);
                 if (before == original.exposedInputs.end() || input != *before)
-                    command.operations.push_back(PutPCGInput{input});
+                    command.operations.emplace_back(PutPCGInput{input});
             }
             for (const auto &input : original.exposedInputs)
                 if (std::ranges::find(candidate.exposedInputs, input.id, &PCG::PCGExposedInput::id) == candidate.exposedInputs.end())
-                    command.operations.push_back(RemovePCGInput{input.id});
+                    command.operations.emplace_back(RemovePCGInput{input.id});
             return command;
         }
     }  // namespace

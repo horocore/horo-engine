@@ -72,7 +72,7 @@ namespace Horo::Editor {
         : m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding),
           m_playSceneFactory(dependencies.gameplay.sceneFactory), m_assetRegistry(assetRegistry),
           m_sourceOpenService(projectRoot, m_documentRegistry),
-          m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcgCatalog,
+          m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcg.document,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
           m_prefabSourceCapture(dependencies.prefabSources), m_workspaceSession(dependencies.documentSessionOwner),
           m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_collisionInventory(dependencies.collision.inventory),
@@ -87,8 +87,8 @@ namespace Horo::Editor {
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
           m_playSession(dependencies.networkDebugger), m_audioPreview(dependencies.audioPreview),
           m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
-        m_viewModel.pcgPalette = dependencies.pcgPalette;
-        m_viewModel.pcgSchemas = dependencies.pcgSchemas;
+        m_viewModel.pcgPalette = dependencies.pcg.palette;
+        m_viewModel.pcgSchemas = dependencies.pcg.schemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         if (dependencies.gameplay.retirements)
             m_gameplayRetirements = dependencies.gameplay.retirements;
