@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "AllocationProbe.h"
 #include "OpenGLBackendInternal.h"
 #include "OpenGLMaterialFixture.h"
@@ -274,6 +275,22 @@ namespace Horo::Render::OpenGLMaterialTests {
         draws[0].material.reset();
         CHECK(native.samplersDeleted == 0);
         CHECK(native.programsDeleted == 0);
+        const auto failedClose = frontend->BeginShutdown();
+        Horo::Tests::RequireError(failedClose, OpenGLBackendErrors::SynchronizationFailed);
+        const auto pending = frontend->PollDrain();
+        REQUIRE(pending.HasValue());
+        CHECK(pending.Value() == RenderBackendDrainProgress::Pending);
+        CHECK(native.samplersDeleted == 0);
+        CHECK(native.programsDeleted == 0);
+        OpenGLBackendTests::commandState.fenceFails = false;
+        OpenGLBackendTests::commandState.pollStatus = 0x911BU;
+        REQUIRE(frontend->BeginShutdown().HasValue());
+        const auto closing = frontend->PollDrain();
+        REQUIRE(closing.HasValue());
+        CHECK(closing.Value() == RenderBackendDrainProgress::Pending);
+        CHECK(native.programsDeleted == 0);
+        OpenGLBackendTests::commandState.pollStatus = 0x911AU;
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
         frontend.reset();
         CHECK(native.samplersDeleted == 1);
         CHECK(native.programsDeleted == 1);

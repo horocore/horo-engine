@@ -213,3 +213,29 @@ TEST_CASE("A failed native acquisition remains observable when cancellation race
     CHECK(failure.progress == MetalDrawablePoll::Failed);
     CHECK(std::string_view{failure.failure.data()}.find("HoroInjectedDrawableFailure") != std::string_view::npos);
 }
+
+TEST_CASE("Foreign Metal acquisition calls cannot consume the owner slot or close admission", "[metal][presentation][lifecycle]") {
+    AcquisitionFixture fixture;
+    REQUIRE(fixture.Request(11, {64, 32}));
+    fixture.AwaitEntered();
+    MetalDrawableResult foreignResult;
+    bool rejectedMutation{};
+    std::thread foreign{[&] {
+        foreignResult = fixture.worker->Poll(12);
+        rejectedMutation =
+            !fixture.worker->Request(12, {128, 96}) && !fixture.worker->Idle() && !fixture.worker->Close() && !fixture.worker->IsDrained();
+    }};
+    foreign.join();
+    CHECK(rejectedMutation);
+    CHECK(foreignResult.progress == MetalDrawablePoll::WrongThread);
+    CHECK(foreignResult.generation == 12);
+    CHECK(foreignResult.drawable == nil);
+    fixture.Release();
+    const auto ready = fixture.AwaitResult(11);
+    CHECK(ready.progress == MetalDrawablePoll::Ready);
+    CHECK(ready.generation == 11);
+    CHECK(ready.extent == FramebufferExtent{64, 32});
+    CHECK(ready.drawable != nil);
+    REQUIRE(fixture.Request(12, {128, 96}));
+    CHECK(fixture.AwaitResult(12).progress == MetalDrawablePoll::Ready);
+}

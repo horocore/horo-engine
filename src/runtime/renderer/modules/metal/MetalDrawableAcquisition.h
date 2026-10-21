@@ -25,7 +25,8 @@ namespace Horo::Render::Detail {
         Ready,
         Unavailable,
         Failed,
-        Stale
+        Stale,
+        WrongThread /**< Caller is not the declared render owner; the request/result slot remains untouched. */
     };
 
     /** @brief Single-slot worker result; generation and extent identify the exact immutable request. */
@@ -66,7 +67,8 @@ namespace Horo::Render::Detail {
          */
         [[nodiscard]] bool Request(std::uint64_t generation, FramebufferExtent extent) noexcept;
         /** @brief Takes one result without waiting; stale generations never expose their drawable.
-         * @param generation Current owner generation. @return Pending, exact ready value, stale drop or owned failure context.
+         * @param generation Current owner generation.
+         * @return Pending, exact ready value, stale drop, owned failure context or WrongThread without consuming the slot.
          */
         [[nodiscard]] MetalDrawableResult Poll(std::uint64_t generation) noexcept;
         /** @brief Tests that no request, native call or unconsumed result can observe mutable layer properties.

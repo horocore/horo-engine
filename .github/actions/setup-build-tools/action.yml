@@ -16,7 +16,8 @@ runs:
           libwayland-dev wayland-protocols libxkbcommon-dev \
           libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
           libxext-dev libxss-dev libxtst-dev libxxf86vm-dev \
-          libgl1-mesa-dev libglu1-mesa-dev
+          libgl1-mesa-dev libglu1-mesa-dev \
+          libvulkan1 mesa-vulkan-drivers vulkan-validationlayers
 
     - name: Install macOS build tools
       if: runner.os == 'macOS'
