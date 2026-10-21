@@ -3,6 +3,7 @@
 #include "EditorAudioPreviewHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
+#include "Horo/Extensions/EditorSurfaceContext.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "ScenePhysicsHost.h"
@@ -1824,6 +1825,9 @@ namespace Horo::Editor {
                                                     .nativeDialogs = &nativeDialogs,
                                                     .extensionSettingsFiles = &durableFiles,
                                                     .extensionUserSettingsRoot = ResolveEditorSettingsPath().parent_path(),
+                                                    .extensionUiPolicy =
+                                                        {.revision = 1,
+                                                         .availableCapabilities = {Extensions::EditorCustomCompositionCapability}},
                                                     .extensionPagePolicy = {.revision = 1,
                                                                             .knownPermissions = {{"editor.settings"},
                                                                                                  {"editor.modal"},
@@ -1842,7 +1846,8 @@ namespace Horo::Editor {
                                                          .knownPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
                                                          .approvedPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
                                                          .availableCapabilities = {{"horo.editor.inspector"},
-                                                                                   {"horo.editor.property-drawer"}}},
+                                                                                   {"horo.editor.property-drawer"},
+                                                                                   Extensions::EditorCustomCompositionCapability}},
                                                     .extensionViewportPolicy = {.revision = 1,
                                                                                 .knownPermissions = {{"editor.viewport-overlay"},
                                                                                                      {"editor.gizmo"}},

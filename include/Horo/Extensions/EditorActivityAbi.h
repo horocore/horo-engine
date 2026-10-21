@@ -3,10 +3,13 @@
 #include "Horo/Extensions/ExtensionAbi.h"
 
 /** @brief Canonical required host capability for the ABI 1.4 editor registration/session transport. */
-#define HORO_EDITOR_ACTIVITY_HOST_CAPABILITY "editor.activity"
+#define HORO_EDITOR_ACTIVITY_HOST_CAPABILITY  "editor.activity"
+#define HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY "editor.custom-composition"
 
 enum {
     HORO_EDITOR_ACTIVITY_SCHEMA_VERSION = 1,
+    HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION = 2,
+    HORO_EDITOR_ACTIVITY_MAXIMUM_PLOT_SAMPLES = 256,
     HORO_EDITOR_ACTIVITY_SESSION_VERSION = 1
 };
 
@@ -22,7 +25,10 @@ enum HoroEditorActivityNodeCode {
     HORO_EDITOR_ACTIVITY_LABEL = 1,
     HORO_EDITOR_ACTIVITY_ACTION = 2,
     HORO_EDITOR_ACTIVITY_STACK = 3,
-    HORO_EDITOR_ACTIVITY_GROUP = 4
+    HORO_EDITOR_ACTIVITY_GROUP = 4,
+    HORO_EDITOR_ACTIVITY_PLOT = 5,
+    HORO_EDITOR_ACTIVITY_ROW = 6,
+    HORO_EDITOR_ACTIVITY_GRID = 7
 };
 
 enum HoroEditorActivityNodeFlags {
@@ -55,6 +61,177 @@ struct HoroEditorActivityNode {
 #ifndef __cplusplus
 typedef struct HoroEditorActivityNode HoroEditorActivityNode;
 #endif
+
+/** @brief Normalized semantic data, never screen coordinates or draw commands. */
+struct HoroEditorActivityPlotSample {
+    float x;
+    float y;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorActivityPlotSample HoroEditorActivityPlotSample;
+#endif
+
+enum HoroEditorUiFontRole {
+    HORO_EDITOR_UI_FONT_NONE = 0,
+    HORO_EDITOR_UI_FONT_SANS = 1,
+    HORO_EDITOR_UI_FONT_SANS_COMPACT = 2,
+    HORO_EDITOR_UI_FONT_SANS_EMPHASIS = 3,
+    HORO_EDITOR_UI_FONT_MONOSPACE = 4,
+    HORO_EDITOR_UI_FONT_ICON = 5,
+    HORO_EDITOR_UI_FONT_COUNT = 6
+};
+
+enum HoroEditorUiIconRole {
+    HORO_EDITOR_UI_ICON_NONE = 0,
+    HORO_EDITOR_UI_ICON_GENERIC = 1,
+    HORO_EDITOR_UI_ICON_INFO = 2,
+    HORO_EDITOR_UI_ICON_WARNING = 3,
+    HORO_EDITOR_UI_ICON_ERROR = 4,
+    HORO_EDITOR_UI_ICON_CREATE = 5,
+    HORO_EDITOR_UI_ICON_RENAME = 6,
+    HORO_EDITOR_UI_ICON_DUPLICATE = 7,
+    HORO_EDITOR_UI_ICON_DELETE = 8,
+    HORO_EDITOR_UI_ICON_RESET = 9,
+    HORO_EDITOR_UI_ICON_CHECK = 10,
+    HORO_EDITOR_UI_ICON_SETTINGS = 11,
+    HORO_EDITOR_UI_ICON_MORE = 12,
+    HORO_EDITOR_UI_ICON_VISIBILITY = 13,
+    HORO_EDITOR_UI_ICON_VISIBILITY_OFF = 14,
+    HORO_EDITOR_UI_ICON_LOCK = 15,
+    HORO_EDITOR_UI_ICON_SEARCH = 16,
+    HORO_EDITOR_UI_ICON_BACK = 17,
+    HORO_EDITOR_UI_ICON_FORWARD = 18,
+    HORO_EDITOR_UI_ICON_FOLDER = 19,
+    HORO_EDITOR_UI_ICON_FILE = 20,
+    HORO_EDITOR_UI_ICON_PLAY = 21,
+    HORO_EDITOR_UI_ICON_PAUSE = 22,
+    HORO_EDITOR_UI_ICON_STOP = 23,
+    HORO_EDITOR_UI_ICON_RECORD = 24,
+    HORO_EDITOR_UI_ICON_COUNT = 25
+};
+
+enum HoroEditorUiColorRole {
+    HORO_EDITOR_UI_COLOR_NONE = 0,
+    HORO_EDITOR_UI_COLOR_SURFACE = 1,
+    HORO_EDITOR_UI_COLOR_SURFACE_SUBTLE = 2,
+    HORO_EDITOR_UI_COLOR_TEXT_PRIMARY = 3,
+    HORO_EDITOR_UI_COLOR_TEXT_SECONDARY = 4,
+    HORO_EDITOR_UI_COLOR_TEXT_DISABLED = 5,
+    HORO_EDITOR_UI_COLOR_BORDER = 6,
+    HORO_EDITOR_UI_COLOR_ACCENT = 7,
+    HORO_EDITOR_UI_COLOR_FOCUS = 8,
+    HORO_EDITOR_UI_COLOR_POSITIVE = 9,
+    HORO_EDITOR_UI_COLOR_WARNING = 10,
+    HORO_EDITOR_UI_COLOR_CRITICAL = 11,
+    HORO_EDITOR_UI_COLOR_SURFACE_RAISED = 12,
+    HORO_EDITOR_UI_COLOR_SURFACE_HOVER = 13,
+    HORO_EDITOR_UI_COLOR_BORDER_STRONG = 14,
+    HORO_EDITOR_UI_COLOR_ACCENT_HOVER = 15,
+    HORO_EDITOR_UI_COLOR_ACCENT_ACTIVE = 16,
+    HORO_EDITOR_UI_COLOR_ON_ACCENT = 17,
+    HORO_EDITOR_UI_COLOR_OVERLAY = 18,
+    HORO_EDITOR_UI_COLOR_COUNT = 19
+};
+
+enum HoroEditorUiMotionRole {
+    HORO_EDITOR_UI_MOTION_NONE = 0,
+    HORO_EDITOR_UI_MOTION_INSTANT = 1,
+    HORO_EDITOR_UI_MOTION_FAST = 2,
+    HORO_EDITOR_UI_MOTION_NORMAL = 3,
+    HORO_EDITOR_UI_MOTION_SLOW = 4,
+    HORO_EDITOR_UI_MOTION_HOVER = 5,
+    HORO_EDITOR_UI_MOTION_PRESS = 6,
+    HORO_EDITOR_UI_MOTION_FOCUS = 7,
+    HORO_EDITOR_UI_MOTION_MODAL = 8,
+    HORO_EDITOR_UI_MOTION_COUNT = 9
+};
+
+enum HoroEditorUiCustomWidget {
+    HORO_EDITOR_UI_STANDARD = 0,
+    HORO_EDITOR_UI_SCALAR_DIAL = 1
+};
+
+/** @brief Copied semantic choices, never font atlases, native icons or a draw callback. Clipping is always host-owned. */
+struct HoroEditorUiCustomPresentation {
+    uint32_t structSize;
+    uint32_t schemaVersion;
+    uint32_t widget;
+    uint32_t fontRole;
+    uint32_t iconRole;
+    uint32_t accentRole;
+    uint32_t motionRole;
+    uint32_t controlRows;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorUiCustomPresentation HoroEditorUiCustomPresentation;
+#endif
+
+/** @brief Checks shared semantic presentation before any string copy or resource resolution.
+ * @param style Borrowed full-prefix profile. @return Nonzero for the closed version1 catalog.
+ */
+static inline int HoroEditorUiCustomPresentationShape(const HoroEditorUiCustomPresentation *style) {
+    return style && style->structSize >= sizeof(*style) && style->schemaVersion == 1 && style->widget <= HORO_EDITOR_UI_SCALAR_DIAL &&
+           style->fontRole > HORO_EDITOR_UI_FONT_NONE && style->fontRole < HORO_EDITOR_UI_FONT_ICON &&
+           style->iconRole < HORO_EDITOR_UI_ICON_COUNT && style->accentRole > HORO_EDITOR_UI_COLOR_NONE &&
+           style->accentRole < HORO_EDITOR_UI_COLOR_COUNT && style->motionRole < HORO_EDITOR_UI_MOTION_COUNT && style->controlRows >= 1 &&
+           style->controlRows <= 8;
+}
+
+/** @brief Schema2 fixed-stride node. Non-plot nodes require a null samples pointer and zero count.
+ * @details A schema2 snapshot's nodes points to an array of these records (cast through the v1 pointer).
+ * The unchanged snapshot/descriptor sizes preserve v1 binary layout. Copy completes before return.
+ * Publishers negotiate support through the session's PLOT node-mask bit. No pointer is retained.
+ */
+struct HoroEditorActivityNodeV2 {
+    HoroEditorActivityNode node;
+    const HoroEditorActivityPlotSample *samples;
+    uint32_t sampleCount;
+    const HoroEditorUiCustomPresentation *presentation;
+    HoroExtensionStringView descriptionKey;
+    HoroExtensionStringView accessibleLabelKey;
+    uint32_t columns;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorActivityNodeV2 HoroEditorActivityNodeV2;
+#endif
+
+/** @brief Validates the bounded normalized specialized payload before allocation or publication.
+ * @param plot Borrowed schema2 record. @return Nonzero only for finite ordered samples in the plot budget.
+ * @details Comparisons reject NaN and infinities without a platform math dependency. No pointer is retained.
+ */
+static inline int HoroEditorActivityPlotNodeShape(const HoroEditorActivityNodeV2 *plot) {
+    uint32_t index;
+    float previous = -1.0f;
+    if (!plot || !plot->samples || plot->sampleCount < 2 || plot->sampleCount > HORO_EDITOR_ACTIVITY_MAXIMUM_PLOT_SAMPLES)
+        return 0;
+    for (index = 0; index < plot->sampleCount; ++index) {
+        const float x = plot->samples[index].x;
+        const float y = plot->samples[index].y;
+        if (!(x >= 0.0f && x <= 1.0f && x > previous && y >= 0.0f && y <= 1.0f))
+            return 0;
+        previous = x;
+    }
+    return 1;
+}
+
+/** @brief Checks all schema2 extents before host copying; it is not a native-memory sandbox.
+ * @param node Borrowed complete fixed-stride record. @return Nonzero for the closed structural profile.
+ */
+static inline int HoroEditorActivityNodeV2Shape(const HoroEditorActivityNodeV2 *node) {
+    if (!node || node->node.structSize < sizeof(node->node) || node->node.kind > HORO_EDITOR_ACTIVITY_GRID ||
+        node->descriptionKey.length > 128 || (node->descriptionKey.length && !node->descriptionKey.data) ||
+        node->accessibleLabelKey.length > 128 || (node->accessibleLabelKey.length && !node->accessibleLabelKey.data) ||
+        (node->presentation && !HoroEditorUiCustomPresentationShape(node->presentation)) || node->columns > 16)
+        return 0;
+    if (node->node.kind == HORO_EDITOR_ACTIVITY_GRID) {
+        if (node->columns == 0)
+            return 0;
+    } else if (node->columns > 1)
+        return 0;
+    if (node->node.kind == HORO_EDITOR_ACTIVITY_PLOT)
+        return HoroEditorActivityPlotNodeShape(node);
+    return !node->samples && node->sampleCount == 0;
+}
 
 /** @brief Bounded immutable view snapshot; revisions strictly increase within an activation. */
 struct HoroEditorActivitySnapshot {

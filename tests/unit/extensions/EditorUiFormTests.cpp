@@ -409,8 +409,9 @@ namespace Horo::Extensions::Tests {
         REQUIRE(snapshot.Value().nodes.size() == 9);
 
         const auto &nodes = snapshot.Value().nodes;
+        CHECK(nodes[1].y == Catch::Approx(28.0F));
         CHECK(nodes[1].width == Catch::Approx(400.0F));
-        CHECK(nodes[1].height == Catch::Approx(32.0F));
+        CHECK(nodes[1].height == Catch::Approx(60.0F));
         CHECK(nodes[2].x == Catch::Approx(0.0F));
         CHECK(nodes[2].width == Catch::Approx(200.0F));
         CHECK(nodes[4].x == Catch::Approx(0.0F));
@@ -418,16 +419,16 @@ namespace Horo::Extensions::Tests {
         CHECK(nodes[5].x == Catch::Approx(200.0F));
         CHECK(nodes[5].width == Catch::Approx(200.0F));
         CHECK(nodes[4].y == Catch::Approx(nodes[5].y));
-        CHECK(nodes[3].y == Catch::Approx(40.0F));
+        CHECK(nodes[3].y == Catch::Approx(96.0F));
         CHECK(nodes[3].width == Catch::Approx(400.0F));
         CHECK(nodes[6].x == Catch::Approx(0.0F));
         CHECK(nodes[7].x == Catch::Approx(200.0F));
-        CHECK(nodes[6].y == Catch::Approx(40.0F));
-        CHECK(nodes[7].y == Catch::Approx(40.0F));
+        CHECK(nodes[6].y == Catch::Approx(96.0F));
+        CHECK(nodes[7].y == Catch::Approx(96.0F));
         CHECK(nodes[8].x == Catch::Approx(0.0F));
-        CHECK(nodes[8].y == Catch::Approx(80.0F));
-        CHECK(nodes[3].height == Catch::Approx(72.0F));
-        CHECK(nodes[0].height == Catch::Approx(112.0F));
+        CHECK(nodes[8].y == Catch::Approx(164.0F));
+        CHECK(nodes[3].height == Catch::Approx(128.0F));
+        CHECK(nodes[0].height == Catch::Approx(224.0F));
     }
 
     TEST_CASE("Unavailable semantic theme roles fall back without exposing color constants", "[Extensions][EditorUiForm]") {
@@ -484,9 +485,9 @@ namespace Horo::Extensions::Tests {
         const auto snapshot = BuildEditorUiRenderSnapshot(form, EditorUiThemeFrame{}, 320.0F);
         REQUIRE(snapshot.HasValue());
         REQUIRE(snapshot.Value().nodes.size() == 3);
-        CHECK(snapshot.Value().nodes[0].height == Catch::Approx(48.0F));
+        CHECK(snapshot.Value().nodes[0].height == Catch::Approx(76.0F));
         CHECK(snapshot.Value().nodes[1].height == Catch::Approx(20.0F));
         CHECK(snapshot.Value().nodes[2].height == Catch::Approx(20.0F));
-        CHECK(snapshot.Value().nodes[2].y == Catch::Approx(28.0F));
+        CHECK(snapshot.Value().nodes[2].y == Catch::Approx(56.0F));
     }
 }  // namespace Horo::Extensions::Tests

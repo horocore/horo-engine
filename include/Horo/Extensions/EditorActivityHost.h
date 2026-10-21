@@ -30,7 +30,9 @@ namespace Horo::Extensions {
     class EditorActivityHost final {
     public:
         /** @brief Composes a bounded surface authority. @param jobs Application scheduler that outlives the host and its admitted work. */
-        explicit EditorActivityHost(JobSystem &jobs);
+        explicit EditorActivityHost(JobSystem &jobs, ExtensionAdmissionPolicy policy = {.revision = 1});
+        /** @brief Borrows sealed custom-composition admission; empty grants support standard activity controls only. */
+        [[nodiscard]] const ExtensionAdmissionPolicy &AdmissionPolicy() const noexcept;
         ~EditorActivityHost();
         EditorActivityHost(const EditorActivityHost &) = delete;
         EditorActivityHost &operator=(const EditorActivityHost &) = delete;
@@ -41,6 +43,10 @@ namespace Horo::Extensions {
         [[nodiscard]] bool IsLive(const EditorSurfaceProviderIdentity &provider) const noexcept;
         /** @brief Refreshes retained projections only after registry publication changes. */
         void Update();
+        /** @brief Applies the host's exclusive modal/input decision; withdrawal discards queued interactions.
+         * @param admitted True only while the workspace owns input. This is an owner-lane host operation.
+         */
+        void SetInputAdmitted(bool admitted) noexcept;
         /** @brief Queues an exact prepared-form semantic action; dispatch occurs at the next owner-lane Update.
          * @param provider Exact live provider generation. @param activityId Registered activity identity.
          * @param nodeId Enabled action node in the current copied form. @param actionId Approved semantic action identity.

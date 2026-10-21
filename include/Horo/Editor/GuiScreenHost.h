@@ -98,6 +98,8 @@ namespace Horo::Editor {
         std::shared_ptr<const Security::NativeArtifactGate> extensionArtifactGate;
         DurableFileSystem *extensionSettingsFiles{};     /**< Explicit application-owned durable storage; absence disables native pages. */
         std::filesystem::path extensionUserSettingsRoot; /**< Resolved user settings root, never inferred from a provider. */
+        Extensions::ExtensionAdmissionPolicy
+            extensionUiPolicy; /**< Explicit advanced presentation grant; no document/resource authority. */
         Extensions::ExtensionAdmissionPolicy extensionPagePolicy; /**< Application-sealed permission evidence. */
         Extensions::ExtensionAdmissionPolicy
             extensionInspectorPolicy; /**< Explicit inspector/drawer grants; no configuration write grant. */

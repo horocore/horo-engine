@@ -94,6 +94,8 @@ namespace Horo::Extensions::Tests {
         CHECK(context.Allows(EditorSurfaceLocalizationKey{"editor.tools.inspector.label"}));
         CHECK(context.Allows(EditorSurfaceDiagnosticCode{"editor.asset.missing"}));
 
+        CHECK(context.HasUsableCapability({"editor.selection.query"}));
+        CHECK_FALSE(context.HasUsableCapability({"editor.project.write"}));
         auto use = context.AcquireCapabilityUse({"editor.selection.query"});
         REQUIRE(use.HasValue());
         CHECK(use.Value().Activation().ExtensionId() == "com.example.tools");
@@ -165,6 +167,7 @@ namespace Horo::Extensions::Tests {
         CHECK_FALSE(registration.IsRegistered());
         CHECK_FALSE(context.IsUsable());
         CHECK_FALSE(registration.Context().IsUsable());
+        CHECK_FALSE(context.HasUsableCapability({"editor.selection.query"}));
         RequireErrorCode(context.AcquireCapabilityUse({"editor.selection.query"}), "editor_surface_context_revoked");
 
         auto replacement = provider.Attach(ContextDescriptor(), admission.ActivationLease(), grants);

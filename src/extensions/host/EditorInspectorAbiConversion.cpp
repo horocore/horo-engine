@@ -3,9 +3,14 @@
 #include "Horo/Extensions/ExtensionErrors.h"
 
 #include <algorithm>
+#include <cstddef>
+#include <type_traits>
 
 namespace Horo::Extensions {
     namespace {
+        static_assert(std::is_standard_layout_v<HoroEditorInspectorDescriptorV2>);
+        static_assert(offsetof(HoroEditorInspectorDescriptorV2, base) == 0);
+
         /** @brief Builds typed malformed transport errors without dropping downstream form validation causes. */
         template <class T> Result<T> Invalid() {
             return Result<T>::Failure(MakeError(ExtensionErrors::EditorUiFormInvalid));
@@ -56,6 +61,30 @@ namespace Horo::Extensions {
             return Result<EditorInspectorField>::Success(std::move(field));
         }
 
+        /** @brief Applies copied semantic styles to exact unique canonical nodes without changing their bindings. */
+        Result<void> CopyPresentations(const HoroEditorInspectorDescriptor &input, EditorUiForm &form) {
+            if (input.schemaVersion == HORO_EDITOR_INSPECTOR_SCHEMA_VERSION)
+                return Result<void>::Success();
+            const auto &extended = *static_cast<const HoroEditorInspectorDescriptorV2 *>(static_cast<const void *>(&input));
+            for (std::uint32_t i = 0; i < extended.presentationCount; ++i) {
+                std::string id;
+                if (!Detail::CopyActivityText(extended.presentations[i].nodeId, id))
+                    return Invalid<void>();
+                const auto node = std::ranges::find_if(form.nodes, [&](const auto &candidate) {
+                    return EditorUiNodeBaseOf(candidate).id.value == id;
+                });
+                if (node == form.nodes.end() || EditorUiNodeBaseOf(*node).custom)
+                    return Invalid<void>();
+                auto style = Detail::CopyCustomPresentation(&extended.presentations[i].presentation);
+                if (style.HasError())
+                    return Result<void>::Failure(style.ErrorValue());
+                std::visit([&](auto &typed) {
+                    typed.base.custom = std::move(style).Value();
+                }, node->payload);
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Copies a finite package catalog, charging total bytes before retaining its strings. */
         Result<void> CopyMessages(const HoroEditorInspectorDescriptor &input, EditorInspectorDefinition &definition) {
             std::size_t total{};
@@ -87,8 +116,10 @@ namespace Horo::Extensions {
             return Invalid<EditorInspectorDefinition>();
         definition.form.title.kind = EditorUiTextKind::LocalizationKey;
         if (input.presentationNodeCount != 0) {
-            const HoroEditorActivitySnapshot presentation{sizeof(presentation),    HORO_EDITOR_ACTIVITY_SCHEMA_VERSION, 1, 0, 0,
-                                                          input.presentationNodes, input.presentationNodeCount};
+            const auto version = input.schemaVersion == HORO_EDITOR_INSPECTOR_SCHEMA_VERSION ? HORO_EDITOR_ACTIVITY_SCHEMA_VERSION
+                                                                                             : HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION;
+            const HoroEditorActivitySnapshot presentation{sizeof(presentation),       version, 1, 0, 0, input.presentationNodes,
+                                                          input.presentationNodeCount};
             auto form = Detail::CopyActivityForm(presentation, definition.form.id.value, definition.form.title.value);
             if (form.HasError())
                 return Result<EditorInspectorDefinition>::Failure(form.ErrorValue());
@@ -100,6 +131,8 @@ namespace Horo::Extensions {
                 return Result<EditorInspectorDefinition>::Failure(field.ErrorValue());
             definition.fields.push_back(std::move(field).Value());
         }
+        if (auto styled = CopyPresentations(input, definition.form); styled.HasError())
+            return Result<EditorInspectorDefinition>::Failure(styled.ErrorValue());
         if (auto copied = CopyMessages(input, definition); copied.HasError())
             return Result<EditorInspectorDefinition>::Failure(copied.ErrorValue());
         return Result<EditorInspectorDefinition>::Success(std::move(definition));

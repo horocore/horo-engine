@@ -19,7 +19,9 @@ HoroExtensionStatus HoroPublishActivityActionResult(void *context, const HoroEdi
     try {
         auto &result = *static_cast<Horo::Extensions::EditorActivitySession::ActionResult *>(context);
         auto copied = Horo::Extensions::Detail::CopyActivityForm(*snapshot, result.drawerId, result.titleKey);
-        if (copied.HasError())
+        if (copied.HasError() || ((snapshot->schemaVersion == HORO_EDITOR_ACTIVITY_PLOT_SCHEMA_VERSION ||
+                                   Horo::Extensions::RequiresEditorUiComposition(copied.Value())) &&
+                                  !result.customAllowed))
             return HORO_EXTENSION_ERROR_OUTPUT_REJECTED;
         const Horo::Extensions::EditorActivityPresentation presentation{(snapshot->presentationFlags & HORO_EDITOR_ACTIVITY_HIDDEN) == 0,
                                                                         (snapshot->presentationFlags & HORO_EDITOR_ACTIVITY_DISABLED) == 0,
@@ -50,6 +52,12 @@ namespace Horo::Extensions {
         void PublishCompletedAction(EditorActivitySession &session) {
             if (session.actions.result && session.actions.result->ready.load(std::memory_order_acquire)) {
                 const auto completed = session.actions.result;
+                if (completed->failed) {
+                    session.Revoke();
+                    session.actions.job.reset();
+                    session.actions.result.reset();
+                    return;
+                }
                 std::lock_guard lock{completed->mutex};
                 if (session.actions.result->form && session.actions.result->revision > session.revision) {
                     if (const auto host = session.host.lock();
@@ -90,6 +98,8 @@ namespace Horo::Extensions {
                 std::lock_guard lock{result->mutex};
                 result->form.reset();
             }
+            result->failed =
+                status != HORO_EXTENSION_SUCCESS && status != HORO_EXTENSION_ERROR_CANCELLED && !cancellation.IsCancellationRequested();
             result->ready.store(true, std::memory_order_release);
             if (cancellation.IsCancellationRequested() || status == HORO_EXTENSION_ERROR_CANCELLED)
                 return JobCancelled();
@@ -101,7 +111,13 @@ namespace Horo::Extensions {
         void PumpAction(EditorActivitySession &session, const JobSystem &jobs, const std::shared_ptr<EditorActivitySession> &owner) {
             if (session.revoked || !session.committed)
                 return;
+            if (const auto host = session.host.lock(); host && !host->IsLive(session.activity.surface.provider)) {
+                session.actions.pending.reset();
+                return;
+            }
             PublishCompletedAction(session);
+            if (session.revoked)
+                return;
             if (!session.actions.pending || session.actions.job)
                 return;
             const auto retirement = session.retirement.lock();
@@ -118,6 +134,16 @@ namespace Horo::Extensions {
             result->drawerId = session.drawer.surface.id;
             result->titleKey = session.drawer.surface.labelLocalizationKey;
             result->revision = session.revision;
+            if (session.customGrant) {
+                const auto &identity = session.activity.surface.provider;
+                auto use = session.customGrant->AcquireUse(identity.extensionId, identity.moduleId, identity.activationGeneration);
+                if (use.HasError()) {
+                    session.Revoke();
+                    return;
+                }
+                result->customUse.emplace(std::move(use).Value());
+                result->customAllowed = true;
+            }
             const auto provider = session.actions.provider;
             auto accepted =
                 jobs.SubmitResult({}, [lease, result, action = std::move(action), provider](const CancellationToken &cancellation) {

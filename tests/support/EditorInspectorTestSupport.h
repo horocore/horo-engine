@@ -11,7 +11,7 @@ namespace Horo::Extensions::Tests::InspectorSupport {
         return {.revision = 1,
                 .knownPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
                 .approvedPermissions = {{"editor.inspector"}, {"editor.property-drawer"}},
-                .availableCapabilities = {EditorInspectorCapability, EditorPropertyDrawerCapability}};
+                .availableCapabilities = {EditorInspectorCapability, EditorPropertyDrawerCapability, EditorCustomCompositionCapability}};
     }
 
     /** @brief Complete copied declaration has exact constraints and localization, but no authored value authority. */
@@ -54,24 +54,29 @@ namespace Horo::Extensions::Tests::InspectorSupport {
             const bool drawer = kind == EditorSurfaceKind::PropertyDrawer;
             const auto capability = drawer ? EditorPropertyDrawerCapability : EditorInspectorCapability;
             const std::vector<ExtensionPermissionId> permissions{{drawer ? "editor.property-drawer" : "editor.inspector"}};
-            auto admitted = ExtensionCapabilityAdmission::Evaluate({provider.extensionId,
-                                                                    provider.moduleId,
-                                                                    provider.activationGeneration,
-                                                                    {{capability, permissions}}},
-                                                                   Policy());
+            std::vector<ExtensionCapabilityId> capabilities{capability};
+            if (RequiresEditorUiComposition(definition.form))
+                capabilities.push_back(EditorCustomCompositionCapability);
+            ExtensionAdmissionRequest request{provider.extensionId, provider.moduleId, provider.activationGeneration, {}};
+            for (const auto &required : capabilities)
+                request.capabilities.push_back({required, permissions});
+            auto admitted = ExtensionCapabilityAdmission::Evaluate(request, Policy());
             if (admitted.HasError())
                 UNSCOPED_INFO(admitted.ErrorValue().message);
             REQUIRE(admitted.HasValue());
             admission.emplace(std::move(admitted).Value());
-            auto grant = admission->Grant(capability);
-            REQUIRE(grant.HasValue());
-            const std::array grants{std::move(grant).Value()};
+            std::vector<ExtensionCapabilityHandle> grants;
+            for (const auto &required : capabilities) {
+                auto grant = admission->Grant(required);
+                REQUIRE(grant.HasValue());
+                grants.push_back(std::move(grant).Value());
+            }
             EditorSurfaceContextDescriptor descriptor{.surface = {.id = "fixture.inspector",
                                                                   .kind = kind,
                                                                   .labelLocalizationKey = "fixture.title",
                                                                   .placement = {EditorSurfacePlacementKind::Inspector, {}, 0},
                                                                   .persistence = EditorSurfacePersistence::None,
-                                                                  .requiredCapabilities = {capability},
+                                                                  .requiredCapabilities = capabilities,
                                                                   .requiredPermissions = permissions,
                                                                   .provider = provider},
                                                       .localization = {{"fixture.title"}, {"fixture.count"}}};
