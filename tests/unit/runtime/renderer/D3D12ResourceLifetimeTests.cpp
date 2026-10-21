@@ -92,6 +92,23 @@ TEST_CASE("D3D12 WARP device removal remains a typed failure instead of false co
     REQUIRE(fixture.resources->QueryBufferMemoryCost({256, CopyUsage}).HasError());
 }
 
+TEST_CASE("D3D12 device removal after readback polling cannot publish a false completed result",
+          "[renderer][d3d12][resources][warp][lifetime]") {
+    Lease lease;
+    Fixture fixture{{}, {.beforeReadbackCompletion = RemoveAfterExecute}};
+    const auto buffer = fixture.Buffer({256, CopyUsage}, {}, RenderResourceNativeLifetime{lease});
+    const auto readback = fixture.resources->Readback(buffer, 0, 256);
+    REQUIRE(readback.HasValue());
+    fixture.resources->DestroyBuffer(buffer);
+    const auto result = fixture.resources->TakeReadback(readback.Value());
+    REQUIRE(result.HasError());
+    REQUIRE(result.ErrorValue().code.Value() == "render.d3d12.device_lost");
+    REQUIRE(FAILED(fixture.device->GetDeviceRemovedReason()));
+    REQUIRE(lease.releases == 0);
+    fixture.resources.reset();
+    REQUIRE(lease.releases == 1);
+}
+
 TEST_CASE("D3D12 native buffer retirement releases one frontend lease only after real copy completion",
           "[renderer][d3d12][resources][warp][lifetime]") {
     Lease lease;

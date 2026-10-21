@@ -317,6 +317,17 @@ namespace Horo::Render::D3D12Detail {
             transfer.commands->ResourceBarrier(1, &barrier);
     }
 
+    /** @copydoc Resources::ReadbackReady */
+    Result<bool> Resources::ReadbackReady(const Transfer &transfer) {
+        if (testHooks_.beforeReadbackCompletion)
+            testHooks_.beforeReadbackCompletion(device_.Get());
+        const auto completed = fence_->GetCompletedValue();
+        if (completed == std::numeric_limits<UINT64>::max())
+            return Result<bool>::Failure(
+                ResourceError("render.d3d12.device_lost", "The device was removed after readback polling.", DXGI_ERROR_DEVICE_REMOVED));
+        return Result<bool>::Success(completed >= transfer.fence);
+    }
+
     /** @copydoc Resources::TakeReadback */
     Result<std::vector<std::byte>> Resources::TakeReadback(D3D12TransferId id) {
         if (auto checked = CheckTransferIdentity(id); checked.HasError())
@@ -330,7 +341,10 @@ namespace Horo::Render::D3D12Detail {
         // Poll may compact unrelated completed records; recover the exact live identity afterwards.
         transfer = FindTransfer(id);
         HORO_INVARIANT_MSG(transfer != nullptr, "Uncancelled owner-thread readback must survive completion polling.");
-        if (fence_->GetCompletedValue() < transfer->fence)
+        auto ready = ReadbackReady(*transfer);
+        if (ready.HasError())
+            return Result<std::vector<std::byte>>::Failure(ready.ErrorValue());
+        if (!ready.Value())
             return Failure<std::vector<std::byte>>("render.d3d12.transfer_pending", "Poll later; GPU readback has not completed.");
         std::vector<std::byte> result(transfer->payloadBytes);
         void *mapped = nullptr;

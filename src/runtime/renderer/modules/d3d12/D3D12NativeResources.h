@@ -11,10 +11,11 @@ struct ID3D12CommandQueue;
 
 namespace Horo::Render {
     /** @brief Optional deterministic native failure seam used only by resource qualification tests.
-     * Runs on the owner thread after actual Execute; it cannot reenter frontend/registry APIs.
+     * Runs on the owner thread at explicit native boundaries; callbacks cannot reenter frontend/registry APIs.
      */
     struct D3D12ResourceTestHooks {
         void (*afterExecute)(ID3D12Device *) noexcept {nullptr};
+        void (*beforeReadbackCompletion)(ID3D12Device *) noexcept {nullptr};
     };
 
     /** @brief Retains the exact initialized device/direct queue; creates bounded descriptor/fence storage.

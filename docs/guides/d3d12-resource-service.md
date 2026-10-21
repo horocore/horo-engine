@@ -155,8 +155,9 @@ identity rather than create a second one.
 
 WARP regressions cover one claim/release across all five creation methods,
 invalid-placement rollback, cancellation/shutdown, copy/readback retention and
-device removal immediately after actual Execute. The post-Execute hook is an
-empty-by-default target-private qualification seam; production passes no hook.
+device removal immediately after actual Execute and between readback polling
+and its completion query. These empty-by-default target-private hooks qualify
+real device-removal boundaries; production passes no hooks.
 The same-value-one regression creates two real contexts and rejects the stale
 incarnation. Portable session tests separately preserve pending/failed drain
 state without releasing the native owner early. The descriptor diagnostic test

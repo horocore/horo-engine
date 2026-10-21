@@ -284,6 +284,8 @@ namespace Horo::Render::D3D12Detail {
         bool ValidRange(const Resource &resource, std::size_t offset, std::size_t bytes, bool readback) const;
 
         Transfer *FindTransfer(D3D12TransferId id);
+        /** @brief Checks the readback fence without interpreting device removal as terminal success. */
+        Result<bool> ReadbackReady(const Transfer &transfer);
 
         Result<D3D12TransferId> Submit(const std::shared_ptr<Resource> &resource, std::size_t offset, std::size_t bytes,
                                        std::span<const std::byte> payload, bool readback, const CancellationToken &cancellation);
