@@ -163,6 +163,9 @@ namespace Horo::Render {
                 if (!config.HasSingleEffectiveQueue())
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
                                                            "OpenGL does not implement distinct effective graph queues."));
+                if (config.presentationOutput)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+
                 if (contextLease_->claimed) {
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::PresentationInUse,
                                                            "OpenGL presentation attachment is already owned by another backend."));

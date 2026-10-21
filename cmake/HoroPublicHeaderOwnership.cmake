@@ -1129,6 +1129,7 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/RenderCapabilities.h
     Horo/Runtime/Render/RenderDisplay.h
     Horo/Runtime/Render/RenderDisplayErrors.h
+    Horo/Runtime/Render/RenderPresentationOutput.h
     Horo/Runtime/Render/FramePacing.h
     Horo/Runtime/Render/FramePacingErrors.h
     Horo/Runtime/Render/PresentMode.h

@@ -457,3 +457,30 @@ namespace {
     }
 
 }  // namespace
+
+TEST_CASE("Metal validates exact primary declarations and finite plan bounds before any encoding", "[metal][presentation]") {
+    PortState state;
+    FakePresentationPort port{state};
+    MetalEditorGraphicsBridge bridge;
+    auto backend = CreateInitializedBackend(port, state, bridge);
+    const auto frame = backend->BeginFrame({1, {64, 64}});
+    REQUIRE(frame.HasValue());
+    SECTION("unadmitted explicit encoding rejects the entire plan") {
+        const std::array passes{BackendTestSupport::MakeClearGraphicsPass(RenderPassId{1}, {}),
+                                RenderPassDescriptor{.id = RenderPassId{2},
+                                                     .primaryOutput = PrimaryOutputAttachment{.outputColor = RenderOutputColor{}}}};
+        const auto rejected = backend->Execute({frame.Value(), passes});
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
+    }
+    SECTION("oversized metadata rejects before quadratic identity validation") {
+        std::array<RenderPassDescriptor, 1025> passes;
+        const auto rejected = backend->Execute({frame.Value(), passes});
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == MetalBackendErrors::InvalidExecutionPlan.code.Value());
+    }
+    CHECK(state.executeCount == 0);
+    backend->AbortFrame(frame.Value());
+    REQUIRE(backend->BeginShutdown().HasValue());
+    REQUIRE(backend->PollDrain().Value() == RenderBackendDrainProgress::Drained);
+}

@@ -3310,6 +3310,7 @@ target_compile_features(HoroRenderAdapterTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderAdapterTests PRIVATE HoroEngine::RenderApi)
 add_executable(HoroRenderDisplayTests
         unit/runtime/renderer/RenderDisplayTests.cpp
+        unit/runtime/renderer/RenderPresentationOutputTests.cpp
 )
 target_compile_features(HoroRenderDisplayTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRenderDisplayTests PRIVATE HoroEngine::RenderApi)
@@ -3425,6 +3426,7 @@ add_executable(HoroRenderFrontendTests
         unit/runtime/renderer/RenderFrontendTestSupport.cpp
         unit/runtime/renderer/RenderFrontendAdmissionTests.cpp
         unit/runtime/renderer/RenderFrontendLifecycleTests.cpp
+        unit/runtime/renderer/RenderFrontendPresentationTests.cpp
         unit/runtime/renderer/RenderFrontendRecoveryTests.cpp
         unit/runtime/renderer/RenderFrontendTerrainGraphTests.cpp
         unit/runtime/renderer/RenderFrontendReservationTests.cpp
@@ -4914,6 +4916,8 @@ if (HORO_BUILD_RENDER_METAL)
         set_tests_properties(HoroMetalShaderPreparationSmoke PROPERTIES LABELS "gpu;metal;shader;material" TIMEOUT 60 RUN_SERIAL TRUE)
     endif ()
     add_executable(HoroRenderMetalTests
+            support/AllocationProbe.cpp
+            unit/runtime/renderer/MetalDrawableAcquisitionTests.mm
             unit/runtime/renderer/MetalPresentationFeedbackTests.cpp
             unit/runtime/renderer/MetalParallelWorkTests.cpp
             unit/runtime/renderer/MetalParallelLeaseTests.cpp
@@ -4930,6 +4934,7 @@ if (HORO_BUILD_RENDER_METAL)
     target_compile_features(HoroRenderMetalTests PRIVATE cxx_std_20)
     # These .mm files use the CXX driver but share ARC-owned types with production.
     set_source_files_properties(
+            unit/runtime/renderer/MetalDrawableAcquisitionTests.mm
             unit/runtime/renderer/MetalParallelCompletionTests.mm
             unit/runtime/renderer/MetalResourceFormatsTests.mm
             PROPERTIES COMPILE_OPTIONS "-fobjc-arc"
@@ -4946,10 +4951,12 @@ if (HORO_BUILD_RENDER_METAL)
     if (HORO_BUILD_EDITOR_GUI)
         add_executable(HoroEditorViewportMetalSmoke
                 integration/renderer/EditorViewportMetalSmoke.mm
+                integration/renderer/MetalPresentationSmoke.mm
         )
 
         target_compile_features(HoroEditorViewportMetalSmoke PRIVATE cxx_std_20)
-        target_include_directories(HoroEditorViewportMetalSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src)
+        target_compile_options(HoroEditorViewportMetalSmoke PRIVATE -fobjc-arc)
+        target_include_directories(HoroEditorViewportMetalSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/support)
         target_link_libraries(HoroEditorViewportMetalSmoke
                 PRIVATE
                 Catch2::Catch2WithMain

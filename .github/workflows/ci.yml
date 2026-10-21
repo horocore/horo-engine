@@ -427,6 +427,146 @@ jobs:
                   summary.write("Metal shader preparation native smoke: " + record["nativeStatus"] + ".\n")
           PYTHON
 
+      - name: Qualify Metal presentation and retained shutdown on an actual device
+        if: ${{ !cancelled() && runner.os == 'macOS' && steps.debug_build.outcome == 'success' }}
+        env:
+          HORO_SOURCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          MTL_DEBUG_LAYER: '1'
+        run: |
+          "$HORO_QUALIFICATION_PYTHON" - <<'PYTHON'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import subprocess
+
+          from xml.etree import ElementTree
+
+          build = Path("build/ci-metal-presentation")
+          build.mkdir(parents=True, exist_ok=True)
+          record = {"sourceHead": os.environ["HORO_SOURCE_HEAD"],
+                    "checkoutRevision": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                    "runId": os.environ["GITHUB_RUN_ID"], "runAttempt": os.environ["GITHUB_RUN_ATTEMPT"],
+                    "validationLayer": os.environ["MTL_DEBUG_LAYER"], "nativeStatus": "not_run", "commands": [],
+                    "qualification": "native encoding/readback; physical EDR requires observed current headroom above one"}
+
+          def run(command, *, capture=False):
+              record["commands"].append(command)
+              return subprocess.run(command, check=True, text=True,
+                                    stdout=subprocess.PIPE if capture else None).stdout
+
+          def record_presentation_result(record, build, returncode):
+              selected = set(record["selectedTests"])
+              owners = ["HoroRenderDisplayTests::", "HoroRenderFrontendTests::", "HoroRenderBackendRegistryTests::",
+                        "HoroRenderMetalTests::", "HoroEditorViewportMetalSmoke::", "HoroMetalUploadShutdownSmoke::"]
+              if any(not any(name.startswith(owner) for name in selected) for owner in owners) or "HoroEditorMetalFirstFrame" not in selected:
+                  raise RuntimeError("Required qualification owner is absent from discovery")
+              prefix = "HoroEditorViewportMetalSmoke::"
+              expected = {name.removeprefix(prefix) for name in selected if name.startswith(prefix)}
+              required = {"Editor Viewport Metal Smoke",
+                          "SDL Metal host policy precedes view creation and publishes actual revisioned display facts",
+                          "Native Metal realizes SDR, validates real drawables and coalesces latest resize before reuse",
+                          "Metal explicit sRGB matching round-trips back to the unchanged unmanaged SDR policy",
+                          "Metal linear EDR qualification uses actual host potential and native layer readback"}
+              if not required.issubset(expected):
+                  raise RuntimeError("Required presentation cases are absent from discovery")
+              common = ElementTree.parse(build / "ctest.xml").findall(".//testcase")
+              presentation = ElementTree.parse(build / "presentation.xml").findall(".//testcase")
+              if {case.attrib["name"] for case in common} != {name for name in selected if not name.startswith(prefix)}:
+                  raise RuntimeError("Common qualification JUnit does not match exact discovery")
+              observed = {name for name in expected for case in presentation
+                          if case.attrib["name"] == name or case.attrib["name"].startswith(name + "/")}
+              unexpected = any(not any(case.attrib["name"] == name or case.attrib["name"].startswith(name + "/")
+                                       for name in expected) for case in presentation)
+              if observed != expected or not presentation or unexpected:
+                  raise RuntimeError("Presentation JUnit does not match required discovered cases")
+              cases = common + presentation
+              skipped = [case.attrib["name"] for case in cases if case.find("skipped") is not None]
+              record["executedCaseCount"] = len(cases) - len(skipped)
+              record["skippedCases"] = skipped
+              if any(case.find("failure") is not None or case.find("error") is not None for case in cases):
+                  raise RuntimeError("Qualification JUnit contains a failure or error")
+              # Only Catch's documented all-skipped exit is non-failing, and only with complete matching skipped evidence.
+              all_skipped = all(case.find("skipped") is not None for case in presentation)
+              if returncode != 0 and not (returncode == 4 and all_skipped):
+                  raise RuntimeError("Native Metal presentation owner failed: " + str(returncode))
+              record["nativeStatus"] = "incomplete_hardware_cases_skipped" if skipped else "passed"
+
+          try:
+              sources = ["apps/HoroEditor/app/HoroEditorApp.cpp",
+                         "include/Horo/Runtime/Render/RenderPresentationOutput.h",
+                         "src/editor/renderer/metal/SdlMetalPresentationPort.mm",
+                         "src/runtime/renderer/modules/metal/MetalRuntime.mm",
+                         "src/runtime/renderer/modules/metal/MetalDrawableAcquisition.mm",
+                         "src/runtime/renderer/modules/metal/MetalPresentationOutput.mm",
+                         "tests/integration/renderer/MetalPresentationSmoke.mm",
+                         "tests/integration/renderer/EditorViewportMetalSmoke.mm",
+                         "tests/integration/renderer/MetalUploadShutdownSmoke.mm"]
+              record["sourceSha256"] = {source: hashlib.sha256(Path(source).read_bytes()).hexdigest() for source in sources}
+              run(["cmake", "--preset", "ci-macos-debug", "-B", str(build),
+                   "-DPython3_EXECUTABLE=" + os.environ["HORO_QUALIFICATION_PYTHON"],
+                   "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON", "-DHORO_BUILD_EDITOR_GUI=ON",
+                   "-DHORO_BUILD_RENDER_METAL=ON", "-DHORO_BUILD_RENDER_OPENGL=OFF",
+                   "-DHORO_BUILD_PHYSICS_NATIVE=OFF", "-DHORO_BUILD_NAVIGATION_RECAST_DETOUR=OFF"])
+              targets = ["HoroEditor", "HoroRenderDisplayTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests",
+                         "HoroRenderMetalTests", "HoroEditorViewportMetalSmoke", "HoroMetalUploadShutdownSmoke",
+                         "HoroRenderApiPublicHeaderConsumer", "HoroRenderFrontendPublicHeaderConsumer"]
+              record["buildTargets"] = targets
+              record["buildOnlyConsumers"] = targets[-2:]
+              run(["cmake", "--build", str(build), "--parallel", "2", "--target", *targets])
+              probe_source = Path(os.environ["RUNNER_TEMP"]) / "horo-metal-presentation-probe.m"
+              probe_binary = probe_source.with_suffix("")
+              probe_source.write_text('#import <Metal/Metal.h>\n#import <AppKit/AppKit.h>\n#include <stdio.h>\n'
+                                      'int main(void) { @autoreleasepool { id<MTLDevice> d = MTLCreateSystemDefaultDevice(); '
+                                      'if (d == nil) return 77; NSScreen *s = NSScreen.mainScreen; '
+                                      'NSDictionary *facts = @{@"device": d.name, @"registryId": @(d.registryID), '
+                                      '@"screenAttached": @(s != nil), '
+                                      '@"currentLinearHeadroom": @(s.maximumExtendedDynamicRangeColorComponentValue), '
+                                      '@"potentialLinearHeadroom": @(s.maximumPotentialExtendedDynamicRangeColorComponentValue)}; '
+                                      'NSData *json = [NSJSONSerialization dataWithJSONObject:facts options:0 error:nil]; '
+                                      'return fwrite(json.bytes, 1, json.length, stdout) == json.length ? 0 : 1; } }\n')
+              run(["xcrun", "clang", "-fobjc-arc", str(probe_source), "-framework", "Metal",
+                   "-framework", "AppKit", "-framework", "Foundation", "-o", str(probe_binary)])
+              probe = subprocess.run([str(probe_binary)], check=False, capture_output=True, text=True)
+              record["deviceProbeExit"] = probe.returncode
+              if probe.returncode == 77:
+                  record["nativeStatus"] = "skipped_no_device"
+                  print("::notice::Metal presentation qualification UNEXECUTED: no actual Metal device; no native/HDR success claim.")
+              elif probe.returncode != 0:
+                  raise RuntimeError("Metal presentation device probe failed: " + str(probe.returncode))
+              else:
+                  record["deviceAndDisplay"] = json.loads(probe.stdout)
+                  pattern = ("^(HoroRender(Display|Frontend|BackendRegistry|Metal)Tests::|"
+                             "HoroEditorViewportMetalSmoke::|HoroMetalUploadShutdownSmoke::|HoroEditorMetalFirstFrame$)")
+                  record["testRegex"] = pattern
+                  discovery = run(["ctest", "--test-dir", str(build), "--show-only=json-v1", "-R", pattern], capture=True)
+                  (build / "test-discovery.json").write_text(discovery)
+                  record["selectedTests"] = [test["name"] for test in json.loads(discovery)["tests"]]
+                  assert any(name.startswith("HoroEditorViewportMetalSmoke::") for name in record["selectedTests"])
+                  assert any(name.startswith("HoroMetalUploadShutdownSmoke::") for name in record["selectedTests"])
+                  assert "HoroEditorMetalFirstFrame" in record["selectedTests"]
+                  record["nativeStatus"] = "failed"
+                  common = ("^(HoroRender(Display|Frontend|BackendRegistry|Metal)Tests::|"
+                            "HoroMetalUploadShutdownSmoke::|HoroEditorMetalFirstFrame$)")
+                  run(["ctest", "--test-dir", str(build), "--parallel", "1", "--timeout", "90", "--output-on-failure",
+                       "--no-tests=error", "-R", common, "--output-junit", str(build.resolve() / "ctest.xml")])
+                  # Catch's own JUnit distinguishes a skipped HDR case from successful SDR cases. The pinned
+                  # CTest adapter otherwise treats an individually selected all-skipped case's exit 4 as failure.
+                  presentation = [str(build / "tests/HoroEditorViewportMetalSmoke"), "--reporter", "junit",
+                                  "--out", str(build.resolve() / "presentation.xml")]
+                  record["commands"].append(presentation)
+                  completed = subprocess.run(presentation, check=False, timeout=90)
+                  record["presentationExit"] = completed.returncode
+                  record_presentation_result(record, build, completed.returncode)
+          except Exception as error:
+              record["error"] = str(error)
+              raise
+          finally:
+              (build / "provenance.json").write_text(json.dumps(record, indent=2) + "\n")
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+                  summary.write("Metal presentation/output qualification: " + record["nativeStatus"] + ".\n")
+          PYTHON
+
       # Debug audio is already in the build above. Release verifies NDEBUG
       # behavior using only the real-time audio group, on this same runner.
       - name: Configure Release audio checks
@@ -818,6 +958,10 @@ jobs:
             build/ci-metal-shader/provenance.json
             build/ci-metal-shader/tests/MetalPreparationFixture.metallib
             build/ci-metal-shader/Testing/Temporary/LastTest.log
+            build/ci-metal-presentation/provenance.json
+            build/ci-metal-presentation/presentation.xml
+            build/ci-metal-presentation/test-discovery.json
+            build/ci-metal-presentation/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
             build/ci-audio-release/restore-ctest.xml
             build/ci-audio-release/collision-allocation-ctest.xml

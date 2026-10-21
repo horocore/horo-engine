@@ -87,6 +87,12 @@ namespace Horo::Render::Detail {
                 INFO((admitted.HasError() ? admitted.ErrorValue().code.Value() + ": " + admitted.ErrorValue().message
                                           : "Native preparation runtime initialized."));
                 REQUIRE(admitted.HasValue());
+                const auto output = runtime->PresentationOutput();
+                REQUIRE(output.HasError());
+                REQUIRE(output.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnavailable.code.Value());
+                const auto readiness = runtime->PollPresentationAvailability({64, 64});
+                REQUIRE(readiness.HasError());
+                REQUIRE(readiness.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnavailable.code.Value());
                 REQUIRE(bridge.Device() != nullptr);
                 REQUIRE(bridge.CommandQueue() != nullptr);
                 CHECK(bridge.CurrentCommandBuffer() == nullptr);

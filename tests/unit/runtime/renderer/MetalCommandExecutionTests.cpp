@@ -264,6 +264,12 @@ namespace {
             REQUIRE(Detail::ExecuteMetalRenderGraph(runtime, {{1}, graph, bindings, instances}).HasError());
             REQUIRE(runtime.encodingCount == 0);
         }
+        SECTION("presentation encoding cannot be attached to an offscreen color operation") {
+            std::get<RenderGraphColorAttachment>(bindings[0].workload).operations.outputColor = RenderOutputColor{};
+            REQUIRE(Detail::ExecuteMetalRenderGraph(runtime, {{1}, graph, bindings, instances}).HasError());
+            REQUIRE(runtime.validationCount == 0);
+            REQUIRE(runtime.encodingCount == 0);
+        }
         SECTION("discarded write cannot initialize a later read") {
             std::get<RenderGraphColorAttachment>(bindings[0].workload).operations.storeOperation = AttachmentStoreOperation::DontCare;
             REQUIRE(Detail::ExecuteMetalRenderGraph(runtime, {{1}, graph, bindings, instances}).HasError());

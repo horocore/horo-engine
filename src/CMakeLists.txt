@@ -2430,6 +2430,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderAdapterErrors.cpp
         runtime/renderer/api/RenderDisplay.cpp
         runtime/renderer/api/RenderDisplayErrors.cpp
+        runtime/renderer/api/RenderPresentationOutput.cpp
+        runtime/renderer/api/RenderPresentationErrors.cpp
         runtime/renderer/api/FramePacing.cpp
         runtime/renderer/api/FramePacingErrors.cpp
         runtime/renderer/api/PresentMode.cpp
@@ -2686,6 +2688,8 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalMaterialResources.mm
             runtime/renderer/modules/metal/MetalParallelRecording.mm
             runtime/renderer/modules/metal/MetalDeviceDiscovery.mm
+            runtime/renderer/modules/metal/MetalDrawableAcquisition.mm
+            runtime/renderer/modules/metal/MetalPresentationOutput.mm
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
             runtime/renderer/modules/metal/MetalResourceGraphRuntime.mm
             runtime/renderer/modules/metal/MetalLightCullingKernel.mm
@@ -2707,6 +2711,7 @@ if (HORO_BUILD_RENDER_METAL)
             "-framework Foundation"
             "-framework Metal"
             "-framework QuartzCore"
+            "-framework CoreGraphics"
     )
 endif ()
 
@@ -2972,6 +2977,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
             ${HORO_SDL3_TARGET}
             PRIVATE
             HoroThirdParty::ImGuiMetal
+            "-framework AppKit"
             "-framework Metal"
             "-framework QuartzCore"
     )

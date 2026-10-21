@@ -57,7 +57,7 @@ namespace Horo::Render {
             if (const auto *culling = std::get_if<RenderGraphLightCulling>(&workload))
                 return MatchesLightCulling(request, pass, *culling);
             if (const auto *color = std::get_if<RenderGraphColorAttachment>(&workload)) {
-                return pass.kind == RenderPassKind::Graphics && color->operations.IsValid() &&
+                return pass.kind == RenderPassKind::Graphics && color->operations.IsValid() && !color->operations.outputColor &&
                        color->operations.loadOperation != AttachmentLoadOperation::DontCare &&
                        color->operations.storeOperation == AttachmentStoreOperation::Store && uses.size() == 1 &&
                        uses[0].resource == color->texture && uses[0].kind == RenderGraphUsageKind::ColorAttachment &&

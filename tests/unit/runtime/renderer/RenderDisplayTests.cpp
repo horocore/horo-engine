@@ -221,3 +221,14 @@ TEST_CASE("Display feed enforces owner affinity and idempotent stop", "[runtime]
     REQUIRE(snapshot.HasError());
     CHECK(HasCode(snapshot.ErrorValue(), RenderDisplayErrors::FeedStopped));
 }
+
+TEST_CASE("Display facts distinguish separately named linear EDR from HDR10 PQ", "[runtime][renderer][display][linear-edr]") {
+    for (const auto colorSpace : {RenderDisplayColorSpace::Srgb, RenderDisplayColorSpace::DisplayP3}) {
+        auto display = HdrDisplay();
+        display.modes = {{1920, 1080, 60.0F, colorSpace, RenderDisplayTransferFunction::Linear, RenderDisplayDynamicRange::High}};
+        display.currentMode = display.modes.front();
+        CHECK(ValidateRenderDisplaySnapshot(Snapshot(1, {display})).HasValue());
+        display.hdr = RenderDisplayHdrSupport::Unsupported;
+        CHECK(ValidateRenderDisplaySnapshot(Snapshot(1, {display})).HasError());
+    }
+}

@@ -181,6 +181,9 @@ namespace Horo::Render::OpenGLBackendTests {
         SECTION("Invalid load") {
             second.primaryOutput->loadOperation = static_cast<AttachmentLoadOperation>(255);
         }
+        SECTION("Explicit output encoding has no admitted OpenGL output contract") {
+            second.primaryOutput->outputColor = RenderOutputColor{};
+        }
         SECTION("Invalid store") {
             second.primaryOutput->storeOperation = static_cast<AttachmentStoreOperation>(255);
         }
