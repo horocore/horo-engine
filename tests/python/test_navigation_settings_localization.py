@@ -45,3 +45,13 @@ def test_navigation_bake_copy_is_paired_and_covers_operation_decisions() -> None
                 "failed", "cancelling", "succeeded", "cancelled", "resources", "elapsed", "stage", "profiles_hint", "saved_source", "reload"}
     assert {prefix + suffix for suffix in required} <= keys
     assert all(english[key]["text"] and turkish[key]["text"] for key in keys)
+
+
+def test_navigation_overlay_copy_covers_all_filters_and_evidence_states() -> None:
+    catalogs = [json.loads((ROOT / f"assets/localization/editor/{locale}.json").read_text(encoding="utf-8"))["messages"]
+                for locale in ("en-US", "tr-TR")]
+    keys = {key for key in catalogs[0] if key.startswith("workspace.navigation_overlay.")}
+    assert keys == {key for key in catalogs[1] if key.startswith("workspace.navigation_overlay.")}
+    for suffix in ("profile", "area", "surface", "validity", "authored", "cooked", "disabled", "unvalidated", "limited", "dirty"):
+        assert "workspace.navigation_overlay." + suffix in keys
+    assert all(catalog[key]["text"] for catalog in catalogs for key in keys)

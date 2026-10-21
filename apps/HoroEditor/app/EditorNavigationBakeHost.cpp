@@ -13,11 +13,18 @@ namespace Horo::Editor {
     namespace {
         namespace Nav = Navigation;
         using namespace Application;
+        /** @brief Worker publishes immutable geometry via atomic shared-pointer access; owner lane only loads it.
+         * All concurrent accesses use atomic free functions; workers drain before mailbox destruction.
+         */
+        using OverlayMailbox = std::shared_ptr<const NavigationViewportSnapshot>;
 
         /** @brief Complete unpublished worker result; facade construction remains on its owner lane. */
         struct Prepared final {
             NavigationBakeApplicationConfig config;
             std::shared_ptr<const NavigationBakeCatalog> catalog;
+            std::shared_ptr<const NavigationViewportSnapshot> overlays;
+            std::shared_ptr<OverlayMailbox> mailbox;
+            std::shared_ptr<const NavigationViewportSnapshot> initialOverlays;
         };
 
         /** @brief Copies the complete bounded authored choices without reducing them to surviving geometry. */
@@ -72,10 +79,33 @@ namespace Horo::Editor {
             if (catalog.HasError())
                 return Return::Failure(catalog.ErrorValue());
             const auto definition = catalog.Value()->definition;
+            auto overlays = NavigationViewportSnapshot::Capture(source.Value()->Scenes(), definition);
+            if (overlays.HasError())
+                return Return::Failure(overlays.ErrorValue());
             auto config = Application::Internal::ComposeNativeNavigationBake(root, definition, compatibility, closed);
             if (config.HasError())
                 return Return::Failure(config.ErrorValue());
-            return Return::Success({std::move(config).Value(), std::move(catalog).Value()});
+            auto composed = std::move(config).Value();
+            auto initialOverlays = overlays.Value();
+            const auto publication = ResolveNavigationBakePublication(composed.service);
+            if (publication.HasValue()) {
+                auto cooked = NavigationViewportSnapshot::WithCooked(*overlays.Value(), publication.Value()->tiles);
+                if (cooked.HasValue())
+                    initialOverlays = std::move(cooked).Value();
+            }
+            auto mailbox = std::make_shared<OverlayMailbox>(overlays.Value());
+            auto capture = std::move(composed.captureSource);
+            composed.captureSource = [capture = std::move(capture), mailbox, definition](const NavigationBakeInvocation &invocation) {
+                auto source = capture(invocation);
+                if (source.HasValue()) {
+                    auto snapshot = NavigationViewportSnapshot::Capture(source.Value()->Scenes(), definition);
+                    std::atomic_store(mailbox.get(), snapshot.HasValue() ? std::move(snapshot).Value() : nullptr);
+                } else
+                    std::atomic_store(mailbox.get(), OverlayMailbox{});
+                return source;
+            };
+            return Return::Success({std::move(composed), std::move(catalog).Value(), std::move(overlays).Value(), std::move(mailbox),
+                                    std::move(initialOverlays)});
         }
     }  // namespace
 
@@ -86,6 +116,8 @@ namespace Horo::Editor {
             std::shared_ptr<std::atomic<bool>> closed{std::make_shared<std::atomic<bool>>(false)};
             std::unique_ptr<Application::NavigationBakeApplication> application;
             NavigationBakeWorkspaceSnapshot view;
+            std::shared_ptr<const NavigationViewportSnapshot> authoredOverlays;
+            std::shared_ptr<OverlayMailbox> overlayMailbox;
             std::optional<Application::NavigationBakeCommandRequest> request;
             std::chrono::steady_clock::time_point started;
         };
@@ -190,6 +222,9 @@ namespace Horo::Editor {
                         else {
                             session.application = std::move(application).Value();
                             session.view.catalog = std::move(prepared.Value().catalog);
+                            session.authoredOverlays = std::move(prepared.Value().overlays);
+                            session.overlayMailbox = std::move(prepared.Value().mailbox);
+                            session.view.overlays = std::move(prepared.Value().initialOverlays);
                         }
                     }
                 }
@@ -202,13 +237,28 @@ namespace Horo::Editor {
             if (!session.view.operation || session.view.operation->IsTerminal())
                 return;
             static_cast<void>(session.application->Pump());
+            if (session.overlayMailbox) {
+                auto authored = std::atomic_load(session.overlayMailbox.get());
+                if (authored != session.authoredOverlays) {
+                    session.authoredOverlays = std::move(authored);
+                    session.view.overlays = session.authoredOverlays;
+                }
+            }
             if (!session.view.operation->IsTerminal())
                 session.view.elapsed =
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - session.started);
             auto result = session.application->Query(session.view.operation->id);
-            if (result.HasValue())
+            if (result.HasValue()) {
                 session.view.operation = std::move(result).Value();
-            else
+                if (session.view.operation->publication && session.authoredOverlays) {
+                    auto overlays =
+                        NavigationViewportSnapshot::WithCooked(*session.authoredOverlays, session.view.operation->publication->tiles);
+                    if (overlays.HasValue())
+                        session.view.overlays = std::move(overlays).Value();
+                    else
+                        session.view.diagnostic = overlays.ErrorValue();
+                }
+            } else
                 session.view.diagnostic = result.ErrorValue();
         }
     };
@@ -246,6 +296,10 @@ namespace Horo::Editor {
         return {.prepare =
                     [this](const auto &root) {
             return impl_->PrepareProject(root);
+        },
+                .overlays = [this](const std::filesystem::path &root) -> std::shared_ptr<const NavigationViewportSnapshot> {
+            const auto found = impl_->sessions.find(root);
+            return found == impl_->sessions.end() ? nullptr : found->second.view.overlays;
         },
                 .reload =
                     [this](const auto &root) {

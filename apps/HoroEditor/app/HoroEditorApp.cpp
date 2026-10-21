@@ -1792,9 +1792,12 @@ namespace Horo::Editor {
                 return packages->Retire(root);
             }});
             EditorNavigationBakeHost navigationBakes{p.operationServices.operationStore};
+            const auto navigationBakeAccess = navigationBakes.Access();
+            const NavigationViewportAccess navigationOverlayAccess{.prepare = navigationBakeAccess.prepare,
+                                                                   .query = navigationBakeAccess.overlays};
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
-            RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakes.Access(), p.modalHost);
+            RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
             Extensions::ExtensionInventory extensionInventory;
             const Result<void> extensionInventoryRefresh = extensionInventory.Refresh();
             if (extensionInventoryRefresh.HasError()) {
@@ -1858,6 +1861,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
             screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
+            screenHost.Services().RegisterConst<NavigationViewportAccess>(navigationOverlayAccess);
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
             screenHost.Services().RegisterConst<EditorPreviewCollisionReceiptSource>(previewCollisionReceipt);

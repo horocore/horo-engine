@@ -5,6 +5,7 @@
 #include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.h"
+#include "navigation/NavigationOverlayLayer.h"
 
 #include <imgui.h>
 #include <optional>
@@ -59,6 +60,9 @@ namespace Horo::Editor {
         Input::InputRouter *inputRouter_{nullptr};
         Input::InputContextToken *workspaceInputContext_{nullptr};
         ViewportInteractionController interaction_;
+        const NavigationViewportAccess *navigationOverlays_{};
+        NavigationOverlayLayer navigationLayer_;
+        std::filesystem::path navigationProjectRoot_;
         bool lightMarkerFailureReported_{false};
         bool assetPlacementPreviewActive_{false};
         bool assetPlacementCancelled_{false};

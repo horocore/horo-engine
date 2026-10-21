@@ -35,6 +35,7 @@ namespace Horo::Extensions {
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
+    struct NavigationViewportAccess;
     class EditorDataBus;
     class IEditorGuiRenderer;
     class IEditorViewportRenderer;
@@ -58,6 +59,7 @@ namespace Horo::Editor {
         const Application::INetworkDebuggerQuery *networkDebuggerQuery{};
         Application::INetworkDebuggerControl *networkDebuggerControl{};
         Extensions::EditorInspectorHost *extensionInspectors{}; /**< Explicit owner-lane host, outliving panel attachment. */
+        const NavigationViewportAccess *navigationOverlays{};   /**< Explicit owner-lane saved/cooked geometry query. */
         const Extensions::EditorThemeFrame *extensionTheme{};   /**< Current host theme capture; no panel-owned authority. */
     };
 

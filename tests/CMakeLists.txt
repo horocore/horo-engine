@@ -1358,6 +1358,7 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
 
     add_executable(HoroEditorNavigationBakeHostTests
             unit/editor/NavigationBakeWorkspaceTests.cpp
+            unit/editor/NavigationViewportSnapshotTests.cpp
             "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorNavigationBakeHost.cpp")
     target_compile_features(HoroEditorNavigationBakeHostTests PRIVATE cxx_std_20)
     target_include_directories(HoroEditorNavigationBakeHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support
@@ -2876,6 +2877,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/NavigationOverlayRenderTests.cpp
             unit/editor/ColliderViewportRenderTests.cpp
             support/ViewportPanelRenderSupport.h
     )
@@ -2884,6 +2886,8 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroViewportPanelRenderTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
+            ${PROJECT_SOURCE_DIR}/tests/helpers
+            ${PROJECT_SOURCE_DIR}/tests/support
     )
     target_link_libraries(HoroViewportPanelRenderTests
             PRIVATE

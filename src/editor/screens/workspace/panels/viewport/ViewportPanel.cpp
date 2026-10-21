@@ -66,6 +66,8 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnAttach */
     void ViewportPanel::OnAttach(PanelContext &context) {
         viewportRenderer_ = context.viewportRenderer;
+        navigationOverlays_ = context.navigationOverlays;
+        navigationProjectRoot_ = context.projectRoot;
         inputRouter_ = context.inputRouter;
         workspaceInputContext_ = context.workspaceInputContext;
         if (context.inputRouter != nullptr && context.workspaceInputContext != nullptr)
@@ -79,6 +81,9 @@ namespace Horo::Editor {
         workspaceInputContext_ = nullptr;
         viewportRenderer_ = nullptr;
         gridOverride_.reset();
+        navigationOverlays_ = nullptr;
+        navigationLayer_ = {};
+        navigationProjectRoot_.clear();
     }
 
     /** @copydoc ViewportPanel::DrawIcon */
@@ -118,6 +123,15 @@ namespace Horo::Editor {
         const bool hasRenderedViewport = viewportRenderer_ != nullptr && viewportRenderer_->IsReady() && textureView.IsValid();
         DrawViewportSurface(drawList, surfaceLayout, textureView, hasRenderedViewport);
 
+        if (navigationOverlays_ && hasRenderedViewport)
+            navigationLayer_.Draw(*navigationOverlays_, {.projectRoot = navigationProjectRoot_,
+                                                         .scenePath = viewModel.navigationScenePath,
+                                                         .camera = viewModel.viewportCamera,
+                                                         .origin = origin,
+                                                         .size = {width, height},
+                                                         .depthRange = viewportRenderer_->ClipDepthRange(),
+                                                         .gui = context,
+                                                         .dirty = viewModel.isDirty || viewModel.sceneExternalConflict});
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
         else
@@ -254,7 +268,8 @@ namespace Horo::Editor {
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
         const ImVec2 pointer = ImGui::GetMousePos();
-        const bool pointerOverControls = pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F;
+        const bool pointerOverControls =
+            navigationLayer_.CapturesPointer() || (pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F);
         const bool inputEligible =
             inputRouter_ != nullptr && workspaceInputContext_ != nullptr &&
             (inputRouter_->IsContextActive(*workspaceInputContext_) ||
