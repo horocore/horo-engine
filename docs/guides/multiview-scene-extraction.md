@@ -88,7 +88,11 @@ Unsupported tuples fail before recording without silently changing device/backen
 The shipped `assets/shaders/runtime/multiview_mesh.hlsl` uses SV_InstanceID to
 select WorldToClip and a per-object LocalToWorld. Separate cooked
 HORO_MULTIVIEW_LAYER_ROUTING=0/1 variants use single-layer views or
-SV_RenderTargetArrayIndex. `PackMultiviewShaderParameters` only adapts typed
+SV_RenderTargetArrayIndex. The HLSL uses vector-first `mul` because its compiler
+representation reverses matrix operands: final-ABI mathematical values must be
+consumed with matrix-times-column-vector operations in SPIR-V. Native qualification
+checks that operation direction as well as the final reflected layout.
+`PackMultiviewShaderParameters` only adapts typed
 mathematical values; `PackMaterialParameterBinding` remains the sole reflected
 matrix/array offset/order/stride/overlap/padding authority. Prepare/upload outside
 an active frame. Its returned generic byte extent can need native block-tail

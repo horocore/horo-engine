@@ -20,7 +20,10 @@ struct VertexOutput {
 
 VertexOutput VSMain(VertexInput input, uint viewIndex : SV_InstanceID) {
     VertexOutput output;
-    output.position = mul(WorldToClip[viewIndex], mul(LocalToWorld, float4(input.position, 1.0)));
+    // Horo packs mathematical matrices from the final target ABI. HLSL's compiler representation
+    // reverses mul operands; vector-first source preserves matrix-times-column-vector in SPIR-V.
+    // The native fixture checks that direction as well as the final reflected offsets/major order.
+    output.position = mul(mul(float4(input.position, 1.0), LocalToWorld), WorldToClip[viewIndex]);
 #if HORO_MULTIVIEW_LAYER_ROUTING
     output.layer = ViewLayers[viewIndex];
 #else

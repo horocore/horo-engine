@@ -6,11 +6,19 @@ namespace {
         std::memcpy(words.data(), bytes.data(), bytes.size());
         REQUIRE(words.size() >= 5);
         std::uint32_t block{};
+        std::uint32_t matrixTimesVector{}, vectorTimesMatrix{};
         for (std::size_t offset = 5; offset < words.size();) {
             const auto count = words[offset] >> 16;
             REQUIRE(count > 0);
             REQUIRE(count <= words.size() - offset);
-            if ((words[offset] & 0xffffU) == 6 && count >= 4 && words[offset + 2] == 0) {
+            // SPIR-V opcodes 145/144 are matrix*column-vector and row-vector*matrix respectively.
+            // Final-ABI typed matrix values must not silently be consumed with transposed math.
+            const auto opcode = words[offset] & 0xffffU;
+            if (opcode == 145)
+                ++matrixTimesVector;
+            if (opcode == 144)
+                ++vectorTimesMatrix;
+            if (opcode == 6 && count >= 4 && words[offset + 2] == 0) {
                 const char *name = reinterpret_cast<const char *>(words.data() + offset + 3);
                 const auto *end = static_cast<const char *>(std::memchr(name, 0, (count - 3) * 4));
                 REQUIRE(end != nullptr);
@@ -20,6 +28,8 @@ namespace {
             offset += count;
         }
         REQUIRE(block != 0);
+        CHECK(matrixTimesVector == 2);
+        CHECK(vectorTimesMatrix == 0);
         auto layout = MultiviewTest::Layout();
         layout.parameters[0].arrayCount = 32;
         layout.parameters[2].arrayCount = 32;
