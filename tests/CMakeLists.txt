@@ -2816,6 +2816,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputPaneTests.cpp
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
+            unit/editor/PrefabAssetBrowserRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
             unit/editor/PlayTopologyModalTests.cpp
     )
@@ -3196,6 +3197,7 @@ add_executable(HoroSceneDocumentTests
         unit/editor/PrefabCreationTests.cpp
         unit/editor/PrefabCreationSchemaTests.cpp
         unit/editor/PrefabDocumentSessionTests.cpp
+        unit/editor/PrefabAssetPreviewTests.cpp
 )
 
 add_library(HoroPrefabCreationPublicHeaderConsumer OBJECT support/PrefabCreationPublicContract.cpp)

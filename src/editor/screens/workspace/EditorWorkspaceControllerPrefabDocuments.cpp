@@ -220,6 +220,9 @@ namespace Horo::Editor {
             m_viewModel.prefabDocumentError = result.ErrorValue();
         else {
             m_viewModel.prefabDocumentError.reset();
+            if (!command.prefabEdit &&
+                (command.prefabAction == PrefabDocumentAction::Reload || command.prefabAction == PrefabDocumentAction::DiscardAndReload))
+                ScheduleContentBrowserPreviews();
             if (command.prefabAction == PrefabDocumentAction::DiscardRecovery) {
                 m_viewModel.prefabRecovery.reset();
                 m_viewModel.prefabRecoveryAvailable = false;
@@ -250,6 +253,7 @@ namespace Horo::Editor {
                 auto saved = document.Save(fence, *m_mutations, *m_durableFiles);
                 if (saved.HasError())
                     return Result<void>::Failure(saved.ErrorValue());
+                ScheduleContentBrowserPreviews();
                 return saved.Value().status == Assets::AssetSourcePublicationStatus::Durable
                            ? Result<void>::Success()
                            : Result<void>::Failure(*saved.Value().durabilityError);
@@ -276,20 +280,32 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::SavePrefabDocuments */
     Result<void> EditorWorkspaceController::SavePrefabDocuments() {
+        Result<void> outcome = Result<void>::Success();
+        bool savedAny{};
         for (const auto &entry : m_prefabDocuments) {
             const auto snapshot = entry->Snapshot();
             if (!snapshot.dirty)
                 continue;
-            if (!m_mutations || !m_durableFiles)
-                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+            if (!m_mutations || !m_durableFiles) {
+                outcome = Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+                break;
+            }
             auto result = entry->Save(snapshot.fence, *m_mutations, *m_durableFiles);
-            if (result.HasError())
-                return Result<void>::Failure(result.ErrorValue());
-            if (result.Value().status != Assets::AssetSourcePublicationStatus::Durable)
-                return Result<void>::Failure(*result.Value().durabilityError);
+            if (result.HasError()) {
+                outcome = Result<void>::Failure(result.ErrorValue());
+                break;
+            }
+            savedAny = true;
+            if (result.Value().status != Assets::AssetSourcePublicationStatus::Durable) {
+                outcome = Result<void>::Failure(*result.Value().durabilityError);
+                break;
+            }
         }
+        // A partial multi-document save still invalidates every preview of a source already published.
+        if (savedAny)
+            ScheduleContentBrowserPreviews();
         RefreshPrefabDocuments();
-        return Result<void>::Success();
+        return outcome;
     }
 
     /** @copydoc EditorWorkspaceController::UpdatePrefabAutosave */

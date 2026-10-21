@@ -73,9 +73,18 @@ namespace {
         "workspace.global_dock.localization.fonts",
     };
     constexpr std::array contentBrowserKeys{
-        "workspace.content_browser.loading",   "workspace.content_browser.unavailable",      "workspace.content_browser.no_results",
-        "workspace.content_browser.search",    "workspace.content_browser.filter.all_types", "workspace.content_browser.sort.name",
+        "workspace.content_browser.loading",
+        "workspace.content_browser.unavailable",
+        "workspace.content_browser.no_results",
+        "workspace.content_browser.search",
+        "workspace.content_browser.filter.all_types",
+        "workspace.content_browser.sort.name",
         "workspace.content_browser.sort.type",
+        "workspace.content_browser.asset.unregistered",
+        "workspace.content_browser.prefab.type",
+        "workspace.content_browser.preview.queued",
+        "workspace.content_browser.preview.unavailable",
+        "workspace.content_browser.prefab.migration_required",
     };
     constexpr std::array recoveryKeys{
         "workspace.recovery.available",

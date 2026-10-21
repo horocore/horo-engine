@@ -638,6 +638,51 @@ namespace Horo::Editor {
         CHECK(initial.source->Data().objects.front().name == "Source root");
     }
 
+    TEST_CASE("Typed prefab asset activation focuses its persistent document and preserves dirty history",
+              "[editor][prefab][assets][native]") {
+        Workspace workspace("prefab asset ü");
+        auto &owner = *workspace.controller;
+        const auto sceneRevision = owner.ViewModel().documentRevision;
+        EditorWorkspaceViewCommandData open;
+        open.command = EditorWorkspaceViewCommand::OpenSourceFile;
+        open.sourceOpenRequest = SourceOpenRequest{.path = workspace.project.source,
+                                                   .origin = SourceOpenOrigin::AssetActivation,
+                                                   .mode = SourceOpenMode::EmbeddedOnly};
+        owner.ProcessCommand(open);
+        REQUIRE(owner.ViewModel().prefabDocuments.size() == 1);
+        const auto initial = owner.ViewModel().prefabDocuments.front();
+        CHECK(initial.identity.key.kind == DocumentKind::Prefab);
+        CHECK_FALSE(workspace.navigated.has_value());
+        EditorWorkspaceViewCommandData edit;
+        edit.command = EditorWorkspaceViewCommand::PrefabDocument;
+        edit.prefabFence = initial.fence;
+        edit.prefabEdit = RenamePrefabObject{{0}, "Browser source edit"};
+        owner.ProcessCommand(edit);
+        REQUIRE(owner.ViewModel().prefabDocuments.front().dirty);
+        owner.ProcessCommand(open);
+        REQUIRE(owner.ViewModel().prefabDocuments.size() == 1);
+        CHECK(owner.ViewModel().prefabDocuments.front().identity.instance == initial.identity.instance);
+        CHECK(owner.ViewModel().prefabDocuments.front().dirty);
+        EditorWorkspaceViewCommandData save;
+        save.command = EditorWorkspaceViewCommand::PrefabDocument;
+        save.prefabFence = owner.ViewModel().prefabDocuments.front().fence;
+        save.prefabAction = PrefabDocumentAction::Save;
+        owner.ProcessCommand(save);
+        CHECK_FALSE(owner.ViewModel().prefabDocuments.front().dirty);
+        CHECK(owner.ViewModel().prefabDocuments.front().source->Data().objects.front().name == "Browser source edit");
+        owner.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = initial.identity.instance});
+        REQUIRE(owner.ViewModel().prefabDocuments.empty());
+        CHECK_FALSE(owner.ViewModel().workspacePanelHost.ActiveDocument().has_value());
+        owner.ProcessCommand(open);
+        REQUIRE(owner.ViewModel().prefabDocuments.size() == 1);
+        CHECK(owner.ViewModel().prefabDocuments.front().identity.instance != initial.identity.instance);
+        CHECK_FALSE(owner.ViewModel().prefabDocuments.front().dirty);
+        CHECK(owner.ViewModel().prefabDocuments.front().source->Data().objects.front().name == "Browser source edit");
+        CHECK(owner.ViewModel().documentRevision == sceneRevision);
+        CHECK_FALSE(owner.ViewModel().isDirty);
+    }
+
     TEST_CASE("Switching prefab documents retires preview without losing source history or granting Scene edits",
               "[editor][prefab][native]") {
         Workspace workspace;

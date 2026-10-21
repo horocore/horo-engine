@@ -2820,7 +2820,8 @@ target_link_libraries(HoroSceneCook PUBLIC HoroEngine::RuntimeScene
 add_library(HoroPrefabHierarchyInternal INTERFACE)
 set(_horo_prefab_hierarchy_headers "${CMAKE_CURRENT_BINARY_DIR}/prefab_hierarchy_internal")
 file(MAKE_DIRECTORY "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab")
-foreach(header IN ITEMS PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h PrefabCreation.h)
+foreach(header IN ITEMS
+        PrefabHierarchyProjection.h PrefabHierarchyCommand.h PrefabHierarchySources.h PrefabCreation.h PrefabAssetPreview.h)
     configure_file("editor/screens/workspace/prefab/${header}"
         "${_horo_prefab_hierarchy_headers}/editor/screens/workspace/prefab/${header}" COPYONLY)
 endforeach()
@@ -3030,6 +3031,7 @@ add_library(HoroEditorServices STATIC
         editor/gameplay/ProjectGameplayRegistry.cpp
         editor/gameplay/EditorPlaySessionController.cpp
         editor/screens/workspace/ContentBrowserModel.cpp
+        editor/screens/workspace/prefab/PrefabAssetPreview.cpp
         editor/screens/workspace/GameplayBehaviorRequestValidation.cpp
         editor/modals/gameplay_behavior/GameplayBehaviorFilenameModalState.cpp
         editor/modals/build_release/BuildReleaseModalSession.cpp
