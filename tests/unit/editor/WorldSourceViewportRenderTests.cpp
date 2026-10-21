@@ -49,6 +49,14 @@ namespace {
         }
     };
 
+    struct FrameOptions {
+        bool eligible{true};
+        bool focused{true};
+        ImVec2 size{640, 480};
+        ImVec2 origin{};
+        Math::ClipDepthRange depth{Math::ClipDepthRange::NegativeOneToOne};
+    };
+
     /** @brief Headless ImGui frames exercise the actual viewport adapter without a GPU or substitute command producer. */
     struct Harness {
         GuiOwner gui;
@@ -88,17 +96,17 @@ namespace {
             ImGui::Render();
         }
 
-        StepResult Step(WorldSourceViewportTool &tool, const EditorWorkspaceViewModel &view, ImVec2 mouse, bool down, bool eligible = true,
-                        bool focused = true) {
+        StepResult Step(WorldSourceViewportTool &tool, const EditorWorkspaceViewModel &view, ImVec2 mouse, bool down,
+                        const FrameOptions &options = {}) {
             auto &io = ImGui::GetIO();
             io.MousePos = mouse;
             io.MouseDown[0] = down;
-            Begin({640, 480});
-            if (!focused)
+            Begin(options.size);
+            if (!options.focused)
                 ImGui::SetWindowFocus(nullptr);
             StepResult result;
-            result.captured = tool.Draw(*ImGui::GetWindowDrawList(), {0, 0}, {640, 480}, view, result.command, context,
-                                        Math::ClipDepthRange::NegativeOneToOne, eligible);
+            result.captured = tool.Draw(*ImGui::GetWindowDrawList(), options.origin, options.size, view, result.command, context,
+                                        options.depth, options.eligible);
             End();
             return result;
         }
@@ -158,10 +166,10 @@ namespace {
             eligible = false;
         }
         WorldSourceViewportTool tool;
-        static_cast<void>(harness.Step(tool, view, {320, 240}, false, eligible));
-        const auto clicked = harness.Step(tool, view, {320, 240}, true, eligible);
+        static_cast<void>(harness.Step(tool, view, {320, 240}, false, {.eligible = eligible}));
+        const auto clicked = harness.Step(tool, view, {320, 240}, true, {.eligible = eligible});
         CHECK_FALSE(clicked.captured);
-        const auto released = harness.Step(tool, view, {340, 240}, false, eligible);
+        const auto released = harness.Step(tool, view, {340, 240}, false, {.eligible = eligible});
         CHECK(released.command.command == EditorWorkspaceViewCommand::None);
         CHECK(world.Snapshot().Value() == original);
     }
@@ -175,29 +183,41 @@ namespace {
         WorldSourceViewportTool tool;
         static_cast<void>(harness.Step(tool, view, {320, 240}, false));
         REQUIRE(harness.Step(tool, view, {320, 240}, true).captured);
-        bool eligible = true;
-        bool focused = true;
+        FrameOptions options;
         SECTION("origin") {
             view.worldViewport.globalOrigin = Point::FromMillimeters(1, 0, 0);
         }
         SECTION("view incarnation") {
             ++view.worldViewport.viewRevision;
         }
+        SECTION("camera pose changes within the same view") {
+            view.viewportCamera.position.x += 1;
+            view.viewportCamera.target.x += 1;
+        }
         SECTION("document replacement") {
             view.worldViewport.snapshot = world.Replace(Document(), original->fence).Value();
         }
         SECTION("input revocation") {
-            eligible = false;
+            options.eligible = false;
         }
         SECTION("focus loss") {
-            focused = false;
+            options.focused = false;
         }
         SECTION("escape") {
             ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, true);
         }
-        static_cast<void>(harness.Step(tool, view, {340, 240}, true, eligible, focused));
+        SECTION("surface extent replacement") {
+            options.size.x = 700;
+        }
+        SECTION("surface origin replacement") {
+            options.origin.x = 10;
+        }
+        SECTION("depth convention replacement") {
+            options.depth = Math::ClipDepthRange::ZeroToOne;
+        }
+        static_cast<void>(harness.Step(tool, view, {340, 240}, true, options));
         ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, false);
-        const auto released = harness.Step(tool, view, {340, 240}, false, eligible, focused);
+        const auto released = harness.Step(tool, view, {340, 240}, false, options);
         CHECK(released.command.command == EditorWorkspaceViewCommand::None);
         CHECK(world.Snapshot().Value()->document.sources == original->document.sources);
     }
