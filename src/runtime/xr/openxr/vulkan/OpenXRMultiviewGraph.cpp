@@ -285,18 +285,19 @@ namespace Horo::XR::OpenXRInternal {
             auto impl = std::make_unique<Impl>(frontend, scene, queue, limits);
             if (const auto live = impl->Validate(active); live.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(live.ErrorValue());
-            auto builder = RenderGraphBuilder::Create({1, Impl::MaximumResources, Impl::MaximumResources, 1});
-            if (builder.HasError())
-                return Result<OpenXRMultiviewGraph>::Failure(builder.ErrorValue());
-            auto pass = builder.Value().AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
+            auto created = RenderGraphBuilder::Create({1, Impl::MaximumResources, Impl::MaximumResources, 1});
+            if (created.HasError())
+                return Result<OpenXRMultiviewGraph>::Failure(created.ErrorValue());
+            auto builder = std::move(created).Value();
+            const auto pass = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
             if (pass.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(pass.ErrorValue());
             Impl::GraphInputs inputs;
-            if (const auto targets = impl->PrepareTargets(builder.Value(), owners, views, inputs); targets.HasError())
+            if (const auto targets = impl->PrepareTargets(builder, owners, views, inputs); targets.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(targets.ErrorValue());
-            if (const auto meshes = impl->PrepareGeometry(builder.Value(), geometry, inputs); meshes.HasError())
+            if (const auto meshes = impl->PrepareGeometry(builder, geometry, inputs); meshes.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(meshes.ErrorValue());
-            if (const auto compiled = impl->Compile(builder.Value(), pass.Value(), inputs); compiled.HasError())
+            if (const auto compiled = impl->Compile(builder, pass.Value(), inputs); compiled.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(compiled.ErrorValue());
             return Result<OpenXRMultiviewGraph>::Success(OpenXRMultiviewGraph{std::move(impl)});
         } catch (const std::bad_alloc &) {
