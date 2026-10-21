@@ -26,6 +26,32 @@ namespace Horo::Editor {
             return result;
         }
 
+        /** @brief Resolves the canonical scene transform only from the current host-owned selection. */
+        [[nodiscard]] bool ContributionSelectionEditable(const EditorWorkspaceViewModel &viewModel) {
+            bool editable = false;
+            if (viewModel.primarySelection) {
+                const auto selected = std::ranges::find(viewModel.objects, *viewModel.primarySelection, &SceneObject::id);
+                editable = selected != viewModel.objects.end() && selected->effectivelyVisible && !selected->effectivelyLocked &&
+                           viewModel.primarySelectionWorldTransform.has_value() &&
+                           viewModel.primarySelectionParentWorldTransform.has_value();
+            }
+            return editable;
+        }
+
+        /** @brief Resolves provider semantic tones through the active host theme without exposing rendering resources. */
+        [[nodiscard]] ImU32 ContributionLineColor(const Extensions::EditorViewportTone tone) {
+            switch (tone) {
+                case Extensions::EditorViewportTone::Neutral:
+                    return Theme::U32(Theme::Text());
+                case Extensions::EditorViewportTone::X:
+                    return Theme::U32(Theme::Err());
+                case Extensions::EditorViewportTone::Y:
+                    return Theme::U32(Theme::Ok());
+                default:
+                    return Theme::U32(Theme::Accent());
+            }
+        }
+
         [[nodiscard]] bool ResolveLightMarkerInteraction(const Result<std::optional<SceneObjectId>> &clickedLight, bool &failureReported,
                                                          EditorWorkspaceViewCommandData &command) {
             if (clickedLight.HasError()) {
@@ -65,7 +91,10 @@ namespace Horo::Editor {
 
     /** @copydoc ViewportPanel::OnAttach */
     void ViewportPanel::OnAttach(PanelContext &context) {
+        contributions_ = context.extensionViewport;
         viewportRenderer_ = context.viewportRenderer;
+        navigationOverlays_ = context.navigationOverlays;
+        navigationProjectRoot_ = context.projectRoot;
         inputRouter_ = context.inputRouter;
         workspaceInputContext_ = context.workspaceInputContext;
         if (context.inputRouter != nullptr && context.workspaceInputContext != nullptr)
@@ -75,10 +104,27 @@ namespace Horo::Editor {
     /** @copydoc ViewportPanel::OnDetach */
     void ViewportPanel::OnDetach() {
         interaction_.Detach();
+        contributions_ = nullptr;
+        activeContribution_ = {};
         inputRouter_ = nullptr;
         workspaceInputContext_ = nullptr;
         viewportRenderer_ = nullptr;
         gridOverride_.reset();
+        navigationOverlays_ = nullptr;
+        navigationLayer_ = {};
+        navigationProjectRoot_.clear();
+    }
+
+    /** @copydoc ViewportPanel::OnPresentationHidden */
+    void ViewportPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &command) {
+        if (!activeContribution_)
+            return;
+        interaction_.CancelContribution();
+        if (EditorWorkspaceViewCommandData cancellation;
+            interaction_.ConsumePendingCancellation(cancellation) && command.command == EditorWorkspaceViewCommand::None)
+            command = std::move(cancellation);
+        activeContribution_ = {};
+        contributionFrame_.count = 0;
     }
 
     /** @copydoc ViewportPanel::DrawIcon */
@@ -121,6 +167,7 @@ namespace Horo::Editor {
         if (std::ranges::any_of(viewModel.prefabDocuments, [&](const auto &entry) {
             return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
         })) {
+            OnPresentationHidden(command);
             // Source-local controls own this stage. Scene picking, overlays and drag/drop
             // cannot bind its isolated runtime projection to the containing Scene document.
             if (!hasRenderedViewport)
@@ -130,6 +177,20 @@ namespace Horo::Editor {
             return;
         }
 
+        if (navigationOverlays_ && hasRenderedViewport)
+            navigationLayer_.Draw(*navigationOverlays_, {.projectRoot = navigationProjectRoot_,
+                                                         .scenePath = viewModel.navigationScenePath,
+                                                         .camera = viewModel.viewportCamera,
+                                                         .origin = origin,
+                                                         .size = {width, height},
+                                                         .depthRange = viewportRenderer_->ClipDepthRange(),
+                                                         .gui = context,
+                                                         .dirty = viewModel.isDirty || viewModel.sceneExternalConflict});
+        if (activeContribution_ && (!hasRenderedViewport || width <= 0 || height <= 0)) {
+            interaction_.CancelContribution();
+            static_cast<void>(interaction_.ConsumePendingCancellation(command));
+            activeContribution_ = {};
+        }
         if (hasRenderedViewport && width > 0.0F && height > 0.0F)
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
         else
@@ -267,26 +328,78 @@ namespace Horo::Editor {
         return active;
     }
 
+    /** @copydoc ViewportPanel::CancelUnavailableContribution */
+    bool ViewportPanel::CancelUnavailableContribution(Extensions::EditorViewportTool tool, bool eligible,
+                                                      EditorWorkspaceViewCommandData &command) {
+        if (!activeContribution_ || (contributions_ && eligible && contributions_->IsLive(activeContribution_, tool)))
+            return false;
+        interaction_.CancelContribution();
+        static_cast<void>(interaction_.ConsumePendingCancellation(command));
+        activeContribution_ = {};
+        return true;
+    }
+
+    /** @copydoc ViewportPanel::PrepareContributions */
+    Extensions::EditorViewportPick ViewportPanel::PrepareContributions(const ViewportSurfaceLayout &layout,
+                                                                       Extensions::EditorViewportTool tool, bool editable, bool canPick) {
+        contributionFrame_.count = 0;
+        if (!contributions_)
+            return {};
+        contributions_->Extract(contributionFrame_, tool, editable, true);
+        if (!canPick || !editable)
+            return {};
+        const auto pointer = ImGui::GetMousePos();
+        return contributions_->Pick(contributionFrame_, (pointer.x - layout.origin.x) / layout.width,
+                                    (pointer.y - layout.origin.y) / layout.height, layout.width, layout.height);
+    }
+
+    /** @copydoc ViewportPanel::RenderContributions */
+    void ViewportPanel::RenderContributions(ImDrawList &drawList, const ViewportSurfaceLayout &layout) const {
+        drawList.PushClipRect(layout.origin, {layout.origin.x + layout.width, layout.origin.y + layout.height}, true);
+        for (std::size_t i = 0; i < contributionFrame_.count; ++i) {
+            const auto &line = contributionFrame_.lines[i].line;
+            const ImU32 color = ContributionLineColor(line.tone);
+            drawList.AddLine({layout.origin.x + line.x0 * layout.width, layout.origin.y + line.y0 * layout.height},
+                             {layout.origin.x + line.x1 * layout.width, layout.origin.y + line.y1 * layout.height}, color, line.thickness);
+        }
+        drawList.PopClipRect();
+    }
+
+    /** @copydoc ViewportPanel::PrepareViewportInput */
+    bool ViewportPanel::PrepareViewportInput(const ViewportSurfaceLayout &layout, bool inputEligible, bool surfaceInteractive) {
+        if (!surfaceInteractive)
+            return false;
+        ImGui::SetCursorScreenPos(layout.origin);
+        ImGui::InvisibleButton("##ViewportSurface", {layout.width, layout.height},
+                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
+        return inputEligible && ImGui::IsItemHovered();
+    }
+
+    /** @copydoc ViewportPanel::ViewportInputEligible */
+    bool ViewportPanel::ViewportInputEligible() const noexcept {
+        return inputRouter_ != nullptr && workspaceInputContext_ != nullptr &&
+               (inputRouter_->IsContextActive(*workspaceInputContext_) ||
+                (interaction_.IsActive() && !inputRouter_->HasHigherPriorityContext(Input::InputContextKind::EditorToolCapture)));
+    }
+
     void ViewportPanel::DrawInteractiveViewport(ImDrawList &drawList, const ViewportSurfaceLayout &layout,
                                                 const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                                 const EditorGuiContext &context, const Math::ClipDepthRange depthRange) {
         const ImVec2 pointer = ImGui::GetMousePos();
-        const bool pointerOverControls = pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F;
-        const bool inputEligible =
-            inputRouter_ != nullptr && workspaceInputContext_ != nullptr &&
-            (inputRouter_->IsContextActive(*workspaceInputContext_) ||
-             (interaction_.IsActive() && !inputRouter_->HasHigherPriorityContext(Input::InputContextKind::EditorToolCapture)));
+        const bool pointerOverControls =
+            navigationLayer_.CapturesPointer() || (pointer.y >= layout.origin.y && pointer.y <= layout.origin.y + 100.0F);
+        const bool inputEligible = ViewportInputEligible();
         const bool surfaceInteractive = !pointerOverControls || interaction_.IsActive();
-        bool surfaceHovered = false;
-        if (surfaceInteractive) {
-            ImGui::SetCursorScreenPos(layout.origin);
-            ImGui::InvisibleButton("##ViewportSurface", {layout.width, layout.height},
-                                   ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight |
-                                       ImGuiButtonFlags_MouseButtonMiddle);
-            surfaceHovered = inputEligible && ImGui::IsItemHovered();
-        }
+        const bool surfaceHovered = PrepareViewportInput(layout, inputEligible, surfaceInteractive);
         if (!surfaceInteractive)
             CancelAssetPlacementPreview(command);
+        const auto tool = static_cast<Extensions::EditorViewportTool>(viewModel.activeTransformTool);
+        const bool editable = viewModel.selectedColliders.empty() && ContributionSelectionEditable(viewModel);
+        if (CancelUnavailableContribution(tool, editable && inputEligible, command))
+            return;
+        const auto contributedPick =
+            PrepareContributions(layout, tool, editable,
+                                 surfaceHovered && !interaction_.IsActive() && ImGui::GetDragDropPayload() == nullptr);
         const bool assetDragActive =
             inputEligible && surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, context, depthRange);
         const Result<std::optional<SceneObjectId>> clickedLight =
@@ -296,7 +409,7 @@ namespace Horo::Editor {
                                       .height = layout.height,
                                       .camera = viewModel.viewportCamera,
                                       .depthRange = depthRange,
-                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive &&
+                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !contributedPick &&
                                                      viewModel.selectedColliders.empty()},
                                      viewModel.viewportLights, viewModel.primarySelection);
         if (!inputEligible)
@@ -312,8 +425,14 @@ namespace Horo::Editor {
                                .command = command,
                                .gui = context,
                                .deltaSeconds = ImGui::GetIO().DeltaTime,
+                               .contributedAxis = contributedPick ? std::optional{contributedPick.axis} : std::nullopt,
                                .depthRange = depthRange});
+            if (contributedPick && interaction_.IsActive() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                activeContribution_ = contributedPick;
+            if (!interaction_.IsActive())
+                activeContribution_ = {};
         }
+        RenderContributions(drawList, layout);
     }
 
     void ViewportPanel::RequestViewportExtent(const float width, const float height) const noexcept {

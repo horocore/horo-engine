@@ -15,6 +15,8 @@
 #include <vector>
 
 namespace Horo::Extensions {
+    /** @brief Explicit host grant required for advanced custom UI presentation; grants no document or native-resource access. */
+    inline const ExtensionCapabilityId EditorCustomCompositionCapability{"horo.editor.custom-composition"};
     struct EditorSurfaceContextProviderState;
     struct EditorSurfaceContextState;
 
@@ -130,6 +132,12 @@ namespace Horo::Extensions {
 
         /** @brief Returns the approved diagnostic identities in host-provided order. */
         [[nodiscard]] std::span<const EditorSurfaceDiagnosticCode> Diagnostics() const noexcept;
+
+        /** @brief Observes a sealed live grant without allocation; this does not admit a callback or document command.
+         * @param capability Capability identity. @return True while its exact attached grant and context remain usable.
+         * @details Dispatch still requires AcquireCapabilityUse and its held lease. Intended for host-owned cached presentation.
+         */
+        [[nodiscard]] bool HasUsableCapability(const ExtensionCapabilityId &capability) const noexcept;
 
         /**
          * @brief Returns an activation-scoped use lease for one approved capability.

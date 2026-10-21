@@ -131,15 +131,14 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::InitializeWorkspaceLayout() {
-        m_viewModel.panelDockAreas = {{"horo.hierarchy", WorkspaceDockArea::Left},
-                                      {"horo.viewport", WorkspaceDockArea::Document},
-                                      {"horo.game", WorkspaceDockArea::Document},
-                                      {"horo.global_dock", WorkspaceDockArea::Bottom},
-                                      {"horo.inspector", WorkspaceDockArea::Right}};
+        m_viewModel.panelDockAreas = {{"horo.hierarchy", WorkspaceDockArea::Left},    {"horo.viewport", WorkspaceDockArea::Document},
+                                      {"horo.game", WorkspaceDockArea::Document},     {"horo.global_dock", WorkspaceDockArea::Bottom},
+                                      {"horo.navigation", WorkspaceDockArea::Bottom}, {"horo.inspector", WorkspaceDockArea::Right}};
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.hierarchy", ActivityBarSlot{ActivityBarRail::Left, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.viewport", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.game", ActivityBarSlot{ActivityBarRail::DocumentTop, 0, 1}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.global_dock", ActivityBarSlot{ActivityBarRail::Left, 2, 0}));
+        static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.navigation", ActivityBarSlot{ActivityBarRail::Left, 3, 0}));
         static_cast<void>(m_viewModel.activityBarLayout.Insert("horo.inspector", ActivityBarSlot{ActivityBarRail::Right, 0, 0}));
     }
 

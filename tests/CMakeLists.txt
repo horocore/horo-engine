@@ -665,7 +665,8 @@ target_link_libraries(HoroAudioComponentPreviewHostTests PRIVATE HoroEngine::Edi
     HoroEngine::AudioImport HoroEngine::AudioNull)
 horo_register_catch_test(HoroAudioComponentPreviewHostTests LABELS "unit;audio;editor;headless;lifecycle")
 target_sources(HoroAudioFrontendPublicHeaderConsumer PRIVATE support/AudioFrontendPublicContract.cpp)
-target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/AudioEditorDocumentPublicContract.cpp)
+target_sources(HoroEditorServicesPublicHeaderConsumer PRIVATE support/AudioEditorDocumentPublicContract.cpp
+        support/NavigationBakeWorkspacePublicConsumer.cpp)
 target_sources(HoroAudioDspPublicHeaderConsumer PRIVATE support/CoreStereoSpatialPublicContract.cpp)
 add_executable(HoroCoreAudioDspTests
     support/AllocationProbe.cpp
@@ -1354,6 +1355,18 @@ if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
             HORO_TEST_NAVIGATION_MCP_SCRIPT="${PROJECT_SOURCE_DIR}/tests/integration/cli_navigation_mcp_contract.py")
     add_dependencies(HoroNavigationNativeCliTests horo-engine)
     horo_register_catch_test(HoroNavigationNativeCliTests LABELS "unit;navigation;cli;integration;headless;ci-windows;sonar-coverage")
+
+    add_executable(HoroEditorNavigationBakeHostTests
+            unit/editor/NavigationBakeWorkspaceTests.cpp
+            unit/editor/NavigationViewportSnapshotTests.cpp
+            "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorNavigationBakeHost.cpp")
+    target_compile_features(HoroEditorNavigationBakeHostTests PRIVATE cxx_std_20)
+    target_include_directories(HoroEditorNavigationBakeHostTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support
+            "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app")
+    target_link_libraries(HoroEditorNavigationBakeHostTests PRIVATE Catch2::Catch2WithMain HoroEngine::EditorServices
+            HoroNativeNavigationBakeHost HoroEngine::NavigationRecastDetour HoroEngine::PlatformProjectIo
+            HoroEngine::PlatformProjectReadFiles)
+    horo_register_catch_test(HoroEditorNavigationBakeHostTests LABELS "unit;editor;navigation;headless;ci-windows;sonar-coverage;native")
 
     add_executable(HoroNavigationBakeApplicationTests unit/application/navigation/NavigationBakeApplicationTests.cpp)
     target_compile_features(HoroNavigationBakeApplicationTests PRIVATE cxx_std_20)
@@ -2819,6 +2832,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/PrefabAssetBrowserRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
             unit/editor/PlayTopologyModalTests.cpp
+            unit/editor/NavigationBakeRenderTests.cpp
     )
 
     target_link_libraries(HoroGlobalDockPanelRenderTests PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::Platform)
@@ -2872,6 +2886,8 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroViewportPanelRenderTests
             unit/editor/ViewportPanelRenderTests.cpp
+            unit/editor/NavigationOverlayRenderTests.cpp
+            unit/editor/ViewportOverlayRenderTests.cpp
             unit/editor/ColliderViewportRenderTests.cpp
             support/ViewportPanelRenderSupport.h
     )
@@ -2880,6 +2896,8 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroViewportPanelRenderTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/support
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
+            ${PROJECT_SOURCE_DIR}/tests/helpers
+            ${PROJECT_SOURCE_DIR}/tests/support
     )
     target_link_libraries(HoroViewportPanelRenderTests
             PRIVATE
@@ -4479,9 +4497,11 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/EditorActivityRegistryTests.cpp
         unit/extensions/EditorCommandRegistryTests.cpp
         unit/extensions/EditorUiFormTests.cpp
+        unit/extensions/EditorUiCompositionTests.cpp
         unit/extensions/EditorPageDefinitionTests.cpp
         unit/extensions/EditorPageHostTests.cpp
         unit/extensions/EditorPageNativeTests.cpp
+        unit/extensions/EditorViewportHostTests.cpp
         unit/extensions/EditorInspectorNativeTests.cpp
         unit/extensions/EditorInspectorDefinitionTests.cpp
         unit/extensions/ExtensionManagerTests.cpp
@@ -4494,6 +4514,12 @@ add_executable(HoroExtensionManagerTests
         unit/extensions/ExternalImporterRegistrationTests.cpp
         integration/extensions/HeadlessExtensionHostTests.cpp
 )
+add_library(HoroEditorViewportFixture MODULE fixtures/extensions/EditorViewportModule.c)
+target_compile_features(HoroEditorViewportFixture PRIVATE c_std_11)
+set_target_properties(HoroEditorViewportFixture PROPERTIES C_EXTENSIONS OFF)
+target_link_libraries(HoroEditorViewportFixture PRIVATE HoroEngine::Extensions)
+add_dependencies(HoroExtensionManagerTests HoroEditorViewportFixture)
+target_compile_definitions(HoroExtensionManagerTests PRIVATE HORO_EDITOR_VIEWPORT_FIXTURE="$<TARGET_FILE:HoroEditorViewportFixture>")
 add_library(HoroEditorInspectorFixture MODULE fixtures/extensions/EditorInspectorModule.c)
 target_compile_features(HoroEditorInspectorFixture PRIVATE c_std_11)
 set_target_properties(HoroEditorInspectorFixture PROPERTIES C_EXTENSIONS OFF)
@@ -5328,7 +5354,7 @@ add_executable(HoroNavigationHostErrorTests unit/application/navigation/Navigati
 target_compile_features(HoroNavigationHostErrorTests PRIVATE cxx_std_20)
 target_include_directories(HoroNavigationHostErrorTests PRIVATE "${PROJECT_SOURCE_DIR}/apps/horo-engine/cli_host")
 target_compile_definitions(HoroNavigationHostErrorTests PRIVATE "$<TARGET_PROPERTY:horo-engine,COMPILE_DEFINITIONS>")
-target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
+target_link_libraries(HoroNavigationHostErrorTests PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo HoroEngine::CliHost HoroEngine::HostErrors
     HoroEngine::NavigationBakeAutomation HoroEngine::PlatformProjectReadFiles HoroEngine::PlatformImmutableFileStorage HoroEngine::McpRegistry HoroEngine::Security HoroEngine::NavigationRecastDetour HoroEngine::CliNavigationAdapters)
 horo_register_catch_test(HoroNavigationHostErrorTests LABELS "unit;navigation;cli;headless;ci-windows;sonar-coverage")
 

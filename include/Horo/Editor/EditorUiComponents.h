@@ -627,8 +627,8 @@ namespace Horo::Editor::Ui {
         const char *title = "";         /**< Visible title-bar text. */
         ImVec2 requestedSize = {Theme::Layout::ModalW, Theme::Layout::ModalH};
         float viewportPadding = 48.0F;
-        float minimumWidth = 360.0F;
-        float minimumHeight = 360.0F;
+        float minimumWidth = 360.0F;  /**< Preferred lower bound, limited by the usable placement region. */
+        float minimumHeight = 360.0F; /**< Preferred lower bound, limited by the usable placement region. */
         float headerHeight = Theme::Layout::HeaderH;
         float headerHorizontalPadding = 22.0F; /**< Title inset; keeps the shared default unless a modal requests a compact header. */
         float footerHeight = Theme::Layout::FooterH;

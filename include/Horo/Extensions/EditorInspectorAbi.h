@@ -6,7 +6,8 @@
 #define HORO_EDITOR_INSPECTOR_HOST_CAPABILITY "editor.inspector"
 
 enum {
-    HORO_EDITOR_INSPECTOR_SCHEMA_VERSION = 1
+    HORO_EDITOR_INSPECTOR_SCHEMA_VERSION = 1,
+    HORO_EDITOR_INSPECTOR_COMPOSITION_SCHEMA_VERSION = 2
 };
 
 enum HoroEditorInspectorKind {
@@ -65,6 +66,23 @@ struct HoroEditorInspectorDescriptor {
 #ifndef __cplusplus
 typedef struct HoroEditorInspectorDescriptor HoroEditorInspectorDescriptor;
 #endif
+/** @brief Versioned custom presentation for one existing field; the binding and value authority remain unchanged. */
+struct HoroEditorInspectorPresentation {
+    HoroExtensionStringView nodeId;
+    HoroEditorUiCustomPresentation presentation;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorInspectorPresentation HoroEditorInspectorPresentation;
+#endif
+/** @brief Schema two prefix extension; presentationNodes use the schema two activity-node stride. */
+struct HoroEditorInspectorDescriptorV2 {
+    HoroEditorInspectorDescriptor base;
+    const HoroEditorInspectorPresentation *presentations;
+    uint32_t presentationCount;
+};
+#ifndef __cplusplus
+typedef struct HoroEditorInspectorDescriptorV2 HoroEditorInspectorDescriptorV2;
+#endif
 /** @brief Checks a borrowed inspector string bound before its deep host copy.
  * @param text Call-lifetime view. @param maximum Maximum admitted bytes. @return Nonzero for bounded paired storage.
  */
@@ -97,7 +115,9 @@ static inline int HoroEditorInspectorFieldShape(const HoroEditorInspectorField *
  * @details Nonnull supplied native memory must cover its declared extent. These checks are not a memory sandbox or permission grant.
  */
 static inline int HoroEditorInspectorDescriptorShape(const HoroEditorInspectorDescriptor *descriptor) {
-    if (!descriptor || descriptor->structSize < sizeof(*descriptor) || descriptor->schemaVersion != HORO_EDITOR_INSPECTOR_SCHEMA_VERSION ||
+    if (!descriptor || descriptor->structSize < sizeof(*descriptor) ||
+        (descriptor->schemaVersion != HORO_EDITOR_INSPECTOR_SCHEMA_VERSION &&
+         descriptor->schemaVersion != HORO_EDITOR_INSPECTOR_COMPOSITION_SCHEMA_VERSION) ||
         descriptor->kind > HORO_EDITOR_PROPERTY_DRAWER || descriptor->behaviorSchemaVersion == 0 ||
         !HoroEditorInspectorTextShape(descriptor->surfaceId, 256) || !HoroEditorInspectorTextShape(descriptor->labelKey, 128) ||
         !HoroEditorInspectorTextShape(descriptor->behaviorType, 160) || !HoroEditorInspectorTextShape(descriptor->propertyField, 96) ||
@@ -106,6 +126,17 @@ static inline int HoroEditorInspectorDescriptorShape(const HoroEditorInspectorDe
         (descriptor->messageCount != 0 && !descriptor->messages) || descriptor->permissionCount > 32 ||
         (descriptor->permissionCount != 0 && !descriptor->permissions))
         return 0;
+    if (descriptor->schemaVersion == HORO_EDITOR_INSPECTOR_COMPOSITION_SCHEMA_VERSION) {
+        if (descriptor->structSize < sizeof(HoroEditorInspectorDescriptorV2))
+            return 0;
+        const HoroEditorInspectorDescriptorV2 *extended = (const HoroEditorInspectorDescriptorV2 *)descriptor;
+        if (extended->presentationCount > 64 || (extended->presentationCount && !extended->presentations))
+            return 0;
+        for (uint32_t index = 0; index < extended->presentationCount; ++index)
+            if (!HoroEditorInspectorTextShape(extended->presentations[index].nodeId, 256) ||
+                !HoroEditorUiCustomPresentationShape(&extended->presentations[index].presentation))
+                return 0;
+    }
     for (uint32_t index = 0; index < descriptor->fieldCount; ++index)
         if (!HoroEditorInspectorFieldShape(&descriptor->fields[index]))
             return 0;

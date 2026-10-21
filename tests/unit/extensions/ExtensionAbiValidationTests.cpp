@@ -233,6 +233,9 @@ namespace Horo::Extensions::Tests {
         }};
         const HoroExtensionQueryFunc current = [](HoroExtensionRequirements *requirements) -> HoroExtensionStatus {
             QueryCurrent(requirements);
+            requirements->minimumHostMinor = 6;
+            requirements->requiredHostApiSize =
+                offsetof(HoroExtensionHostApi, registerEditorInspector) + sizeof(HoroRegisterEditorInspectorFunc);
             requirements->requiredFunctions = HORO_EXTENSION_REQUIRES_EDITOR_INSPECTOR;
             return HORO_EXTENSION_SUCCESS;
         };
@@ -251,4 +254,5 @@ namespace Horo::Extensions::Tests {
         host.registerEditorInspector = nullptr;
         CHECK(NegotiateModuleAbi(current, host) == HORO_EXTENSION_ERROR_INVALID_ARGS);
     }
+
 }  // namespace Horo::Extensions::Tests

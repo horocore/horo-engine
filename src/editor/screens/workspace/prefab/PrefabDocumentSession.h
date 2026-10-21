@@ -7,6 +7,9 @@
 #include "Horo/Prefab/PrefabSourceResolver.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
+#include <cstddef>
+#include <span>
+#include <string>
 #include <thread>
 #include <variant>
 
@@ -154,6 +157,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Close(const PrefabDocumentFence &fence, bool discardDirty);
 
     private:
+        /** @brief Materializes bounded parser characters from typed bytes; allocation failure is a typed error. */
+        [[nodiscard]] static Result<std::string> ReadSourceText(std::span<const std::byte> bytes);
+
         struct Delta final {
             Prefab::LocalObjectId object;
             PrefabSourceEdit before;

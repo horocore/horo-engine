@@ -51,6 +51,8 @@ namespace Horo::Editor {
         const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
         m_viewModel.documentRevision = documentSnapshot.revision;
         m_viewModel.assetDropFence = {m_workspaceSession, documentSnapshot.revision, m_document.ReplacementEpoch()};
+        m_viewModel.navigationScenePath =
+            m_defaultScenePath ? m_defaultScenePath->lexically_relative(m_viewModel.projectRoot) : std::filesystem::path{};
         RefreshPhysicsInspectorPort();
         RefreshNavigationInspectorDefinitions();
         m_viewModel.objects.clear();

@@ -3,7 +3,6 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 
-#include <bit>
 #include <chrono>
 
 namespace Horo::Editor {
@@ -144,8 +143,10 @@ namespace Horo::Editor {
         if (record.asset != source_->Data().assetId || record.document != identity_.key || record.acceptedSource != accepted_ ||
             record.payload.empty())
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        const std::string_view text{std::bit_cast<const char *>(record.payload.data()), record.payload.size()};
-        auto parsed = Prefab::PrefabDocument::Parse(text, limits_, {.expectedProjectVersion = source_->Data().projectVersion});
+        auto text = ReadSourceText(record.payload);
+        if (text.HasError())
+            return Result<void>::Failure(text.ErrorValue());
+        auto parsed = Prefab::PrefabDocument::Parse(text.Value(), limits_, {.expectedProjectVersion = source_->Data().projectVersion});
         if (parsed.HasError())
             return Result<void>::Failure(parsed.ErrorValue());
         auto encoded = parsed.Value().SerializeCanonical();

@@ -33,3 +33,25 @@ def test_navigation_policy_does_not_depend_on_editor_local_preferences() -> None
     assert "RequestOpenDefinition" in policy_ui
     assert "PutNavigationProfile" not in policy_ui
     assert "RemoveNavigationProfile" not in policy_ui
+
+
+def test_navigation_bake_copy_is_paired_and_covers_operation_decisions() -> None:
+    english = json.loads((ROOT / "assets/localization/editor/en-US.json").read_text(encoding="utf-8"))["messages"]
+    turkish = json.loads((ROOT / "assets/localization/editor/tr-TR.json").read_text(encoding="utf-8"))["messages"]
+    prefix = "workspace.navigation_bake."
+    keys = {key for key in english if key.startswith(prefix)}
+    assert keys == {key for key in turkish if key.startswith(prefix)}
+    required = {"keep_running", "confirm_cancel", "return", "preparing", "unavailable", "selected_only", "retry",
+                "failed", "cancelling", "succeeded", "cancelled", "resources", "elapsed", "stage", "profiles_hint", "saved_source", "reload"}
+    assert {prefix + suffix for suffix in required} <= keys
+    assert all(english[key]["text"] and turkish[key]["text"] for key in keys)
+
+
+def test_navigation_overlay_copy_covers_all_filters_and_evidence_states() -> None:
+    catalogs = [json.loads((ROOT / f"assets/localization/editor/{locale}.json").read_text(encoding="utf-8"))["messages"]
+                for locale in ("en-US", "tr-TR")]
+    keys = {key for key in catalogs[0] if key.startswith("workspace.navigation_overlay.")}
+    assert keys == {key for key in catalogs[1] if key.startswith("workspace.navigation_overlay.")}
+    for suffix in ("profile", "area", "surface", "validity", "authored", "cooked", "disabled", "unvalidated", "limited", "dirty"):
+        assert "workspace.navigation_overlay." + suffix in keys
+    assert all(catalog[key]["text"] for catalog in catalogs for key in keys)

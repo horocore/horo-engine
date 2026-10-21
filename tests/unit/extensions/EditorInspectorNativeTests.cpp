@@ -18,37 +18,41 @@ namespace Horo::Extensions::Tests {
             Horo::Tests::OwnedTestDirectory directory{"horo110 native inspector"};
             const std::filesystem::path root = directory.Path();
 
-            InspectorPackage() {
+            explicit InspectorPackage(bool composition = false) {
                 const std::filesystem::path library{HORO_EDITOR_INSPECTOR_FIXTURE};
                 std::filesystem::copy_file(library, root / library.filename());
                 std::ofstream manifest{root / "extension.json"};
                 manifest
                     << R"({"id":"fixture.package","version":"1.0.0","modules":[{"id":"fixture.module","version":"1.0.0","kind":"native","roles":["editor-presentation"],"entry":")"
-                    << library.filename().string()
-                    << R"(","abi":{"major":1,"minimumMinor":5},"requiredCapabilities":["editor.inspector"]}],"contributions":[{"type":"editor.inspector","id":"fixture.inspector","module":"fixture.module"}]})";
+                    << library.filename().string() << R"(","abi":{"major":1,"minimumMinor":5},"requiredCapabilities":["editor.inspector")"
+                    << (composition ? R"(,"editor.custom-composition")" : "")
+                    << R"(]}],"contributions":[{"type":"editor.inspector","id":"fixture.inspector","module":"fixture.module"}]})";
             }
         };
 
         /** @brief Explicit host policy supplies the exact permission/capability; the module cannot self-approve document fields. */
-        ExtensionAdmissionPolicy Policy() {
-            return {.revision = 1,
-                    .knownPermissions = {{"editor.inspector"}},
-                    .approvedPermissions = {{"editor.inspector"}},
-                    .availableCapabilities = {EditorInspectorCapability}};
+        ExtensionAdmissionPolicy Policy(bool composition = false) {
+            ExtensionAdmissionPolicy policy{.revision = 1,
+                                            .knownPermissions = {{"editor.inspector"}},
+                                            .approvedPermissions = {{"editor.inspector"}},
+                                            .availableCapabilities = {EditorInspectorCapability}};
+            if (composition)
+                policy.availableCapabilities.push_back(EditorCustomCompositionCapability);
+            return policy;
         }
 
         /** @brief Keeps one real composition alive through native registration and whole-provider retirement. */
         struct Host final {
             JobSystem jobs;
             std::shared_ptr<EditorActivityHost> activities = std::make_shared<EditorActivityHost>(jobs);
-            std::shared_ptr<EditorInspectorHost> inspectors = std::make_shared<EditorInspectorHost>(activities->Registry(), Policy());
-            ExtensionManager manager{nullptr,
-                                     ExtensionHostProfile::Interactive,
-                                     {HORO_EDITOR_INSPECTOR_HOST_CAPABILITY},
-                                     Horo::Tests::CreateAcceptingArtifactGate(),
-                                     {},
-                                     {},
-                                     {.activities = activities, .inspectors = inspectors}};
+            std::shared_ptr<EditorInspectorHost> inspectors;
+            ExtensionManager manager;
+
+            explicit Host(bool composition = false)
+                : inspectors(std::make_shared<EditorInspectorHost>(activities->Registry(), Policy(composition))),
+                  manager(nullptr, ExtensionHostProfile::Interactive,
+                          {HORO_EDITOR_INSPECTOR_HOST_CAPABILITY, HORO_EDITOR_CUSTOM_UI_HOST_CAPABILITY},
+                          Horo::Tests::CreateAcceptingArtifactGate(), {}, {}, {.activities = activities, .inspectors = inspectors}) {}
         };
     }  // namespace
 
@@ -124,4 +128,40 @@ namespace Horo::Extensions::Tests {
                                  Horo::Tests::CreateAcceptingArtifactGate()};
         CHECK(missing.LoadExtension(package.root.string()).HasError());
     }
+
+    TEST_CASE("Native custom scalar schema is copied only with explicit composition admission",
+              "[Extensions][Inspector][Composition][ABI]") {
+        InspectorPackage package{true};
+        auto library =
+            Platform::LoadDynamicLibrary((package.root / std::filesystem::path{HORO_EDITOR_INSPECTOR_FIXTURE}.filename()).string());
+        REQUIRE(library.HasValue());
+        const auto query = reinterpret_cast<void (*)(uint32_t)>(library.Value()->GetSymbol("horo_test_inspector_query_mode"));
+        REQUIRE(query);
+        {
+            Host missing;
+            query(4);
+            CHECK(missing.manager.LoadExtension(package.root.string()).HasError());
+            CHECK(missing.inspectors->Contributions("game.fixture.counter", 3).Value().empty());
+        }
+        Host host{true};
+        query(4);
+        const auto loaded = host.manager.LoadExtension(package.root.string());
+        if (loaded.HasError())
+            UNSCOPED_INFO(loaded.ErrorValue().message);
+        REQUIRE(loaded.HasValue());
+        const auto found = host.inspectors->Contributions("game.fixture.counter", 3);
+        REQUIRE(found.HasValue());
+        REQUIRE(found.Value().size() == 1);
+        const auto &definition = *found.Value().front().definition;
+        REQUIRE(definition.form.nodes.size() == 2);
+        const auto &number = std::get<EditorUiNumberNode>(definition.form.nodes.back().payload);
+        REQUIRE(number.base.custom);
+        CHECK(number.base.custom->widget == EditorUiCustomWidget::ScalarDial);
+        CHECK(number.base.custom->icon == EditorThemeIconRole::Info);
+        CHECK(number.minimum == -1.5);
+        CHECK(number.maximum == 2.5);
+        host.manager.UnloadExtension("fixture.package");
+        CHECK_FALSE(found.Value().front().context.IsUsable());
+    }
+
 }  // namespace Horo::Extensions::Tests

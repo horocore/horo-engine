@@ -1229,6 +1229,8 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/NavigationBakeWorkspace.h
+    Horo/Editor/NavigationViewportSnapshot.h
     Horo/Editor/ProjectCollisionSettingsStore.h
     Horo/Editor/NativeAssetRegistrySource.h
     Horo/Editor/CollisionProjectSettingsSession.h
@@ -1319,6 +1321,8 @@ horo_configure_target_header_boundary(HoroExtensions PUBLIC_HEADERS
     Horo/Extensions/EditorActivityHost.h
     Horo/Extensions/EditorPageDefinition.h
     Horo/Extensions/EditorPageHost.h
+    Horo/Extensions/EditorViewportHost.h
+    Horo/Extensions/EditorViewportAbi.h
     Horo/Extensions/EditorInspectorHost.h
     Horo/Extensions/EditorPageAbi.h
     Horo/Extensions/EditorInspectorAbi.h

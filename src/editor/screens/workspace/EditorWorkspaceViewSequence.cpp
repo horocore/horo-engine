@@ -59,16 +59,13 @@ namespace Horo::Editor {
                             m_context.theme.fonts);
             return;
         }
-        if (area == WorkspaceDockArea::Document && DrawPrefabDocument(viewModel, outCommand))
+        if (area == WorkspaceDockArea::Document &&
+            (DrawPrefabDocument(viewModel, outCommand) || DrawSourceDocument(viewModel, outCommand) || DrawNavigationDocument(viewModel) ||
+             DrawPCGDocument(viewModel, outCommand) || DrawSequenceDocument(viewModel, outCommand))) {
+            if (panel)
+                panel->OnPresentationHidden(outCommand);
             return;
-        if (area == WorkspaceDockArea::Document && DrawSourceDocument(viewModel, outCommand))
-            return;
-        if (area == WorkspaceDockArea::Document && DrawNavigationDocument(viewModel))
-            return;
-        if (area == WorkspaceDockArea::Document && DrawPCGDocument(viewModel, outCommand))
-            return;
-        if (area == WorkspaceDockArea::Document && DrawSequenceDocument(viewModel, outCommand))
-            return;
+        }
         if (panel)
             panel->DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), viewModel, outCommand, m_context);
     }

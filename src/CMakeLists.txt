@@ -2984,6 +2984,7 @@ target_include_directories(HoroPrefabDocumentSessionInternal INTERFACE "$<BUILD_
 target_link_libraries(HoroPrefabDocumentSessionInternal INTERFACE HoroEditorPlaySceneHostInternal)
 
 add_library(HoroEditorServices STATIC
+        editor/navigation/NavigationViewportSnapshot.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/screens/workspace/prefab/PrefabCreation.cpp
         editor/screens/workspace/prefab/PrefabCreationPublication.cpp
@@ -3069,7 +3070,7 @@ target_compile_features(HoroPCGSceneBake PUBLIC cxx_std_20)
 target_link_libraries(HoroPCGSceneBake PUBLIC HoroEngine::PCGSceneAdapter HoroEngine::EditorServices HoroEngine::EditorModel)
 
 add_library(HoroEngine::EditorServices ALIAS HoroEditorServices)
-target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings)
+target_link_libraries(HoroEditorServices PUBLIC HoroEngine::ProjectSettings HoroEngine::NavigationBakeAutomation)
 
 target_compile_features(HoroEditorServices PUBLIC cxx_std_20)
 target_include_directories(HoroEditorServices
@@ -3197,6 +3198,7 @@ endif ()
 if (HORO_BUILD_EDITOR_GUI)
     add_library(HoroGui STATIC
             editor/design_system/components/EditorUiComponents.cpp
+            editor/design_system/components/EditorUiCustomResources.cpp
             editor/design_system/components/SequenceTimelineControl.cpp
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
@@ -3267,6 +3269,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/game/GamePanel.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
             editor/screens/workspace/panels/viewport/ViewportOverlay.cpp
+            editor/screens/workspace/panels/viewport/navigation/NavigationOverlayLayer.cpp
             editor/screens/workspace/panels/viewport/visualizers/light/LightMarkerLayer.cpp
         editor/screens/workspace/panels/viewport/gizmo/TransformGizmoController.cpp
         editor/screens/workspace/panels/viewport/gizmo/ColliderGizmoController.cpp
@@ -3276,6 +3279,8 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/viewport/interaction/ViewportInteractionController.cpp
             editor/screens/workspace/panels/viewport/navigation/ViewportNavigationController.cpp
             editor/screens/workspace/WorkspacePanelRegistry.cpp
+            editor/navigation/NavigationTab.cpp
+            editor/navigation/NavigationBakeCancelModal.cpp
             editor/screens/workspace/DefaultWorkspacePanels.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPanel.cpp
             editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.cpp
@@ -3331,6 +3336,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceView.cpp
             editor/screens/workspace/ExtensionRecoveryView.cpp
             editor/screens/workspace/ExtensionActivityView.cpp
+            editor/screens/workspace/ExtensionActivityPlot.cpp
             editor/screens/workspace/EditorWorkspaceScreen.cpp
             editor/screens/NavigationErrors.cpp
             editor/screens/GuiScreenHost.cpp
@@ -3396,6 +3402,9 @@ add_library(HoroExtensions STATIC
         extensions/host/EditorActivitySession.cpp
         extensions/host/EditorActivityAction.cpp
         extensions/host/EditorPageHost.cpp
+        extensions/manifest/EditorViewportDefinition.cpp
+        extensions/host/EditorViewportHost.cpp
+        extensions/host/EditorViewportNativeSession.cpp
         extensions/host/EditorInspectorHost.cpp
         extensions/host/EditorInspectorNativeSession.cpp
         extensions/host/EditorInspectorAbiConversion.cpp
@@ -3435,6 +3444,8 @@ add_library(HoroExtensions STATIC
         extensions/manifest/EditorSvgIcon.cpp
     extensions/manifest/EditorUiForm.cpp
     extensions/manifest/EditorUiFormBuilder.cpp
+    extensions/manifest/EditorUiComposition.cpp
+    extensions/manifest/EditorUiPlot.cpp
     extensions/manifest/EditorUiFormRender.cpp
         extensions/manifest/ScriptExportDescriptor.cpp
         extensions/manifest/ScriptExportDescriptorInternal.h

@@ -5,8 +5,9 @@
 #include "Horo/Prefab/PrefabErrors.h"
 
 #include <algorithm>
-#include <bit>
+#include <cstddef>
 #include <limits>
+#include <new>
 
 namespace Horo::Editor {
     namespace {
@@ -17,12 +18,24 @@ namespace Horo::Editor {
                 return Result<Sha256Digest>::Failure(encoded.ErrorValue());
             return Result<Sha256Digest>::Success(ComputeSha256(std::as_bytes(std::span(encoded.Value()))));
         }
-
-        /** @brief Views owned bounded bytes only during parsing. */
-        std::string_view Text(const Assets::AssetSourceCapture &capture) {
-            return {std::bit_cast<const char *>(capture.bytes.data()), capture.bytes.size()};
-        }
     }  // namespace
+
+    /** @copydoc PrefabDocumentSession::ReadSourceText */
+    Result<std::string> PrefabDocumentSession::ReadSourceText(const std::span<const std::byte> bytes) {
+        // All session parse calls use the default byte ceiling and a validated source's project version.
+        if (bytes.size() > Prefab::PrefabHardLimits::SourceDocumentBytes)
+            return Result<std::string>::Failure(
+                MakeError(Prefab::PrefabErrors::PayloadTooLarge, "Prefab source exceeds its parser byte bound."));
+        try {
+            std::string text(bytes.size(), '\0');
+            std::ranges::transform(bytes, text.begin(), [](const std::byte byte) {
+                return std::to_integer<char>(byte);
+            });
+            return Result<std::string>::Success(std::move(text));
+        } catch (const std::bad_alloc &) {
+            return Result<std::string>::Failure(MakeError(Prefab::PrefabErrors::ExpansionCacheAllocationFailed));
+        }
+    }
 
     PrefabDocumentSession::PrefabDocumentSession(const ConstructionKey &, std::filesystem::path root, std::filesystem::path path,
                                                  DocumentIdentity identity, Assets::AssetId owner, const Prefab::PrefabLimitProfile &limits)
@@ -40,7 +53,10 @@ namespace Horo::Editor {
         if (capture.HasError())
             return Result<std::unique_ptr<PrefabDocumentSession>>::Failure(capture.ErrorValue());
         auto session = std::make_unique<PrefabDocumentSession>(ConstructionKey{}, root, path, std::move(identity), owner, limits);
-        auto parsed = Prefab::PrefabDocument::Parse(Text(capture.Value()), limits);
+        auto text = ReadSourceText(capture.Value().bytes);
+        if (text.HasError())
+            return Result<std::unique_ptr<PrefabDocumentSession>>::Failure(text.ErrorValue());
+        auto parsed = Prefab::PrefabDocument::Parse(text.Value(), limits);
         if (parsed.HasError())
             return Result<std::unique_ptr<PrefabDocumentSession>>::Failure(parsed.ErrorValue());
         if (parsed.Value().Data().assetId != asset)
@@ -182,7 +198,10 @@ namespace Horo::Editor {
 
     /** @copydoc PrefabDocumentSession::Replace */
     Result<void> PrefabDocumentSession::Replace(const Assets::AssetSourceCapture &capture) {
-        auto parsed = Prefab::PrefabDocument::Parse(Text(capture), limits_, {.expectedProjectVersion = source_->Data().projectVersion});
+        auto text = ReadSourceText(capture.bytes);
+        if (text.HasError())
+            return Result<void>::Failure(text.ErrorValue());
+        auto parsed = Prefab::PrefabDocument::Parse(text.Value(), limits_, {.expectedProjectVersion = source_->Data().projectVersion});
         if (parsed.HasError())
             return Result<void>::Failure(parsed.ErrorValue());
         if (parsed.Value().Data().assetId != source_->Data().assetId)

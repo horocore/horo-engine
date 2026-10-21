@@ -13,12 +13,14 @@
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/NativeAssetRegistrySource.h"
+#include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
+#include "Horo/Extensions/EditorViewportHost.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -677,6 +679,8 @@ namespace Horo::Editor {
                     .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
                     .networkDebuggerControl = panelServices_.networkDebuggerControl,
                     .extensionInspectors = services_.TryGet<Extensions::EditorInspectorHost>(),
+                    .navigationOverlays = services_.TryGetConst<NavigationViewportAccess>(),
+                    .extensionViewport = services_.TryGet<Extensions::EditorViewportHost>(),
                     .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
                 };
                 contributions_.panels.AttachAll(panelContext);
