@@ -40,13 +40,14 @@ namespace Horo::Editor {
         auto decoded = ReadIndex(*m_worldSourceFiles, path, m_workspaceSession, *m_streamingPreviewPolicy);
         if (decoded.HasError())
             return Result<void>::Failure(decoded.ErrorValue());
-        if (decoded.Value().descriptor.Partition() != view.snapshot->document.settings.partition)
+        auto index = std::move(decoded).Value();
+        if (index.descriptor.Partition() != view.snapshot->document.settings.partition)
             return Result<void>::Failure(MakeError(WorldDocumentErrors::Stale));
-        const auto owner = m_streamingPreview->IssueMountIdentity(decoded.Value().descriptor.Partition());
+        const auto owner = m_streamingPreview->IssueMountIdentity(index.descriptor.Partition());
         if (owner.HasError())
             return Result<void>::Failure(owner.ErrorValue());
         auto candidate =
-            WorldStreamingPreviewRuntime::Create(owner.Value(), expected, std::move(decoded.Value().descriptor), *m_streamingPreviewPolicy);
+            WorldStreamingPreviewRuntime::Create(owner.Value(), expected, std::move(index.descriptor), *m_streamingPreviewPolicy);
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
         m_pendingStreamingPath = path;
