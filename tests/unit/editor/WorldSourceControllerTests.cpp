@@ -125,7 +125,7 @@ TEST_CASE("Registered workspace streaming capture uses its composed bridge and c
     controller.RefreshWorldDocumentProjection();
     CHECK_FALSE(controller.ViewModel().worldStreamingPreview);
     REQUIRE(controller.ViewModel().worldStreamingPreviewError);
-    CHECK(controller.ViewModel().worldStreamingPreviewError->code == WorldDocumentErrors::Lifecycle.code);
+    CHECK(controller.ViewModel().worldStreamingPreviewError->code.Value() == WorldDocumentErrors::Lifecycle.code.Value());
     REQUIRE(world.Close(root->fence).HasValue());
     controller.RefreshWorldDocumentProjection();
     CHECK_FALSE(controller.ViewModel().worldViewport.snapshot);

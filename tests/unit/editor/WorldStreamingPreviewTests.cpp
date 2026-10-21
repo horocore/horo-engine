@@ -387,7 +387,7 @@ namespace Horo::Editor {
             bool rejected{};
             std::thread thread{[&] {
                 const auto result = host.Refresh(view);
-                rejected = result.HasError() && result.ErrorValue().code == WorldDocumentErrors::WrongThread.code;
+                rejected = result.HasError() && result.ErrorValue().code.Value() == WorldDocumentErrors::WrongThread.code.Value();
             }};
             thread.join();
             CHECK(rejected);

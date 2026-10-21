@@ -97,7 +97,7 @@ namespace Horo::Editor {
                 WorldStreamingPreviewRuntime::Create(owner, added.Value()->fence, std::move(decoded.descriptor), fixture.policy).Value();
             const auto rejected = runtime->Service(added.Value());
             REQUIRE(rejected.HasError());
-            CHECK(rejected.ErrorValue().code == WorldDocumentErrors::Capacity.code);
+            CHECK(rejected.ErrorValue().code.Value() == WorldDocumentErrors::Capacity.code.Value());
             CHECK(runtime->Diagnostics() == nullptr);
             CHECK(runtime->Planner().Plan().HasError());
         }

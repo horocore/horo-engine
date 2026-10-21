@@ -103,7 +103,7 @@ namespace Horo::Editor {
             }
             const auto rejected = project.controller->MountWorldStreamingPreview("z-up.index", fence);
             REQUIRE(rejected.HasError());
-            CHECK(rejected.ErrorValue().code == WorldDocumentErrors::Unsupported.code);
+            CHECK(rejected.ErrorValue().code.Value() == WorldDocumentErrors::Unsupported.code.Value());
             CHECK(project.controller->ViewModel().worldStreamingPreview == first);
             project.Mount();
             const auto second = project.controller->ViewModel().worldStreamingPreview;

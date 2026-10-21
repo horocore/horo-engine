@@ -207,12 +207,12 @@ namespace Horo::Editor {
                 return "workspace.streaming.legend";
             if (!view.worldStreamingPreviewError)
                 return "workspace.streaming.unavailable";
-            const auto &code = view.worldStreamingPreviewError->code;
-            if (code == WorldDocumentErrors::Capacity.code)
+            const auto &code = view.worldStreamingPreviewError->code.Value();
+            if (code == WorldDocumentErrors::Capacity.code.Value())
                 return "workspace.streaming.capacity";
-            if (code == WorldDocumentErrors::Stale.code)
+            if (code == WorldDocumentErrors::Stale.code.Value())
                 return "workspace.streaming.stale";
-            if (code == WorldDocumentErrors::Cancelled.code)
+            if (code == WorldDocumentErrors::Cancelled.code.Value())
                 return "workspace.streaming.cancelled";
             return "workspace.streaming.unavailable";
         }
