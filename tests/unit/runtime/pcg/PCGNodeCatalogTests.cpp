@@ -310,34 +310,35 @@ namespace Horo::PCG {
         CHECK(root.Nodes().size() == 1);
     }
 
-    TEST_CASE("PCG authoring uses exact executable settings codecs for every built-in schema", "[unit][pcg][catalog][authoring]") {
-        auto owner = Catalog(17);
-        for (unsigned index = 0; index < 17; ++index)
-            REQUIRE(owner.Register(static_cast<PCGCpuNodeKind>(index)).HasValue());
-        const auto catalog = owner.Snapshot().Value();
-        const auto spatial = Id<SpatialElementId>(1);
-        const std::array<PCGNodeAuthoringSettings, 17>
-            settings{PCGGridGenerationSettings{spatial},
-                     std::monostate{},
-                     std::monostate{},
-                     std::monostate{},
-                     PCGJitterGenerationSettings{spatial},
-                     PCGStratifiedGenerationSettings{spatial},
-                     PCGPoissonGenerationSettings{.volume = spatial},
-                     PCGDensityRangeFilterSettings{},
-                     PCGBoundsFilterSettings{{{-1, -1, -1}, {1, 1, 1}}},
-                     PCGSlopeFilterSettings{},
-                     PCGDistanceFilterSettings{},
-                     PCGAttributeFilterSettings{PCGAttributeKey::Create("world.density").Value(), PCGAttributeComparison::Equal, double{}},
-                     PCGPointTransformSettings{},
-                     PCGPointAlignmentSettings{},
-                     PCGPointRandomOffsetSettings{.salt = std::numeric_limits<std::uint64_t>::max()},
-                     PCGPointNoiseSettings{.attribute = PCGAttributeKey::Create("world.perlin").Value()},
-                     PCGPointNoiseSettings{.attribute = PCGAttributeKey::Create("world.simplex").Value()}};
-        for (const auto &descriptor : catalog.Nodes()) {
-            INFO(static_cast<unsigned>(descriptor.kind));
-            const auto &value = settings[static_cast<std::size_t>(descriptor.kind)];
-            auto bytes = std::visit([]<class T>(const T &typed) -> Result<std::vector<std::uint8_t>> {
+    namespace {
+        /** @brief Exact owned typed fixtures for every built-in schema. */
+        std::array<PCGNodeAuthoringSettings, 17> AuthoringSettingsFixtures() {
+            const auto spatial = Id<SpatialElementId>(1);
+            const std::array<PCGNodeAuthoringSettings, 17>
+                settings{PCGGridGenerationSettings{spatial},
+                         std::monostate{},
+                         std::monostate{},
+                         std::monostate{},
+                         PCGJitterGenerationSettings{spatial},
+                         PCGStratifiedGenerationSettings{spatial},
+                         PCGPoissonGenerationSettings{.volume = spatial},
+                         PCGDensityRangeFilterSettings{},
+                         PCGBoundsFilterSettings{{{-1, -1, -1}, {1, 1, 1}}},
+                         PCGSlopeFilterSettings{},
+                         PCGDistanceFilterSettings{},
+                         PCGAttributeFilterSettings{PCGAttributeKey::Create("world.density").Value(), PCGAttributeComparison::Equal,
+                                                    double{}},
+                         PCGPointTransformSettings{},
+                         PCGPointAlignmentSettings{},
+                         PCGPointRandomOffsetSettings{.salt = std::numeric_limits<std::uint64_t>::max()},
+                         PCGPointNoiseSettings{.attribute = PCGAttributeKey::Create("world.perlin").Value()},
+                         PCGPointNoiseSettings{.attribute = PCGAttributeKey::Create("world.simplex").Value()}};
+            return settings;
+        }
+
+        /** @brief Uses the existing public codecs to construct canonical authored fixture bytes. */
+        Result<std::vector<std::uint8_t>> EncodeAuthoringFixture(const PCGNodeAuthoringSettings &value) {
+            return std::visit([]<class T>(const T &typed) -> Result<std::vector<std::uint8_t>> {
                 if constexpr (std::is_same_v<T, std::monostate>)
                     return Result<std::vector<std::uint8_t>>::Success({});
                 else if constexpr (std::is_same_v<T, PCGGridGenerationSettings> || std::is_same_v<T, PCGJitterGenerationSettings> ||
@@ -348,6 +349,36 @@ namespace Horo::PCG {
                 else
                     return EncodePCGPointTransformationSettings(typed);
             }, value);
+        }
+
+        /** @brief Confirms failures never repair versions, malformed bytes or mismatched alternatives. */
+        void CheckRejectedAuthoringSettings(const PCGNodeCatalogSnapshot &catalog, const PCGGraphNode &node,
+                                            const PCGNodeAuthoringSettings &decoded) {
+            auto unknown = node;
+            unknown.version.major = 9;
+            CHECK(catalog.DecodeSettings(unknown).HasError());
+            unknown = node;
+            unknown.payload.push_back(255);
+            CHECK(catalog.DecodeSettings(unknown).HasError());
+            unknown = node;
+            unknown.pins[0].type = PCGPinType::Vector4;
+            CHECK(catalog.DecodeSettings(unknown).HasError());
+            const auto mismatched = decoded.index() == 0 ? PCGNodeAuthoringSettings{PCGGridGenerationSettings{Id<SpatialElementId>(1)}}
+                                                         : PCGNodeAuthoringSettings{std::monostate{}};
+            CHECK(catalog.EncodeSettings(node, mismatched).HasError());
+        }
+    }  // namespace
+
+    TEST_CASE("PCG authoring uses exact executable settings codecs for every built-in schema", "[unit][pcg][catalog][authoring]") {
+        auto owner = Catalog(17);
+        for (unsigned index = 0; index < 17; ++index)
+            REQUIRE(owner.Register(static_cast<PCGCpuNodeKind>(index)).HasValue());
+        const auto catalog = owner.Snapshot().Value();
+        const auto settings = AuthoringSettingsFixtures();
+        for (const auto &descriptor : catalog.Nodes()) {
+            INFO(static_cast<unsigned>(descriptor.kind));
+            const auto &value = settings[static_cast<std::size_t>(descriptor.kind)];
+            const auto bytes = EncodeAuthoringFixture(value);
             REQUIRE(bytes.HasValue());
             PCGGraphNode node{.id = Id<NodeId>(1), .type = descriptor.type, .version = descriptor.version, .payload = bytes.Value()};
             for (std::size_t pin = 0; pin < descriptor.pinCount; ++pin) {
@@ -360,18 +391,7 @@ namespace Horo::PCG {
             const auto encoded = catalog.EncodeSettings(node, decoded.Value());
             REQUIRE(encoded.HasValue());
             CHECK(encoded.Value() == node);
-            auto unknown = node;
-            unknown.version.major = 9;
-            CHECK(catalog.DecodeSettings(unknown).HasError());
-            unknown = node;
-            unknown.payload.push_back(255);
-            CHECK(catalog.DecodeSettings(unknown).HasError());
-            unknown = node;
-            unknown.pins[0].type = PCGPinType::Vector4;
-            CHECK(catalog.DecodeSettings(unknown).HasError());
-            const auto mismatched = decoded.Value().index() == 0 ? PCGNodeAuthoringSettings{PCGGridGenerationSettings{spatial}}
-                                                                 : PCGNodeAuthoringSettings{std::monostate{}};
-            CHECK(catalog.EncodeSettings(node, mismatched).HasError());
+            CheckRejectedAuthoringSettings(catalog, node, decoded.Value());
             REQUIRE(owner.Remove(node.type).HasValue());
             CHECK(owner.Snapshot().Value().DecodeSettings(node).HasError());
             CHECK(catalog.DecodeSettings(node).HasValue());

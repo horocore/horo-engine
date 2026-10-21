@@ -68,6 +68,55 @@ namespace Horo::Editor {
                     return Return::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Invalid)));
             }
         }
+
+        /** @brief Validates the complete detached property/input candidate before building semantic operations. */
+        Result<PCG::PCGGraphAsset> PrepareCandidate(const PCGGraphAuthoringDraft &draft, const PCG::PCGNodeCatalogSnapshot &catalog) {
+            auto candidate = draft.values;
+            const auto &original = draft.baseline.source->Data();
+            // This gesture cannot smuggle topology, identity or tier changes into property operations.
+            if (candidate.generation != original.generation || candidate.tier != original.tier || candidate.version != original.version ||
+                candidate.edges != original.edges || candidate.nodes.size() != original.nodes.size() ||
+                draft.properties.size() != original.nodes.size())
+                return Result<PCG::PCGGraphAsset>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Invalid)));
+            const auto tier = PCG::LimitsForTier(candidate.tier);
+            if (tier.HasError())
+                return Result<PCG::PCGGraphAsset>::Failure(tier.ErrorValue());
+            for (std::size_t index = 0; index < candidate.nodes.size(); ++index) {
+                auto prepared = PrepareNode(candidate.nodes[index], original.nodes[index], draft.properties[index], catalog, tier.Value());
+                if (prepared.HasError())
+                    return Result<PCG::PCGGraphAsset>::Failure(prepared.ErrorValue());
+                candidate.nodes[index] = std::move(prepared).Value();
+            }
+            std::vector<PCG::PCGNodeTypeSupport> types;
+            for (const auto &type : catalog.Nodes())
+                types.push_back({type.type, type.version, type.version});
+            return PCG::PCGGraphAsset::Create(std::move(candidate), {.tier = draft.values.tier,
+                                                                     .unknownNodePolicy = PCG::PCGUnknownNodePolicy::PreserveInert,
+                                                                     .supportedNodeTypes = types});
+        }
+
+        /** @brief Builds only source deltas; admission and semantic validation have already succeeded. */
+        PCGDocumentCommand BuildOperations(const PCGDocumentSnapshot &current, const PCG::PCGGraphSourceData &candidate,
+                                           const PCG::PCGGraphSourceData &original, bool canEdit) {
+            PCGDocumentCommand command{.session = current.session,
+                                       .expectedRevision = current.revision,
+                                       .catalogRevision = current.catalogRevision,
+                                       .canEdit = canEdit};
+            if (candidate.mode != original.mode || candidate.deterministicSeed != original.deterministicSeed)
+                command.operations.push_back(SetPCGGraphPolicy{candidate.mode, candidate.deterministicSeed});
+            for (std::size_t index = 0; index < candidate.nodes.size(); ++index)
+                if (candidate.nodes[index] != original.nodes[index])
+                    command.operations.push_back(PutPCGNode{candidate.nodes[index]});
+            for (const auto &input : candidate.exposedInputs) {
+                const auto before = std::ranges::find(original.exposedInputs, input.id, &PCG::PCGExposedInput::id);
+                if (before == original.exposedInputs.end() || input != *before)
+                    command.operations.push_back(PutPCGInput{input});
+            }
+            for (const auto &input : original.exposedInputs)
+                if (std::ranges::find(candidate.exposedInputs, input.id, &PCG::PCGExposedInput::id) == candidate.exposedInputs.end())
+                    command.operations.push_back(RemovePCGInput{input.id});
+            return command;
+        }
     }  // namespace
 
     /** @copydoc PCGGraphAuthoringDraft::Capture */
@@ -113,47 +162,12 @@ namespace Horo::Editor {
             return Result<PCGDocumentCommand>::Failure(capability.ErrorValue());
         if (values.mode != baseline.source->Data().mode && !catalog.Capabilities().granted.Contains(capability.Value()))
             return Result<PCGDocumentCommand>::Failure(MakeError(PCG::PCGErrors::UnsupportedCapability));
-        auto candidate = values;
+        auto prepared = PrepareCandidate(*this, catalog);
+        if (prepared.HasError())
+            return Result<PCGDocumentCommand>::Failure(prepared.ErrorValue());
+        const auto &candidate = prepared.Value().Data();
         const auto &original = baseline.source->Data();
-        // This gesture cannot smuggle topology, identity or tier changes into property operations.
-        if (candidate.generation != original.generation || candidate.tier != original.tier || candidate.version != original.version ||
-            candidate.edges != original.edges || candidate.nodes.size() != original.nodes.size() ||
-            properties.size() != original.nodes.size())
-            return reject(PCGDocumentCommandFailureReason::Invalid);
-        const auto tier = PCG::LimitsForTier(candidate.tier);
-        if (tier.HasError())
-            return Result<PCGDocumentCommand>::Failure(tier.ErrorValue());
-        for (std::size_t index = 0; index < candidate.nodes.size(); ++index) {
-            auto prepared = PrepareNode(candidate.nodes[index], original.nodes[index], properties[index], catalog, tier.Value());
-            if (prepared.HasError())
-                return Result<PCGDocumentCommand>::Failure(prepared.ErrorValue());
-            candidate.nodes[index] = std::move(prepared).Value();
-        }
-        std::vector<PCG::PCGNodeTypeSupport> types;
-        for (const auto &type : catalog.Nodes())
-            types.push_back({type.type, type.version, type.version});
-        const auto valid = PCG::PCGGraphAsset::Create(candidate, {.tier = candidate.tier,
-                                                                  .unknownNodePolicy = PCG::PCGUnknownNodePolicy::PreserveInert,
-                                                                  .supportedNodeTypes = types});
-        if (valid.HasError())
-            return Result<PCGDocumentCommand>::Failure(valid.ErrorValue());
-        PCGDocumentCommand command{.session = current.session,
-                                   .expectedRevision = current.revision,
-                                   .catalogRevision = current.catalogRevision,
-                                   .canEdit = canEdit};
-        if (candidate.mode != original.mode || candidate.deterministicSeed != original.deterministicSeed)
-            command.operations.push_back(SetPCGGraphPolicy{candidate.mode, candidate.deterministicSeed});
-        for (std::size_t index = 0; index < candidate.nodes.size(); ++index)
-            if (candidate.nodes[index] != original.nodes[index])
-                command.operations.push_back(PutPCGNode{candidate.nodes[index]});
-        for (const auto &input : candidate.exposedInputs) {
-            const auto before = std::ranges::find(original.exposedInputs, input.id, &PCG::PCGExposedInput::id);
-            if (before == original.exposedInputs.end() || input != *before)
-                command.operations.push_back(PutPCGInput{input});
-        }
-        for (const auto &input : original.exposedInputs)
-            if (std::ranges::find(candidate.exposedInputs, input.id, &PCG::PCGExposedInput::id) == candidate.exposedInputs.end())
-                command.operations.push_back(RemovePCGInput{input.id});
+        auto command = BuildOperations(current, candidate, original, canEdit);
         if (command.operations.size() > 256)
             return reject(PCGDocumentCommandFailureReason::Limit);
         if (command.operations.empty())

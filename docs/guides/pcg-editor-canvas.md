@@ -47,7 +47,10 @@ revision, dirty state and history unchanged. Large deletions exceeding the exist
 256-operation command budget reject atomically; there is no partial-delete path.
 
 Undo/redo and save call the existing document services. Common workspace undo, redo
-and save intents route to the active PCG session, preserving scene history. Save failures remain visible
+and save intents route to the active PCG session, preserving scene history.
+The active graph also owns keyboard Delete; scene transform/duplicate shortcuts
+are not dispatched while the graph is active. Menu Save bypasses the scene Save As
+dialog for graph documents. Save failures remain visible
 and do not mark the graph clean. Workspace navigation, modal interruption, focus loss,
 Escape and source replacement cancel transient gestures, restoring a drag origin.
 No new public API, serializer, backend dependency, evaluator or graph history is added.

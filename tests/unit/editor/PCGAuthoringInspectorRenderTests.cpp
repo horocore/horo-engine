@@ -52,6 +52,48 @@ namespace Horo::Editor {
                     CHECK(std::isfinite(vertex.pos.y));
                 }
         }
+
+        /** @brief Shared drawing harness keeps each behavior assertion scenario bounded and independent. */
+        struct RenderContext final {
+            const PCGDocumentSnapshot &snapshot;
+            const PCG::PCGNodeCatalogSnapshot &catalog;
+            const Theme::Fonts &fonts;
+            const ILocalizationService &labels;
+
+            void Draw(PCGAuthoringInspectorState &state, const PCGDocumentSnapshot &current, bool canEdit, float width = 240) const {
+                const std::array selected{current.source->Data().nodes.front().id};
+                ImGui::NewFrame();
+                ImGui::SetNextWindowPos({0, 0});
+                ImGui::SetNextWindowSize({width, 800});
+                ImGui::Begin("PCG inspector", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                CHECK_FALSE(DrawPCGAuthoringInspector(state, current, catalog, selected, canEdit, labels, fonts));
+                ImGui::End();
+                ImGui::Render();
+            }
+
+            void CheckBufferedNumbers(PCGAuthoringInspectorState &state, bool canEdit) const {
+                state.text["node.1.grid"] = "0";
+                for (int frame = 0; frame < 2; ++frame) {
+                    Draw(state, snapshot, canEdit);
+                    CHECK(state.invalid.contains("node.1.grid.identity"));
+                    CHECK(std::get<PCG::PCGJitterGenerationSettings>(*state.draft->properties[0].settings).grid.Value() == 1);
+                }
+                state.text["node.1.grid"] = "2";
+                state.text["graph.seed"] = "18446744073709551615";
+                Draw(state, snapshot, canEdit);
+                CHECK(state.invalid.empty());
+                CHECK(std::get<PCG::PCGJitterGenerationSettings>(*state.draft->properties[0].settings).grid.Value() == 2);
+                CHECK(state.draft->values.deterministicSeed == std::numeric_limits<std::uint64_t>::max());
+            }
+
+            void CheckReplacement(PCGAuthoringInspectorState &state, bool canEdit) const {
+                auto replaced = snapshot;
+                ++replaced.revision;
+                state.draft->values.deterministicSeed = 42;
+                Draw(state, replaced, canEdit);
+                CHECK(state.draft->values.deterministicSeed == snapshot.source->Data().deterministicSeed);
+            }
+        };
     }  // namespace
 
     TEST_CASE("PCG schema inspector renders narrow localized and disabled controls in both themes", "[editor][pcg][render]") {
@@ -70,56 +112,22 @@ namespace Horo::Editor {
         const auto catalog = owner.Snapshot().Value();
         const auto snapshot = JitterSnapshot(catalog);
         const auto &data = snapshot.source->Data();
-        const std::array selected{data.nodes.front().id};
         LongLabels labels;
+        const RenderContext context{snapshot, catalog, fonts, labels};
         for (const auto preset : {Theme::Preset::HoroDark, Theme::Preset::Light}) {
             Theme::SetThemePreset(preset);
             Theme::ApplyCurrentTheme();
             for (const float width : {240.0F, 900.0F})
                 for (const bool canEdit : {true, false}) {
                     PCGAuthoringInspectorState state;
-                    for (int frame = 0; frame < 2; ++frame) {
-                        ImGui::NewFrame();
-                        ImGui::SetNextWindowPos({0, 0});
-                        ImGui::SetNextWindowSize({width, 800});
-                        ImGui::Begin("PCG inspector", nullptr, ImGuiWindowFlags_NoSavedSettings);
-                        CHECK_FALSE(DrawPCGAuthoringInspector(state, snapshot, catalog, selected, canEdit, labels, fonts));
-                        ImGui::End();
-                        ImGui::Render();
-                    }
+                    for (int frame = 0; frame < 2; ++frame)
+                        context.Draw(state, snapshot, canEdit, width);
                     REQUIRE(state.draft);
                     CHECK(state.draft->values == data);
                     RequireFiniteVertices();
                     CHECK(snapshot.source->Data() == data);
-                    state.text["node.1.grid"] = "0";
-                    for (int frame = 0; frame < 2; ++frame) {
-                        ImGui::NewFrame();
-                        ImGui::Begin("PCG inspector");
-                        CHECK_FALSE(DrawPCGAuthoringInspector(state, snapshot, catalog, selected, canEdit, labels, fonts));
-                        ImGui::End();
-                        ImGui::Render();
-                        CHECK(state.invalid.contains("node.1.grid.identity"));
-                        CHECK(std::get<PCG::PCGJitterGenerationSettings>(*state.draft->properties[0].settings).grid.Value() == 1);
-                    }
-                    state.text["node.1.grid"] = "2";
-                    state.text["graph.seed"] = "18446744073709551615";
-                    ImGui::NewFrame();
-                    ImGui::Begin("PCG inspector");
-                    CHECK_FALSE(DrawPCGAuthoringInspector(state, snapshot, catalog, selected, canEdit, labels, fonts));
-                    ImGui::End();
-                    ImGui::Render();
-                    CHECK(state.invalid.empty());
-                    CHECK(std::get<PCG::PCGJitterGenerationSettings>(*state.draft->properties[0].settings).grid.Value() == 2);
-                    CHECK(state.draft->values.deterministicSeed == std::numeric_limits<std::uint64_t>::max());
-                    auto replaced = snapshot;
-                    ++replaced.revision;
-                    state.draft->values.deterministicSeed = 42;
-                    ImGui::NewFrame();
-                    ImGui::Begin("PCG inspector");
-                    CHECK_FALSE(DrawPCGAuthoringInspector(state, replaced, catalog, selected, canEdit, labels, fonts));
-                    ImGui::End();
-                    ImGui::Render();
-                    CHECK(state.draft->values.deterministicSeed == data.deterministicSeed);
+                    context.CheckBufferedNumbers(state, canEdit);
+                    context.CheckReplacement(state, canEdit);
                 }
         }
         Theme::SetThemePreset(Theme::Preset::HoroDark);

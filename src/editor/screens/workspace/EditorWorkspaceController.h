@@ -161,6 +161,10 @@ namespace Horo::Editor {
             return m_sourceCloseOutcome;
         }
 
+        /** @brief Reports whether common workspace input belongs to a live PCG document.
+         * @return True only when the active instance has a canonical graph projection. */
+        [[nodiscard]] bool HasActivePCGDocument() const noexcept;
+
         /** @brief Queries workspace-owned PCG source without lending mutable roots. @return Owner-thread immutable query service. */
         [[nodiscard]] const PCGGraphDocumentService &PCGDocuments() const noexcept {
             return m_pcgDocuments;

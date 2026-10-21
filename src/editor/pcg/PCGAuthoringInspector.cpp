@@ -179,64 +179,106 @@ namespace Horo::Editor {
                 Value("predicate", value);
             }
 
+            /** @brief Draws the exact monostate schema through shared fields. */
+            void SettingsValue(std::monostate &) {
+                Ui::Hint(Text("no_properties").c_str(), fonts);
+            }
+
+            /** @brief Draws the exact PCGGridGenerationSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGGridGenerationSettings &value) {
+                Field("grid", value.grid);
+            }
+
+            /** @brief Draws the exact PCGJitterGenerationSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGJitterGenerationSettings &value) {
+                Field("grid", value.grid);
+                Field("fraction", value.fraction);
+            }
+
+            /** @brief Draws the exact PCGStratifiedGenerationSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGStratifiedGenerationSettings &value) {
+                Field("volume", value.volume);
+                Label("strata");
+                for (std::size_t axis = 0; axis < 3; ++axis)
+                    Number("strata." + std::to_string(axis), value.strata[axis]);
+            }
+
+            /** @brief Draws the exact PCGPoissonGenerationSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGPoissonGenerationSettings &value) {
+                Field("volume", value.volume);
+                Field("count", value.count);
+                Field("attempts", value.attempts);
+                Field("minimum_distance", value.minimumDistance);
+            }
+
+            /** @brief Draws the exact PCGDensityRangeFilterSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGDensityRangeFilterSettings &value) {
+                Field("minimum", value.minimum);
+                Field("maximum", value.maximum);
+            }
+
+            /** @brief Draws the exact PCGBoundsFilterSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGBoundsFilterSettings &value) {
+                Field("minimum", value.bounds.minimum);
+                Field("maximum", value.bounds.maximum);
+            }
+
+            /** @brief Draws the exact PCGSlopeFilterSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGSlopeFilterSettings &value) {
+                Field("minimum_degrees", value.minimumDegrees);
+                Field("maximum_degrees", value.maximumDegrees);
+            }
+
+            /** @brief Draws the exact PCGDistanceFilterSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGDistanceFilterSettings &value) {
+                Field("minimum_distance", value.minimumDistance);
+            }
+
+            /** @brief Draws the exact PCGAttributeFilterSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGAttributeFilterSettings &value) {
+                Field("attribute", value.key);
+                Choice("comparison", value.comparison, std::array{"equal", "not_equal", "less", "less_equal", "greater", "greater_equal"});
+                Predicate(value.value);
+            }
+
+            /** @brief Draws the exact PCGPointTransformSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGPointTransformSettings &value) {
+                Field("translation", value.delta.translation);
+                Field("rotation", value.delta.rotation);
+                Field("scale", value.delta.scale);
+                Space(value.space);
+            }
+
+            /** @brief Draws the exact PCGPointAlignmentSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGPointAlignmentSettings &value) {
+                Field("maximum_vertical_distance", value.maximumVerticalDistance);
+            }
+
+            /** @brief Draws the exact PCGPointRandomOffsetSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGPointRandomOffsetSettings &value) {
+                Field("half_extent", value.halfExtent);
+                Space(value.space);
+                Field("salt", value.salt);
+            }
+
+            /** @brief Draws the exact PCGPointNoiseSettings schema through shared fields. */
+            void SettingsValue(PCG::PCGPointNoiseSettings &value) {
+                Field("attribute", value.attribute);
+                Choice("attribute_type", value.type,
+                       std::array{"boolean", "signed", "unsigned", "scalar", "vector2", "vector3", "vector4"});
+                Field("frequency", value.frequency);
+                Field("amplitude", value.amplitude);
+                Field("octaves", value.octaves);
+                Field("persistence", value.persistence);
+                Field("lacunarity", value.lacunarity);
+                Choice("normalization", value.normalization, std::array{"signed_noise", "unit_interval"});
+                Field("salt", value.salt);
+            }
+
+            /** @brief Dispatches only the catalog-decoded typed alternative, without interpreting source bytes. */
             void Settings(PCG::PCGNodeAuthoringSettings &settings) {
-                std::visit([&]<class T>(T &value) {
-                    if constexpr (std::is_same_v<T, std::monostate>) {
-                        Ui::Hint(Text("no_properties").c_str(), fonts);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGGridGenerationSettings>) {
-                        Field("grid", value.grid);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGJitterGenerationSettings>) {
-                        Field("grid", value.grid);
-                        Field("fraction", value.fraction);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGStratifiedGenerationSettings>) {
-                        Field("volume", value.volume);
-                        Label("strata");
-                        for (std::size_t axis = 0; axis < 3; ++axis)
-                            Number("strata." + std::to_string(axis), value.strata[axis]);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGPoissonGenerationSettings>) {
-                        Field("volume", value.volume);
-                        Field("count", value.count);
-                        Field("attempts", value.attempts);
-                        Field("minimum_distance", value.minimumDistance);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGDensityRangeFilterSettings>) {
-                        Field("minimum", value.minimum);
-                        Field("maximum", value.maximum);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGBoundsFilterSettings>) {
-                        Field("minimum", value.bounds.minimum);
-                        Field("maximum", value.bounds.maximum);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGSlopeFilterSettings>) {
-                        Field("minimum_degrees", value.minimumDegrees);
-                        Field("maximum_degrees", value.maximumDegrees);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGDistanceFilterSettings>) {
-                        Field("minimum_distance", value.minimumDistance);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGAttributeFilterSettings>) {
-                        Field("attribute", value.key);
-                        Choice("comparison", value.comparison,
-                               std::array{"equal", "not_equal", "less", "less_equal", "greater", "greater_equal"});
-                        Predicate(value.value);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGPointTransformSettings>) {
-                        Field("translation", value.delta.translation);
-                        Field("rotation", value.delta.rotation);
-                        Field("scale", value.delta.scale);
-                        Space(value.space);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGPointAlignmentSettings>) {
-                        Field("maximum_vertical_distance", value.maximumVerticalDistance);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGPointRandomOffsetSettings>) {
-                        Field("half_extent", value.halfExtent);
-                        Space(value.space);
-                        Field("salt", value.salt);
-                    } else if constexpr (std::is_same_v<T, PCG::PCGPointNoiseSettings>) {
-                        Field("attribute", value.attribute);
-                        Choice("attribute_type", value.type,
-                               std::array{"boolean", "signed", "unsigned", "scalar", "vector2", "vector3", "vector4"});
-                        Field("frequency", value.frequency);
-                        Field("amplitude", value.amplitude);
-                        Field("octaves", value.octaves);
-                        Field("persistence", value.persistence);
-                        Field("lacunarity", value.lacunarity);
-                        Choice("normalization", value.normalization, std::array{"signed_noise", "unit_interval"});
-                        Field("salt", value.salt);
-                    }
+                std::visit([this](auto &value) {
+                    SettingsValue(value);
                 }, settings);
             }
         };

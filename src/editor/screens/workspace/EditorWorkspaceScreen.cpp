@@ -405,7 +405,8 @@ namespace Horo::Editor {
                     OpenPackagesModal();
                     return true;
                 }
-                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->CurrentScenePath().has_value())
+                if (controller_ && action == EditorMenuAction::SaveScene && !controller_->HasActivePCGDocument() &&
+                    !controller_->CurrentScenePath().has_value())
                     action = EditorMenuAction::SaveSceneAs;
                 if (controller_ && action == EditorMenuAction::CreatePrimitive && invocation.primitive.has_value()) {
                     EditorWorkspaceViewCommandData command;
@@ -673,7 +674,6 @@ namespace Horo::Editor {
                 auto pcgComposition = CreatePCGEditorCatalog();
                 if (pcgComposition.HasError())
                     return Result<void>::Failure(pcgComposition.ErrorValue());
-                auto pcgCatalog = std::move(pcgComposition).Value();
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -699,9 +699,9 @@ namespace Horo::Editor {
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
-                                                   .pcgCatalog = std::move(pcgCatalog.document),
-                                                   .pcgSchemas = std::move(pcgCatalog.schemas),
-                                                   .pcgPalette = std::move(pcgCatalog.palette),
+                                                   .pcgCatalog = std::move(pcgComposition.Value().document),
+                                                   .pcgSchemas = std::move(pcgComposition.Value().schemas),
+                                                   .pcgPalette = std::move(pcgComposition.Value().palette),
                                                });
                 if (controller_->InitializationError().has_value()) {
                     const Error error = *controller_->InitializationError();
@@ -978,6 +978,9 @@ namespace Horo::Editor {
                     command.command = EditorWorkspaceViewCommand::UndoScene;
                 } else if (pressed(kActionSave)) {
                     command.command = EditorWorkspaceViewCommand::SaveScene;
+                } else if (controller_->HasActivePCGDocument()) {
+                    if (pressed(kActionDelete))
+                        command.command = EditorWorkspaceViewCommand::DeleteSelectedObjects;
                 } else if (pressed(kActionToolSelect)) {
                     command.command = EditorWorkspaceViewCommand::ChangeTransformTool;
                     command.transformToolPayload = EditorTransformTool::Select;

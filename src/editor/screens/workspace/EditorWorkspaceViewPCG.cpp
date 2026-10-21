@@ -259,8 +259,8 @@ namespace Horo::Editor {
             }
         }
 
-        /** @brief Composes selection inspection and reference-aware removal without decoding node-owned payloads. */
-        void DrawInspector(CanvasFrame &frame) {
+        /** @brief Forwards one explicit property Apply while retaining presentation-only buffers in the panel. */
+        bool DrawAuthoringControls(CanvasFrame &frame) {
             if (frame.schemas && frame.inspector) {
                 ImGui::BeginDisabled(frame.request && frame.request->action != PCGEditorAction::Present);
                 const bool submitted = DrawPCGAuthoringInspector(*frame.inspector, frame.document.snapshot, *frame.schemas,
@@ -271,9 +271,15 @@ namespace Horo::Editor {
                     frame.Edit().authoring = frame.inspector->draft;
                 }
                 ImGui::EndDisabled();
-                if (submitted)
-                    return;
+                return submitted;
             }
+            return false;
+        }
+
+        /** @brief Composes selection inspection and reference-aware removal without decoding node-owned payloads. */
+        void DrawInspector(CanvasFrame &frame) {
+            if (DrawAuthoringControls(frame))
+                return;
             Ui::SectionTitle(frame.Text("workspace.pcg.inspector").c_str(), frame.fonts);
             if (frame.State().selection.empty()) {
                 Ui::Hint(frame.Text("workspace.pcg.select_hint").c_str(), frame.fonts);
