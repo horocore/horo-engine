@@ -14,7 +14,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Select the canonical typed slot without a property-name parser. */
-        template <class T> auto &Slot(auto &components) {
+        template <class T, class Components> auto &Slot(Components &components) {
             if constexpr (std::is_same_v<T, Runtime::NavigationSurfaceComponent>)
                 return components.navigationSurface;
             else if constexpr (std::is_same_v<T, Runtime::NavigationRegionComponent>)
@@ -29,16 +29,17 @@ namespace Horo::Editor {
 
         /** @brief Preserve source identity/schema and advance only changed generation-bearing values. */
         template <class T> Result<void> Replace(SceneSource::SceneObjectComponentSet &components, const T &value) {
+            using enum SceneTransactionFailure;
             auto &slot = Slot<T>(components);
             if (!slot)
-                return Result<void>::Failure(Rejected(SceneTransactionFailure::Unauthorized));
+                return Result<void>::Failure(Rejected(Unauthorized));
             if (slot->schemaVersion != value.schemaVersion)
-                return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
+                return Result<void>::Failure(Rejected(Stale));
             if constexpr (!std::is_same_v<T, Runtime::NavigationAgentComponent>) {
                 if (slot->id != value.id || slot->generation != value.generation)
-                    return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
+                    return Result<void>::Failure(Rejected(Stale));
                 if (*slot != value && value.generation == UINT64_MAX)
-                    return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
+                    return Result<void>::Failure(Rejected(Capacity));
                 const bool changed = *slot != value;
                 slot = value;
                 if (changed)
@@ -48,50 +49,66 @@ namespace Horo::Editor {
             return Result<void>::Success();
         }
 
+        /** @brief Resolve the definition owned by an exact authored surface. */
+        const Navigation::NavigationDefinition *FindDefinition(std::span<const SceneSource::SceneObjectSnapshot> objects,
+                                                               std::span<const NavigationDefinitionSnapshot> definitions,
+                                                               Navigation::SurfaceId id) {
+            const auto surface = std::ranges::find_if(objects, [id](const auto &object) {
+                return object.components.navigationSurface && object.components.navigationSurface->id == id;
+            });
+            if (surface == objects.end())
+                return nullptr;
+            const auto entry =
+                std::ranges::find(definitions, surface->components.navigationSurface->definition, &NavigationDefinitionSnapshot::asset);
+            return entry == definitions.end() ? nullptr : entry->definition.get();
+        }
+
+        /** @brief Require an exact profile from its owning definition. */
+        bool HasProfile(const Navigation::NavigationDefinition &definition, Navigation::NavigationAgentProfileId id) {
+            return std::ranges::any_of(definition.Profiles(), [id](const auto &profile) {
+                return profile.id == id;
+            });
+        }
+
+        /** @brief Validate one object's descriptor bindings against the complete proposed surface graph. */
+        bool HasDescriptors(const SceneSource::SceneObjectComponentSet &c, std::span<const SceneSource::SceneObjectSnapshot> objects,
+                            std::span<const NavigationDefinitionSnapshot> definitions) {
+            const auto definition = [&](Navigation::SurfaceId id) {
+                return FindDefinition(objects, definitions, id);
+            };
+            if (c.navigationSurface) {
+                const auto *d = definition(c.navigationSurface->id);
+                if (!d || !std::ranges::all_of(c.navigationSurface->profiles, [&](auto id) {
+                    return HasProfile(*d, id);
+                }))
+                    return false;
+            }
+            if (c.navigationModifier && c.navigationModifier->area) {
+                const auto *d = definition(c.navigationModifier->surface);
+                if (!d || d->Registry().ResolveArea(*c.navigationModifier->area).HasError())
+                    return false;
+            }
+            if (c.navigationLink) {
+                const auto *start = definition(c.navigationLink->start.surface);
+                const auto *end = definition(c.navigationLink->end.surface);
+                if (!start || !end || !std::ranges::all_of(c.navigationLink->profiles, [&](auto id) {
+                    return HasProfile(*start, id) && HasProfile(*end, id);
+                }))
+                    return false;
+            }
+            return !c.navigationAgent || std::ranges::any_of(definitions, [&](const auto &entry) {
+                return entry.definition && HasProfile(*entry.definition, c.navigationAgent->profile) &&
+                       entry.definition->Registry().ResolveFilter(c.navigationAgent->filter).HasValue();
+            });
+        }
+
         /** @brief Require exact profile/filter/area descriptors from an explicit owning definition. */
         Result<void> Descriptors(std::span<const SceneSource::SceneObjectSnapshot> objects,
                                  std::span<const NavigationDefinitionSnapshot> definitions) {
-            const auto definition = [&](Navigation::SurfaceId id) -> const Navigation::NavigationDefinition * {
-                for (const auto &object : objects)
-                    if (object.components.navigationSurface && object.components.navigationSurface->id == id)
-                        for (const auto &entry : definitions)
-                            if (entry.asset == object.components.navigationSurface->definition)
-                                return entry.definition.get();
-                return nullptr;
-            };
-            const auto profile = [](const Navigation::NavigationDefinition &d, Navigation::NavigationAgentProfileId id) {
-                return std::ranges::any_of(d.Profiles(), [id](const auto &p) {
-                    return p.id == id;
-                });
-            };
-            for (const auto &object : objects) {
-                const auto &c = object.components;
-                if (c.navigationSurface) {
-                    const auto *d = definition(c.navigationSurface->id);
-                    if (!d || !std::ranges::all_of(c.navigationSurface->profiles, [&](auto id) {
-                        return profile(*d, id);
-                    }))
-                        return Result<void>::Failure(Rejected(SceneTransactionFailure::Invalid));
-                }
-                if (c.navigationModifier && c.navigationModifier->area) {
-                    const auto *d = definition(c.navigationModifier->surface);
-                    if (!d || d->Registry().ResolveArea(*c.navigationModifier->area).HasError())
-                        return Result<void>::Failure(Rejected(SceneTransactionFailure::Invalid));
-                }
-                if (c.navigationLink) {
-                    const auto *start = definition(c.navigationLink->start.surface);
-                    const auto *end = definition(c.navigationLink->end.surface);
-                    if (!start || !end || !std::ranges::all_of(c.navigationLink->profiles, [&](auto id) {
-                        return profile(*start, id) && profile(*end, id);
-                    }))
-                        return Result<void>::Failure(Rejected(SceneTransactionFailure::Invalid));
-                }
-                if (c.navigationAgent && !std::ranges::any_of(definitions, [&](const auto &entry) {
-                    return entry.definition && profile(*entry.definition, c.navigationAgent->profile) &&
-                           entry.definition->Registry().ResolveFilter(c.navigationAgent->filter).HasValue();
-                }))
-                    return Result<void>::Failure(Rejected(SceneTransactionFailure::Invalid));
-            }
+            if (std::ranges::any_of(objects, [&](const auto &object) {
+                return !HasDescriptors(object.components, objects, definitions);
+            }))
+                return Result<void>::Failure(Rejected(SceneTransactionFailure::Invalid));
             return Result<void>::Success();
         }
 
@@ -109,8 +126,7 @@ namespace Horo::Editor {
             if (bytes > limits.maximumPreparedBytes / 3)
                 return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
             for (const auto &edit : edits) {
-                const bool bounded = std::visit([](const auto &value) {
-                    using T = std::decay_t<decltype(value)>;
+                const bool bounded = std::visit([]<class T>(const T &value) {
                     if constexpr (std::is_same_v<T, Runtime::NavigationSurfaceComponent> ||
                                   std::is_same_v<T, Runtime::NavigationLinkComponent>)
                         return value.profiles.size() <= Runtime::MaximumNavigationSurfaceProfiles;

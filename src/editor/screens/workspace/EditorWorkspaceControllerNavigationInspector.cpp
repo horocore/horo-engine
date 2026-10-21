@@ -11,19 +11,16 @@ namespace Horo::Editor {
     namespace {
         /** @brief Map only closed typed alternatives to the canonical built-in codec. */
         Runtime::BuiltinSceneComponentKind Kind(const NavigationInspectorValue &value) {
-            constexpr std::array kinds{Runtime::BuiltinSceneComponentKind::NavigationSurface,
-                                       Runtime::BuiltinSceneComponentKind::NavigationRegion,
-                                       Runtime::BuiltinSceneComponentKind::NavigationModifier,
-                                       Runtime::BuiltinSceneComponentKind::NavigationLink,
-                                       Runtime::BuiltinSceneComponentKind::NavigationAgent};
+            using enum Runtime::BuiltinSceneComponentKind;
+            constexpr std::array kinds{NavigationSurface, NavigationRegion, NavigationModifier, NavigationLink, NavigationAgent};
             return kinds[value.index()];
         }
 
         /** @brief Put exactly one typed value into the codec's detached input and advance its authored generation. */
         Result<SceneSource::SceneObjectComponentSet> Components(const NavigationInspectorValue &value) {
             SceneSource::SceneObjectComponentSet components;
-            const auto valid = std::visit([&](auto component) -> Result<void> {
-                using T = decltype(component);
+            if (const auto valid = std::visit(
+                    [&]<class T>(T component) {
                 if constexpr (!std::is_same_v<T, Runtime::NavigationAgentComponent>) {
                     if (component.generation == UINT64_MAX)
                         return Result<void>::Failure(MakeError(SceneTransactionError(SceneTransactionFailure::Capacity)));
@@ -41,27 +38,29 @@ namespace Horo::Editor {
                     components.navigationAgent = std::move(component);
                 return Result<void>::Success();
             }, value);
-            if (valid.HasError())
+                valid.HasError())
                 return Result<SceneSource::SceneObjectComponentSet>::Failure(valid.ErrorValue());
             return Result<SceneSource::SceneObjectComponentSet>::Success(std::move(components));
         }
 
+        /** @brief Borrow the exact typed source occurrence without copying its owned profile storage. */
+        template <class T> const T *SourceComponent(const Runtime::RuntimeComponentSet &source) {
+            if constexpr (std::is_same_v<T, Runtime::NavigationSurfaceComponent>)
+                return source.navigationSurface ? &*source.navigationSurface : nullptr;
+            else if constexpr (std::is_same_v<T, Runtime::NavigationRegionComponent>)
+                return source.navigationRegion ? &*source.navigationRegion : nullptr;
+            else if constexpr (std::is_same_v<T, Runtime::NavigationModifierComponent>)
+                return source.navigationModifier ? &*source.navigationModifier : nullptr;
+            else if constexpr (std::is_same_v<T, Runtime::NavigationLinkComponent>)
+                return source.navigationLink ? &*source.navigationLink : nullptr;
+            else
+                return source.navigationAgent ? &*source.navigationAgent : nullptr;
+        }
+
         /** @brief Preserve source-owned identity, schema and generation before serializing a Prefab draft. */
         bool MatchesSource(const NavigationInspectorValue &value, const Runtime::RuntimeComponentSet &source) {
-            return std::visit([&](const auto &component) {
-                using T = std::decay_t<decltype(component)>;
-                const auto *before = [&]() -> const T * {
-                    if constexpr (std::is_same_v<T, Runtime::NavigationSurfaceComponent>)
-                        return source.navigationSurface ? &*source.navigationSurface : nullptr;
-                    else if constexpr (std::is_same_v<T, Runtime::NavigationRegionComponent>)
-                        return source.navigationRegion ? &*source.navigationRegion : nullptr;
-                    else if constexpr (std::is_same_v<T, Runtime::NavigationModifierComponent>)
-                        return source.navigationModifier ? &*source.navigationModifier : nullptr;
-                    else if constexpr (std::is_same_v<T, Runtime::NavigationLinkComponent>)
-                        return source.navigationLink ? &*source.navigationLink : nullptr;
-                    else
-                        return source.navigationAgent ? &*source.navigationAgent : nullptr;
-                }();
+            return std::visit([&]<class T>(const T &component) {
+                const auto *before = SourceComponent<T>(source);
                 if (!before || before->schemaVersion != component.schemaVersion)
                     return false;
                 if constexpr (!std::is_same_v<T, Runtime::NavigationAgentComponent>)
@@ -90,22 +89,24 @@ namespace Horo::Editor {
             return Result<Runtime::RuntimeComponentSet>::Success(std::move(baseline));
         }
 
+        /** @brief Reserve source removals and instance additions for this exact object's occurrence allocator. */
+        std::uint64_t RetainedOccurrence(const Prefab::PrefabComponentOverrideRecord &record, const Prefab::ResolvedPrefabObject &object) {
+            return std::visit([&]<class Intent>(const Intent &intent) {
+                if constexpr (std::is_same_v<Intent, Prefab::PrefabAddComponentOverride>)
+                    return intent.object == object.key.object ? intent.payload.instance.Value() : std::uint64_t{};
+                else
+                    return intent.target.object == object.key.object ? intent.target.instance.Value() : std::uint64_t{};
+            }, record);
+        }
+
         /** @brief Fresh occurrence allocation also reserves all retained source removals and instance additions. */
         std::uint64_t LastOccurrence(const Prefab::ResolvedPrefabObject &object, const ScenePrefabInstance &instance) {
             std::uint64_t next{};
             for (const auto &raw : object.object.components)
                 next = std::max(next, raw.instance.Value());
             if (instance.valueOverrides)
-                for (const auto &record : instance.valueOverrides->componentRecords) {
-                    std::visit([&](const auto &intent) {
-                        using T = std::decay_t<decltype(intent)>;
-                        if constexpr (std::is_same_v<T, Prefab::PrefabAddComponentOverride>) {
-                            if (intent.object == object.key.object)
-                                next = std::max(next, intent.payload.instance.Value());
-                        } else if (intent.target.object == object.key.object)
-                            next = std::max(next, intent.target.instance.Value());
-                    }, record);
-                }
+                for (const auto &record : instance.valueOverrides->componentRecords)
+                    next = std::max(next, RetainedOccurrence(record, object));
             return next;
         }
 
@@ -237,6 +238,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::EnsureNavigationPrefabSchemas */
     Result<void> EditorWorkspaceController::EnsureNavigationPrefabSchemas(const Prefab::PrefabLimitProfile &limits) {
+        using enum Runtime::BuiltinSceneComponentKind;
         if (m_navigationPrefabSchemas)
             return Result<void>::Success();
         std::vector<Prefab::PrefabComponentOverridePolicy> components;
@@ -244,13 +246,11 @@ namespace Horo::Editor {
             auto type = Gameplay::ComponentTypeId::Parse(builtin.typeId);
             if (type.HasError())
                 return Result<void>::Failure(type.ErrorValue());
-            const bool navigation = builtin.kind >= Runtime::BuiltinSceneComponentKind::NavigationSurface &&
-                                    builtin.kind <= Runtime::BuiltinSceneComponentKind::NavigationAgent;
+            const bool navigation = builtin.kind >= NavigationSurface && builtin.kind <= NavigationAgent;
             Gameplay::ComponentDescriptor descriptor{.typeId = type.Value(),
                                                      .displayName = std::string(builtin.typeId),
                                                      .category = "Navigation"};
-            const auto maximum = builtin.kind == Runtime::BuiltinSceneComponentKind::Collider ||
-                                         builtin.kind == Runtime::BuiltinSceneComponentKind::PhysicsConstraint
+            const auto maximum = builtin.kind == Collider || builtin.kind == PhysicsConstraint
                                      ? static_cast<std::uint32_t>(limits.Policy().maximumComponentsPerObject)
                                      : 1U;
             components.push_back({std::move(descriptor), maximum, navigation, navigation, {}, {}, {}});
@@ -295,8 +295,8 @@ namespace Horo::Editor {
         const auto reject = [this](SceneTransactionFailure failure) {
             m_viewModel.navigationEditError = MakeError(SceneTransactionError(failure)).message;
         };
-        const auto &selection = m_selection.Current();
-        if (request.selectionRevision != selection.revision.value || request.objects != selection.objects ||
+        if (const auto &selection = m_selection.Current();
+            request.selectionRevision != selection.revision.value || request.objects != selection.objects ||
             request.prefab != m_viewModel.prefabSelection || std::ranges::any_of(request.edits, [&](const auto &edit) {
             return std::ranges::find(selection.objects, edit.object) == selection.objects.end();
         })) {
@@ -347,7 +347,7 @@ namespace Horo::Editor {
             return;
         }
         m_viewModel.navigationEditError.clear();
-        HandleDocumentCommandResult(std::move(committed), "Update Prefab navigation components");
+        HandleDocumentCommandResult(committed, "Update Prefab navigation components");
     }
 
     /** @copydoc EditorWorkspaceController::CommitPrefabNavigationInspector */

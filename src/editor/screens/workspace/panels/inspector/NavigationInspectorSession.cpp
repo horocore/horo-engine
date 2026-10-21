@@ -7,7 +7,9 @@
 namespace Horo::Editor {
     namespace {
         /** @brief Copy only actual typed navigation occurrences, preserving the selected object's unrelated content. */
-        void Capture(std::vector<NavigationInspectorDraft> &drafts, SceneObjectId object, const auto &components, const std::string &name) {
+        template <class Components>
+        void Capture(std::vector<NavigationInspectorDraft> &drafts, SceneObjectId object, const Components &components,
+                     const std::string &name) {
             const auto append = [&](const auto &value) {
                 if (value)
                     drafts.push_back({{object, *value}, *value, name});
@@ -18,15 +20,48 @@ namespace Horo::Editor {
             append(components.navigationLink);
             append(components.navigationAgent);
         }
+
+        /** @brief Decode one synchronized instance while its immutable source projection remains pinned. */
+        bool CaptureInstance(std::vector<NavigationInspectorDraft> &drafts, std::vector<Runtime::NavigationSurfaceComponent> &surfaces,
+                             const SceneSource::ScenePrefabInstanceProjection &instance, const PrefabHierarchyTarget &target) {
+            for (const auto &object : instance.expanded->Objects()) {
+                Runtime::RuntimeComponentSet components;
+                std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
+                for (const auto &raw : object.object.components) {
+                    if (const auto projected = SceneSource::ProjectPrefabBuiltinComponent(raw, components, primitive);
+                        projected.HasError()) {
+                        drafts.clear();
+                        return false;
+                    }
+                }
+                if (components.navigationSurface)
+                    surfaces.push_back(*components.navigationSurface);
+                if (object.key == *target.member)
+                    Capture(drafts, {}, components, object.object.name);
+            }
+            return true;
+        }
+
+        /** @brief Retain only the selected synchronized Prefab instance's typed drafts and surface inventory. */
+        void CapturePrefab(std::vector<NavigationInspectorDraft> &drafts, std::vector<Runtime::NavigationSurfaceComponent> &surfaces,
+                           const PrefabHierarchyProjection &publication, const PrefabHierarchyTarget &target) {
+            for (const auto &instance : publication.sources->instances) {
+                if (instance.authored.instanceId != target.instance || !instance.IsSynchronized())
+                    continue;
+                if (!CaptureInstance(drafts, surfaces, instance, target))
+                    return;
+            }
+        }
     }  // namespace
 
     /** @copydoc NavigationInspectorSession::Begin */
     void NavigationInspectorSession::Begin(const EditorWorkspaceViewModel &view) {
-        const bool sameDefinitions = definitions_.size() == view.navigationDefinitions.size() &&
-                                     std::ranges::equal(definitions_, view.navigationDefinitions, [](const auto &a, const auto &b) {
+        if (const bool sameDefinitions =
+                definitions_.size() == view.navigationDefinitions.size() && std::ranges::equal(definitions_, view.navigationDefinitions,
+                                                                                               [](const auto &a, const auto &b) {
             return a.asset == b.asset && a.session == b.session && a.revision == b.revision && a.definition == b.definition;
         });
-        if (context_.session == view.physicsContext.session && context_.revision == view.physicsContext.revision &&
+            context_.session == view.physicsContext.session && context_.revision == view.physicsContext.revision &&
             context_.state == view.physicsContext.state && selection_ == view.selectionRevision && objects_ == view.selectedObjects &&
             prefab_ == view.prefabSelection && publication_ == view.prefabHierarchy && sameDefinitions)
             return;
@@ -38,25 +73,7 @@ namespace Horo::Editor {
         publication_ = view.prefabHierarchy;
         definitions_ = view.navigationDefinitions;
         if (prefab_ && prefab_->member && publication_ && publication_->sources) {
-            for (const auto &instance : publication_->sources->instances) {
-                if (instance.authored.instanceId != prefab_->instance || !instance.IsSynchronized())
-                    continue;
-                for (const auto &object : instance.expanded->Objects()) {
-                    Runtime::RuntimeComponentSet components;
-                    std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
-                    for (const auto &raw : object.object.components) {
-                        const auto projected = SceneSource::ProjectPrefabBuiltinComponent(raw, components, primitive);
-                        if (projected.HasError()) {
-                            drafts_.clear();
-                            return;
-                        }
-                    }
-                    if (components.navigationSurface)
-                        surfaces_.push_back(*components.navigationSurface);
-                    if (object.key == *prefab_->member)
-                        Capture(drafts_, {}, components, object.object.name);
-                }
-            }
+            CapturePrefab(drafts_, surfaces_, *publication_, *prefab_);
             return;
         }
         for (const auto &object : view.objects)

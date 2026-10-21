@@ -39,27 +39,35 @@ namespace Horo::Editor {
             });
         }
 
+        /** @brief Keep the immutable schema and its admission limits paired for hierarchy resolution. */
+        struct HierarchySchemaContext final {
+            const Prefab::PrefabLimitProfile &limits;
+            const Prefab::PrefabValueSchemaSnapshot *schemas;
+        };
+
         /** @brief Builds canonical source/member evidence while a newly captured host lease remains owned by the caller. */
-        Result<SceneSource::ScenePrefabProjection> ResolveHierarchy(
-            const SceneDocumentSnapshot &document, const Assets::AssetRegistrySnapshot &registry,
-            const PrefabHierarchySourceCapture &capture, const std::optional<PrefabHierarchySources> &retained,
-            const Prefab::PrefabLimitProfile &limits, const Prefab::PrefabValueSchemaSnapshot *schemas,
-            const CancellationToken &cancellation, std::optional<PreparedPrefabHierarchySources> &prepared) {
+        Result<SceneSource::ScenePrefabProjection> ResolveHierarchy(const SceneDocumentSnapshot &document,
+                                                                    const Assets::AssetRegistrySnapshot &registry,
+                                                                    const PrefabHierarchySourceCapture &capture,
+                                                                    const std::optional<PrefabHierarchySources> &retained,
+                                                                    const HierarchySchemaContext &context,
+                                                                    const CancellationToken &cancellation,
+                                                                    std::optional<PreparedPrefabHierarchySources> &prepared) {
             if (document.prefabInstances.empty())
                 return Result<SceneSource::ScenePrefabProjection>::Success({});
             if (retained && HasRoots(*retained, document))
-                return BuildScenePrefabProjection(document, retained->resolver, limits, schemas);
+                return BuildScenePrefabProjection(document, retained->resolver, context.limits, context.schemas);
             if (!capture)
                 return Result<SceneSource::ScenePrefabProjection>::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
             std::vector<Assets::AssetId> roots;
             roots.reserve(document.prefabInstances.size());
             for (const auto &placement : document.prefabInstances)
                 roots.push_back(placement.sourcePrefab.Asset());
-            auto loaded = capture(registry, roots, limits, cancellation);
+            auto loaded = capture(registry, roots, context.limits, cancellation);
             if (loaded.HasError())
                 return Result<SceneSource::ScenePrefabProjection>::Failure(loaded.ErrorValue());
             prepared.emplace(std::move(loaded).Value());
-            return BuildScenePrefabProjection(document, prepared->sources.resolver, limits, schemas);
+            return BuildScenePrefabProjection(document, prepared->sources.resolver, context.limits, context.schemas);
         }
 
         /** @brief Delegates only placement-owned mutations to the existing canonical history executor. */
@@ -117,8 +125,8 @@ namespace Horo::Editor {
         if (EnsureNavigationPrefabSchemas(limits.Value()).HasError())
             return;
         std::optional<PreparedPrefabHierarchySources> prepared;
-        auto resolved = ResolveHierarchy(document, m_assetRegistry, m_prefabSourceCapture, m_prefabSources, limits.Value(),
-                                         &*m_navigationPrefabSchemas, m_prefabCancellation.Token(), prepared);
+        auto resolved = ResolveHierarchy(document, m_assetRegistry, m_prefabSourceCapture, m_prefabSources,
+                                         {limits.Value(), &*m_navigationPrefabSchemas}, m_prefabCancellation.Token(), prepared);
         auto sources = std::make_shared<const SceneSource::ScenePrefabProjection>(
             resolved.HasValue() ? std::move(resolved).Value()
                                 : BrokenProjection(document, resolved.ErrorValue(), m_viewModel.prefabHierarchy.get()));

@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <format>
 
 namespace Horo::Editor {
     namespace {
@@ -29,8 +30,7 @@ namespace Horo::Editor {
         /** @brief Present an unresolved stable identity as an explicit sentinel; never select the first available descriptor. */
         template <class Id>
         void Identity(const EditorGuiContext &ctx, const char *key, Id &value, const std::vector<std::pair<Id, std::string>> &options) {
-            std::vector<std::string> labels{std::string(Label(ctx, "workspace.navigation_inspector.missing")) + " " +
-                                            std::to_string(value.Value())};
+            std::vector<std::string> labels{std::format("{} {}", Label(ctx, "workspace.navigation_inspector.missing"), value.Value())};
             int selected = 0;
             for (const auto &[id, name] : options) {
                 labels.push_back(name);
@@ -46,7 +46,7 @@ namespace Horo::Editor {
             std::vector<std::string> labels;
             for (const auto *entry : keys)
                 labels.emplace_back(Label(ctx, entry));
-            int selected = static_cast<int>(value);
+            auto selected = static_cast<int>(value);
             if (Select(ctx, key, selected, labels))
                 value = static_cast<E>(selected);
         }
@@ -86,8 +86,8 @@ namespace Horo::Editor {
         const Navigation::NavigationDefinition *Definition(Navigation::SurfaceId surface, const NavigationInspectorSession &session,
                                                            const EditorWorkspaceViewModel &view) {
             Assets::AssetId asset;
-            const auto found = std::ranges::find(session.Surfaces(), surface, &Runtime::NavigationSurfaceComponent::id);
-            if (found != session.Surfaces().end())
+            if (const auto found = std::ranges::find(session.Surfaces(), surface, &Runtime::NavigationSurfaceComponent::id);
+                found != session.Surfaces().end())
                 asset = found->definition;
             for (const auto &draft : session.Drafts())
                 if (const auto *value = std::get_if<Runtime::NavigationSurfaceComponent>(&draft.edit.value); value && value->id == surface)
@@ -126,21 +126,21 @@ namespace Horo::Editor {
                     Ui::ShowTooltip(profile.displayName.c_str(), &ctx.theme.fonts);
                 ImGui::PopID();
             }
-            for (std::size_t index = 0; index < selected.size(); ++index) {
+            for (const auto id : selected) {
                 if (std::ranges::any_of(definition->Profiles(),
                                         [&](const auto &p) {
-                    return p.id == selected[index];
+                    return p.id == id;
                 }) &&
                     (!other || std::ranges::any_of(other->Profiles(), [&](const auto &p) {
-                    return p.id == selected[index];
+                    return p.id == id;
                 })))
                     continue;
-                ImGui::PushID(static_cast<int>(index));
-                Ui::Hint((std::string(Label(ctx, "workspace.navigation_inspector.missing")) + " " + std::to_string(selected[index].Value()))
-                             .c_str(),
-                         ctx.theme.fonts);
+                std::array<char, 20> identity{};
+                const auto encoded = std::to_chars(identity.data(), identity.data() + identity.size(), id.Value());
+                ImGui::PushID(identity.data(), encoded.ptr);
+                Ui::Hint(std::format("{} {}", Label(ctx, "workspace.navigation_inspector.missing"), id.Value()).c_str(), ctx.theme.fonts);
                 if (Ui::Button({.label = Label(ctx, "workspace.navigation_inspector.remove_missing"), .font = ctx.theme.fonts.sans})) {
-                    selected.erase(selected.begin() + static_cast<std::ptrdiff_t>(index));
+                    selected.erase(std::ranges::find(selected, id));
                     ImGui::PopID();
                     break;
                 }
@@ -194,8 +194,8 @@ namespace Horo::Editor {
         void Draw(const EditorGuiContext &ctx, Runtime::NavigationModifierComponent &value, const NavigationInspectorSession &session,
                   const EditorWorkspaceViewModel &view) {
             Surface(ctx, "workspace.navigation_inspector.surface", value.surface, session);
-            int shape = static_cast<int>(value.volume.index());
-            if (Select(ctx, "workspace.navigation_inspector.shape", shape,
+            if (auto shape = static_cast<int>(value.volume.index());
+                Select(ctx, "workspace.navigation_inspector.shape", shape,
                        {Label(ctx, "workspace.navigation_inspector.box"), Label(ctx, "workspace.navigation_inspector.cylinder")})) {
                 if (shape == 0)
                     value.volume = Runtime::NavigationLocalBounds{};
@@ -221,7 +221,7 @@ namespace Horo::Editor {
                 else if (!value.area)
                     value.area.emplace();
                 if (operation == Runtime::NavigationModifierOperation::OverrideAreaAndCost) {
-                    if (!value.traversalCost)
+                    if (!value.traversalCost.has_value())
                         value.traversalCost = 1.0F;
                 } else
                     value.traversalCost.reset();
@@ -233,7 +233,7 @@ namespace Horo::Editor {
                         options.emplace_back(area.id, std::to_string(area.id.Value()));
                 Identity(ctx, "workspace.navigation_inspector.area", *value.area, options);
             }
-            if (value.traversalCost)
+            if (value.traversalCost.has_value())
                 Scalar(ctx, "workspace.navigation_inspector.cost", *value.traversalCost);
         }
 
@@ -287,14 +287,13 @@ namespace Horo::Editor {
                 else
                     value.radiusOverride.reset();
             }
-            if (value.radiusOverride)
+            if (value.radiusOverride.has_value())
                 Scalar(ctx, "workspace.navigation_inspector.radius", *value.radiusOverride);
         }
 
         /** @brief Validate typed component drafts independently of any runtime activation. */
         bool Valid(const NavigationInspectorValue &value) {
-            return std::visit([](const auto &component) {
-                using T = std::decay_t<decltype(component)>;
+            return std::visit([]<class T>(const T &component) {
                 if constexpr (std::is_same_v<T, Runtime::NavigationSurfaceComponent>)
                     return Runtime::ValidateNavigationSurfaceComponent(component).HasValue();
                 else if constexpr (std::is_same_v<T, Runtime::NavigationRegionComponent>)
@@ -336,11 +335,11 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @copydoc InspectorPanel::DrawNavigation */
-    void InspectorPanel::DrawNavigation(const EditorWorkspaceViewModel &view, EditorWorkspaceViewCommandData &command,
-                                        const EditorGuiContext &context) {
-        m_navigationSession.Begin(view);
-        if (m_navigationSession.Drafts().empty())
+    /** @copydoc DrawNavigationInspector */
+    void DrawNavigationInspector(NavigationInspectorSession &session, const EditorWorkspaceViewModel &view,
+                                 EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+        session.Begin(view);
+        if (session.Drafts().empty())
             return;
         bool canEdit = view.physicsContext.canEdit && !view.sceneExternalConflict && view.playState == EditorPlayState::Idle &&
                        (!view.prefabSelection || !view.prefabHierarchyUnavailable);
@@ -350,18 +349,19 @@ namespace Horo::Editor {
         if (view.navigationDefinitions.empty())
             Ui::Hint(Label(context, "workspace.navigation_inspector.degraded"), context.theme.fonts);
         ImGui::BeginDisabled(!canEdit);
-        const bool valid = DrawCards(m_navigationSession, view, context);
-        const bool dirty = m_navigationSession.Dirty();
+        const bool valid = DrawCards(session, view, context);
+        const bool dirty = session.Dirty();
         const bool apply = PhysicsInspectorWidgets::Action(context, "workspace.navigation_inspector.apply",
                                                            dirty && valid && !view.navigationDefinitions.empty() &&
                                                                command.command == EditorWorkspaceViewCommand::None);
-        const bool cancel = PhysicsInspectorWidgets::Action(context, "workspace.navigation_inspector.cancel", dirty) ||
-                            (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
-        if (cancel)
-            m_navigationSession.Cancel();
+        if (const bool cancel =
+                PhysicsInspectorWidgets::Action(context, "workspace.navigation_inspector.cancel", dirty) ||
+                (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) && ImGui::IsKeyPressed(ImGuiKey_Escape, false));
+            cancel)
+            session.Cancel();
         else if (apply) {
             command.command = EditorWorkspaceViewCommand::UpdateNavigationComponents;
-            command.navigationPayload = m_navigationSession.Request();
+            command.navigationPayload = session.Request();
         }
         ImGui::EndDisabled();
         if (!view.navigationEditError.empty()) {
