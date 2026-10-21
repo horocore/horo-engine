@@ -11,7 +11,7 @@ namespace Horo::Editor {
     /** @brief Exercises actual point/bounds draw primitives under the finite render budget. */
     void CheckPreviewDrawing(const CanvasWorkspace &fixture) {
         Tests::EditorGuiContextFixture gui;
-        for (const auto preset : {Theme::Preset::HoroDark, Theme::Preset::HoroLight}) {
+        for (const auto preset : {Theme::Preset::HoroDark, Theme::Preset::Light}) {
             Theme::SetThemePreset(preset);
             for (const auto locale : {"en-US", "tr-TR"}) {
                 REQUIRE(gui.localization.Prepare(LocaleTag{locale}));
