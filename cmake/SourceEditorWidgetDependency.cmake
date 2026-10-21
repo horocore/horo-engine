@@ -7,6 +7,15 @@ FetchContent_Declare(zep
     SOURCE_SUBDIR horo_no_upstream_project
 )
 FetchContent_MakeAvailable(zep)
+# editor.cpp includes this header even when native filesystem support is disabled.
+# Generate it privately without enabling upstream developer-root discovery.
+set(HORO_ZEP_PRIVATE_CONFIG_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/zep")
+function(horo_generate_zep_private_config)
+    set(ZEP_ROOT "")
+    configure_file("${zep_SOURCE_DIR}/cmake/config_app.h.cmake"
+        "${HORO_ZEP_PRIVATE_CONFIG_DIR}/config_app.h")
+endfunction()
+horo_generate_zep_private_config()
 add_library(HoroThirdPartyZep STATIC
     ${zep_SOURCE_DIR}/src/buffer.cpp
     ${zep_SOURCE_DIR}/src/range_markers.cpp
@@ -42,7 +51,8 @@ add_library(HoroThirdPartyZep STATIC
 add_library(HoroThirdParty::Zep ALIAS HoroThirdPartyZep)
 target_compile_features(HoroThirdPartyZep PRIVATE cxx_std_20)
 target_include_directories(HoroThirdPartyZep SYSTEM PUBLIC ${zep_SOURCE_DIR}/include)
-target_include_directories(HoroThirdPartyZep PRIVATE ${zep_SOURCE_DIR}/src ${zep_SOURCE_DIR}/src/mcommon)
+target_include_directories(HoroThirdPartyZep PRIVATE
+    ${zep_SOURCE_DIR}/src ${zep_SOURCE_DIR}/src/mcommon ${HORO_ZEP_PRIVATE_CONFIG_DIR})
 # No ZEP_FEATURE_CPP_FILE_SYSTEM: only the adapter's denied filesystem is usable.
 set_target_properties(HoroThirdPartyZep PROPERTIES POSITION_INDEPENDENT_CODE ON)
 find_package(Threads REQUIRED)

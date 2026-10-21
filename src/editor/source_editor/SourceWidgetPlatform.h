@@ -3,7 +3,9 @@
 /** @file SourceWidgetPlatform.h
  * @brief Target-private Zep/ImGui bridge. No third-party declarations cross SourceEditorWidget.h.
  */
+#include <algorithm>
 #include <array>
+#include <cassert>
 #include <memory>
 #include <optional>
 #include <zep/imgui/display_imgui.h>
@@ -19,8 +21,15 @@ namespace Horo::Editor {
         Zep::ZepFont &GetFont(const Zep::ZepTextType type) override {
             const auto index = static_cast<std::size_t>(type);
             auto *font = ImGui::GetFont();
+            const auto &io = ImGui::GetIO();
+            if (!font)
+                font = io.FontDefault;
+            if (!font && !io.Fonts->Fonts.empty())
+                font = io.Fonts->Fonts.front();
+            assert(font);
+            const float pixels = ImGui::GetFontSize() > 0 ? ImGui::GetFontSize() : font->FontSize * io.FontGlobalScale;
             if (!m_fonts[index] || fonts_[index] != font) {
-                m_fonts[index] = std::make_shared<Zep::ZepFont_ImGui>(*this, font, static_cast<int>(ImGui::GetFontSize()));
+                m_fonts[index] = std::make_shared<Zep::ZepFont_ImGui>(*this, font, std::max(1, static_cast<int>(pixels)));
                 fonts_[index] = font;
             }
             return *m_fonts[index];
