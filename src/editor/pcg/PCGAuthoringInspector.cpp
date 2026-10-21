@@ -128,7 +128,7 @@ namespace Horo::Editor {
                     value = static_cast<T>(selected);
             }
 
-            void Space(PCG::PCGPointCoordinateSpace &value) {
+            void Space(PCG::PCGPointCoordinateSpace &value) const {
                 Choice("space", value, std::array{"snapshot", "point_local"});
             }
 
@@ -294,8 +294,8 @@ namespace Horo::Editor {
             Ui::Hint(fields.Text(tier < tiers.size() ? tiers[tier] : "unsupported").c_str(), fonts);
             fields.Label("mode");
             constexpr std::array modes{"offline", "runtime", "hybrid"};
-            constexpr std::array capabilities{PCG::PCGCapability::OfflineBake, PCG::PCGCapability::RuntimeEvaluation,
-                                              PCG::PCGCapability::HybridEvaluation};
+            static constexpr std::array capabilities{PCG::PCGCapability::OfflineBake, PCG::PCGCapability::RuntimeEvaluation,
+                                                     PCG::PCGCapability::HybridEvaluation};
             std::array<std::string, 3> modeLabels;
             for (std::size_t i = 0; i < modes.size(); ++i)
                 modeLabels[i] = fields.Text(modes[i]);
@@ -306,7 +306,7 @@ namespace Horo::Editor {
                 return modeLabels[static_cast<std::size_t>(i)].c_str();
             },
                                                  .enabled =
-                                                     [&catalog, &capabilities](int i) {
+                                                     [&catalog](int i) {
                 return catalog.Capabilities().granted.Contains(capabilities[static_cast<std::size_t>(i)]);
             },
                                                  .disabledTooltip =
