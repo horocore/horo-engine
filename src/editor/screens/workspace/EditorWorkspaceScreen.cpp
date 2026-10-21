@@ -12,11 +12,11 @@
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -27,8 +27,6 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Paths.h"
-#include "Horo/Platform/NativeProjectReadFiles.h"
-#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
@@ -42,7 +40,6 @@
 #include "editor/screens/NavigationErrors.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
-#include <array>
 #include <filesystem>
 #include <format>
 #include <imgui.h>
@@ -66,13 +63,6 @@ namespace Horo::Editor {
             IOperationControl *operationControl{nullptr};
             const Application::INetworkDebuggerQuery *networkDebuggerQuery{};
             Application::INetworkDebuggerControl *networkDebuggerControl{};
-        };
-
-        /** @brief One workspace incarnation and its independently retained root-bound source capabilities. */
-        struct WorkspaceSourceAuthorities {
-            Assets::AssetId owner;
-            std::shared_ptr<const Assets::IAssetRegistrySource> registry;
-            std::shared_ptr<const Platform::IProjectReadFiles> world;
         };
 
         struct WorkspaceProjectServices {
@@ -675,40 +665,13 @@ namespace Horo::Editor {
                 return playSceneFactory;
             }
 
-            /** @brief Issues a fresh nonzero workspace incarnation from host-composed native entropy. */
-            static Result<Assets::AssetId> CreateSessionOwner() {
-                std::array<std::uint8_t, 16> bytes{};
-                const auto entropy = Platform::CreateNativeSecureRandomSource();
-                if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(bytes))); generated.HasError())
-                    return Result<Assets::AssetId>::Failure(generated.ErrorValue());
-                const auto owner = Assets::AssetId::FromBytes(bytes);
-                if (!owner.IsValid())
-                    return Result<Assets::AssetId>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
-                return Result<Assets::AssetId>::Success(owner);
-            }
-
-            /** @brief Captures both native readers under the same fresh workspace incarnation before exposing either. */
-            static Result<WorkspaceSourceAuthorities> CaptureWorkspaceSources(const std::filesystem::path &root) {
-                const auto identity = CreateSessionOwner();
-                if (identity.HasError())
-                    return Result<WorkspaceSourceAuthorities>::Failure(identity.ErrorValue());
-                const auto owner = identity.Value();
-                auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
-                if (registry.HasError())
-                    return Result<WorkspaceSourceAuthorities>::Failure(registry.ErrorValue());
-                auto world = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
-                if (world.HasError())
-                    return Result<WorkspaceSourceAuthorities>::Failure(world.ErrorValue());
-                return Result<WorkspaceSourceAuthorities>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
-            }
-
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =
                     services_.TryGet<Application::GameplayBuildEnvironment>();
-                auto capturedSources = CaptureWorkspaceSources(projectRoot);
+                auto capturedSources = CaptureWorkspaceReadSources(services_.TryGetConst<WorkspaceReadSourceFactory>(), projectRoot);
                 if (capturedSources.HasError())
                     return Result<void>::Failure(capturedSources.ErrorValue());
                 auto sources = std::move(capturedSources).Value();

@@ -1,3 +1,5 @@
+#include "Horo/Editor/NativeAssetRegistrySource.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "OwnedTestDirectory.h"
 #include "PartitionedWorldResidencyTestSupport.h"
@@ -76,7 +78,7 @@ namespace Horo::Editor::WorldCompositionTests {
         close.worldDocumentFence = edited->fence;
         controller.ProcessCommand(close);
         REQUIRE(controller.ViewModel().worldDocumentError);
-        CHECK(controller.ViewModel().worldDocumentError->code == WorldDocumentErrors::Dirty.code);
+        CHECK(controller.ViewModel().worldDocumentError->code.Value() == WorldDocumentErrors::Dirty.code.Value());
         CHECK(controller.WorldDocuments().Snapshot().Value() == edited);
         REQUIRE(controller.WorldDocuments().Shutdown(WorldDocumentDisposition::Discard).HasValue());
         controller.RefreshWorldDocumentProjection();
@@ -275,4 +277,89 @@ namespace Horo::Editor {
         REQUIRE(snapshot->operations.front().error);
         CHECK(snapshot->operations.front().error->code == Application::WorldBakeErrors::Stale.code);
     }
+}  // namespace Horo::Editor
+
+namespace Horo::Editor {
+    namespace {
+        /** @brief Creates actual native fixture readers while preserving their exact shared opening fence. */
+        Result<WorkspaceReadSources> CaptureTestReaders(const std::filesystem::path &root, const Assets::AssetId owner) {
+            auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
+            if (registry.HasError())
+                return Result<WorkspaceReadSources>::Failure(registry.ErrorValue());
+            auto world = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
+            if (world.HasError())
+                return Result<WorkspaceReadSources>::Failure(world.ErrorValue());
+            return Result<WorkspaceReadSources>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
+        }
+    }  // namespace
+
+    TEST_CASE("Workspace reader composition requires explicit complete host authority", "[editor][world_bake][native]") {
+        Horo::Tests::OwnedTestDirectory project{"workspace source factory"};
+        const auto owner = WorldResidencyTests::Asset(9);
+        const auto capture = [owner](const std::filesystem::path &root) {
+            return CaptureTestReaders(root, owner);
+        };
+        WorkspaceReadSourceFactory factory{capture};
+        SECTION("absent capability never creates native readers") {
+            WorldResidencyTests::ErrorIs(CaptureWorkspaceReadSources(nullptr, project.Path()),
+                                         Platform::ProjectReadErrors::Unavailable.code.Value());
+        }
+        SECTION("unbound callback is rejected") {
+            factory.capture = {};
+            CHECK(CaptureWorkspaceReadSources(&factory, project.Path()).HasError());
+        }
+        SECTION("relative roots never reach host capture") {
+            bool invoked{};
+            factory.capture = [&](const auto &) {
+                invoked = true;
+                return Result<WorkspaceReadSources>::Success({});
+            };
+            CHECK(CaptureWorkspaceReadSources(&factory, "relative").HasError());
+            CHECK_FALSE(invoked);
+        }
+        SECTION("partial capture never escapes") {
+            factory.capture = [](const auto &) {
+                return Result<WorkspaceReadSources>::Success({});
+            };
+            CHECK(CaptureWorkspaceReadSources(&factory, project.Path()).HasError());
+        }
+        SECTION("original capture error survives") {
+            factory.capture = [](const auto &) {
+                return Result<WorkspaceReadSources>::Failure(MakeError(Platform::ProjectReadErrors::Stale));
+            };
+            const auto result = CaptureWorkspaceReadSources(&factory, project.Path());
+            REQUIRE(result.HasError());
+            CHECK(result.ErrorValue().code == Platform::ProjectReadErrors::Stale.code);
+        }
+    }
+
+    TEST_CASE("Workspace reader bridge retains actual native root authority", "[editor][world_bake][native]") {
+        Horo::Tests::OwnedTestDirectory project{"workspace native readers"};
+        const auto owner = WorldResidencyTests::Asset(9);
+        const WorkspaceReadSourceFactory factory{[owner](const std::filesystem::path &root) {
+            return CaptureTestReaders(root, owner);
+        }};
+        REQUIRE(std::filesystem::create_directory(project.Path() / "Assets"));
+        {
+            std::ofstream file{project.Path() / "Assets/page scene.horo"};
+            file << WorldResidencyTests::Source();
+            REQUIRE(file.good());
+        }
+        auto sources = CaptureWorkspaceReadSources(&factory, project.Path());
+        REQUIRE(sources.HasValue());
+        CHECK(sources.Value().owner == owner);
+        const Platform::ProjectReadContext context{.projectIdentity = owner.ToString(),
+                                                   .projectGeneration = 1,
+                                                   .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+        const auto bytes = sources.Value().world->SourceText("Assets/page scene.horo", context, {});
+        REQUIRE(bytes.HasValue());
+        REQUIRE(bytes.Value().text);
+        CHECK(*bytes.Value().text == WorldResidencyTests::Source());
+        const auto inventory = sources.Value().registry->Capture();
+        REQUIRE(inventory.HasValue());
+        CHECK(inventory.Value().assetRoot == "Assets");
+        REQUIRE(inventory.Value().entries.size() == 1);
+        CHECK(inventory.Value().entries.front().path == "Assets/page scene.horo");
+    }
+
 }  // namespace Horo::Editor

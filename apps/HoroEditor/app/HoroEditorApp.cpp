@@ -34,11 +34,13 @@
 #include "Horo/Editor/GuiRoute.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
+#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/RecentProjectInspectionService.h"
 #include "Horo/Editor/WelcomeController.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Extensions/ExtensionInventory.h"
 #include "Horo/Extensions/ExtensionMarketplace.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -49,6 +51,8 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/Paths.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
+#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Runtime/Save/SaveTelemetry.h"
 #include "PackageHostPolicy.h"
 #include "PackageProjectHost.h"
@@ -1645,6 +1649,24 @@ namespace Horo::Editor {
             return healthy && completed;
         }
 
+        /** @brief Creates one complete native workspace read pair at the application composition boundary. */
+        Result<WorkspaceReadSources> CaptureNativeWorkspaceSources(const std::filesystem::path &root) {
+            std::array<std::uint8_t, 16> bytes{};
+            const auto entropy = Platform::CreateNativeSecureRandomSource();
+            if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(bytes))); generated.HasError())
+                return Result<WorkspaceReadSources>::Failure(generated.ErrorValue());
+            const auto owner = Assets::AssetId::FromBytes(bytes);
+            if (!owner.IsValid())
+                return Result<WorkspaceReadSources>::Failure(MakeError(Platform::ProjectReadErrors::Invalid));
+            auto registry = CreateNativeAssetRegistrySource(root, owner.ToString(), 1);
+            if (registry.HasError())
+                return Result<WorkspaceReadSources>::Failure(registry.ErrorValue());
+            auto world = Platform::CreateNativeProjectReadFiles(root, owner.ToString(), 1);
+            if (world.HasError())
+                return Result<WorkspaceReadSources>::Failure(world.ErrorValue());
+            return Result<WorkspaceReadSources>::Success({owner, std::move(registry).Value(), std::move(world).Value()});
+        }
+
         /** @brief Captures explicit cooked selection and Physics mode before constructing Scene owners. */
         [[nodiscard]] Result<Application::Internal::EditorProjectScenePolicy> CaptureEditorScenePolicy(const EditorGuiOptions &options) {
             Application::Internal::EditorProjectScenePolicy scenePolicy{.physicsMode = options.physicsMode.value(),
@@ -1746,6 +1768,7 @@ namespace Horo::Editor {
             auto capturedPolicy = CaptureEditorScenePolicy(p.options);
             if (capturedPolicy.HasError())
                 return std::nullopt;
+            const WorkspaceReadSourceFactory workspaceReadSources{CaptureNativeWorkspaceSources};
             auto scenePolicy = std::move(capturedPolicy).Value();
             std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
             if (scenePolicy.cooked)
@@ -1861,6 +1884,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
             screenHost.Services().RegisterConst<EditorPreviewCollisionReceiptSource>(previewCollisionReceipt);
+            screenHost.Services().RegisterConst<WorkspaceReadSourceFactory>(workspaceReadSources);
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);
             screenHost.Services().Register<DurableFileSystem>(durableFiles);
             screenHost.Services().Register<Application::GameplayBuildService>(gameplayBuildService);

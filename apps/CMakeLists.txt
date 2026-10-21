@@ -233,6 +233,8 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/ConfiguredEditorUpdateManifestSource.cpp
     )
 
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles)
+
     if(APPLE)
         # SDL_GetBasePath resolves to Contents/Resources for an application bundle.
         set(HORO_EDITOR_PACKAGED_ASSET_ROOT_RELATIVE "assets")

@@ -2,13 +2,25 @@
 
 `HoroWorldBakeApplication` is a non-installed host composition above EditorModel,
 SceneRuntimeConversion, SceneCellPayload, WorldStreaming, Assets and the root-bound
-Platform read capability and existing ProjectMutationGuard. It is deliberately separate from HoroApplication and
+ProjectReadFilesApi capability and existing ProjectMutationGuard. Native reader
+construction remains explicit host/test composition; this target does not export
+the concrete PlatformProjectReadFiles implementation. It is deliberately separate from HoroApplication and
 from the editor model. No lower owner depends on this target. Its public header is
 owned by this target alone, with an independent public consumer. The controller
 owns the service; detaching World Composition or Global Dock presentation does not
 cancel accepted work or release its captures.
 
 ## Capture and real production path
+
+The graphical executable composes `WorkspaceReadSourceFactory` before starting
+`GuiScreenHost`. Each project activation receives a fresh workspace identity and
+retained registry/world readers, both bound to that identity at generation one.
+`HoroEditor` selects the native implementation; `HoroGui` consumes only the injected
+capability and has no PlatformProjectReadFiles edge or native reader/entropy fallback.
+Missing factories, relative roots and partial pairs fail closed; original adapter
+errors cross the bridge intact. Other hosts must explicitly compose their own
+native or restricted capture. Existing document, viewport and source ownership is
+unchanged; no ambient reader or second world store is introduced.
 
 The controller captures the canonical `WorldDocuments()` immutable root, including
 owner, generation, publication and exact page heads. Loaded pages retain actual

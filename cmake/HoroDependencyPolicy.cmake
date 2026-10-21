@@ -235,7 +235,7 @@ horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorPlaySceneHostInternal DEPENDENCIES HoroRuntimeScene HoroGameplayRuntime)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroWorldBakeApplication HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource
+    DEPENDENCIES HoroProjectReadFilesApi HoroWorldBakeApplication HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
@@ -289,6 +289,7 @@ horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES
+        HoroPlatformProjectReadFiles
         HoroEditorSceneProductHost
         HoroEditorPlaySceneHostInternal
         HoroScenePhysicsHost
@@ -390,4 +391,4 @@ horo_allow_target_dependencies(TARGET HoroProjectCollisionSettings
 horo_allow_target_dependencies(TARGET HoroCliNavigationAdapters DEPENDENCIES HoroCliHost HoroNavigationBakeAutomation)
 horo_allow_target_dependencies(TARGET HoroMcpNavigationAdapters DEPENDENCIES HoroMcpRegistry HoroNavigationBakeAutomation)
 
-horo_allow_target_dependencies(TARGET HoroWorldBakeApplication DEPENDENCIES HoroEditorModel HoroSceneCellPayload HoroWorldStreaming HoroSceneRuntimeConversion HoroFoundation HoroAssets HoroPlatformProjectReadFiles HoroProjectMutationGuard)
+horo_allow_target_dependencies(TARGET HoroWorldBakeApplication DEPENDENCIES HoroEditorModel HoroSceneCellPayload HoroWorldStreaming HoroSceneRuntimeConversion HoroFoundation HoroAssets HoroProjectReadFilesApi HoroProjectMutationGuard)

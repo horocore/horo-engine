@@ -2780,6 +2780,7 @@ add_library(HoroEditorModel STATIC
         editor/document/PartitionedWorldSource.cpp
         editor/document/PartitionedWorldWorkspace.cpp
         editor/document/PartitionedWorldSourceAuthoring.cpp
+        editor/document/WorldSourceValidation.cpp
         editor/document/WorldSourceGizmo.cpp
         editor/document/WorldLayerCommands.cpp
         editor/document/PartitionedWorldResidency.cpp
@@ -2847,7 +2848,7 @@ add_library(HoroEngine::WorldBakeApplication ALIAS HoroWorldBakeApplication)
 target_compile_features(HoroWorldBakeApplication PUBLIC cxx_std_20)
 target_link_libraries(HoroWorldBakeApplication PUBLIC
         HoroEngine::EditorModel HoroEngine::SceneCellPayload HoroEngine::WorldStreaming
-        HoroEngine::SceneRuntimeConversion HoroEngine::Foundation HoroEngine::Assets HoroEngine::PlatformProjectReadFiles HoroEngine::ProjectMutationGuard)
+        HoroEngine::SceneRuntimeConversion HoroEngine::Foundation HoroEngine::Assets HoroEngine::ProjectReadFilesApi HoroEngine::ProjectMutationGuard)
 
 add_library(HoroEditorViewportScene STATIC
         editor/renderer/EditorViewportScene.cpp
@@ -2941,6 +2942,7 @@ target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_IN
 target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
 
 add_library(HoroEditorServices STATIC
+        editor/document/WorkspaceReadSources.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
@@ -3033,6 +3035,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::ProjectReadFilesApi
         HoroEngine::WorldBakeApplication
         HoroPrefabHierarchyInternal
         HoroEngine::ProjectCollisionSettings
@@ -3306,7 +3309,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::PlatformProjectReadFiles)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication)
     target_link_libraries(HoroGui
             PUBLIC
             HoroEngine::EditorServices

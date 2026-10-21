@@ -2806,6 +2806,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputPaneTests.cpp
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
+            unit/editor/WorldSourceViewportRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
             unit/editor/PlayTopologyModalTests.cpp
     )
@@ -3157,7 +3158,7 @@ target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroWorldBakeApplicationTests unit/application/WorldBakeApplicationTests.cpp)
 target_include_directories(HoroWorldBakeApplicationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
-target_link_libraries(HoroWorldBakeApplicationTests PRIVATE HoroEngine::WorldBakeApplication)
+target_link_libraries(HoroWorldBakeApplicationTests PRIVATE HoroEngine::WorldBakeApplication HoroEngine::PlatformProjectReadFiles)
 horo_register_catch_test(HoroWorldBakeApplicationTests LABELS "unit;headless;world_bake")
 
 add_executable(HoroPartitionedWorldWorkspaceTests

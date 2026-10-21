@@ -841,3 +841,19 @@ Fresh successful bake output is retained independently from source dirty state,
 runtime activation and Assets release publication. The complete source, identity,
 cancellation, publication and migration contract is in the
 [world bake workflow guide](../../guides/world-bake-workflow.md).
+
+
+### Workspace read-source composition
+
+`HoroEditorServices` owns `WorkspaceReadSources.h`, a backend-neutral pair of
+retained asset-inventory and world-source read capabilities plus a never-reused
+workspace identity. `WorkspaceReadSourceFactory` is explicitly supplied by the
+application host before workspace activation. Both readers use generation one
+under that fresh identity. The GUI consumes this capability without selecting a
+native reader or entropy backend; absent or partial composition fails closed.
+The HoroEditor executable owns native factory selection and links the concrete
+PlatformProjectReadFiles target privately. Bake orchestration depends publicly
+on ProjectReadFilesApi only; native test hosts link their adapter explicitly.
+Hosts migrating from GUI-local source construction register the factory before
+starting GuiScreenHost. The canonical WorldDocuments owner, source projection,
+viewport ownership and public source-edit contracts remain unchanged.
