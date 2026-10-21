@@ -859,7 +859,7 @@ namespace Horo::Editor {
                          .message = std::move(message)};
         }
 
-        /** @brief Initializes and installs the GUI and viewport renderer pair atomically. */
+        /** @brief Retains both native renderer owners before initialization so failures use explicit host retirement. */
         template <typename GuiRenderer, typename ViewportRenderer>
         [[nodiscard]] Result<void> InstallEditorRenderers(EditorRenderComposition &composition, std::unique_ptr<GuiRenderer> guiRenderer,
                                                           std::unique_ptr<ViewportRenderer> viewportRenderer) {

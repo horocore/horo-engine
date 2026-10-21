@@ -375,6 +375,43 @@ jobs:
               return subprocess.run(command, check=True, text=True,
                                     stdout=subprocess.PIPE if capture else None).stdout
 
+          def record_presentation_result(record, build, returncode):
+              selected = set(record["selectedTests"])
+              owners = ["HoroRenderDisplayTests::", "HoroRenderFrontendTests::", "HoroRenderBackendRegistryTests::",
+                        "HoroRenderMetalTests::", "HoroEditorViewportMetalSmoke::", "HoroMetalUploadShutdownSmoke::"]
+              if any(not any(name.startswith(owner) for name in selected) for owner in owners) or "HoroEditorMetalFirstFrame" not in selected:
+                  raise RuntimeError("Required qualification owner is absent from discovery")
+              prefix = "HoroEditorViewportMetalSmoke::"
+              expected = {name.removeprefix(prefix) for name in selected if name.startswith(prefix)}
+              required = {"Editor Viewport Metal Smoke",
+                          "SDL Metal host policy precedes view creation and publishes actual revisioned display facts",
+                          "Native Metal realizes SDR, validates real drawables and coalesces latest resize before reuse",
+                          "Metal explicit sRGB matching round-trips back to the unchanged unmanaged SDR policy",
+                          "Metal linear EDR qualification uses actual host potential and native layer readback"}
+              if not required.issubset(expected):
+                  raise RuntimeError("Required presentation cases are absent from discovery")
+              common = ElementTree.parse(build / "ctest.xml").findall(".//testcase")
+              presentation = ElementTree.parse(build / "presentation.xml").findall(".//testcase")
+              if {case.attrib["name"] for case in common} != {name for name in selected if not name.startswith(prefix)}:
+                  raise RuntimeError("Common qualification JUnit does not match exact discovery")
+              observed = {name for name in expected for case in presentation
+                          if case.attrib["name"] == name or case.attrib["name"].startswith(name + "/")}
+              unexpected = any(not any(case.attrib["name"] == name or case.attrib["name"].startswith(name + "/")
+                                       for name in expected) for case in presentation)
+              if observed != expected or not presentation or unexpected:
+                  raise RuntimeError("Presentation JUnit does not match required discovered cases")
+              cases = common + presentation
+              skipped = [case.attrib["name"] for case in cases if case.find("skipped") is not None]
+              record["executedCaseCount"] = len(cases) - len(skipped)
+              record["skippedCases"] = skipped
+              if any(case.find("failure") is not None or case.find("error") is not None for case in cases):
+                  raise RuntimeError("Qualification JUnit contains a failure or error")
+              # Only Catch's documented all-skipped exit is non-failing, and only with complete matching skipped evidence.
+              all_skipped = all(case.find("skipped") is not None for case in presentation)
+              if returncode != 0 and not (returncode == 4 and all_skipped):
+                  raise RuntimeError("Native Metal presentation owner failed: " + str(returncode))
+              record["nativeStatus"] = "incomplete_hardware_cases_skipped" if skipped else "passed"
+
           try:
               sources = ["apps/HoroEditor/app/HoroEditorApp.cpp",
                          "include/Horo/Runtime/Render/RenderPresentationOutput.h",
@@ -429,13 +466,18 @@ jobs:
                   assert any(name.startswith("HoroMetalUploadShutdownSmoke::") for name in record["selectedTests"])
                   assert "HoroEditorMetalFirstFrame" in record["selectedTests"]
                   record["nativeStatus"] = "failed"
+                  common = ("^(HoroRender(Display|Frontend|BackendRegistry|Metal)Tests::|"
+                            "HoroMetalUploadShutdownSmoke::|HoroEditorMetalFirstFrame$)")
                   run(["ctest", "--test-dir", str(build), "--parallel", "1", "--timeout", "90", "--output-on-failure",
-                       "--no-tests=error", "-R", pattern, "--output-junit", str(build.resolve() / "ctest.xml")])
-                  cases = ElementTree.parse(build / "ctest.xml").findall(".//testcase")
-                  skipped = [case.attrib.get("name") for case in cases if case.find("skipped") is not None]
-                  record["executedCaseCount"] = len(cases) - len(skipped)
-                  record["skippedCases"] = skipped
-                  record["nativeStatus"] = "incomplete_hardware_cases_skipped" if skipped else "passed"
+                       "--no-tests=error", "-R", common, "--output-junit", str(build.resolve() / "ctest.xml")])
+                  # Catch's own JUnit distinguishes a skipped HDR case from successful SDR cases. The pinned
+                  # CTest adapter otherwise treats an individually selected all-skipped case's exit 4 as failure.
+                  presentation = [str(build / "tests/HoroEditorViewportMetalSmoke"), "--reporter", "junit",
+                                  "--out", str(build.resolve() / "presentation.xml")]
+                  record["commands"].append(presentation)
+                  completed = subprocess.run(presentation, check=False, timeout=90)
+                  record["presentationExit"] = completed.returncode
+                  record_presentation_result(record, build, completed.returncode)
           except Exception as error:
               record["error"] = str(error)
               raise
@@ -837,6 +879,7 @@ jobs:
             build/ci-metal-shader/tests/MetalPreparationFixture.metallib
             build/ci-metal-shader/Testing/Temporary/LastTest.log
             build/ci-metal-presentation/provenance.json
+            build/ci-metal-presentation/presentation.xml
             build/ci-metal-presentation/test-discovery.json
             build/ci-metal-presentation/Testing/Temporary/LastTest.log
             build/ci-audio-release/mcp-ctest.xml
