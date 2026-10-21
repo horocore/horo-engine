@@ -64,7 +64,10 @@ through its existing graph completion lease. No parallel resource registry or
 completion ledger is introduced.
 
 The non-installed `OpenXRMultiviewGraph` is host composition in
-`HoroXROpenXRVulkanHostInterface`/`HoroXROpenXRVulkan`. Create runs before an active
+`HoroXROpenXRVulkanHostInterface`/`HoroXROpenXRVulkan`. The host header carries API
+values and forward-declared frontend/frame borrows; the existing private implementation
+dependency supplies frontend execution. No frontend dependency is published through
+the host interface. Create runs before an active
 frame, receives ready resources and the host's actual graphics queue, and resolves
 `OpenXRSwapchain::Current` rather than treating graph contents policy as a native
 import. It copies actual external-source acquired/final states and compiles their

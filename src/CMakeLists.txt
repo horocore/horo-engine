@@ -2782,7 +2782,7 @@ if (HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN)
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/xr/openxr/vulkan/host>")
     target_compile_definitions(HoroXROpenXRVulkanHostInterface INTERFACE XR_USE_GRAPHICS_API_VULKAN)
     target_link_libraries(HoroXROpenXRVulkanHostInterface INTERFACE
-        HoroXROpenXRHostInterface HoroRenderVulkanExternalImagesInterface HoroEngine::RenderFrontend)
+        HoroXROpenXRHostInterface HoroRenderVulkanExternalImagesInterface)
     add_library(HoroXROpenXRVulkan STATIC
         runtime/xr/openxr/vulkan/OpenXRVulkanSwapchain.cpp
         runtime/xr/openxr/vulkan/OpenXRMultiviewGraph.cpp)

@@ -2,14 +2,17 @@
 /** @file OpenXRMultiviewGraph.h
  * @brief Non-installed XR acquisition-to-canonical-render-graph host composition.
  */
-#include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/Mesh.h"
-#include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
 #include "Horo/XR/XRMultiviewScene.h"
 #include "OpenXRSwapchain.h"
 
 #include <memory>
+
+namespace Horo::Render {
+    class RenderFrontend;
+    class RenderFrameScope;
+}  // namespace Horo::Render
 
 namespace Horo::XR::OpenXRInternal {
     /** @brief Ready canonical mesh dependencies and material, in visible draw order. */

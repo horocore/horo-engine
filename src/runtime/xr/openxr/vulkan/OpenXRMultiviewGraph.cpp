@@ -1,6 +1,8 @@
 #include "host/OpenXRMultiviewGraph.h"
 
+#include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
+#include "Horo/Runtime/Render/RenderFrontend.h"
 #include "RenderExternalImages.h"
 
 #include <algorithm>
