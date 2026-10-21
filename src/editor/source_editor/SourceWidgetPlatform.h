@@ -42,6 +42,9 @@ namespace Horo::Editor {
         /** @brief Maps only pointers inside the current mirror allocation. @param begin Drawn glyph pointer. @return Normalized byte
          * offset, or no source glyph. */
         [[nodiscard]] std::optional<std::size_t> SourceOffset(const uint8_t *begin) const noexcept;
+        /** @brief Checks the current normalized inclusive selection. @param offset Display byte offset. @return Whether the source glyph is
+         * selected. */
+        [[nodiscard]] bool Selected(std::size_t offset) const noexcept;
         std::array<ImFont *, static_cast<std::size_t>(Zep::ZepTextType::Count)> fonts_{};
         ImFont *regular_{};
         ImFont *emphasisFace_{};

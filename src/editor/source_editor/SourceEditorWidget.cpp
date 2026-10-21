@@ -361,7 +361,7 @@ namespace Horo::Editor {
                 auto &ime = ImGui::GetCurrentContext()->PlatformImeData;
                 ime.WantVisible = true;
                 ime.InputPos = display.cursor ? Zep::toImVec2(display.cursor->topLeftPx) : origin;
-                ime.InputLineHeight = ImGui::GetFontSize();
+                ime.InputLineHeight = std::round(Theme::GetActiveTokens().typography.body);
             } else if (ImGui::GetActiveID() == inputId) {
                 ImGui::ClearActiveID();
             }

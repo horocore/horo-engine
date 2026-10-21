@@ -63,6 +63,7 @@ namespace Horo::Editor {
         SourceEditorWidget &operator=(const SourceEditorWidget &) = delete;
         /** @brief Reconciles a document publication; rejection/external changes reset obsolete interaction caches.
          * @param snapshot Authoritative immutable lease; an inert lease detaches the widget.
+         * @pre An initialized GUI context with a populated font atlas exists; its first frame may start later.
          */
         void Publish(const SourceDocumentSnapshot &snapshot);
         /** @brief Draws inside the current GUI window and emits at most one revision-fenced operation.

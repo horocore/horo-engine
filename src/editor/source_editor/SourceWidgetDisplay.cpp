@@ -2,11 +2,30 @@
 #include "SourceWidgetPlatform.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Resolves the populated host atlas before the first GUI frame, preserving the widget host precondition. */
+        [[nodiscard]] ImFont *ActiveAtlasFont() {
+            auto *font = ImGui::GetFont();
+            const auto &io = ImGui::GetIO();
+            if (!font)
+                font = io.FontDefault;
+            if (!font && !io.Fonts->Fonts.empty())
+                font = io.Fonts->Fonts.front();
+            assert(font);
+            return font;
+        }
+
+        /** @brief Resolves valid initial metrics before ImGui has started its first frame. */
+        [[nodiscard]] int InitialFontPixels(const ImFont &font) {
+            const float pixels = ImGui::GetFontSize() > 0 ? ImGui::GetFontSize() : font.FontSize * ImGui::GetIO().FontGlobalScale;
+            return std::max(1, static_cast<int>(pixels));
+        }
+
         /** @brief Converts Horo's source color only at the target-private widget boundary. */
         [[nodiscard]] Zep::NVec4f NativeColor(const SourceColor &color) noexcept {
             return {color[0], color[1], color[2], color[3]};
@@ -15,7 +34,7 @@ namespace Horo::Editor {
 
     /** @copydoc WidgetDisplay::Configure */
     void WidgetDisplay::Configure(const SourceEditorTheme &theme, const Theme::Fonts *fonts) {
-        ImFont *regular = fonts && fonts->monospace ? fonts->monospace : ImGui::GetFont();
+        ImFont *regular = fonts && fonts->monospace ? fonts->monospace : ActiveAtlasFont();
         ImFont *emphasis = fonts && fonts->monospaceEmphasis ? fonts->monospaceEmphasis : regular;
         const int pixels = static_cast<int>(std::lround(theme.fontPixels));
         if (regular_ != regular || fontPixels_ != pixels)
@@ -40,8 +59,8 @@ namespace Horo::Editor {
     /** @copydoc WidgetDisplay::GetFont */
     Zep::ZepFont &WidgetDisplay::GetFont(const Zep::ZepTextType type) {
         const auto index = static_cast<std::size_t>(type);
-        auto *font = regular_ ? regular_ : ImGui::GetFont();
-        const int pixels = fontPixels_ > 0 ? fontPixels_ : static_cast<int>(ImGui::GetFontSize());
+        auto *font = regular_ ? regular_ : ActiveAtlasFont();
+        const int pixels = fontPixels_ > 0 ? fontPixels_ : InitialFontPixels(*font);
         if (!m_fonts[index] || fonts_[index] != font) {
             m_fonts[index] = std::make_shared<Zep::ZepFont_ImGui>(*this, font, pixels);
             fonts_[index] = font;
@@ -70,6 +89,14 @@ namespace Horo::Editor {
         return (gapStart - start) + (address - gapEnd);
     }
 
+    /** @copydoc WidgetDisplay::Selected */
+    bool WidgetDisplay::Selected(const std::size_t offset) const noexcept {
+        if (!buffer_ || !buffer_->HasSelection())
+            return false;
+        const auto range = buffer_->GetInclusiveSelection();
+        return offset >= static_cast<std::size_t>(range.first.Index()) && offset <= static_cast<std::size_t>(range.second.Index());
+    }
+
     /** @copydoc WidgetDisplay::DrawChars */
     void WidgetDisplay::DrawChars(Zep::ZepFont &font, const Zep::NVec2f &position, const Zep::NVec4f &color, const uint8_t *begin,
                                   const uint8_t *end) const {
@@ -77,7 +104,8 @@ namespace Horo::Editor {
             const auto role = syntax_ ? syntax_->RoleAt(*offset) : SourceSyntaxRole::Text;
             const auto &style = theme_.styles[static_cast<std::size_t>(role)];
             Zep::ZepFont &face = style.font == SourceFontRole::MonospaceEmphasis && emphasis_ ? *emphasis_ : font;
-            Zep::ZepDisplay_ImGui::DrawChars(face, position, NativeColor(style.color), begin, end);
+            const auto &foreground = Selected(*offset) ? style.selectedColor : style.color;
+            Zep::ZepDisplay_ImGui::DrawChars(face, position, NativeColor(foreground), begin, end);
         } else {
             Zep::ZepDisplay_ImGui::DrawChars(font, position, color, begin, end);
         }

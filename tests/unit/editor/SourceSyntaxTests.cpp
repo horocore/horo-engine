@@ -138,16 +138,20 @@ TEST_CASE("Source syntax memory and input work admission have explicit bounds", 
 TEST_CASE("Source styles follow each frame theme and preserve readable contrast at every DPI", "[editor][source][theme]") {
     auto tokens = DesignSystem::DefaultDesignTokens();
     const auto dark = ResolveSourceEditorTheme(tokens);
-    for (const auto &style : dark.styles)
+    for (const auto &style : dark.styles) {
         REQUIRE(SourceContrast(style.color, dark.background) >= 4.5F);
+        REQUIRE(SourceContrast(style.selectedColor, dark.selectionSurface) >= 4.5F);
+    }
     tokens.colors.surfaceWindow = ImVec4{1, 1, 1, 1};
     tokens.sourceSyntax.keyword = ImVec4{0.98F, 0.98F, 0.98F, 1};
     const auto light = ResolveSourceEditorTheme(tokens);
     REQUIRE(light.background != dark.background);
     REQUIRE(light.styles[static_cast<std::size_t>(SourceSyntaxRole::Keyword)].color !=
             dark.styles[static_cast<std::size_t>(SourceSyntaxRole::Keyword)].color);
-    for (const auto &style : light.styles)
+    for (const auto &style : light.styles) {
         REQUIRE(SourceContrast(style.color, light.background) >= 4.5F);
+        REQUIRE(SourceContrast(style.selectedColor, light.selectionSurface) >= 4.5F);
+    }
     for (const float scale : {1.0F, 1.25F, 1.5F, 2.0F}) {
         auto scaled = tokens;
         DesignSystem::ApplyGlobalUiScale(scaled, scale);

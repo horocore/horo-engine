@@ -678,7 +678,8 @@ specify `tokens.sourceSyntax` entries with those names as `#RRGGBB`; omitted
 entries derive from the existing semantic editor palette. The source surface
 uses `surfaceWindow`, `actionPrimarySoft` selection and body typography. Source
 foregrounds are corrected toward a readable luminance endpoint when necessary
-to preserve WCAG 4.5:1 contrast, including custom/light themes. Source typography
+to preserve WCAG 4.5:1 contrast against the opaque source surface and the
+alpha-composed selection overlay, including custom/light themes. Source typography
 uses the packaged IBM Plex Mono regular/emphasis faces with the same cell size;
 no smaller caption tier is introduced for comments or fallback text.
 

@@ -153,7 +153,7 @@ namespace Horo::Editor {
         if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
             static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
         auto toolIntent = found->second.tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
-        const bool focus = m_focusedSource != source.Identity().instance || found->second.tools.TakeFocusRequest();
+        const bool focus = m_focusedSource != source.Identity().instance || (!toolIntent && found->second.tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();
         auto intent =
             widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent}, &m_context.theme.fonts);

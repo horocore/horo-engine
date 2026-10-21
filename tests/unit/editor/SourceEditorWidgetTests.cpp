@@ -7,6 +7,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <fstream>
 #include <imgui_internal.h>
 #include <limits>
@@ -80,9 +81,10 @@ namespace {
     };
 
     /** @brief Counts actual rendered source-glyph color vertices rather than inspecting a detached lexical result. */
-    std::size_t ColoredVertices(const SourceSyntaxRole role) {
+    std::size_t ColoredVertices(const SourceSyntaxRole role, const bool selected = false) {
         const auto theme = ResolveSourceEditorTheme(Theme::GetActiveTokens());
-        const auto &rgba = theme.styles[static_cast<std::size_t>(role)].color;
+        const auto &style = theme.styles[static_cast<std::size_t>(role)];
+        const auto &rgba = selected ? style.selectedColor : style.color;
         const auto color = ImGui::GetColorU32(ImVec4{rgba[0], rgba[1], rgba[2], rgba[3]});
         std::size_t count = 0;
         const auto *data = ImGui::GetDrawData();
@@ -337,6 +339,7 @@ TEST_CASE("Every open widget draws lexical roles from the immediately active the
         static_cast<void>(fixture.Frame(*widget));
         REQUIRE(ColoredVertices(SourceSyntaxRole::Keyword) > 0);
         REQUIRE(ColoredVertices(SourceSyntaxRole::String) > 0);
+        REQUIRE(ImGui::GetCurrentContext()->PlatformImeData.InputLineHeight == std::round(Theme::GetActiveTokens().typography.body));
     }
     Theme::SelectThemeByIndex(2);
     // No Publish or Highlight call: a palette switch must reach both retained mirrors on their next draw.
@@ -422,4 +425,20 @@ TEST_CASE("Source semantic font roles use the supplied regular and emphasis atla
     REQUIRE(DrawnGlyph(*regular));
     REQUIRE(DrawnGlyph(*emphasis));
     REQUIRE(fonts.monospace->CalcTextSizeA(18, 1000, 1000, "iiii").x == fonts.monospaceEmphasis->CalcTextSizeA(18, 1000, 1000, "iiii").x);
+}
+
+TEST_CASE("Selected source glyphs retain semantic roles and readable contrast in the light theme", "[editor][source][widget][theme]") {
+    WidgetFixture fixture;
+    Theme::RefreshThemeList();
+    Theme::SelectThemeByIndex(2);
+    const auto source = fixture.Open("selected.cpp", "const char* text = \"value\"; // comment\n");
+    fixture.first.Publish(source);
+    REQUIRE(fixture.first.Highlight(source.Revision(), TokenizeSource(SourceLanguage::Cpp, source.Text())));
+    static_cast<void>(fixture.Frame(fixture.first));
+    REQUIRE(fixture.first.Select({0, source.Text().size()}));
+    static_cast<void>(fixture.Frame(fixture.first, false));
+    REQUIRE(ColoredVertices(SourceSyntaxRole::Keyword, true) > 0);
+    REQUIRE(ColoredVertices(SourceSyntaxRole::String, true) > 0);
+    REQUIRE(ColoredVertices(SourceSyntaxRole::Comment, true) > 0);
+    Theme::SelectThemeByIndex(0);
 }

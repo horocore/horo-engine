@@ -27,6 +27,15 @@ namespace Horo::Editor {
             return 0.2126F * Linear(color[0]) + 0.7152F * Linear(color[1]) + 0.0722F * Linear(color[2]);
         }
 
+        /** @brief Composes the active selection overlay over the opaque source surface. */
+        [[nodiscard]] SourceColor SelectionSurface(const SourceColor &overlay, const SourceColor &background) noexcept {
+            SourceColor result = background;
+            for (std::size_t channel = 0; channel < 3; ++channel)
+                result[channel] = overlay[channel] * overlay[3] + background[channel] * (1.0F - overlay[3]);
+            result[3] = 1.0F;
+            return result;
+        }
+
         /** @brief Preserves the theme hue where possible, moving only toward the nearer readable luminance endpoint. */
         [[nodiscard]] SourceColor Readable(SourceColor color, const SourceColor &background) noexcept {
             color[3] = 1.0F;
@@ -63,6 +72,8 @@ namespace Horo::Editor {
             .cursor = Readable(Color(colors.textPrimary), Color(colors.surfaceWindow)),
             .fontPixels = tokens.typography.body,
         };
+        result.background[3] = 1.0F;
+        result.selectionSurface = SelectionSurface(result.selection, result.background);
         const std::array palette{
             syntax.text.value_or(colors.textPrimary),        syntax.keyword.value_or(colors.actionPrimary),
             syntax.type.value_or(colors.statusWarn),         syntax.string.value_or(colors.statusOk),
@@ -72,6 +83,7 @@ namespace Horo::Editor {
         for (std::size_t index = 0; index < palette.size(); ++index) {
             const auto role = static_cast<SourceSyntaxRole>(index);
             result.styles[index] = {.color = Readable(Color(palette[index]), result.background),
+                                    .selectedColor = Readable(Color(palette[index]), result.selectionSurface),
                                     .font = role == SourceSyntaxRole::Keyword || role == SourceSyntaxRole::Directive
                                                 ? SourceFontRole::MonospaceEmphasis
                                                 : SourceFontRole::Monospace};
