@@ -155,6 +155,10 @@ namespace Horo::Render::OpenGLBackendTests {
             portState.failure = None;
             Check(backend->Initialize(RenderBackendConfig{}).HasValue());
             Horo::Render::Test::RequireDrainedOwner(*backend);
+            Check(portState.contextCreated);
+            Check(portState.destroyCount == (failure == Create ? 0 : 1));
+            backend.reset();
+            Check(!portState.contextCreated);
             Check(portState.destroyCount == (failure == Create ? 1 : 2));
         }
     }
