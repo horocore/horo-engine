@@ -94,7 +94,8 @@ namespace Horo::Editor {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0F);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0F);
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
-            ImGui::Begin(id, nullptr, flags);
+            // Structural docks/rails must not steal explicit document focus when they first appear later in the frame.
+            ImGui::Begin(id, nullptr, flags | ImGuiWindowFlags_NoFocusOnAppearing);
         }
 
         void DrawAllocationTarget(const AllocationTarget &target, const EditorWorkspaceViewModel &viewModel,
@@ -453,6 +454,7 @@ namespace Horo::Editor {
 
     void EditorWorkspaceView::Draw(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
                                    const GuiContentRegion &contentRegion) {
+        outCommand.sourceTextInputOwned = false;
         if (!m_inputRouter.Snapshot().State(Input::PointerButton::Primary).down) {
             m_panelDragCapture.Release();
             m_panelDragContext.Reset();

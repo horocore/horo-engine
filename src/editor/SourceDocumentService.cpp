@@ -46,7 +46,7 @@ namespace Horo::Editor {
     }  // namespace Detail
 
     /** @copydoc SourceDocumentService::SourceDocumentService */
-    SourceDocumentService::SourceDocumentService(const std::filesystem::path &projectRoot, const SourceDocumentLimits limits)
+    SourceDocumentService::SourceDocumentService(const std::filesystem::path &projectRoot, const SourceDocumentLimits &limits)
         : storage_(std::make_unique<Storage>()) {
         storage_->limits = limits;
         std::error_code error;
@@ -59,7 +59,8 @@ namespace Horo::Editor {
         if (!std::filesystem::is_directory(storage_->projectRoot, error) || error || limits.maximumDocumentBytes == 0 ||
             limits.maximumDocumentBytes > ceiling.maximumDocumentBytes || limits.maximumResidentBytes == 0 ||
             limits.maximumResidentBytes > ceiling.maximumResidentBytes || limits.maximumDocuments == 0 ||
-            limits.maximumDocuments > ceiling.maximumDocuments)
+            limits.maximumDocuments > ceiling.maximumDocuments || limits.maximumHistoryBytes > ceiling.maximumHistoryBytes ||
+            limits.maximumHistoryEntries > ceiling.maximumHistoryEntries)
             storage_->projectRoot.clear();
     }
 
