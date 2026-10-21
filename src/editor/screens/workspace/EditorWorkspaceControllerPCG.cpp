@@ -253,8 +253,7 @@ namespace Horo::Editor {
         if (request.action == PreviewRefresh)
             return RequestPCGPreview(instance, request.fence.cancellation);
         if (request.action == PreviewCancel) {
-            const auto owner = std::ranges::find(m_pcgPreviews, instance, &PCGPreviewOwner::document);
-            if (owner != m_pcgPreviews.end())
+            if (const auto owner = std::ranges::find(m_pcgPreviews, instance, &PCGPreviewOwner::document); owner != m_pcgPreviews.end())
                 static_cast<void>(owner->session->Cancel());
             UpdatePCGPreviews();
             return Result<void>::Success();

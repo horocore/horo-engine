@@ -28,15 +28,15 @@ namespace Horo::Editor {
             found = std::prev(m_pcgPreviews.end());
         }
         const auto &inputs = *m_pcgPreviewInputs;
-        auto submitted = found->session->Request({document.Value(),
-                                                  m_pcgPreviewCatalog,
-                                                  inputs.spatial,
-                                                  inputs.schema,
-                                                  {},
-                                                  inputs.evaluation,
-                                                  inputs.maximumPointsPerOutput,
-                                                  cancellation});
-        if (submitted.HasError())
+        if (auto submitted = found->session->Request({document.Value(),
+                                                      m_pcgPreviewCatalog,
+                                                      inputs.spatial,
+                                                      inputs.schema,
+                                                      {},
+                                                      inputs.evaluation,
+                                                      inputs.maximumPointsPerOutput,
+                                                      cancellation});
+            submitted.HasError())
             return Result<void>::Failure(submitted.ErrorValue());
         UpdatePCGPreviews();
         return Result<void>::Success();

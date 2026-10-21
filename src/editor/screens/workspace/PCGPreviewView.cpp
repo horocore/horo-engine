@@ -62,10 +62,13 @@ namespace Horo::Editor {
                         .enabled = preview.phase == PCGPreviewPhase::Evaluating || preview.overlay != nullptr,
                         .font = fonts.sans}))
             action = PCGPreviewAction::Cancel;
-        const auto key = preview.phase == PCGPreviewPhase::Evaluating ? "workspace.pcg.preview.running"
-                         : preview.phase == PCGPreviewPhase::Failed   ? "workspace.pcg.preview.failed"
-                         : preview.overlay                            ? "workspace.pcg.preview.current"
-                                                                      : "workspace.pcg.preview.empty";
+        const char *key = "workspace.pcg.preview.empty";
+        if (preview.phase == PCGPreviewPhase::Evaluating)
+            key = "workspace.pcg.preview.running";
+        else if (preview.phase == PCGPreviewPhase::Failed)
+            key = "workspace.pcg.preview.failed";
+        else if (preview.overlay)
+            key = "workspace.pcg.preview.current";
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, localization.Get("editor", key), Theme::Muted(), fonts);
         if (preview.error)
             Ui::WrappedText(ImGui::GetContentRegionAvail().x, preview.error->code.Value(), Theme::Muted(), fonts);

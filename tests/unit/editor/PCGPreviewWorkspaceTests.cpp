@@ -3,12 +3,23 @@
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <cmath>
+#include <map>
 #include <thread>
 
 namespace Horo::Editor {
     using namespace PCGCanvasTestSupport;
 
     namespace {
+        /** @brief Records localization keys requested by the actual preview panel without inspecting ImGui internals. */
+        class PreviewLabels final : public ILocalizationService {
+        public:
+            const std::string &Get(std::string_view, std::string_view key) const override {
+                return labels.try_emplace(std::string{key}, key).first->second;
+            }
+
+            mutable std::map<std::string, std::string> labels;
+        };
+
         /** @brief Refreshes through the production workspace route and waits only in the bounded test harness. */
         std::shared_ptr<const PCGPreviewOverlay> RefreshPreview(CanvasWorkspace &fixture) {
             fixture.Send(fixture.Request(PCGEditorAction::PreviewRefresh));
@@ -102,6 +113,48 @@ namespace Horo::Editor {
         }
         REQUIRE(fixture.controller->ShutdownPCGDocuments(true).HasValue());
         CHECK(fixture.controller->ViewModel().pcgDocuments.empty());
+    }
+
+    TEST_CASE("PCG preview status preserves phase precedence over a retained overlay", "[unit][editor][pcg][preview][workspace]") {
+        CanvasWorkspace fixture{true};
+        const auto overlay = RefreshPreview(fixture);
+        Tests::EditorGuiContextFixture gui;
+        ImGui::GetIO().IniFilename = nullptr;
+
+        struct StatusCase final {
+            PCGPreviewPhase phase;
+            const char *withoutOverlay;
+            const char *withOverlay;
+        };
+
+        const std::array cases{StatusCase{PCGPreviewPhase::Idle, "empty", "current"},
+                               StatusCase{PCGPreviewPhase::Evaluating, "running", "running"},
+                               StatusCase{PCGPreviewPhase::Ready, "empty", "current"},
+                               StatusCase{PCGPreviewPhase::Failed, "failed", "failed"},
+                               StatusCase{PCGPreviewPhase::Cancelled, "empty", "current"},
+                               StatusCase{PCGPreviewPhase::Closed, "empty", "current"}};
+        for (const auto &status : cases) {
+            for (const bool retainOverlay : {false, true}) {
+                CAPTURE(status.phase, retainOverlay);
+                PreviewLabels labels;
+                PCGPreviewSnapshot preview{.phase = status.phase, .overlay = retainOverlay ? overlay : nullptr};
+                for (int frame = 0; frame < 2; ++frame) {
+                    gui.imgui.BeginFrame();
+                    ImGui::SetNextWindowPos({0, 0});
+                    ImGui::SetNextWindowSize({600, 450});
+                    ImGui::Begin("PreviewStatus", nullptr, ImGuiWindowFlags_NoSavedSettings);
+                    CHECK(DrawPCGPreview(preview, fixture.View().previewRegion, 4, labels, gui.imgui.Fonts()) == PCGPreviewAction::None);
+                    ImGui::End();
+                    gui.imgui.EndFrame();
+                }
+                const auto expected = std::string{"workspace.pcg.preview."} + (retainOverlay ? status.withOverlay : status.withoutOverlay);
+                CHECK(labels.labels.contains(expected));
+                for (const auto key : {"empty", "running", "current", "failed"}) {
+                    const auto statusKey = std::string{"workspace.pcg.preview."} + key;
+                    CHECK(labels.labels.contains(statusKey) == (statusKey == expected));
+                }
+            }
+        }
     }
 
     TEST_CASE("PCG authoring Apply and history revoke previews while drafts never enter evaluator capture",

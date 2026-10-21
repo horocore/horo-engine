@@ -38,20 +38,21 @@ namespace Horo::Editor {
                     EditorWorkspaceController>(project.directory.path, runtime, project.registry.Snapshot(),
                                                EditorWorkspaceDependencies{.mutations = &project.mutations,
                                                                            .durableFiles = &project.files,
-                                                                           .sourceOpenNavigator =
-                                                                               diagnosticRoute
-                                                                                   ? SourceOpenNavigator{}
-                                                                                   : SourceOpenNavigator{[this](const SourceOpenResult
-                                                                                                                    &source) {
+                                                                           .sourceNavigation =
+                                                                               {.sourceOpenNavigator =
+                                                                                    diagnosticRoute
+                                                                                        ? SourceOpenNavigator{}
+                                                                                        : SourceOpenNavigator{[this](const SourceOpenResult
+                                                                                                                         &source) {
                     navigated = source.location.absolutePath;
                     navigatedIdentity = source.location.document.Value();
                     return true;
                 }},
-                                                                           .diagnosticSourceNavigator =
-                                                                               [this](const DiagnosticSourceRequest &source) {
+                                                                                .diagnosticSourceNavigator =
+                                                                                    [this](const DiagnosticSourceRequest &source) {
                     diagnosticPath = source.absolutePath;
                     return true;
-                },
+                }},
                                                                            .documentSessionOwner = session,
                                                                            .prefabSources = [this](const auto &registry, const auto roots,
                                                                                                    const auto &limits,

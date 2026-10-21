@@ -245,6 +245,33 @@ namespace Horo::Editor {
         CHECK_FALSE(fixture.Advance().overlay);
     }
 
+    TEST_CASE("PCG preview rejected replacement retains the ready overlay and request identity", "[unit][editor][pcg][preview]") {
+        Fixture fixture;
+        REQUIRE(fixture.preview.Request(fixture.Request()).HasValue());
+        const auto ready = fixture.Complete();
+        REQUIRE(ready.phase == PCGPreviewPhase::Ready);
+        REQUIRE(ready.overlay);
+        auto replacement = fixture.Request();
+        SECTION("missing schema") {
+            replacement.schema.reset();
+        }
+        SECTION("zero output bound") {
+            replacement.maximumPointsPerOutput = 0;
+        }
+        SECTION("cancelled parent") {
+            CancellationSource cancellation;
+            cancellation.RequestCancellation();
+            replacement.cancellation = cancellation.Token();
+        }
+        CHECK(fixture.preview.Request(std::move(replacement)).HasError());
+        const auto current = fixture.Advance();
+        CHECK(current.phase == PCGPreviewPhase::Ready);
+        CHECK(current.request == ready.request);
+        CHECK(current.overlay == ready.overlay);
+        CHECK_FALSE(current.error);
+        CHECK_FALSE(fixture.Snapshot().dirty);
+    }
+
     TEST_CASE("PCG preview shutdown cancels queued capture and closes admission without scene work", "[unit][editor][pcg][preview]") {
         Fixture fixture;
         Blocker blocker{fixture.jobs};

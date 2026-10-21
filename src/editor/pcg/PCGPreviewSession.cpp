@@ -36,8 +36,7 @@ namespace Horo::Editor {
             PCGGraphDescriptor descriptor{.generation = request.document.source->Data().generation};
             for (const auto &node : request.document.source->Data().nodes)
                 descriptor.nodes.push_back({node.id, node.type});
-            auto registered = registry.RegisterGraph(std::move(descriptor));
-            if (registered.HasError())
+            if (auto registered = registry.RegisterGraph(std::move(descriptor)); registered.HasError())
                 return Result<PCGRegistrySnapshot>::Failure(registered.ErrorValue());
             return registry.Snapshot();
         }
@@ -62,7 +61,7 @@ namespace Horo::Editor {
             for (std::size_t index = 0; index < plan.Nodes().size(); ++index)
                 for (const auto &pin : plan.Nodes()[index].pins)
                     if (pin.direction == PCG::PCGPinDirection::Output && pin.type == PCG::PCGPinType::PointSet)
-                        bounds.push_back({static_cast<std::uint32_t>(index), pin.id, request.schema, request.maximumPointsPerOutput});
+                        bounds.emplace_back(static_cast<std::uint32_t>(index), pin.id, request.schema, request.maximumPointsPerOutput);
             return bounds;
         }
 
@@ -210,7 +209,7 @@ namespace Horo::Editor {
         // Move the immutable capture into a shared const root before submission; no worker retains the session.
         auto capture = std::make_shared<const PCGPreviewRequest>(std::move(pending.request));
         auto submitted = state_->jobs.SubmitResult({.parentCancellation = parent, .priority = JobPriority::Background},
-                                                   [capture, mailbox](const CancellationToken &token) -> Result<void> {
+                                                   [capture, mailbox](const CancellationToken &token) {
             auto evaluated = Evaluate(*capture, token);
             if (token.IsCancellationRequested())
                 return JobCancelled();
@@ -252,19 +251,22 @@ namespace Horo::Editor {
     void PCGPreviewSession::CompleteActive(const PCGPreviewFence *current) {
         if (!state_->active)
             return;
-        auto &active = *state_->active;
+        const auto &active = *state_->active;
         const auto job = active.job.Snapshot();
         if (!job || !job->terminalResult)
             return;
         if (CanPublish(current)) {
             state_->view.error = job->terminalResult->error;
-            state_->view.phase = job->state == JobState::Succeeded   ? PCGPreviewPhase::Ready
-                                 : job->state == JobState::Cancelled ? PCGPreviewPhase::Cancelled
-                                                                     : PCGPreviewPhase::Failed;
+            if (job->state == JobState::Succeeded)
+                state_->view.phase = PCGPreviewPhase::Ready;
+            else if (job->state == JobState::Cancelled)
+                state_->view.phase = PCGPreviewPhase::Cancelled;
+            else
+                state_->view.phase = PCGPreviewPhase::Failed;
             std::lock_guard lock(active.mailbox->mutex);
             if (state_->view.phase == PCGPreviewPhase::Ready && active.mailbox->candidate) {
-                state_->view.overlay = std::make_shared<const PCGPreviewOverlay>(
-                    PCGPreviewOverlay{active.id, active.fence, std::move(*active.mailbox->candidate)});
+                state_->view.overlay =
+                    std::make_shared<const PCGPreviewOverlay>(active.id, active.fence, std::move(*active.mailbox->candidate));
                 state_->retained.push_back(state_->view.overlay);
             }
         }
@@ -308,8 +310,7 @@ namespace Horo::Editor {
         static_cast<void>(Cancel());
         if (state_->active) {
             auto waited = state_->active->job.Wait({WaitPolicy::OwnerThreadBlockAllowed, timeout});
-            const auto job = state_->active->job.Snapshot();
-            if (!job || !job->terminalResult)
+            if (const auto job = state_->active->job.Snapshot(); !job || !job->terminalResult)
                 return waited;
             state_->active.reset();
         }

@@ -64,6 +64,12 @@ namespace Horo::Editor {
         EditorPlaySceneFactory sceneFactory{}; /**< Host composition capturing the selected native and asset authorities. */
     };
 
+    /** @brief Host presentation routes for validated source opens and diagnostic locations; empty callbacks retain workspace defaults. */
+    struct EditorWorkspaceSourceNavigation {
+        SourceOpenNavigator sourceOpenNavigator{};
+        DiagnosticSourceNavigator diagnosticSourceNavigator{};
+    };
+
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
@@ -73,8 +79,7 @@ namespace Horo::Editor {
         std::shared_ptr<const Assets::IAssetRegistrySource> assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
         JobSystem *jobs{};
-        SourceOpenNavigator sourceOpenNavigator{};
-        DiagnosticSourceNavigator diagnosticSourceNavigator{};
+        EditorWorkspaceSourceNavigation sourceNavigation{};
         EditorWorkspaceGameplayServices gameplay{};
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
