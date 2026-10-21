@@ -32,7 +32,9 @@ explicit LocalBounds surfaces also show their exact transformed authored box.
 Cylinders retain cylindrical rings/ribs; link arrowheads preserve direction.
 
 The executable composes the same navigation bake owner used by the Navigation
-panel. A memory-only geometry callback is injected into the viewport attachment.
+panel. The dedicated `NavigationViewportAccess` geometry query and read-preparation
+capability are injected into the viewport attachment, without bake submission or
+cancellation authority.
 Source refreshes run on the existing capture worker and publish an immutable
 mailbox; the host loads it on its owner lane. Worker shutdown drains before
 mailbox destruction. Closing the viewport only drops presentation state.

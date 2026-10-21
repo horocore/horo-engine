@@ -71,7 +71,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Measures actual CPU draw output; AA line tessellation is fixed so a missing draw cap is observable. */
-        int Frame(Tests::EditorGuiContextFixture &gui, NavigationOverlayLayer &layer, const NavigationBakeWorkspaceAccess &access,
+        int Frame(Tests::EditorGuiContextFixture &gui, NavigationOverlayLayer &layer, const NavigationViewportAccess &access,
                   const std::filesystem::path &scene, const Math::ClipDepthRange depth) {
             const std::filesystem::path root{"overlay project"};
             const EditorViewportCamera camera{.position = {3, 6, 9}, .target = {3, 0, 3}};
@@ -98,7 +98,7 @@ namespace Horo::Editor {
         Tests::EditorGuiContextFixture gui{{640, 480}};
         std::size_t queries{};
         const auto snapshot = Cooked(*Authored());
-        NavigationBakeWorkspaceAccess access{.overlays = [&](const std::filesystem::path &) {
+        NavigationViewportAccess access{.query = [&](const std::filesystem::path &) {
             ++queries;
             return snapshot;
         }};
@@ -122,7 +122,7 @@ namespace Horo::Editor {
         Tests::EditorGuiContextFixture gui{{640, 480}};
         const auto snapshot = Authored(64);
         REQUIRE(snapshot->Scenes().front().primitives.size() > 1024);
-        NavigationBakeWorkspaceAccess access{.overlays = [&](const std::filesystem::path &) {
+        NavigationViewportAccess access{.query = [&](const std::filesystem::path &) {
             return snapshot;
         }};
         NavigationOverlayLayer hidden;
@@ -140,10 +140,10 @@ namespace Horo::Editor {
         Tests::EditorGuiContextFixture gui{{640, 480}};
         const auto snapshot = Authored();
         std::size_t preparations{};
-        NavigationBakeWorkspaceAccess access{.prepare = [&](const std::filesystem::path &) {
+        NavigationViewportAccess access{.prepare = [&](const std::filesystem::path &) {
             ++preparations;
             return Result<void>::Success();
-        }, .overlays = [&](const std::filesystem::path &) {
+        }, .query = [&](const std::filesystem::path &) {
             return snapshot;
         }};
         NavigationOverlayLayer visible{true};

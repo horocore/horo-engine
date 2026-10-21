@@ -13,7 +13,7 @@
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Editor/NativeAssetRegistrySource.h"
-#include "Horo/Editor/NavigationBakeWorkspace.h"
+#include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
@@ -579,7 +579,7 @@ namespace Horo::Editor {
                     .networkDebuggerQuery = panelServices_.networkDebuggerQuery,
                     .networkDebuggerControl = panelServices_.networkDebuggerControl,
                     .extensionInspectors = services_.TryGet<Extensions::EditorInspectorHost>(),
-                    .navigationOverlays = services_.TryGetConst<NavigationBakeWorkspaceAccess>(),
+                    .navigationOverlays = services_.TryGetConst<NavigationViewportAccess>(),
                     .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
                 };
                 contributions_.panels.AttachAll(panelContext);

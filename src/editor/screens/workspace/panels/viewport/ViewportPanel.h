@@ -60,7 +60,7 @@ namespace Horo::Editor {
         Input::InputRouter *inputRouter_{nullptr};
         Input::InputContextToken *workspaceInputContext_{nullptr};
         ViewportInteractionController interaction_;
-        const NavigationBakeWorkspaceAccess *navigationOverlays_{};
+        const NavigationViewportAccess *navigationOverlays_{};
         NavigationOverlayLayer navigationLayer_;
         std::filesystem::path navigationProjectRoot_;
         bool lightMarkerFailureReported_{false};

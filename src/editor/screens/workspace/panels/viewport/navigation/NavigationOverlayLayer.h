@@ -3,7 +3,7 @@
  * @brief Presentation-only navigation controls and bounded neutral geometry drawing.
  */
 #include "Horo/Editor/EditorGuiContext.h"
-#include "Horo/Editor/NavigationBakeWorkspace.h"
+#include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "editor/project_model/EditorViewportCamera.h"
 
 #include <imgui.h>
@@ -51,7 +51,7 @@ namespace Horo::Editor {
          * @param access Explicit host capability, outliving attachment.
          * @param frame Current immutable inputs; no reference is retained after return.
          */
-        void Draw(const NavigationBakeWorkspaceAccess &access, const NavigationOverlayFrame &frame);
+        void Draw(const NavigationViewportAccess &access, const NavigationOverlayFrame &frame);
 
         /** @brief Whether the options button or popup owns pointer interaction this frame. @return Presentation capture. */
         [[nodiscard]] bool CapturesPointer() const noexcept {
@@ -74,7 +74,7 @@ namespace Horo::Editor {
          * @param scene Matched Scene or absence. @param frame Current immutable presentation inputs.
          * @param frameLimited Whether the independent frame inspection/draw budget omitted geometry.
          */
-        void DrawOptions(const NavigationBakeWorkspaceAccess &access, const std::shared_ptr<const NavigationViewportSnapshot> &snapshot,
+        void DrawOptions(const NavigationViewportAccess &access, const std::shared_ptr<const NavigationViewportSnapshot> &snapshot,
                          const NavigationOverlayScene *scene, const NavigationOverlayFrame &frame, bool frameLimited);
         NavigationOverlayFilter filter_;
         std::array<std::vector<Choice>, 3> choices_;

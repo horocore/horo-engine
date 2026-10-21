@@ -255,14 +255,13 @@ namespace Horo::Editor {
     }
 
     /** @copydoc NavigationOverlayLayer::Draw */
-    void NavigationOverlayLayer::Draw(const NavigationBakeWorkspaceAccess &access, const NavigationOverlayFrame &frame) {
+    void NavigationOverlayLayer::Draw(const NavigationViewportAccess &access, const NavigationOverlayFrame &frame) {
         const auto size = frame.size;
         capturesPointer_ = false;
         if (size.x <= 32 || size.y <= 180 || !std::isfinite(size.x) || !std::isfinite(size.y))
             return;
         ImGui::PushID("NavigationOverlays");
-        const auto snapshot =
-            (visible_ || ImGui::IsPopupOpen(OptionsPopup)) && access.overlays ? access.overlays(frame.projectRoot) : nullptr;
+        const auto snapshot = (visible_ || ImGui::IsPopupOpen(OptionsPopup)) && access.query ? access.query(frame.projectRoot) : nullptr;
         const NavigationOverlayScene *scene{};
         if (snapshot)
             for (const auto &candidate : snapshot->Scenes())
@@ -281,7 +280,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc NavigationOverlayLayer::DrawOptions */
-    void NavigationOverlayLayer::DrawOptions(const NavigationBakeWorkspaceAccess &access,
+    void NavigationOverlayLayer::DrawOptions(const NavigationViewportAccess &access,
                                              const std::shared_ptr<const NavigationViewportSnapshot> &snapshot,
                                              const NavigationOverlayScene *scene, const NavigationOverlayFrame &frame,
                                              const bool frameLimited) {

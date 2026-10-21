@@ -35,7 +35,7 @@ namespace Horo::Extensions {
 }  // namespace Horo::Extensions
 
 namespace Horo::Editor {
-    struct NavigationBakeWorkspaceAccess;
+    struct NavigationViewportAccess;
     class EditorDataBus;
     class IEditorGuiRenderer;
     class IEditorViewportRenderer;
@@ -58,9 +58,9 @@ namespace Horo::Editor {
         EditorSurfaceEventContext *surfaceEvents{nullptr};
         const Application::INetworkDebuggerQuery *networkDebuggerQuery{};
         Application::INetworkDebuggerControl *networkDebuggerControl{};
-        Extensions::EditorInspectorHost *extensionInspectors{};    /**< Explicit owner-lane host, outliving panel attachment. */
-        const NavigationBakeWorkspaceAccess *navigationOverlays{}; /**< Explicit owner-lane saved/cooked geometry query. */
-        const Extensions::EditorThemeFrame *extensionTheme{};      /**< Current host theme capture; no panel-owned authority. */
+        Extensions::EditorInspectorHost *extensionInspectors{}; /**< Explicit owner-lane host, outliving panel attachment. */
+        const NavigationViewportAccess *navigationOverlays{};   /**< Explicit owner-lane saved/cooked geometry query. */
+        const Extensions::EditorThemeFrame *extensionTheme{};   /**< Current host theme capture; no panel-owned authority. */
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

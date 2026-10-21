@@ -5,6 +5,7 @@
 #include "Horo/Application/NavigationProjectBakeSource.h"
 #include "Horo/Navigation/NavigationTileArtifact.h"
 
+#include <functional>
 #include <memory>
 
 namespace Horo::Editor {
@@ -76,6 +77,7 @@ namespace Horo::Editor {
          * @param scenes Exact saved Scene captures. @param definition Explicit selected definition.
          * @param budget Positive hard-bounded work/storage policy.
          * @return Immutable owned evidence or typed invalid/capacity failure. Truncated captures remain inspectable.
+         * @throws std::bad_alloc if bounded capture storage cannot be allocated.
          */
         [[nodiscard]] static Result<std::shared_ptr<const NavigationViewportSnapshot>> Capture(
             std::span<const Application::NavigationSceneBakeSource> scenes, Assets::AssetId definition,
@@ -84,6 +86,7 @@ namespace Horo::Editor {
          * @param authored Existing immutable saved capture, never modified. @param tiles Verified complete cooked publication.
          * @param budget Aggregate storage/work ceilings, including retained authored primitives.
          * @return Independent immutable geometry; all borrowed topology memory is released at return.
+         * @throws std::bad_alloc if bounded copied geometry cannot be allocated.
          */
         [[nodiscard]] static Result<std::shared_ptr<const NavigationViewportSnapshot>> WithCooked(
             const NavigationViewportSnapshot &authored, const Navigation::NavigationCookedTileSet &tiles,
@@ -110,5 +113,14 @@ namespace Horo::Editor {
         std::optional<Sha256Digest> cookedFingerprint_;
         std::vector<NavigationOverlayScene> scenes_;
         bool truncated_{};
+    };
+
+    /** @brief Narrow owner-lane viewport read capability, outliving attachment.
+     * @details Preparation schedules bounded source/cook reads on the existing owner. Query copies only
+     * shared ownership of independent geometry; neither callback grants bake submission or cancellation.
+     */
+    struct NavigationViewportAccess final {
+        std::function<Result<void>(const std::filesystem::path &)> prepare;
+        std::function<std::shared_ptr<const NavigationViewportSnapshot>(const std::filesystem::path &)> query;
     };
 }  // namespace Horo::Editor
