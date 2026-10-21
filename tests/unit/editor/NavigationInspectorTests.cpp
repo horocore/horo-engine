@@ -31,6 +31,11 @@ namespace {
         SceneDocumentTransactions scene = SceneDocumentTransactions::Create({Asset(2), 1}, ObjectsWithLinks()).Value();
     };
 
+    /** @brief Compare complete persisted authored state without inventing equality semantics for Scene snapshots. */
+    std::string Bytes(std::span<const SceneSource::SceneObjectSnapshot> objects) {
+        return SceneSource::EncodeSceneSource({objects, {}});
+    }
+
     /** @brief Owner-issued permission and exact content fence, regenerated for every replay. */
     SceneTransactionContext Fence(const SceneTransactionSnapshot &snapshot) {
         return {snapshot.session, snapshot.revision, snapshot.state, true, {}};
@@ -69,10 +74,10 @@ TEST_CASE("Navigation inspectors atomically edit all component families through 
     CHECK(after.objects[1].components.navigationAgent->radiusOverride == agent.radiusOverride);
     REQUIRE(owner.scene.Replay(Fence(after), false).HasValue());
     const auto undone = owner.scene.Snapshot().Value();
-    CHECK(undone.objects == before.objects);
+    CHECK(Bytes(undone.objects) == Bytes(before.objects));
     CHECK(undone.state == before.state);
     REQUIRE(owner.scene.Replay(Fence(undone), true).HasValue());
-    CHECK(owner.scene.Snapshot().Value().objects == after.objects);
+    CHECK(Bytes(owner.scene.Snapshot().Value().objects) == Bytes(after.objects));
 }
 
 TEST_CASE("Navigation rejected batches preserve content revision dirty state and history", "[unit][editor][navigation][inspector]") {
@@ -115,7 +120,7 @@ TEST_CASE("Navigation rejected batches preserve content revision dirty state and
     const auto after = owner.scene.Snapshot().Value();
     CHECK(after.revision == 0);
     CHECK_FALSE(after.dirty);
-    CHECK(after.objects == ObjectsWithLinks());
+    CHECK(Bytes(after.objects) == Bytes(ObjectsWithLinks()));
     CHECK(owner.scene.Replay(Fence(after), false).HasError());
 }
 
@@ -160,7 +165,7 @@ TEST_CASE("Navigation source-ownership rejection preserves canonical history", "
     const auto after = owner.scene.Snapshot().Value();
     CHECK(after.revision == 0);
     CHECK_FALSE(after.dirty);
-    CHECK(after.objects == ObjectsWithLinks());
+    CHECK(Bytes(after.objects) == Bytes(ObjectsWithLinks()));
     CHECK(owner.scene.Replay(Fence(after), false).HasError());
 }
 
