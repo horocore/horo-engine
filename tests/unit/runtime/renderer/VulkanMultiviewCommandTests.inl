@@ -1,26 +1,7 @@
-/** @brief Deterministic adapter borrows a real prepared native packet for canonical table-issued generations. */
-struct MultiviewTestBackend final : IMaterialBindingBackend {
-    struct Lease final : IResidentMaterialBinding {
-        const IResidentMaterialBinding *native;
-
-        explicit Lease(const IResidentMaterialBinding &value) : native(&value) {}
-
-        const IResidentMaterialBinding &NativeBinding() const noexcept override {
-            return *native;
-        }
-    };
-
-    const IResidentMaterialBinding *native{};
-
-    Result<std::unique_ptr<IResidentMaterialBinding>> Realize(const MaterialBindingDescriptor &) override {
-        return Result<std::unique_ptr<IResidentMaterialBinding>>::Success(std::make_unique<Lease>(*native));
-    }
-};
-
 /** @brief Actual native graph/resource fixture with two ordered views and one table-issued material generation. */
 struct MultiviewPacket {
     MaterialPacket native;
-    MultiviewTestBackend backend;
+    MultiviewTest::BorrowedMaterialBackend backend;
     std::unique_ptr<MaterialBindingTable> table;
     std::shared_ptr<const ResidentMaterialBinding> material;
     std::shared_ptr<const MultiviewSceneSnapshot> scene;

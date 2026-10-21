@@ -44,6 +44,30 @@ namespace Horo::Render::Detail {
         native.drawIndexed = std::bit_cast<PFN_vkCmdDrawIndexed>(resolver(device, "vkCmdDrawIndexed"));
     }
 
+    /** @copydoc VulkanGraphRuntime::Impl::ReserveStorage */
+    Result<void> VulkanGraphRuntime::Impl::ReserveStorage(const std::span<const VulkanCommandQueue> sourceQueues,
+                                                          const std::uint32_t frames) {
+        try {
+            queues.assign(sourceQueues.begin(), sourceQueues.end());
+            bindings.resize(RenderGraphLimits::HardMaxResources);
+            states.resize(RenderGraphLimits::HardMaxResources);
+            identities.reserve(RenderGraphLimits::HardMaxResources);
+            used.resize(RenderGraphLimits::HardMaxResources);
+            discarded.resize(RenderGraphLimits::HardMaxResources);
+            passes.resize(RenderGraphLimits::HardMaxPasses);
+            barriers.reserve(RenderGraphLimits::HardMaxUsages * 3);
+            updates.reserve(RenderGraphLimits::HardMaxUsages);
+            submissions.reserve(RenderGraphSubmissionLimits::MaximumSubmissions);
+            retention.resize(frames);
+            for (auto &pins : retention)
+                pins.resources.reserve(RenderGraphLimits::HardMaxResources + MultiviewExtractionLimits::HardMaximumInstances * 3);
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(
+                MakeError(VulkanBackendErrors::ResourceCreationFailed, "Bounded graph storage allocation failed."));
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc VulkanGraphRuntime::Initialize */
     Result<void> VulkanGraphRuntime::Initialize(const VkDevice device, const std::span<const VulkanCommandQueue> queues,
                                                 const std::uint32_t frames, const std::uint64_t timelineDifference,
@@ -64,24 +88,8 @@ namespace Horo::Render::Detail {
         if (!dispatch.barrier || !dispatch.copy || !dispatch.beginRendering || !dispatch.endRendering)
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::EntryPointMissing, "Graph execution requires Vulkan1.3 core command dispatch."));
-        try {
-            impl_->queues.assign(queues.begin(), queues.end());
-            impl_->bindings.resize(RenderGraphLimits::HardMaxResources);
-            impl_->states.resize(RenderGraphLimits::HardMaxResources);
-            impl_->identities.reserve(RenderGraphLimits::HardMaxResources);
-            impl_->used.resize(RenderGraphLimits::HardMaxResources);
-            impl_->discarded.resize(RenderGraphLimits::HardMaxResources);
-            impl_->passes.resize(RenderGraphLimits::HardMaxPasses);
-            impl_->barriers.reserve(RenderGraphLimits::HardMaxUsages * 3);
-            impl_->updates.reserve(RenderGraphLimits::HardMaxUsages);
-            impl_->submissions.reserve(RenderGraphSubmissionLimits::MaximumSubmissions);
-            impl_->retention.resize(frames);
-            for (auto &pins : impl_->retention)
-                pins.resources.reserve(RenderGraphLimits::HardMaxResources + MultiviewExtractionLimits::HardMaximumInstances * 3);
-        } catch (const std::bad_alloc &) {
-            return Result<void>::Failure(
-                MakeError(VulkanBackendErrors::ResourceCreationFailed, "Bounded graph storage allocation failed."));
-        }
+        if (const auto storage = impl_->ReserveStorage(queues, frames); storage.HasError())
+            return storage;
         auto initialized = impl_->commands.Initialize(device, queues, RenderGraphSubmissionLimits::MaximumSubmissions, timelineDifference,
                                                       deviceIncarnation, resolver);
         if (initialized.HasError())

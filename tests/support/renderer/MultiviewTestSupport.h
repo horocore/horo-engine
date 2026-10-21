@@ -3,6 +3,25 @@
 #include "RenderGraphSubmissionFixture.h"
 
 namespace Horo::Render::MultiviewTest {
+    /** @brief Deterministic adapter borrows a real prepared native packet for canonical table-issued generations. */
+    struct BorrowedMaterialBackend final : IMaterialBindingBackend {
+        struct Lease final : IResidentMaterialBinding {
+            const IResidentMaterialBinding *native;
+
+            explicit Lease(const IResidentMaterialBinding &value) : native(&value) {}
+
+            const IResidentMaterialBinding &NativeBinding() const noexcept override {
+                return *native;
+            }
+        };
+
+        const IResidentMaterialBinding *native{};
+
+        Result<std::unique_ptr<IResidentMaterialBinding>> Realize(const MaterialBindingDescriptor &) override {
+            return Result<std::unique_ptr<IResidentMaterialBinding>>::Success(std::make_unique<Lease>(*native));
+        }
+    };
+
     /** @brief Two-view final-artifact layout with padded matrices and scalar routing arrays. */
     inline MaterialBindingLayout Layout(const bool columnMajor = true) {
         MaterialBindingLayout layout;

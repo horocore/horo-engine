@@ -23,6 +23,9 @@ namespace Horo::Render::Detail {
                                                                          bool discardPriorAccess);
 
     struct VulkanGraphRuntime::Impl {
+        /** @brief Reserves the fixed graph and canonical retention envelope before any frame admission. */
+        [[nodiscard]] Result<void> ReserveStorage(std::span<const VulkanCommandQueue> queues, std::uint32_t frames);
+
         struct Pass {
             RenderGraphExecutionRange before;
             RenderGraphExecutionRange after;
@@ -66,7 +69,6 @@ namespace Horo::Render::Detail {
         VulkanCommandRuntime commands;
         VulkanMultiviewRecorder multiview;
         VulkanResourceRuntime *resources{};
-        std::uint64_t deviceIncarnation{};
         std::thread::id owner;
         std::vector<VulkanCommandQueue> queues;
         std::vector<VulkanGraphResource> bindings;

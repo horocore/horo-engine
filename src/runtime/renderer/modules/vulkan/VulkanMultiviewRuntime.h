@@ -64,6 +64,12 @@ namespace Horo::Render::Detail {
                                                                RenderTextureAspect) const;
         [[nodiscard]] Result<void> PrepareTargets(const RenderGraphExecutionRequest &, const RenderGraphMultiview &,
                                                   std::span<const VulkanGraphResource>, const VulkanResourceRuntime &);
+        /** @brief Captures the actual mesh and validates its exact graph buffer dependencies and immutable ranges. */
+        [[nodiscard]] Result<VulkanMaterialMesh> DrawMesh(const RenderGraphExecutionRequest &, const MultiviewGraphGeometry &,
+                                                          RenderMeshHandle, std::span<const VulkanGraphResource>, VulkanResourceRuntime &,
+                                                          VulkanCommandRetention &) const;
+        /** @brief Admits the existing native material lease against device, shader routing and every target tuple. */
+        [[nodiscard]] Result<void> PrepareMaterial(Draw &, const MultiviewGraphGeometry &) const;
         [[nodiscard]] Result<void> PrepareDraws(const RenderGraphExecutionRequest &, const RenderGraphMultiview &,
                                                 std::span<const VulkanGraphResource>, VulkanResourceRuntime &, VulkanCommandRetention &);
         [[nodiscard]] bool CanRouteLayers() const noexcept;

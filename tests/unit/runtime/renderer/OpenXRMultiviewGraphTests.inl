@@ -92,7 +92,57 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
                                        acquired,
                                        {1, 1, 1, 1, 11, 1},
                                        ResolveMultiviewCapabilities(frontend->Capabilities().support)};
-    const auto scene = SubmissionTest::Take(XRMultiviewScene::Create({plan, transforms, {}, active.renderer}, active));
+    const auto viewScene = SubmissionTest::Take(XRMultiviewScene::Create({plan, transforms, {}, active.renderer}, active));
+    native.resourceState.state.bufferRequirements.size = 4096;
+    const std::array<MeshVertex, 3> vertexData{{{{-0.2F, -0.2F, -0.75F}}, {{0.2F, -0.2F, -0.75F}}, {{0, 0.2F, -0.75F}}}};
+    const std::array<std::uint32_t, 3> indexData{0, 1, 2};
+    const auto buffer = [&](const std::span<const std::byte> bytes, const RenderBufferUsage usage) {
+        auto created = SubmissionTest::Take(frontend->CreateBuffer({bytes.size(), usage, RenderBufferAccess::HostVisible}, bytes));
+        REQUIRE(frontend->ProcessResourceRequests().HasValue());
+        REQUIRE(frontend->ResourceOperationResult(created.operation).HasValue());
+        return created.handle;
+    };
+    const auto vertices = buffer(std::as_bytes(std::span{vertexData}), RenderBufferUsage::Vertex);
+    const auto indices = buffer(std::as_bytes(std::span{indexData}), RenderBufferUsage::Index);
+    const RenderMeshDescriptor meshDescriptor{.vertexBuffer = vertices,
+                                              .indexBuffer = indices,
+                                              .vertexStride = sizeof(MeshVertex),
+                                              .vertexCount = 3,
+                                              .indexCount = 3,
+                                              .localBounds = {{-0.2F, -0.2F, -0.75F}, {0.2F, 0.2F, -0.75F}}};
+    const auto mesh = SubmissionTest::Take(frontend->CreateMesh(meshDescriptor));
+    REQUIRE(frontend->ProcessResourceRequests().HasValue());
+    REQUIRE(frontend->ResourceOperationResult(mesh.operation).HasValue());
+    const std::array<std::uint32_t, 2> routing{};
+    auto packed = SubmissionTest::Take(
+        PackMultiviewShaderParameters(MultiviewTest::Layout(), viewScene.Scene().Views(), Horo::Math::Mat4::Identity(), routing));
+    packed.bytes.resize(224, std::byte{});
+    const auto uniform = buffer(packed.bytes, RenderBufferUsage::Uniform);
+    Detail::VulkanPreparedMaterialBinding nativeMaterial;
+    nativeMaterial.device = NativeHandle<VkDevice>(1);
+    nativeMaterial.deviceIncarnation = 11;
+    nativeMaterial.owner = &nativeMaterial;
+    nativeMaterial.pipelineBacking = std::make_shared<int>(1);
+    nativeMaterial.pipeline = NativeHandle<VkPipeline>(201);
+    nativeMaterial.layout = NativeHandle<VkPipelineLayout>(202);
+    nativeMaterial.sets = {NativeHandle<VkDescriptorSet>(203)};
+    nativeMaterial.state.depthFormat.reset();
+    nativeMaterial.state.depthTest = false;
+    nativeMaterial.state.depthWrite = false;
+    MultiviewTest::BorrowedMaterialBackend materialBackend;
+    materialBackend.native = &nativeMaterial;
+    auto materials = SubmissionTest::Take(MaterialBindingTable::Create(acquisition.texture.owner, materialBackend));
+    const MaterialBindingDescriptor binding{.material = {1},
+                                            .revision = 1,
+                                            .pipeline = {acquisition.texture.owner, 99, 1},
+                                            .layout = MultiviewTest::Layout(),
+                                            .resources = {{{1}, 0, MaterialBufferBinding{uniform, 0, 224}}}};
+    const auto selection = SubmissionTest::Take(materials->Publish(binding));
+    const auto material = SubmissionTest::Take(materials->Acquire(selection.binding));
+    const std::array instances{
+        MultiviewSceneInstance{mesh.handle, material->Id(), Horo::Math::Mat4::Identity(), meshDescriptor.localBounds}};
+    const auto scene = SubmissionTest::Take(viewScene.ExtractInstances(instances, active, MultiviewExecutionPolicy::Multipass));
+    const std::array geometry{NativeXR::OpenXRMultiviewGeometry{0, meshDescriptor, material}};
     std::array<NativeXR::OpenXRMultiviewTargetViews, 2> views{};
     for (std::uint32_t index = 0; index < 2; ++index) {
         auto view = SubmissionTest::Take(frontend->CreateTextureView({.texture = acquisition.texture, .baseLayer = index}));
@@ -100,7 +150,7 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
         views[index].color = view.handle;
     }
     std::array<NativeXR::OpenXRSwapchain *, 1> owners{&swapchain};
-    auto prepared = SubmissionTest::Take(NativeXR::OpenXRMultiviewGraph::Create(*frontend, scene, active, owners, {}, views, {1}));
+    auto prepared = SubmissionTest::Take(NativeXR::OpenXRMultiviewGraph::Create(*frontend, scene, active, owners, geometry, views, {1}));
     CHECK(prepared.Graph().ExternalReleases().size() == 1);
     auto frame = SubmissionTest::Take(frontend->BeginFrame({1, {640, 480}}));
     const auto result = prepared.Execute(frame, active, {{1}, {1}, {}, {{1}, 1}});
@@ -108,6 +158,13 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
     REQUIRE(result.HasValue());
     REQUIRE(frame.Present().HasValue());
     CHECK(native.encoded.renderingBegins == 2);
+    REQUIRE(native.encoded.drawCalls.size() == 2);
+    CHECK(native.encoded.drawCalls[0].firstView == 0);
+    CHECK(native.encoded.drawCalls[1].firstView == 1);
+    REQUIRE(frontend->ReleaseMesh(mesh.handle).HasValue());
+    REQUIRE(frontend->ReleaseBuffer(vertices).HasValue());
+    REQUIRE(frontend->ReleaseBuffer(indices).HasValue());
+    REQUIRE(frontend->ReleaseBuffer(uniform).HasValue());
     for (const auto &view : views)
         REQUIRE(frontend->ReleaseTextureView(view.color).HasValue());
     REQUIRE_FALSE(swapchain.PollRelease().Value());

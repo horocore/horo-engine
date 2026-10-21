@@ -114,6 +114,55 @@ namespace Horo::Render::Detail {
         return true;
     }
 
+    /** @copydoc VulkanMultiviewRecorder::DrawMesh */
+    Result<VulkanMaterialMesh> VulkanMultiviewRecorder::DrawMesh(const RenderGraphExecutionRequest &request,
+                                                                 const MultiviewGraphGeometry &input, const RenderMeshHandle mesh,
+                                                                 const std::span<const VulkanGraphResource> resources,
+                                                                 VulkanResourceRuntime &registry, VulkanCommandRetention &retention) const {
+        const auto mapped = std::ranges::find(request.meshes, mesh, &RenderGraphMeshInstance::mesh);
+        if (mapped == request.meshes.end())
+            return Invalid<VulkanMaterialMesh>("Exact multiview mesh generation mapping is missing.");
+        const auto actual = registry.CaptureMaterialMesh(mapped->instance, retention);
+        if (actual.HasError())
+            return actual;
+        const auto *vertex = Resource(request, resources, input.vertices);
+        const auto *indices = Resource(request, resources, input.indices);
+        if (!vertex || !indices || vertex->buffer != actual.Value().vertex.buffer || indices->buffer != actual.Value().index.buffer)
+            return Invalid<VulkanMaterialMesh>("Canonical graph vertex/index dependencies differ from the exact resident mesh.");
+        const auto &descriptor = actual.Value().descriptor;
+        const auto indexBytes = descriptor.indexFormat == RenderIndexFormat::UInt16 ? 2U : 4U;
+        if (!descriptor.IsValid() || descriptor.vertexStride != sizeof(MeshVertex) ||
+            static_cast<std::uint64_t>(descriptor.vertexCount) * descriptor.vertexStride >
+                actual.Value().vertex.bufferDescriptor.byteSize ||
+            static_cast<std::uint64_t>(descriptor.indexCount) * indexBytes > actual.Value().index.bufferDescriptor.byteSize)
+            return Invalid<VulkanMaterialMesh>("Multiview mesh exceeds its exact immutable vertex/index backing.");
+        return actual;
+    }
+
+    /** @copydoc VulkanMultiviewRecorder::PrepareMaterial */
+    Result<void> VulkanMultiviewRecorder::PrepareMaterial(Draw &draw, const MultiviewGraphGeometry &input) const {
+        if (!input.material)
+            return Invalid<void>("Exact multiview material generation is missing.");
+        const auto *material = dynamic_cast<const VulkanPreparedMaterialBinding *>(&input.material->BackendBinding().NativeBinding());
+        if (!material || material->device != device_ || material->deviceIncarnation != deviceIncarnation_ || !material->owner ||
+            !material->pipeline || !material->layout || material->sets.empty() || material->sets.size() > 4)
+            return Invalid<void>("Multiview draw requires a live same-device Vulkan material descriptor lease.");
+        draw.pipeline = material->pipeline;
+        draw.layout = material->layout;
+        draw.sets = material->sets;
+        draw.state = material->state;
+        const auto required = mode_ == MultiviewExecutionMode::Instanced ? RenderViewRouting::VertexLayer : RenderViewRouting::SingleView;
+        if (draw.state.viewRouting != required || draw.state.sampleCount != 1)
+            return Unsupported("Cooked shader routing or samples differ from the admitted multiview execution mode.");
+        for (std::uint32_t view = 0; view < targetCount_; ++view) {
+            const auto &target = targets_[view];
+            const auto depth = target.depth ? std::optional{target.depthDescriptor.format} : std::nullopt;
+            if (draw.state.colorFormat != target.colorDescriptor.format || draw.state.depthFormat != depth)
+                return Invalid<void>("Cooked native pipeline attachment formats differ from the exact XR target tuple.");
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc VulkanMultiviewRecorder::PrepareDraws */
     Result<void> VulkanMultiviewRecorder::PrepareDraws(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &workload,
                                                        const std::span<const VulkanGraphResource> resources,
@@ -124,41 +173,16 @@ namespace Horo::Render::Detail {
             if (input.instanceIndex >= workload.scene->Instances().size() ||
                 input.instanceIndex != workload.scene->Draws()[index].instanceIndex)
                 return Invalid<void>("Multiview geometry source index differs from its canonical visible draw.");
-            const auto mesh = workload.scene->Instances()[input.instanceIndex].mesh;
-            const auto mapped = std::ranges::find(request.meshes, mesh, &RenderGraphMeshInstance::mesh);
-            if (mapped == request.meshes.end() || !input.material)
-                return Invalid<void>("Exact multiview mesh/material generation mapping is missing.");
-            const auto actual = registry.CaptureMaterialMesh(mapped->instance, retention);
+            const auto actual =
+                DrawMesh(request, input, workload.scene->Instances()[input.instanceIndex].mesh, resources, registry, retention);
             if (actual.HasError())
                 return Result<void>::Failure(actual.ErrorValue());
-            const auto *vertex = Resource(request, resources, input.vertices);
-            const auto *indices = Resource(request, resources, input.indices);
-            if (!vertex || !indices || vertex->buffer != actual.Value().vertex.buffer || indices->buffer != actual.Value().index.buffer)
-                return Invalid<void>("Canonical graph vertex/index dependencies differ from the exact resident mesh.");
-            const auto &descriptor = actual.Value().descriptor;
-            const auto indexBytes = descriptor.indexFormat == RenderIndexFormat::UInt16 ? 2U : 4U;
-            if (!descriptor.IsValid() || descriptor.vertexStride != sizeof(MeshVertex) ||
-                static_cast<std::uint64_t>(descriptor.vertexCount) * descriptor.vertexStride >
-                    actual.Value().vertex.bufferDescriptor.byteSize ||
-                static_cast<std::uint64_t>(descriptor.indexCount) * indexBytes > actual.Value().index.bufferDescriptor.byteSize)
-                return Invalid<void>("Multiview mesh exceeds its exact immutable vertex/index backing.");
-            const auto *material = dynamic_cast<const VulkanPreparedMaterialBinding *>(&input.material->BackendBinding().NativeBinding());
-            if (!material || material->device != device_ || material->deviceIncarnation != deviceIncarnation_ || !material->owner ||
-                !material->pipeline || !material->layout || material->sets.empty() || material->sets.size() > 4)
-                return Invalid<void>("Multiview draw requires a live same-device Vulkan material descriptor lease.");
             auto &draw = draws_[index];
-            draw = {actual.Value(), material->pipeline, material->layout,
-                    material->sets, material->state,    workload.scene->Draws()[index].visibleViews};
-            const auto required =
-                mode_ == MultiviewExecutionMode::Instanced ? RenderViewRouting::VertexLayer : RenderViewRouting::SingleView;
-            if (draw.state.viewRouting != required || draw.state.sampleCount != 1)
-                return Unsupported("Cooked shader routing or samples differ from the admitted multiview execution mode.");
-            for (std::uint32_t view = 0; view < targetCount_; ++view) {
-                const auto &target = targets_[view];
-                const auto depth = target.depth ? std::optional{target.depthDescriptor.format} : std::nullopt;
-                if (draw.state.colorFormat != target.colorDescriptor.format || draw.state.depthFormat != depth)
-                    return Invalid<void>("Cooked native pipeline attachment formats differ from the exact XR target tuple.");
-            }
+            draw = {};
+            draw.mesh = actual.Value();
+            draw.views = workload.scene->Draws()[index].visibleViews;
+            if (const auto material = PrepareMaterial(draw, input); material.HasError())
+                return material;
             const auto expanded = static_cast<std::uint64_t>(std::popcount(draw.views));
             const auto count = static_cast<std::uint64_t>(draw.mesh.descriptor.indexCount);
             if (count == 0 || count > workload.limits.maximumIndicesPerDraw || expanded > remaining / count)

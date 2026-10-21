@@ -382,6 +382,18 @@ namespace Horo::Render {
                 VkPhysicalDevice device{VK_NULL_HANDLE};
             };
 
+            /** @brief Intersects actual enabled draw/layer dispatch with the selected device's framebuffer layer limit. */
+            void PublishMultiviewCapabilities(const VkPhysicalDeviceProperties &properties) {
+                auto &snapshot = resourceCapabilities_;
+                const auto multiview = graph_.MultiviewSupport();
+                if (multiview.indexedShaders) {
+                    snapshot.features.Enable(RenderCapability::ViewIndexedShaders);
+                    snapshot.limits.maxMultiviewViews = std::min(multiview.maximumViews, properties.limits.maxFramebufferLayers);
+                }
+                if (multiview.instancedTargetRouting)
+                    snapshot.features.Enable(RenderCapability::InstancedViewRouting);
+            }
+
             /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
             Result<void> PublishResourceCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties,
                                                      const VkDeviceSize allocationLimit, const std::uint64_t incarnation) {
@@ -401,13 +413,7 @@ namespace Horo::Render {
                      {RenderCapability::BufferResources, RenderCapability::MeshResources, RenderCapability::TextureResources,
                       RenderCapability::RenderTargetResources, RenderCapability::OffscreenTargets})
                     snapshot.features.Enable(capability);
-                const auto multiview = graph_.MultiviewSupport();
-                if (multiview.indexedShaders) {
-                    snapshot.features.Enable(RenderCapability::ViewIndexedShaders);
-                    snapshot.limits.maxMultiviewViews = std::min(multiview.maximumViews, properties.limits.maxFramebufferLayers);
-                }
-                if (multiview.instancedTargetRouting)
-                    snapshot.features.Enable(RenderCapability::InstancedViewRouting);
+                PublishMultiviewCapabilities(properties);
                 const auto query = LoadInstanceFunction<PFN_vkGetPhysicalDeviceFormatProperties>(getInstanceProcAddr_, instance_,
                                                                                                  "vkGetPhysicalDeviceFormatProperties");
                 if (query == nullptr) {

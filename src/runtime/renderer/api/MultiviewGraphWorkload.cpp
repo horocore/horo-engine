@@ -63,6 +63,8 @@ namespace Horo::Render {
         [[nodiscard]] bool AddTargets(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &workload, Uses &uses) {
             for (std::size_t index = 0; index < workload.targets.size(); ++index) {
                 const auto &target = workload.targets[index];
+                if (!target.depth.IsValid() && target.depth != RenderGraphResourceId{})
+                    return false;
                 const auto colorView = std::ranges::find(request.views, target.colorView, &RenderGraphTextureViewInstance::view);
                 if (!target.colorView.IsValid() || colorView == request.views.end() || colorView->instance == 0 ||
                     !uses.Add(target.color, RenderGraphResourceKind::Texture, RenderGraphUsageKind::ColorAttachment) ||

@@ -152,6 +152,115 @@ namespace Horo::XR::OpenXRInternal {
             buffers[bufferCount++] = {handle, id.Value(), role};
             return id;
         }
+
+        static constexpr std::size_t MaximumResources =
+            XRViewRenderHardLimits::MaximumTargets + MultiviewExtractionLimits::HardMaximumInstances * 3;
+
+        /** @brief Bounded temporary authoring facts, released after immutable graph compilation. */
+        struct GraphInputs {
+            std::vector<RenderGraphImportedState> initial;
+            std::vector<RenderGraphFinalState> final;
+
+            GraphInputs() {
+                initial.reserve(MaximumResources);
+                final.reserve(XRViewRenderHardLimits::MaximumTargets);
+            }
+        };
+
+        /** @brief Resolves complete runtime-ordered targets and ready prepared views before graph publication. */
+        Result<void> PrepareTargets(RenderGraphBuilder &builder, const std::span<OpenXRSwapchain *const> owners,
+                                    const std::span<const OpenXRMultiviewTargetViews> views, GraphInputs &inputs) {
+            for (std::size_t index = 0; index < views.size(); ++index) {
+                auto &target = targets[index];
+                for (const auto &source : xr.Plan().Targets()) {
+                    if (source.view != xr.Plan().Views()[index].id)
+                        continue;
+                    auto resource = Texture(builder, source, owners, inputs.initial, inputs.final);
+                    if (resource.HasError())
+                        return Result<void>::Failure(resource.ErrorValue());
+                    if (source.role == XRExternalRenderTargetRole::ProjectionColor) {
+                        target.color = resource.Value();
+                        target.arrayLayer = source.arrayLayer;
+                        target.rectangle = {source.renderRectangle.x, source.renderRectangle.y, source.renderRectangle.width,
+                                            source.renderRectangle.height};
+                    } else {
+                        target.depth = resource.Value();
+                        target.depthArrayLayer = source.arrayLayer;
+                    }
+                }
+                target.colorView = views[index].color;
+                target.depthView = views[index].depth;
+                if (const auto ready = Ready(*frontend, target.colorView); ready.HasError())
+                    return Result<void>::Failure(ready.ErrorValue());
+                if (target.depth.IsValid())
+                    if (const auto ready = Ready(*frontend, target.depthView); ready.HasError())
+                        return Result<void>::Failure(ready.ErrorValue());
+            }
+            if (acquisitionCount != owners.size())
+                return Result<void>::Failure(Invalid());
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves visible canonical geometry and its exact material uniform dependency. */
+        Result<void> PrepareGeometry(RenderGraphBuilder &builder, const std::span<const OpenXRMultiviewGeometry> source,
+                                     GraphInputs &inputs) {
+            for (std::size_t index = 0; index < source.size(); ++index) {
+                const auto &input = source[index];
+                if (input.instanceIndex != scene->Draws()[index].instanceIndex || !input.mesh.IsValid() || !input.material ||
+                    input.material->Id() != scene->Instances()[input.instanceIndex].material)
+                    return Result<void>::Failure(Invalid());
+                if (const auto ready = Ready(*frontend, scene->Instances()[input.instanceIndex].mesh); ready.HasError())
+                    return ready;
+                const auto &resources = input.material->Descriptor().resources;
+                const auto *uniform = resources.size() == 1 ? std::get_if<MaterialBufferBinding>(&resources.front().value) : nullptr;
+                if (!uniform)
+                    return Result<void>::Failure(Invalid());
+                auto vertex = Input(builder, input.mesh.vertexBuffer, RenderGraphUsageKind::VertexBuffer, inputs.initial);
+                if (vertex.HasError())
+                    return Result<void>::Failure(vertex.ErrorValue());
+                auto indices = Input(builder, input.mesh.indexBuffer, RenderGraphUsageKind::IndexBuffer, inputs.initial);
+                if (indices.HasError())
+                    return Result<void>::Failure(indices.ErrorValue());
+                auto parameters = Input(builder, uniform->buffer, RenderGraphUsageKind::UniformBuffer, inputs.initial);
+                if (parameters.HasError())
+                    return Result<void>::Failure(parameters.ErrorValue());
+                geometry[index] = {input.instanceIndex, vertex.Value(), indices.Value(), parameters.Value(), input.material};
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Declares exhaustive semantic uses and compiles exact queue/acquired/final-state evidence. */
+        Result<void> Compile(RenderGraphBuilder &builder, const RenderGraphPassRef pass, const GraphInputs &inputs) {
+            for (const auto &entry : std::span{buffers}.first(bufferCount))
+                if (auto use = builder.AddUsage({pass, entry.resource, RenderGraphAccess::Read, entry.role}); use.HasError())
+                    return Result<void>::Failure(use.ErrorValue());
+            for (const auto &entry : std::span{acquisitions}.first(acquisitionCount)) {
+                const auto depth = std::ranges::any_of(xr.Plan().Targets(), [&](const auto &target) {
+                    return target.image == entry.current.image && target.role == XRExternalRenderTargetRole::ProjectionDepth;
+                });
+                if (auto use =
+                        builder.AddUsage({pass, entry.resource, RenderGraphAccess::Write,
+                                          depth ? RenderGraphUsageKind::DepthStencilAttachment : RenderGraphUsageKind::ColorAttachment});
+                    use.HasError())
+                    return Result<void>::Failure(use.ErrorValue());
+            }
+            const auto authored = builder.Finalize();
+            if (authored.HasError())
+                return Result<void>::Failure(authored.ErrorValue());
+            const auto schedule = CompileRenderGraph(authored.Value());
+            if (schedule.HasError())
+                return Result<void>::Failure(schedule.ErrorValue());
+            const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, queue}};
+            const auto sync =
+                SynthesizeRenderGraphSynchronization(authored.Value(), schedule.Value(), queues, inputs.initial, inputs.final);
+            if (sync.HasError())
+                return Result<void>::Failure(sync.ErrorValue());
+            auto compiled = CompileRenderGraphExecution(authored.Value(), schedule.Value(), sync.Value(), queues);
+            if (compiled.HasError())
+                return Result<void>::Failure(compiled.ErrorValue());
+            graph.emplace(std::move(compiled).Value());
+            return Result<void>::Success();
+        }
     };
 
     OpenXRMultiviewGraph::OpenXRMultiviewGraph(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -174,92 +283,19 @@ namespace Horo::XR::OpenXRInternal {
             auto impl = std::make_unique<Impl>(frontend, scene, queue, limits);
             if (const auto live = impl->Validate(active); live.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(live.ErrorValue());
-            auto builder = RenderGraphBuilder::Create({1, 448, 448, 1});
+            auto builder = RenderGraphBuilder::Create({1, Impl::MaximumResources, Impl::MaximumResources, 1});
             if (builder.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(builder.ErrorValue());
             auto pass = builder.Value().AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
             if (pass.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(pass.ErrorValue());
-            std::vector<RenderGraphImportedState> initial;
-            std::vector<RenderGraphFinalState> final;
-            initial.reserve(448);
-            final.reserve(XRViewRenderHardLimits::MaximumTargets);
-            for (std::size_t index = 0; index < views.size(); ++index) {
-                auto &target = impl->targets[index];
-                for (const auto &source : scene.Plan().Targets()) {
-                    if (source.view != scene.Plan().Views()[index].id)
-                        continue;
-                    auto resource = impl->Texture(builder.Value(), source, owners, initial, final);
-                    if (resource.HasError())
-                        return Result<OpenXRMultiviewGraph>::Failure(resource.ErrorValue());
-                    if (source.role == XRExternalRenderTargetRole::ProjectionColor) {
-                        target.color = resource.Value();
-                        target.arrayLayer = source.arrayLayer;
-                        target.rectangle = {source.renderRectangle.x, source.renderRectangle.y, source.renderRectangle.width,
-                                            source.renderRectangle.height};
-                    } else {
-                        target.depth = resource.Value();
-                        target.depthArrayLayer = source.arrayLayer;
-                    }
-                }
-                target.colorView = views[index].color;
-                target.depthView = views[index].depth;
-                if (const auto ready = Ready(frontend, target.colorView); ready.HasError())
-                    return Result<OpenXRMultiviewGraph>::Failure(ready.ErrorValue());
-                if (target.depth.IsValid())
-                    if (const auto ready = Ready(frontend, target.depthView); ready.HasError())
-                        return Result<OpenXRMultiviewGraph>::Failure(ready.ErrorValue());
-            }
-            if (impl->acquisitionCount != owners.size())
-                return Result<OpenXRMultiviewGraph>::Failure(Invalid());
-            for (std::size_t index = 0; index < geometry.size(); ++index) {
-                const auto &input = geometry[index];
-                if (input.instanceIndex != scene.Scene().Draws()[index].instanceIndex || !input.mesh.IsValid() || !input.material ||
-                    input.material->Id() != scene.Scene().Instances()[input.instanceIndex].material)
-                    return Result<OpenXRMultiviewGraph>::Failure(Invalid());
-                const auto &resources = input.material->Descriptor().resources;
-                const auto *uniform = resources.size() == 1 ? std::get_if<MaterialBufferBinding>(&resources.front().value) : nullptr;
-                if (!uniform)
-                    return Result<OpenXRMultiviewGraph>::Failure(Invalid());
-                auto vertex = impl->Input(builder.Value(), input.mesh.vertexBuffer, RenderGraphUsageKind::VertexBuffer, initial);
-                if (vertex.HasError())
-                    return Result<OpenXRMultiviewGraph>::Failure(vertex.ErrorValue());
-                auto indices = impl->Input(builder.Value(), input.mesh.indexBuffer, RenderGraphUsageKind::IndexBuffer, initial);
-                if (indices.HasError())
-                    return Result<OpenXRMultiviewGraph>::Failure(indices.ErrorValue());
-                auto parameters = impl->Input(builder.Value(), uniform->buffer, RenderGraphUsageKind::UniformBuffer, initial);
-                if (parameters.HasError())
-                    return Result<OpenXRMultiviewGraph>::Failure(parameters.ErrorValue());
-                impl->geometry[index] = {input.instanceIndex, vertex.Value(), indices.Value(), parameters.Value(), input.material};
-            }
-            for (const auto &entry : std::span{impl->buffers}.first(impl->bufferCount))
-                if (auto use = builder.Value().AddUsage({pass.Value(), entry.resource, RenderGraphAccess::Read, entry.role});
-                    use.HasError())
-                    return Result<OpenXRMultiviewGraph>::Failure(use.ErrorValue());
-            for (const auto &entry : std::span{impl->acquisitions}.first(impl->acquisitionCount)) {
-                const auto depth = std::ranges::any_of(scene.Plan().Targets(), [&](const auto &target) {
-                    return target.image == entry.current.image && target.role == XRExternalRenderTargetRole::ProjectionDepth;
-                });
-                if (auto use = builder.Value().AddUsage(
-                        {pass.Value(), entry.resource, RenderGraphAccess::Write,
-                         depth ? RenderGraphUsageKind::DepthStencilAttachment : RenderGraphUsageKind::ColorAttachment});
-                    use.HasError())
-                    return Result<OpenXRMultiviewGraph>::Failure(use.ErrorValue());
-            }
-            const auto authored = builder.Value().Finalize();
-            if (authored.HasError())
-                return Result<OpenXRMultiviewGraph>::Failure(authored.ErrorValue());
-            const auto schedule = CompileRenderGraph(authored.Value());
-            if (schedule.HasError())
-                return Result<OpenXRMultiviewGraph>::Failure(schedule.ErrorValue());
-            const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, queue}};
-            const auto sync = SynthesizeRenderGraphSynchronization(authored.Value(), schedule.Value(), queues, initial, final);
-            if (sync.HasError())
-                return Result<OpenXRMultiviewGraph>::Failure(sync.ErrorValue());
-            auto compiled = CompileRenderGraphExecution(authored.Value(), schedule.Value(), sync.Value(), queues);
-            if (compiled.HasError())
+            Impl::GraphInputs inputs;
+            if (const auto targets = impl->PrepareTargets(builder.Value(), owners, views, inputs); targets.HasError())
+                return Result<OpenXRMultiviewGraph>::Failure(targets.ErrorValue());
+            if (const auto meshes = impl->PrepareGeometry(builder.Value(), geometry, inputs); meshes.HasError())
+                return Result<OpenXRMultiviewGraph>::Failure(meshes.ErrorValue());
+            if (const auto compiled = impl->Compile(builder.Value(), pass.Value(), inputs); compiled.HasError())
                 return Result<OpenXRMultiviewGraph>::Failure(compiled.ErrorValue());
-            impl->graph.emplace(std::move(compiled).Value());
             return Result<OpenXRMultiviewGraph>::Success(OpenXRMultiviewGraph{std::move(impl)});
         } catch (const std::bad_alloc &) {
             return Result<OpenXRMultiviewGraph>::Failure(MakeError(MultiviewExtractionErrors::CapacityExceeded));
