@@ -2927,6 +2927,7 @@ target_include_directories(HoroEditorPlaySceneHostInternal INTERFACE "$<BUILD_IN
 target_link_libraries(HoroEditorPlaySceneHostInternal INTERFACE HoroEngine::RuntimeScene HoroEngine::GameplayRuntime)
 
 add_library(HoroEditorServices STATIC
+        editor/document/WorkspaceReadSources.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
         editor/physics/ProjectCollisionSettingsStore.cpp
         editor/physics/ProjectCollisionTemplate.cpp
@@ -3019,6 +3020,7 @@ target_include_directories(HoroEditorServices
 
 target_link_libraries(HoroEditorServices
         PUBLIC
+        HoroEngine::ProjectReadFilesApi
         HoroPrefabHierarchyInternal
         HoroEngine::ProjectCollisionSettings
         HoroEngine::SceneRuntimeConversion
@@ -3292,7 +3294,7 @@ if (HORO_BUILD_EDITOR_GUI)
             GL_SILENCE_DEPRECATION
             HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}"
     )
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication HoroEngine::PlatformProjectReadFiles)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlayTopologyApplication)
     target_link_libraries(HoroGui
             PUBLIC
             HoroEngine::EditorServices

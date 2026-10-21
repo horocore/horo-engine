@@ -12,11 +12,11 @@
 #include "Horo/Editor/EditorSnackbarHost.h"
 #include "Horo/Editor/GuiScreenHost.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/ScreenRegistry.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -27,8 +27,6 @@
 #include "Horo/Foundation/OperationStore.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "Horo/Foundation/Paths.h"
-#include "Horo/Platform/NativeProjectReadFiles.h"
-#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
 #include "editor/input/EditorInputActions.h"
@@ -573,8 +571,7 @@ namespace Horo::Editor {
             /** @brief Rechecks exact world consent after operations on other owners that may run host callbacks. */
             Result<void> ValidateLeaveWorld() const {
                 const auto world = controller_->WorldDocuments().Snapshot();
-                const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt;
-                if (fence != leaveWorldFence_)
+                if (const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt; fence != leaveWorldFence_)
                     return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
                 return Result<void>::Success();
             }
@@ -667,34 +664,16 @@ namespace Horo::Editor {
                 return playSceneFactory;
             }
 
-            /** @brief Issues a fresh nonzero workspace incarnation from host-composed native entropy. */
-            static Result<Assets::AssetId> CreateSessionOwner() {
-                std::array<std::uint8_t, 16> bytes{};
-                const auto entropy = Platform::CreateNativeSecureRandomSource();
-                if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(bytes))); generated.HasError())
-                    return Result<Assets::AssetId>::Failure(generated.ErrorValue());
-                const auto owner = Assets::AssetId::FromBytes(bytes);
-                if (!owner.IsValid())
-                    return Result<Assets::AssetId>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
-                return Result<Assets::AssetId>::Success(owner);
-            }
-
             /** @brief Creates the workspace controller while the caller retains the uncommitted project activation lease. */
             Result<void> InitializeController(const std::filesystem::path &projectRoot) {
                 const Assets::AssetRegistrySnapshot assetSnapshot =
                     projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
                 const Application::GameplayBuildEnvironment *gameplayEnvironment =
                     services_.TryGet<Application::GameplayBuildEnvironment>();
-                const auto identity = CreateSessionOwner();
-                if (identity.HasError())
-                    return Result<void>::Failure(identity.ErrorValue());
-                const auto sessionOwner = identity.Value();
-                auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
-                if (registrySource.HasError())
-                    return Result<void>::Failure(registrySource.ErrorValue());
-                auto worldSources = Platform::CreateNativeProjectReadFiles(std::filesystem::path{projectRoot}, sessionOwner.ToString(), 1);
-                if (worldSources.HasError())
-                    return Result<void>::Failure(worldSources.ErrorValue());
+                auto capturedSources = CaptureWorkspaceReadSources(services_.TryGetConst<WorkspaceReadSourceFactory>(), projectRoot);
+                if (capturedSources.HasError())
+                    return Result<void>::Failure(capturedSources.ErrorValue());
+                auto sources = std::move(capturedSources).Value();
                 controller_ = std::make_unique<
                     EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
                                                EditorWorkspaceDependencies{
@@ -704,7 +683,7 @@ namespace Horo::Editor {
                                                                  .previewReceipt = projectServices_.previewCollisionReceipt},
                                                    .mutations = projectServices_.mutations,
                                                    .durableFiles = projectServices_.durableFiles,
-                                                   .assetRegistrySource = std::move(registrySource).Value(),
+                                                   .assetRegistrySource = std::move(sources.registry),
                                                    .importerCatalog = projectServices_.importerCatalog,
                                                    .jobs = &services_.Get<JobSystem>(),
                                                    .gameplay = {.builds = services_.TryGet<Application::GameplayBuildService>(),
@@ -718,8 +697,8 @@ namespace Horo::Editor {
                                                    .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
                                                    .streamingPreviewPolicy = services_.TryGetConst<WorldStreamingPreviewRuntimePolicy>(),
                                                    .streamingPreview = services_.TryGet<WorldStreamingPreviewHost>(),
-                                                   .worldSourceFiles = std::move(worldSources).Value(),
-                                                   .documentSessionOwner = sessionOwner,
+                                                   .worldSourceFiles = std::move(sources.world),
+                                                   .documentSessionOwner = sources.owner,
                                                    .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
                                                    .audioPreview = services_.TryGet<IAudioComponentPreview>(),
                                                    .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),

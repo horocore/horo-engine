@@ -829,3 +829,15 @@ immutable source-fenced cell/layer results. Search/status/layer filters change
 presentation only. Authoring working-set, loaded payload, cooked availability and
 runtime residency remain independent. See the partitioned-world document migration
 guide for schema, ownership, rejection and lifecycle details.
+
+### Workspace source authority composition
+
+The executable host supplies `WorkspaceReadSourceFactory` for project opening.
+Its capture returns one fresh workspace identity and retained registry/world
+read capabilities bound to that identity at generation one. The factory outlives
+its screen-host registration; captured readers outlive any controller work that
+uses them. `CaptureWorkspaceReadSources` rejects missing factories, relative
+roots and incomplete pairs before a controller is published. Host capture errors
+retain their typed identity. GUI code consumes these interfaces and never selects
+a native reader as a fallback. Concrete native creation belongs in application
+or test composition roots.
