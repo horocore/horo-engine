@@ -74,7 +74,9 @@ namespace Horo::Editor::Ui {
                     return Increment;
             }
             if (state.editing && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-                return Commit;
+                return ImGui::IsMouseReleased(ImGuiMouseButton_Left) && ImGui::IsItemDeactivated() ? Commit : Cancel;
+            if (state.editing && !ImGui::IsItemActive())
+                return Cancel;
             if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
                 return Begin;
             if (state.editing && ImGui::IsMouseDown(ImGuiMouseButton_Left))
@@ -115,6 +117,13 @@ namespace Horo::Editor::Ui {
     std::optional<double> EditorUiScalar(const Extensions::EditorUiNumberNode &node, Extensions::EditorUiScalarState &state,
                                          Extensions::EditorUiAccessibleNode *semantic, const Extensions::EditorThemeFrame &theme,
                                          const Theme::Fonts &fonts, bool enabled, ImVec2 size) {
+        const auto frame = static_cast<std::uint64_t>(ImGui::GetFrameCount());
+        if (frame == 0 || state.lastPresentedFrame != frame - 1) {
+            state.editing = false;
+            state.preview = std::get<double>(node.value);
+            state.emphasis = 0;
+        }
+        state.lastPresentedFrame = frame;
         char text[64]{};
         std::snprintf(text, sizeof(text), "%.9g", state.editing ? state.preview : std::get<double>(node.value));
         Hint(text, fonts);

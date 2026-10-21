@@ -1,6 +1,8 @@
 #include "Horo/Extensions/EditorUiForm.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
+#include <limits>
 #include <string>
 
 namespace Horo::Extensions {
@@ -133,6 +135,26 @@ namespace Horo::Extensions {
         CHECK(ValidateEditorUiForm(form, limits).HasError());
         std::get<EditorUiNumberNode>(form.nodes.front().payload).base.custom->schemaVersion = 99;
         CHECK(ValidateEditorUiForm(form).HasError());
+    }
+
+    TEST_CASE("Scalar gestures retain finite endpoints and keyboard progress at decimal precision limits",
+              "[Extensions][Composition][Scalar]") {
+        auto form = ScalarForm();
+        auto number = std::get<EditorUiNumberNode>(form.nodes.front().payload);
+        number.minimum = 1.0;
+        number.maximum = std::nextafter(1.0, 2.0);
+        number.value = 1.0;
+        EditorUiScalarState state;
+        EditorThemeFrame theme;
+        const auto stepped = UpdateEditorUiScalar(number, state, EditorUiScalarInput::Increment, 0, true, theme, .01F);
+        REQUIRE(stepped);
+        CHECK(*stepped == *number.maximum);
+        number.maximum = std::numeric_limits<double>::max();
+        number.minimum = *number.maximum / 2;
+        number.value = *number.minimum;
+        CHECK_FALSE(UpdateEditorUiScalar(number, state, EditorUiScalarInput::Begin, 1.0, true, theme, .01F));
+        CHECK(std::isfinite(state.preview));
+        CHECK(state.preview == *number.maximum);
     }
 
 }  // namespace Horo::Extensions

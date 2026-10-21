@@ -25,8 +25,15 @@ namespace Horo::Editor {
 
     /** @copydoc InspectorContributionView::Prepare */
     bool InspectorContributionView::Prepare(Entry &entry) const {
-        if (!host_.IsAvailable(entry.contribution) || !theme_.revision)
+        if (!host_.IsAvailable(entry.contribution) || !theme_.revision) {
+            for (auto &[index, state] : entry.scalars) {
+                state = {};
+                if (const auto *number = std::get_if<EditorUiNumberNode>(&entry.form.nodes[index].payload))
+                    state.preview = std::get<double>(number->value);
+            }
+            entry.render.reset();
             return false;
+        }
         const float width = ImGui::GetContentRegionAvail().x;
         if (entry.render && entry.render->themeRevision == theme_.revision && entry.preparedWidth == width)
             return true;

@@ -147,6 +147,43 @@ namespace Horo::Editor::Tests {
             view.SetInputAdmitted(true);
             Frame(view, owner, gui, command);
         }
+
+        /** @brief A disabled contribution drops an active drag; reactivation cannot commit that abandoned gesture. */
+        void CheckScalarProviderWithdrawal(ImVec2 point, InspectorContributionView &view, InspectorControllerSupport::Fixture &owner,
+                                           const Gui &gui, EditorWorkspaceViewCommandData &command) {
+            auto &io = ImGui::GetIO();
+            io.AddMousePosEvent(point.x, point.y);
+            io.AddMouseButtonEvent(0, true);
+            Frame(view, owner, gui, command);
+            REQUIRE(owner.provider.registry
+                        .SetProviderStatus({"fixture.package", "fixture.module"}, Extensions::EditorSurfaceProviderStatus::Disabled)
+                        .HasValue());
+            Frame(view, owner, gui, command);
+            CHECK(view.Accessibility("fixture.inspector").empty());
+            REQUIRE(owner.provider.registry
+                        .SetProviderStatus({"fixture.package", "fixture.module"}, Extensions::EditorSurfaceProviderStatus::Active)
+                        .HasValue());
+            Frame(view, owner, gui, command);
+            io.AddMouseButtonEvent(0, false);
+            Frame(view, owner, gui, command);
+            CHECK(command.command == EditorWorkspaceViewCommand::None);
+            CHECK(ScalarValue(owner) == 25.0);
+        }
+
+        /** @brief A hidden contribution loses native pointer capture and cannot replay its abandoned preview on reopening. */
+        void CheckScalarHiddenGesture(ImVec2 point, InspectorContributionView &view, const InspectorControllerSupport::Fixture &owner,
+                                      const Gui &gui, EditorWorkspaceViewCommandData &command) {
+            auto &io = ImGui::GetIO();
+            io.AddMousePosEvent(point.x, point.y);
+            io.AddMouseButtonEvent(0, true);
+            Frame(view, owner, gui, command);
+            ImGui::NewFrame();
+            ImGui::Render();
+            io.AddMouseButtonEvent(0, false);
+            Frame(view, owner, gui, command);
+            CHECK(command.command == EditorWorkspaceViewCommand::None);
+            CHECK(ScalarValue(owner) == 25.0);
+        }
     }  // namespace
 
     TEST_CASE("Actual inspector button admits exact owner approval before custom controls replace generic fields",
@@ -400,6 +437,8 @@ namespace Horo::Editor::Tests {
         CHECK(ScalarValue(owner) == 25.0);
         const auto before = owner.controller->ViewModel().documentRevision;
         CheckScalarPreviewCancellation(geometry.center, view, owner, gui, command);
+        CheckScalarProviderWithdrawal(geometry.center, view, owner, gui, command);
+        CheckScalarHiddenGesture(geometry.center, view, owner, gui, command);
         Click(geometry.center, view, owner, gui, command);
         REQUIRE(command.command == EditorWorkspaceViewCommand::UpdateInspectorBehaviorField);
         REQUIRE(command.inspectorEdit);

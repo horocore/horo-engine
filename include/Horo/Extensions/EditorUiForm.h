@@ -517,6 +517,7 @@ namespace Horo::Extensions {
         double preview{};
         float emphasis{};
         bool editing{};
+        std::uint64_t lastPresentedFrame{}; /**< Host continuity fence; not a document revision or authority token. */
     };
 
     /** @brief Semantic custom interaction vocabulary, scoped by the owning host's focus/modal and provider context. */

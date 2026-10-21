@@ -64,7 +64,9 @@ selection/dragging is scoped to its host hit target. Disabled ancestors cannot
 activate controls. There are no custom global shortcuts, event subscriptions or
 provider callbacks in draw traversal. Stable identity combines provider generation,
 surface, node and the inspector selection epoch. Locale/theme changes do not alter
-node identity; provider/selection/document replacement discards local drafts.
+node identity; provider/selection/document replacement discards local drafts. A host
+frame-continuity fence also cancels a drag when its control was hidden; reopening
+a panel cannot commit a stale preview.
 
 ## Theme, accessibility and budgets
 

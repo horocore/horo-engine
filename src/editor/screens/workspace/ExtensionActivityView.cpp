@@ -430,8 +430,10 @@ namespace Horo::Editor {
         if (const auto *plot = std::get_if<Extensions::EditorUiPlotNode>(&node.payload)) {
             DrawPlot(entry, *plot, index, enabled);
         } else if (const auto *action = std::get_if<Extensions::EditorUiActionNode>(&node.payload)) {
-            if (Ui::Button(
-                    {.label = entry.nodeText[index].c_str(), .size = {width, geometry.height}, .enabled = enabled, .font = fonts.sans}))
+            if (Ui::Button({.label = entry.nodeText[index].c_str(),
+                            .size = {width / entry.render->uiScale, geometry.height / entry.render->uiScale},
+                            .enabled = enabled,
+                            .font = fonts.sans}))
                 static_cast<void>(host_->QueueAction(surface.descriptor.provider, surface.descriptor.id, base.id.value,
                                                      action->action.value, entry.projection.revision));
         } else if (std::holds_alternative<Extensions::EditorUiContainerNode>(node.payload)) {

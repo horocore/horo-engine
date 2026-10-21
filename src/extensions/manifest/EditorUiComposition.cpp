@@ -79,7 +79,10 @@ namespace Horo::Extensions {
             if (input == EditorUiScalarInput::Increment || input == EditorUiScalarInput::Decrement) {
                 const double step = (*node.maximum - *node.minimum) / 100.0;
                 const double direction = input == EditorUiScalarInput::Increment ? 1.0 : -1.0;
-                state.preview = std::clamp(std::get<double>(node.value) + direction * step, *node.minimum, *node.maximum);
+                const double current = std::get<double>(node.value);
+                state.preview = std::clamp(current + direction * step, *node.minimum, *node.maximum);
+                if (state.preview == current)
+                    state.preview = std::nextafter(current, direction > 0 ? *node.maximum : *node.minimum);
                 state.editing = false;
                 return state.preview;
             }
@@ -159,7 +162,7 @@ namespace Horo::Extensions {
             state.editing = false;
         } else if (input == EditorUiScalarInput::Begin || input == EditorUiScalarInput::Preview) {
             if (std::isfinite(normalizedValue)) {
-                state.preview = *node.minimum + std::clamp(normalizedValue, 0.0, 1.0) * (*node.maximum - *node.minimum);
+                state.preview = std::lerp(*node.minimum, *node.maximum, std::clamp(normalizedValue, 0.0, 1.0));
                 state.editing = true;
             }
         }
