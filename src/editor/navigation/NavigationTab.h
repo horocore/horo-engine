@@ -39,6 +39,7 @@ namespace Horo::Editor {
     private:
         void DrawChoices(const NavigationBakeCatalog &catalog, const EditorGuiContext &context);
         void DrawOperation(const NavigationBakeWorkspaceSnapshot &view, const EditorGuiContext &context);
+        [[nodiscard]] bool Prepare();
         void StartBake(Navigation::NavigationBakeExecutionMode mode);
         void DrawReloadAction(const NavigationBakeWorkspaceSnapshot &view, const EditorGuiContext &context);
         void DrawOperationActions(const NavigationBakeWorkspaceSnapshot &view, const EditorGuiContext &context);

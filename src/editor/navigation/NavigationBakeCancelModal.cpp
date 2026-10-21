@@ -33,8 +33,14 @@ namespace Horo::Editor {
             return context_.localization.Get("editor", std::string{"workspace.navigation_bake."} + key);
         };
         const auto &fonts = context_.theme.fonts;
-        Ui::ScopedModalShell shell({.id = "NavigationBakeCancel", .title = text("cancel_title").c_str()}, fonts);
-        ImGui::BeginChild("##NavigationCancelBody", {0, shell.BodyHeight()}, false, ImGuiWindowFlags_NoSavedSettings);
+        Ui::ScopedModalShell shell({.id = "NavigationBakeCancel",
+                                    .title = text("cancel_title").c_str(),
+                                    .requestedSize = {480, 400},
+                                    .minimumWidth = 240,
+                                    .minimumHeight = 280},
+                                   fonts);
+        ImGui::BeginChild("##NavigationCancelBody", {0, shell.BodyHeight()}, false,
+                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysVerticalScrollbar);
         Ui::Hint(text("cancel_hint").c_str(), fonts);
         if (error_) {
             Ui::ErrorText(text("action_failed").c_str(), fonts);

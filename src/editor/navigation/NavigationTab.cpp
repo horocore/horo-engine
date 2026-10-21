@@ -17,7 +17,7 @@ namespace Horo::Editor {
 
         /** @brief Formats localized labels independently of opaque technical values. */
         void Value(const EditorGuiContext &context, const char *key, const std::string &value) {
-            Ui::FieldLabel(Text(context, key).c_str(), context.theme.fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, key), Theme::Dim(), context.theme.fonts);
             Ui::Hint(value.c_str(), context.theme.fonts);
         }
 
@@ -76,18 +76,22 @@ namespace Horo::Editor {
         for (const auto &profile : catalog.profiles)
             Ui::Hint(std::format("{} / {}", profile.id.Value(), profile.displayName).c_str(), fonts);
         Ui::Hint(Text(context, "profiles_hint").c_str(), fonts);
-        (void)Ui::CheckboxControl(Text(context, "selected_only").c_str(), &selectedOnly_, fonts);
+        (void)Ui::CheckboxControl(Text(context, "selection_mode").c_str(), &selectedOnly_, fonts);
+        Ui::Hint(Text(context, "selected_only").c_str(), fonts);
         if (selectedOnly_) {
             for (const auto &surface : catalog.surfaces) {
                 bool selected = std::ranges::find(selected_, surface) != selected_.end();
                 const auto label =
                     std::format("{} / {}", Assets::AssetId::FromBytes(surface.scope.SceneBytes()).ToString(), surface.surface.Value());
-                if (Ui::CheckboxControl(label.c_str(), &selected, fonts)) {
+                ImGui::PushID(label.c_str());
+                Ui::Hint(label.c_str(), fonts);
+                if (Ui::CheckboxControl(Text(context, "surface_selected").c_str(), &selected, fonts)) {
                     if (selected)
                         selected_.push_back(surface);
                     else
                         std::erase(selected_, surface);
                 }
+                ImGui::PopID();
             }
             if (selected_.empty())
                 Ui::Hint(Text(context, "selection_required").c_str(), fonts);
@@ -198,19 +202,29 @@ namespace Horo::Editor {
         }
     }
 
+    /** @brief Admits preparation before querying its owner, retaining the original admission error on failure. */
+    bool NavigationTab::Prepare() {
+        if (prepared_)
+            return true;
+        if (!access_.prepare)
+            return false;
+        const auto result = access_.prepare(root_);
+        if (result.HasError()) {
+            error_ = result.ErrorValue();
+            return false;
+        }
+        prepared_ = true;
+        error_.reset();
+        return true;
+    }
+
     /** @copydoc NavigationTab::DrawPanel */
     void NavigationTab::DrawPanel(const ImVec2 &, const ImVec2 &size, const EditorWorkspaceViewModel &, EditorWorkspaceViewCommandData &,
                                   const EditorGuiContext &context) {
         // No updates or subscriptions poll the host while this panel is hidden.
-        ImGui::BeginChild("##NavigationBake", size, false, ImGuiWindowFlags_NoSavedSettings);
+        ImGui::BeginChild("##NavigationBake", size, false, ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysVerticalScrollbar);
         Ui::Hint(Text(context, "saved_source").c_str(), context.theme.fonts);
-        if (!prepared_ && access_.prepare) {
-            const auto result = access_.prepare(root_);
-            prepared_ = result.HasValue();
-            if (result.HasError())
-                error_ = result.ErrorValue();
-        }
-        if (access_.query) {
+        if (Prepare() && access_.query) {
             const auto result = access_.query(root_);
             if (result.HasValue()) {
                 const auto &view = result.Value();

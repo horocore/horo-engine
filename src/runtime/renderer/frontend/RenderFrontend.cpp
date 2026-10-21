@@ -120,8 +120,8 @@ namespace Horo::Render {
     RenderFrameScope::RenderFrameScope(RenderFrameScope &&other) noexcept
         : owner_(std::exchange(other.owner_, nullptr)), backend_(std::exchange(other.backend_, nullptr)),
           frame_(std::exchange(other.frame_, {})), hostFrame_(std::exchange(other.hostFrame_, 0)),
-          executed_(std::exchange(other.executed_, false)), parallelWork_(std::move(other.parallelWork_)),
-          parallelGraphWork_(std::move(other.parallelGraphWork_)) {
+          executed_(std::exchange(other.executed_, false)), guiComposed_(std::exchange(other.guiComposed_, false)),
+          parallelWork_(std::move(other.parallelWork_)), parallelGraphWork_(std::move(other.parallelGraphWork_)) {
         if (owner_ != nullptr) {
             owner_->activeFrameScope_ = this;
         }
@@ -136,6 +136,7 @@ namespace Horo::Render {
             frame_ = std::exchange(other.frame_, {});
             hostFrame_ = std::exchange(other.hostFrame_, 0);
             executed_ = std::exchange(other.executed_, false);
+            guiComposed_ = std::exchange(other.guiComposed_, false);
             parallelWork_ = std::move(other.parallelWork_);
             parallelGraphWork_ = std::move(other.parallelGraphWork_);
             if (owner_ != nullptr) {
@@ -274,6 +275,31 @@ namespace Horo::Render {
         }
     }
 
+    /** @copydoc RenderFrameScope::ComposeGui */
+    Result<void> RenderFrameScope::ComposeGui(IGuiPassExecutor &executor, const CancellationToken &cancellation) {
+        if (backend_ == nullptr)
+            return Result<void>::Failure(MakeError(FrontendErrors::FrameNotActive));
+        if (!executed_)
+            return Result<void>::Failure(MakeError(FrontendErrors::FrameNotExecuted));
+        if (guiComposed_)
+            return Result<void>::Failure(MakeError(FrontendErrors::GuiAlreadyComposed));
+        if (cancellation.IsCancellationRequested()) {
+            Abort();
+            return Result<void>::Failure(MakeError(FrontendErrors::GuiCancelled));
+        }
+        try {
+            if (const auto encoded = executor.RenderDrawData(); encoded.HasError()) {
+                Abort();
+                return encoded;
+            }
+            guiComposed_ = true;
+            return Result<void>::Success();
+        } catch (...) {  // NOSONAR(cpp:S2738)
+            Abort();
+            return Result<void>::Failure(MakeFrontendError(FrontendErrors::FrameException, "GUI frame encoding threw."));
+        }
+    }
+
     /** @copydoc RenderFrameScope::Present */
     Result<void> RenderFrameScope::Present(const PresentationTimingRequest *timing) {
         if (backend_ == nullptr) {
@@ -328,6 +354,7 @@ namespace Horo::Render {
         backend_ = nullptr;
         frame_ = {};
         executed_ = false;
+        guiComposed_ = false;
     }
 
     /** @copydoc RenderFrontend::Create */
