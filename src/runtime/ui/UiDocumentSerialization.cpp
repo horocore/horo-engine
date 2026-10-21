@@ -683,5 +683,6 @@ namespace Horo::Runtime::Ui::SerializationInternal {
     template Result<UiStyleClassId> DecodeUiId<UiStyleClassId>(const Json &value);
     template Result<UiStyleTokenId> DecodeUiId<UiStyleTokenId>(const Json &value);
     template Result<UiStylePropertyId> DecodeUiId<UiStylePropertyId>(const Json &value);
+    template Result<UiPresentationProfileId> DecodeUiId<UiPresentationProfileId>(const Json &value);
 
 }  // namespace Horo::Runtime::Ui::SerializationInternal
