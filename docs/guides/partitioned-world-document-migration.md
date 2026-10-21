@@ -258,3 +258,22 @@ Regression coverage lives in `PartitionedWorldObjectInspectionTests.cpp` within
 `HoroEditorModelPublicHeaderConsumer` / `HoroWorldStreamingPublicHeaderConsumer`;
 run the existing world-document and WorldStreaming CTest groups. No native/GPU
 interaction or GUI rendering result is implied by these model-level tests.
+
+The selection/query entry points synchronously borrow `WorldDocumentFence` and the
+optional primary address by const reference. These larger input values are never
+retained by reference; publications copy their owned state before returning.
+Ordinary calls, including temporary/null primary values, are unchanged. Consumers
+storing member-function pointers must use the const-reference parameter types;
+the standalone public consumer asserts those exact signatures. Rebuild consumers
+with this in-memory API evolution; no source-file or serialized identity changes.
+
+The new LoadPage, CommitLoadedPage, UnloadPage and SetPagePinned methods borrow
+their page descriptors and world fences by const reference for the synchronous call.
+Selection adapters likewise borrow the optional primary and fence. Consumers rebuild against
+the updated declarations; ordinary value and temporary arguments remain supported,
+and no borrowed reference is stored. The selection adapter captures an owned fence
+before publication because the argument may alias the immutable root being replaced.
+The public-header consumer checks the exact manual load/unload signatures, and the
+selection regression exercises a fence backed solely by that owner root. Decoded Scene
+source is transferred out of its successful Result before moving its vectors into
+the actual document; moving from the immutable lvalue Result view would copy instead.

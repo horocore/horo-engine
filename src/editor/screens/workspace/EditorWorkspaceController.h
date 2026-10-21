@@ -197,7 +197,7 @@ namespace Horo::Editor {
          * @return Typed committed world lease or rejection. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> SelectWorldObjects(
             std::span<const WorldStreaming::WorldAuthoringObjectAddress> objects,
-            std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary, WorldDocumentFence expected) {
+            const std::optional<WorldStreaming::WorldAuthoringObjectAddress> &primary, const WorldDocumentFence &expected) {
             return m_selection.SetWorldObjects(m_worldDocuments, objects, primary, expected);
         }
 
