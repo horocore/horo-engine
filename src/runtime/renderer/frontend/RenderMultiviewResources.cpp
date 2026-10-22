@@ -11,8 +11,7 @@ namespace Horo::Render::Detail {
         template <typename Handle, typename Entry, std::size_t Capacity>
         [[nodiscard]] Result<void> Resolve(const Handle handle, const RenderResourceClass kind, std::array<Entry, Capacity> &entries,
                                            std::size_t &count, const RenderResourceRegistry &registry) {
-            const auto used = std::span{entries}.first(count);
-            if (std::ranges::any_of(used, [handle](const Entry &entry) {
+            if (const auto used = std::span{entries}.first(count); std::ranges::any_of(used, [handle](const Entry &entry) {
                 if constexpr (requires { entry.mesh; })
                     return entry.mesh == handle;
                 else

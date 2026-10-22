@@ -277,13 +277,18 @@ namespace Horo::Render {
                 const auto incarnation = AcquireRenderDeviceIncarnation();
                 if (incarnation.HasError())
                     return Result<void>::Failure(incarnation.ErrorValue());
-                auto shaders = resources_.InitializeShaders(properties.properties, request.adapter, dispatch_.getDeviceProcAddr,
-                                                            incarnation.Value(), request.enableVertexLayerRouting);
-                if (shaders.HasError())
+                if (auto shaders = resources_.InitializeShaders(properties.properties, request.adapter, dispatch_.getDeviceProcAddr,
+                                                                incarnation.Value(), request.enableVertexLayerRouting);
+                    shaders.HasError())
                     return shaders;
-                if (auto prepared =
-                        graph_.Initialize(device_, queues, request.maxFramesInFlight, timeline.maxTimelineSemaphoreValueDifference,
-                                          incarnation.Value(), resources_, dispatch_.getDeviceProcAddr, request.enableVertexLayerRouting);
+                if (auto prepared = graph_.Initialize({.device = device_,
+                                                       .queues = queues,
+                                                       .frames = request.maxFramesInFlight,
+                                                       .timelineDifference = timeline.maxTimelineSemaphoreValueDifference,
+                                                       .deviceIncarnation = incarnation.Value(),
+                                                       .resources = resources_,
+                                                       .resolver = dispatch_.getDeviceProcAddr,
+                                                       .vertexLayerEnabled = request.enableVertexLayerRouting});
                     prepared.HasError())
                     return prepared;
                 return PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,

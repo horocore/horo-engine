@@ -32,7 +32,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> Validate(const NativeSwapchainRequest &request) const override;
         [[nodiscard]] Result<std::int64_t> SelectFormat(const NativeSwapchainRequest &request,
                                                         std::span<const std::int64_t> formats) const override;
-        [[nodiscard]] Result<void> Enumerate(XrSwapchain swapchain, std::uint32_t count, PFN_xrEnumerateSwapchainImages enumerate) override;
+        [[nodiscard]] Result<void> Enumerate(std::uint32_t count, const IOpenXRSwapchainImageEnumeration &enumeration) override;
         [[nodiscard]] Result<Render::RenderTextureHandle> Import(const NativeSwapchainRequest &request, const XRSwapchainImageId &image,
                                                                  std::uint32_t index) override;
         [[nodiscard]] Result<void> Retire(Render::RenderTextureHandle texture) override;

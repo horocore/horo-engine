@@ -133,22 +133,23 @@ namespace Horo::XR::OpenXRInternal {
                                                                    const std::span<const std::int64_t> formats) const {
         if (auto valid = Validate(request); valid.HasError())
             return Result<std::int64_t>::Failure(valid.ErrorValue());
-        const auto native = *NativeFormat(request.texture.format);
-        return std::ranges::find(formats, native) != formats.end()
-                   ? Result<std::int64_t>::Success(native)
+        const auto native = NativeFormat(request.texture.format);
+        if (!native)
+            return Result<std::int64_t>::Failure(MakeError(XRErrors::OperationUnsupported));
+        return std::ranges::find(formats, *native) != formats.end()
+                   ? Result<std::int64_t>::Success(*native)
                    : Result<std::int64_t>::Failure(MakeError(XRErrors::OperationUnsupported));
     }
 
     /** @copydoc OpenXRVulkanSwapchainImages::Enumerate */
-    Result<void> OpenXRVulkanSwapchainImages::Enumerate(const XrSwapchain swapchain, const std::uint32_t count,
-                                                        PFN_xrEnumerateSwapchainImages enumerate) {
-        if (!enumerate || count == 0 || count > sources_.size() || count_ != 0)
+    Result<void> OpenXRVulkanSwapchainImages::Enumerate(const std::uint32_t count, const IOpenXRSwapchainImageEnumeration &enumeration) {
+        if (!enumeration.IsAvailable() || count == 0 || count > sources_.size() || count_ != 0)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         std::array<XrSwapchainImageVulkanKHR, 64> images{};
         for (auto &image : images)
             image.type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR;
         std::uint32_t written{};
-        const XrResult result = enumerate(swapchain, count, &written, reinterpret_cast<XrSwapchainImageBaseHeader *>(images.data()));
+        const XrResult result = enumeration.Enumerate(count, &written, reinterpret_cast<XrSwapchainImageBaseHeader *>(images.data()));
         if (XR_FAILED(result))
             return Result<void>::Failure(
                 MakeError(XRErrors::OperationUnavailable,
@@ -192,7 +193,7 @@ namespace Horo::XR::OpenXRInternal {
         }
         if (index >= count_ || imported_.IsValid())
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
-        auto &source = sources_[index];
+        const auto &source = sources_[index];
         source->request = request;
         source->image = image;
         source->releaseStateProved = false;

@@ -44,8 +44,8 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] constexpr RenderGraphSynchronizationOperation OperationFor(const RenderGraphUsageKind usage) noexcept {
-            if (usage == RenderGraphUsageKind::VertexBuffer || usage == RenderGraphUsageKind::IndexBuffer ||
-                usage == RenderGraphUsageKind::UniformBuffer)
+            using enum RenderGraphUsageKind;
+            if (usage == VertexBuffer || usage == IndexBuffer || usage == UniformBuffer)
                 return RenderGraphSynchronizationOperation::GraphicsInputBuffer;
             return static_cast<RenderGraphSynchronizationOperation>(static_cast<std::uint8_t>(usage) + 1);
         }
@@ -346,20 +346,21 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(RenderGraphSynchronizationErrors::InvalidExternalRelease));
                 externalReleases_.reserve(finalStates_.size());
                 std::vector<bool> seen(graph_.Resources().size(), false);
-                for (const auto &final : finalStates_) {
-                    if (final.resource.owner != graph_.Owner() || final.resource.value == 0 ||
-                        final.resource.value > graph_.Resources().size())
+                for (const auto &finalState : finalStates_) {
+                    if (finalState.resource.owner != graph_.Owner() || finalState.resource.value == 0 ||
+                        finalState.resource.value > graph_.Resources().size())
                         return Result<void>::Failure(
-                            ContextError(RenderGraphSynchronizationErrors::InvalidExternalRelease, final.resource));
-                    const std::size_t index = final.resource.value - 1;
-                    const auto &resource = graph_.Resources()[index];
-                    if (seen[index] || resource.resourceClass != RenderGraphResourceClass::External || !current_[index]->pass.IsValid() ||
-                        !IsStateValid(final.state, resource.kind) || final.state.access == RenderGraphSynchronizationAccess::None ||
-                        final.state.scope != RenderGraphPipelineScope::External)
+                            ContextError(RenderGraphSynchronizationErrors::InvalidExternalRelease, finalState.resource));
+                    const std::size_t index = finalState.resource.value - 1;
+                    if (const auto &resource = graph_.Resources()[index];
+                        seen[index] || resource.resourceClass != RenderGraphResourceClass::External || !current_[index]->pass.IsValid() ||
+                        !IsStateValid(finalState.state, resource.kind) ||
+                        finalState.state.access == RenderGraphSynchronizationAccess::None ||
+                        finalState.state.scope != RenderGraphPipelineScope::External)
                         return Result<void>::Failure(
-                            ContextError(RenderGraphSynchronizationErrors::InvalidExternalRelease, final.resource));
+                            ContextError(RenderGraphSynchronizationErrors::InvalidExternalRelease, finalState.resource));
                     seen[index] = true;
-                    externalReleases_.push_back({final.resource, current_[index]->pass, current_[index]->state, final.state});
+                    externalReleases_.emplace_back(finalState.resource, current_[index]->pass, current_[index]->state, finalState.state);
                 }
                 return Result<void>::Success();
             }

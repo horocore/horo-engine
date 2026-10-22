@@ -11,13 +11,12 @@ namespace Horo::Render::Detail {
         if (resource.HasError())
             return Result<VkDescriptorBufferInfo>::Failure(resource.ErrorValue());
         const auto &buffer = resource.Value();
-        const std::array validRange{buffer.buffer != VK_NULL_HANDLE,
-                                    resident.offset % std::max<VkDeviceSize>(1, properties.limits.minUniformBufferOffsetAlignment) == 0,
-                                    resident.byteCount != 0,
-                                    resident.byteCount <= properties.limits.maxUniformBufferRange,
-                                    resident.offset <= buffer.bytes,
-                                    resident.byteCount <= buffer.bytes - std::min(resident.offset, buffer.bytes)};
-        if (!std::ranges::all_of(validRange, [](bool valid) {
+        if (const std::array validRange{buffer.buffer != VK_NULL_HANDLE,
+                                        resident.offset % std::max<VkDeviceSize>(1, properties.limits.minUniformBufferOffsetAlignment) == 0,
+                                        resident.byteCount != 0, resident.byteCount <= properties.limits.maxUniformBufferRange,
+                                        resident.offset <= buffer.bytes,
+                                        resident.byteCount <= buffer.bytes - std::min(resident.offset, buffer.bytes)};
+            !std::ranges::all_of(validRange, [](bool valid) {
             return valid;
         }))
             return Result<VkDescriptorBufferInfo>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
@@ -92,7 +91,7 @@ namespace Horo::Render::Detail {
                                               .maxSets = static_cast<std::uint32_t>(pipeline.sets.size()),
                                               .poolSizeCount = static_cast<std::uint32_t>(sizes.size()),
                                               .pPoolSizes = sizes.data()};
-        if (const auto nativeResult = createDescriptorPool(device, &pool, nullptr, &table.pool); nativeResult != VK_SUCCESS) {
+        if (const auto nativeResult = native.createDescriptorPool(device, &pool, nullptr, &table.pool); nativeResult != VK_SUCCESS) {
             table.pool = VK_NULL_HANDLE;
             return Result<void>::Failure(NativeShaderFailure("vkCreateDescriptorPool", nativeResult));
         }
@@ -101,7 +100,7 @@ namespace Horo::Render::Detail {
                                                      .descriptorPool = table.pool,
                                                      .descriptorSetCount = static_cast<std::uint32_t>(table.sets.size()),
                                                      .pSetLayouts = pipeline.sets.data()};
-        if (const auto nativeResult = allocateDescriptorSets(device, &allocation, table.sets.data()); nativeResult != VK_SUCCESS)
+        if (const auto nativeResult = native.allocateDescriptorSets(device, &allocation, table.sets.data()); nativeResult != VK_SUCCESS)
             return Result<void>::Failure(NativeShaderFailure("vkAllocateDescriptorSets", nativeResult));
         return Result<void>::Success();
     }
@@ -114,8 +113,8 @@ namespace Horo::Render::Detail {
         const auto pipeline = impl_->pipelines.find(id);
         if (pipeline == impl_->pipelines.end() || !SameLayout(pipeline->second->material, descriptor.layout))
             return Result<std::size_t>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
-        const auto entry = std::ranges::find(pipeline->second->material.resources, binding, &ShaderReflectedBinding::id);
-        if (entry == pipeline->second->material.resources.end() || !entry->active || entry->kind != ShaderResourceKind::UniformBuffer)
+        if (const auto entry = std::ranges::find(pipeline->second->material.resources, binding, &ShaderReflectedBinding::id);
+            entry == pipeline->second->material.resources.end() || !entry->active || entry->kind != ShaderResourceKind::UniformBuffer)
             return Result<std::size_t>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
         return impl_->ParameterBytes(pipeline->second->material, binding);
     }
@@ -133,7 +132,7 @@ namespace Horo::Render::Detail {
                     std::ranges::find(descriptor.layout.targetBindings, descriptor.resources[i].binding, &ShaderTargetBindingMapEntry::id);
                 writes[i].dstSet = table.sets[mapping->nativeSpace];
             }
-            updateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
+            native.updateDescriptorSets(device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
         }
         return Result<void>::Success();
     }
@@ -143,8 +142,8 @@ namespace Horo::Render::Detail {
                                                                    const MaterialBindingLayout &layout,
                                                                    const MaterialResourceBinding &logical,
                                                                    const MaterialResidentResource &resident) const {
-        const auto kind = std::ranges::find(layout.resources, logical.binding, &ShaderReflectedBinding::id)->kind;
-        if (kind == ShaderResourceKind::Sampler)
+        if (const auto kind = std::ranges::find(layout.resources, logical.binding, &ShaderReflectedBinding::id)->kind;
+            kind == ShaderResourceKind::Sampler)
             table.samplerBackings.push_back(samplers.at(resident.instance));
         else {
             auto backing = resolve(resident, kind);
@@ -169,11 +168,11 @@ namespace Horo::Render::Detail {
         try {
             auto table = std::make_unique<VulkanPreparedMaterialBinding>();
             table->device = impl_->device;
-            table->destroyPool = impl_->destroyDescriptorPool;
-            table->owner = impl_.get();
+            table->destroyPool = impl_->native.destroyDescriptorPool;
+            table->owner = &impl_->ownerIdentity;
             table->pipeline = pipeline->handle;
             table->layout = pipeline->layout;
-            table->deviceIncarnation = impl_->deviceIncarnation;
+            table->deviceIncarnation = impl_->ownerIdentity.deviceIncarnation;
             table->state = pipeline->state;
             table->pipelineBacking = impl_->pipelines.at(id);
             table->resources.reserve(resources.size());

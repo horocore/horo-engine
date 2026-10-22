@@ -136,7 +136,15 @@ namespace Horo::Render::VulkanGraphTest {
         explicit NativeGraphFixture(const bool vertexLayers = false) {
             encodedGraph = &encoded;
             InitializeNativeResourceRuntime(resources);
-            REQUIRE(graph.Initialize(NativeHandle<VkDevice>(1), commandState.queues, 2, 1024, 11, resources, GraphResolver, vertexLayers)
+            REQUIRE(graph
+                        .Initialize({.device = NativeHandle<VkDevice>(1),
+                                     .queues = commandState.queues,
+                                     .frames = 2,
+                                     .timelineDifference = 1024,
+                                     .deviceIncarnation = 11,
+                                     .resources = resources,
+                                     .resolver = GraphResolver,
+                                     .vertexLayerEnabled = vertexLayers})
                         .HasValue());
         }
 

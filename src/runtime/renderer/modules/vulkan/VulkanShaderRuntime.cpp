@@ -8,7 +8,8 @@
 #include <array>
 #include <bit>
 #include <cmath>
-#include <cstring>
+#include <cstddef>
+#include <format>
 #include <map>
 #include <thread>
 #include <tuple>
@@ -20,8 +21,9 @@ namespace Horo::Render::Detail {
         /** @copydoc NativeShaderFailure */
         Error NativeShaderFailure(const std::string_view operation, const VkResult result) {
             return MakeError(VulkanBackendErrors::ResourceCreationFailed,
-                             std::string(operation) + " failed (VkResult " + std::to_string(result) +
-                                 "). Verify device support and the cooked target artifact; no substitute pipeline was selected.");
+                             std::format("{} failed (VkResult {}). Verify device support and the cooked target artifact; no substitute "
+                                         "pipeline was selected.",
+                                         operation, static_cast<int>(result)));
         }
 
         /** @brief Supplies conservative driver-object accounting rather than claiming measured allocation. */
@@ -44,12 +46,13 @@ namespace Horo::Render::Detail {
 
         /** @brief Maps the material resource envelope without relying on native enum ordering. */
         VkDescriptorType DescriptorType(ShaderResourceKind kind) {
+            using enum ShaderResourceKind;
             switch (kind) {
-                case ShaderResourceKind::UniformBuffer:
+                case UniformBuffer:
                     return VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-                case ShaderResourceKind::SampledTexture:
+                case SampledTexture:
                     return VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                case ShaderResourceKind::Sampler:
+                case Sampler:
                     return VK_DESCRIPTOR_TYPE_SAMPLER;
                 default:
                     return VK_DESCRIPTOR_TYPE_MAX_ENUM;
@@ -91,12 +94,18 @@ namespace Horo::Render::Detail {
         bool EntryMatches(std::span<const std::uint32_t> entry, const RenderShaderModuleDescriptor &descriptor) {
             if (entry.size() < 4)
                 return false;
-            const auto *name = reinterpret_cast<const char *>(entry.data() + 3);
-            const auto *end = static_cast<const char *>(std::memchr(name, 0, (entry.size() - 3) * 4));
-            if (!end)
+            const auto name = std::as_bytes(entry.subspan(3));
+            const auto end = std::ranges::find(name, std::byte{});
+            if (end == name.end())
                 return false;
+            const auto length = static_cast<std::size_t>(end - name.begin());
             const auto model = descriptor.stage == ShaderStage::Vertex ? 0U : 4U;
-            return entry[1] == model && std::string_view(name, static_cast<std::size_t>(end - name)) == descriptor.entryPoint;
+            return entry[1] == model && length == descriptor.entryPoint.size() &&
+                   std::ranges::equal(name.first(length), std::as_bytes(std::span{descriptor.entryPoint}), {}, [](std::byte value) {
+                return std::to_integer<unsigned char>(value);
+            }, [](std::byte value) {
+                return std::to_integer<unsigned char>(value);
+            });
         }
 
         /** @brief Rejects malformed instruction streams and mismatched exact entry points before driver calls. */
@@ -123,8 +132,8 @@ namespace Horo::Render::Detail {
             for (std::size_t offset = 5; offset < words.size();) {
                 const auto count = words[offset] >> 16;
                 const auto opcode = words[offset] & 0xffffU;
-                const auto instruction = words.subspan(offset, count);
-                if ((opcode == 71 && count >= 4 && instruction[2] == 11 && instruction[3] == 9) ||
+                if (const auto instruction = words.subspan(offset, count);
+                    (opcode == 71 && count >= 4 && instruction[2] == 11 && instruction[3] == 9) ||
                     (opcode == 72 && count >= 5 && instruction[3] == 11 && instruction[4] == 9))
                     return true;
                 offset += count;
@@ -145,40 +154,36 @@ namespace Horo::Render::Detail {
     }
 
     /** @brief Resolves the full shader/material device dispatch before acquiring native objects. */
-    bool VulkanShaderRuntime::Impl::LoadDispatch(VkDevice device, const Resolver &resolver) {
-        createShaderModule = std::bit_cast<PFN_vkCreateShaderModule>(resolver(device, "vkCreateShaderModule"));
-        destroyShaderModule = std::bit_cast<PFN_vkDestroyShaderModule>(resolver(device, "vkDestroyShaderModule"));
-        createDescriptorSetLayout = std::bit_cast<PFN_vkCreateDescriptorSetLayout>(resolver(device, "vkCreateDescriptorSetLayout"));
-        destroyDescriptorSetLayout = std::bit_cast<PFN_vkDestroyDescriptorSetLayout>(resolver(device, "vkDestroyDescriptorSetLayout"));
-        createPipelineLayout = std::bit_cast<PFN_vkCreatePipelineLayout>(resolver(device, "vkCreatePipelineLayout"));
-        destroyPipelineLayout = std::bit_cast<PFN_vkDestroyPipelineLayout>(resolver(device, "vkDestroyPipelineLayout"));
-        createPipelineCache = std::bit_cast<PFN_vkCreatePipelineCache>(resolver(device, "vkCreatePipelineCache"));
-        destroyPipelineCache = std::bit_cast<PFN_vkDestroyPipelineCache>(resolver(device, "vkDestroyPipelineCache"));
-        createGraphicsPipelines = std::bit_cast<PFN_vkCreateGraphicsPipelines>(resolver(device, "vkCreateGraphicsPipelines"));
-        destroyPipeline = std::bit_cast<PFN_vkDestroyPipeline>(resolver(device, "vkDestroyPipeline"));
-        createSampler = std::bit_cast<PFN_vkCreateSampler>(resolver(device, "vkCreateSampler"));
-        destroySampler = std::bit_cast<PFN_vkDestroySampler>(resolver(device, "vkDestroySampler"));
-        createDescriptorPool = std::bit_cast<PFN_vkCreateDescriptorPool>(resolver(device, "vkCreateDescriptorPool"));
-        destroyDescriptorPool = std::bit_cast<PFN_vkDestroyDescriptorPool>(resolver(device, "vkDestroyDescriptorPool"));
-        allocateDescriptorSets = std::bit_cast<PFN_vkAllocateDescriptorSets>(resolver(device, "vkAllocateDescriptorSets"));
-        updateDescriptorSets = std::bit_cast<PFN_vkUpdateDescriptorSets>(resolver(device, "vkUpdateDescriptorSets"));
-        const std::array dispatchAvailable{createShaderModule != nullptr,
-                                           destroyShaderModule != nullptr,
-                                           createDescriptorSetLayout != nullptr,
-                                           destroyDescriptorSetLayout != nullptr,
-                                           createPipelineLayout != nullptr,
-                                           destroyPipelineLayout != nullptr,
-                                           createPipelineCache != nullptr,
-                                           destroyPipelineCache != nullptr,
-                                           createGraphicsPipelines != nullptr,
-                                           destroyPipeline != nullptr,
-                                           createSampler != nullptr,
-                                           destroySampler != nullptr,
-                                           createDescriptorPool != nullptr,
-                                           destroyDescriptorPool != nullptr,
-                                           allocateDescriptorSets != nullptr,
-                                           updateDescriptorSets != nullptr};
-        if (!std::ranges::all_of(dispatchAvailable, [](bool present) {
+    template <typename ResolverCallable>
+    bool VulkanShaderRuntime::Impl::LoadDispatch(VkDevice selectedDevice, const ResolverCallable &resolver) {
+        native.createShaderModule = std::bit_cast<PFN_vkCreateShaderModule>(resolver(selectedDevice, "vkCreateShaderModule"));
+        native.destroyShaderModule = std::bit_cast<PFN_vkDestroyShaderModule>(resolver(selectedDevice, "vkDestroyShaderModule"));
+        native.createDescriptorSetLayout =
+            std::bit_cast<PFN_vkCreateDescriptorSetLayout>(resolver(selectedDevice, "vkCreateDescriptorSetLayout"));
+        native.destroyDescriptorSetLayout =
+            std::bit_cast<PFN_vkDestroyDescriptorSetLayout>(resolver(selectedDevice, "vkDestroyDescriptorSetLayout"));
+        native.createPipelineLayout = std::bit_cast<PFN_vkCreatePipelineLayout>(resolver(selectedDevice, "vkCreatePipelineLayout"));
+        native.destroyPipelineLayout = std::bit_cast<PFN_vkDestroyPipelineLayout>(resolver(selectedDevice, "vkDestroyPipelineLayout"));
+        native.createPipelineCache = std::bit_cast<PFN_vkCreatePipelineCache>(resolver(selectedDevice, "vkCreatePipelineCache"));
+        native.destroyPipelineCache = std::bit_cast<PFN_vkDestroyPipelineCache>(resolver(selectedDevice, "vkDestroyPipelineCache"));
+        native.createGraphicsPipelines =
+            std::bit_cast<PFN_vkCreateGraphicsPipelines>(resolver(selectedDevice, "vkCreateGraphicsPipelines"));
+        native.destroyPipeline = std::bit_cast<PFN_vkDestroyPipeline>(resolver(selectedDevice, "vkDestroyPipeline"));
+        native.createSampler = std::bit_cast<PFN_vkCreateSampler>(resolver(selectedDevice, "vkCreateSampler"));
+        native.destroySampler = std::bit_cast<PFN_vkDestroySampler>(resolver(selectedDevice, "vkDestroySampler"));
+        native.createDescriptorPool = std::bit_cast<PFN_vkCreateDescriptorPool>(resolver(selectedDevice, "vkCreateDescriptorPool"));
+        native.destroyDescriptorPool = std::bit_cast<PFN_vkDestroyDescriptorPool>(resolver(selectedDevice, "vkDestroyDescriptorPool"));
+        native.allocateDescriptorSets = std::bit_cast<PFN_vkAllocateDescriptorSets>(resolver(selectedDevice, "vkAllocateDescriptorSets"));
+        native.updateDescriptorSets = std::bit_cast<PFN_vkUpdateDescriptorSets>(resolver(selectedDevice, "vkUpdateDescriptorSets"));
+        if (const std::array dispatchAvailable{native.createShaderModule != nullptr, native.destroyShaderModule != nullptr,
+                                               native.createDescriptorSetLayout != nullptr, native.destroyDescriptorSetLayout != nullptr,
+                                               native.createPipelineLayout != nullptr, native.destroyPipelineLayout != nullptr,
+                                               native.createPipelineCache != nullptr, native.destroyPipelineCache != nullptr,
+                                               native.createGraphicsPipelines != nullptr, native.destroyPipeline != nullptr,
+                                               native.createSampler != nullptr, native.destroySampler != nullptr,
+                                               native.createDescriptorPool != nullptr, native.destroyDescriptorPool != nullptr,
+                                               native.allocateDescriptorSets != nullptr, native.updateDescriptorSets != nullptr};
+            !std::ranges::all_of(dispatchAvailable, [](bool present) {
             return present;
         }))
             return false;
@@ -188,7 +193,7 @@ namespace Horo::Render::Detail {
     /** @copydoc VulkanShaderRuntime::Initialize */
     Result<void> VulkanShaderRuntime::Initialize(VkDevice device, const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
                                                  const Resolver &resolver, IssueIdentity issue, ResolveResource resolve,
-                                                 const std::uint64_t deviceIncarnation, const bool vertexLayerEnabled) {
+                                                 const DeviceFeatures features) {
         if (impl_->device || !device || !resolver || !issue || !resolve || !adapter.IsValid())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidConfig));
         impl_->owner = std::this_thread::get_id();
@@ -196,8 +201,8 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::EntryPointMissing, "Vulkan shader/material dispatch is incomplete."));
         impl_->properties = properties;
-        impl_->deviceIncarnation = deviceIncarnation;
-        impl_->vertexLayerEnabled = vertexLayerEnabled;
+        impl_->ownerIdentity.deviceIncarnation = features.deviceIncarnation;
+        impl_->vertexLayerEnabled = features.vertexLayerEnabled;
         impl_->issue = std::move(issue);
         impl_->resolve = std::move(resolve);
         Sha256Builder hash;
@@ -208,10 +213,11 @@ namespace Horo::Render::Detail {
                            .backendModuleVersion = 1,
                            .adapter = std::move(adapter),
                            .deviceCompatibilityDigest = hash.Finalize(),
-                           .driverIdentity = std::to_string(properties.vendorID) + ":" + std::to_string(properties.deviceID),
+                           .driverIdentity = std::format("{}:{}", properties.vendorID, properties.deviceID),
                            .driverVersion = std::to_string(properties.driverVersion)};
         const VkPipelineCacheCreateInfo info{.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-        if (const auto nativeResult = impl_->createPipelineCache(device, &info, nullptr, &impl_->cache); nativeResult != VK_SUCCESS) {
+        if (const auto nativeResult = impl_->native.createPipelineCache(device, &info, nullptr, &impl_->cache);
+            nativeResult != VK_SUCCESS) {
             impl_->cache = VK_NULL_HANDLE;
             return Result<void>::Failure(NativeShaderFailure("vkCreatePipelineCache", nativeResult));
         }
@@ -223,11 +229,11 @@ namespace Horo::Render::Detail {
     void VulkanShaderRuntime::Shutdown() noexcept {
         impl_->pipelines.clear();
         for (auto &[id, shader] : impl_->shaders)
-            impl_->destroyShaderModule(impl_->device, shader.handle, nullptr);
+            impl_->native.destroyShaderModule(impl_->device, shader.handle, nullptr);
         impl_->shaders.clear();
         impl_->samplers.clear();
         if (impl_->cache)
-            impl_->destroyPipelineCache(impl_->device, impl_->cache, nullptr);
+            impl_->native.destroyPipelineCache(impl_->device, impl_->cache, nullptr);
         impl_->cache = VK_NULL_HANDLE;
         impl_->device = VK_NULL_HANDLE;
     }
@@ -247,22 +253,28 @@ namespace Horo::Render::Detail {
             return Result<RenderMemoryCostPlan>::Failure(impl_->AdmissionError());
         if (const auto valid = ValidateRenderShaderModuleDescriptor(descriptor); valid.HasError())
             return Result<RenderMemoryCostPlan>::Failure(valid.ErrorValue());
-        const std::array supported{descriptor.target.backend == ShaderTargetBackend::Vulkan,
-                                   descriptor.target.payloadFormat == ShaderPayloadFormat::SpirV16,
-                                   descriptor.target.descriptorVersion == 1,
-                                   descriptor.target.interfaceSchemaVersion == 1,
-                                   descriptor.stage == ShaderStage::Vertex || descriptor.stage == ShaderStage::Fragment,
-                                   size >= 20,
-                                   size % 4 == 0,
-                                   size <= 64U * 1024U * 1024U,
-                                   impl_->shaders.size() < MaximumObjects};
-        if (!std::ranges::all_of(supported, [](bool value) {
+        if (const std::array supported{descriptor.target.backend == ShaderTargetBackend::Vulkan,
+                                       descriptor.target.payloadFormat == ShaderPayloadFormat::SpirV16,
+                                       descriptor.target.descriptorVersion == 1, descriptor.target.interfaceSchemaVersion == 1,
+                                       descriptor.stage == ShaderStage::Vertex || descriptor.stage == ShaderStage::Fragment, size >= 20,
+                                       size % 4 == 0, size <= 64U * 1024U * 1024U, impl_->shaders.size() < MaximumObjects};
+            !std::ranges::all_of(supported, [](bool value) {
             return value;
         }))
             return Result<RenderMemoryCostPlan>::Failure(
                 MakeError(VulkanBackendErrors::ResourceUnsupported,
                           "Vulkan requires bounded SPIR-V 1.6 vertex/fragment artifacts with version-one metadata."));
         return Result<RenderMemoryCostPlan>::Success(Estimate(40, size));
+    }
+
+    /** @brief Publishes a native shader transactionally; all insertion failures destroy its acquired handle and rethrow. */
+    void VulkanShaderRuntime::Impl::PublishShader(std::uint64_t id, Shader &shader) {
+        try {
+            shaders.try_emplace(id, std::move(shader));
+        } catch (...) {
+            native.destroyShaderModule(device, shader.handle, nullptr);
+            throw;
+        }
     }
 
     /** @copydoc VulkanShaderRuntime::CreateShaderModule */
@@ -279,30 +291,25 @@ namespace Horo::Render::Detail {
             std::ranges::transform(code, std::as_writable_bytes(std::span{words}).begin(), [](std::uint8_t value) {
                 return static_cast<std::byte>(value);
             });
-            if (!HasEntry(words, descriptor))
+            if (!VulkanShaderDetail::HasEntry(words, descriptor))
                 return Result<std::uint64_t>::Failure(
                     MakeError(VulkanBackendErrors::ResourceRequestInvalid,
                               "SPIR-V header, instruction bounds or exact stage entry point is invalid; recook the artifact."));
-            Impl::Shader shader{.descriptor = descriptor, .bytes = code.size(), .writesLayer = WritesLayer(words)};
+            Impl::Shader shader{.descriptor = descriptor, .bytes = code.size(), .writesLayer = VulkanShaderDetail::WritesLayer(words)};
             if (shader.writesLayer && (!impl_->vertexLayerEnabled || descriptor.stage != ShaderStage::Vertex))
                 return Result<std::uint64_t>::Failure(
                     MakeError(VulkanBackendErrors::ResourceUnsupported, "Layer output requires explicitly enabled vertex layer routing."));
             const auto id = impl_->issue();
-            if (!id)
+            if (!id.has_value())
                 return Result<std::uint64_t>::Failure(
                     MakeError(VulkanBackendErrors::ResourceCreationFailed, "Resource identities exhausted."));
             const VkShaderModuleCreateInfo info{.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
                                                 .codeSize = code.size(),
                                                 .pCode = words.data()};
-            if (const auto nativeResult = impl_->createShaderModule(impl_->device, &info, nullptr, &shader.handle);
+            if (const auto nativeResult = impl_->native.createShaderModule(impl_->device, &info, nullptr, &shader.handle);
                 nativeResult != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(NativeShaderFailure("vkCreateShaderModule", nativeResult));
-            try {
-                impl_->shaders.emplace(*id, std::move(shader));
-            } catch (...) {
-                impl_->destroyShaderModule(impl_->device, shader.handle, nullptr);
-                throw;
-            }
+            impl_->PublishShader(*id, shader);
             return Result<std::uint64_t>::Success(*id);
         } catch (const std::bad_alloc &) {
             return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
@@ -332,8 +339,8 @@ namespace Horo::Render::Detail {
             });
         };
         const auto &actual = identity;
-        const auto &expected = descriptor.compatibility;
-        if (!matches(v->second, ShaderStage::Vertex) || !matches(f->second, ShaderStage::Fragment) ||
+        if (const auto &expected = descriptor.compatibility;
+            !matches(v->second, ShaderStage::Vertex) || !matches(f->second, ShaderStage::Fragment) ||
             std::tie(actual.backend, actual.backendModuleVersion, actual.adapter, actual.deviceCompatibilityDigest, actual.driverIdentity,
                      actual.driverVersion) != std::tie(expected.backend, expected.backendModuleVersion, expected.adapter,
                                                        expected.deviceCompatibilityDigest, expected.driverIdentity, expected.driverVersion))
@@ -365,8 +372,8 @@ namespace Horo::Render::Detail {
     Result<RenderMemoryCostPlan> VulkanShaderRuntime::QuerySamplerMemoryCost(const RenderSamplerDescriptor &descriptor) const {
         if (!impl_->Ready())
             return Result<RenderMemoryCostPlan>::Failure(impl_->AdmissionError());
-        const auto maximumSamplers = std::min<std::size_t>(MaximumObjects, impl_->properties.limits.maxSamplerAllocationCount);
-        if (!descriptor.IsValid() || descriptor.maximumAnisotropy != 1 || impl_->samplers.size() >= maximumSamplers)
+        if (const auto maximumSamplers = std::min<std::size_t>(MaximumObjects, impl_->properties.limits.maxSamplerAllocationCount);
+            !descriptor.IsValid() || descriptor.maximumAnisotropy != 1 || impl_->samplers.size() >= maximumSamplers)
             return Result<RenderMemoryCostPlan>::Failure(
                 MakeError(VulkanBackendErrors::ResourceUnsupported, "Vulkan baseline samplers require anisotropy one."));
         return Result<RenderMemoryCostPlan>::Success(Estimate(42, 256));
@@ -399,19 +406,19 @@ namespace Horo::Render::Detail {
                                        .maxLod = descriptor.maximumLod,
                                        .borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK};
         const auto id = impl_->issue();
-        if (!id)
+        if (!id.has_value())
             return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
         try {
             auto sampler = std::make_shared<Impl::Sampler>();
             sampler->device = impl_->device;
-            sampler->destroy = impl_->destroySampler;
+            sampler->destroy = impl_->native.destroySampler;
             sampler->descriptor = descriptor;
-            if (const auto nativeResult = impl_->createSampler(impl_->device, &info, nullptr, &sampler->handle);
+            if (const auto nativeResult = impl_->native.createSampler(impl_->device, &info, nullptr, &sampler->handle);
                 nativeResult != VK_SUCCESS) {
                 sampler->handle = VK_NULL_HANDLE;
                 return Result<std::uint64_t>::Failure(NativeShaderFailure("vkCreateSampler", nativeResult));
             }
-            impl_->samplers.emplace(*id, std::move(sampler));
+            impl_->samplers.try_emplace(*id, std::move(sampler));
         } catch (const std::bad_alloc &) {
             return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
         }
@@ -422,7 +429,7 @@ namespace Horo::Render::Detail {
     void VulkanShaderRuntime::DestroyShaderModule(std::uint64_t id) noexcept {
         const auto found = impl_->shaders.find(id);
         if (found != impl_->shaders.end()) {
-            impl_->destroyShaderModule(impl_->device, found->second.handle, nullptr);
+            impl_->native.destroyShaderModule(impl_->device, found->second.handle, nullptr);
             impl_->shaders.erase(found);
         }
     }

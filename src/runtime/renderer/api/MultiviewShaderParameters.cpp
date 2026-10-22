@@ -54,8 +54,7 @@ namespace Horo::Render {
                                                                    const std::span<const MultiviewSceneView> views,
                                                                    const Math::Mat4 &localToWorld,
                                                                    const std::span<const std::uint32_t> layers) {
-        const auto bytes = MultiviewShaderParameterBytes(layout, views.size());
-        if (bytes.HasError())
+        if (const auto bytes = MultiviewShaderParameterBytes(layout, views.size()); bytes.HasError())
             return Result<MaterialParameterBinding>::Failure(bytes.ErrorValue());
         if (layers.size() != views.size() || !Math::IsFinite(localToWorld))
             return Result<MaterialParameterBinding>::Failure(MakeError(MultiviewExtractionErrors::InvalidInput));

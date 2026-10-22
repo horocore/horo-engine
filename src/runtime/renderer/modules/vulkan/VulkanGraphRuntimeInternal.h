@@ -5,7 +5,9 @@
 #include "VulkanRenderBackendErrors.h"
 
 #include <array>
+#include <bit>
 #include <thread>
+#include <type_traits>
 
 namespace Horo::Render::Detail {
     /** @brief One prevalidated whole-resource dependency; release/acquire masks differ but layouts match. */
@@ -91,18 +93,41 @@ namespace Horo::Render::Detail {
         std::vector<Update> updates;
         std::vector<Submission> submissions;
         std::vector<VulkanCommandRetention> retention;
-        FrameToken frame;
-        bool recorded{false};
-        bool closing{false};
-        bool failedSubmission{false};
 
-        void LoadMaterialDispatch(VkDevice device, const VulkanShaderRuntime::Resolver &resolver);
+        /** @brief Active-frame admission and terminal submission/shutdown state, owned together by the command runtime. */
+        struct Lifecycle {
+            FrameToken frame;
+            bool recorded{false};
+            bool closing{false};
+            bool failedSubmission{false};
+        };
+
+        Lifecycle lifecycle;
+
+        /** @brief Borrows the synchronous resolver to load optional material dispatch without copying or allocation. */
+        template <typename Resolver> void LoadMaterialDispatch(VkDevice device, const Resolver &resolver) {
+            if constexpr (std::is_null_pointer_v<Resolver>) {
+                return;
+            } else {
+                if constexpr (std::is_pointer_v<Resolver>) {
+                    if (resolver == nullptr)
+                        return;
+                }
+                native.bindPipeline = std::bit_cast<PFN_vkCmdBindPipeline>(resolver(device, "vkCmdBindPipeline"));
+                native.bindSets = std::bit_cast<PFN_vkCmdBindDescriptorSets>(resolver(device, "vkCmdBindDescriptorSets"));
+                native.bindVertices = std::bit_cast<PFN_vkCmdBindVertexBuffers>(resolver(device, "vkCmdBindVertexBuffers"));
+                native.bindIndex = std::bit_cast<PFN_vkCmdBindIndexBuffer>(resolver(device, "vkCmdBindIndexBuffer"));
+                native.viewport = std::bit_cast<PFN_vkCmdSetViewport>(resolver(device, "vkCmdSetViewport"));
+                native.scissor = std::bit_cast<PFN_vkCmdSetScissor>(resolver(device, "vkCmdSetScissor"));
+                native.drawIndexed = std::bit_cast<PFN_vkCmdDrawIndexed>(resolver(device, "vkCmdDrawIndexed"));
+            }
+        }
+
         [[nodiscard]] Result<void> Access(bool admission = true) const;
         [[nodiscard]] const VulkanCommandQueue *Queue(RenderQueueId id) const noexcept;
-        [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request, VulkanCommandRetention &retention);
+        [[nodiscard]] Result<void> Prepare(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins);
         [[nodiscard]] Result<void> InitialStates(const RenderGraphExecutionRequest &request);
-        [[nodiscard]] Result<void> PreparePass(const RenderGraphExecutionRequest &request, std::size_t index,
-                                               VulkanCommandRetention &retention);
+        [[nodiscard]] Result<void> PreparePass(const RenderGraphExecutionRequest &request, std::size_t index, VulkanCommandRetention &pins);
         /** @brief Appends one exact transition and commits only its scratch logical state. */
         [[nodiscard]] Result<void> AppendTransition(const RenderGraphTransition &transition, bool release, bool acquire);
         [[nodiscard]] Result<void> PrepareTransitions(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,

@@ -31,17 +31,15 @@ namespace Horo::Render {
             [[nodiscard]] bool Matches(const std::span<const RenderGraphResourceUsage> usages) const noexcept {
                 if (usages.size() != count_)
                     return false;
-                for (const auto &use : usages) {
+                return std::ranges::all_of(usages, [this](const RenderGraphResourceUsage &use) {
                     if (use.resource.owner != graph_.Owner() || use.resource.value == 0 || use.resource.value > graph_.Resources().size())
                         return false;
                     const auto &entry = entries_[use.resource.value - 1];
                     const bool attachment =
                         entry.role == RenderGraphUsageKind::ColorAttachment || entry.role == RenderGraphUsageKind::DepthStencilAttachment;
-                    if (!entry.present || entry.role != use.kind ||
-                        use.access != (attachment ? RenderGraphAccess::Write : RenderGraphAccess::Read))
-                        return false;
-                }
-                return true;
+                    return entry.present && entry.role == use.kind &&
+                           use.access == (attachment ? RenderGraphAccess::Write : RenderGraphAccess::Read);
+                });
             }
 
         private:
@@ -65,8 +63,8 @@ namespace Horo::Render {
                 const auto &target = workload.targets[index];
                 if (!target.depth.IsValid() && target.depth != RenderGraphResourceId{})
                     return false;
-                const auto colorView = std::ranges::find(request.views, target.colorView, &RenderGraphTextureViewInstance::view);
-                if (!target.colorView.IsValid() || colorView == request.views.end() || colorView->instance == 0 ||
+                if (const auto colorView = std::ranges::find(request.views, target.colorView, &RenderGraphTextureViewInstance::view);
+                    !target.colorView.IsValid() || colorView == request.views.end() || colorView->instance == 0 ||
                     !uses.Add(target.color, RenderGraphResourceKind::Texture, RenderGraphUsageKind::ColorAttachment) ||
                     target.rectangle.width == 0 || target.rectangle.height == 0)
                     return false;
@@ -105,12 +103,13 @@ namespace Horo::Render {
 
         /** @brief Resolves each visible source exactly once, preserving canonical draw order and exact resident generations. */
         [[nodiscard]] bool AddGeometry(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &workload, Uses &uses) {
+            using enum RenderGraphResourceKind;
+            using enum RenderGraphUsageKind;
             for (std::size_t index = 0; index < workload.geometry.size(); ++index) {
                 const auto &geometry = workload.geometry[index];
                 if (geometry.instanceIndex != workload.scene->Draws()[index].instanceIndex || !geometry.material ||
-                    !uses.Add(geometry.vertices, RenderGraphResourceKind::Buffer, RenderGraphUsageKind::VertexBuffer) ||
-                    !uses.Add(geometry.indices, RenderGraphResourceKind::Buffer, RenderGraphUsageKind::IndexBuffer) ||
-                    !uses.Add(geometry.parameters, RenderGraphResourceKind::Buffer, RenderGraphUsageKind::UniformBuffer))
+                    !uses.Add(geometry.vertices, Buffer, VertexBuffer) || !uses.Add(geometry.indices, Buffer, IndexBuffer) ||
+                    !uses.Add(geometry.parameters, Buffer, UniformBuffer))
                     return false;
                 const auto &source = workload.scene->Instances()[geometry.instanceIndex];
                 if (geometry.material->Id() != source.material ||
@@ -144,9 +143,8 @@ namespace Horo::Render {
             return live;
         if (!pass.usages.IsValidFor(request.graph.Usages().size()))
             return Invalid();
-        Uses uses{request.graph};
-        if (!AddTargets(request, workload, uses) || !AddGeometry(request, workload, uses) ||
-            !uses.Matches(request.graph.Usages().subspan(pass.usages.offset, pass.usages.count)))
+        if (Uses uses{request.graph}; !AddTargets(request, workload, uses) || !AddGeometry(request, workload, uses) ||
+                                      !uses.Matches(request.graph.Usages().subspan(pass.usages.offset, pass.usages.count)))
             return Invalid();
         return Result<void>::Success();
     }

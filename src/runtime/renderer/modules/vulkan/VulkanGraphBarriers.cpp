@@ -80,9 +80,9 @@ namespace Horo::Render::Detail {
 
         /** @brief Checks native buffer/image layout placement independently of operation mask selection. */
         bool ValidPlacement(const RenderGraphLogicalState &state, bool texture, const NativeState &native) {
-            const bool transfer = state.operation == RenderGraphSynchronizationOperation::CopySource ||
-                                  state.operation == RenderGraphSynchronizationOperation::CopyDestination;
-            const bool inputBuffer = state.operation == RenderGraphSynchronizationOperation::GraphicsInputBuffer;
+            using enum RenderGraphSynchronizationOperation;
+            const bool transfer = state.operation == CopySource || state.operation == CopyDestination;
+            const bool inputBuffer = state.operation == GraphicsInputBuffer;
             return (texture ? state.layout == native.expected && !inputBuffer : state.layout == RenderGraphTextureLayout::NotApplicable) &&
                    (transfer || state.scope == RenderGraphPipelineScope::Graphics);
         }
@@ -95,15 +95,14 @@ namespace Horo::Render::Detail {
 
         /** @brief Rejects unsupported scopes instead of emitting native masks unavailable on a queue. */
         [[nodiscard]] Result<NativeState> Translate(const RenderGraphLogicalState &state, const bool texture) {
-            if (state.access == RenderGraphSynchronizationAccess::None)
+            using enum RenderGraphSynchronizationAccess;
+            if (state.access == None)
                 return UndefinedState(state);
             if (!ValidExecutionScope(state))
                 return Result<NativeState>::Failure(
                     MakeError(VulkanBackendErrors::UnsupportedOperation, "Native compute/external access scope is not admitted."));
-            const bool read =
-                state.access == RenderGraphSynchronizationAccess::Read || state.access == RenderGraphSynchronizationAccess::ReadWrite;
-            const bool write =
-                state.access == RenderGraphSynchronizationAccess::Write || state.access == RenderGraphSynchronizationAccess::ReadWrite;
+            const bool read = state.access == Read || state.access == ReadWrite;
+            const bool write = state.access == Write || state.access == ReadWrite;
             if (!read && !write)
                 return Result<NativeState>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid, "Unknown native graph access."));
             auto translated = TranslateOperation(state, read, write);

@@ -87,17 +87,21 @@ namespace Horo::Render::Detail {
         native_.draw(command, draw.mesh.descriptor.indexCount, count, 0, 0, firstView);
     }
 
+    /** @copydoc VulkanMultiviewRecorder::EncodeView */
+    void VulkanMultiviewRecorder::EncodeView(const VkCommandBuffer command, const std::uint32_t view) const noexcept {
+        Begin(command, targets_[view], false);
+        for (std::uint32_t index = 0; index < drawCount_; ++index)
+            if ((draws_[index].views & (std::uint32_t{1} << view)) != 0)
+                DrawInstances(command, draws_[index], view, 1);
+        native_.end(command);
+    }
+
     /** @copydoc VulkanMultiviewRecorder::Encode */
     void VulkanMultiviewRecorder::Encode(const VkCommandBuffer command) const noexcept {
         HORO_INVARIANT_MSG(prepared_, "Multiview encoding requires complete native preparation.");
         if (mode_ == MultiviewExecutionMode::Multipass) {
-            for (std::uint32_t view = 0; view < targetCount_; ++view) {
-                Begin(command, targets_[view], false);
-                for (std::uint32_t index = 0; index < drawCount_; ++index)
-                    if ((draws_[index].views & (std::uint32_t{1} << view)) != 0)
-                        DrawInstances(command, draws_[index], view, 1);
-                native_.end(command);
-            }
+            for (std::uint32_t view = 0; view < targetCount_; ++view)
+                EncodeView(command, view);
             return;
         }
         Begin(command, targets_[0], true);

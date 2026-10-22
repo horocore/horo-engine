@@ -168,8 +168,8 @@ namespace Horo::Render {
                                                                const MaterialBindingLimits &limits) {
         if (!limits.IsValid() || !ValidResources(layout, limits))
             return Result<std::size_t>::Failure(Invalid());
-        const auto resource = std::ranges::find(layout.resources, binding, &ShaderReflectedBinding::id);
-        if (resource == layout.resources.end() || resource->kind != ShaderResourceKind::UniformBuffer)
+        if (const auto resource = std::ranges::find(layout.resources, binding, &ShaderReflectedBinding::id);
+            resource == layout.resources.end() || resource->kind != ShaderResourceKind::UniformBuffer)
             return Result<std::size_t>::Failure(Invalid());
         std::size_t bytes = 0;
         for (const auto &parameter : layout.parameters) {
@@ -186,8 +186,8 @@ namespace Horo::Render {
     namespace {
         /** @brief Converts a validated typed scalar to its exact 32-bit representation. */
         [[nodiscard]] std::uint32_t ParameterBits(const MaterialParameterValue &value, const std::size_t index) {
-            return std::visit([index](const auto components) -> std::uint32_t {
-                using Scalar = typename decltype(components)::value_type;
+            return std::visit([index]<typename Components>(const Components components) -> std::uint32_t {
+                using Scalar = typename Components::value_type;
                 if constexpr (std::is_same_v<Scalar, bool>)
                     return components[index] ? 1U : 0U;
                 else
@@ -214,26 +214,35 @@ namespace Horo::Render {
             return false;
         }
 
+        /** @brief Packs one logical row using reflected matrix order and rejects the first occupied byte without changing it. */
+        [[nodiscard]] bool PackParameterRow(const ShaderReflectedParameter &parameter, const MaterialParameterValue &value,
+                                            const std::size_t array, const std::size_t row, MaterialParameterBinding &packed,
+                                            std::vector<bool> &occupied) {
+            const bool matrix = parameter.rows > 1 && parameter.columns > 1;
+            for (std::size_t column = 0; column < parameter.columns; ++column) {
+                const auto vector = parameter.columnMajor ? column : row;
+                const auto component = parameter.columnMajor ? row : column;
+                const auto offset = parameter.byteOffset + array * parameter.arrayStride +
+                                    (matrix ? vector * parameter.matrixStride + component * 4 : (row + column) * 4);
+                const auto bits = std::bit_cast<std::array<std::byte, 4>>(
+                    ParameterBits(value, (array * parameter.rows + row) * parameter.columns + column));
+                for (std::size_t byte = 0; byte < bits.size(); ++byte) {
+                    if (occupied[offset + byte])
+                        return false;
+                    occupied[offset + byte] = true;
+                    packed.bytes[offset + byte] = bits[byte];
+                }
+            }
+            return true;
+        }
+
         /** @brief Applies reflected offsets with bounds already proven by ParameterEnd; occupied bytes cannot alias. */
         [[nodiscard]] bool PackParameter(const ShaderReflectedParameter &parameter, const MaterialParameterValue &value,
                                          MaterialParameterBinding &packed, std::vector<bool> &occupied) {
-            const bool matrix = parameter.rows > 1 && parameter.columns > 1;
             for (std::size_t array = 0; array < parameter.arrayCount; ++array)
                 for (std::size_t row = 0; row < parameter.rows; ++row)
-                    for (std::size_t column = 0; column < parameter.columns; ++column) {
-                        const auto vector = parameter.columnMajor ? column : row;
-                        const auto component = parameter.columnMajor ? row : column;
-                        const auto offset = parameter.byteOffset + array * parameter.arrayStride +
-                                            (matrix ? vector * parameter.matrixStride + component * 4 : (row + column) * 4);
-                        const auto bits = std::bit_cast<std::array<std::byte, 4>>(
-                            ParameterBits(value, (array * parameter.rows + row) * parameter.columns + column));
-                        for (std::size_t byte = 0; byte < bits.size(); ++byte) {
-                            if (occupied[offset + byte])
-                                return false;
-                            occupied[offset + byte] = true;
-                            packed.bytes[offset + byte] = bits[byte];
-                        }
-                    }
+                    if (!PackParameterRow(parameter, value, array, row, packed, occupied))
+                        return false;
             return true;
         }
 

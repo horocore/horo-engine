@@ -27,7 +27,11 @@ namespace Horo::Tests::OpenXR {
                 return Result<std::int64_t>::Success(selectAbsentFormat ? 99 : 37);
             }
 
-            Result<void> Enumerate(XrSwapchain, std::uint32_t, PFN_xrEnumerateSwapchainImages) override {
+            Result<void> Enumerate(std::uint32_t count, const IOpenXRSwapchainImageEnumeration &enumeration) override {
+                CHECK(enumeration.IsAvailable());
+                std::uint32_t written{};
+                CHECK(enumeration.Enumerate(0, &written, nullptr) == XR_SUCCESS);
+                CHECK(written == count);
                 return rejectEnumeration ? Result<void>::Failure(MakeError(XRErrors::OperationUnavailable)) : Result<void>::Success();
             }
 
@@ -92,6 +96,73 @@ namespace Horo::Tests::OpenXR {
             }
         };
     }  // namespace
+
+    TEST_CASE("OpenXR enumeration context forwards captured state and exact native output", "[unit][xr][native][swapchain]") {
+        const auto native = NativeHandle<XrSwapchain>(1);
+        std::uint32_t calls{};
+        XrSwapchain observed{XR_NULL_HANDLE};
+        XrSwapchainImageBaseHeader output{XR_TYPE_UNKNOWN};
+        auto enumerate = [&](XrSwapchain swapchain, std::uint32_t capacity, std::uint32_t *written,
+                             XrSwapchainImageBaseHeader *images) -> XrResult {
+            ++calls;
+            observed = swapchain;
+            CHECK(capacity == 1);
+            REQUIRE(images == &output);
+            CHECK(images->type == XR_TYPE_UNKNOWN);
+            *written = 1;
+            return XR_ERROR_RUNTIME_FAILURE;
+        };
+        OpenXRSwapchainImageEnumeration context{native, enumerate};
+        const IOpenXRSwapchainImageEnumeration &port = context;
+        CHECK(port.IsAvailable());
+        std::uint32_t written{};
+        CHECK(port.Enumerate(1, &written, &output) == XR_ERROR_RUNTIME_FAILURE);
+        CHECK(calls == 1);
+        CHECK(observed == native);
+        CHECK(written == 1);
+    }
+
+    TEST_CASE("OpenXR enumeration context rejects typed null and null literal", "[unit][xr][native][swapchain]") {
+        PFN_xrEnumerateSwapchainImages nullFunction{};
+        OpenXRSwapchainImageEnumeration typed{XR_NULL_HANDLE, nullFunction};
+        auto nullLiteral = nullptr;
+        OpenXRSwapchainImageEnumeration literal{XR_NULL_HANDLE, nullLiteral};
+        std::uint32_t written = 17;
+        CHECK_FALSE(typed.IsAvailable());
+        CHECK_FALSE(literal.IsAvailable());
+        CHECK(typed.Enumerate(0, &written, nullptr) == XR_ERROR_FUNCTION_UNSUPPORTED);
+        CHECK(literal.Enumerate(0, &written, nullptr) == XR_ERROR_FUNCTION_UNSUPPORTED);
+        CHECK(written == 17);
+        std::uint32_t calls{};
+        auto enumerate = [&](XrSwapchain, std::uint32_t, std::uint32_t *, XrSwapchainImageBaseHeader *) -> XrResult {
+            ++calls;
+            return XR_SUCCESS;
+        };
+        OpenXRSwapchainImageEnumeration invalid{XR_NULL_HANDLE, enumerate};
+        CHECK_FALSE(invalid.IsAvailable());
+        CHECK(invalid.Enumerate(0, &written, nullptr) == XR_ERROR_FUNCTION_UNSUPPORTED);
+        CHECK(calls == 0);
+    }
+
+    TEST_CASE("OpenXR swapchain creation accepts a capturing resolver", "[unit][xr][native][swapchain]") {
+        SwapchainFixture fixture;
+        std::uint32_t calls{};
+        auto resolver = [&](XrInstance instance, const char *name, PFN_xrVoidFunction *output) -> XrResult {
+            ++calls;
+            return SwapchainScript::GetProc(instance, name, output);
+        };
+        REQUIRE(fixture.owner.Create(fixture.request, resolver).HasValue());
+        CHECK(calls == 7);
+    }
+
+    TEST_CASE("OpenXR swapchain creation rejects null resolver forms before dispatch", "[unit][xr][native][swapchain]") {
+        SwapchainFixture fixture;
+        PFN_xrGetInstanceProcAddr nullResolver{};
+        CHECK(fixture.owner.Create(fixture.request, nullptr).HasError());
+        CHECK(fixture.owner.Create(fixture.request, nullResolver).HasError());
+        CHECK(fixture.script.calls.empty());
+        CHECK(fixture.script.creates == 0);
+    }
 
     TEST_CASE("OpenXR swapchain waits imports retires and releases in native order", "[unit][xr][native][swapchain]") {
         SwapchainFixture fixture;

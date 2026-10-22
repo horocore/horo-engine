@@ -1,3 +1,54 @@
+/** @brief Stable borrowed shader-owner identity for the XR material fixture. */
+const Detail::VulkanShaderOwnerIdentity XrMaterialOwnerIdentity{11};
+
+/** @brief Exercises request aliasing across the actual foreign graphics validation boundary. */
+class ReentrantFormatGraphics final : public NativeXR::IOpenXRGraphicsBinding {
+public:
+    ReentrantFormatGraphics(NativeVulkanGraphics &graphics, NativeXR::NativeSwapchainRequest &request)
+        : graphics_(graphics), request_(request) {}
+
+    const char *RequiredExtension() const noexcept override {
+        return graphics_.RequiredExtension();
+    }
+
+    Horo::Result<void> Validate(const Horo::XR::XRSessionId &candidate) const override {
+        request_.texture.format = RenderTextureFormat::R8Unorm;
+        return graphics_.Validate(candidate);
+    }
+
+    Horo::Result<const XrBaseInStructure *> Prepare(XrInstance instance, XrSystemId system, PFN_xrGetInstanceProcAddr dispatch) override {
+        return graphics_.Prepare(instance, system, dispatch);
+    }
+
+    void Release() noexcept override {
+        graphics_.Release();
+    }
+
+private:
+    NativeVulkanGraphics &graphics_;
+    NativeXR::NativeSwapchainRequest &request_;
+};
+
+TEST_CASE("OpenXR Vulkan format selection rejects format revoked during graphics validation", "[unit][xr][vulkan][format][integration]") {
+    NativeGraphFixture native;
+    NativeXRSessionFixture session{false};
+    auto frontend = XRBridgeFixture::CreateFrontend(native);
+    NativeXR::NativeSwapchainRequest request{.target = {session.identity, {1, 1}},
+                                             .texture = {.extent = {640, 480}, .usage = RenderTextureUsage::RenderAttachment}};
+    ReentrantFormatGraphics graphics{session.graphics, request};
+    NativeXR::OpenXRVulkanSwapchainImages images{*frontend, graphics, session.graphics.binding, {1}};
+    NativeXR::OpenXRSwapchain swapchain{session.owner, images};
+    REQUIRE(images.Bind(swapchain).HasValue());
+    const std::array<std::int64_t, 1> offered{VK_FORMAT_R8G8B8A8_UNORM};
+    const auto selected = images.SelectFormat(request, offered);
+    CHECK(request.texture.format == RenderTextureFormat::R8Unorm);
+    REQUIRE(selected.HasError());
+    CHECK(selected.ErrorValue().domain.Value() == Horo::XR::XRErrors::OperationUnsupported.domain.Value());
+    CHECK(selected.ErrorValue().code.Value() == Horo::XR::XRErrors::OperationUnsupported.code.Value());
+    REQUIRE(frontend->BeginShutdown().HasValue());
+    REQUIRE(frontend->PollDrain().HasValue());
+}
+
 TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserves native release obligations",
           "[unit][xr][vulkan][multiview][integration]") {
     using namespace Horo::XR;
@@ -121,7 +172,7 @@ TEST_CASE("OpenXR multiview host graph consumes actual acquisitions and preserve
     Detail::VulkanPreparedMaterialBinding nativeMaterial;
     nativeMaterial.device = NativeHandle<VkDevice>(1);
     nativeMaterial.deviceIncarnation = 11;
-    nativeMaterial.owner = &nativeMaterial;
+    nativeMaterial.owner = &XrMaterialOwnerIdentity;
     nativeMaterial.pipelineBacking = std::make_shared<int>(1);
     nativeMaterial.pipeline = NativeHandle<VkPipeline>(201);
     nativeMaterial.layout = NativeHandle<VkPipelineLayout>(202);

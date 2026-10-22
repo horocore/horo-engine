@@ -72,9 +72,9 @@ namespace Horo::Render {
 
         /** @brief Validates the existing typed permutation scalar envelope before hashing native pipeline identity. */
         [[nodiscard]] bool IsValidPipelineSpecialization(const ShaderSpecializationValue &value) noexcept {
-            return value.id.IsValid() && value.type <= ShaderValueType::Bool32 &&
-                   (value.type != ShaderValueType::Bool32 || value.valueBits <= 1) &&
-                   (value.type != ShaderValueType::Float32 || std::isfinite(std::bit_cast<float>(value.valueBits)));
+            using enum ShaderValueType;
+            return value.id.IsValid() && value.type <= Bool32 && (value.type != Bool32 || value.valueBits <= 1) &&
+                   (value.type != Float32 || std::isfinite(std::bit_cast<float>(value.valueBits)));
         }
 
         /** @brief Requires two distinct exact shader generations owned by one frontend incarnation. */

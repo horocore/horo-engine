@@ -73,8 +73,8 @@ namespace Horo::XR::OpenXRInternal {
             if (const auto valid = xr.Validate(active); valid.HasError())
                 return valid;
             const auto &actual = frontend->Capabilities().support;
-            const auto support = ResolveMultiviewCapabilities(actual);
-            if (!actual.IsValid() || actual.deviceIncarnation != active.renderer.deviceIncarnation ||
+            if (const auto support = ResolveMultiviewCapabilities(actual);
+                !actual.IsValid() || actual.deviceIncarnation != active.renderer.deviceIncarnation ||
                 actual.capabilityRevision != active.renderer.capabilityRevision || !support.multipass || !support.indexedShaders ||
                 scene->Views().size() > support.maximumViews ||
                 (scene->Mode() == MultiviewExecutionMode::Instanced && !support.instancedTargetRouting))
@@ -92,7 +92,7 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Imports exact owner-issued image registrations and actual acquired/final states once. */
         Result<RenderGraphResourceId> Texture(RenderGraphBuilder &builder, const XRExternalRenderTargetDescriptor &target,
                                               std::span<OpenXRSwapchain *const> owners, std::vector<RenderGraphImportedState> &initial,
-                                              std::vector<RenderGraphFinalState> &final) {
+                                              std::vector<RenderGraphFinalState> &finalStates) {
             for (const auto &entry : std::span{acquisitions}.first(acquisitionCount))
                 if (entry.current.image == target.image)
                     return Result<RenderGraphResourceId>::Success(entry.resource);
@@ -117,8 +117,8 @@ namespace Horo::XR::OpenXRInternal {
             if (facts.HasError())
                 return Result<RenderGraphResourceId>::Failure(facts.ErrorValue());
             const auto &f = facts.Value();
-            const auto &d = f.descriptor;
-            if (f.deviceIncarnation != scene->Publication().deviceIncarnation || d.extent != target.allocationExtent ||
+            if (const auto &d = f.descriptor;
+                f.deviceIncarnation != scene->Publication().deviceIncarnation || d.extent != target.allocationExtent ||
                 d.format != target.format || d.sampleCount != target.sampleCount || d.layerCount != target.arrayLayerCount ||
                 d.dimension != RenderTextureDimension::TwoD || d.mipCount != 1 ||
                 (static_cast<unsigned>(d.usage) & static_cast<unsigned>(target.usage)) != static_cast<unsigned>(target.usage) ||
@@ -129,8 +129,8 @@ namespace Horo::XR::OpenXRInternal {
                 return id;
             if (const auto exported = builder.ExportResource(id.Value()); exported.HasError())
                 return Result<RenderGraphResourceId>::Failure(exported.ErrorValue());
-            initial.push_back({id.Value(), f.acquired, RenderGraphInitialContents::Preserved});
-            final.push_back({id.Value(), f.requiredFinal});
+            initial.emplace_back(id.Value(), f.acquired, RenderGraphInitialContents::Preserved);
+            finalStates.emplace_back(id.Value(), f.requiredFinal);
             acquisitions[acquisitionCount++] = {owner, current, id.Value()};
             return id;
         }
@@ -161,11 +161,11 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Bounded temporary authoring facts, released after immutable graph compilation. */
         struct GraphInputs {
             std::vector<RenderGraphImportedState> initial;
-            std::vector<RenderGraphFinalState> final;
+            std::vector<RenderGraphFinalState> finalStates;
 
             GraphInputs() {
                 initial.reserve(MaximumResources);
-                final.reserve(XRViewRenderHardLimits::MaximumTargets);
+                finalStates.reserve(XRViewRenderHardLimits::MaximumTargets);
             }
         };
 
@@ -177,7 +177,7 @@ namespace Horo::XR::OpenXRInternal {
                 for (const auto &source : xr.Plan().Targets()) {
                     if (source.view != xr.Plan().Views()[index].id)
                         continue;
-                    auto resource = Texture(builder, source, owners, inputs.initial, inputs.final);
+                    auto resource = Texture(builder, source, owners, inputs.initial, inputs.finalStates);
                     if (resource.HasError())
                         return Result<void>::Failure(resource.ErrorValue());
                     if (source.role == XRExternalRenderTargetRole::ProjectionColor) {
@@ -254,7 +254,7 @@ namespace Horo::XR::OpenXRInternal {
                 return Result<void>::Failure(schedule.ErrorValue());
             const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, queue}};
             const auto sync =
-                SynthesizeRenderGraphSynchronization(authored.Value(), schedule.Value(), queues, inputs.initial, inputs.final);
+                SynthesizeRenderGraphSynchronization(authored.Value(), schedule.Value(), queues, inputs.initial, inputs.finalStates);
             if (sync.HasError())
                 return Result<void>::Failure(sync.ErrorValue());
             auto compiled = CompileRenderGraphExecution(authored.Value(), schedule.Value(), sync.Value(), queues);
@@ -267,17 +267,32 @@ namespace Horo::XR::OpenXRInternal {
 
     OpenXRMultiviewGraph::OpenXRMultiviewGraph(std::unique_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
 
-    OpenXRMultiviewGraph::~OpenXRMultiviewGraph() = default;
+    OpenXRMultiviewGraph::~OpenXRMultiviewGraph() {
+        Reset();
+    }
+
+    void OpenXRMultiviewGraph::Reset() noexcept {
+        if (!impl_)
+            return;
+        HORO_INVARIANT_MSG(impl_->thread == std::this_thread::get_id(), "XR prepared graph cleanup requires its control thread");
+        // Release compiled CPU graph storage before material/scene dependencies; XR acquisitions remain host-owned.
+        impl_->graph.reset();
+        impl_.reset();
+    }
+
     OpenXRMultiviewGraph::OpenXRMultiviewGraph(OpenXRMultiviewGraph &&) noexcept = default;
-    OpenXRMultiviewGraph &OpenXRMultiviewGraph::operator=(OpenXRMultiviewGraph &&) noexcept = default;
+
+    OpenXRMultiviewGraph &OpenXRMultiviewGraph::operator=(OpenXRMultiviewGraph &&other) noexcept {
+        if (this != &other) {
+            Reset();
+            impl_ = std::move(other.impl_);
+        }
+        return *this;
+    }
 
     /** @copydoc OpenXRMultiviewGraph::Create */
-    Result<OpenXRMultiviewGraph> OpenXRMultiviewGraph::Create(RenderFrontend &frontend, const XRMultiviewScene &scene,
-                                                              const XRMultiviewOwnerState &active,
-                                                              const std::span<OpenXRSwapchain *const> owners,
-                                                              const std::span<const OpenXRMultiviewGeometry> geometry,
-                                                              const std::span<const OpenXRMultiviewTargetViews> views,
-                                                              const RenderQueueId queue, const MultiviewNativeWorkLimits &limits) {
+    Result<OpenXRMultiviewGraph> OpenXRMultiviewGraph::Create(RenderFrontend &frontend, const OpenXRMultiviewGraphRequest &request) {
+        const auto &[scene, active, owners, geometry, views, queue, limits] = request;
         if (!queue.IsValid() || !limits.IsValid() || owners.empty() || owners.size() > XRViewRenderHardLimits::MaximumTargets ||
             views.size() != scene.Scene().Views().size() || geometry.size() != scene.Scene().Draws().size())
             return Result<OpenXRMultiviewGraph>::Failure(Invalid());
@@ -303,6 +318,16 @@ namespace Horo::XR::OpenXRInternal {
         } catch (const std::bad_alloc &) {
             return Result<OpenXRMultiviewGraph>::Failure(MakeError(MultiviewExtractionErrors::CapacityExceeded));
         }
+    }
+
+    /** @copydoc OpenXRMultiviewGraph::Create */
+    Result<OpenXRMultiviewGraph> OpenXRMultiviewGraph::Create(RenderFrontend &frontend, const XRMultiviewScene &scene,
+                                                              const XRMultiviewOwnerState &active,
+                                                              const std::span<OpenXRSwapchain *const> owners,
+                                                              const std::span<const OpenXRMultiviewGeometry> geometry,
+                                                              const std::span<const OpenXRMultiviewTargetViews> views,
+                                                              const RenderQueueId queue) {
+        return Create(frontend, OpenXRMultiviewGraphRequest{scene, active, owners, geometry, views, queue, {}});
     }
 
     /** @copydoc OpenXRMultiviewGraph::Execute */

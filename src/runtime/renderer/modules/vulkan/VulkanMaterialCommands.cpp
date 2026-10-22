@@ -19,8 +19,8 @@ namespace Horo::Render::Detail {
 
         /** @brief Checks the complete offscreen attachment policy independently of state mutation. */
         bool ValidMaterialAttachmentRequest(const RenderMaterialExecutionRequest &request) {
-            const bool validDepth =
-                !request.depthClear || (std::isfinite(*request.depthClear) && *request.depthClear >= 0 && *request.depthClear <= 1);
+            const bool validDepth = !request.depthClear.has_value() ||
+                                    (std::isfinite(*request.depthClear) && *request.depthClear >= 0 && *request.depthClear <= 1);
             return request.color.IsValid() && request.color.storeOperation == AttachmentStoreOperation::Store &&
                    request.color.loadOperation != AttachmentLoadOperation::DontCare && validDepth;
         }
@@ -37,8 +37,7 @@ namespace Horo::Render::Detail {
                                                          const RenderQueueSubmission &submission, const bool requireContents) {
         if (resource.state == nullptr)
             return Result<void>::Failure(Invalid("Material backing has no canonical resource state."));
-        const auto existing = std::ranges::find(updates, resource.state, &Update::target);
-        if (existing != updates.end())
+        if (const auto existing = std::ranges::find(updates, resource.state, &Update::target); existing != updates.end())
             return existing->value.logical == next ? Result<void>::Success()
                                                    : Result<void>::Failure(Invalid("A material pass aliases incompatible resource roles."));
         if (updates.size() == RenderGraphLimits::HardMaxResources)
@@ -58,7 +57,7 @@ namespace Horo::Render::Detail {
     Result<void> VulkanGraphRuntime::Impl::PrepareMaterialTarget(const RenderMaterialExecutionRequest &request,
                                                                  VulkanCommandRetention &pins) {
         const auto &submission = *request.submission;
-        const auto target = resources->CaptureMaterialTarget(request.target, pins);
+        const auto target = resources->MaterialCapture().CaptureMaterialTarget(request.target, pins);
         if (target.HasError())
             return Result<void>::Failure(target.ErrorValue());
         materialTarget = target.Value();
@@ -76,7 +75,8 @@ namespace Horo::Render::Detail {
                                                 RenderGraphSynchronizationOperation::DepthStencilAttachment,
                                                 RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::DepthStencilAttachment,
                                                 submission.queue};
-            if (auto prepared = MaterialState(materialTarget.depth, depth, submission, !request.depthClear); prepared.HasError())
+            if (auto prepared = MaterialState(materialTarget.depth, depth, submission, !request.depthClear.has_value());
+                prepared.HasError())
                 return prepared;
         }
         return Result<void>::Success();
@@ -113,22 +113,22 @@ namespace Horo::Render::Detail {
         draw.material = dynamic_cast<const VulkanPreparedMaterialBinding *>(source.material);
         if (!draw.material)
             return Result<void>::Failure(Invalid("Material has no Vulkan native binding."));
-        const std::array validIdentity{draw.material->deviceIncarnation == deviceIncarnation, draw.material->owner != nullptr,
-                                       draw.material->pipelineBacking != nullptr, draw.material->pipeline != VK_NULL_HANDLE,
-                                       draw.material->layout != VK_NULL_HANDLE};
-        if (!std::ranges::all_of(validIdentity, [](bool valid) {
+        if (const std::array validIdentity{draw.material->deviceIncarnation == deviceIncarnation, draw.material->owner != nullptr,
+                                           draw.material->pipelineBacking != nullptr, draw.material->pipeline != VK_NULL_HANDLE,
+                                           draw.material->layout != VK_NULL_HANDLE};
+            !std::ranges::all_of(validIdentity, [](bool valid) {
             return valid;
         }))
             return Result<void>::Failure(Invalid("Material belongs to a different or retired selected-device incarnation."));
         const auto &state = draw.material->state;
         const auto depthFormat = materialTarget.depthView ? std::optional{materialTarget.depth.textureDescriptor.format} : std::nullopt;
-        const std::array formats{state.colorFormat == materialTarget.color.textureDescriptor.format, state.depthFormat == depthFormat,
-                                 state.sampleCount == 1};
-        if (!std::ranges::all_of(formats, [](bool valid) {
+        if (const std::array formats{state.colorFormat == materialTarget.color.textureDescriptor.format, state.depthFormat == depthFormat,
+                                     state.sampleCount == 1};
+            !std::ranges::all_of(formats, [](bool valid) {
             return valid;
         }))
             return Result<void>::Failure(Invalid("Material pipeline attachment formats differ from the captured target."));
-        const auto mesh = resources->CaptureMaterialMesh(source.mesh, pins);
+        const auto mesh = resources->MaterialCapture().CaptureMaterialMesh(source.mesh, pins);
         if (mesh.HasError())
             return Result<void>::Failure(mesh.ErrorValue());
         draw.mesh = mesh.Value();
@@ -170,7 +170,8 @@ namespace Horo::Render::Detail {
         const VkRenderingAttachmentInfo depth{.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
                                               .imageView = materialTarget.depthView,
                                               .imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
-                                              .loadOp = request.depthClear ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
+                                              .loadOp =
+                                                  request.depthClear.has_value() ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD,
                                               .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
                                               .clearValue = {.depthStencil = {request.depthClear.value_or(1.0F), 0}}};
         const auto depthFormat = materialTarget.depth.textureDescriptor.format;
@@ -205,26 +206,25 @@ namespace Horo::Render::Detail {
 
     /** @brief Checks active frame, borrowed envelope and required native graphics dispatch. */
     Result<void> VulkanGraphRuntime::Impl::ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const {
-        if (!frame.IsValid() || frame != request.frame || recorded)
+        if (!lifecycle.frame.IsValid() || lifecycle.frame != request.frame || lifecycle.recorded)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         if (!request.submission)
             return Result<void>::Failure(Invalid("Material requires explicit submission evidence."));
-        const std::array validRequest{request.lease != nullptr, request.transfer != nullptr, !request.draws.empty(),
-                                      request.draws.size() <= RenderMaterialPass::MaximumDraws,
-                                      request.submission->waits.size() <= RenderGraphSubmissionLimits::MaximumQueues};
-        if (!std::ranges::all_of(validRequest, [](bool valid) {
+        if (const std::array validRequest{request.lease != nullptr, request.transfer != nullptr, !request.draws.empty(),
+                                          request.draws.size() <= RenderMaterialPass::MaximumDraws,
+                                          request.submission->waits.size() <= RenderGraphSubmissionLimits::MaximumQueues};
+            !std::ranges::all_of(validRequest, [](bool valid) {
             return valid;
         }))
             return Result<void>::Failure(Invalid("Material execution requires bounded draws and a completion lease."));
-        const std::array dispatch{native.bindPipeline != nullptr, native.bindSets != nullptr, native.bindVertices != nullptr,
-                                  native.bindIndex != nullptr,    native.viewport != nullptr, native.scissor != nullptr,
-                                  native.drawIndexed != nullptr};
-        if (!std::ranges::all_of(dispatch, [](bool valid) {
+        if (const std::array dispatch{native.bindPipeline != nullptr, native.bindSets != nullptr, native.bindVertices != nullptr,
+                                      native.bindIndex != nullptr, native.viewport != nullptr, native.scissor != nullptr,
+                                      native.drawIndexed != nullptr};
+            !std::ranges::all_of(dispatch, [](bool valid) {
             return valid;
         }))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::EntryPointMissing));
-        const auto *queue = Queue(request.submission->queue);
-        if (!queue || !queue->supportsGraphics)
+        if (const auto *queue = Queue(request.submission->queue); !queue || !queue->supportsGraphics)
             return Result<void>::Failure(Unsupported("Material execution requires the admitted graphics queue."));
         return Result<void>::Success();
     }
@@ -258,7 +258,7 @@ namespace Horo::Render::Detail {
         EncodeMaterial(command.Value(), request);
         if (auto finished = commands.Finish(submission.ticket); finished.HasError())
             return fail(finished);
-        recorded = true;
+        lifecycle.recorded = true;
         return Result<void>::Success();
     }
 

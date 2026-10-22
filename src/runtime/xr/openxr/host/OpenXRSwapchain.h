@@ -8,7 +8,10 @@
 #include "Horo/XR/XRViewRenderPlan.h"
 #include "OpenXRNativeSession.h"
 
+#include <bit>
 #include <thread>
+#include <type_traits>
+#include <utility>
 
 namespace Horo::XR::OpenXRInternal {
     /** @brief Native role admitted jointly by runtime extensions and the selected renderer adapter. */
@@ -36,6 +39,57 @@ namespace Horo::XR::OpenXRInternal {
         NativeSwapchainFoveation foveation{NativeSwapchainFoveation::None};
     };
 
+    /** @brief Synchronous, borrowed native enumeration context; adapters must not retain it. */
+    class IOpenXRSwapchainImageEnumeration {
+    public:
+        virtual ~IOpenXRSwapchainImageEnumeration() = default;
+        /** @brief Admits the bound swapchain and callable before any native output write. */
+        [[nodiscard]] virtual bool IsAvailable() const noexcept = 0;
+        /** @brief Calls the bound dispatch with the unchanged official output prototype and result.
+         * @param capacity Native image capacity. @param written Native count output.
+         * @param images API-typed image storage adapted according to the OpenXR graphics binding contract. */
+        [[nodiscard]] virtual XrResult Enumerate(std::uint32_t capacity, std::uint32_t *written,
+                                                 XrSwapchainImageBaseHeader *images) const = 0;
+    };
+
+    /** @brief Allocation-free context binding one swapchain to any borrowed native-signature callable.
+     * @details The callable and native allocation outlive this synchronous context. No function pointer
+     * is retyped, no callable is copied, and foreign exceptions keep the caller's existing rollback boundary. */
+    template <typename Enumerator> class OpenXRSwapchainImageEnumeration final : public IOpenXRSwapchainImageEnumeration {
+    public:
+        OpenXRSwapchainImageEnumeration(XrSwapchain swapchain, Enumerator &enumerate) noexcept
+            : swapchain_(swapchain), enumerate_(enumerate) {}
+
+        [[nodiscard]] bool IsAvailable() const noexcept override {
+            if (swapchain_ == XR_NULL_HANDLE)
+                return false;
+            if constexpr (std::is_null_pointer_v<Enumerator>)
+                return false;
+            else if constexpr (std::is_pointer_v<Enumerator>)
+                return enumerate_ != nullptr;
+            else
+                return true;
+        }
+
+        [[nodiscard]] XrResult Enumerate(std::uint32_t capacity, std::uint32_t *written,
+                                         XrSwapchainImageBaseHeader *images) const override {
+            if constexpr (std::is_null_pointer_v<Enumerator>) {
+                return XR_ERROR_FUNCTION_UNSUPPORTED;
+            } else {
+                static_assert(std::is_same_v<
+                              std::invoke_result_t<Enumerator &, XrSwapchain, std::uint32_t, std::uint32_t *, XrSwapchainImageBaseHeader *>,
+                              XrResult>);
+                if (!IsAvailable())
+                    return XR_ERROR_FUNCTION_UNSUPPORTED;
+                return enumerate_(swapchain_, capacity, written, images);
+            }
+        }
+
+    private:
+        XrSwapchain swapchain_;
+        Enumerator &enumerate_;
+    };
+
     /**
      * @brief Selected backend's private image translator, borrowed by exactly one swapchain owner.
      *
@@ -57,8 +111,7 @@ namespace Horo::XR::OpenXRInternal {
                                                                 std::span<const std::int64_t> formats) const = 0;
         /** @brief Enumerates API-typed images using official dispatch into adapter-owned bounded storage.
          * @post Failure retains no renderer imports. The owner keeps the swapchain until Reset succeeds. */
-        [[nodiscard]] virtual Result<void> Enumerate(XrSwapchain swapchain, std::uint32_t count,
-                                                     PFN_xrEnumerateSwapchainImages enumerate) = 0;
+        [[nodiscard]] virtual Result<void> Enumerate(std::uint32_t count, const IOpenXRSwapchainImageEnumeration &enumeration) = 0;
         /** @brief Imports one exact ready acquisition into the canonical registry.
          * @post Failure retains no registry or native work; partial asynchronous ownership must return a handle for retirement. */
         [[nodiscard]] virtual Result<Render::RenderTextureHandle> Import(const NativeSwapchainRequest &request,
@@ -108,7 +161,42 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Resolves official dispatch, selects a complete tuple and creates/enumerates a bounded native candidate.
          * @param request Exact new target and immutable allocation policy. @param getProc Official retained-loader dispatch.
          * @return Success or original typed/native failure; incomplete rollback remains owned for Close retry. */
-        [[nodiscard]] Result<void> Create(const NativeSwapchainRequest &request, PFN_xrGetInstanceProcAddr getProc);
+        template <typename Resolver> [[nodiscard]] Result<void> Create(const NativeSwapchainRequest &request, Resolver getProc) {
+            if (auto thread = CheckThread(); thread.HasError())
+                return thread;
+            if constexpr (std::is_null_pointer_v<Resolver>) {
+                return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+            } else {
+                if constexpr (requires { static_cast<bool>(getProc); }) {
+                    if (!getProc)
+                        return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+                }
+                auto session = AdmitCreate(request);
+                if (session.HasError())
+                    return Result<void>::Failure(std::move(session).ErrorValue());
+                if (auto dispatch = Resolve(getProc, session.Value().instance); dispatch.HasError())
+                    return dispatch;
+                request_ = request;
+                lastTarget_ = request.target;
+                closing_ = false;
+                lost_ = false;
+                malformedAcquisition_ = false;
+                try {
+                    auto prepared = Prepare(session.Value());
+                    if (prepared.HasValue())
+                        return prepared;
+                    // Keep the original preparation diagnostic; failed cleanup remains retained for Close retry.
+                    if (const auto rollback = Close(); rollback.HasError())
+                        return Result<void>::Failure(rollback.ErrorValue());
+                    return prepared;
+                } catch (...) {
+                    const auto rollback = Close();
+                    (void)rollback;
+                    throw;
+                }
+            }
+        }
+
         /** @brief Acquires one runtime image; zero native work is allowed when an old acquisition remains open.
          * @return Success or typed failure; successful native acquisition always retains its release obligation. */
         [[nodiscard]] Result<void> Acquire();
@@ -135,7 +223,38 @@ namespace Horo::XR::OpenXRInternal {
     private:
         [[nodiscard]] Result<void> CheckThread() const;
         [[nodiscard]] Result<void> CheckCurrent() const;
-        [[nodiscard]] Result<void> Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance);
+        [[nodiscard]] Result<NativeSessionBorrow> AdmitCreate(const NativeSwapchainRequest &request) const;
+        [[nodiscard]] static Error DispatchFailure(const char *name, XrResult result);
+
+        /** @brief Secures candidate-scoped dispatch before native allocation. */
+        template <typename Function, typename Resolver>
+        [[nodiscard]] static Result<void> Load(Resolver &getProc, XrInstance instance, const char *name, Function &function) {
+            static_assert(std::is_function_v<std::remove_pointer_t<Function>>);
+            static_assert(std::is_same_v<std::invoke_result_t<Resolver &, XrInstance, const char *, PFN_xrVoidFunction *>, XrResult>);
+            PFN_xrVoidFunction raw{};
+            function = {};
+            if (const XrResult result = getProc(instance, name, &raw); XR_FAILED(result) || !raw)
+                return Result<void>::Failure(DispatchFailure(name, XR_FAILED(result) ? result : XR_ERROR_FUNCTION_UNSUPPORTED));
+            function = std::bit_cast<Function>(raw);
+            return Result<void>::Success();
+        }
+
+        template <typename Resolver> [[nodiscard]] Result<void> Resolve(Resolver &getProc, XrInstance instance) {
+            if (auto r = Load(getProc, instance, "xrEnumerateSwapchainFormats", dispatch_.formats); r.HasError())
+                return r;
+            if (auto r = Load(getProc, instance, "xrCreateSwapchain", dispatch_.create); r.HasError())
+                return r;
+            if (auto r = Load(getProc, instance, "xrDestroySwapchain", dispatch_.destroy); r.HasError())
+                return r;
+            if (auto r = Load(getProc, instance, "xrEnumerateSwapchainImages", dispatch_.enumerate); r.HasError())
+                return r;
+            if (auto r = Load(getProc, instance, "xrAcquireSwapchainImage", dispatch_.acquire); r.HasError())
+                return r;
+            if (auto r = Load(getProc, instance, "xrWaitSwapchainImage", dispatch_.wait); r.HasError())
+                return r;
+            return Load(getProc, instance, "xrReleaseSwapchainImage", dispatch_.release);
+        }
+
         /** @brief Selects the exact requested format from bounded native discovery before allocation.
          * @param session Native session from the current fenced owner. @return Exact native format or original validation failure. */
         [[nodiscard]] Result<std::int64_t> SelectRuntimeFormat(XrSession session) const;
@@ -151,7 +270,9 @@ namespace Horo::XR::OpenXRInternal {
             PFN_xrAcquireSwapchainImage acquire{};
             PFN_xrWaitSwapchainImage wait{};
             PFN_xrReleaseSwapchainImage release{};
-        } dispatch_;
+        };
+
+        Dispatch dispatch_;
 
         OpenXRNativeSession *session_;
         IOpenXRSwapchainImages *images_;

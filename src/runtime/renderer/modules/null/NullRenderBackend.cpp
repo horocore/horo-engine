@@ -295,19 +295,8 @@ namespace Horo::Render {
                             return Result<void>::Failure(MakeBackendError(NullBackendErrors::InvalidExecutionPlan,
                                                                           "Execution plan contains an invalid render pass kind."));
                     }
-                    if (pass.primaryOutput.has_value()) {
-                        if (pass.primaryOutput->outputColor)
-                            return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
-                        if (pass.kind != Graphics) {
-                            return Result<void>::Failure(MakeBackendError(NullBackendErrors::InvalidExecutionPlan,
-                                                                          "Only graphics passes may bind the primary output attachment."));
-                        }
-
-                        if (!pass.primaryOutput->IsValid()) {
-                            return Result<void>::Failure(MakeBackendError(NullBackendErrors::InvalidExecutionPlan,
-                                                                          "Primary output attachment operations are invalid."));
-                        }
-                    }
+                    if (auto output = ValidatePrimaryOutput(pass); output.HasError())
+                        return output;
                     for (std::size_t previous = 0; previous < index; ++previous) {
                         if (pass.id == plan.orderedPasses[previous].id) {
                             return Result<void>::Failure(MakeBackendError(NullBackendErrors::InvalidExecutionPlan,
@@ -415,6 +404,25 @@ namespace Horo::Render {
             }
 
         private:
+            /** @brief Validates primary output operations after pass-kind admission and before duplicate-ID admission. */
+            [[nodiscard]] static Result<void> ValidatePrimaryOutput(const RenderPassDescriptor &pass) {
+                using enum RenderPassKind;
+                if (pass.primaryOutput.has_value()) {
+                    if (pass.primaryOutput->outputColor)
+                        return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+                    if (pass.kind != Graphics) {
+                        return Result<void>::Failure(MakeBackendError(NullBackendErrors::InvalidExecutionPlan,
+                                                                      "Only graphics passes may bind the primary output attachment."));
+                    }
+
+                    if (!pass.primaryOutput->IsValid()) {
+                        return Result<void>::Failure(
+                            MakeBackendError(NullBackendErrors::InvalidExecutionPlan, "Primary output attachment operations are invalid."));
+                    }
+                }
+                return Result<void>::Success();
+            }
+
             [[nodiscard]] Result<std::uint64_t> TrackLifetime(Result<std::uint64_t> instance, RenderResourceNativeLifetime lifetime) {
                 if (instance.HasValue()) {
                     try {

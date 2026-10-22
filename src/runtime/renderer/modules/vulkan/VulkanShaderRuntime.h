@@ -12,6 +12,11 @@
 namespace Horo::Render::Detail {
     struct VulkanGraphResourceState;
 
+    /** @brief Typed selected-device identity borrowed by native material leases. */
+    struct VulkanShaderOwnerIdentity {
+        std::uint64_t deviceIncarnation{0};
+    };
+
     /** @brief Exact resource resolved by the existing device resource registry. */
     struct VulkanMaterialResource {
         VkBuffer buffer{VK_NULL_HANDLE};
@@ -38,7 +43,7 @@ namespace Horo::Render::Detail {
         VkPipeline pipeline{VK_NULL_HANDLE};
         VkPipelineLayout layout{VK_NULL_HANDLE};
         std::vector<VkDescriptorSet> sets;
-        const void *owner{nullptr};
+        const VulkanShaderOwnerIdentity *owner{nullptr};
         std::uint64_t deviceIncarnation{0};
         RenderGraphicsPipelineState state;
         std::shared_ptr<const void> pipelineBacking;
@@ -54,6 +59,13 @@ namespace Horo::Render::Detail {
         using Resolver = std::function<PFN_vkVoidFunction(VkDevice, const char *)>;
         using IssueIdentity = std::function<std::optional<std::uint64_t>()>;
         using ResolveResource = std::function<Result<VulkanMaterialResource>(const MaterialResidentResource &, ShaderResourceKind)>;
+
+        /** @brief Exact incarnation and enabled layer routing of the selected logical device. */
+        struct DeviceFeatures {
+            std::uint64_t deviceIncarnation{0};
+            bool vertexLayerEnabled{false};
+        };
+
         VulkanShaderRuntime();
         ~VulkanShaderRuntime();
         VulkanShaderRuntime(const VulkanShaderRuntime &) = delete;
@@ -61,7 +73,7 @@ namespace Horo::Render::Detail {
         /** @brief Attaches exact selected-device facts and borrowed registry callbacks; rolls back on missing dispatch. */
         [[nodiscard]] Result<void> Initialize(VkDevice device, const VkPhysicalDeviceProperties &properties, RenderAdapterId adapter,
                                               const Resolver &resolver, IssueIdentity issue, ResolveResource resolve,
-                                              std::uint64_t deviceIncarnation = 0, bool vertexLayerEnabled = false);
+                                              DeviceFeatures features = DefaultDeviceFeatures());
         /** @brief Releases pipeline/layout/cache/shader/sampler objects after host-owned queue drain and lease release. */
         void Shutdown() noexcept;
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
@@ -83,6 +95,9 @@ namespace Horo::Render::Detail {
                                                                                         std::span<const MaterialResidentResource>);
 
     private:
+        static constexpr DeviceFeatures DefaultDeviceFeatures() noexcept {
+            return {};
+        }
         struct Impl;
         std::unique_ptr<Impl> impl_;
     };

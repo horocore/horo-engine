@@ -29,9 +29,14 @@ namespace Horo::Render::Detail {
 
     private:
         struct Target {
-            VkImageView color{}, depth{}, colorArray{}, depthArray{};
-            VkImage colorImage{}, depthImage{};
-            RenderTextureDescriptor colorDescriptor, depthDescriptor;
+            VkImageView color{};
+            VkImageView depth{};
+            VkImageView colorArray{};
+            VkImageView depthArray{};
+            VkImage colorImage{};
+            VkImage depthImage{};
+            RenderTextureDescriptor colorDescriptor;
+            RenderTextureDescriptor depthDescriptor;
             MultiviewRenderRectangle rectangle;
             std::uint32_t layer{};
             std::uint32_t depthLayer{};
@@ -56,7 +61,9 @@ namespace Horo::Render::Detail {
             PFN_vkCmdBindIndexBuffer indices{};
             PFN_vkCmdBindDescriptorSets descriptors{};
             PFN_vkCmdDrawIndexed draw{};
-        } native_;
+        };
+
+        Dispatch native_;
 
         /** @brief Validates an actual registry-issued one-layer attachment view against its graph texture. */
         [[nodiscard]] Result<VulkanDrawViewBinding> Attachment(const RenderGraphExecutionRequest &, const VulkanResourceRuntime &,
@@ -75,13 +82,18 @@ namespace Horo::Render::Detail {
         [[nodiscard]] bool CanRouteLayers() const noexcept;
         void Begin(VkCommandBuffer command, const Target &target, bool array) const noexcept;
         void DrawInstances(VkCommandBuffer command, const Draw &draw, std::uint32_t firstView, std::uint32_t count) const noexcept;
+        /** @brief Encodes one admitted multipass view with its exact begin/draw/end recording boundary. */
+        void EncodeView(VkCommandBuffer command, std::uint32_t view) const noexcept;
         VkDevice device_{};
         std::uint64_t deviceIncarnation_{};
-        bool vertexLayerEnabled_{}, available_{}, prepared_{};
+        bool vertexLayerEnabled_{};
+        bool available_{};
+        bool prepared_{};
         MultiviewExecutionMode mode_{MultiviewExecutionMode::Multipass};
         std::array<Target, MultiviewExtractionLimits::HardMaximumViews> targets_;
         std::array<Draw, MultiviewExtractionLimits::HardMaximumInstances> draws_;
-        std::uint32_t targetCount_{}, drawCount_{};
+        std::uint32_t targetCount_{};
+        std::uint32_t drawCount_{};
         ClearColor clearColor_;
         float depthClear_{};
     };

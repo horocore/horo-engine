@@ -576,8 +576,8 @@ namespace Horo::Render::Detail {
     Result<std::uint64_t> VulkanResourceRuntime::CreateRenderTarget(const RenderTargetDescriptor &descriptor,
                                                                     const std::uint64_t colorIdentity, const std::uint64_t depthIdentity,
                                                                     RenderResourceNativeLifetime lifetime) {
-        auto *color = Impl::Find(impl_->views, colorIdentity);
-        auto *depth = Impl::Find(impl_->views, depthIdentity);
+        const auto *color = Impl::Find(impl_->views, colorIdentity);
+        const auto *depth = Impl::Find(impl_->views, depthIdentity);
         if (!Impl::IsTargetValid(descriptor, colorIdentity, color, depthIdentity, depth))
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "Render target attachment identity is invalid."));
@@ -675,12 +675,4 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
-    /** @copydoc VulkanResourceRuntime::ResolveDrawView */
-    Result<VulkanDrawViewBinding> VulkanResourceRuntime::ResolveDrawView(const std::uint64_t identity) const {
-        const auto *view = Impl::Find(impl_->views, identity);
-        if (!view || !view->texture)
-            return Result<VulkanDrawViewBinding>::Failure(
-                ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "Draw attachment view is foreign or retired."));
-        return Result<VulkanDrawViewBinding>::Success({view->handle, view->texture->handle, view->descriptor});
-    }
 }  // namespace Horo::Render::Detail

@@ -42,13 +42,14 @@ namespace Horo::Render::Detail {
             }
 
             void ConfigureRaster(const RenderGraphicsPipelineState &state) {
+                VkCullModeFlags cullMode = VK_CULL_MODE_BACK_BIT;
+                if (state.cull == RenderCullMode::None)
+                    cullMode = VK_CULL_MODE_NONE;
+                else if (state.cull == RenderCullMode::Front)
+                    cullMode = VK_CULL_MODE_FRONT_BIT;
                 raster = VkPipelineRasterizationStateCreateInfo{.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
                                                                 .polygonMode = VK_POLYGON_MODE_FILL,
-                                                                .cullMode = static_cast<VkCullModeFlags>(
-                                                                    state.cull == RenderCullMode::None
-                                                                        ? VK_CULL_MODE_NONE
-                                                                        : (state.cull == RenderCullMode::Front ? VK_CULL_MODE_FRONT_BIT
-                                                                                                               : VK_CULL_MODE_BACK_BIT)),
+                                                                .cullMode = cullMode,
                                                                 .frontFace = state.frontFace == RenderFrontFace::CounterClockwise
                                                                                  ? VK_FRONT_FACE_COUNTER_CLOCKWISE
                                                                                  : VK_FRONT_FACE_CLOCKWISE,
@@ -140,7 +141,7 @@ namespace Horo::Render::Detail {
             const VkDescriptorSetLayoutCreateInfo info{.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
                                                        .bindingCount = static_cast<std::uint32_t>(bindings[set].size()),
                                                        .pBindings = bindings[set].data()};
-            if (const auto nativeResult = createDescriptorSetLayout(device, &info, nullptr, &pipeline.sets[set]);
+            if (const auto nativeResult = native.createDescriptorSetLayout(device, &info, nullptr, &pipeline.sets[set]);
                 nativeResult != VK_SUCCESS) {
                 pipeline.sets[set] = VK_NULL_HANDLE;
                 return Result<void>::Failure(NativeShaderFailure("vkCreateDescriptorSetLayout", nativeResult));
@@ -149,7 +150,7 @@ namespace Horo::Render::Detail {
         const VkPipelineLayoutCreateInfo layout{.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
                                                 .setLayoutCount = static_cast<std::uint32_t>(setCount),
                                                 .pSetLayouts = pipeline.sets.data()};
-        if (const auto nativeResult = createPipelineLayout(device, &layout, nullptr, &pipeline.layout); nativeResult != VK_SUCCESS) {
+        if (const auto nativeResult = native.createPipelineLayout(device, &layout, nullptr, &pipeline.layout); nativeResult != VK_SUCCESS) {
             pipeline.layout = VK_NULL_HANDLE;
             return Result<void>::Failure(NativeShaderFailure("vkCreatePipelineLayout", nativeResult));
         }
@@ -200,9 +201,9 @@ namespace Horo::Render::Detail {
             auto pipeline = std::make_shared<Impl::Pipeline>();
             pipeline->device = impl_->device;
             pipeline->state = descriptor.state;
-            pipeline->destroy = impl_->destroyPipeline;
-            pipeline->destroyLayout = impl_->destroyPipelineLayout;
-            pipeline->destroySetLayout = impl_->destroyDescriptorSetLayout;
+            pipeline->destroy = impl_->native.destroyPipeline;
+            pipeline->destroyLayout = impl_->native.destroyPipelineLayout;
+            pipeline->destroySetLayout = impl_->native.destroyDescriptorSetLayout;
             pipeline->material = material.Value();
             pipeline->key = ValidateRenderGraphicsPipelineDescriptor(descriptor).Value();
             if (const auto layouts = impl_->CreateLayouts(*pipeline); layouts.HasError())
@@ -215,14 +216,15 @@ namespace Horo::Render::Detail {
             state.ConfigureAttachments(descriptor.state);
             const auto info = state.Info(pipeline->layout, stages.stages);
             // The driver may publish a partial handle on failure; the candidate RAII owner releases it.
-            if (const auto nativeResult = impl_->createGraphicsPipelines(impl_->device, impl_->cache, 1, &info, nullptr, &pipeline->handle);
+            if (const auto nativeResult =
+                    impl_->native.createGraphicsPipelines(impl_->device, impl_->cache, 1, &info, nullptr, &pipeline->handle);
                 nativeResult != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(NativeShaderFailure("vkCreateGraphicsPipelines", nativeResult));
             const auto id = impl_->issue();
-            if (!id)
+            if (!id.has_value())
                 return Result<std::uint64_t>::Failure(
                     MakeError(VulkanBackendErrors::ResourceCreationFailed, "Resource identities exhausted."));
-            impl_->pipelines.emplace(*id, std::move(pipeline));
+            impl_->pipelines.try_emplace(*id, std::move(pipeline));
             return Result<std::uint64_t>::Success(*id);
         } catch (const std::bad_alloc &) {
             return Result<std::uint64_t>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));

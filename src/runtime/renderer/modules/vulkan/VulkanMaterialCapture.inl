@@ -23,10 +23,11 @@ template <typename View> bool WholeMaterialView(const View &view) {
     });
 }
 
-/** @copydoc VulkanResourceRuntime::CaptureMaterialTarget */
-Result<VulkanMaterialTarget> VulkanResourceRuntime::CaptureMaterialTarget(const std::uint64_t identity, VulkanCommandRetention &retention) {
-    const auto found = impl_->targets.find(identity);
-    if (found == impl_->targets.end() || !found->second->color || retention.resources.size() == retention.resources.capacity())
+/** @copydoc VulkanMaterialCapture::CaptureMaterialTarget */
+Result<VulkanMaterialTarget> VulkanMaterialCapture::CaptureMaterialTarget(const std::uint64_t identity,
+                                                                          VulkanCommandRetention &retention) const {
+    const auto found = runtime_.impl_->targets.find(identity);
+    if (found == runtime_.impl_->targets.end() || !found->second->color || retention.resources.size() == retention.resources.capacity())
         return Result<VulkanMaterialTarget>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
     const auto &target = *found->second;
     if (!WholeMaterialView(target.color) || !WholeMaterialView(target.depth))
@@ -49,14 +50,15 @@ Result<VulkanMaterialTarget> VulkanResourceRuntime::CaptureMaterialTarget(const 
     return Result<VulkanMaterialTarget>::Success(result);
 }
 
-/** @copydoc VulkanResourceRuntime::CaptureMaterialMesh */
-Result<VulkanMaterialMesh> VulkanResourceRuntime::CaptureMaterialMesh(const std::uint64_t identity, VulkanCommandRetention &retention) {
-    const auto found = impl_->meshes.find(identity);
-    if (found == impl_->meshes.end() || retention.resources.capacity() - retention.resources.size() < 3)
+/** @copydoc VulkanMaterialCapture::CaptureMaterialMesh */
+Result<VulkanMaterialMesh> VulkanMaterialCapture::CaptureMaterialMesh(const std::uint64_t identity,
+                                                                      VulkanCommandRetention &retention) const {
+    const auto found = runtime_.impl_->meshes.find(identity);
+    if (found == runtime_.impl_->meshes.end() || retention.resources.capacity() - retention.resources.size() < 3)
         return Result<VulkanMaterialMesh>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
-    const auto vertex = impl_->buffers.find(found->second->vertex);
-    const auto index = impl_->buffers.find(found->second->index);
-    if (vertex == impl_->buffers.end() || index == impl_->buffers.end())
+    const auto vertex = runtime_.impl_->buffers.find(found->second->vertex);
+    const auto index = runtime_.impl_->buffers.find(found->second->index);
+    if (vertex == runtime_.impl_->buffers.end() || index == runtime_.impl_->buffers.end())
         return Result<VulkanMaterialMesh>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
     const auto capture = [](const auto &buffer) {
         return VulkanGraphResource{.buffer = buffer->handle, .bufferDescriptor = buffer->descriptor, .state = &buffer->graphState};
@@ -66,4 +68,13 @@ Result<VulkanMaterialMesh> VulkanResourceRuntime::CaptureMaterialMesh(const std:
     retention.resources.push_back(vertex->second);
     retention.resources.push_back(index->second);
     return Result<VulkanMaterialMesh>::Success(result);
+}
+
+/** @copydoc VulkanMaterialCapture::ResolveDrawView */
+Result<VulkanDrawViewBinding> VulkanMaterialCapture::ResolveDrawView(const std::uint64_t identity) const {
+    const auto *view = VulkanResourceRuntime::Impl::Find(runtime_.impl_->views, identity);
+    if (!view || !view->texture)
+        return Result<VulkanDrawViewBinding>::Failure(
+            ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "Draw attachment view is foreign or retired."));
+    return Result<VulkanDrawViewBinding>::Success({view->handle, view->texture->handle, view->descriptor});
 }

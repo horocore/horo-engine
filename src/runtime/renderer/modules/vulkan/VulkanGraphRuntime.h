@@ -6,6 +6,18 @@
 #include "VulkanResourceRuntime.h"
 
 namespace Horo::Render::Detail {
+    /** @brief Borrowed selected-device configuration consumed synchronously during graph initialization. */
+    struct VulkanGraphInitialization {
+        VkDevice device;
+        std::span<const VulkanCommandQueue> queues;
+        std::uint32_t frames;
+        std::uint64_t timelineDifference;
+        std::uint64_t deviceIncarnation;
+        VulkanResourceRuntime &resources;
+        const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver;
+        bool vertexLayerEnabled{false};
+    };
+
     /** @brief Bounded render-owner graph recorder; native parents outlive its explicit drain. */
     class VulkanGraphRuntime final {
     public:
@@ -14,19 +26,10 @@ namespace Horo::Render::Detail {
         VulkanGraphRuntime(const VulkanGraphRuntime &) = delete;
         VulkanGraphRuntime &operator=(const VulkanGraphRuntime &) = delete;
         /** @brief Prepares fixed graph scratch/retention storage and required Vulkan1.3 dispatch.
-         * @param device Admitted native device.
-         * @param queues Exact Horo queue topology with native family ownership.
-         * @param frames Maximum simultaneously retained graph admissions.
-         * @param timelineDifference Selected-device timeline semaphore value-difference limit.
-         * @param deviceIncarnation Canonical non-reused selected-device identity.
-         * @param resources Same-device resource identity registry; remains alive through drain.
-         * @param resolver Same-device dispatch resolver.
+         * @param request Selected device, exact queue topology, bounded frames, timeline limit, canonical identity,
+         * borrowed same-device registry/resolver, and actual enabled vertex-layer feature.
          * @return Success or original typed rollback-safe failure. */
-        [[nodiscard]] Result<void> Initialize(VkDevice device, std::span<const VulkanCommandQueue> queues, std::uint32_t frames,
-                                              std::uint64_t timelineDifference, std::uint64_t deviceIncarnation,
-                                              VulkanResourceRuntime &resources,
-                                              const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver,
-                                              bool vertexLayerEnabled = false);
+        [[nodiscard]] Result<void> Initialize(const VulkanGraphInitialization &request);
         /** @brief Returns effective indexed draw and explicitly enabled layer routing facts for this device. */
         [[nodiscard]] MultiviewCapabilities MultiviewSupport() const noexcept;
         [[nodiscard]] Result<void> BeginFrame(FrameToken frame);

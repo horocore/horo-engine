@@ -28,6 +28,17 @@ namespace Horo::XR::OpenXRInternal {
         Render::RenderTextureViewHandle depth;
     };
 
+    /** @brief Complete borrowed creation inputs; limits remain part of the same admitted request. */
+    struct OpenXRMultiviewGraphRequest final {
+        const XRMultiviewScene &scene;
+        const XRMultiviewOwnerState &active;
+        std::span<OpenXRSwapchain *const> owners;
+        std::span<const OpenXRMultiviewGeometry> geometry;
+        std::span<const OpenXRMultiviewTargetViews> views;
+        Render::RenderQueueId queue;
+        Render::MultiviewNativeWorkLimits limits{};
+    };
+
     /** @brief Prepared host graph borrowing exact swapchain owners through synchronous admission.
      * @details Create allocates bounded CPU graph storage outside an active frame. Meshes, material
      * parameter buffers and attachment views must already be ready. Caller retains their logical handles
@@ -43,24 +54,19 @@ namespace Horo::XR::OpenXRInternal {
         OpenXRMultiviewGraph &operator=(OpenXRMultiviewGraph &&) noexcept;
         OpenXRMultiviewGraph(const OpenXRMultiviewGraph &) = delete;
         OpenXRMultiviewGraph &operator=(const OpenXRMultiviewGraph &) = delete;
-        /** @brief Resolves exact current acquisitions and compiles one complete graphics pass.
-         * @param frontend Actual selected resource/device owner.
-         * @param scene Immutable XR-derived presentation with ready mesh/material generations.
-         * @param active Actual session/configuration/origin/publication fences.
-         * @param owners Exact retained swapchain owners, with no duplicate or unused entries.
-         * @param geometry Ready visible geometry in canonical draw order.
-         * @param views Prepared per-layer attachment views in complete runtime view order.
-         * @param queue Host-issued actual graphics queue; never synthesized.
-         * @param limits Finite primitive-work bounds.
+        /** @brief Resolves current acquisitions and compiles one complete graphics pass.
+         * @param frontend Actual selected resource/device owner. @param request Complete ready borrowed inputs and work limits.
          * @return Prepared graph or typed owner/resource/stale/allocation failure without native work.
          */
+        [[nodiscard]] static Result<OpenXRMultiviewGraph> Create(Render::RenderFrontend &frontend,
+                                                                 const OpenXRMultiviewGraphRequest &request);
+        /** @brief Convenience composition with default finite work limits; all input owners remain borrowed. */
         [[nodiscard]] static Result<OpenXRMultiviewGraph> Create(Render::RenderFrontend &frontend, const XRMultiviewScene &scene,
                                                                  const XRMultiviewOwnerState &active,
                                                                  std::span<OpenXRSwapchain *const> owners,
                                                                  std::span<const OpenXRMultiviewGeometry> geometry,
                                                                  std::span<const OpenXRMultiviewTargetViews> views,
-                                                                 Render::RenderQueueId queue,
-                                                                 const Render::MultiviewNativeWorkLimits &limits = {});
+                                                                 Render::RenderQueueId queue);
         /** @brief Revalidates actual owner acquisitions and executes through the canonical submission API.
          * @param frame Exact active frontend frame. @param active Current owner/publication facts.
          * @param submission Host scheduler's actual queue order, waits and signal.
@@ -72,6 +78,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] const Render::CompiledRenderGraphExecution &Graph() const noexcept;
 
     private:
+        /** @brief Releases compiled CPU graph storage before its borrowed-input metadata, without releasing any XR acquisition. */
+        void Reset() noexcept;
         struct Impl;
         explicit OpenXRMultiviewGraph(std::unique_ptr<Impl> impl) noexcept;
         std::unique_ptr<Impl> impl_;

@@ -41,7 +41,7 @@ Result<void> VulkanResourceRuntime::InitializeShaders(const VkPhysicalDeviceProp
         return impl_->IssueIdentity();
     }, [this](const MaterialResidentResource &resident, ShaderResourceKind kind) {
         return kind == ShaderResourceKind::UniformBuffer ? impl_->ResolveMaterialBuffer(resident) : impl_->ResolveMaterialView(resident);
-    }, deviceIncarnation, vertexLayerEnabled);
+    }, VulkanShaderRuntime::DeviceFeatures{deviceIncarnation, vertexLayerEnabled});
 }
 
 /** @copydoc VulkanResourceRuntime::QueryPipelineDeviceIdentity */

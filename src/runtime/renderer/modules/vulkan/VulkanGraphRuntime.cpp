@@ -12,7 +12,7 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(VulkanBackendErrors::NotInitialized));
         if (owner != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::WrongThread));
-        if (admission && (closing || failedSubmission))
+        if (admission && (lifecycle.closing || lifecycle.failedSubmission))
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         return Result<void>::Success();
     }
@@ -37,17 +37,6 @@ namespace Horo::Render::Detail {
             // Destruction cannot release native owners without proven terminal retirement.
             std::terminate();
         }
-    }
-
-    /** @brief Loads optional material command dispatch without changing graph-only admission. */
-    void VulkanGraphRuntime::Impl::LoadMaterialDispatch(VkDevice device, const VulkanShaderRuntime::Resolver &resolver) {
-        native.bindPipeline = std::bit_cast<PFN_vkCmdBindPipeline>(resolver(device, "vkCmdBindPipeline"));
-        native.bindSets = std::bit_cast<PFN_vkCmdBindDescriptorSets>(resolver(device, "vkCmdBindDescriptorSets"));
-        native.bindVertices = std::bit_cast<PFN_vkCmdBindVertexBuffers>(resolver(device, "vkCmdBindVertexBuffers"));
-        native.bindIndex = std::bit_cast<PFN_vkCmdBindIndexBuffer>(resolver(device, "vkCmdBindIndexBuffer"));
-        native.viewport = std::bit_cast<PFN_vkCmdSetViewport>(resolver(device, "vkCmdSetViewport"));
-        native.scissor = std::bit_cast<PFN_vkCmdSetScissor>(resolver(device, "vkCmdSetScissor"));
-        native.drawIndexed = std::bit_cast<PFN_vkCmdDrawIndexed>(resolver(device, "vkCmdDrawIndexed"));
     }
 
     /** @copydoc VulkanGraphRuntime::Impl::ReserveStorage */
@@ -75,39 +64,38 @@ namespace Horo::Render::Detail {
     }
 
     /** @copydoc VulkanGraphRuntime::Initialize */
-    Result<void> VulkanGraphRuntime::Initialize(const VkDevice device, const std::span<const VulkanCommandQueue> queues,
-                                                const std::uint32_t frames, const std::uint64_t timelineDifference,
-                                                const std::uint64_t deviceIncarnation, VulkanResourceRuntime &resources,
-                                                const std::function<PFN_vkVoidFunction(VkDevice, const char *)> &resolver,
-                                                const bool vertexLayerEnabled) {
-        if (impl_->owner != std::thread::id{} || frames == 0 || frames > 8 || !resolver)
+    Result<void> VulkanGraphRuntime::Initialize(const VulkanGraphInitialization &request) {
+        if (impl_->owner != std::thread::id{} || request.frames == 0 || request.frames > 8 || !request.resolver)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidConfig));
-        for (std::size_t index = 0; index < queues.size(); ++index)
+        for (std::size_t index = 0; index < request.queues.size(); ++index)
             for (std::size_t previous = 0; previous < index; ++previous)
-                if (queues[index].family == queues[previous].family)
+                if (request.queues[index].family == request.queues[previous].family)
                     return Result<void>::Failure(
                         Impl::Unsupported("Distinct Horo queues require distinct native families in this whole-resource ownership path."));
-        Impl::Dispatch dispatch{.barrier = std::bit_cast<PFN_vkCmdPipelineBarrier2>(resolver(device, "vkCmdPipelineBarrier2")),
-                                .copy = std::bit_cast<PFN_vkCmdCopyBuffer2>(resolver(device, "vkCmdCopyBuffer2")),
-                                .beginRendering = std::bit_cast<PFN_vkCmdBeginRendering>(resolver(device, "vkCmdBeginRendering")),
-                                .endRendering = std::bit_cast<PFN_vkCmdEndRendering>(resolver(device, "vkCmdEndRendering"))};
+        Impl::Dispatch dispatch{.barrier =
+                                    std::bit_cast<PFN_vkCmdPipelineBarrier2>(request.resolver(request.device, "vkCmdPipelineBarrier2")),
+                                .copy = std::bit_cast<PFN_vkCmdCopyBuffer2>(request.resolver(request.device, "vkCmdCopyBuffer2")),
+                                .beginRendering =
+                                    std::bit_cast<PFN_vkCmdBeginRendering>(request.resolver(request.device, "vkCmdBeginRendering")),
+                                .endRendering =
+                                    std::bit_cast<PFN_vkCmdEndRendering>(request.resolver(request.device, "vkCmdEndRendering"))};
         if (!dispatch.barrier || !dispatch.copy || !dispatch.beginRendering || !dispatch.endRendering)
             return Result<void>::Failure(
                 MakeError(VulkanBackendErrors::EntryPointMissing, "Graph execution requires Vulkan1.3 core command dispatch."));
-        if (const auto storage = impl_->ReserveStorage(queues, frames); storage.HasError())
+        if (const auto storage = impl_->ReserveStorage(request.queues, request.frames); storage.HasError())
             return storage;
-        if (auto initialized = impl_->commands.Initialize(device, queues, RenderGraphSubmissionLimits::MaximumSubmissions,
-                                                          timelineDifference, deviceIncarnation, resolver);
+        if (auto initialized = impl_->commands.Initialize(request.device, request.queues, RenderGraphSubmissionLimits::MaximumSubmissions,
+                                                          request.timelineDifference, request.deviceIncarnation, request.resolver);
             initialized.HasError())
             return initialized;
         impl_->native = dispatch;
-        impl_->LoadMaterialDispatch(device, resolver);
-        impl_->multiview.Initialize(device, deviceIncarnation, vertexLayerEnabled, resolver);
-        impl_->resources = &resources;
-        impl_->deviceIncarnation = deviceIncarnation;
+        impl_->LoadMaterialDispatch(request.device, request.resolver);
+        impl_->multiview.Initialize(request.device, request.deviceIncarnation, request.vertexLayerEnabled, request.resolver);
+        impl_->resources = &request.resources;
+        impl_->deviceIncarnation = request.deviceIncarnation;
         impl_->owner = std::this_thread::get_id();
-        impl_->closing = false;
-        impl_->failedSubmission = false;
+        impl_->lifecycle.closing = false;
+        impl_->lifecycle.failedSubmission = false;
         return Result<void>::Success();
     }
 
@@ -115,11 +103,11 @@ namespace Horo::Render::Detail {
     Result<void> VulkanGraphRuntime::BeginFrame(const FrameToken frame) {
         if (auto access = impl_->Access(); access.HasError())
             return access;
-        if (!frame.IsValid() || impl_->frame.IsValid())
+        if (!frame.IsValid() || impl_->lifecycle.frame.IsValid())
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         if (auto polled = impl_->commands.Poll(); polled.HasError())
             return polled;
-        impl_->frame = frame;
+        impl_->lifecycle.frame = frame;
         impl_->multiview.Reset();
         return Result<void>::Success();
     }
@@ -128,7 +116,7 @@ namespace Horo::Render::Detail {
     Result<void> VulkanGraphRuntime::ExecuteGraph(const RenderGraphExecutionRequest &request) {
         if (auto access = impl_->Access(); access.HasError())
             return access;
-        if (request.frame != impl_->frame || !impl_->frame.IsValid() || impl_->recorded)
+        if (request.frame != impl_->lifecycle.frame || !impl_->lifecycle.frame.IsValid() || impl_->lifecycle.recorded)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         if (auto valid = ValidateRenderGraphExecutionRequest(request); valid.HasError())
             return valid;
@@ -157,7 +145,7 @@ namespace Horo::Render::Detail {
             free->resources.clear();
             return recorded;
         }
-        impl_->recorded = true;
+        impl_->lifecycle.recorded = true;
         return Result<void>::Success();
     }
 
@@ -165,11 +153,11 @@ namespace Horo::Render::Detail {
     Result<void> VulkanGraphRuntime::SubmitFrame(const FrameToken frame) {
         if (auto access = impl_->Access(); access.HasError())
             return access;
-        if (!frame.IsValid() || frame != impl_->frame)
+        if (!frame.IsValid() || frame != impl_->lifecycle.frame)
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         for (const auto &submission : impl_->submissions) {
             if (auto accepted = impl_->commands.Submit(submission.ticket, submission.value); accepted.HasError()) {
-                impl_->failedSubmission = true;
+                impl_->lifecycle.failedSubmission = true;
                 impl_->Abort();
                 return accepted;
             }
@@ -177,8 +165,8 @@ namespace Horo::Render::Detail {
                 *update.target = update.value;
         }
         impl_->submissions.clear();
-        impl_->frame = {};
-        impl_->recorded = false;
+        impl_->lifecycle.frame = {};
+        impl_->lifecycle.recorded = false;
         return Result<void>::Success();
     }
 
@@ -187,13 +175,13 @@ namespace Horo::Render::Detail {
         for (const auto &submission : submissions)
             commands.Abort(submission.ticket);
         submissions.clear();
-        recorded = false;
-        frame = {};
+        lifecycle.recorded = false;
+        lifecycle.frame = {};
     }
 
     /** @copydoc VulkanGraphRuntime::AbortFrame */
     void VulkanGraphRuntime::AbortFrame(const FrameToken frame) noexcept {
-        if (impl_->owner == std::this_thread::get_id() && frame == impl_->frame)
+        if (impl_->owner == std::this_thread::get_id() && frame == impl_->lifecycle.frame)
             impl_->Abort();
     }
 
@@ -201,7 +189,7 @@ namespace Horo::Render::Detail {
     Result<bool> VulkanGraphRuntime::ObserveSubmission(const RenderCpuWait &wait) {
         if (auto access = impl_->Access(false); access.HasError())
             return Result<bool>::Failure(std::move(access).ErrorValue());
-        if (impl_->frame.IsValid() && wait.purpose != RenderCpuWaitPurpose::Poll)
+        if (impl_->lifecycle.frame.IsValid() && wait.purpose != RenderCpuWaitPurpose::Poll)
             return Result<bool>::Failure(
                 MakeError(VulkanBackendErrors::TimelineInvalid, "An active frame cannot issue a blocking CPU wait."));
         return impl_->commands.Observe(wait);
@@ -218,7 +206,7 @@ namespace Horo::Render::Detail {
             return Result<void>::Success();
         if (auto access = impl_->Access(false); access.HasError())
             return access;
-        impl_->closing = true;
+        impl_->lifecycle.closing = true;
         impl_->Abort();
         return impl_->commands.BeginShutdown();
     }
@@ -229,7 +217,7 @@ namespace Horo::Render::Detail {
             return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
         if (auto access = impl_->Access(false); access.HasError())
             return Result<RenderBackendDrainProgress>::Failure(std::move(access).ErrorValue());
-        if (!impl_->closing)
+        if (!impl_->lifecycle.closing)
             return Result<RenderBackendDrainProgress>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         auto drained = impl_->commands.PollDrain();
         if (drained.HasValue() && drained.Value() == RenderBackendDrainProgress::Drained) {

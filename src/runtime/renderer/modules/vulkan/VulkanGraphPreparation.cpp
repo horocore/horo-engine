@@ -44,7 +44,7 @@ namespace Horo::Render::Detail {
     }
 
     /** @brief Prepares every state, binding and workload before any command is recorded. */
-    Result<void> VulkanGraphRuntime::Impl::Prepare(const RenderGraphExecutionRequest &request, VulkanCommandRetention &retention) {
+    Result<void> VulkanGraphRuntime::Impl::Prepare(const RenderGraphExecutionRequest &request, VulkanCommandRetention &pins) {
         barriers.clear();
         updates.clear();
         submissions.clear();
@@ -68,7 +68,7 @@ namespace Horo::Render::Detail {
             submission.passes = record.passes;
             submission.updates.offset = updates.size();
             for (std::size_t pass = record.passes.offset; pass < record.passes.offset + record.passes.count; ++pass) {
-                if (auto prepared = PreparePass(request, pass, retention); prepared.HasError())
+                if (auto prepared = PreparePass(request, pass, pins); prepared.HasError())
                     return prepared;
             }
             submission.updates.count = updates.size() - submission.updates.offset;
@@ -135,7 +135,7 @@ namespace Horo::Render::Detail {
 
     /** @brief Validates contents and commits only scratch updates, later attached to each exact successful submission. */
     Result<void> VulkanGraphRuntime::Impl::PreparePass(const RenderGraphExecutionRequest &request, const std::size_t index,
-                                                       VulkanCommandRetention &retention) {
+                                                       VulkanCommandRetention &pins) {
         const auto &pass = request.graph.Passes()[index];
         auto &prepared = passes[index];
         const auto usages = request.graph.Usages().subspan(pass.usages.offset, pass.usages.count);
@@ -153,10 +153,9 @@ namespace Horo::Render::Detail {
             return transitions;
         prepared.before.count = barriers.size() - prepared.before.offset;
         if (const auto *scene = std::get_if<RenderGraphMultiview>(&request.workloads[index].workload)) {
-            const auto *queue = Queue(pass.queue);
-            if (!queue || !queue->supportsGraphics)
+            if (const auto *queue = Queue(pass.queue); !queue || !queue->supportsGraphics)
                 return Result<void>::Failure(Unsupported("Multiview scene encoding requires the admitted graphics queue."));
-            if (const auto admitted = multiview.Prepare(request, *scene, bindings, *resources, retention); admitted.HasError())
+            if (const auto admitted = multiview.Prepare(request, *scene, bindings, *resources, pins); admitted.HasError())
                 return admitted;
         }
         if (auto workload = ValidateWorkload(request.workloads[index].workload, pass.queue); workload.HasError())

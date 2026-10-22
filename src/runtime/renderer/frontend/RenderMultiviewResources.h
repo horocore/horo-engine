@@ -10,7 +10,8 @@ namespace Horo::Render::Detail {
     struct ResolvedMultiviewResources final {
         std::array<RenderGraphMeshInstance, MultiviewExtractionLimits::HardMaximumInstances> meshes;
         std::array<RenderGraphTextureViewInstance, MultiviewExtractionLimits::HardMaximumViews * 2> views;
-        std::size_t meshCount{}, viewCount{};
+        std::size_t meshCount{};
+        std::size_t viewCount{};
     };
 
     /** @brief Resolves real resident meshes and attachment views before the canonical graph lease is acquired. */

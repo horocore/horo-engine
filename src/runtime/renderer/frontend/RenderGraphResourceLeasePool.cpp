@@ -10,6 +10,21 @@
 #include <type_traits>
 
 namespace Horo::Render::Detail {
+    namespace {
+        /** @brief Pins multiview workloads in order; the caller's lease transaction owns partial-prefix rollback. */
+        template <typename Lease>
+        [[nodiscard]] Result<void> PinMultiviewWorkloads(Lease &lease, const std::span<const RenderGraphPassWorkload> workloads) {
+            for (const auto &entry : workloads) {
+                const auto *scene = std::get_if<RenderGraphMultiview>(&entry.workload);
+                if (scene == nullptr)
+                    continue;
+                if (auto pinned = lease.PinMultiview(*scene); pinned.HasError())
+                    return pinned;
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc ResolveGraphResidentIdentity */
     Result<RenderGraphResidentIdentity> ResolveGraphResidentIdentity(const RenderGraphResourceBinding &binding) {
         return std::visit([]<typename Handle>(const Handle &handle) -> Result<RenderGraphResidentIdentity> {
@@ -177,12 +192,8 @@ namespace Horo::Render::Detail {
                     return Result<IRenderGraphResourceLease *>::Failure(captured.ErrorValue());
                 }
             }
-            for (const auto &entry : workloads) {
-                if (const auto *scene = std::get_if<RenderGraphMultiview>(&entry.workload)) {
-                    if (const auto pinned = lease.PinMultiview(*scene); pinned.HasError())
-                        return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
-                }
-            }
+            if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
+                return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
             return Result<IRenderGraphResourceLease *>::Success(transaction.release());
         }
         return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));

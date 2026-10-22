@@ -27,10 +27,11 @@ namespace Horo::Render::Detail {
     Result<RenderTextureHandle> RenderExternalTextureAccess::Import(RenderFrontend &frontend,
                                                                     std::shared_ptr<const IRenderExternalTextureSource> source) {
         using Outcome = Result<RenderTextureHandle>;
+        using enum RenderResourceClass;
         const auto backend = ValidateImport(frontend, source);
         if (backend.HasError())
             return Outcome::Failure(backend.ErrorValue());
-        auto reservation = frontend.resourceRegistry_->Reserve(RenderResourceClass::Texture);
+        auto reservation = frontend.resourceRegistry_->Reserve(Texture);
         if (reservation.HasError())
             return Outcome::Failure(reservation.ErrorValue());
         const auto identity = reservation.Value().identity;
@@ -40,34 +41,32 @@ namespace Horo::Render::Detail {
             if (identity.slot >= frontend.textures_.size())
                 frontend.textures_.resize(static_cast<std::size_t>(identity.slot) + 1);
             frontend.textures_[identity.slot] = {.generation = identity.generation, .descriptor = source->Descriptor()};
-            auto attached = frontend.resourceRegistry_->AttachExternalSource(identity, source);
-            if (attached.HasError()) {
-                frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
+            if (auto attached = frontend.resourceRegistry_->AttachExternalSource(identity, source); attached.HasError()) {
+                frontend.resourceRegistry_->RollbackPending(Texture, reservation.Value());
                 return Outcome::Failure(attached.ErrorValue());
             }
             auto lifetime = frontend.resourceRegistry_->PrepareExternalNativeLifetime(identity);
             if (lifetime.HasError()) {
-                frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
+                frontend.resourceRegistry_->RollbackPending(Texture, reservation.Value());
                 return Outcome::Failure(lifetime.ErrorValue());
             }
             auto imported = backend.Value()->ImportExternalTexture(*source, std::move(lifetime).Value());
             if (imported.HasError()) {
-                frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
+                frontend.resourceRegistry_->RollbackPending(Texture, reservation.Value());
                 return Outcome::Failure(imported.ErrorValue());
             }
             instance = imported.Value();
-            const auto published = frontend.resourceRegistry_->Publish(RenderResourceClass::Texture, identity, instance);
-            if (published.HasError()) {
+            if (const auto published = frontend.resourceRegistry_->Publish(Texture, identity, instance); published.HasError()) {
                 frontend.backend_->DestroyTexture(instance);
                 instance = 0;
-                frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
+                frontend.resourceRegistry_->RollbackPending(Texture, reservation.Value());
                 return Outcome::Failure(published.ErrorValue());
             }
             return Outcome::Success(TextureHandle(identity));
         } catch (...) {
             if (instance != 0)
                 frontend.backend_->DestroyTexture(instance);
-            frontend.resourceRegistry_->RollbackPending(RenderResourceClass::Texture, reservation.Value());
+            frontend.resourceRegistry_->RollbackPending(Texture, reservation.Value());
             throw;
         }
     }

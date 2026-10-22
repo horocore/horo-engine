@@ -19,8 +19,8 @@ namespace Horo::XR {
             });
             std::size_t depthCount = 0;
             for (const auto &target : targets) {
-                const auto &baseline = target.role == XRExternalRenderTargetRole::ProjectionDepth ? *depth : first;
-                if (target.image != baseline.image || target.format != baseline.format || target.renderRectangle != first.renderRectangle ||
+                if (const auto &baseline = target.role == XRExternalRenderTargetRole::ProjectionDepth ? *depth : first;
+                    target.image != baseline.image || target.format != baseline.format || target.renderRectangle != first.renderRectangle ||
                     target.allocationExtent != first.allocationExtent || target.arrayLayerCount != first.arrayLayerCount ||
                     target.sampleCount != first.sampleCount)
                     return false;
@@ -93,9 +93,9 @@ namespace Horo::XR {
         /** @brief Requires the renderer's origin/configuration fences to name the exact admitted XR publication. */
         [[nodiscard]] Result<void> ValidateOwner(const XRViewRenderPlan &plan, const Render::MultiviewPublication &publication,
                                                  const XRMultiviewOwnerState &active) {
-            const auto live = ValidateXRViewRenderPlan(plan, active.session, active.configuration, active.configurationRevision,
-                                                       active.originRevision, active.acquiredImages);
-            if (live.HasError())
+            if (const auto live = ValidateXRViewRenderPlan(plan, active.session, active.configuration, active.configurationRevision,
+                                                           active.originRevision, active.acquiredImages);
+                live.HasError())
                 return live;
             if (publication.originRevision != active.originRevision.Value())
                 return Result<void>::Failure(MakeError(XRErrors::OriginRevisionStale));

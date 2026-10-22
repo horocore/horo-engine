@@ -53,6 +53,8 @@ namespace Horo::Render::Detail {
         RenderTextureViewDescriptor descriptor;
     };
 
+    class VulkanMaterialCapture;
+
     /** @brief Device-owned Vulkan resource allocator and identity registry. */
     class VulkanResourceRuntime final : public IRenderResourceBackend,
                                         public IMaterialBindingBackend,
@@ -120,14 +122,6 @@ namespace Horo::Render::Detail {
         void DestroyTextureView(std::uint64_t backendInstance) noexcept override;
         void DestroyRenderTarget(std::uint64_t backendInstance) noexcept override;
         void ShutdownResources() noexcept;
-        /** @brief Captures whole single-sample attachments and retains the target's transitive backing.
-         * @param identity Exact registry target. @param retention Prepared command pin storage.
-         * @return Native snapshot or typed stale/unsupported/capacity failure before recording. */
-        [[nodiscard]] Result<VulkanMaterialTarget> CaptureMaterialTarget(std::uint64_t identity, VulkanCommandRetention &retention);
-        /** @brief Captures exact indexed mesh buffers and retains all three native registry owners.
-         * @param identity Exact registry mesh. @param retention Prepared command pin storage.
-         * @return Native snapshot or typed stale/capacity failure before recording. */
-        [[nodiscard]] Result<VulkanMaterialMesh> CaptureMaterialMesh(std::uint64_t identity, VulkanCommandRetention &retention);
         /** @brief Captures exact native namespaces and pins actual resources into preallocated graph retention.
          * @param request Portable-validated exact frontend resource mapping.
          * @param destination Prepared snapshot storage, at least graph resource count.
@@ -136,12 +130,42 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> CaptureGraphResources(const RenderGraphExecutionRequest &request,
                                                          std::span<VulkanGraphResource> destination,
                                                          VulkanCommandRetention &retention) const;
-        /** @brief Resolves exact image-view source and subresource metadata without native calls or allocation on success. */
-        [[nodiscard]] Result<VulkanDrawViewBinding> ResolveDrawView(std::uint64_t view) const;
+        /** @brief Borrows synchronous material/mesh/view capture; the runtime must outlive the returned view.
+         * @return Allocation-free view; captured backing remains owned by command retention, not by this view. */
+        [[nodiscard]] VulkanMaterialCapture MaterialCapture() const & noexcept;
 
     private:
+        friend class VulkanMaterialCapture;
         struct Impl;
         std::unique_ptr<Impl> impl_;
         VulkanShaderRuntime shaders_;
     };
+
+    /** @brief Synchronous borrowed material capture authority, with no ownership or stored native snapshots.
+     * The registry must remain alive through each call. Command retention owns successful captured backing.
+     * All calls obey the registry's existing serialized render-owner lifetime/retirement discipline. */
+    class VulkanMaterialCapture final {
+    public:
+        /** @brief Captures whole single-sample attachments and retains the target's transitive backing.
+         * @param identity Exact registry target. @param retention Prepared command pin storage.
+         * @return Native snapshot or typed stale/unsupported/capacity failure before recording. */
+        [[nodiscard]] Result<VulkanMaterialTarget> CaptureMaterialTarget(std::uint64_t identity, VulkanCommandRetention &retention) const;
+        /** @brief Captures exact indexed mesh buffers and retains all three native registry owners.
+         * @param identity Exact registry mesh. @param retention Prepared command pin storage.
+         * @return Native snapshot or typed stale/capacity failure before recording. */
+        [[nodiscard]] Result<VulkanMaterialMesh> CaptureMaterialMesh(std::uint64_t identity, VulkanCommandRetention &retention) const;
+        /** @brief Resolves exact image-view source and subresource metadata without native calls or allocation on success. */
+        [[nodiscard]] Result<VulkanDrawViewBinding> ResolveDrawView(std::uint64_t view) const;
+
+    private:
+        friend class VulkanResourceRuntime;
+
+        explicit VulkanMaterialCapture(const VulkanResourceRuntime &runtime) noexcept : runtime_(runtime) {}
+
+        const VulkanResourceRuntime &runtime_;
+    };
+
+    inline VulkanMaterialCapture VulkanResourceRuntime::MaterialCapture() const & noexcept {
+        return VulkanMaterialCapture{*this};
+    }
 }  // namespace Horo::Render::Detail

@@ -33,7 +33,8 @@ struct MaterialPacket {
         view = SubmissionTest::Take(resources.CreateTextureView({.texture = {{1}, 3, 1}}, texture));
         target = SubmissionTest::Take(resources.CreateRenderTarget({.colorAttachment = {{1}, 4, 1}, .extent = {8, 8}}, view, 0));
         material.deviceIncarnation = 11;
-        material.owner = this;
+        static const Detail::VulkanShaderOwnerIdentity identity{11};
+        material.owner = &identity;
         material.pipelineBacking = std::make_shared<int>(1);
         material.pipeline = NativeHandle<VkPipeline>(201);
         material.layout = NativeHandle<VkPipelineLayout>(202);

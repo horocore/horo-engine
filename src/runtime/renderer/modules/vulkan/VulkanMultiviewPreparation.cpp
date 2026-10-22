@@ -38,11 +38,11 @@ namespace Horo::Render::Detail {
         const auto found = std::ranges::find(request.views, view, &RenderGraphTextureViewInstance::view);
         if (found == request.views.end() || found->instance == 0)
             return Invalid<VulkanDrawViewBinding>("Exact frontend-resolved multiview attachment view is missing.");
-        const auto actual = registry.ResolveDrawView(found->instance);
+        const auto actual = registry.MaterialCapture().ResolveDrawView(found->instance);
         if (actual.HasError())
             return actual;
-        const auto &descriptor = actual.Value().descriptor;
-        if (actual.Value().image != texture.image || actual.Value().view == VK_NULL_HANDLE || descriptor.baseLayer != layer ||
+        if (const auto &descriptor = actual.Value().descriptor;
+            actual.Value().image != texture.image || actual.Value().view == VK_NULL_HANDLE || descriptor.baseLayer != layer ||
             descriptor.layerCount != 1 || descriptor.baseMip != 0 || descriptor.mipCount != 1 ||
             descriptor.dimension != RenderTextureViewDimension::TwoD || descriptor.format != texture.textureDescriptor.format ||
             descriptor.aspect != aspect)
@@ -122,16 +122,16 @@ namespace Horo::Render::Detail {
         const auto mapped = std::ranges::find(request.meshes, mesh, &RenderGraphMeshInstance::mesh);
         if (mapped == request.meshes.end())
             return Invalid<VulkanMaterialMesh>("Exact multiview mesh generation mapping is missing.");
-        const auto actual = registry.CaptureMaterialMesh(mapped->instance, retention);
+        const auto actual = registry.MaterialCapture().CaptureMaterialMesh(mapped->instance, retention);
         if (actual.HasError())
             return actual;
         const auto *vertex = Resource(request, resources, input.vertices);
-        const auto *indices = Resource(request, resources, input.indices);
-        if (!vertex || !indices || vertex->buffer != actual.Value().vertex.buffer || indices->buffer != actual.Value().index.buffer)
+        if (const auto *indices = Resource(request, resources, input.indices);
+            !vertex || !indices || vertex->buffer != actual.Value().vertex.buffer || indices->buffer != actual.Value().index.buffer)
             return Invalid<VulkanMaterialMesh>("Canonical graph vertex/index dependencies differ from the exact resident mesh.");
         const auto &descriptor = actual.Value().descriptor;
-        const auto indexBytes = descriptor.indexFormat == RenderIndexFormat::UInt16 ? 2U : 4U;
-        if (!descriptor.IsValid() || descriptor.vertexStride != sizeof(MeshVertex) ||
+        if (const auto indexBytes = descriptor.indexFormat == RenderIndexFormat::UInt16 ? 2U : 4U;
+            !descriptor.IsValid() || descriptor.vertexStride != sizeof(MeshVertex) ||
             static_cast<std::uint64_t>(descriptor.vertexCount) * descriptor.vertexStride >
                 actual.Value().vertex.bufferDescriptor.byteSize ||
             static_cast<std::uint64_t>(descriptor.indexCount) * indexBytes > actual.Value().index.bufferDescriptor.byteSize)
@@ -151,8 +151,9 @@ namespace Horo::Render::Detail {
         draw.layout = material->layout;
         draw.sets = material->sets;
         draw.state = material->state;
-        const auto required = mode_ == MultiviewExecutionMode::Instanced ? RenderViewRouting::VertexLayer : RenderViewRouting::SingleView;
-        if (draw.state.viewRouting != required || draw.state.sampleCount != 1)
+        if (const auto required =
+                mode_ == MultiviewExecutionMode::Instanced ? RenderViewRouting::VertexLayer : RenderViewRouting::SingleView;
+            draw.state.viewRouting != required || draw.state.sampleCount != 1)
             return Unsupported("Cooked shader routing or samples differ from the admitted multiview execution mode.");
         for (std::uint32_t view = 0; view < targetCount_; ++view) {
             const auto &target = targets_[view];

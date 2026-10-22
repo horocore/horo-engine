@@ -106,12 +106,14 @@
 #include <imgui_impl_sdl3.h>
 #include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <portable-file-dialogs.h>
 #include <span>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -1065,6 +1067,13 @@ namespace Horo::Editor {
             Application::Internal::PackageProjectHost *packages;
         };
 
+        /** @brief Value-owned prepared viewport/GUI workload and the mesh generation used to assemble it. */
+        struct EditorPreparedPasses final {
+            std::array<Render::RenderPassDescriptor, 2> descriptors{};
+            std::size_t count{};
+            std::uint64_t viewportMeshResourceGeneration{};
+        };
+
         class EditorRuntimeParticipant final : public Runtime::RuntimeLifecycleParticipant, public EditorSurfaceRealizer {
         public:
             EditorRuntimeParticipant(RunEditorMainLoopParams &params, GuiScreenHost &screenHost,
@@ -1401,14 +1410,14 @@ namespace Horo::Editor {
                 p_->modalHost.Draw();
                 ImGui::Render();
 
-                passCount_ = 0;
+                preparedPasses_.count = 0;
                 const EditorViewportSceneView viewportScene = viewportSceneState_->View();
                 if (const EditorViewportExtent viewportExtent = p_->presentation.viewportRenderer.RequestedExtent();
-                    preparedViewportMeshResourceGeneration_ == viewportSceneState_->MeshResourceGeneration() &&
+                    preparedPasses_.viewportMeshResourceGeneration == viewportSceneState_->MeshResourceGeneration() &&
                     CanSubmitViewportPass(viewportExtent)) {
                     if (const Result<void> resized = ResizeLegacyViewportTarget(viewportExtent); resized.HasError())
                         return resized;
-                    passes_[passCount_++] =
+                    preparedPasses_.descriptors[preparedPasses_.count++] =
                         Render::RenderPassDescriptor{.id = Render::RenderPassId{1},
                                                      .kind = Render::RenderPassKind::Graphics,
                                                      .staticMesh = Render::
@@ -1425,7 +1434,7 @@ namespace Horo::Editor {
                                                                                                               .lights =
                                                                                                                   viewportScene.lights}}};
                 }
-                passes_[passCount_++] =
+                preparedPasses_.descriptors[preparedPasses_.count++] =
                     Render::RenderPassDescriptor{.id = Render::RenderPassId{2},
                                                  .kind = Render::RenderPassKind::Graphics,
                                                  .primaryOutput =
@@ -1499,8 +1508,8 @@ namespace Horo::Editor {
                     return Result<void>::Failure(extent.ErrorValue());
                 nativePresentationPending_ = false;
                 if (extent.Value() && SurfaceAdmission() == EditorSurfaceAdmission::Idle) {
-                    const auto available = p_->presentation.renderFrontend.PollPresentationAvailability(*extent.Value());
-                    if (available.HasError()) {
+                    if (const auto available = p_->presentation.renderFrontend.PollPresentationAvailability(*extent.Value());
+                        available.HasError()) {
                         if (available.ErrorValue().code.Value() != Render::RenderPresentationErrors::DrawableUnavailable.code.Value())
                             return Result<void>::Failure(available.ErrorValue());
                         nativePresentationPending_ = true;
@@ -1566,7 +1575,7 @@ namespace Horo::Editor {
                                                                                                .lights = viewportScene.lights});
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
-                preparedViewportMeshResourceGeneration_ = viewportSceneState_->MeshResourceGeneration();
+                preparedPasses_.viewportMeshResourceGeneration = viewportSceneState_->MeshResourceGeneration();
                 if (prepared.Value().has_value())
                     p_->presentation.viewportTarget = *prepared.Value();
                 return Result<void>::Success();
@@ -1589,7 +1598,8 @@ namespace Horo::Editor {
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                 qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::Execution);
 #endif
-                return frame_->Execute(std::span<const Render::RenderPassDescriptor>{passes_.data(), passCount_});
+                return frame_->Execute(
+                    std::span<const Render::RenderPassDescriptor>{preparedPasses_.descriptors.data(), preparedPasses_.count});
             }
 
             /** @brief Observes the actual native present at its owner boundary, before host timing is committed. */
@@ -1655,9 +1665,7 @@ namespace Horo::Editor {
             bool nativePresentationPending_{false};
             Input::FrameNumber inputFrameNumber_{1};
             Input::InputContextToken focusedWidgetInputContext_;
-            std::array<Render::RenderPassDescriptor, 2> passes_{};
-            std::size_t passCount_{};
-            std::uint64_t preparedViewportMeshResourceGeneration_{};
+            EditorPreparedPasses preparedPasses_;
             std::optional<Render::RenderFrameScope> frame_;
             EditorScrollSmoother scrollSmoother_;
             ImGuiMouseSource scrollSource_{ImGuiMouseSource_Mouse};
@@ -2281,24 +2289,43 @@ namespace Horo::Editor {
         }
     }
 
-    /** @brief Contains construction failures while the caller retains partial native owners for explicit retirement. */
+    /** @brief Contains construction failures while the caller retains partial native owners for explicit retirement.
+     * @details The caller admits an owned failure before acquiring native resources. Translating exception diagnostics may
+     * allocate; if that fails, moving the admitted failure still returns to the caller's explicit retirement path.
+     */
     [[nodiscard]] static Result<void> PrepareEditorPresentationResources(SDL_Window &window, const EditorGuiOptions &options,
-                                                                         EditorRenderComposition &composition, EditorTextures &textures) {
+                                                                         EditorRenderComposition &composition, EditorTextures &textures,
+                                                                         Result<void> constructionFailure) noexcept {
+        static_assert(std::is_nothrow_move_constructible_v<Error>);
+        static_assert(std::is_nothrow_move_constructible_v<Result<void>>);
         try {
-            if (const auto composed = CreateEditorRenderComposition(window, options, composition); composed.HasError())
+            if (auto composed = CreateEditorRenderComposition(window, options, composition); composed.HasError())
                 return composed;
             textures = LoadEditorTextures(*composition.guiRenderer);
             return Result<void>::Success();
         } catch (const std::exception &exception) {
-            return Result<void>::Failure(MakeEditorRendererError("editor.renderer.construction_failed", exception.what()));
+            try {
+                return Result<void>::Failure(MakeEditorRendererError("editor.renderer.construction_failed", exception.what()));
+            } catch (...) {
+                // Diagnostic allocation must not bypass retirement of the caller's partial native owners.
+                return constructionFailure;
+            }
         } catch (...) {  // NOSONAR(cpp:S2738) Host ownership survives native construction failure.
-            return Result<void>::Failure(
-                MakeEditorRendererError("editor.renderer.construction_failed", "Renderer construction raised an unknown exception."));
+            return constructionFailure;
         }
     }
 
     /** @brief Creates the SDL, ImGui, renderer, and texture presentation in dependency order. */
     [[nodiscard]] static std::optional<EditorPresentation> StartEditorPresentation(const PreparedEditorStartup &startup) {
+        std::optional<Result<void>> constructionFailure;
+        try {
+            // Reserve a complete typed failure before any window, context or native renderer can require retirement.
+            constructionFailure.emplace(Result<void>::Failure(
+                MakeEditorRendererError("editor.renderer.construction_failed", "Renderer construction raised an unknown exception.")));
+        } catch (const std::bad_alloc &) {
+            std::fputs("Renderer startup cannot reserve its construction failure before acquiring native resources.\n", stderr);
+            return std::nullopt;
+        }
         SDL_Window *window = nullptr;
         if (!InitializeSdlAndCreateWindow(window, startup.moduleInfo->windowRequirements))
             return std::nullopt;
@@ -2311,10 +2338,15 @@ namespace Horo::Editor {
         ApplySavedThemePreference();
         EditorRenderComposition composition;
         EditorTextures textures;
-        auto composed = PrepareEditorPresentationResources(*window, startup.options, composition, textures);
-        if (composed.HasError()) {
-            LOG_CRITICAL("editor.renderer", "Renderer startup failed for '%s': %s", startup.options.rendererBackend.c_str(),
-                         composed.ErrorValue().message.c_str());
+        if (auto composed =
+                PrepareEditorPresentationResources(*window, startup.options, composition, textures, std::move(*constructionFailure));
+            composed.HasError()) {
+            try {
+                LOG_CRITICAL("editor.renderer", "Renderer startup failed for '%s': %s", startup.options.rendererBackend.c_str(),
+                             composed.ErrorValue().message.c_str());
+            } catch (const std::bad_alloc &) {
+                Log::Logger::WriteEmergency("editor.renderer", Log::Level::Critical, composed.ErrorValue().message);
+            }
             bool allowRestart = false;
             static_cast<void>(RetireEditorPresentation(window, composition, textures, allowRestart));
             return std::nullopt;

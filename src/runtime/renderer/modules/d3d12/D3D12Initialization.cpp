@@ -64,8 +64,7 @@ namespace Horo::Render {
 
         /** @brief Completes resource acquisition under the existing startup rollback transaction. */
         Result<void> InitializeResourceService(ID3D12InitializationRuntime &runtime, const D3D12InitializationRequest &request) {
-            auto resources = runtime.InitializeResources(request.resourceLimits);
-            if (resources.HasError())
+            if (auto resources = runtime.InitializeResources(request.resourceLimits); resources.HasError())
                 return resources;
             if (request.cancellation.IsCancellationRequested())
                 return Result<void>::Failure(

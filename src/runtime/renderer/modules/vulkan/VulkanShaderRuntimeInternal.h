@@ -23,7 +23,13 @@ namespace Horo::Render::Detail {
         bool SameLayout(const MaterialBindingLayout &a, const MaterialBindingLayout &b);
     }  // namespace VulkanShaderDetail
 
-    using namespace VulkanShaderDetail;
+    using VulkanShaderDetail::Compare;
+    using VulkanShaderDetail::DescriptorType;
+    using VulkanShaderDetail::Estimate;
+    using VulkanShaderDetail::MaximumObjects;
+    using VulkanShaderDetail::NativeShaderFailure;
+    using VulkanShaderDetail::SameLayout;
+    using VulkanShaderDetail::Stages;
 
     struct VulkanShaderRuntime::Impl {
         struct Shader {
@@ -88,7 +94,7 @@ namespace Horo::Render::Detail {
         VkDevice device{VK_NULL_HANDLE};
         VkPhysicalDeviceProperties properties{};
         RenderPipelineDeviceIdentity identity;
-        std::uint64_t deviceIncarnation{0};
+        VulkanShaderOwnerIdentity ownerIdentity;
         bool vertexLayerEnabled{false};
         IssueIdentity issue;
         ResolveResource resolve;
@@ -97,22 +103,28 @@ namespace Horo::Render::Detail {
         std::unordered_map<std::uint64_t, Shader> shaders;
         std::unordered_map<std::uint64_t, std::shared_ptr<Pipeline>> pipelines;
         std::unordered_map<std::uint64_t, std::shared_ptr<Sampler>> samplers;
-        PFN_vkCreateShaderModule createShaderModule{nullptr};
-        PFN_vkDestroyShaderModule destroyShaderModule{nullptr};
-        PFN_vkCreateDescriptorSetLayout createDescriptorSetLayout{nullptr};
-        PFN_vkDestroyDescriptorSetLayout destroyDescriptorSetLayout{nullptr};
-        PFN_vkCreatePipelineLayout createPipelineLayout{nullptr};
-        PFN_vkDestroyPipelineLayout destroyPipelineLayout{nullptr};
-        PFN_vkCreatePipelineCache createPipelineCache{nullptr};
-        PFN_vkDestroyPipelineCache destroyPipelineCache{nullptr};
-        PFN_vkCreateGraphicsPipelines createGraphicsPipelines{nullptr};
-        PFN_vkDestroyPipeline destroyPipeline{nullptr};
-        PFN_vkCreateSampler createSampler{nullptr};
-        PFN_vkDestroySampler destroySampler{nullptr};
-        PFN_vkCreateDescriptorPool createDescriptorPool{nullptr};
-        PFN_vkDestroyDescriptorPool destroyDescriptorPool{nullptr};
-        PFN_vkAllocateDescriptorSets allocateDescriptorSets{nullptr};
-        PFN_vkUpdateDescriptorSets updateDescriptorSets{nullptr};
+
+        /** @brief Value-owned complete native dispatch for this shader/material owner. */
+        struct Dispatch {
+            PFN_vkCreateShaderModule createShaderModule{nullptr};
+            PFN_vkDestroyShaderModule destroyShaderModule{nullptr};
+            PFN_vkCreateDescriptorSetLayout createDescriptorSetLayout{nullptr};
+            PFN_vkDestroyDescriptorSetLayout destroyDescriptorSetLayout{nullptr};
+            PFN_vkCreatePipelineLayout createPipelineLayout{nullptr};
+            PFN_vkDestroyPipelineLayout destroyPipelineLayout{nullptr};
+            PFN_vkCreatePipelineCache createPipelineCache{nullptr};
+            PFN_vkDestroyPipelineCache destroyPipelineCache{nullptr};
+            PFN_vkCreateGraphicsPipelines createGraphicsPipelines{nullptr};
+            PFN_vkDestroyPipeline destroyPipeline{nullptr};
+            PFN_vkCreateSampler createSampler{nullptr};
+            PFN_vkDestroySampler destroySampler{nullptr};
+            PFN_vkCreateDescriptorPool createDescriptorPool{nullptr};
+            PFN_vkDestroyDescriptorPool destroyDescriptorPool{nullptr};
+            PFN_vkAllocateDescriptorSets allocateDescriptorSets{nullptr};
+            PFN_vkUpdateDescriptorSets updateDescriptorSets{nullptr};
+        };
+
+        Dispatch native;
 
         Result<VkDescriptorBufferInfo> UniformBinding(const MaterialBindingLayout &, const MaterialResourceBinding &,
                                                       const MaterialResidentResource &) const;
@@ -134,7 +146,8 @@ namespace Horo::Render::Detail {
         }
 
         Result<std::size_t> PipelinePayload(const RenderGraphicsPipelineDescriptor &, std::uint64_t, std::uint64_t) const;
-        bool LoadDispatch(VkDevice device, const Resolver &resolver);
+        template <typename ResolverCallable> bool LoadDispatch(VkDevice selectedDevice, const ResolverCallable &resolver);
+        void PublishShader(std::uint64_t id, Shader &shader);
 
         const Pipeline *FindMaterialPipeline(std::uint64_t id, const MaterialBindingDescriptor &descriptor, std::size_t count) const {
             const auto found = pipelines.find(id);
@@ -182,7 +195,9 @@ namespace Horo::Render::Detail {
 
         /** @brief Counts actual descriptors, including arrays, without issuing native calls. */
         struct DescriptorCounts {
-            std::uint64_t buffers{}, images{}, samplers{};
+            std::uint64_t buffers{};
+            std::uint64_t images{};
+            std::uint64_t samplers{};
 
             void Add(const ShaderReflectedBinding &binding) noexcept {
                 switch (binding.kind) {

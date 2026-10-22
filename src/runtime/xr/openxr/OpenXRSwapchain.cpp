@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <format>
 #include <limits>
 
@@ -20,42 +19,31 @@ namespace Horo::XR::OpenXRInternal {
             return MakeError(code, std::format("OpenXR {} failed; native result={}", operation, static_cast<std::int32_t>(result)));
         }
 
-        /** @brief Secures candidate-scoped dispatch before native allocation. */
-        template <typename Function>
-        [[nodiscard]] Result<void> Load(PFN_xrGetInstanceProcAddr getProc, XrInstance instance, const char *name, Function &function) {
-            PFN_xrVoidFunction raw{};
-            const XrResult result = getProc(instance, name, &raw);
-            if (XR_FAILED(result) || !raw)
-                return Result<void>::Failure(NativeFailure(name, XR_FAILED(result) ? result : XR_ERROR_FUNCTION_UNSUPPORTED));
-            function = std::bit_cast<Function>(raw);
-            return Result<void>::Success();
-        }
-
         /** @brief Maps declared Horo uses without introducing additional native uses. */
         [[nodiscard]] XrSwapchainUsageFlags NativeUsage(const NativeSwapchainRequest &request) noexcept {
             using Render::HasTextureUsage;
-            using Render::RenderTextureUsage;
+            using enum Render::RenderTextureUsage;
             XrSwapchainUsageFlags usage{};
-            if (HasTextureUsage(request.texture.usage, RenderTextureUsage::RenderAttachment))
+            if (HasTextureUsage(request.texture.usage, RenderAttachment))
                 usage |= request.role == NativeSwapchainRole::Depth ? XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT
                                                                     : XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
-            if (HasTextureUsage(request.texture.usage, RenderTextureUsage::Sampled))
+            if (HasTextureUsage(request.texture.usage, Sampled))
                 usage |= XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-            if (HasTextureUsage(request.texture.usage, RenderTextureUsage::Storage))
+            if (HasTextureUsage(request.texture.usage, Storage))
                 usage |= XR_SWAPCHAIN_USAGE_UNORDERED_ACCESS_BIT;
-            if (HasTextureUsage(request.texture.usage, RenderTextureUsage::CopySource))
+            if (HasTextureUsage(request.texture.usage, CopySource))
                 usage |= XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT;
-            if (HasTextureUsage(request.texture.usage, RenderTextureUsage::CopyDestination))
+            if (HasTextureUsage(request.texture.usage, CopyDestination))
                 usage |= XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT;
             return usage;
         }
 
         /** @brief Enforces an allocation shape the native base swapchain contract can describe. */
         [[nodiscard]] bool ValidRequest(const NativeSwapchainRequest &request) noexcept {
-            using Render::RenderTextureFormat;
+            using enum Render::RenderTextureFormat;
             const auto format = request.texture.format;
-            const bool depth = format == RenderTextureFormat::Depth16Unorm || format == RenderTextureFormat::Depth24Stencil8 ||
-                               format == RenderTextureFormat::Depth32Float || format == RenderTextureFormat::Depth32FloatStencil8;
+            const bool depth =
+                format == Depth16Unorm || format == Depth24Stencil8 || format == Depth32Float || format == Depth32FloatStencil8;
             return request.target.IsValid() && request.role < NativeSwapchainRole::Count &&
                    request.foveation < NativeSwapchainFoveation::Count && request.texture.IsValid() &&
                    request.texture.dimension == Render::RenderTextureDimension::TwoD && request.texture.mipCount == 1 &&
@@ -92,21 +80,9 @@ namespace Horo::XR::OpenXRInternal {
         return images_->Validate(request_);
     }
 
-    /** @copydoc OpenXRSwapchain::Resolve */
-    Result<void> OpenXRSwapchain::Resolve(PFN_xrGetInstanceProcAddr getProc, XrInstance instance) {
-        if (auto r = Load(getProc, instance, "xrEnumerateSwapchainFormats", dispatch_.formats); r.HasError())
-            return r;
-        if (auto r = Load(getProc, instance, "xrCreateSwapchain", dispatch_.create); r.HasError())
-            return r;
-        if (auto r = Load(getProc, instance, "xrDestroySwapchain", dispatch_.destroy); r.HasError())
-            return r;
-        if (auto r = Load(getProc, instance, "xrEnumerateSwapchainImages", dispatch_.enumerate); r.HasError())
-            return r;
-        if (auto r = Load(getProc, instance, "xrAcquireSwapchainImage", dispatch_.acquire); r.HasError())
-            return r;
-        if (auto r = Load(getProc, instance, "xrWaitSwapchainImage", dispatch_.wait); r.HasError())
-            return r;
-        return Load(getProc, instance, "xrReleaseSwapchainImage", dispatch_.release);
+    /** @copydoc OpenXRSwapchain::DispatchFailure */
+    Error OpenXRSwapchain::DispatchFailure(const char *name, const XrResult result) {
+        return NativeFailure(name, result);
     }
 
     /** @copydoc OpenXRSwapchain::SelectRuntimeFormat */
@@ -164,7 +140,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(NativeFailure("enumerate swapchain images", result));
         if (count_ == 0 || count_ > MaximumImages)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (auto images = images_->Enumerate(native_, count_, dispatch_.enumerate); images.HasError())
+        const OpenXRSwapchainImageEnumeration enumeration{native_, dispatch_.enumerate};
+        if (auto images = images_->Enumerate(count_, enumeration); images.HasError())
             return images;
         if (auto sessionState = session_->Validate(request_.target.session); sessionState.HasError())
             return sessionState;
@@ -174,44 +151,23 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
-    /** @copydoc OpenXRSwapchain::Create */
-    Result<void> OpenXRSwapchain::Create(const NativeSwapchainRequest &request, PFN_xrGetInstanceProcAddr getProc) {
-        if (auto thread = CheckThread(); thread.HasError())
-            return thread;
-        if (native_ != XR_NULL_HANDLE || !getProc || !ValidRequest(request))
-            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+    /** @copydoc OpenXRSwapchain::AdmitCreate */
+    Result<NativeSessionBorrow> OpenXRSwapchain::AdmitCreate(const NativeSwapchainRequest &request) const {
+        using Outcome = Result<NativeSessionBorrow>;
+        if (native_ != XR_NULL_HANDLE || !ValidRequest(request))
+            return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
         if (lastTarget_.IsValid() && request.target.session == lastTarget_.session && request.target.slot.index == lastTarget_.slot.index &&
             request.target.slot.generation <= lastTarget_.slot.generation)
-            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         auto session = session_->Borrow(request.target.session);
         if (session.HasError())
-            return Result<void>::Failure(session.ErrorValue());
+            return session;
         if (request.role == NativeSwapchainRole::Depth && !session_->HasExtension("XR_KHR_composition_layer_depth"))
-            return Result<void>::Failure(
+            return Outcome::Failure(
                 MakeError(XRErrors::OperationUnsupported, "Projection depth requires negotiated XR_KHR_composition_layer_depth."));
         if (auto device = images_->Validate(request); device.HasError())
-            return device;
-        if (auto dispatch = Resolve(getProc, session.Value().instance); dispatch.HasError())
-            return dispatch;
-        request_ = request;
-        lastTarget_ = request.target;
-        closing_ = false;
-        lost_ = false;
-        malformedAcquisition_ = false;
-        try {
-            auto prepared = Prepare(session.Value());
-            if (prepared.HasValue())
-                return prepared;
-            // Keep the original preparation diagnostic; failed cleanup remains retained for Close retry.
-            const auto rollback = Close();
-            if (rollback.HasError())
-                return Result<void>::Failure(rollback.ErrorValue());
-            return prepared;
-        } catch (...) {
-            const auto rollback = Close();
-            (void)rollback;
-            throw;
-        }
+            return Outcome::Failure(std::move(device).ErrorValue());
+        return session;
     }
 
     /** @copydoc OpenXRSwapchain::Acquire */
@@ -313,8 +269,7 @@ namespace Horo::XR::OpenXRInternal {
         if (phase_ == Imported) {
             // Revoke retained plans before calling out; a failed retirement remains retryable but unpublishable.
             phase_ = Retiring;
-            const auto retired = images_->Retire(acquisition_.texture);
-            if (retired.HasError()) {
+            if (const auto retired = images_->Retire(acquisition_.texture); retired.HasError()) {
                 retireRequested_ = false;
                 return Result<bool>::Failure(retired.ErrorValue());
             }
@@ -322,8 +277,7 @@ namespace Horo::XR::OpenXRInternal {
         }
         if (phase_ == Retiring) {
             if (!retireRequested_) {
-                const auto retired = images_->Retire(acquisition_.texture);
-                if (retired.HasError())
+                if (const auto retired = images_->Retire(acquisition_.texture); retired.HasError())
                     return Result<bool>::Failure(retired.ErrorValue());
                 retireRequested_ = true;
             }
@@ -354,16 +308,16 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRSwapchain::Close */
     Result<bool> OpenXRSwapchain::Close() {
+        using enum NativeSwapchainPhase;
         if (auto thread = CheckThread(); thread.HasError())
             return Result<bool>::Failure(thread.ErrorValue());
         closing_ = true;
-        if (phase_ == NativeSwapchainPhase::Acquired && !lost_) {
+        if (phase_ == Acquired && !lost_) {
             auto waited = Wait(0);
             if (waited.HasError() || !waited.Value())
                 return waited;
         }
-        if (phase_ == NativeSwapchainPhase::Acquired || phase_ == NativeSwapchainPhase::Ready || phase_ == NativeSwapchainPhase::Imported ||
-            phase_ == NativeSwapchainPhase::Retiring) {
+        if (phase_ == Acquired || phase_ == Ready || phase_ == Imported || phase_ == Retiring) {
             auto released = PollRelease();
             if (released.HasError() || !released.Value())
                 return released;

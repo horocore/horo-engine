@@ -114,10 +114,10 @@ namespace Horo::Render {
 
         /** @brief Reports whether a resource category can satisfy the semantic use. */
         [[nodiscard]] bool IsResourceCompatible(const RenderGraphResourceKind resource, const RenderGraphUsageKind usage) noexcept {
-            if (usage == RenderGraphUsageKind::VertexBuffer || usage == RenderGraphUsageKind::IndexBuffer ||
-                usage == RenderGraphUsageKind::UniformBuffer)
+            using enum RenderGraphUsageKind;
+            if (usage == VertexBuffer || usage == IndexBuffer || usage == UniformBuffer)
                 return resource == RenderGraphResourceKind::Buffer;
-            if (usage == RenderGraphUsageKind::ColorAttachment || usage == RenderGraphUsageKind::DepthStencilAttachment) {
+            if (usage == ColorAttachment || usage == DepthStencilAttachment) {
                 return resource == RenderGraphResourceKind::Texture;
             }
             return true;
