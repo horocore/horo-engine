@@ -18,7 +18,8 @@ namespace Horo::Render::VulkanPresentationTest {
         }
         const auto resized = fixture.runtime.Resize({640, 480}, PresentMode::Fifo);
         REQUIRE(resized.HasError());
-        CHECK(resized.ErrorValue().code == RenderPresentationErrors::OutputUnsupported.code);
+        CHECK(resized.ErrorValue().domain.Value() == RenderPresentationErrors::OutputUnsupported.domain.Value());
+        CHECK(resized.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
         CHECK(fixture.state.chainsCreated == 0);
         CHECK(fixture.state.acquires == 0);
     }
@@ -29,7 +30,8 @@ namespace Horo::Render::VulkanPresentationTest {
         fixture.state.outputFormat.format = VK_FORMAT_R8G8B8A8_UNORM;
         const auto resized = fixture.runtime.Resize({800, 600}, PresentMode::Fifo);
         REQUIRE(resized.HasError());
-        CHECK(resized.ErrorValue().code == RenderPresentationErrors::OutputUnsupported.code);
+        CHECK(resized.ErrorValue().domain.Value() == RenderPresentationErrors::OutputUnsupported.domain.Value());
+        CHECK(resized.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
         CHECK(fixture.runtime.OutputFormat().Value() == VK_FORMAT_B8G8R8A8_UNORM);
         CHECK(fixture.state.chainsCreated == 1);
         CHECK(fixture.state.chainsDestroyed == 0);

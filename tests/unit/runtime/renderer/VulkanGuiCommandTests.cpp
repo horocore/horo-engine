@@ -1,6 +1,7 @@
 #include "../../../support/renderer/MultiviewTestSupport.h"
 #include "VulkanGraphTestSupport.h"
 #include "VulkanShaderDispatchFixture.h"
+#include "runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.h"
 
 namespace {
     using namespace Horo::Render::VulkanGraphTest;
@@ -19,7 +20,7 @@ namespace {
             driver = &shader;
             VkPhysicalDeviceProperties properties{};
             properties.limits.maxSamplerAllocationCount = 4096;
-            REQUIRE(frame.resources.InitializeShaders(properties, {"vulkan:gui-test"}, Resolve, 11).HasValue());
+            REQUIRE(frame.resources.InitializeShaders(properties, RenderAdapterId{"vulkan:gui-test"}, Resolve, 11).HasValue());
             frame.resourceState.state.bufferRequirements.size = 16;
             frame.resourceState.state.imageRequirements.size = 16;
             const RenderTextureDescriptor descriptor{.extent = {2, 2},
