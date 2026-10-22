@@ -1,3 +1,4 @@
+#include "../../helpers/ProjectReplicationTestSupport.h"
 #include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
@@ -17,6 +18,7 @@ namespace Horo::Editor::WorldCompositionTests {
             std::unique_ptr<EditorWorkspaceController> controller;
 
             WorldProject() {
+                Tests::WriteReplicationProject(directory.Path());
                 {
                     std::ofstream file{Path()};
                     file << WorldSource();
@@ -259,6 +261,7 @@ namespace Horo::Editor {
     TEST_CASE("World Composition bake command uses the application-owned real cell producer and shared diagnostic stores",
               "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake controller"};
+        Tests::WriteReplicationProject(project.Path());
         JobSystem jobs{{.workerCount = 1}};
         OperationStore operations{8, 16};
         BuildOutputStore diagnostics{32};
@@ -309,6 +312,7 @@ namespace Horo::Editor {
 namespace Horo::Editor {
     TEST_CASE("World bake project replacement cannot reuse a source publication fence", "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake project fence"};
+        Tests::WriteReplicationProject(project.Path());
         JobSystem jobs{{.workerCount = 0}};
         OperationStore operations{8, 16};
         BuildOutputStore output{32};
@@ -350,6 +354,7 @@ namespace Horo::Editor {
     TEST_CASE("World bake publication fences the registry owner before a presentation snapshot refresh",
               "[editor][world_bake][controller]") {
         Horo::Tests::OwnedTestDirectory project{"world bake registry fence"};
+        Tests::WriteReplicationProject(project.Path());
         JobSystem jobs{{.workerCount = 1}};
         OperationStore operations{8, 16};
         BuildOutputStore output{32};

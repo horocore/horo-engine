@@ -195,49 +195,51 @@ namespace Horo::Network {
     /** @copydoc AuthenticationSessionAdapter::VerifyWithAuthorities */
     Result<AuthenticationResult> AuthenticationSessionAdapter::VerifyWithAuthorities(const AuthenticationResponseView &response,
                                                                                      const PeerAuthenticationEvidence &evidence,
-                                                                                     const std::uint64_t nowTick) try {
-        const auto peer = VerifyPeerAuthorities(evidence, nowTick);
-        if (peer.HasError())
-            return Result<AuthenticationResult>::Failure(peer.ErrorValue());
-        if (proofAuthorization_ && (!SameEvidence(evidence, proofAuthorization_->Evidence()) ||
-                                    peer.Value().certificate.stamp != proofAuthorization_->certificateStamp_ ||
-                                    peer.Value().peer.stamp != proofAuthorization_->Peer().stamp ||
-                                    peer.Value().peer.trustLevel != proofAuthorization_->Peer().trustLevel))
-            return Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
-        const auto chargeVerifier = [this, nowTick]() {
-            return protection_ == nullptr ||
-                   protection_->Charge(challenge_.connection, challenge_.sessionGeneration, AdmissionWork::VerifierCall, 1, nowTick)
-                       .HasValue();
-        };
-        if (!chargeVerifier())
-            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
-        const auto credential =
-            authorities_.credentials->Verify({challenge_, policy_.credential, peer.Value().peer.trustLevel, response.proof, nowTick});
-        if (credential.HasError())
-            return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
-        if (!ValidStamp(credential.Value().stamp, challenge_) || credential.Value().binding != policy_.credential ||
-            !ValidPrincipal(credential.Value().principal, peer.Value().peer.trustLevel, nowTick))
-            return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
+                                                                                     const std::uint64_t nowTick) {
+        try {
+            const auto peer = VerifyPeerAuthorities(evidence, nowTick);
+            if (peer.HasError())
+                return Result<AuthenticationResult>::Failure(peer.ErrorValue());
+            if (proofAuthorization_ && (!SameEvidence(evidence, proofAuthorization_->Evidence()) ||
+                                        peer.Value().certificate.stamp != proofAuthorization_->certificateStamp_ ||
+                                        peer.Value().peer.stamp != proofAuthorization_->Peer().stamp ||
+                                        peer.Value().peer.trustLevel != proofAuthorization_->Peer().trustLevel))
+                return Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
+            const auto chargeVerifier = [this, nowTick]() {
+                return protection_ == nullptr ||
+                       protection_->Charge(challenge_.connection, challenge_.sessionGeneration, AdmissionWork::VerifierCall, 1, nowTick)
+                           .HasValue();
+            };
+            if (!chargeVerifier())
+                return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
+            const auto credential =
+                authorities_.credentials->Verify({challenge_, policy_.credential, peer.Value().peer.trustLevel, response.proof, nowTick});
+            if (credential.HasError())
+                return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
+            if (!ValidStamp(credential.Value().stamp, challenge_) || credential.Value().binding != policy_.credential ||
+                !ValidPrincipal(credential.Value().principal, peer.Value().peer.trustLevel, nowTick))
+                return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
 
-        if (!chargeVerifier())
-            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
-        const auto channel = authorities_.privateKeys->Bind(
-            {challenge_, policy_.privateKey, evidence.transport, credential.Value().stamp, credential.Value().principal.session});
-        if (channel.HasError())
-            return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
-        if (!ValidStamp(channel.Value().stamp, challenge_) || channel.Value().binding != policy_.privateKey ||
-            channel.Value().channel != evidence.transport.channel ||
-            channel.Value().channelGeneration != evidence.transport.channelGeneration ||
-            !Detail::HasNonZeroByte(channel.Value().bindingDigest))
-            return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
+            if (!chargeVerifier())
+                return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
+            const auto channel = authorities_.privateKeys->Bind(
+                {challenge_, policy_.privateKey, evidence.transport, credential.Value().stamp, credential.Value().principal.session});
+            if (channel.HasError())
+                return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
+            if (!ValidStamp(channel.Value().stamp, challenge_) || channel.Value().binding != policy_.privateKey ||
+                channel.Value().channel != evidence.transport.channel ||
+                channel.Value().channelGeneration != evidence.transport.channelGeneration ||
+                !Detail::HasNonZeroByte(channel.Value().bindingDigest))
+                return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
 
-        accepted_ = AuthenticationResult{challenge_.connection, challenge_.sessionGeneration, policy_.id,
-                                         policy_.revision,      credential.Value().principal, channel.Value()};
-        state_ = AuthenticationState::Accepted;
-        failure_ = AuthenticationFailureClass::None;
-        return Result<AuthenticationResult>::Success(accepted_);
-    } catch (...) {
-        return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
+            accepted_ = AuthenticationResult{challenge_.connection, challenge_.sessionGeneration, policy_.id,
+                                             policy_.revision,      credential.Value().principal, channel.Value()};
+            state_ = AuthenticationState::Accepted;
+            failure_ = AuthenticationFailureClass::None;
+            return Result<AuthenticationResult>::Success(accepted_);
+        } catch (...) {
+            return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
+        }
     }
 
     /** @copydoc AuthenticationSessionAdapter::Authenticate */

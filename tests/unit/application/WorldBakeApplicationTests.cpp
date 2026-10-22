@@ -30,7 +30,7 @@ namespace Horo::Application {
             REQUIRE(entities.size() == 2);
             REQUIRE(output.Value().sourceScenes.size() == entities.size());
             for (std::size_t index = 0; index < entities.size(); ++index) {
-                const auto &authored = request.document->loadedPages[index].content.Objects().front().components.navigationSurface;
+                const auto authored = request.document->loadedPages[index].content.Objects().front().components.navigationSurface;
                 REQUIRE(authored);
                 REQUIRE(entities[index].components.navigationSurface);
                 CHECK(*entities[index].components.navigationSurface == *authored);

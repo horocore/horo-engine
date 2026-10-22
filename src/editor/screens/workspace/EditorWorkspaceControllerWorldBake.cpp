@@ -85,6 +85,14 @@ namespace Horo::Editor {
         const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
         auto project = m_worldBakeProject;
         project.fence.registryRevision = registry.Revision().value;
+        if (!m_gameplayRegistry)
+            return Result<OperationId>::Failure(MakeError(Application::WorldBakeErrors::Dependency));
+        if (const auto *error = m_gameplayRegistry->ReplicationMetadataError())
+            return Result<OperationId>::Failure(*error);
+        if (!m_gameplayRegistry->ReplicationMetadata())
+            return Result<OperationId>::Failure(MakeError(Application::WorldBakeErrors::Dependency));
+        project.replication = m_gameplayRegistry->ReplicationMetadata();
+        project.fence.replication = project.replication->Fingerprint();
         Application::WorldBakeRequest request{.document = current.Value(),
                                               .project = std::move(project),
                                               .registry = registry,
@@ -110,6 +118,10 @@ namespace Horo::Editor {
             return;
         const auto current = (m_partitionedWorld ? *m_partitionedWorld : WorldDocuments()).Snapshot();
         auto project = m_worldBakeProject.fence;
+        project.replication =
+            m_gameplayRegistry && !m_gameplayRegistry->ReplicationMetadataError() && m_gameplayRegistry->ReplicationMetadata()
+                ? m_gameplayRegistry->ReplicationMetadata()->Fingerprint()
+                : Sha256Digest{};
         project.registryRevision = (m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry).Revision().value;
         const auto lease = current.HasValue() ? current.Value() : PartitionedWorldSnapshotLease{};
         m_worldBake->Pump(lease, project);

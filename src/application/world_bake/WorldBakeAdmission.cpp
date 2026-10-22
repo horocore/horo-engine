@@ -89,6 +89,15 @@ namespace Horo::Application::WorldBakeDetail {
 
         /** @brief Admits complete dependency identities and finite graph storage without resolving provider state. */
         Result<void> AdmitProject(const WorldBakeProjectCapture &project, const WorldBakeLimits &limits) {
+            if (project.fence.replication != (project.replication ? project.replication->Fingerprint() : Sha256Digest{}))
+                return Result<void>::Failure(MakeError(WorldBakeErrors::Stale));
+            if (project.replication) {
+                auto assessment = project.replication->Assess(Network::ReplicationDeclarationUse::Cook);
+                if (assessment.HasError())
+                    return Result<void>::Failure(assessment.ErrorValue());
+                if (auto admitted = assessment.Value().RequireAdmission(); admitted.HasError())
+                    return admitted;
+            }
             if (project.dependencies.size() > limits.cache.maximumDependencies || project.components.size() > limits.cache.maximumSchemas ||
                 project.behaviors.size() > limits.cache.maximumSchemas - project.components.size())
                 return Result<void>::Failure(MakeError(WorldBakeErrors::Capacity));

@@ -1,6 +1,7 @@
 #include "WorldBakeInternal.h"
 
 #include <algorithm>
+#include <array>
 #include <set>
 
 namespace Horo::Application {
@@ -63,7 +64,9 @@ namespace Horo::Application {
             std::vector<S::SceneCellCookDependency> dependencies;
             for (const auto &dependency : request.project.dependencies)
                 dependencies.push_back({dependency.asset.id, dependency.digest, dependency.revision, dependency.dependencies});
-            auto cooked = cache.Cook(partition, std::span{&input, 1}, dependencies, request.project.settings, cache.Revision(),
+            const std::array<std::span<const std::byte>, 2> settings{std::as_bytes(std::span{request.project.settings.bytes}),
+                                                                     std::as_bytes(std::span{request.project.fence.replication.bytes})};
+            auto cooked = cache.Cook(partition, std::span{&input, 1}, dependencies, ComputeSha256Fragments(settings), cache.Revision(),
                                      request.limits.codec.semantic, cancellation);
             if (cooked.HasError())
                 return Result<std::shared_ptr<const S::RuntimeSceneCellPayload>>::Failure(

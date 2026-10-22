@@ -359,6 +359,7 @@ add_executable(HoroNetworkApiTests
         unit/runtime/networking/PacketQueueTests.cpp
         unit/runtime/networking/ProtocolIdentityTests.cpp
         unit/runtime/networking/ReplicationDescriptorTests.cpp
+        unit/runtime/networking/ReplicationMetadataCaptureTests.cpp
         unit/runtime/networking/ReplicationDeclarationPolicyTests.cpp
         unit/runtime/networking/NetworkReplicationInventoryTests.cpp
         unit/runtime/networking/ReplicationDescriptorRegistryTests.cpp
@@ -2717,6 +2718,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerPrefabCreationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
+            unit/editor/EditorWorkspaceWorldBakeReplicationTests.cpp
             unit/editor/EditorWorkspaceWorldCompositionTests.cpp
             unit/editor/EditorWorkspaceStreamingMountTests.cpp
             unit/editor/WorkspaceReadSourcesTests.cpp
@@ -3254,6 +3256,7 @@ add_executable(HoroEditorViewportSceneTests
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
 add_executable(HoroWorldBakeApplicationTests
+        unit/application/WorldBakeReplicationTests.cpp
         unit/application/WorldBakeApplicationTests.cpp
         unit/application/WorldBakeNativeSourceTests.cpp
 )

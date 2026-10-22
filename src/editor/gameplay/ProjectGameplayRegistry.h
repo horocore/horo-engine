@@ -11,6 +11,7 @@
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Gameplay/LuaBehavior.h"
+#include "Horo/Network/ReplicationMetadataCapture.h"
 
 #include <cstdint>
 #include <filesystem>
@@ -137,6 +138,15 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> RestoreNativeReload(const Gameplay::GameModuleReloadSnapshot &snapshot);
         /** @brief Reports whether a native generation is loaded. */
         [[nodiscard]] bool HasNativeModule() const noexcept;
+        /** @brief Returns deep-owned metadata of the actual loaded generation, without executable leases.
+         * @return Immutable capture, or null when capture failed; Diagnostics retains the original cause. */
+        [[nodiscard]] const Network::ReplicationMetadataCapturePtr &ReplicationMetadata() const noexcept;
+        /** @brief Returns nonadmitting inspection evidence, including opaque unavailable declarations.
+         * @return Capture-owned assessment or null when structural capture failed. */
+        [[nodiscard]] const Network::ReplicationDeclarationAssessment *ReplicationInspection() const noexcept;
+        /** @brief Returns the current source/candidate capture error without discarding last-good inspection metadata.
+         * @return Borrowed typed failure while Cook must fail closed, otherwise null. */
+        [[nodiscard]] const Error *ReplicationMetadataError() const noexcept;
 
     private:
         struct LuaSourceStat {
@@ -159,6 +169,12 @@ namespace Horo::Editor {
 
         void DiscoverLuaPrograms(const std::filesystem::path &projectRoot);
         void InstallLuaGeneration(const ProjectLuaGenerationSnapshot &snapshot);
+        void CaptureReplicationMetadata(const std::filesystem::path &projectRoot);
+        [[nodiscard]] Result<Network::ReplicationMetadataCapturePtr> BuildReplicationMetadata(
+            const std::filesystem::path &projectRoot, const Gameplay::LuaBehaviorProgram *replacement = nullptr,
+            std::size_t replacementIndex = 0) const;
+        [[nodiscard]] Result<void> ReplaceLuaGeneration(std::size_t index, std::unique_ptr<Gameplay::LuaBehaviorProgram> candidate);
+        [[nodiscard]] Result<void> RefreshReplicationSource();
 
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> moduleRetirements_;
         std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
@@ -174,5 +190,10 @@ namespace Horo::Editor {
         std::optional<std::filesystem::file_time_type> nativeManifestWriteTime_;
         Gameplay::BehaviorRegistry registry_;
         std::vector<ProjectGameplayDiagnostic> diagnostics_;
+        std::filesystem::path projectRoot_;
+        Network::ReplicationMetadataCapturePtr replicationMetadata_;
+        std::optional<Network::ReplicationDeclarationAssessment> replicationInspection_;
+        std::optional<Error> replicationError_;
+        std::optional<std::pair<std::filesystem::file_time_type, std::uintmax_t>> replicationSourceStamp_;
     };
 }  // namespace Horo::Editor
