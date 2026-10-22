@@ -16,6 +16,7 @@
 #include "Horo/Editor/ProjectOpenService.h"
 #include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/OperationStore.h"
@@ -168,18 +169,14 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void AttachWorkspacePanels();
         /** @brief Owns the project path and application closure across asynchronous Play preparation. */
         EditorPlaySceneFactory BindPlayFactory(const std::filesystem::path &projectRoot) const;
-        /** @brief Capture gameplay borrows and the selected play factory at the host composition boundary. */
-        EditorWorkspaceGameplayServices BindGameplayServices(const std::filesystem::path &projectRoot) const;
         /** @brief Binds the explicit authoring stage capability to this authorized project. */
         EditorPlaySceneFactory BindPrefabStageFactory(const std::filesystem::path &projectRoot) const;
-        /** @brief Binds borrowed host services and transfers admitted source/PCG owners into controller dependencies. */
-        EditorWorkspaceDependencies BindControllerDependencies(const std::filesystem::path &projectRoot,
-                                                               UiInspectorResources *uiInspectorResources,
-                                                               const Assets::AssetId &sessionOwner,
-                                                               std::shared_ptr<const Assets::IAssetRegistrySource> registrySource,
-                                                               PCGEditorCatalog &&pcgCatalog, PCGPreviewInputs &&pcgPreviewInputs) const;
         /** @brief Creates the controller under the uncommitted project activation lease. */
         Result<void> InitializeController(const std::filesystem::path &projectRoot);
+        /** @brief Binds admitted read and preview owners to the controller's borrowed host services. */
+        EditorWorkspaceDependencies BindControllerDependencies(const std::filesystem::path &projectRoot,
+                                                               UiInspectorResources *uiInspectorResources, WorkspaceReadSources &&sources,
+                                                               PCGEditorCatalog &&catalog, PCGPreviewInputs &&previewInputs) const;
         /** @brief Keeps native dialog input ownership through scene publication. */
         bool SaveSceneAs(const bool copyOnly);
         /** @brief Restores admitted extension surface state before presentation. */
@@ -192,6 +189,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OpenPlayTopologyProfilesModal();
         /** @brief Captures the external scene before opening its comparison modal. */
         void OpenSceneComparison();
+        /** @brief Opens layer creation over the canonical world document owner. */
+        void OpenWorldLayerCreation(const WorldDocumentFence &expected);
         /** @brief Opens the transient captured-subtree workflow under the workspace lifetime fence. */
         void OpenPrefabCreationModal(const SceneObjectId root);
         /** @brief Resolves a contained destination before opening behavior creation. */

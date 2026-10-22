@@ -10,11 +10,13 @@
 #include "editor/modals/prefab_creation/PrefabCreationModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/modals/source_document/SourceDocumentCloseModal.h"
+#include "editor/modals/world_layer/CreateWorldLayerModal.h"
 
 #include <algorithm>
 #include <format>
 #include <portable-file-dialogs.h>
 #include <span>
+#include <utility>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
@@ -275,6 +277,19 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (opened.HasError()) {
             LOG_WARN("editor.scene_document", "External scene comparison modal could not open: %s", opened.ErrorValue().message.c_str());
         }
+    }
+
+    /** @copydoc EditorWorkspaceScreen::OpenWorldLayerCreation */
+    void EditorWorkspaceScreen::OpenWorldLayerCreation(const WorldDocumentFence &expected) {
+        const auto opened = modalHost_.OpenRoot(
+            std::make_unique<CreateWorldLayerModal>(context_, expected, [this](std::string name, const WorldDocumentFence &fence) {
+            if (!controller_)
+                return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Lifecycle));
+            return controller_->WorldDocuments().CreateLayer(std::move(name), fence);
+        }));
+        if (opened.HasError() && controller_)
+            controller_->Notifications().Publish("world_layers", NotificationSeverity::Error,
+                                                 context_.localization.Get("editor", "workspace.world_layers.rejected"));
     }
 
     /** @copydoc EditorWorkspaceScreen::OpenPrefabCreationModal */

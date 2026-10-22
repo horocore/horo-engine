@@ -2171,3 +2171,32 @@ benchmark qualifies CPU/work only. Advancing-clock dense/moving-source tests
 qualify compatible profiles and typed expiry for incompatible profiles without
 serving aged intent. Positive budgets alone do not imply feasibility at any
 arbitrary cadence or deadline.
+
+
+### Read-only native inspection diagnostics (WST-009.7)
+
+The application may mount an explicit validated `world.index` for isolated,
+read-only Editor inspection. That owner instantiates the canonical registry,
+source planner, source registrations, scheduler and residency ledger. It has no
+payload-loading/activation capability, so an empty actual residency ledger is
+unobserved state rather than an invented Unloaded/Resident/Active record. The
+Editor does not derive residency from its source working set. The canonical
+active document/view remains the Editor controller's existing owner and binding.
+
+`WorldStreamingDiagnosticSnapshot::CreateStateOnly` uses the same bounded
+source/cell/failure/event validation as the measured-budget capture, while explicitly
+retaining no budget policy or usage sample. `BudgetPolicy()` and `BudgetSample()`
+return nullable pointers and are absent together. Consumers must distinguish this
+absence from measured zero. This is one canonical diagnostic projection with an
+explicit capability limit, not a second diagnostic authority or a guessed sample.
+State-only diagnostics never authorize resource admission, loading or activation;
+those paths still require their existing complete budget/reservation contracts.
+
+The mounted lifecycle prepares private native owners from actual index bytes,
+advances bounded source-planner quanta using the native steady clock, and binds
+only a successful real plan/diagnostic publication to the viewport bridge.
+Replacement explicitly unbinds the old exact mounted owner before destruction;
+failed preparation preserves the active mount. Source changes withdraw actual
+registrations before recomputation. Document replacement, close, workspace
+teardown and explicit stop revoke the bridge before native shutdown. No packaged
+artifact or policy is edited by inspection.

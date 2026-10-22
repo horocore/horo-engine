@@ -325,6 +325,14 @@ namespace Horo::WorldStreaming {
         return Result<const WorldPartitionCellDescriptor *>::Success(&record);
     }
 
+    /** @copydoc WorldPartitionRegistrySnapshot::CellBounds */
+    Result<WorldPartitionBounds> WorldPartitionRegistrySnapshot::CellBounds(const WorldPartitionCellHandle &handle) const {
+        const auto resolved = Resolve(handle);
+        if (resolved.HasError())
+            return Result<WorldPartitionBounds>::Failure(resolved.ErrorValue());
+        return Result<WorldPartitionBounds>::Success(state_->spatialIndex.cellBounds[handle.slot]);
+    }
+
     /** @copydoc WorldPartitionRegistrySnapshot::Query */
     Result<WorldPartitionSpatialQueryResult> WorldPartitionRegistrySnapshot::Query(const WorldPartitionSpatialQuery &query,
                                                                                    const std::span<WorldPartitionCellHandle> output) const {

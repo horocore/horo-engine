@@ -251,7 +251,7 @@ horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorPlaySceneHostInternal DEPENDENCIES HoroRuntimeScene HoroGameplayRuntime)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroFoundationJsonInternal HoroNavigationBakeAutomation HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource
+    DEPENDENCIES HoroFoundationJsonInternal HoroNavigationBakeAutomation HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource HoroProjectReadFilesApi HoroWorldBakeApplication
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
@@ -305,6 +305,7 @@ horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES HoroEditorUiStyleHostInternal
+        HoroPlatformProjectReadFiles
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo
         HoroEditorSceneProductHost
@@ -411,3 +412,4 @@ horo_allow_target_dependencies(TARGET HoroMcpNavigationAdapters DEPENDENCIES Hor
 horo_allow_target_dependencies(TARGET HoroUiStyleWorkspaceApplication DEPENDENCIES HoroRuntimeUi HoroAssets)
 horo_allow_target_dependencies(TARGET HoroEditorUiStyleHostInternal
     DEPENDENCIES HoroEditorServices HoroUiStyleWorkspaceApplication HoroPlatformImmutableFileStorage HoroPlatform HoroProjectMutationGuard)
+horo_allow_target_dependencies(TARGET HoroWorldBakeApplication DEPENDENCIES HoroEditorModel HoroSceneCellPayload HoroWorldStreaming HoroSceneRuntimeConversion HoroFoundation HoroAssets HoroProjectReadFilesApi HoroProjectMutationGuard)

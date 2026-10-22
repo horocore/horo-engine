@@ -537,6 +537,32 @@ namespace {
             RequireCatalogKeys(service, PCGAuthoringKeys);
         }
     }
+
+    TEST_CASE("World layer outliner messages resolve in both shipped locales", "[unit][editor][localization][layers]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+        Horo::Editor::LocalizationError error;
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            for (const auto key : {
+                     "workspace.world_layers.title",          "workspace.world_layers.create",      "workspace.world_layers.undo",
+                     "workspace.world_layers.redo",           "workspace.world_layers.filter",      "workspace.world_layers.all_owners",
+                     "workspace.world_layers.streaming",      "workspace.world_layers.gameplay",    "workspace.world_layers.network",
+                     "workspace.world_layers.current",        "workspace.world_layers.set_current", "workspace.world_layers.clear_current",
+                     "workspace.world_layers.move_up",        "workspace.world_layers.move_down",   "workspace.world_layers.empty",
+                     "workspace.world_layers.current_hidden", "workspace.world_layers.name",        "workspace.world_layers.name_hint",
+                     "workspace.world_layers.cancel",         "workspace.world_layers.stale",       "workspace.world_layers.rejected",
+                 }) {
+                INFO(locale);
+                INFO(key);
+                CHECK_FALSE(service.Get("editor", key).empty());
+                CHECK(service.Get("editor", key) != key);
+            }
+        }
+    }
 }  // namespace
 
 TEST_CASE("UI canvas hierarchy and catalog copy resolve in both shipped locales", "[unit][editor][ui_canvas][localization]") {

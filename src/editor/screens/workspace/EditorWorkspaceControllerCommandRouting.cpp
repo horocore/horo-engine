@@ -43,15 +43,27 @@ namespace Horo::Editor {
             ++m_viewModel.colliderSelectionRevision;
         }
         DispatchWorkspaceCommand(cmd);
+        RefreshWorldDocumentProjection();
+        UpdateWorldBake();
         RefreshSourceDocumentProjection();
         RefreshPrefabDocuments();
     }
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
-        if (ProcessUiCanvasCommand(cmd) || ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) ||
-            ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessPCGDocumentCommand(cmd) ||
-            ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd))
+        if (cmd.command == EditorWorkspaceViewCommand::WorldLayerAuthoring) {
+            const auto result = cmd.worldLayerIntent
+                                    ? ApplyWorldLayerIntent(*cmd.worldLayerIntent)
+                                    : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            m_viewModel.worldLayerFailure = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
+            RefreshWorldDocumentProjection();
+            return;
+        }
+        if (ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
+            ProcessWorldSourceCommand(cmd) || ProcessUiCanvasCommand(cmd) || ProcessPrefabDocumentCommand(cmd) ||
+            ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) ||
+            ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
+            ProcessLayoutCommand(cmd))
             return;
         if (m_activePrefabDocument) {
             ProcessFocusedPrefabCommand(cmd);
@@ -60,6 +72,21 @@ namespace Horo::Editor {
         static_cast<void>(ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) || ProcessCreatePrefabCommand(cmd) ||
                           ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
                           ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd));
+    }
+
+    /** @copydoc EditorWorkspaceController::ApplyWorldLayerIntent */
+    Result<PartitionedWorldSnapshotLease> EditorWorkspaceController::ApplyWorldLayerIntent(const WorldLayerOutlinerIntent &intent) {
+        using enum WorldLayerOutlinerAction;
+        switch (intent.action) {
+            case Execute:
+                return intent.command ? m_worldDocuments.ExecuteLayerCommand(*intent.command, intent.expected)
+                                      : Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Invalid));
+            case Undo:
+            case Redo:
+                return m_worldDocuments.ReplayLayerCommand(intent.action == Redo, intent.expected);
+            default:
+                return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Unsupported));
+        }
     }
 
     /** @copydoc EditorWorkspaceController::ProcessFocusedPrefabCommand */

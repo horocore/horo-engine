@@ -176,6 +176,14 @@ namespace Horo::WorldStreaming {
                                                                              const StreamingBudgetSample &sample,
                                                                              const WorldStreamingDiagnosticRows &rows);
 
+        /** @brief Captures actual state when this owner has no budget-measurement capability.
+         * @param input Actual owner, revision, lifecycle, queue and bounded row ceilings.
+         * @param rows Actual source/residency/failure/decision rows, validated identically to Create.
+         * @return Canonical snapshot with explicitly unavailable budget policy/sample, or typed failure.
+         * @details Absence is never converted to zero usage or a fabricated policy. */
+        [[nodiscard]] static Result<WorldStreamingDiagnosticSnapshot> CreateStateOnly(const WorldStreamingDiagnosticSnapshotInput &input,
+                                                                                      const WorldStreamingDiagnosticRows &rows);
+
         /**
          * @brief Validates a complete successor while preserving the prior immutable snapshot on failure.
          * @param previous Currently published snapshot.
@@ -200,10 +208,12 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] WorldStreamingRuntimeCompositionState Lifecycle() const noexcept;
         /** @brief Returns captured scheduler queue pressure. @return Immutable queue facts. */
         [[nodiscard]] const StreamingDiagnosticQueueSnapshot &Queue() const noexcept;
-        /** @brief Returns the captured multidimensional budget policy. @return Immutable owned policy. */
-        [[nodiscard]] const StreamingBudgetPolicy &BudgetPolicy() const noexcept;
-        /** @brief Returns the captured multidimensional usage sample. @return Immutable owned sample. */
-        [[nodiscard]] const StreamingBudgetSample &BudgetSample() const noexcept;
+        /** @brief Returns the captured multidimensional budget policy. @return Immutable owned policy, or null when this owner cannot
+         * supply budget observations. */
+        [[nodiscard]] const StreamingBudgetPolicy *BudgetPolicy() const noexcept;
+        /** @brief Returns the captured multidimensional usage sample. @return Immutable owned sample, or null together with an unavailable
+         * budget policy. */
+        [[nodiscard]] const StreamingBudgetSample *BudgetSample() const noexcept;
         /** @brief Returns source rows in stable source-identity order. @return Borrow valid for this value's lifetime. */
         [[nodiscard]] std::span<const StreamingSourceDesiredState> Sources() const noexcept;
         /** @brief Returns cell attempts in canonical cell/generation order. @return Borrow valid for this value's lifetime. */
@@ -214,16 +224,21 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] std::span<const StreamingDiagnosticDecisionEvent> Events() const noexcept;
 
     private:
+        /** @brief Shares canonical row validation for measured-budget and explicitly state-only captures. */
+        [[nodiscard]] static Result<WorldStreamingDiagnosticSnapshot> Capture(const WorldStreamingDiagnosticSnapshotInput &input,
+                                                                              std::optional<StreamingBudgetPolicy> policy,
+                                                                              std::optional<StreamingBudgetSample> sample,
+                                                                              const WorldStreamingDiagnosticRows &rows);
         /** @brief Owns an already validated and canonically ordered projection. */
-        WorldStreamingDiagnosticSnapshot(WorldStreamingDiagnosticSnapshotInput input, StreamingBudgetPolicy policy,
-                                         StreamingBudgetSample sample, std::vector<StreamingSourceDesiredState> sources,
+        WorldStreamingDiagnosticSnapshot(WorldStreamingDiagnosticSnapshotInput input, std::optional<StreamingBudgetPolicy> policy,
+                                         std::optional<StreamingBudgetSample> sample, std::vector<StreamingSourceDesiredState> sources,
                                          std::vector<StreamingCellStateRecord> cells,
                                          std::vector<StreamingDiagnosticFailureRecord> failures,
                                          std::vector<StreamingDiagnosticDecisionEvent> events) noexcept;
 
         WorldStreamingDiagnosticSnapshotInput input_;
-        StreamingBudgetPolicy policy_;
-        StreamingBudgetSample sample_;
+        std::optional<StreamingBudgetPolicy> policy_;
+        std::optional<StreamingBudgetSample> sample_;
         std::vector<StreamingSourceDesiredState> sources_;
         std::vector<StreamingCellStateRecord> cells_;
         std::vector<StreamingDiagnosticFailureRecord> failures_;

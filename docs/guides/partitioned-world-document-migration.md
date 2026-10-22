@@ -134,6 +134,110 @@ undo/redo history, source-control merge, crash recovery or runtime preview activ
 Those services must consume exact immutable source revisions and must not clear dirty
 metadata without their own durable publication contract.
 
+
+## Streaming source authoring (HORO-1633)
+
+The canonical `PartitionedWorldDocument` now includes bounded authored `sources`.
+`PartitionedWorldSource` reuses World Streaming's exact sphere, box, frustum and
+path-volume types, source identity/revision, priority, intent and desired-residency
+values. Debug color is editor source metadata. Runtime owner tokens, partition
+epochs and registration are intentionally absent: authoring never mounts a world
+or changes runtime residency.
+
+`EditSource` is the single atomic source command path. It issues strictly increasing
+revisions, validates the entire document and records one bounded source-history
+step. `ReplaySources` restores authored values with fresh revisions; it never rewinds
+a publication fence. Metadata `Commit` invalidates source history, while transient
+working-set changes preserve it. Capacity, cancellation, invalid/unsupported input,
+stale fences and owner lifecycle failures preserve both root and history. A full
+history explicitly rejects new edits until history is rewound or a deliberate
+metadata publication invalidates it. No history eviction or implicit save occurs.
+Open/replacement and successful close reset history; immutable retained leases
+remain safe. The existing schema version remains an in-memory model version: this
+change defines no competing persisted world format.
+
+The GUI controller borrows the host's single `PartitionedWorldWorkspace` through
+`EditorWorkspaceDependencies::partitionedWorld`. The host must outlive the controller
+or call `DetachWorldSourceOwner` before destroying that owner. Panels receive owned
+immutable leases, never raw owner memory. The active world host supplies a
+`WorldViewportBinding` (exact root, global origin, monotonic view revision) through
+`SetWorldViewportBinding` (the explicit owner overload accepts the controller's
+existing `WorldDocuments()` authority). It owns camera/origin mapping and dirty/save/leave policy;
+the source tool does not invent another world or selection authority. The production
+world-tab composition is delivered by HORO-1630; until that composition is integrated,
+the source toolbar reports unavailable and does not synthesize a document.
+
+The viewport popup creates all four shapes and edits intent, target state, priority
+and debug color using shared controls and localized copy. Shape forms expose exact
+millimeter radii/extents, all six frustum plane normals/distances with explicit
+normalization, and bounded path vertex addition/removal. Canonical control-point
+gizmos use fixed-capacity point sets without draw-time point allocation and
+preview only in panel-owned transient storage; release submits one ordinary
+source command. Escape, focus loss, input revocation, document replacement, origin
+change, view replacement and detach cancel the preview. Undo/redo use the same
+canonical owner. Play mode rejects source edits at the controller boundary.
+
+`WorldSourceViewportPoint` subtracts integer global coordinates before any float
+conversion, including near both signed-64-bit limits. Local projection admits an
+8000-meter precision window. `WorldSourceViewportGlobal` rounds only a bounded
+local offset to millimeters and adds it with checked integer arithmetic; absolute
+global coordinates never pass through float or double. The host rebases distant
+views by publishing a new origin/view revision. Off-window points are unsupported,
+not clamped or silently relocated.
+
+Affected consumers are `HoroEditorModel`, its public-header consumer, the GUI
+workspace/controller/viewport and focused model/controller/localization tests. No
+new public header ownership or reverse dependency is introduced. Existing aggregate
+initializers remain source compatible because the new source collection and limits
+are additive with defaults. Source-only local checks do not qualify native GUI or
+GPU interaction; actual current-head hosted checks and a compatible editor session
+remain separate evidence.
+## Layer command and outliner projection migration (WST-009.4)
+
+The existing workspace now owns `WorldLayerCommand` and its exact semantic layer
+history. There is no second document, mutable panel-owned layer table or independent
+selection authority. `CreateWorldLayer` takes a host-issued `StreamingLayerId`,
+validated descriptor and insertion ordinal. `ReorderWorldLayer` takes stable identity
+and a final ordinal in the complete authored order, including filtered-out rows.
+`FilterWorldLayers` selects a bounded, exact UTF-8 substring and optional typed
+ownership. `SetCurrentWorldLayer` selects an admitted identity or explicitly clears
+context. Filtering never changes context; it may hide the current layer.
+`CreateLayer` is the host adapter for a name-only creation request: the canonical
+owner chooses an unused typed ID and appends through the same command path.
+`VisibleLayers` projects stable IDs in authored order. Names are presentation values,
+never identities. The caller resolves IDs against its captured immutable snapshot.
+
+`ExecuteLayerCommand` and `ReplayLayerCommand` require the same owner/generation/
+publication fence as other workspace mutations. They prepare the complete candidate
+and history before publishing. Bad descriptors, missing IDs, stale fences, unsupported
+filters, capacity overflow and cancellation preserve the exact old lease, context,
+working set and history. A no-op preserves revision and redo. Undo/redo restore exact
+layer-section values rather than replaying UI input, while publication revisions
+continue increasing. Source edits mark dirty and undo restores the pre-command dirty
+state; transient filter/context edits never mark authored metadata dirty.
+
+History retains at most 128 transactions and 4 MiB of charged semantic metadata,
+including before/after layer descriptors and name/filter bytes. Oldest entries are
+evicted before a newly reserved transaction is committed. A new command drops redo;
+a failed command does neither. Pages, objects, working-set changes and runtime data
+are never retained in layer history. Complete external metadata commits and `CommitLoadedPage` clear the
+layer history and clear a removed current identity. Unchanged complete commits leave
+history intact. Working-set changes preserve history, and replay preserves the
+current working set. Replacement and close clear history/context; cancellation gates
+commands/replay but preserves immutable queries until explicit teardown.
+
+This additive C++ contract remains in the existing `HoroEditorModel` header and target.
+Existing consumers rebuild; no persisted schema or backend dependency changes.
+The public consumer fixture covers command, replay and projection signatures.
+Run `HoroPartitionedWorldWorkspaceTests` and build
+`HoroEditorModelPublicHeaderConsumer` to validate the new contract.
+
+The GUI host routes outliner actions through `WorldLayerAuthoring` and
+`OpenCreateWorldLayer`. `EditorWorkspaceController::ApplyWorldLayerIntent` applies
+canonical owner commands; the screen composes the exclusive creation modal. The
+World Composition tab integrates the draw/route helper from its persistent document
+surface. Registration of that surface remains the WST-009.3 child integration.
+
 ## Manual page residency and selection (HORO-1635)
 
 The existing `PartitionedWorldWorkspace` is the sole authoring authority. It now
@@ -270,6 +374,31 @@ Regression coverage lives in `PartitionedWorldObjectInspectionTests.cpp` within
 run the existing world-document and WorldStreaming CTest groups. No native/GPU
 interaction or GUI rendering result is implied by these model-level tests.
 
+### Layer GUI binding
+
+`DrawWorldLayerOutliner` consumes one immutable document snapshot and emits at
+most one `WorldLayerOutlinerIntent`. `Execute` carries a canonical command;
+`Undo`/`Redo` carry direction; `Create` requests the host-owned
+`CreateWorldLayerModal`. Every action carries the exact snapshot fence. The
+outliner uses stable IDs and full-document ordinals, shared themed controls,
+wrapped names and localized copy. It does not mutate source or maintain a second
+history or selection.
+
+The modal stores only a bounded name draft and its opening fence. The host
+callback invokes `CreateLayer`; failure retains the draft and displays a localized
+failure, while success closes the modal. Stale or closed-document failures require
+explicit cancellation/reopening rather than silently retargeting a newer source.
+The ordinary modal host owns exclusive input, cancellation and shutdown. Render
+regressions cover narrow widths, long names, empty/filtered current context, both
+supported locales, dark/light theme surfaces and cancellation without submission.
+
+The shared host adapter is `RouteWorldLayerOutlinerIntent`, which translates a draw
+result into the existing screen/controller command output. Canonical typed errors
+remain available as `EditorWorkspaceViewModel::worldLayerFailure`; the world tab
+resolves localized failure copy. The layer controller regression target exercises
+real loaded Scene content, page pinning, the single selection/primary root, stale
+command rejection and loaded-page dirty/history isolation.
+
 The selection/query entry points synchronously borrow `WorldDocumentFence` and the
 optional primary address by const reference. These larger input values are never
 retained by reference; publications copy their owned state before returning.
@@ -288,3 +417,128 @@ The public-header consumer checks the exact manual load/unload signatures, and t
 selection regression exercises a fence backed solely by that owner root. Decoded Scene
 source is transferred out of its successful Result before moving its vectors into
 the actual document; moving from the immutable lvalue Result view would copy instead.
+
+Layer command, name-only creation and replay entry points likewise borrow the exact
+fence for the synchronous operation. They never retain it or access it after root
+publication. The layer consumer asserts the exact const-reference member signatures,
+in addition to the canonical selection/query/manual-page signatures. Existing value
+and temporary arguments continue working; consumers storing member pointers rebuild
+against these updated in-memory declarations. Modal drafts and queued presentation
+intents still own their fence values across frames.
+
+
+## World Composition source route and browser (HORO-1630)
+
+`horo.world_composition` is a registered persistent document-area panel, reachable
+from the workspace document rail. Enter a project-relative `.horoworld` path and
+activate **Open world source**. The executable composition root creates a retained
+`WorkspaceReadSourceFactory` and registers it for the screen lifetime. The screen
+admits its complete owner/registry/world-reader capture through
+`CaptureWorkspaceReadSources`, then injects those owned capabilities into the
+controller. Missing factories fail as unavailable; relative roots and partial
+captures fail as invalid, without selecting a backend in GUI code. Host failures
+retain their original typed error.
+
+`WorkspaceReadSources.h` belongs to `HoroEditorServices`, whose public dependency
+is the narrow `ProjectReadFilesApi`. The concrete `PlatformProjectReadFiles`
+dependency belongs privately to `HoroEditor` and native test composition roots;
+`HoroGui` consumes the supplied interface. Build
+`HoroEditorServicesPublicHeaderConsumer` after migrating host composition.
+The controller captures bounded source through
+`Platform::IProjectReadFiles::SourceText`; retained root handles reject traversal,
+symlinks/reparse points, special files and multiple hardlinks. File I/O
+and semantic admission execute in the command phase, never in panel drawing.
+
+The route uses the controller's existing `WorldDocuments()` authority. It does not
+create a second workspace, selection model or serializer history. Initial open
+requires no current document; replacement requires the exact displayed
+owner/generation/revision and preserves dirty content by default. Failed source
+reads, decoding and admission preserve the active source and panel focus. Closing
+the source uses the same dirty guard. Project shutdown uses the existing explicit
+leave/discard workflow. This source reader does not implement a durable save or
+claim that an authored edit has reached disk.
+
+Version-one source is strict UTF-8 JSON, at most 8 MiB, with duplicate and unknown
+keys rejected. Integers are exact (floating-point coercion and narrowing are
+rejected); coordinate arrays are signed 64-bit millimeters. `world`, page `asset`
+and object `source` use canonical nonzero AssetId UUID spelling. Page `revision`
+is nonzero; all object revisions inherit their page head. One minimal real source:
+
+```json
+{
+  "version": 1,
+  "world": "00000000-0000-0000-0000-000000000001",
+  "bounds": {"minimum": [-1000,-1000,-1000], "maximum": [1999,1999,1999]},
+  "grid": {"origin": [0,0,0], "cellMillimeters": 1000,
+           "bounds": [-1,1,-1,1,-1,1], "lodLevels": 1},
+  "layers": [{"id": 0, "name": "Terrain", "ownership": 0, "flags": 0, "priority": 1}],
+  "pages": [{"asset": "00000000-0000-0000-0000-000000000002", "revision": 1,
+    "objects": [{"id": 1, "source": "00000000-0000-0000-0000-000000000003",
+                 "bounds": {"minimum": [-1,0,0], "maximum": [1000,0,0]},
+                 "placement": 0, "layer": 0}]}]
+}
+```
+
+Ownership, flags and placement use the declared WorldStreaming enum values; unknown
+policies return typed unsupported errors rather than being silently dropped.
+Normal workspace metadata/layer/page/object ceilings still apply. The schema is
+an explicit new source interchange route; no existing Scene or cooked world.index
+file changes meaning. Existing typed in-memory callers need no migration.
+
+`PartitionedWorldWorkspace::Browse(query, expected, cancellation)` is the one
+headless cell/layer query contract. It borrows no mutable caller storage and
+returns a detached complete projection retaining its exact immutable source lease.
+The ordinary `WorldSpatialAssignment::CreateForAuthoring` kernel supplies spatial
+coverage at each object's authored assignment LOD; always-present objects remain in layer totals and never
+fabricate spatial cells or cooked packages. Cell keys use canonical layer/LOD/Z/Y/X
+order, layer keys use stable numeric IDs, and all rows belong to the returned
+source fence. This is automatic source coverage, not an assertion of effective
+spanning placement: explicit placement directives and their diagnostics remain
+owned by the canonical object-inspection contract. Rename/filtering cannot retarget
+an identity.
+
+The tab also composes the published World Layer Outliner and routes its typed
+intent through the ordinary controller and Create Layer modal. Its authored
+order/current layer/filter/history remain in the existing document owner. The
+viewport uses the published streaming-source popup/gizmo; source admission binds
+that view to the same canonical owner and exact immutable lease. No alternate
+layer or source state is introduced.
+
+Search matches layer names/IDs and cell coordinate/LOD text. ASCII letters match
+case-insensitively; non-ASCII UTF-8 matches exact bytes. Layer and authoring-set
+status filters compose with search. Open means every contributing source object
+belongs to a page in the authoring working set, closed means none, and mixed means
+a strict subset. Empty layers report closed. These statuses prove neither loaded
+Scene payloads nor runtime residency. A filter never changes selection or opens a
+page. Output and intermediate-assignment ceilings reject the entire query without
+truncation or hidden state. Invalid, unsupported, stale, cancelled and wrong-thread
+queries publish no result. Cancelling owners remain readable; close/shutdown drop
+current projections while retained old leases remain safe.
+
+The controller refreshes the VM's `worldDocument` and browser only when the source
+lease or accepted filter changes. A source-publication change clears a layer filter whose stable identity is no
+longer present, returning its presentation to All layers. The tab caches table strings by source/filter/locale,
+reuses shared controls and refreshes text colors from the active theme. All visible
+copy is paired in en-US and tr-TR. Public-header consumer coverage protects the
+new typed query signature, and focused model/controller tests cover real source
+admission, query boundaries, replacement and teardown.
+
+
+The browser query retains its by-value `WorldDocumentFence` input and one immutable
+source lease; it never publishes authored state. The consumer checks that exact
+query signature alongside the borrowed layer/manual-page/selection signatures.
+Controller integration regressions open a real `.horoworld` source, load and
+release actual Scene payloads, capture the shared browser/viewport frame, and verify
+that a selected page cannot unload or silently replace the displayed source root.
+### Synchronous source-tool input borrowing
+
+`WorldSourceViewportPoint`, `WorldSourceViewportGlobal`, `MoveWorldSourceGizmo`
+and `ReplaySources` borrow their coordinate/fence inputs through `const&` for the
+synchronous call. This avoids copying the large canonical values while preserving
+ordinary call syntax. Callers storing exact function/member pointers must use the
+new reference signatures; the public-header consumer asserts these exact types.
+No input reference is retained: emitted commands own their fence/source values,
+and gestures copy their global origin, start point and projection capture. Source
+history publication consumes the borrowed fence synchronously before publishing
+and performs no post-publication read of caller fence storage. No callback or cross-frame borrow is
+introduced by this signature migration.

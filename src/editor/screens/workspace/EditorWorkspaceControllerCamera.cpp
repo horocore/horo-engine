@@ -43,6 +43,9 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
+        DetachWorldSourceOwner();
+        if (m_worldBake)
+            m_worldBake->Close();
         // Preview providers may borrow host project authority. Join them before any document/service retirement.
         if (m_assetPreviews)
             m_assetPreviews->Shutdown();
