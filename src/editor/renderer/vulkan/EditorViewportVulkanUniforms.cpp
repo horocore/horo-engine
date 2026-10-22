@@ -41,6 +41,7 @@ namespace Horo::Editor {
                                   Math::ClipDepthRange::ZeroToOne);
         if (mvp.HasError())
             return Result<void>::Failure(mvp.ErrorValue());
+        Math::Mat4 clipFromLocal = std::move(mvp).Value();
         const auto inverse = Math::TryInverseAffine(instance.localToWorld);
         if (inverse.HasError())
             return Result<void>::Failure(inverse.ErrorValue());
@@ -50,7 +51,7 @@ namespace Horo::Editor {
                 normal.values[column * 4 + row] = inverse.Value().values[row * 4 + column];
         // Vulkan's positive-height viewport has top-left framebuffer origin; flip only the clip-space Y component.
         for (std::size_t column = 0; column < 4; ++column)
-            mvp.Value().values[column * 4 + 1] *= -1;
+            clipFromLocal.values[column * 4 + 1] *= -1;
         const auto &presentation = instance.presentation;
         const std::array tint{presentation.tint.x, presentation.tint.y, presentation.tint.z, presentation.tintStrength};
         std::array direction{0.0F, 0.0F, -1.0F, 0.0F};
@@ -62,7 +63,7 @@ namespace Horo::Editor {
         }
         std::array<std::byte, MaximumUniformBytes> storage{};
         const auto bytes = std::span{storage}.first(shader_.uniformBytes);
-        const std::array<std::span<const float>, 5> parameters{mvp.Value().values, normal.values, tint, direction, color};
+        const std::array<std::span<const float>, 5> parameters{clipFromLocal.values, normal.values, tint, direction, color};
         for (std::size_t index = 0; index < parameters.size(); ++index)
             if (const auto written = WriteParameter(bytes, {static_cast<std::uint32_t>(index + 1)}, parameters[index]); written.HasError())
                 return written;

@@ -1,4 +1,5 @@
 #include "EditorViewportRendererVulkan.h"
+#include "RenderFrontendResourceAccess.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
 namespace Horo::Editor {
@@ -89,10 +90,10 @@ namespace Horo::Editor {
                     return Result<void>::Failure(buffer.ErrorValue());
                 draw.buffer = buffer.Value().handle;
                 if (const auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
-                    return processed;
+                    return Result<void>::Failure(processed.ErrorValue());
                 if (const auto ready = frontend_.ResourceOperationResult(buffer.Value().operation); ready.HasError())
                     return ready;
-                const auto native = frontend_.BackendInstance(draw.buffer);
+                const auto native = Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend_, draw.buffer);
                 if (native.HasError())
                     return Result<void>::Failure(native.ErrorValue());
                 draw.instance = native.Value();

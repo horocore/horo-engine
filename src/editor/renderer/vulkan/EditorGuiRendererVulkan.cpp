@@ -1,6 +1,7 @@
 #include "EditorGuiRendererVulkan.h"
 
 #include "ImGuiVulkanSlots.h"
+#include "RenderFrontendResourceAccess.h"
 
 #include <algorithm>
 #include <bit>
@@ -46,9 +47,13 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererVulkan::Validate */
     Result<void> EditorGuiRendererVulkan::Validate() const {
-        if (owner_ != std::this_thread::get_id() || !ImGui::GetCurrentContext() || !bridge_.Port() ||
-            (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
+        if (owner_ != std::this_thread::get_id() || !ImGui::GetCurrentContext() || !bridge_.Port())
             return Result<void>::Failure(MakeError(RendererErrors::GuiOwnerInvalid));
+#ifdef IMGUI_HAS_VIEWPORT
+        // Docking builds expose platform viewports; each would require its own qualified canonical owner.
+        if ((ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable) != 0)
+            return Result<void>::Failure(MakeError(RendererErrors::GuiOwnerInvalid));
+#endif
         return Result<void>::Success();
     }
 
@@ -124,8 +129,8 @@ namespace Horo::Editor {
         const auto font = Resolve(fontIdentity_);
         if (font.HasError())
             return Result<void>::Failure(font.ErrorValue());
-        const auto view = frontend_.BackendInstance(font.Value().view);
-        const auto sampler = frontend_.BackendInstance(sampler_);
+        const auto view = Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend_, font.Value().view);
+        const auto sampler = Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend_, sampler_);
         if (view.HasError())
             return Result<void>::Failure(view.ErrorValue());
         if (sampler.HasError())

@@ -25,16 +25,15 @@ namespace Horo::Render {
             return MakeError(descriptor, std::move(message));
         }
 
+#if defined(_WIN32) || defined(__linux__)
         [[nodiscard]] bool IsQualifiedPresentationExtension(const std::string_view extension) noexcept {
 #if defined(_WIN32)
             return extension == "VK_KHR_win32_surface";
 #elif defined(__linux__)
             return extension == "VK_KHR_xlib_surface" || extension == "VK_KHR_xcb_surface" || extension == "VK_KHR_wayland_surface";
-#else
-            static_cast<void>(extension);
-            return false;
 #endif
         }
+#endif
 
         struct VulkanRuntimeLease {
             bool claimed{false};
@@ -402,6 +401,7 @@ namespace Horo::Render {
                     if (platform.HasError()) {
                         return Result<std::vector<std::string>>::Failure(std::move(platform).ErrorValue());
                     }
+#if defined(_WIN32) || defined(__linux__)
                     if (!std::ranges::any_of(platform.Value(), IsQualifiedPresentationExtension) ||
                         !std::ranges::all_of(platform.Value(), [](const std::string &extension) {
                         return IsQualifiedPresentationExtension(extension) || extension == SurfaceExtension ||
@@ -413,6 +413,11 @@ namespace Horo::Render {
                                             "The platform did not provide one qualified Vulkan WSI extension."));
                     }
                     required.insert(required.end(), platform.Value().begin(), platform.Value().end());
+#else
+                    return Result<std::vector<std::string>>::Failure(
+                        MakeVulkanError(VulkanBackendErrors::PresentationExtensionUnsupported,
+                                        "The platform did not provide one qualified Vulkan WSI extension."));
+#endif
                 }
                 if (config.enableValidation) {
                     required.emplace_back(DebugUtilsExtension);

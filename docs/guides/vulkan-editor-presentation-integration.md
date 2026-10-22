@@ -103,7 +103,7 @@ through the canonical frontend resource/submission path and never invokes the
 upstream Vulkan automatic font upload.
 
 The pinned ImGui Vulkan encoder is copied into build output and transformed only
-at audited sites by `prepare_imgui_vulkan_slots.py`. The script verifies the full
+at audited sites by `scripts/project.py imgui-vulkan-slots`. The script verifies the full
 source hash for revision `993fa347495860ed44b83574254ef2a317d0c14f` and rejects
 ambiguous matches or output inside fetched sources. Canonical retired slot/index
 and actual in-flight capacity replace upstream call-count rotation. Buffers are

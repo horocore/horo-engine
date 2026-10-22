@@ -38,8 +38,9 @@ namespace Horo::Editor {
         if (prepared.HasError())
             return prepared;
         preparedBuffers_ = slots_[slot.Value().index].buffers;
-        prepared.Value().buffers = preparedBuffers_;
-        return prepared;
+        auto preparation = std::move(prepared).Value();
+        preparation.buffers = preparedBuffers_;
+        return Outcome::Success(preparation);
     }
 
     /** @copydoc EditorGuiRendererVulkan::RenderDrawData */

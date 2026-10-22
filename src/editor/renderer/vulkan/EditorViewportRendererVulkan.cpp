@@ -1,5 +1,6 @@
 #include "EditorViewportRendererVulkan.h"
 
+#include "RenderFrontendResourceAccess.h"
 #include "editor/renderer/EditorRendererErrors.h"
 
 #include <algorithm>
@@ -9,7 +10,7 @@ namespace Horo::Editor {
     namespace {
         /** @brief Stable private GUI name; exact view generation is always carried separately by the existing viewport owner. */
         Result<std::uintptr_t> ViewportImage(const Render::RenderFrontend &frontend, Render::RenderTextureViewHandle view) {
-            const auto ready = frontend.BackendInstance(view);
+            const auto ready = Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend, view);
             if (ready.HasError())
                 return Result<std::uintptr_t>::Failure(ready.ErrorValue());
             return Result<std::uintptr_t>::Success(std::numeric_limits<std::uintptr_t>::max());

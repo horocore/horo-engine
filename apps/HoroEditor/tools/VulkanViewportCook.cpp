@@ -30,20 +30,19 @@ namespace {
     }
 
     /** @brief Proves actual cook userspace identity instead of relabeling an arbitrary runner. */
-    bool QualifiedHost() {
 #if defined(__linux__) && defined(__x86_64__)
+    bool QualifiedHost() {
         const auto release = Read("/etc/os-release", 16384);
         if (release.HasError())
             return false;
         const std::string text(release.Value().begin(), release.Value().end());
         return (text.find("\nID=ubuntu\n") != std::string::npos || text.starts_with("ID=ubuntu\n")) &&
                text.find("\nVERSION_ID=\"26.04\"\n") != std::string::npos;
-#else
-        return false;
-#endif
     }
+#endif
 
     Result<ShaderCompilerToolchainConfiguration> Configuration(char **argv) {
+#if defined(__linux__) && defined(__x86_64__)
         if (!QualifiedHost())
             return Result<ShaderCompilerToolchainConfiguration>::Failure(
                 MakeError(ShaderCompilerPipelineErrors::ToolNotApproved,
@@ -67,6 +66,12 @@ namespace {
                                            executable.Value()});
         }
         return Result<ShaderCompilerToolchainConfiguration>::Success(std::move(configuration));
+#else
+        static_cast<void>(argv);
+        return Result<ShaderCompilerToolchainConfiguration>::Failure(
+            MakeError(ShaderCompilerPipelineErrors::ToolNotApproved,
+                      "Viewport cook requires actual reviewed linux-x86_64-ubuntu-26.04 userspace."));
+#endif
     }
 
     Result<void> Write(const std::filesystem::path &path, std::span<const std::uint8_t> bytes) {

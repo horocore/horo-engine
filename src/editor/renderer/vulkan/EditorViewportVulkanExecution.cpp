@@ -10,17 +10,18 @@ namespace Horo::Editor {
         auto builder = RenderGraphBuilder::Create({.maxPasses = 1, .maxResources = 1, .maxUsages = 1, .maxDependencies = 1});
         if (builder.HasError())
             return Result<void>::Failure(builder.ErrorValue());
-        const auto pass = builder.Value().AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        auto pending = std::move(builder).Value();
+        const auto pass = pending.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
         if (pass.HasError())
             return Result<void>::Failure(pass.ErrorValue());
-        const auto color = builder.Value().ImportTexture(resources_.ColorTexture(), RenderGraphResourceClass::Persistent);
+        const auto color = pending.ImportTexture(resources_.ColorTexture(), RenderGraphResourceClass::Persistent);
         if (color.HasError())
             return Result<void>::Failure(color.ErrorValue());
         if (const auto used =
-                builder.Value().AddUsage({pass.Value(), color.Value(), RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+                pending.AddUsage({pass.Value(), color.Value(), RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
             used.HasError())
             return used;
-        const auto graph = builder.Value().Finalize();
+        const auto graph = pending.Finalize();
         if (graph.HasError())
             return Result<void>::Failure(graph.ErrorValue());
         const auto schedule = CompileRenderGraph(graph.Value());

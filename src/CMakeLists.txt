@@ -2618,6 +2618,15 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/UiRenderTextureRealization.cpp
 )
 add_library(HoroEngine::RenderFrontend ALIAS HoroRenderFrontend)
+
+# Non-installed matching-backend adapter; expose only the existing typed resource access declaration.
+set(_horo_frontend_access_root "${CMAKE_CURRENT_BINARY_DIR}/internal/render-frontend-access")
+file(MAKE_DIRECTORY "${_horo_frontend_access_root}")
+configure_file(runtime/renderer/frontend/RenderFrontendResourceAccess.h
+    "${_horo_frontend_access_root}/RenderFrontendResourceAccess.h" COPYONLY)
+add_library(HoroRenderFrontendResourceAccessInternal INTERFACE)
+target_include_directories(HoroRenderFrontendResourceAccessInternal INTERFACE "${_horo_frontend_access_root}")
+target_link_libraries(HoroRenderFrontendResourceAccessInternal INTERFACE HoroEngine::RenderFrontend)
 target_link_libraries(HoroRenderFrontend PRIVATE HoroRenderExternalImagesInterface)
 
 target_compile_features(HoroRenderFrontend PUBLIC cxx_std_20)
@@ -3340,7 +3349,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
     target_include_directories(HoroEditorVulkanGuiInternal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(HoroEditorVulkanGuiInternal
         PUBLIC HoroRenderVulkanHostInterface HoroEngine::RenderFrontend HoroEditorVulkanShaderInternal
-        PRIVATE HoroEngine::RenderVulkan HoroEngine::EditorViewportResources HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+        PRIVATE HoroRenderFrontendResourceAccessInternal HoroEngine::RenderVulkan HoroEngine::EditorViewportResources HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
 endif ()
 
 if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)

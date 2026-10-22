@@ -550,11 +550,11 @@ if(HORO_BUILD_EDITOR_GUI)
         add_custom_command(
             OUTPUT "${_horo_imgui_vulkan_slots}"
             COMMAND "${Python3_EXECUTABLE}"
-                "${PROJECT_SOURCE_DIR}/scripts/prepare_imgui_vulkan_slots.py"
+                "${PROJECT_SOURCE_DIR}/scripts/project.py" imgui-vulkan-slots
                 --source "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
                 --output "${_horo_imgui_vulkan_slots}"
             DEPENDS
-                "${PROJECT_SOURCE_DIR}/scripts/prepare_imgui_vulkan_slots.py"
+                "${PROJECT_SOURCE_DIR}/scripts/project.py"
                 "${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp"
             COMMENT "Prepare pinned ImGui Vulkan encoder for canonical Horo slots"
             VERBATIM

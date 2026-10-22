@@ -10,7 +10,7 @@ namespace Horo::Editor {
     /** @copydoc EditorGuiRendererVulkan::Realize */
     Result<void> EditorGuiRendererVulkan::Realize(const Render::ResourceOperationId operation) {
         if (const auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
-            return processed;
+            return Result<void>::Failure(processed.ErrorValue());
         return frontend_.ResourceOperationResult(operation);
     }
 

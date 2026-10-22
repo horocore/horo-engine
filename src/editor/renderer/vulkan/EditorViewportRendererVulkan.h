@@ -2,6 +2,7 @@
 /** @file EditorViewportRendererVulkan.h
  * @brief Selected Vulkan viewport using canonical cooked material, frontend resources and frame submission. */
 #include "EditorVulkanViewportShader.h"
+#include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "VulkanEditorGraphicsBridge.h"
 #include "editor/renderer/EditorViewportResources.h"
