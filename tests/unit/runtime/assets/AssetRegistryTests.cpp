@@ -396,4 +396,24 @@ namespace {
         })));
         std::filesystem::remove_all(root);
     }
+
+    TEST_CASE("Runtime UI style source and sidecar classify as one actual registry asset", "[unit][assets][ui-style]") {
+        const auto root = TemporaryProject();
+        const auto source = root / "assets" / std::filesystem::path{u8"tema_日本 style.uistyle"};
+        Write(source, "{}");
+        Write(std::filesystem::path{source}.concat(".horo"),
+              R"({"schemaVersion":1,"assetId":"10213243-5465-7687-98a9-bacbdcedfe0f","assetType":"core.ui_style"})");
+        AssetRegistry registry;
+        const auto rebuilt = RebuildAssetRegistry(registry, root, AssetRegistryOpenMode::ReadOnly);
+        REQUIRE(rebuilt.HasValue());
+        CHECK(rebuilt.Value().status == AssetRegistryBuildStatus::Complete);
+        CHECK(rebuilt.Value().registeredAssets == 1);
+        CHECK(rebuilt.Value().diagnostics.empty());
+        const auto snapshot = registry.Snapshot();
+        const auto *record = snapshot.Find(Id("10213243-5465-7687-98a9-bacbdcedfe0f"));
+        REQUIRE(record != nullptr);
+        CHECK(record->type.Value() == "core.ui_style");
+        CHECK(record->metadataPath.String() == record->sourcePath.String() + ".horo");
+        std::filesystem::remove_all(root);
+    }
 }  // namespace

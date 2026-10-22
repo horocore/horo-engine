@@ -141,8 +141,13 @@ TEST_CASE("Legacy element presentation absence survives source and older cooked 
     REQUIRE_FALSE(parsed.Value().Elements()[0].presentation.has_value());
     auto cooked = CookedUiDocument::Cook(source).Value();
     auto v2 = std::vector<std::uint8_t>{cooked.Payload().begin(), cooked.Payload().end()};
-    // This one-element fixture has no properties/references/dependencies/routes; format 3's only tail is its absence flag.
-    v2.pop_back();
+    // This fixture has no dependencies/routes. Remove format 4's length-prefixed empty
+    // profile array and format 3's element-presentation absence flag before decoding as v2.
+    const std::array<std::uint8_t, 7> currentTail{0, 2, 0, 0, 0, '[', ']'};
+    REQUIRE(v2[8] == 4);
+    REQUIRE(v2.size() >= currentTail.size());
+    REQUIRE(std::equal(currentTail.begin(), currentTail.end(), v2.end() - currentTail.size()));
+    v2.resize(v2.size() - currentTail.size());
     v2[8] = 2;
     auto older = CookedUiDocument::Decode(v2);
     REQUIRE(older.HasValue());
