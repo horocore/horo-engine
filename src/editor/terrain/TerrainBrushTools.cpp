@@ -21,7 +21,7 @@ namespace Horo::Editor {
         if (document.IsClosed()) return Failed(TerrainEditErrors::Closed);
         if (cancellation.IsCancellationRequested()) return Failed(TerrainEditErrors::Cancelled);
         if (!operation.IsValid() || dabs.empty() || !std::isfinite(settings.radiusMeters) || settings.radiusMeters <= 0 ||
-            !std::isfinite(settings.strength) || settings.strength < 0 || settings.mode != TerrainBrushMode::Raise)
+            !std::isfinite(settings.strength) || settings.strength < 0 || (settings.mode != TerrainBrushMode::Raise && settings.mode != TerrainBrushMode::Lower))
             return Failed(TerrainEditErrors::Invalid);
         if (dabs.size() > limits.maximumDabs) return Failed(TerrainEditErrors::LimitExceeded);
         const auto &source = document.Source();
@@ -57,7 +57,7 @@ namespace Horo::Editor {
                         const double dz = (rect.z + z - dab.z) * source.coordinates.spacingZ;
                         const double falloff = std::max(0.0, 1.0 - std::hypot(dx, dz) / settings.radiusMeters);
                         float &height = patch.heightsMeters[static_cast<std::size_t>(z) * rect.width + x];
-                        const double changed = height + settings.strength * falloff;
+                        const double changed = height + (settings.mode == TerrainBrushMode::Lower ? -settings.strength : settings.strength) * falloff;
                         if (!Detail::TryNarrowTerrainHeight(changed, height)) return Failed(TerrainEditErrors::Invalid);
                     }
             }
