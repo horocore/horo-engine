@@ -4928,7 +4928,7 @@ if (HORO_BUILD_RENDER_METAL)
         target_include_directories(HoroMetalShaderPreparationSmoke PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests/support)
         target_link_libraries(HoroMetalShaderPreparationSmoke PRIVATE Catch2::Catch2WithMain HoroEngine::RenderMetal "-framework Metal")
         add_test(NAME HoroMetalShaderPreparationSmoke COMMAND HoroMetalShaderPreparationSmoke)
-        set_tests_properties(HoroMetalShaderPreparationSmoke PROPERTIES LABELS "gpu;metal;shader;material" TIMEOUT 60 RUN_SERIAL TRUE)
+        set_tests_properties(HoroMetalShaderPreparationSmoke PROPERTIES LABELS "gpu;metal;shader;material" TIMEOUT 60 RUN_SERIAL TRUE SKIP_RETURN_CODE 4)
     endif ()
     add_executable(HoroRenderMetalTests
             support/AllocationProbe.cpp
@@ -5300,9 +5300,10 @@ if (HORO_ENABLE_GPU_SMOKE_TESTS)
         horo_register_catch_test(HoroEditorViewportOpenGLSmoke LABELS "gpu;display;opengl")
     endif ()
     if (TARGET HoroEditorViewportMetalSmoke)
+        # Catch returns 4 when a hardware-dependent case is skipped (for example, HDR on an SDR display).
         horo_register_catch_test(HoroEditorViewportMetalSmoke
                 LABELS "gpu;display;metal"
-                PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1"
+                PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1" SKIP_RETURN_CODE 4
         )
     endif ()
     if (TARGET HoroMetalUploadShutdownSmoke)
