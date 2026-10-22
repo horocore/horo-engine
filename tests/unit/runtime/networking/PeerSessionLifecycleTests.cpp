@@ -150,6 +150,41 @@ namespace Horo::Network {
         REQUIRE(remote.Terminal()->kind == PeerSessionTerminalKind::RemoteClose);
     }
 
+    TEST_CASE("Pre-active admission rejections retain truthful terminals at every stage without rewriting active or closing sessions",
+              "[unit][network][session]") {
+        const std::array<void (*)(PeerSessionLifecycle &), 4> stages{[](PeerSessionLifecycle &) {
+        }, [](PeerSessionLifecycle &session) {
+            REQUIRE(session.BeginNegotiation(Connection(), Session(), 1).HasValue());
+        }, ReachAuthenticating, ReachActivating};
+        for (std::size_t index = 0; index < stages.size(); ++index) {
+            const auto stage = stages[index];
+            const std::uint64_t tick = index == 3 ? 12 : 3;
+            auto protocol = Lifecycle();
+            stage(protocol);
+            REQUIRE(protocol.RejectProtocol(Connection(), Session(), NetworkFailureKind::ProtocolMalformed, tick).HasValue());
+            REQUIRE(protocol.Terminal());
+            CHECK(protocol.Terminal()->kind == PeerSessionTerminalKind::ProtocolRejected);
+            auto authentication = Lifecycle();
+            stage(authentication);
+            REQUIRE(authentication.RejectAuthentication(Connection(), Session(), tick).HasValue());
+            REQUIRE(authentication.Terminal());
+            CHECK(authentication.Terminal()->kind == PeerSessionTerminalKind::AuthenticationRejected);
+        }
+        auto active = Lifecycle();
+        ReachActive(active);
+        RequireError(active.RejectProtocol(Connection(), Session(), NetworkFailureKind::ProtocolMalformed, 22),
+                     NetworkErrors::NetworkLifecycleTransitionInvalid);
+        RequireError(active.RejectAuthentication(Connection(), Session(), 22), NetworkErrors::NetworkLifecycleTransitionInvalid);
+        CHECK(active.State() == PeerSessionState::Active);
+        const auto reason = WireIdentity<CloseReasonId>(10);
+        REQUIRE(active.RequestClose(Connection(), Session(), PeerSessionTerminalKind::RemoteClose, reason, 22).HasValue());
+        REQUIRE(active.RejectAuthentication(Connection(), Session(), 23).HasValue());
+        CHECK(active.Terminal()->kind == PeerSessionTerminalKind::RemoteClose);
+        CHECK(active.Terminal()->closeReason == reason);
+        RequireError(active.RejectProtocol(Connection(), Session(), NetworkFailureKind::ProtocolMalformed, 24),
+                     NetworkErrors::TerminalAlreadyResolved);
+    }
+
     TEST_CASE("Peer session rejects malformed hostile and incompatible transition input", "[unit][network][session]") {
         RequireError(PeerSessionLifecycle::Create(Connection(), Session(), {}), NetworkErrors::NetworkLifecycleInvalid);
         RequireError(PeerSessionLifecycle::Create(Connection(), Session(), {20, 10, 30, 100, 5}), NetworkErrors::NetworkLifecycleInvalid);
@@ -159,19 +194,15 @@ namespace Horo::Network {
         RequireError(early.AdmitGameplay(Connection(), Session(), 1), NetworkErrors::GameplayDispatchRejected);
         RequireError(early.RequestClose(Connection(), Session(), PeerSessionTerminalKind::LocalClose, WireIdentity<CloseReasonId>(1), 1),
                      NetworkErrors::NetworkLifecycleTransitionInvalid);
-        RequireError(early.RejectAuthentication(Connection(), Session(), 1), NetworkErrors::NetworkLifecycleTransitionInvalid);
         RequireError(early.BeginNegotiation(Connection(4), Session(), 1), NetworkErrors::NetworkLifecycleOperationStale);
         REQUIRE(early.BeginNegotiation(Connection(), Session(), 1).HasValue());
         RequireError(early.BeginNegotiation(Connection(), Session(), 2), NetworkErrors::NetworkLifecycleTransitionInvalid);
-        RequireError(early.RejectAuthentication(Connection(), Session(), 2), NetworkErrors::NetworkLifecycleTransitionInvalid);
 
         auto malformed = Negotiation();
         malformed.features.count = MaximumHandshakeFeatures + 1;
         RequireError(early.AcceptNegotiation(malformed, 2), NetworkErrors::HandshakeInvalid);
         REQUIRE(early.State() == PeerSessionState::Negotiating);
         REQUIRE(early.AcceptNegotiation(Negotiation(), 2).HasValue());
-        RequireError(early.RejectProtocol(Connection(), Session(), NetworkFailureKind::ProtocolMalformed, 3),
-                     NetworkErrors::NetworkLifecycleTransitionInvalid);
 
         auto invalidPrincipal = Authentication();
         invalidPrincipal.principal.capabilities.values[0] = {};

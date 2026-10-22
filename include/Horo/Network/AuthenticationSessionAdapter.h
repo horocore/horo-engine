@@ -13,6 +13,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 namespace Horo::Network {
@@ -114,6 +115,10 @@ namespace Horo::Network {
         bool allowUnprotectedInMemoryLoopback{};                      /**< Explicit Null-only exception; never valid for LAN or remote. */
     };
 
+    /** @brief Validate an inert host trust snapshot without invoking authorities or selecting defaults.
+     * @param policy Immutable composition-root policy. @return Whether every identity, exposure and proof bound is valid. */
+    [[nodiscard]] bool ValidateNetworkTrustPolicy(const NetworkTrustPolicySnapshot &policy) noexcept;
+
     /** @brief Host-created public challenge bound to the accepted negotiation transcript. */
     struct AuthenticationChallenge final {
         std::uint32_t contractVersion{AuthenticationContractVersion}; /**< Closed Horo contract version. */
@@ -179,6 +184,52 @@ namespace Horo::Network {
     struct PeerVerificationResult final {
         AuthenticationAuthorityStamp stamp{};
         NetworkTrustLevel trustLevel{NetworkTrustLevel::Count};
+    };
+
+    /**
+     * @brief Canonical certificate/peer authorization to issue a proof for one validated peer challenge.
+     * @details Only AuthenticationSessionAdapter constructs this grant. It is not a principal, an
+     * authenticated session or an activation grant. Its deadline, local generation, peer-owned
+     * transcript/nonces, immutable policy and exact evidence must remain unchanged during issuance.
+     */
+    class ProofIssuanceAuthorization final {
+        friend class AuthenticationSessionAdapter;
+
+    public:
+        /** @brief Borrow the exact normalized peer challenge. @return Immutable challenge. */
+        [[nodiscard]] const AuthenticationChallenge &Challenge() const noexcept {
+            return challenge_;
+        }
+
+        /** @brief Borrow exact verified channel/certificate evidence. @return Immutable evidence. */
+        [[nodiscard]] const PeerAuthenticationEvidence &Evidence() const noexcept {
+            return evidence_;
+        }
+
+        /** @brief Borrow the canonical host peer-verification result. @return Generation-bound peer trust. */
+        [[nodiscard]] const PeerVerificationResult &Peer() const noexcept {
+            return peer_;
+        }
+
+        /** @brief Check unchanged public evidence and issuance deadline without granting authentication.
+         * @param evidence Fresh host evidence. @param nowTick Shared positive owner tick. @return Exact immutable binding match. */
+        [[nodiscard]] bool MatchesEvidence(const PeerAuthenticationEvidence &evidence, std::uint64_t nowTick) const noexcept;
+
+        /** @brief Read the absolute issuance deadline in the shared tick domain. @return Positive deadline. */
+        [[nodiscard]] std::uint64_t DeadlineTick() const noexcept {
+            return deadlineTick_;
+        }
+
+    private:
+        ProofIssuanceAuthorization(AuthenticationChallenge challenge, PeerAuthenticationEvidence evidence, PeerVerificationResult peer,
+                                   AuthenticationAuthorityStamp certificateStamp, std::uint64_t deadlineTick)
+            : challenge_(challenge), evidence_(evidence), peer_(peer), certificateStamp_(certificateStamp), deadlineTick_(deadlineTick) {}
+
+        AuthenticationChallenge challenge_;
+        PeerAuthenticationEvidence evidence_;
+        PeerVerificationResult peer_;
+        AuthenticationAuthorityStamp certificateStamp_;
+        std::uint64_t deadlineTick_{};
     };
 
     /** @brief Fresh correlation identity, not an authentication secret. */
@@ -377,6 +428,23 @@ namespace Horo::Network {
                                                                          AdmissionProtection *protection = nullptr);
 
         /**
+         * @brief Authorize bounded synchronous proof issuance through the canonical certificate/peer chain.
+         * @param connection Exact local connection generation.
+         * @param sessionGeneration Exact local admission generation.
+         * @param peerChallenge Peer-owned transcript with locally normalized fences and validated matching nonces/policy.
+         * @param evidence Host-normalized evidence for the exact local protected channel.
+         * @param nowTick Shared positive monotonic tick strictly before the authentication deadline.
+         * @return Closed proof-issuance grant or sanitized typed rejection; never a principal or Active state.
+         * @details Charges the same ledger before each verifier. Authenticate revalidates this same
+         * canonical chain before accepting any principal, so issuance cannot pin stale provider trust.
+         */
+        [[nodiscard]] Result<ProofIssuanceAuthorization> AuthorizeProofIssuance(ConnectionHandle connection,
+                                                                                NetworkOperationGeneration sessionGeneration,
+                                                                                const AuthenticationChallenge &peerChallenge,
+                                                                                const PeerAuthenticationEvidence &evidence,
+                                                                                std::uint64_t nowTick);
+
+        /**
          * @brief Verifies one bounded proof and atomically publishes a principal/channel handoff.
          * @param connection Exact connection generation retained by the completion.
          * @param sessionGeneration Exact admission generation retained by the completion.
@@ -390,6 +458,19 @@ namespace Horo::Network {
                                                                 const AuthenticationResponseView &response,
                                                                 const PeerAuthenticationEvidence &evidence, std::uint64_t nowTick,
                                                                 TransportAdmissionState operation = TransportAdmissionState::Accepting);
+
+        /**
+         * @brief Revalidate canonical peer trust and channel fences immediately before activation.
+         * @param connection Exact local connection generation.
+         * @param sessionGeneration Exact local admission generation.
+         * @param evidence Fresh host channel/certificate evidence.
+         * @param nowTick Shared positive owner tick before authentication/credential expiry.
+         * @return Success for the unchanged accepted context or sanitized typed denial.
+         * @details Charges the same certificate/peer verifier prefix. It cannot replace a principal,
+         * extend credential expiry or change the accepted channel/issuance authority generation.
+         */
+        [[nodiscard]] Result<void> ValidateActivationEvidence(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
+                                                              const PeerAuthenticationEvidence &evidence, std::uint64_t nowTick);
 
         /** @brief Applies the absolute deadline. @param nowTick Current monotonic tick. @return True only on terminal timeout. */
         [[nodiscard]] bool Expire(std::uint64_t nowTick) noexcept;
@@ -412,7 +493,17 @@ namespace Horo::Network {
                                      AdmissionProtection *protection) noexcept;
         [[nodiscard]] bool Owns(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration) const noexcept;
         [[nodiscard]] Result<AuthenticationResult> Reject(const ErrorCodeDescriptor &error, AuthenticationFailureClass failure);
-        /** @brief Runs the ordered host-authority chain after cheap hostile-input validation. */
+
+        /** @brief One canonical prefix completion retains both provider generation fences. */
+        struct VerifiedPeerAuthorities final {
+            CertificateVerificationResult certificate;
+            PeerVerificationResult peer;
+        };
+
+        /** @brief Run the single canonical bounded certificate/peer prefix; sanitize every private failure. */
+        [[nodiscard]] Result<VerifiedPeerAuthorities> VerifyPeerAuthorities(const PeerAuthenticationEvidence &evidence,
+                                                                            std::uint64_t nowTick);
+        /** @brief Run the ordered host-authority chain and sanitize provider exceptions after cheap hostile-input validation. */
         [[nodiscard]] Result<AuthenticationResult> VerifyWithAuthorities(const AuthenticationResponseView &response,
                                                                          const PeerAuthenticationEvidence &evidence, std::uint64_t nowTick);
 
@@ -422,6 +513,7 @@ namespace Horo::Network {
         AdmissionProtection *protection_{};
         std::uint64_t deadlineTick_{};
         AuthenticationResult accepted_{};
+        std::optional<ProofIssuanceAuthorization> proofAuthorization_;
         AuthenticationState state_{AuthenticationState::AwaitingProof};
         AuthenticationFailureClass failure_{AuthenticationFailureClass::None};
     };

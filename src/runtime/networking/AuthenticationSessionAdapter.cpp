@@ -64,6 +64,18 @@ namespace Horo::Network {
                    Detail::ValidCanonicalIdentities(principal.capabilities.values, principal.capabilities.count);
         }
 
+        /** @brief Issuance and credential acceptance must observe one exact public channel/certificate generation. */
+        bool SameEvidence(const PeerAuthenticationEvidence &left, const PeerAuthenticationEvidence &right) noexcept {
+            const auto &a = left.transport;
+            const auto &b = right.transport;
+            return a.connection == b.connection && a.sessionGeneration == b.sessionGeneration && a.channel == b.channel &&
+                   a.channelGeneration == b.channelGeneration && a.confidentiality == b.confidentiality && a.integrity == b.integrity &&
+                   a.authenticatedPeer == b.authenticatedPeer && a.inMemoryLoopback == b.inMemoryLoopback &&
+                   left.certificate.binding == right.certificate.binding &&
+                   left.certificate.certificateDigest == right.certificate.certificateDigest &&
+                   left.certificate.evidenceGeneration == right.certificate.evidenceGeneration;
+        }
+
         /** @brief Requires every host authority before entering the ordered verification chain. */
         [[nodiscard]] bool AvailableAuthorities(const AuthenticationAuthorities &authorities) noexcept {
             return authorities.certificates && authorities.peers && authorities.credentials && authorities.privateKeys &&
@@ -71,6 +83,12 @@ namespace Horo::Network {
                    authorities.privateKeys->Available();
         }
     }  // namespace
+
+    /** @copydoc ProofIssuanceAuthorization::MatchesEvidence */
+    bool ProofIssuanceAuthorization::MatchesEvidence(const PeerAuthenticationEvidence &evidence,
+                                                     const std::uint64_t nowTick) const noexcept {
+        return nowTick != 0 && nowTick < deadlineTick_ && SameEvidence(evidence, evidence_);
+    }
 
     /** @copydoc NetworkSessionId::IsValid */
     bool NetworkSessionId::IsValid() const noexcept {
@@ -83,13 +101,18 @@ namespace Horo::Network {
                                                                const std::uint64_t deadlineTick, AdmissionProtection *protection) noexcept
         : policy_(policy), challenge_(challenge), authorities_(authorities), protection_(protection), deadlineTick_(deadlineTick) {}
 
+    /** @copydoc ValidateNetworkTrustPolicy */
+    bool ValidateNetworkTrustPolicy(const NetworkTrustPolicySnapshot &policy) noexcept {
+        return ValidPolicy(policy);
+    }
+
     /** @copydoc AuthenticationSessionAdapter::Create */
     Result<AuthenticationSessionAdapter> AuthenticationSessionAdapter::Create(const NetworkTrustPolicySnapshot &policy,
                                                                               const AuthenticationChallenge &challenge,
                                                                               const AuthenticationAuthorities &authorities,
                                                                               const std::uint64_t deadlineTick,
                                                                               AdmissionProtection *protection) {
-        if (!ValidPolicy(policy) || !ValidChallenge(challenge, policy) || deadlineTick == 0)
+        if (!ValidateNetworkTrustPolicy(policy) || !ValidChallenge(challenge, policy) || deadlineTick == 0)
             return Result<AuthenticationSessionAdapter>::Failure(MakeError(NetworkErrors::AuthenticationInvalid));
         return Result<AuthenticationSessionAdapter>::Success(
             AuthenticationSessionAdapter{policy, challenge, authorities, deadlineTick, protection});
@@ -107,13 +130,80 @@ namespace Horo::Network {
         return Result<AuthenticationResult>::Failure(MakeError(error));
     }
 
+    /** @copydoc AuthenticationSessionAdapter::VerifyPeerAuthorities */
+    Result<AuthenticationSessionAdapter::VerifiedPeerAuthorities> AuthenticationSessionAdapter::VerifyPeerAuthorities(
+        const PeerAuthenticationEvidence &evidence, const std::uint64_t nowTick) {
+        const auto reject = [this](const ErrorCodeDescriptor &error, const AuthenticationFailureClass failure) {
+            state_ = AuthenticationState::Rejected;
+            failure_ = failure;
+            return Result<VerifiedPeerAuthorities>::Failure(MakeError(error));
+        };
+        const auto charge = [this, nowTick]() {
+            return protection_ == nullptr ||
+                   protection_->Charge(challenge_.connection, challenge_.sessionGeneration, AdmissionWork::VerifierCall, 1, nowTick)
+                       .HasValue();
+        };
+        if (!AvailableAuthorities(authorities_))
+            return reject(NetworkErrors::AuthenticationTrustUnavailable, AuthenticationFailureClass::TrustUnavailable);
+        try {
+            if (!charge())
+                return reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
+            const auto certificate = authorities_.certificates->Verify({challenge_, evidence.certificate});
+            if (certificate.HasError())
+                return reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
+            if (!ValidStamp(certificate.Value().stamp, challenge_) || certificate.Value().binding != policy_.certificate)
+                return reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
+            if (!charge())
+                return reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
+            const auto peer = authorities_.peers->Verify({challenge_, evidence, certificate.Value()});
+            if (peer.HasError())
+                return reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
+            if (!ValidStamp(peer.Value().stamp, challenge_) || !ExposureAllowsTrust(policy_.exposure, peer.Value().trustLevel))
+                return reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
+            return Result<VerifiedPeerAuthorities>::Success({certificate.Value(), peer.Value()});
+        } catch (...) {
+            return reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
+        }
+    }
+
+    /** @copydoc AuthenticationSessionAdapter::AuthorizeProofIssuance */
+    Result<ProofIssuanceAuthorization> AuthenticationSessionAdapter::AuthorizeProofIssuance(
+        const ConnectionHandle connection, const NetworkOperationGeneration sessionGeneration, const AuthenticationChallenge &peerChallenge,
+        const PeerAuthenticationEvidence &evidence, const std::uint64_t nowTick) {
+        if (!Owns(connection, sessionGeneration))
+            return Result<ProofIssuanceAuthorization>::Failure(MakeError(NetworkErrors::NetworkLifecycleOperationStale));
+        if (state_ != AuthenticationState::AwaitingProof || proofAuthorization_)
+            return Result<ProofIssuanceAuthorization>::Failure(MakeError(NetworkErrors::AuthenticationStateInvalid));
+        if (nowTick >= deadlineTick_) {
+            (void)Expire(nowTick);
+            return Result<ProofIssuanceAuthorization>::Failure(MakeError(NetworkErrors::SessionTimedOut));
+        }
+        if (nowTick == 0 || !ValidChallenge(peerChallenge, policy_) || peerChallenge.connection != connection ||
+            peerChallenge.sessionGeneration != sessionGeneration || peerChallenge.clientNonce != challenge_.clientNonce ||
+            peerChallenge.serverNonce != challenge_.serverNonce || !ValidTransportEvidence(evidence, challenge_, policy_)) {
+            (void)Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
+            return Result<ProofIssuanceAuthorization>::Failure(MakeError(NetworkErrors::AuthenticationIncompatible));
+        }
+        const auto peer = VerifyPeerAuthorities(evidence, nowTick);
+        if (peer.HasError())
+            return Result<ProofIssuanceAuthorization>::Failure(peer.ErrorValue());
+        proofAuthorization_ =
+            ProofIssuanceAuthorization{peerChallenge, evidence, peer.Value().peer, peer.Value().certificate.stamp, deadlineTick_};
+        return Result<ProofIssuanceAuthorization>::Success(*proofAuthorization_);
+    }
+
     /** @copydoc AuthenticationSessionAdapter::VerifyWithAuthorities */
     Result<AuthenticationResult> AuthenticationSessionAdapter::VerifyWithAuthorities(const AuthenticationResponseView &response,
                                                                                      const PeerAuthenticationEvidence &evidence,
-                                                                                     const std::uint64_t nowTick) {
-        if (!AvailableAuthorities(authorities_))
-            return Reject(NetworkErrors::AuthenticationTrustUnavailable, AuthenticationFailureClass::TrustUnavailable);
-
+                                                                                     const std::uint64_t nowTick) try {
+        const auto peer = VerifyPeerAuthorities(evidence, nowTick);
+        if (peer.HasError())
+            return Result<AuthenticationResult>::Failure(peer.ErrorValue());
+        if (proofAuthorization_ && (!SameEvidence(evidence, proofAuthorization_->Evidence()) ||
+                                    peer.Value().certificate.stamp != proofAuthorization_->certificateStamp_ ||
+                                    peer.Value().peer.stamp != proofAuthorization_->Peer().stamp ||
+                                    peer.Value().peer.trustLevel != proofAuthorization_->Peer().trustLevel))
+            return Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
         const auto chargeVerifier = [this, nowTick]() {
             return protection_ == nullptr ||
                    protection_->Charge(challenge_.connection, challenge_.sessionGeneration, AdmissionWork::VerifierCall, 1, nowTick)
@@ -121,29 +211,12 @@ namespace Horo::Network {
         };
         if (!chargeVerifier())
             return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
-
-        const auto certificate = authorities_.certificates->Verify({challenge_, evidence.certificate});
-        if (certificate.HasError())
-            return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
-        if (!ValidStamp(certificate.Value().stamp, challenge_) || certificate.Value().binding != policy_.certificate)
-            return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
-
-        if (!chargeVerifier())
-            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
-        const auto peer = authorities_.peers->Verify({challenge_, evidence, certificate.Value()});
-        if (peer.HasError())
-            return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
-        if (!ValidStamp(peer.Value().stamp, challenge_) || !ExposureAllowsTrust(policy_.exposure, peer.Value().trustLevel))
-            return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
-
-        if (!chargeVerifier())
-            return Reject(NetworkErrors::AdmissionLimitExceeded, AuthenticationFailureClass::ResourceLimited);
         const auto credential =
-            authorities_.credentials->Verify({challenge_, policy_.credential, peer.Value().trustLevel, response.proof, nowTick});
+            authorities_.credentials->Verify({challenge_, policy_.credential, peer.Value().peer.trustLevel, response.proof, nowTick});
         if (credential.HasError())
             return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
         if (!ValidStamp(credential.Value().stamp, challenge_) || credential.Value().binding != policy_.credential ||
-            !ValidPrincipal(credential.Value().principal, peer.Value().trustLevel, nowTick))
+            !ValidPrincipal(credential.Value().principal, peer.Value().peer.trustLevel, nowTick))
             return Reject(NetworkErrors::AuthenticationInvalid, AuthenticationFailureClass::Malformed);
 
         if (!chargeVerifier())
@@ -163,6 +236,8 @@ namespace Horo::Network {
         state_ = AuthenticationState::Accepted;
         failure_ = AuthenticationFailureClass::None;
         return Result<AuthenticationResult>::Success(accepted_);
+    } catch (...) {
+        return Reject(NetworkErrors::AuthenticationRejected, AuthenticationFailureClass::Rejected);
     }
 
     /** @copydoc AuthenticationSessionAdapter::Authenticate */
@@ -212,6 +287,38 @@ namespace Horo::Network {
             return Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
         state_ = AuthenticationState::Authenticating;
         return VerifyWithAuthorities(response, evidence, nowTick);
+    }
+
+    /** @copydoc AuthenticationSessionAdapter::ValidateActivationEvidence */
+    Result<void> AuthenticationSessionAdapter::ValidateActivationEvidence(const ConnectionHandle connection,
+                                                                          const NetworkOperationGeneration sessionGeneration,
+                                                                          const PeerAuthenticationEvidence &evidence,
+                                                                          const std::uint64_t nowTick) {
+        if (!Owns(connection, sessionGeneration))
+            return Result<void>::Failure(MakeError(NetworkErrors::NetworkLifecycleOperationStale));
+        if (state_ != AuthenticationState::Accepted)
+            return Result<void>::Failure(MakeError(NetworkErrors::AuthenticationStateInvalid));
+        if (nowTick == 0 || nowTick >= deadlineTick_ || nowTick >= accepted_.principal.expiresAtTick) {
+            state_ = AuthenticationState::TimedOut;
+            failure_ = AuthenticationFailureClass::TimedOut;
+            return Result<void>::Failure(MakeError(NetworkErrors::SessionTimedOut));
+        }
+        if (!ValidTransportEvidence(evidence, challenge_, policy_) || evidence.transport.channel != accepted_.secureChannel.channel ||
+            evidence.transport.channelGeneration != accepted_.secureChannel.channelGeneration ||
+            (proofAuthorization_ && !proofAuthorization_->MatchesEvidence(evidence, nowTick))) {
+            (void)Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
+            return Result<void>::Failure(MakeError(NetworkErrors::AuthenticationIncompatible));
+        }
+        const auto peer = VerifyPeerAuthorities(evidence, nowTick);
+        if (peer.HasError())
+            return Result<void>::Failure(peer.ErrorValue());
+        if (proofAuthorization_ && (peer.Value().certificate.stamp != proofAuthorization_->certificateStamp_ ||
+                                    peer.Value().peer.stamp != proofAuthorization_->Peer().stamp ||
+                                    peer.Value().peer.trustLevel != proofAuthorization_->Peer().trustLevel)) {
+            (void)Reject(NetworkErrors::AuthenticationIncompatible, AuthenticationFailureClass::Incompatible);
+            return Result<void>::Failure(MakeError(NetworkErrors::AuthenticationIncompatible));
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc AuthenticationSessionAdapter::Expire */

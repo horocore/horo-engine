@@ -12,11 +12,13 @@
 #include <array>
 #include <cstdint>
 #include <imgui.h>
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace Horo::Editor {
     struct GuiContentRegion;
+    class UiCanvasInspectorPanel;
 
     class EditorWorkspaceView final : public Input::IInputCaptureOwner {
     public:
@@ -66,6 +68,9 @@ namespace Horo::Editor {
                             Input::InputRouter &inputRouter, Input::InputContextToken &workspaceInputContext,
                             Extensions::EditorActivityHost *activityHost = nullptr, IEditorGuiRenderer *renderer = nullptr);
 
+        /** @brief Releases transient inspector state before the workspace composition is destroyed. */
+        ~EditorWorkspaceView();
+
         void Draw(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand,
                   const GuiContentRegion &contentRegion);
 
@@ -84,6 +89,7 @@ namespace Horo::Editor {
         ExtensionActivityView m_extensions;
         ExtensionRecoveryView m_extensionRecovery;
         const EditorGuiContext &m_context;
+        mutable std::unique_ptr<UiCanvasInspectorPanel> m_uiCanvasInspector;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;
         Input::InputRouter &m_inputRouter;
@@ -119,6 +125,8 @@ namespace Horo::Editor {
         /** @brief Draws the host's ordered instance tabs using shared controls and typed lifecycle commands. */
         void DrawWorkspaceDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Presents the active immutable source; text editing belongs to the source widget adapter. */
+        /** @brief Draws cached retained hierarchy and descriptor palette, emitting typed owner commands. */
+        bool DrawUiCanvasDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         bool DrawSourceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Composes one view's tools and concrete widget without taking document mutation ownership. */
         void DrawSourceEditor(DocumentInstanceId instance, const SourceDocumentSnapshot &source, const SourceHistoryState &history,

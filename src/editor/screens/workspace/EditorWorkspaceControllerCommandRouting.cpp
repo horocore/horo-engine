@@ -60,9 +60,10 @@ namespace Horo::Editor {
             return;
         }
         if (ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
-            ProcessWorldSourceCommand(cmd) || ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) ||
-            ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessPCGDocumentCommand(cmd) ||
-            ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd))
+            ProcessWorldSourceCommand(cmd) || ProcessUiCanvasCommand(cmd) || ProcessPrefabDocumentCommand(cmd) ||
+            ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) ||
+            ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
+            ProcessLayoutCommand(cmd))
             return;
         if (m_activePrefabDocument) {
             ProcessFocusedPrefabCommand(cmd);

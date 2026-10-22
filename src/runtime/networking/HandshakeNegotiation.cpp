@@ -84,6 +84,18 @@ namespace Horo::Network {
         }
     }  // namespace
 
+    /** @copydoc ValidateHandshakeLocalDescriptor */
+    Result<void> ValidateHandshakeLocalDescriptor(const HandshakeLocalDescriptor &local) {
+        const auto &compatibility = local.compatibility;
+        if (compatibility.contractVersion != HandshakeContractVersion || !compatibility.protocol.IsValid() ||
+            !compatibility.versions.IsValid() || compatibility.schemaFingerprint == 0 ||
+            !ValidFeatureSet(compatibility.protocol, compatibility.features) || !HasCompression(compatibility.compression) ||
+            !ValidRequiredCompression(compatibility.compression, compatibility.requiredCompression) ||
+            !ValidateTransportCapabilities(local.transport))
+            return Result<void>::Failure(MakeError(NetworkErrors::HandshakeInvalid));
+        return Result<void>::Success();
+    }
+
     HandshakeNegotiator::HandshakeNegotiator(const ConnectionHandle connection, const NetworkOperationGeneration sessionGeneration,
                                              const std::uint64_t deadlineTick, OwnedLocalPolicy local) noexcept
         : connection_(connection), sessionGeneration_(sessionGeneration), deadlineTick_(deadlineTick), local_(std::move(local)) {}
@@ -92,14 +104,10 @@ namespace Horo::Network {
     Result<HandshakeNegotiator> HandshakeNegotiator::Create(const ConnectionHandle connection,
                                                             const NetworkOperationGeneration sessionGeneration,
                                                             const std::uint64_t deadlineTick, const HandshakeLocalDescriptor &local) {
-        const auto &compatibility = local.compatibility;
         if (!connection.IsValid() || !sessionGeneration.IsValid() || deadlineTick == 0 ||
-            compatibility.contractVersion != HandshakeContractVersion || !compatibility.protocol.IsValid() ||
-            !compatibility.versions.IsValid() || compatibility.schemaFingerprint == 0 ||
-            !ValidFeatureSet(compatibility.protocol, compatibility.features) || !HasCompression(compatibility.compression) ||
-            !ValidRequiredCompression(compatibility.compression, compatibility.requiredCompression) ||
-            !ValidateTransportCapabilities(local.transport))
+            ValidateHandshakeLocalDescriptor(local).HasError())
             return Failure<HandshakeNegotiator>(NetworkErrors::HandshakeInvalid);
+        const auto &compatibility = local.compatibility;
 
         OwnedFeatures features;
         features.supportedCount = compatibility.features.supported.size();

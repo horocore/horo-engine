@@ -60,8 +60,9 @@ namespace Horo::Editor {
             return;
         }
         if (area == WorkspaceDockArea::Document &&
-            (DrawPrefabDocument(viewModel, outCommand) || DrawSourceDocument(viewModel, outCommand) || DrawNavigationDocument(viewModel) ||
-             DrawPCGDocument(viewModel, outCommand) || DrawSequenceDocument(viewModel, outCommand))) {
+            (DrawUiCanvasDocument(viewModel, outCommand) || DrawPrefabDocument(viewModel, outCommand) ||
+             DrawSourceDocument(viewModel, outCommand) || DrawNavigationDocument(viewModel) || DrawPCGDocument(viewModel, outCommand) ||
+             DrawSequenceDocument(viewModel, outCommand))) {
             if (panel)
                 panel->OnPresentationHidden(outCommand);
             return;

@@ -74,7 +74,7 @@ horo_allow_target_dependencies(TARGET HoroAssets DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNetworkApi DEPENDENCIES HoroFoundation)
 horo_allow_target_dependencies(TARGET HoroNetworkDebuggerApplication DEPENDENCIES HoroNetworkApi)
 horo_allow_target_dependencies(TARGET HoroPlayTopologyApplication DEPENDENCIES HoroFoundation HoroNetworkApi HoroPlatform)
-horo_allow_target_dependencies(TARGET HoroNetworkRuntime DEPENDENCIES HoroNetworkApi HoroRuntimeScene HoroRuntime)
+horo_allow_target_dependencies(TARGET HoroNetworkRuntime DEPENDENCIES HoroNetworkApi HoroRuntimeScene HoroRuntime HoroSecurity)
 horo_allow_target_dependencies(TARGET HoroNetworkTransportNull DEPENDENCIES HoroNetworkApi)
 if(HORO_BUILD_NETWORK_GNS)
     horo_allow_target_dependencies(TARGET HoroNetworkTransportGNSFactoryInternal DEPENDENCIES HoroNetworkApi)
@@ -251,7 +251,7 @@ horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorPlaySceneHostInternal DEPENDENCIES HoroRuntimeScene HoroGameplayRuntime)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroProjectReadFilesApi HoroWorldBakeApplication HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource HoroNavigationBakeAutomation
+    DEPENDENCIES HoroFoundationJsonInternal HoroNavigationBakeAutomation HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource HoroProjectReadFilesApi HoroWorldBakeApplication
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
@@ -304,7 +304,7 @@ horo_allow_target_dependencies(TARGET HoroExtensionSdkPackageStage DEPENDENCIES 
 horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
-    DEPENDENCIES
+    DEPENDENCIES HoroEditorUiStyleHostInternal
         HoroPlatformProjectReadFiles
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo
@@ -409,4 +409,7 @@ horo_allow_target_dependencies(TARGET HoroProjectCollisionSettings
 horo_allow_target_dependencies(TARGET HoroCliNavigationAdapters DEPENDENCIES HoroCliHost HoroNavigationBakeAutomation)
 horo_allow_target_dependencies(TARGET HoroMcpNavigationAdapters DEPENDENCIES HoroMcpRegistry HoroNavigationBakeAutomation)
 
+horo_allow_target_dependencies(TARGET HoroUiStyleWorkspaceApplication DEPENDENCIES HoroRuntimeUi HoroAssets)
+horo_allow_target_dependencies(TARGET HoroEditorUiStyleHostInternal
+    DEPENDENCIES HoroEditorServices HoroUiStyleWorkspaceApplication HoroPlatformImmutableFileStorage HoroPlatform HoroProjectMutationGuard)
 horo_allow_target_dependencies(TARGET HoroWorldBakeApplication DEPENDENCIES HoroEditorModel HoroSceneCellPayload HoroWorldStreaming HoroSceneRuntimeConversion HoroFoundation HoroAssets HoroProjectReadFilesApi HoroProjectMutationGuard)

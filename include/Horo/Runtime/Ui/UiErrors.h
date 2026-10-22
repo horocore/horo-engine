@@ -140,6 +140,14 @@ namespace Horo::Runtime::Ui::UiErrors {
     extern const ErrorCodeDescriptor LayoutIntrinsicUnavailable;
     /** @brief Layout source identity or revision evidence does not match the active tree/canvas. */
     extern const ErrorCodeDescriptor LayoutSourceStale;
+    /** @brief Responsive profile values or selector intervals are malformed. */
+    extern const ErrorCodeDescriptor PresentationProfileMalformed;
+    /** @brief Responsive profile revision evidence is stale. */
+    extern const ErrorCodeDescriptor PresentationProfileSourceStale;
+    /** @brief Responsive profile capability bits are unsupported. */
+    extern const ErrorCodeDescriptor PresentationProfileUnsupported;
+    /** @brief Responsive profile identity belongs to another canvas or owner. */
+    extern const ErrorCodeDescriptor PresentationProfileForeignIdentity;
     /** @brief Arrange-time dependency resolution changed more than the one bounded remeasure permits. */
     extern const ErrorCodeDescriptor LayoutNonConvergent;
     /** @brief Every preallocated immutable layout snapshot slot remains leased. */

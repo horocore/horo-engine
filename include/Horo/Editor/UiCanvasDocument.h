@@ -9,6 +9,7 @@
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Ui/UiDocument.h"
+#include "Horo/Runtime/Ui/UiElementCatalog.h"
 
 #include <compare>
 #include <cstddef>
@@ -17,10 +18,12 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <variant>
+#include <vector>
 
 namespace Horo::Editor {
     inline constexpr std::string_view UiCanvasDocumentExtension = ".uicanvas";
-    inline constexpr std::uint32_t UiCanvasDocumentFormatVersion = 1;
+    inline constexpr std::uint32_t UiCanvasDocumentFormatVersion = 2;
     inline constexpr std::size_t MaximumUiCanvasDocumentBytes = 64ULL * 1024ULL * 1024ULL;
 
     namespace UiCanvasDocumentErrors {
@@ -48,7 +51,8 @@ namespace Horo::Editor {
 
     /** @brief Editor-owned identity of one committed in-memory UI Canvas state. */
     struct UiCanvasDocumentStateId final {
-        std::uint64_t value{};
+        std::uint64_t value{};       /**< Monotonic publication fence; undo/redo never restore this value. */
+        DocumentInstanceId instance; /**< Exact workspace incarnation; detached persistence snapshots may omit it. */
 
         [[nodiscard]] constexpr bool IsValid() const noexcept {
             return value != 0;
@@ -62,6 +66,38 @@ namespace Horo::Editor {
         Runtime::Ui::UiDocument document;
         UiCanvasDocumentStateId state;
         UiCanvasFileFingerprint fingerprint; /**< Canonical fingerprint of the bytes used to load the document. */
+    };
+
+    /** @brief Creates one descriptor-backed primitive at a stable sibling position. */
+    struct UiCanvasCreateElement final {
+        Runtime::Ui::UiElementId id;
+        Runtime::Ui::UiElementId parent;
+        Runtime::Ui::UiElementId before; /**< Invalid appends after existing children. */
+        Runtime::Ui::UiElementKind kind{Runtime::Ui::UiElementKind::Panel};
+    };
+
+    /** @brief Moves one subtree; invalid before appends, and canvas roots cannot move. */
+    struct UiCanvasMoveElement final {
+        Runtime::Ui::UiElementId element;
+        Runtime::Ui::UiElementId parent;
+        Runtime::Ui::UiElementId before;
+    };
+
+    /** @brief Replaces the canonical typed presentation record; absence explicitly restores legacy defaults. */
+    struct UiCanvasSetPresentation final {
+        Runtime::Ui::UiElementId element;
+        std::optional<Runtime::Ui::UiElementPresentation> presentation;
+    };
+
+    /** @brief Revision-checked semantic hierarchy or presentation operation. */
+    using UiCanvasElementCommand = std::variant<UiCanvasCreateElement, UiCanvasMoveElement, UiCanvasSetPresentation>;
+
+    /** @brief One cached hierarchy row; semantic order comes exclusively from the document. */
+    struct UiCanvasHierarchyRow final {
+        Runtime::Ui::UiElementId element;
+        Runtime::Ui::UiElementId parent;
+        std::size_t depth{};
+        std::string label;
     };
 
     /** @brief Result category of a conflict-aware UI Canvas save attempt. */
@@ -134,8 +170,12 @@ namespace Horo::Editor {
          */
         [[nodiscard]] static Result<UiCanvasDocument> Open(DocumentIdentity identity, const std::filesystem::path &absolutePath);
 
-        UiCanvasDocument(UiCanvasDocument &&) noexcept = default;
-        UiCanvasDocument &operator=(UiCanvasDocument &&) noexcept = default;
+        /** @brief Transfers document ownership and closes the moved-from command boundary. @param other Owner to transfer. */
+        UiCanvasDocument(UiCanvasDocument &&other) noexcept;
+        /** @brief Replaces this owner by transfer and closes the moved-from boundary.
+         * @param other Owner to transfer. @return This owner.
+         */
+        UiCanvasDocument &operator=(UiCanvasDocument &&other) noexcept;
         UiCanvasDocument(const UiCanvasDocument &) = delete;
         UiCanvasDocument &operator=(const UiCanvasDocument &) = delete;
         ~UiCanvasDocument() = default;
@@ -165,7 +205,7 @@ namespace Horo::Editor {
 
         /** @brief Reports whether current authored state differs from the last saved state. */
         [[nodiscard]] bool IsDirty() const noexcept {
-            return currentState_ != savedState_;
+            return contentState_ != savedContentState_;
         }
 
         /** @brief Reports whether the session has been explicitly closed. */
@@ -179,6 +219,48 @@ namespace Horo::Editor {
          * @return Success or a stale/invalid/closed-state error; failure leaves the session unchanged.
          */
         [[nodiscard]] Result<void> Replace(Runtime::Ui::UiDocument document);
+
+        /**
+         * @brief Commits one atomic hierarchy command on the editor owner thread.
+         * @param expected Exact document instance and monotonic publication fence; stale reload/reopen/undo drafts cannot mutate source.
+         * @param command Owned primitive creation or subtree move with stable sibling identities.
+         * @return Success or typed closed, stale, topology, descriptor or capacity failure; failure preserves all state.
+         */
+        [[nodiscard]] Result<void> Execute(UiCanvasDocumentStateId expected, const UiCanvasElementCommand &command);
+
+        /** @brief Undoes the last hierarchy transaction under an exact state fence.
+         * @param expected Current state. @return Success or typed closed, stale or empty-history failure.
+         */
+        [[nodiscard]] Result<void> Undo(UiCanvasDocumentStateId expected);
+        /** @brief Redoes the next hierarchy transaction under an exact state fence.
+         * @param expected Current state. @return Success or typed closed, stale or empty-history failure.
+         */
+        [[nodiscard]] Result<void> Redo(UiCanvasDocumentStateId expected);
+        /** @brief Builds a bounded hierarchy projection outside draw work, retaining ancestors of matching rows.
+         * @param search Case-insensitive ASCII substring, bounded to 256 UTF-8 bytes.
+         * @return Owned rows or typed closed/invalid-search failure. Callers cache until state or search changes.
+         */
+        [[nodiscard]] Result<std::vector<UiCanvasHierarchyRow>> Hierarchy(std::string_view search = {}) const;
+        /** @brief Changes transient selection without dirtying authored state.
+         * @param expected Current state. @param element Stable identity, or invalid to clear.
+         * @return Success or typed closed, stale or missing-element failure.
+         */
+        [[nodiscard]] Result<void> Select(UiCanvasDocumentStateId expected, Runtime::Ui::UiElementId element);
+
+        /** @brief Returns whether a hierarchy transaction can be undone. @return True while history precedes the cursor. */
+        [[nodiscard]] bool CanUndo() const noexcept {
+            return !closed_ && historyCursor_ > 0;
+        }
+
+        /** @brief Returns whether a hierarchy transaction can be redone. @return True while history follows the cursor. */
+        [[nodiscard]] bool CanRedo() const noexcept {
+            return !closed_ && historyCursor_ < history_.size();
+        }
+
+        /** @brief Returns transient selection; reload and close clear it. @return Selected stable ID or invalid. */
+        [[nodiscard]] Runtime::Ui::UiElementId Selection() const noexcept {
+            return selection_;
+        }
 
         /**
          * @brief Saves the current state through the project mutation and durable filesystem boundaries.
@@ -216,12 +298,30 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<UiCanvasDocumentStateId> AdvanceState() const;
 
+        /** @brief Restores one semantic history state while advancing the notification fence. */
+        [[nodiscard]] Result<void> RestoreHistory(UiCanvasDocumentStateId expected, bool redo);
+
+        struct HierarchyTransaction final {
+            UiCanvasElementCommand command;
+            std::optional<UiCanvasElementCommand> inverse;
+            UiCanvasDocumentStateId beforeContent;
+            UiCanvasDocumentStateId afterContent;
+            bool materializedRoots{};
+            Runtime::Ui::UiElementId beforeSelection;
+            Runtime::Ui::UiElementId afterSelection;
+        };
+
+        std::vector<HierarchyTransaction> history_;
+        std::size_t historyCursor_{};
+        Runtime::Ui::UiElementId selection_;
         DocumentIdentity identity_;
         std::filesystem::path path_;
         std::optional<Runtime::Ui::UiDocument> document_;
         UiCanvasFileFingerprint fingerprint_;
         UiCanvasDocumentStateId currentState_{1};
         UiCanvasDocumentStateId savedState_{1};
+        UiCanvasDocumentStateId contentState_{1};
+        UiCanvasDocumentStateId savedContentState_{1};
         bool closed_{false};
     };
 }  // namespace Horo::Editor

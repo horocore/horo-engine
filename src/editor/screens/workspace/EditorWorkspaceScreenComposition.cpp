@@ -60,6 +60,25 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<WorkspacePCGComposition>::Success({std::move(pcgCatalog), std::move(pcgPreview).Value()});
         }
 
+        /** @brief Compose one explicit resource lease without replacing the prior controller capability. */
+        Result<std::unique_ptr<UiInspectorResources>> PrepareUiInspectorResources(const EditorServiceRegistry &services,
+                                                                                  const std::filesystem::path &root,
+                                                                                  const Assets::AssetId owner) {
+            if (const auto *factory = services.TryGet<UiInspectorResourcesFactory>())
+                return (*factory)(root, owner);
+            return Result<std::unique_ptr<UiInspectorResources>>::Success(nullptr);
+        }
+
+        /** @brief Capture gameplay borrows and the selected play factory at the host composition boundary. */
+        EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, GuiScreenHost &host,
+                                                             EditorPlaySceneFactory sceneFactory) {
+            const auto *environment = services.TryGet<Application::GameplayBuildEnvironment>();
+            return {.builds = services.TryGet<Application::GameplayBuildService>(),
+                    .environment = environment ? *environment : Application::GameplayBuildEnvironment{},
+                    .retirements = host.GameplayRetirements(),
+                    .sceneFactory = std::move(sceneFactory)};
+        }
+
     }  // namespace
 
     /** @copydoc EditorWorkspaceScreen::AttachWorkspacePanels */
@@ -122,32 +141,38 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (capturedSources.HasError())
             return Result<void>::Failure(capturedSources.ErrorValue());
         auto sources = std::move(capturedSources).Value();
+        auto resources = PrepareUiInspectorResources(services_, projectRoot, sources.owner);
+        if (resources.HasError())
+            return Result<void>::Failure(resources.ErrorValue());
+        auto uiInspectorResources = std::move(resources).Value();
         auto pcgComposition = CreatePCGWorkspaceComposition();
         if (pcgComposition.HasError())
             return Result<void>::Failure(std::move(pcgComposition).ErrorValue());
         auto pcg = std::move(pcgComposition).Value();
         view_.ResetSourceSession();
-        controller_ =
-            std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
-                                                        BindControllerDependencies(projectRoot, std::move(sources), std::move(pcg.catalog),
-                                                                                   std::move(pcg.previewInputs)));
+        controller_ = std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
+                                                                  BindControllerDependencies(projectRoot, uiInspectorResources.get(),
+                                                                                             std::move(sources), std::move(pcg.catalog),
+                                                                                             std::move(pcg.previewInputs)));
         if (controller_->InitializationError().has_value()) {
             const Error error = *controller_->InitializationError();
             controller_.reset();
             return Result<void>::Failure(error);
         }
+        uiInspectorResources_ = std::move(uiInspectorResources);
         return Result<void>::Success();
     }
 
     /** @copydoc EditorWorkspaceScreen::BindControllerDependencies */
     EditorWorkspaceDependencies EditorWorkspaceScreen::BindControllerDependencies(const std::filesystem::path &projectRoot,
+                                                                                  UiInspectorResources *uiInspectorResources,
                                                                                   WorkspaceReadSources &&sources,
                                                                                   PCGEditorCatalog &&catalog,
                                                                                   PCGPreviewInputs &&previewInputs) const {
-        const Application::GameplayBuildEnvironment *gameplayEnvironment = services_.TryGet<Application::GameplayBuildEnvironment>();
         const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
         return EditorWorkspaceDependencies{
             .mutableAssetRegistry = projectServices_.assetRegistry,
+            .uiInspectorResources = uiInspectorResources,
             .collision = {.inventory = projectServices_.collisionInventory,
                           .activation = projectServices_.collisionActivation,
                           .previewReceipt = projectServices_.previewCollisionReceipt},
@@ -159,10 +184,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .worldBakeOperations = services_.TryGet<OperationStore>(),
             .worldBakeOutput = services_.TryGet<BuildOutputStore>(),
             .worldBakeDependencies = bakeDependencies ? std::optional{*bakeDependencies} : std::nullopt,
-            .gameplay = {.builds = services_.TryGet<Application::GameplayBuildService>(),
-                         .environment = gameplayEnvironment != nullptr ? *gameplayEnvironment : Application::GameplayBuildEnvironment{},
-                         .retirements = host_.GameplayRetirements(),
-                         .sceneFactory = BindPlayFactory(projectRoot)},
+            .gameplay = BindGameplayServices(services_, host_, BindPlayFactory(projectRoot)),
             .localization = &context_.localization,
             .engineEvents = &context_.engineEvents,
             .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),

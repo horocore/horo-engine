@@ -4,6 +4,8 @@
 #include "EditorNavigationBakeHost.h"
 #include "EditorPresentationSurface.h"
 #include "EditorProjectSceneHost.h"
+#include "EditorUiStylePreparation.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Extensions/EditorSurfaceContext.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
 #include "Horo/Physics/PhysicsErrors.h"
@@ -1927,6 +1929,8 @@ namespace Horo::Editor {
             // Covers constructor failure as well as startup failure: dependencies precede both join guards.
             const EditorWorkerShutdown constructionRollback{p.background.jobs, p.operationServices.shaderBuild, nullptr, packages.get()};
             auto gameplayRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
+            auto uiInspectorResourcesFactory =
+                MakeEditorUiInspectorResourcesFactory(p.background.jobs, assetRegistry, mutationCoordinator, durableFiles);
             WorldStreamingPreviewHost streamingPreview;
             auto streamingPolicy = MakeWorldStreamingPreviewRuntimePolicy();
             if (streamingPolicy.HasError()) {
@@ -1996,6 +2000,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<EditorProjectPlaySceneFactory>(playSceneFactory);
             screenHost.Services().Register<EditorProjectPrefabStageFactory>(prefabStageFactory);
             screenHost.Services().Register<Assets::AssetRegistry>(assetRegistry);
+            screenHost.Services().Register<UiInspectorResourcesFactory>(uiInspectorResourcesFactory);
             screenHost.Services().Register<IAudioComponentPreview>(audioPreview);
             screenHost.Services().RegisterConst<NavigationViewportAccess>(navigationOverlayAccess);
             screenHost.Services().Register<CollisionInventoryEvidence>(collisionInventory);

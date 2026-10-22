@@ -7,6 +7,7 @@
 
 #include "Horo/Runtime/Ui/UiCanvasSpace.h"
 #include "Horo/Runtime/Ui/UiElementTree.h"
+#include "Horo/Runtime/Ui/UiLayoutWork.h"
 
 #include <array>
 #include <compare>
@@ -58,6 +59,7 @@ namespace Horo::Runtime::Ui {
     struct UiLayoutIntrinsicRevisionTag;
     struct UiLayoutCanvasRevisionTag;
     struct UiLayoutPolicyRevisionTag;
+    struct UiLayoutPresentationRevisionTag;
     /** @brief Monotonic resolved binding/content generation consumed by layout. */
     using UiLayoutContentRevision = UiRevision<UiLayoutContentRevisionTag>;
     /** @brief Monotonic computed-style generation consumed by layout. */
@@ -69,26 +71,23 @@ namespace Horo::Runtime::Ui {
     /** @brief Monotonic layout policy generation consumed by layout. */
     using UiLayoutPolicyRevision = UiRevision<UiLayoutPolicyRevisionTag>;
 
+    /** @brief Monotonic attachment-derived presentation policy generation; zero is legacy neutral composition. */
+    using UiLayoutPresentationRevision = UiRevision<UiLayoutPresentationRevisionTag>;
+
     /** @brief Complete immutable source lineage for one layout evaluation. */
     struct UiLayoutSourceRevisions final {
-        UiDocumentRevision document;         /**< Authored document revision. */
-        UiRuntimeTreeRevision tree;          /**< Retained tree revision. */
-        UiLayoutContentRevision content;     /**< Resolved content/binding revision. */
-        UiLayoutStyleRevision style;         /**< Computed style revision. */
-        UiLayoutIntrinsicRevision intrinsic; /**< Font/image/intrinsic metric revision. */
-        UiLayoutCanvasRevision canvas;       /**< Logical canvas resolution revision. */
-        UiLayoutPolicyRevision policy;       /**< Layout policy revision. */
-        /** @brief Checks that every source revision is non-zero. @return Whether the lineage is complete. */
+        UiDocumentRevision document;               /**< Authored document revision. */
+        UiRuntimeTreeRevision tree;                /**< Retained tree revision. */
+        UiLayoutContentRevision content;           /**< Resolved content/binding revision. */
+        UiLayoutStyleRevision style;               /**< Computed style revision. */
+        UiLayoutIntrinsicRevision intrinsic;       /**< Font/image/intrinsic metric revision. */
+        UiLayoutCanvasRevision canvas;             /**< Logical canvas resolution revision. */
+        UiLayoutPolicyRevision policy;             /**< Layout policy revision. */
+        UiLayoutPresentationRevision presentation; /**< Responsive/attachment generation; absent in legacy neutral callers. */
+        /** @brief Checks the seven required source revisions. @return Whether mandatory lineage is complete.
+         * @note Zero presentation is reserved for legacy neutral callers; responsive owners always provide a valid revision. */
         [[nodiscard]] bool IsValid() const noexcept;
         [[nodiscard]] auto operator<=>(const UiLayoutSourceRevisions &) const noexcept = default;
-    };
-
-    /** @brief Closed invalidation strength; stronger values include weaker work. */
-    enum class UiLayoutDirtyKind : std::uint8_t {
-        Arrange,
-        Measure,
-        Structure,
-        All,
     };
 
     /** @brief One bounded invalidation against an exact retained-tree generation. */
@@ -586,11 +585,19 @@ namespace Horo::Runtime::Ui {
         UiCanvasScaleFactor fontScale{};   /**< Accessibility text scale consumed by this generation. */
     };
 
-    /** @brief One complete immutable arranged element record. */
+    /**
+     * @brief One complete immutable arranged element record.
+     * @details Constraints and consumed work are additive inspection evidence from the sole layout authority; they never
+     * drive input or rendering. Existing geometry and clipping consumers continue reading the original first three fields.
+     * Three-field aggregate initialization remains source-compatible; callers that construct records manually must supply
+     * actual evaluated constraints/work before presenting them as inspection evidence. No serialized layout format changes.
+     */
     struct UiLayoutRecord final {
         UiElementHandle element;         /**< Exact resident source element. */
         UiLayoutMeasurement measurement; /**< Cached measure result used by this generation. */
         UiLayoutArrangement arrangement; /**< Complete logical render/hit-test geometry. */
+        UiLayoutConstraints constraints; /**< Final inherited measure range, also for cached measurements. */
+        UiLayoutWork work;               /**< Actual consumed work for this publication, never pending dirty flags. */
     };
 
     /** @brief Load-time limits for one incremental layout owner. */
@@ -681,7 +688,10 @@ namespace Horo::Runtime::Ui {
             friend class UiLayoutEngine;
             friend class UiAnimationOwner;
             PreparedUpdate(std::shared_ptr<Storage> owner, UiLayoutSnapshot snapshot, bool changes, const UiElementTree &tree,
-                           const UiLayoutUpdateRequest &request) noexcept;
+                           const UiLayoutUpdateRequest &request, std::shared_ptr<Storage> primaryIssuer = {},
+                           std::uint64_t primaryReservation = 0) noexcept;
+            std::shared_ptr<Storage> primaryIssuer_;
+            std::uint64_t primaryReservation_{};
             std::shared_ptr<Storage> owner_;
             std::optional<UiLayoutSnapshot> snapshot_;
             std::shared_ptr<const void> treeIssuer_;
@@ -747,6 +757,12 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsDrained() const noexcept;
 
     private:
+        /** @brief Prepares derived geometry using the actual still-reserved canonical primary interaction issuer. */
+        [[nodiscard]] Result<PreparedUpdate> PrepareDerived(const UiElementTree &tree, const UiLayoutUpdateRequest &request,
+                                                            const PreparedUpdate &primary) const;
+        /** @brief Runs common preparation with an optional actual canonical primary reservation. */
+        [[nodiscard]] Result<PreparedUpdate> PrepareInternal(const UiElementTree &tree, const UiLayoutUpdateRequest &request,
+                                                             const PreparedUpdate *primary) const;
         friend class UiAnimationOwner;
         /** @brief Reads the actual owner-issued initial/current interaction revision for aggregate style input admission. */
         [[nodiscard]] UiInteractionRevision PublishedInteraction() const noexcept;

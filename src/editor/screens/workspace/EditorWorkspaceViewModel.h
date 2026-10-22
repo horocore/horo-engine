@@ -10,6 +10,8 @@
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceEditingCommands.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
 #include "Horo/Editor/WorldStreamingPreview.h"
 #include "Horo/Foundation/Result.h"
@@ -133,6 +135,16 @@ namespace Horo::Editor {
         SaveSourceDocumentAs,
         SaveAllSourceDocuments,
         CloseSourceDocument,
+        UiCanvasSelect,
+        UiCanvasCreate,
+        UiCanvasMove,
+        UiCanvasSearch,
+        UiCanvasUndo,
+        UiCanvasRedo,
+        UiCanvasSave,
+        UiCanvasApplyPresentation,
+        UiCanvasSelectTheme,
+        UiCanvasReload,
         SaveScene,
         SaveSceneAs,
         SaveSceneCopyAs,
@@ -285,6 +297,29 @@ namespace Horo::Editor {
         SequenceTimelineState timeline;
     };
 
+    /** @brief Cached immutable hierarchy presentation; no source data is rebuilt during drawing. */
+    struct UiCanvasWorkspaceDocument final {
+        DocumentIdentity identity;
+        UiCanvasDocumentStateId state;
+        Runtime::Ui::UiElementId root;
+        Runtime::Ui::UiElementId selection;
+        std::uint64_t selectionRevision{1};
+        Assets::AssetRegistryRevision inspectorAssets;
+        Runtime::Ui::RuntimeStyleGeneration inspectorStyles;
+        std::uint64_t inspectorResourcePublication{};
+        std::shared_ptr<const std::vector<UiInspectorTheme>> inspectorThemes;
+        Runtime::Ui::RuntimeStyleAssetId inspectorTheme;
+        bool inspectorStylePending{};
+        Runtime::Ui::UiDocumentRevision documentRevision;
+        std::optional<Runtime::Ui::UiDocumentElement> selectedElement;
+        std::vector<UiCanvasHierarchyRow> rows;
+        std::string search;
+        std::optional<Error> diagnostic;
+        bool canUndo{};
+        bool canRedo{};
+        bool dirty{};
+    };
+
     struct TransparentStringHash {
         using is_transparent = void;
 
@@ -336,6 +371,17 @@ namespace Horo::Editor {
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};
+        UiCanvasDocumentStateId uiCanvasState;
+        Runtime::Ui::UiElementId uiCanvasElement;
+        Runtime::Ui::UiElementKind uiCanvasKind{Runtime::Ui::UiElementKind::Panel};
+        std::optional<UiCanvasMoveElement> uiCanvasMove;
+        std::optional<UiCanvasSetPresentation> uiCanvasPresentation;
+        std::uint64_t uiCanvasSelectionRevision{};
+        Runtime::Ui::UiDocumentRevision uiCanvasDocumentRevision;
+        Assets::AssetRegistryRevision uiCanvasInspectorAssets;
+        Runtime::Ui::RuntimeStyleGeneration uiCanvasInspectorStyles;
+        std::uint64_t uiCanvasInspectorResourcePublication{};
+        Runtime::Ui::RuntimeStyleAssetId uiCanvasTheme;
         std::optional<SequenceTimelineState> sequenceTimeline;
         std::optional<PCGEditorRequest> pcgRequest;
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
@@ -497,6 +543,7 @@ namespace Horo::Editor {
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
         std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::optional<Error> prefabDocumentError;
         bool prefabRecoveryAvailable{};

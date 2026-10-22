@@ -26,14 +26,14 @@ individual contracts with explicitly injected test authorities, not an integrate
 production negotiation/authentication/admission path. This bundle must not close
 the parent on that evidence alone. Production completion requires host-injected
 credential/trust authorities, explicit bounded pre-active handshake routing,
-revocation/timeout ownership and a successfully admitted typed dispatch path;
+a bounded pre-active wire codec/admission channel and a successfully admitted product dispatch path;
 there is no safe static credential or fake-session fallback.
 
 | Acceptance | Implementation and executable evidence |
 | --- | --- |
 | Only compatible authenticated active peers dispatch | `HandshakeNegotiation`, host-injected `AuthenticationSessionAdapter`, `PeerSessionLifecycle`, `InboundMessageDispatcher`; corresponding runtime tests reject pending, stale, incompatible and untrusted sessions. |
 | Bounds/schema checks precede decode and owner access | `MessageEnvelope`, `MessageCodecRegistry`, bounded dispatcher staging; envelope malformed/version/fragmentation and dispatcher tests. |
-| Distinct cancellation/timeout/rejection/transport terminals | `PeerSessionLifecycle`, `NetworkLifecycle`, typed `NetworkFailure`; lifecycle/failure tests and admission protections. |
+| Distinct cancellation/timeout/rejection/transport terminals | `PeerSessionLifecycle`, `NetworkLifecycle`, typed `NetworkFailure`; private product owner retains the canonical lease, expires it before ingress using one explicit monotonic domain, and reconciles transport terminals before world callbacks. Product regressions cover actual packet-at-expiry, rollback, cancellation/remote close, stale handles, teardown and queued travel; these additions require current-source execution evidence. |
 | Diagnostics exclude secrets/payload | `NetworkDiagnostics`, `NetworkDebugger`, typed sanitized evidence; diagnostics, debugger and disabled-instrumentation tests. The chaos owner accepts no credential authority. |
 | Fragmentation/coalescing, malformed frames, skew, auth failure, replay, saturation, shutdown | `MessageEnvelopeTests`, `HandshakeNegotiationTests`, `AuthenticationSessionAdapterTests`, `AdmissionProtectionTests`, `MessageDeliveryGateTests`, `InboundMessageDispatcherTests`, `PeerSessionLifecycleTests`. |
 
@@ -65,14 +65,18 @@ current-source tests.
 factories. `NetworkModeComposition` creates the selected optional participants;
 `HeadlessNetworkServices` composes the ordinary Scene/Physics/Gameplay owners.
 Standalone omits network factories; dedicated omits presentation and local player
-services. Listen mode owns separate authority/client worlds. However, the reference
-executable's `SessionOrLocalPlayerService` is an inert/no-op participant, and its
-transport participant has no production authenticated session admission. This is
-not evidence of completed accepted-mode session/replication integration; the
-broader composition work must replace that placeholder with explicit real owners
-and externally supplied trust before claiming the full ticket complete.
+services. Listen mode owns separate authority/client worlds. The private
+application session owner now retains a host-supplied canonical active peer,
+shares its explicit admission/poll clock with real router ingress, and revokes
+role/travel authority on expiry, rollback and exact-generation native terminals
+before world callbacks. Its transport binding retires explicitly during partial
+startup failure and shutdown. `SessionOrLocalPlayerService` still supplies no
+player roster or negotiation/authentication authority; its Session slot is
+wrapped by the real owner reconciliation boundary. The reference executable's
+empty protocol registry and absent trust authority cannot admit an authenticated
+product peer. These lifecycle improvements do not close the full ticket.
 
-`NetworkModeHostIntegrationTests` exercises all four concrete compositions,
+`NetworkModeHostIntegrationTests` and `NetworkProductSessionTests` exercise all four concrete compositions,
 admission, travel, disconnect and shutdown. Added regression coverage queues
 client travel and then disconnects or shuts down before the canonical lifecycle
 safe point. The original world remains intact on stale-session rejection; stopped
@@ -135,3 +139,24 @@ or client; an explicit mismatching operation is rejected. Module/Lua admission
 accepts only resolved server/client operations. Editor inspection and cook never
 authorize runtime activation. Public header ownership remains with the existing
 Gameplay targets and their declared NetworkApi dependency.
+
+
+### Pending secure product admission qualification
+
+The next candidate adds a bounded runtime controller and one versioned control
+codec over the existing envelope/dispatcher. Two actual product hosts use the same
+production transport service with explicitly injected test HMAC capabilities and
+one shared process Physics owner. The fixture does not inject Active sessions.
+It exercises independent local authentication, acknowledgement and admitted message
+dispatch, peer isolation, proof/transcript replay fences, provider denial, pending
+terminal visibility, clock rollback, native generation replacement, expiry/travel,
+and partial transport startup/retirement. The HMAC capability is test-only and
+uses the already pinned private MbedTLS target; it does not qualify a native GNS
+credential/certificate backend or install product credentials.
+
+These new source cases require a fresh actual native configure/build/test packet;
+the prior 276 networking/gameplay cases and 190 shared UI/SDK cases do not qualify
+changed admission inputs. The new graph also includes the API envelope target and
+all affected public consumers. Parent ticket closure remains withheld: editor/cook
+replication integration, remaining secure product policy/backend qualification, and
+the explicit open editor simulator dependency require their own complete evidence.

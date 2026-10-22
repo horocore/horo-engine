@@ -128,10 +128,12 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> CompleteClose(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
                                                  std::uint64_t nowTick);
 
-        /** @brief Fails admission with a canonical malformed/incompatible protocol reason. @return Exactly-once result. */
+        /** @brief Fails pre-active admission with a canonical malformed/incompatible protocol reason; Active/terminal states cannot be
+         * rewritten. @return Exactly-once result. */
         [[nodiscard]] Result<void> RejectProtocol(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
                                                   NetworkFailureKind failure, std::uint64_t nowTick);
-        /** @brief Fails admission with a sanitized authentication rejection. @return Exactly-once result. */
+        /** @brief Fails pre-active admission with a sanitized authentication rejection; Closing retains its pinned reason. @return
+         * Exactly-once result. */
         [[nodiscard]] Result<void> RejectAuthentication(ConnectionHandle connection, NetworkOperationGeneration sessionGeneration,
                                                         std::uint64_t nowTick);
         /** @brief Fails the session for one canonical transport reason. @return Exactly-once result. */

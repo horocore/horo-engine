@@ -13,6 +13,7 @@
 #include "Horo/Editor/PCGGraphDocumentService.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Editor/UiInspectorResources.h"
 #include "Horo/Editor/WorldStreamingPreviewRuntime.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/document/EditorViewportSceneExtractor.h"
@@ -86,6 +87,7 @@ namespace Horo::Editor {
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
+        UiInspectorResources *uiInspectorResources{}; /**< Actual host resource publisher, outliving the workspace. */
         EditorWorkspaceCollisionEvidence collision{};
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
@@ -385,6 +387,8 @@ namespace Horo::Editor {
         /** @brief Advances a requested synchronous Content Browser refresh without blocking the request
          * frame. */
         void UpdateContentBrowser();
+        /** @brief Poll owned style preparation and refresh cached UI Canvas resource fences without I/O. */
+        void UpdateUiCanvasResources();
         /** @brief Polls project Lua sources and applies compatible safe-point reload candidates. */
         void UpdateGameplaySources(float elapsedSeconds);
         /**
@@ -483,6 +487,7 @@ namespace Horo::Editor {
         CancellationSource m_prefabCancellation;
 
         Assets::AssetRegistry *m_mutableAssetRegistry{};
+        UiInspectorResources *m_uiInspectorResources{};
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};
         const EditorPreviewCollisionReceiptSource *m_previewCollisionReceipt{};
@@ -756,7 +761,14 @@ namespace Horo::Editor {
         bool ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Refreshes source presentation and dirty flags without disk I/O or document mutation. */
         void RefreshSourceDocumentProjection();
-
+        /** @brief Refreshes changed canvas projections outside GUI draw work. */
+        void RefreshUiCanvasProjection();
+        /** @brief Routes revision-fenced hierarchy and persistence operations to the canonical canvas owner. */
+        bool ProcessUiCanvasCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Saves one canvas through the shared project mutation boundary and returns its typed outcome. */
+        [[nodiscard]] Result<void> SaveUiCanvasSource(UiCanvasDocument &owner) const;
+        /** @brief Joins explicit canvas close admission with workspace routing and presents dirty-state errors. */
+        void CloseUiCanvasSource(DocumentInstanceId instance);
         /** @brief Writes to a selected destination, optionally preserving active document identity. */
         void SaveSceneToPath(const std::filesystem::path &absolutePath, bool copyOnly);
         /** @brief Completes default metadata and active identity only after a successful destination source save.

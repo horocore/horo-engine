@@ -80,6 +80,72 @@ namespace Horo::Network {
     static_assert(sizeof(MessageSequenceNumber::ValueType) == 4);
     static_assert(sizeof(MessageAcknowledgementNumber::ValueType) == 4);
 
+    TEST_CASE("Borrowed envelope inspection validates the complete frame without copying its payload", "[unit][network][message]") {
+        const CodecFixture fixture;
+        const auto identities = fixture.Identities();
+        const auto registry = fixture.Registry(identities);
+        auto encoded = EncodeMessageEnvelope(fixture.Envelope(), registry);
+        REQUIRE(encoded.HasValue());
+        auto frame = std::move(encoded).Value();
+        const auto inspected = InspectMessageEnvelope(frame, registry);
+        REQUIRE(inspected.HasValue());
+        CHECK(inspected.Value().protocol == fixture.protocols[0].id);
+        CHECK(inspected.Value().fieldCount == 2);
+        REQUIRE(inspected.Value().payload.size() == 2);
+        CHECK(inspected.Value().payload.data() == frame.data() + 46);
+        frame[46] = std::byte{0x42};
+        CHECK(inspected.Value().payload.front() == std::byte{0x42});
+    }
+
+    TEST_CASE("Bounded borrowed payload encoding matches canonical owned framing and rejects short output before writes",
+              "[unit][network][message]") {
+        const CodecFixture fixture;
+        const auto identities = fixture.Identities();
+        const auto registry = fixture.Registry(identities);
+        auto envelope = fixture.Envelope();
+        envelope.fields.clear();
+        const auto encoded = EncodeMessageEnvelope(envelope, registry);
+        REQUIRE(encoded.HasValue());
+        const auto view = InspectMessageEnvelope(encoded.Value(), registry);
+        REQUIRE(view.HasValue());
+        std::array<std::byte, 64> output;
+        output.fill(std::byte{0x71});
+        const auto denied = EncodeMessageEnvelopePayloadInto(view.Value(), registry, std::span{output}.first(33));
+        REQUIRE(denied.HasError());
+        CHECK(std::ranges::all_of(output, [](const auto byte) {
+            return byte == std::byte{0x71};
+        }));
+        const auto written = EncodeMessageEnvelopePayloadInto(view.Value(), registry, output);
+        REQUIRE(written.HasValue());
+        CHECK(std::ranges::equal(std::span{output}.first(written.Value()), encoded.Value()));
+    }
+
+    TEST_CASE("Borrowed and owned envelope paths share framing schema extension and lifecycle denials", "[unit][network][message]") {
+        const CodecFixture fixture;
+        const auto identities = fixture.Identities();
+        const auto registry = fixture.Registry(identities);
+        const auto encoded = EncodeMessageEnvelope(fixture.Envelope(), registry);
+        REQUIRE(encoded.HasValue());
+        for (std::size_t size = 0; size < encoded.Value().size(); ++size) {
+            const auto frame = std::span<const std::byte>{encoded.Value()}.first(size);
+            const auto owned = DecodeMessageEnvelope(frame, registry);
+            const auto view = InspectMessageEnvelope(frame, registry);
+            REQUIRE(owned.HasError());
+            REQUIRE(view.HasError());
+            CHECK(owned.ErrorValue().domain.Value() == view.ErrorValue().domain.Value());
+            CHECK(owned.ErrorValue().code.Value() == view.ErrorValue().code.Value());
+        }
+        for (const auto state : {MessageEnvelopeAdmissionState::Cancelled, MessageEnvelopeAdmissionState::TimedOut,
+                                 MessageEnvelopeAdmissionState::ShuttingDown}) {
+            const auto owned = DecodeMessageEnvelope(encoded.Value(), registry, {}, state);
+            const auto view = InspectMessageEnvelope(encoded.Value(), registry, {}, state);
+            REQUIRE(owned.HasError());
+            REQUIRE(view.HasError());
+            CHECK(owned.ErrorValue().domain.Value() == view.ErrorValue().domain.Value());
+            CHECK(owned.ErrorValue().code.Value() == view.ErrorValue().code.Value());
+        }
+    }
+
     TEST_CASE("Message envelope encoding is canonical big endian and input-order independent", "[unit][network][message]") {
         const CodecFixture fixture;
         const auto identities = fixture.Identities();

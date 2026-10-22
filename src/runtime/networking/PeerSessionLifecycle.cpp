@@ -302,7 +302,8 @@ namespace Horo::Network {
         if (state_ != PeerSessionState::Closing) {
             if (failure != NetworkFailureKind::ProtocolMalformed && failure != NetworkFailureKind::ProtocolIncompatible)
                 return Result<void>::Failure(MakeError(NetworkErrors::NetworkLifecycleInvalid));
-            if (state_ != PeerSessionState::Negotiating)
+            if (state_ != PeerSessionState::Created && state_ != PeerSessionState::Negotiating &&
+                state_ != PeerSessionState::Authenticating && state_ != PeerSessionState::Activating)
                 return Result<void>::Failure(MakeError(NetworkErrors::NetworkLifecycleTransitionInvalid));
         }
         return PublishFailureOrClose(failure, PeerSessionTerminalKind::ProtocolRejected, nowTick);
@@ -315,7 +316,7 @@ namespace Horo::Network {
         using enum PeerSessionState;
         if (auto valid = MutableOperation(connection, sessionGeneration); valid.HasError())
             return valid;
-        if (state_ != Closing && state_ != Authenticating && state_ != Activating)
+        if (state_ != Closing && state_ != Created && state_ != Negotiating && state_ != Authenticating && state_ != Activating)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkLifecycleTransitionInvalid));
         return PublishFailureOrClose(NetworkFailureKind::SessionAuthenticationRejected, PeerSessionTerminalKind::AuthenticationRejected,
                                      nowTick);

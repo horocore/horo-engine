@@ -16,7 +16,8 @@ namespace Horo::Runtime::Ui {
         if (canvas == canvases.end() || !canvas->tree.WasIssuedBy(allocator))
             return Result<UiAnimationOwner>::Failure(MakeError(UiErrors::AnimationTargetStale));
         // Source + six clocks + finite timeline slots share the actual tree issuer, and this complete range is burned on failure.
-        auto reserved = allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + limits.timelines);
+        auto reserved =
+            allocator.Reserve(static_cast<std::uint32_t>(UiTimeDomainCount) + 1 + limits.timelines + MaximumUiAnimationAttachments);
         if (reserved.HasError())
             return Result<UiAnimationOwner>::Failure(reserved.ErrorValue());
         auto publisher = UiHotReload::Create(std::move(initial));
@@ -50,6 +51,26 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
+    /** @copydoc UiAnimationOwner::InitializeProfiles */
+    Result<void> UiAnimationOwner::InitializeProfiles(Storage &storage, UiReloadGeneration &generation) {
+        const auto &tree = generation.Canvas(storage.definition.canvas)->tree;
+        const auto tables = generation.Instance().PresentationProfiles();
+        const auto table = std::ranges::find(tables, storage.definition.canvas, &UiDocumentPresentationProfiles::canvas);
+        const auto tableRevision = table == tables.end() ? UiPresentationProfileRevision::Create(1).Value() : table->revision;
+        const auto rows =
+            table == tables.end() ? std::span<const UiPresentationProfile>{} : std::span<const UiPresentationProfile>{table->rows};
+        auto profiles = UiPresentationProfileTable::Create(generation, storage.definition.canvas, tableRevision, rows);
+        if (profiles.HasError())
+            return Result<void>::Failure(profiles.ErrorValue());
+        storage.profiles.emplace(std::move(profiles).Value());
+        storage.primaryAttachment = {tree.Instance().ownership,
+                                     storage.range.FirstSlot() + 1 + static_cast<std::uint32_t>(UiTimeDomainCount) +
+                                         storage.limits.timelines,
+                                     1};
+        storage.presentation = UiLayoutPresentationRevision::Create(1).Value();
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiAnimationOwner::InitializeBindings */
     Result<void> UiAnimationOwner::InitializeBindings(Storage &storage, UiReloadGeneration &generation) {
         auto *canvas = generation.Canvas(storage.definition.canvas);
@@ -59,6 +80,8 @@ namespace Horo::Runtime::Ui {
         if (auto reserved = ReserveInteractionSources(*canvas); reserved.HasError())
             return reserved;
         const auto &tree = canvas->tree;
+        if (auto profiles = InitializeProfiles(storage, generation); profiles.HasError())
+            return profiles;
         storage.binding.source = {tree.Instance().ownership, storage.range.FirstSlot(), 1};
         for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {
             auto &sample = storage.binding.clocks.domains[index];
