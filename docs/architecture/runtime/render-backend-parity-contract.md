@@ -296,6 +296,12 @@ retirement ownership; shutdown deletes all fences and relies on OpenGL's native
 queued-reference lifetime during resource/context destruction, without GPU-idle
 or command-completion waits. Native handles never enter the public Render API.
 
+Deleting an OpenGL object can make its name available for reuse before earlier
+GPU references retire. Each allocation retains its own retirement lease and fence,
+even when a later allocation receives the same native name. Destruction targets
+only the current active allocation; bounded polling must visit every pending
+allocation sharing a name before releasing its individual charge.
+
 ## Required Editor Rendering Lifecycle
 
 The editor uses one backend-neutral ordering regardless of the selected API:
