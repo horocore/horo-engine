@@ -50,12 +50,14 @@ namespace Horo::Render::Detail {
             AllocationResource &operator=(const AllocationResource &) = delete;
 
             ~AllocationResource() {
-                if (handle != VK_NULL_HANDLE)
+                if (handle != VK_NULL_HANDLE && !borrowed)
                     destroy(device, handle, nullptr);
                 if (memory != VK_NULL_HANDLE)
                     freeMemory(device, memory, nullptr);
             }
 
+            RenderResourceNativeLifetime lifetime;
+            bool borrowed{false};
             VkDevice device{VK_NULL_HANDLE};
             NativeHandle handle{VK_NULL_HANDLE};
             VkDeviceMemory memory{VK_NULL_HANDLE};
@@ -65,13 +67,26 @@ namespace Horo::Render::Detail {
 
         struct Buffer final : AllocationResource<VkBuffer, PFN_vkDestroyBuffer> {
             RenderBufferDescriptor descriptor;
+            VulkanGraphResourceState graphState;
         };
 
         struct Texture final : AllocationResource<VkImage, PFN_vkDestroyImage> {
+            const IVulkanExternalTextureSource *externalSource{};
             RenderTextureDescriptor descriptor;
+            VulkanGraphResourceState graphState;
+            VkImageView colorView{VK_NULL_HANDLE};
+            PFN_vkDestroyImageView destroyView{};
+
+            ~Texture() {
+                if (externalSource != nullptr)
+                    externalSource->RecordNativeRetirement(graphState.logical, graphState.hasNativeState);
+                if (colorView != VK_NULL_HANDLE)
+                    destroyView(this->device, colorView, nullptr);
+            }
         };
 
         struct View {
+            RenderResourceNativeLifetime lifetime;
             View() = default;
 
             View(const View &) = delete;
@@ -85,18 +100,22 @@ namespace Horo::Render::Detail {
             VkDevice device{VK_NULL_HANDLE};
             VkImageView handle{VK_NULL_HANDLE};
             PFN_vkDestroyImageView destroy{nullptr};
-            Texture *texture{nullptr};
+            std::shared_ptr<Texture> texture;
             RenderTextureAspect aspect{};
+            RenderTextureViewDescriptor descriptor;
         };
 
         struct Mesh {
+            RenderResourceNativeLifetime lifetime;
             std::uint64_t vertex{0};
             std::uint64_t index{0};
+            RenderMeshDescriptor descriptor;
         };
 
         struct Target {
-            View *color{nullptr};
-            View *depth{nullptr};
+            RenderResourceNativeLifetime lifetime;
+            std::shared_ptr<View> color;
+            std::shared_ptr<View> depth;
             FramebufferExtent extent;
         };
 
@@ -117,7 +136,7 @@ namespace Horo::Render::Detail {
             PFN_vkDestroyImageView destroyImageView{nullptr};
         };
 
-        template <typename Resource> using Registry = std::unordered_map<std::uint64_t, std::unique_ptr<Resource>>;
+        template <typename Resource> using Registry = std::unordered_map<std::uint64_t, std::shared_ptr<Resource>>;
 
         VkDevice device{VK_NULL_HANDLE};
         VkPhysicalDeviceMemoryProperties memoryProperties{};
@@ -166,7 +185,7 @@ namespace Horo::Render::Detail {
         }
 
         template <typename Resource>
-        [[nodiscard]] Result<std::uint64_t> Register(Registry<Resource> &entries, std::unique_ptr<Resource> resource) {
+        [[nodiscard]] Result<std::uint64_t> Register(Registry<Resource> &entries, std::shared_ptr<Resource> resource) {
             const auto identity = IssueIdentity();
             if (!identity.has_value())
                 return Result<std::uint64_t>::Failure(
@@ -181,9 +200,9 @@ namespace Horo::Render::Detail {
         }
 
         template <typename Resource, typename... Arguments>
-        [[nodiscard]] static std::unique_ptr<Resource> Allocate(Arguments &&...arguments) noexcept {
+        [[nodiscard]] static std::shared_ptr<Resource> Allocate(Arguments &&...arguments) noexcept {
             try {
-                return std::make_unique<Resource>(std::forward<Arguments>(arguments)...);
+                return std::make_shared<Resource>(std::forward<Arguments>(arguments)...);
             } catch (const std::bad_alloc &) {
                 return nullptr;
             }
@@ -255,15 +274,18 @@ namespace Horo::Render::Detail {
                    AttachmentAspectsMatch(color, depth);
         }
 
+        Result<VulkanMaterialResource> ResolveMaterialBuffer(const MaterialResidentResource &) const;
+        Result<VulkanMaterialResource> ResolveMaterialView(const MaterialResidentResource &) const;
+
         void RemoveTargetsReferencing(const View *view) {
             std::erase_if(targets, [view](const auto &entry) {
-                return entry.second->color == view || entry.second->depth == view;
+                return entry.second->color.get() == view || entry.second->depth.get() == view;
             });
         }
 
         void RemoveViewsReferencing(const Texture *texture) {
             std::erase_if(views, [this, texture](const auto &entry) {
-                if (entry.second->texture != texture)
+                if (entry.second->texture.get() != texture)
                     return false;
                 RemoveTargetsReferencing(entry.second.get());
                 return true;
@@ -320,6 +342,8 @@ namespace Horo::Render::Detail {
         }
         return Result<void>::Success();
     }
+
+#include "VulkanResourceShaderDelegation.inl"
 
     Result<RenderMemoryCostPlan> VulkanResourceRuntime::QueryBufferMemoryCost(const RenderBufferDescriptor &descriptor) const {
         if (impl_->device == VK_NULL_HANDLE || !descriptor.IsValid())
@@ -388,7 +412,8 @@ namespace Horo::Render::Detail {
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateBuffer(const RenderBufferDescriptor &descriptor,
                                                               const std::span<const std::byte> initialData,
-                                                              const RenderMemoryPlacement &placement) {
+                                                              const RenderMemoryPlacement &placement,
+                                                              RenderResourceNativeLifetime lifetime) {
         const auto plan = QueryBufferMemoryCost(descriptor);
         if (plan.HasError())
             return Result<std::uint64_t>::Failure(WrapError(VulkanBackendErrors::ResourceRequestInvalid, plan.ErrorValue(),
@@ -403,6 +428,7 @@ namespace Horo::Render::Detail {
         if (instance == nullptr)
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Buffer identity allocation failed."));
+        instance->lifetime = std::move(lifetime);
         instance->device = impl_->device;
         instance->destroy = impl_->dispatch.destroyBuffer;
         instance->freeMemory = impl_->dispatch.freeMemory;
@@ -427,11 +453,12 @@ namespace Horo::Render::Detail {
         if (!impl_->Upload(*instance, initialData))
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Buffer upload mapping failed."));
+        instance->graphState.contentsDefined = !initialData.empty();
         return impl_->Register(impl_->buffers, std::move(instance));
     }
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
-                                                            const std::uint64_t indexBuffer) {
+                                                            const std::uint64_t indexBuffer, RenderResourceNativeLifetime lifetime) {
         const auto *vertex = Impl::Find(impl_->buffers, vertexBuffer);
         if (const auto *index = Impl::Find(impl_->buffers, indexBuffer);
             !descriptor.IsValid() || vertex == nullptr || index == nullptr ||
@@ -443,14 +470,17 @@ namespace Horo::Render::Detail {
         if (mesh == nullptr)
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Mesh identity allocation failed."));
+        mesh->lifetime = std::move(lifetime);
         mesh->vertex = vertexBuffer;
         mesh->index = indexBuffer;
+        mesh->descriptor = descriptor;
         return impl_->Register(impl_->meshes, std::move(mesh));
     }
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateTexture(const RenderTextureDescriptor &descriptor,
                                                                const std::span<const std::byte> initialData,
-                                                               const RenderMemoryPlacement &placement) {
+                                                               const RenderMemoryPlacement &placement,
+                                                               RenderResourceNativeLifetime lifetime) {
         const auto plan = QueryTextureMemoryCost(descriptor);
         if (plan.HasError())
             return Result<std::uint64_t>::Failure(WrapError(VulkanBackendErrors::ResourceRequestInvalid, plan.ErrorValue(),
@@ -467,10 +497,12 @@ namespace Horo::Render::Detail {
         if (texture == nullptr)
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Texture identity allocation failed."));
+        texture->lifetime = std::move(lifetime);
         texture->device = impl_->device;
         texture->destroy = impl_->dispatch.destroyImage;
         texture->freeMemory = impl_->dispatch.freeMemory;
         texture->descriptor = descriptor;
+        texture->destroyView = impl_->dispatch.destroyImageView;
         if (impl_->dispatch.createImage(impl_->device, &info, nullptr, &texture->handle) != VK_SUCCESS) {
             texture->handle = VK_NULL_HANDLE;
             return Result<std::uint64_t>::Failure(ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Texture creation failed."));
@@ -487,11 +519,29 @@ namespace Horo::Render::Detail {
             allocation != Impl::AllocationFailure::None) {
             return Result<std::uint64_t>::Failure(Impl::AllocationError(allocation, "Texture"));
         }
+        if (descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
+            descriptor.sampleCount == 1 && HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment)) {
+            const VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                             .image = texture->handle,
+                                             .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                                             .format = VulkanResourceConversion::TextureFormat(descriptor.format),
+                                             .subresourceRange = {VulkanResourceConversion::Aspect(
+                                                                      VulkanResourceConversion::IsDepthFormat(descriptor.format)
+                                                                          ? RenderTextureAspect::Depth
+                                                                          : RenderTextureAspect::Color),
+                                                                  0, 1, 0, descriptor.layerCount}};
+            if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS)
+                return Result<std::uint64_t>::Failure(
+                    ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing a native graph color attachment view failed."));
+        }
         return impl_->Register(impl_->textures, std::move(texture));
     }
 
+#include "VulkanExternalImageRegistration.inl"
+
     Result<std::uint64_t> VulkanResourceRuntime::CreateTextureView(const RenderTextureViewDescriptor &descriptor,
-                                                                   const std::uint64_t textureIdentity) {
+                                                                   const std::uint64_t textureIdentity,
+                                                                   RenderResourceNativeLifetime lifetime) {
         auto *texture = Impl::Find(impl_->textures, textureIdentity);
         if (!descriptor.IsValid() || texture == nullptr)
             return Result<std::uint64_t>::Failure(
@@ -509,10 +559,12 @@ namespace Horo::Render::Detail {
         if (view == nullptr)
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Texture view identity allocation failed."));
+        view->lifetime = std::move(lifetime);
         view->device = impl_->device;
         view->destroy = impl_->dispatch.destroyImageView;
-        view->texture = texture;
+        view->texture = impl_->textures.at(textureIdentity);
         view->aspect = descriptor.aspect;
+        view->descriptor = descriptor;
         if (impl_->dispatch.createImageView(impl_->device, &info, nullptr, &view->handle) != VK_SUCCESS) {
             view->handle = VK_NULL_HANDLE;
             return Result<std::uint64_t>::Failure(
@@ -522,9 +574,10 @@ namespace Horo::Render::Detail {
     }
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateRenderTarget(const RenderTargetDescriptor &descriptor,
-                                                                    const std::uint64_t colorIdentity, const std::uint64_t depthIdentity) {
-        auto *color = Impl::Find(impl_->views, colorIdentity);
-        auto *depth = Impl::Find(impl_->views, depthIdentity);
+                                                                    const std::uint64_t colorIdentity, const std::uint64_t depthIdentity,
+                                                                    RenderResourceNativeLifetime lifetime) {
+        const auto *color = Impl::Find(impl_->views, colorIdentity);
+        const auto *depth = Impl::Find(impl_->views, depthIdentity);
         if (!Impl::IsTargetValid(descriptor, colorIdentity, color, depthIdentity, depth))
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "Render target attachment identity is invalid."));
@@ -532,8 +585,11 @@ namespace Horo::Render::Detail {
         if (target == nullptr)
             return Result<std::uint64_t>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Render target identity allocation failed."));
-        target->color = color;
-        target->depth = depth;
+        target->lifetime = std::move(lifetime);
+        if (color)
+            target->color = impl_->views.at(colorIdentity);
+        if (depth)
+            target->depth = impl_->views.at(depthIdentity);
         target->extent = descriptor.extent;
         return impl_->Register(impl_->targets, std::move(target));
     }
@@ -567,6 +623,7 @@ namespace Horo::Render::Detail {
     }
 
     void VulkanResourceRuntime::ShutdownResources() noexcept {
+        shaders_.Shutdown();
         impl_->targets.clear();
         impl_->views.clear();
         impl_->meshes.clear();
@@ -574,4 +631,48 @@ namespace Horo::Render::Detail {
         impl_->buffers.clear();
         impl_->device = VK_NULL_HANDLE;
     }
+
+#include "VulkanMaterialCapture.inl"
+
+    /** @copydoc VulkanResourceRuntime::CaptureGraphResources */
+    Result<void> VulkanResourceRuntime::CaptureGraphResources(const RenderGraphExecutionRequest &request,
+                                                              const std::span<VulkanGraphResource> destination,
+                                                              VulkanCommandRetention &retention) const {
+        if (impl_->device == VK_NULL_HANDLE || destination.size() < request.resources.size() || retention.references != 0 ||
+            retention.lease != nullptr || retention.resources.capacity() < request.resources.size())
+            return Result<void>::Failure(
+                ResourceError(VulkanBackendErrors::InvalidCommandState, "Graph capture requires prepared free device-owned storage."));
+        retention.resources.clear();
+        for (std::size_t index = 0; index < request.resources.size(); ++index) {
+            const auto &resource = request.graph.Resources()[index];
+            auto &captured = destination[index];
+            captured = VulkanGraphResource{.kind = resource.kind};
+            if (resource.resourceClass == RenderGraphResourceClass::Transient)
+                return Result<void>::Failure(ResourceError(VulkanBackendErrors::ResourceUnsupported,
+                                                           "Vulkan placed/transient reuse is not admitted by this resource owner."));
+            const auto identity = request.resources[index].instance;
+            if (resource.kind == RenderGraphResourceKind::Buffer) {
+                const auto found = impl_->buffers.find(identity);
+                if (found == impl_->buffers.end())
+                    return Result<void>::Failure(
+                        ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "A graph buffer identity is foreign or retired."));
+                captured.buffer = found->second->handle;
+                captured.bufferDescriptor = found->second->descriptor;
+                captured.state = &found->second->graphState;
+                retention.resources.push_back(found->second);
+            } else {
+                const auto found = impl_->textures.find(identity);
+                if (found == impl_->textures.end())
+                    return Result<void>::Failure(
+                        ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "A graph texture identity is foreign or retired."));
+                captured.image = found->second->handle;
+                captured.colorView = found->second->colorView;
+                captured.textureDescriptor = found->second->descriptor;
+                captured.state = &found->second->graphState;
+                retention.resources.push_back(found->second);
+            }
+        }
+        return Result<void>::Success();
+    }
+
 }  // namespace Horo::Render::Detail

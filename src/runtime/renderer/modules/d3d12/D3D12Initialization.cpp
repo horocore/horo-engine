@@ -62,6 +62,23 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        /** @brief Completes resource acquisition under the existing startup rollback transaction. */
+        Result<void> InitializeResourceService(ID3D12InitializationRuntime &runtime, const D3D12InitializationRequest &request) {
+            if (auto resources = runtime.InitializeResources(request.resourceLimits); resources.HasError())
+                return resources;
+            if (request.cancellation.IsCancellationRequested())
+                return Result<void>::Failure(
+                    D3D12InitializationError("render.d3d12.cancelled",
+                                             "D3D12 initialization was cancelled before publishing resource readiness."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates finite startup bounds before host or native calls. */
+        bool ValidRequest(const D3D12InitializationRequest &request) {
+            return request.resourceLimits.IsValid() && request.maxAdapters > 0 && request.maxAdapters <= 64 &&
+                   (!request.adapter || request.adapter->IsValid());
+        }
+
         /** @brief Acquires bounded adapter/device/queue state under the caller's rollback transaction. */
         Result<RenderAdapterId> CreateNativeSession(ID3D12InitializationRuntime &runtime, ID3D12HostAdmission &host,
                                                     const D3D12InitializationRequest &request) {
@@ -154,7 +171,7 @@ namespace Horo::Render {
         if (state_ != State::Idle) {
             return fail("render.d3d12.invalid_state", "Create a new session after shutdown; do not initialize a ready device twice.");
         }
-        if (request.maxAdapters == 0 || request.maxAdapters > 64 || (request.adapter && !request.adapter->IsValid())) {
+        if (!ValidRequest(request)) {
             return fail("render.d3d12.invalid_request", "Use a valid machine-local adapter and an enumeration limit from 1 to 64.");
         }
         if (request.cancellation.IsCancellationRequested()) {
@@ -176,9 +193,23 @@ namespace Horo::Render {
         if (device.HasError()) {
             return device;
         }
+        if (auto resources = InitializeResourceService(*runtime_, request); resources.HasError())
+            return Result<RenderAdapterId>::Failure(resources.ErrorValue());
         state_ = State::Ready;
         rollback.committed = true;
         return device;
+    }
+
+    /** @copydoc D3D12Initialization::Resources */
+    Result<ID3D12Resources *> D3D12Initialization::Resources() {
+        if (owner_ != std::this_thread::get_id())
+            return Result<ID3D12Resources *>::Failure(
+                D3D12InitializationError("render.d3d12.wrong_thread", "Access resources on the render owner thread."));
+        if (state_ != State::Ready || !runtime_->Resources())
+            return Result<ID3D12Resources *>::Failure(
+                D3D12InitializationError("render.d3d12.resources_unavailable",
+                                         "Initialize a native device session before accessing resources."));
+        return Result<ID3D12Resources *>::Success(runtime_->Resources());
     }
 
     /** @copydoc D3D12Initialization::Shutdown */
@@ -189,6 +220,15 @@ namespace Horo::Render {
         if (state_ == State::Initializing) {
             return Result<void>::Failure(D3D12InitializationError("render.d3d12.initialization_in_progress",
                                                                   "Complete or cancel initialization before shutting down its session."));
+        }
+        if (auto *resources = runtime_->Resources()) {
+            resources->StopAdmission();
+            auto drained = resources->PollDrain();
+            if (drained.HasError())
+                return Result<void>::Failure(drained.ErrorValue());
+            if (!drained.Value())
+                return Result<void>::Failure(
+                    D3D12InitializationError("render.d3d12.drain_pending", "Poll shutdown again after queued transfers retire."));
         }
         runtime_->Release();
         state_ = State::Stopped;

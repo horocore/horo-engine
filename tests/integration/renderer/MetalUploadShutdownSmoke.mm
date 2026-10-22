@@ -1,3 +1,4 @@
+#include "../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "editor/renderer/metal/EditorViewportRendererMetal.h"
 #include "editor/renderer/metal/SdlMetalPresentationPort.h"
@@ -30,6 +31,7 @@ namespace {
 
 TEST_CASE("Metal staging upload drains at shutdown", "[integration][renderer][gpu][shutdown]") {
     REQUIRE(SDL_Init(SDL_INIT_VIDEO));
+    REQUIRE(SDL_SetHint(SDL_HINT_VIDEO_METAL_AUTO_RESIZE_DRAWABLE, "0"));
     SDL_Window *window = SDL_CreateWindow("Horo Metal upload shutdown smoke", 64, 64, SDL_WINDOW_METAL);
     REQUIRE(window != nullptr);
 
@@ -40,10 +42,13 @@ TEST_CASE("Metal staging upload drains at shutdown", "[integration][renderer][gp
     REQUIRE(registry.Seal().HasValue());
     RenderBackendConfig config{.requirePresentation = true, .enableValidation = true};
     auto frontendResult = RenderFrontend::Create(registry, RenderBackendId{"metal"}, config);
+    INFO((frontendResult.HasError() ? frontendResult.ErrorValue().code.Value() + ": " + frontendResult.ErrorValue().message
+                                    : "Native Metal upload frontend initialized."));
     REQUIRE(frontendResult.HasValue());
     std::unique_ptr<RenderFrontend> frontend = std::move(frontendResult).Value();
 
     QueueUploadImmediatelyBeforeShutdown(*frontend);
+    Horo::Render::Test::RequireDrainedOwner(*frontend);
     frontend.reset();
     SDL_DestroyWindow(window);
     SDL_Quit();

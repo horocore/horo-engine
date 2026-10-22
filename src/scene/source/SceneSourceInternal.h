@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PhysicsReferenceValidation.h"
+
 /**
  * @file SceneSourceInternal.h
  * @brief Non-installed canonical Scene codec bridge; no editor or runtime activation dependency.
@@ -86,13 +88,19 @@ namespace Horo::SceneSource::Detail {
     void AppendCharacterController(WireJson &value, const Runtime::CharacterControllerComponent &component);
 
     [[nodiscard]] Result<Runtime::RigidBodyComponent> ParseRigidBody(const Json &value);
-    [[nodiscard]] Result<std::vector<Runtime::ColliderComponent>> ParseColliders(const Json &value);
-    [[nodiscard]] Result<std::vector<Runtime::PhysicsConstraintComponent>> ParsePhysicsConstraints(const Json &value);
+    [[nodiscard]] Result<std::vector<Runtime::ColliderComponent>> ParseColliders(
+        const Json &value,
+        Runtime::PhysicsValidationDetail::BodyReferenceDomain domain = Runtime::PhysicsValidationDetail::BodyReferenceDomain::Scene);
+    [[nodiscard]] Result<std::vector<Runtime::PhysicsConstraintComponent>> ParsePhysicsConstraints(
+        const Json &value,
+        Runtime::PhysicsValidationDetail::BodyReferenceDomain domain = Runtime::PhysicsValidationDetail::BodyReferenceDomain::Scene);
     [[nodiscard]] Result<std::vector<Gameplay::BehaviorComponent>> ParseBehaviors(const Json &value);
 
     [[nodiscard]] WireJson ComponentsJson(const SceneObjectComponentSet &components);
     void AppendPhysicsComponents(WireJson &value, const SceneObjectComponentSet &components);
-    [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(const Json &value, std::size_t &recognized);
+    [[nodiscard]] Result<SceneObjectComponentSet> ParseComponents(
+        const Json &value, std::size_t &recognized,
+        Runtime::PhysicsValidationDetail::BodyReferenceDomain domain = Runtime::PhysicsValidationDetail::BodyReferenceDomain::Scene);
 
     using ParsedScene = SceneSourceDocument;
     [[nodiscard]] WireJson SceneJson(const SceneSourceView &snapshot);

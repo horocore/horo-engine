@@ -1,4 +1,4 @@
-#include "runtime/renderer/modules/d3d12/D3D12Initialization.h"
+#include "D3D12Initialization.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <functional>
@@ -18,6 +18,15 @@ namespace {
         std::optional<RenderAdapterId> unsupported;
         std::function<void()> onVerify;
         int liveObjects{0};
+        ID3D12Resources *resourceService{nullptr};
+
+        void AttachResources(ID3D12Resources &service) {
+            resourceService = &service;
+        }
+
+        void CancelAfter(std::string step) {
+            cancelAfter = std::move(step);
+        }
     };
 
     Result<void> Step(State &state, const std::string &name) {
@@ -48,6 +57,112 @@ namespace {
 
     private:
         State &state_;
+    };
+
+    // Exercises the portable session drain protocol only. Real copy/backing ownership
+    // is separately tested on WARP; any allocation call here is an unexpected test failure.
+    class DrainService final : public ID3D12Resources {
+    public:
+        void Complete() noexcept {
+            complete_ = true;
+        }
+
+        void SetFailure(bool failed) noexcept {
+            failed_ = failed;
+        }
+
+        unsigned stops{0};
+        unsigned drains{0};
+
+        Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &) const override {
+            return NotCalled<RenderMemoryCostPlan>();
+        }
+
+        Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescriptor &) const override {
+            return NotCalled<RenderMemoryCostPlan>();
+        }
+
+        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>, const RenderMemoryPlacement &,
+                                           RenderResourceNativeLifetime) override {
+            return NotCalled<std::uint64_t>();
+        }
+
+        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>, const RenderMemoryPlacement &,
+                                            RenderResourceNativeLifetime) override {
+            return NotCalled<std::uint64_t>();
+        }
+
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t,
+                                         RenderResourceNativeLifetime) override {
+            return NotCalled<std::uint64_t>();
+        }
+
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t, RenderResourceNativeLifetime) override {
+            return NotCalled<std::uint64_t>();
+        }
+
+        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t,
+                                                 RenderResourceNativeLifetime) override {
+            return NotCalled<std::uint64_t>();
+        }
+
+        void DestroyBuffer(std::uint64_t) noexcept override {}
+
+        void DestroyTexture(std::uint64_t) noexcept override {}
+
+        void DestroyMesh(std::uint64_t) noexcept override {}
+
+        void DestroyTextureView(std::uint64_t) noexcept override {}
+
+        void DestroyRenderTarget(std::uint64_t) noexcept override {}
+
+        Result<D3D12TransferId> Upload(std::uint64_t, std::span<const std::byte>, std::size_t, const CancellationToken &) override {
+            return NotCalled<D3D12TransferId>();
+        }
+
+        Result<D3D12TransferId> Readback(std::uint64_t, std::size_t, std::size_t, const CancellationToken &) override {
+            return NotCalled<D3D12TransferId>();
+        }
+
+        Result<std::vector<std::byte>> TakeReadback(D3D12TransferId) override {
+            return NotCalled<std::vector<std::byte>>();
+        }
+
+        Result<void> Cancel(D3D12TransferId) override {
+            return NotCalled<void>();
+        }
+
+        Result<void> Poll() override {
+            return NotCalled<void>();
+        }
+
+        void StopAdmission() noexcept override {
+            ++stops;
+        }
+
+        Result<bool> PollDrain() override {
+            ++drains;
+            if (failed_)
+                return Result<bool>::Failure(D3D12InitializationError("test.drain_failed", "Injected native drain failure."));
+            return Result<bool>::Success(complete_);
+        }
+
+        Result<D3D12ResidencyObservation> QueryResidency() const override {
+            return NotCalled<D3D12ResidencyObservation>();
+        }
+
+        D3D12ResourceSnapshot Snapshot() const noexcept override {
+            return {.accepting = stops == 0};
+        }
+
+    private:
+        bool complete_{false};
+        bool failed_{false};
+
+        template <typename T> static Result<T> NotCalled() {
+            FAIL("Portable drain protocol tests must not perform native resource operations");
+            return Result<T>::Failure(D3D12InitializationError("test.unexpected_resource_call", "Unexpected native operation."));
+        }
     };
 
     class Runtime final : public ID3D12InitializationRuntime {
@@ -83,8 +198,17 @@ namespace {
             return Step(state_, kind == D3D12QueueKind::Direct ? "direct" : kind == D3D12QueueKind::Compute ? "compute" : "copy");
         }
 
+        Result<void> InitializeResources(const D3D12ResourceLimits &) override {
+            return Step(state_, "resources");
+        }
+
+        ID3D12Resources *Resources() noexcept override {
+            return state_.resourceService;
+        }
+
         void Release() noexcept override {
             state_.calls.emplace_back("release");
+            state_.resourceService = nullptr;
             state_.liveObjects = 0;
         }
 
@@ -102,7 +226,8 @@ TEST_CASE("D3D12 startup owns exact device queues and closes admission", "[rende
     REQUIRE(result.HasValue());
     CHECK(result.Value() == state.adapters.front().id);
     CHECK(state.debug);
-    CHECK(state.calls == std::vector<std::string>{"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy"});
+    CHECK(state.calls ==
+          std::vector<std::string>{"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy", "resources"});
     CHECK(session.Initialize(host, {}).HasError());
     REQUIRE(session.Shutdown().HasValue());
     CHECK(state.liveObjects == 0);
@@ -111,7 +236,7 @@ TEST_CASE("D3D12 startup owns exact device queues and closes admission", "[rende
 }
 
 TEST_CASE("D3D12 failed stages preserve native causes and release partial state", "[renderer][d3d12]") {
-    for (const std::string stage : {"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy"}) {
+    for (const std::string stage : {"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy", "resources"}) {
         INFO(stage);
         State state;
         state.failure = stage;
@@ -209,8 +334,8 @@ TEST_CASE("D3D12 default order qualifies required features but exact selection n
         auto result = session.Initialize(host, {});
         REQUIRE(result.HasValue());
         CHECK(result.Value() == state.adapters.back().id);
-        CHECK(state.calls ==
-              std::vector<std::string>{"verify", "open", "enumerate", "driver", "unsupported-device", "driver", "device", "direct"});
+        CHECK(state.calls == std::vector<std::string>{"verify", "open", "enumerate", "driver", "unsupported-device", "driver", "device",
+                                                      "direct", "resources"});
     }
     SECTION("explicit baseline rejection is preserved") {
         auto result = session.Initialize(host, {.adapter = state.adapters.front().id});
@@ -222,7 +347,7 @@ TEST_CASE("D3D12 default order qualifies required features but exact selection n
 }
 
 TEST_CASE("D3D12 cancellation rolls back each synchronous acquisition boundary", "[renderer][d3d12]") {
-    for (const std::string stage : {"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy"}) {
+    for (const std::string stage : {"verify", "open", "enumerate", "driver", "device", "direct", "compute", "copy", "resources"}) {
         INFO(stage);
         State state;
         state.cancelAfter = stage;
@@ -267,3 +392,63 @@ TEST_CASE("D3D12 production runtime reports unsupported hosts without native acq
     CHECK(result.ErrorValue().code.Value() == "render.d3d12.unsupported_host");
 }
 #endif
+
+TEST_CASE("D3D12 resource startup preserves acquisition errors and cancellation", "[renderer][d3d12]") {
+    State state;
+    Host host{state};
+    D3D12Initialization session{std::make_unique<Runtime>(state)};
+    REQUIRE(session.Resources().HasError());
+    state.failure = "resources";
+    auto result = session.Initialize(host, {});
+    REQUIRE(result.HasError());
+    REQUIRE(result.ErrorValue().code.Value() == "test.injected");
+    REQUIRE(state.liveObjects == 0);
+    state.failure.clear();
+    state.CancelAfter("resources");
+    result = session.Initialize(host, {.cancellation = state.cancellation.Token()});
+    REQUIRE(result.HasError());
+    REQUIRE(result.ErrorValue().code.Value() == "render.d3d12.cancelled");
+    REQUIRE(state.liveObjects == 0);
+}
+
+TEST_CASE("D3D12 session shutdown retains the native device until resource drain is actually complete", "[renderer][d3d12][lifecycle]") {
+    State state;
+    DrainService resources;
+    state.AttachResources(resources);
+    Host host{state};
+    D3D12Initialization session{std::make_unique<Runtime>(state)};
+    REQUIRE(session.Initialize(host, {}).HasValue());
+    REQUIRE(session.Resources().HasValue());
+    REQUIRE(session.Resources().Value() == &resources);
+    auto pending = session.Shutdown();
+    REQUIRE(pending.HasError());
+    REQUIRE(pending.ErrorValue().code.Value() == "render.d3d12.drain_pending");
+    REQUIRE(state.liveObjects == 3);
+    REQUIRE(resources.stops == 1);
+    REQUIRE(resources.drains == 1);
+    resources.Complete();
+    REQUIRE(session.Shutdown().HasValue());
+    REQUIRE(state.liveObjects == 0);
+    REQUIRE(session.Resources().HasError());
+    REQUIRE(session.Shutdown().HasValue());
+    REQUIRE(resources.stops == 2);
+    REQUIRE(resources.drains == 2);
+}
+
+TEST_CASE("D3D12 session shutdown preserves resource drain failure and permits owner-thread recovery", "[renderer][d3d12][lifecycle]") {
+    State state;
+    DrainService resources;
+    state.AttachResources(resources);
+    Host host{state};
+    D3D12Initialization session{std::make_unique<Runtime>(state)};
+    REQUIRE(session.Initialize(host, {}).HasValue());
+    resources.SetFailure(true);
+    const auto failed = session.Shutdown();
+    REQUIRE(failed.HasError());
+    REQUIRE(failed.ErrorValue().code.Value() == "test.drain_failed");
+    REQUIRE(state.liveObjects == 3);
+    resources.SetFailure(false);
+    resources.Complete();
+    REQUIRE(session.Shutdown().HasValue());
+    REQUIRE(state.liveObjects == 0);
+}

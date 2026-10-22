@@ -10,6 +10,8 @@ namespace Horo::Render::RenderGraphSynchronizationErrors {
     extern const ErrorCodeDescriptor AllocationFailed;
     extern const ErrorCodeDescriptor DuplicateInitialState;
     extern const ErrorCodeDescriptor InvalidInitialState;
+    /** @brief An external final-state obligation is duplicate, unused, malformed or foreign. */
+    extern const ErrorCodeDescriptor InvalidExternalRelease;
     extern const ErrorCodeDescriptor InvalidQueueTopology;
     extern const ErrorCodeDescriptor InvalidSchedule;
     extern const ErrorCodeDescriptor MissingInitialState;

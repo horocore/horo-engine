@@ -4,6 +4,7 @@
  * @brief Private, native-free D3D12 device initialization and host admission seam.
  */
 
+#include "D3D12Resources.h"
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Render/RenderAdapter.h"
 
@@ -30,6 +31,7 @@ namespace Horo::Render {
         bool enableCopyQueue{false};
         bool allowSoftwareForTests{false};
         CancellationToken cancellation;
+        D3D12ResourceLimits resourceLimits;
     };
 
     /**
@@ -61,8 +63,10 @@ namespace Horo::Render {
      * @brief Backend-private runtime seam for deterministic failure and lifecycle coverage.
      * Calls run synchronously on the render-capable thread with host-initialized COM.
      * Release is idempotent, tolerates partial acquisition, and releases queues before
-     * device, adapters and factory. No command submission is exposed by this ticket,
-     * so teardown has no outstanding GPU work and performs no GPU wait.
+     * device, adapters and factory. The resource service can submit bounded native
+     * copies after startup. Release requires that those copies have drained, that
+     * no resource service was published, or that the native device is actually lost.
+     * The session polls drain before explicit release; it never inserts a CPU/GPU wait.
      */
     class ID3D12InitializationRuntime {
     public:
@@ -78,17 +82,31 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<void> CreateDevice(const RenderAdapterId &adapter) = 0;
         /** @brief Creates one explicitly requested queue; failure retains the native cause. */
         [[nodiscard]] virtual Result<void> CreateQueue(D3D12QueueKind kind) = 0;
+
+        /** @brief Initializes the resource service after direct queue creation. Default test runtimes own no service. */
+        [[nodiscard]] virtual Result<void> InitializeResources(const D3D12ResourceLimits &) {
+            return Result<void>::Success();
+        }
+
+        /** @brief Borrows the session resource service; null before native initialization or in a startup-only test runtime. */
+        [[nodiscard]] virtual ID3D12Resources *Resources() noexcept {
+            return nullptr;
+        }
+
         /** @brief Releases every acquired native object, including partial device/queue state. */
         virtual void Release() noexcept = 0;
     };
 
     /**
-     * @brief Owns a startup-only D3D12 device session on its construction thread.
+     * @brief Owns D3D12 startup and the native resource-service lifetime on its construction thread.
      *
      * The host must construct, initialize, stop and destroy this object on its
      * render-capable owner thread. No async work or borrowed native handles escape.
-     * Failed/cancelled initialization rolls back and may be retried; Shutdown closes
-     * admission permanently. Device-ready here does not imply presentation or parity.
+     * Failed/cancelled initialization rolls back and may be retried. Shutdown closes
+     * resource admission permanently and returns drain_pending until copies retire.
+     * Before destruction, the host must retire external submission pins and complete
+     * shutdown, unless the native device is actually removed. Device-ready here does
+     * not imply presentation or interactive renderer parity.
      */
     class D3D12Initialization final {
     public:
@@ -103,7 +121,13 @@ namespace Horo::Render {
          * @return Selected adapter, or a typed startup error.
          */
         [[nodiscard]] Result<RenderAdapterId> Initialize(ID3D12HostAdmission &host, const D3D12InitializationRequest &request);
-        /** @brief Releases native state and closes admission. @return Wrong-thread error or success. */
+        /** @brief Borrows the initialized session's canonical resource implementation.
+         * @return Owner-thread service, or typed lifecycle/unsupported error. Lifetime ends at successful Shutdown.
+         */
+        [[nodiscard]] Result<ID3D12Resources *> Resources();
+        /** @brief Closes admission and polls transfer retirement without blocking.
+         * @return Wrong-thread, drain-pending or native error; success releases native state. Retry pending shutdown on the owner thread.
+         */
         [[nodiscard]] Result<void> Shutdown();
 
     private:

@@ -63,6 +63,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (auto initialized = InitializeController(projectRoot); initialized.HasError())
             return initialized;
         sourceCommands_.BeginSession();
+        workspaceControllerLifetime_ = std::make_shared<int>(0);
         snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
         host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
         LoadProjectInputProfile(controller_->ViewModel().projectRoot);
@@ -170,6 +171,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 OpenPlayTopologyProfilesModal();
             } else if (command.command == CompareExternalScene) {
                 OpenSceneComparison();
+            } else if (command.command == CreatePrefabFromSelection && command.objectPayload) {
+                OpenPrefabCreationModal(*command.objectPayload);
             } else if (command.command == CreateLuaBehavior || command.command == CreateNativeBehavior) {
                 using enum GameplayBehaviorKind;
                 const GameplayBehaviorKind kind = command.command == CreateNativeBehavior ? Native : Lua;

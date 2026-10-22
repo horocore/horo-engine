@@ -79,12 +79,25 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     struct WorkspaceContributionRegistries final {
         WorkspacePanelRegistry &panels;
         EditorStatusItemRegistry &statusItems;
+        bool workspacePersistenceAdmitted{};
     };
 
     /** @brief Exact pending leave decision captures; borrowed collision authority never extends project lifetime. */
     struct WorkspaceLeaveCapture final {
+        /** @brief Requires every prefab owner, source revision and accepted base captured by leave consent. */
+        Result<void> ValidateLeavePrefabs(EditorWorkspaceController &controller) const;
+        /** @brief Rechecks exact world consent after operations on other owners that may run host callbacks. */
+        Result<void> ValidateLeaveWorld(EditorWorkspaceController &controller) const;
+        /** @brief Captures the exact cached collision draft for a leave decision. */
+        Result<void> CaptureLeaveCollision(EditorWorkspaceController &controller);
+        /** @brief Rejects a delayed decision after the collision draft changes. */
+        Result<void> ValidateLeaveCollision(EditorWorkspaceController &controller) const;
+        /** @brief Rejects a delayed decision after any graph session or revision changes. */
+        Result<void> ValidateLeavePCGDocuments(EditorWorkspaceController &controller) const;
+
         std::vector<SourceDocumentSnapshot> sourceDocuments;
         std::vector<PCGDocumentSnapshot> pcgDocuments;
+        std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
         std::shared_ptr<const Application::ProjectCollisionSettings> collisionRoot;
         std::optional<WorldDocumentFence> worldFence;
@@ -151,23 +164,20 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         bool HasDirtyDocuments() const;
         /** @brief Validates captured leave consent against each independently owned document group. */
         Result<void> ValidateLeaveCapture() const;
-        /** @brief Rechecks exact world consent after operations on other owners that may run host callbacks. */
-        Result<void> ValidateLeaveWorld() const;
         /** @brief Attaches built-in panels before session publication. */
         void AttachWorkspacePanels();
-        /** @brief Captures the exact cached collision draft for a leave decision. */
-        Result<void> CaptureLeaveCollision() const;
-        /** @brief Rejects a delayed decision after the collision draft changes. */
-        Result<void> ValidateLeaveCollision() const;
-        /** @brief Rejects a delayed decision after any graph session or revision changes. */
-        Result<void> ValidateLeavePCGDocuments() const;
         /** @brief Owns the project path and application closure across asynchronous Play preparation. */
         EditorPlaySceneFactory BindPlayFactory(const std::filesystem::path &projectRoot) const;
-        /** @brief Compose one explicit resource lease without replacing the prior controller capability. */
-        Result<std::unique_ptr<UiInspectorResources>> PrepareUiInspectorResources(const std::filesystem::path &root,
-                                                                                  const Assets::AssetId owner);
         /** @brief Capture gameplay borrows and the selected play factory at the host composition boundary. */
-        EditorWorkspaceGameplayServices BindGameplayServices(const std::filesystem::path &projectRoot);
+        EditorWorkspaceGameplayServices BindGameplayServices(const std::filesystem::path &projectRoot) const;
+        /** @brief Binds the explicit authoring stage capability to this authorized project. */
+        EditorPlaySceneFactory BindPrefabStageFactory(const std::filesystem::path &projectRoot) const;
+        /** @brief Binds borrowed host services and transfers admitted source/PCG owners into controller dependencies. */
+        EditorWorkspaceDependencies BindControllerDependencies(const std::filesystem::path &projectRoot,
+                                                               UiInspectorResources *uiInspectorResources,
+                                                               const Assets::AssetId &sessionOwner,
+                                                               std::shared_ptr<const Assets::IAssetRegistrySource> registrySource,
+                                                               PCGEditorCatalog &&pcgCatalog, PCGPreviewInputs &&pcgPreviewInputs) const;
         /** @brief Creates the controller under the uncommitted project activation lease. */
         Result<void> InitializeController(const std::filesystem::path &projectRoot);
         /** @brief Keeps native dialog input ownership through scene publication. */
@@ -182,6 +192,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OpenPlayTopologyProfilesModal();
         /** @brief Captures the external scene before opening its comparison modal. */
         void OpenSceneComparison();
+        /** @brief Opens the transient captured-subtree workflow under the workspace lifetime fence. */
+        void OpenPrefabCreationModal(const SceneObjectId root);
         /** @brief Resolves a contained destination before opening behavior creation. */
         void OpenGameplayBehaviorModal(const GameplayBehaviorKind kind, const std::string &requestedDirectory);
         /** @brief Installs the project profile while retaining the host profile for teardown. */
@@ -191,12 +203,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         /** @brief Projects document and selection status through registered status items. */
         void UpdateStatusItems();
 
-        bool workspacePersistenceAdmitted_{};
         PackageWorkspaceAccess packages_;
         GuiScreenHost &host_;
         const EditorServiceRegistry &services_;
         EditorModalHost &modalHost_;
         WorkspaceSourceDocumentCommands sourceCommands_;
+        std::shared_ptr<const void> workspaceControllerLifetime_;
         const EditorGuiContext &context_;
         WorkspaceContributionRegistries contributions_;
         WorkspaceInputState input_;

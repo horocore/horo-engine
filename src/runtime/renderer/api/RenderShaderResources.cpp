@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <new>
 #include <stdexcept>
 
@@ -68,6 +70,28 @@ namespace Horo::Render {
                    left.supportsCompute == right.supportsCompute && left.supportsStorageResources == right.supportsStorageResources;
         }
 
+        /** @brief Validates the existing typed permutation scalar envelope before hashing native pipeline identity. */
+        [[nodiscard]] bool IsValidPipelineSpecialization(const ShaderSpecializationValue &value) noexcept {
+            using enum ShaderValueType;
+            return value.id.IsValid() && value.type <= Bool32 && (value.type != Bool32 || value.valueBits <= 1) &&
+                   (value.type != Float32 || std::isfinite(std::bit_cast<float>(value.valueBits)));
+        }
+
+        /** @brief Requires two distinct exact shader generations owned by one frontend incarnation. */
+        [[nodiscard]] bool PipelineHandlesValid(const RenderGraphicsPipelineDescriptor &descriptor) noexcept {
+            return descriptor.vertex.IsValid() && descriptor.fragment.IsValid() && descriptor.vertex != descriptor.fragment &&
+                   descriptor.vertex.owner == descriptor.fragment.owner;
+        }
+
+        /** @brief Matches the complete immutable pipeline identity to the cooked target and reflected interface. */
+        [[nodiscard]] bool PipelineCacheIdentityMatches(const RenderGraphicsPipelineDescriptor &descriptor,
+                                                        const Sha256Digest &digest) noexcept {
+            return descriptor.compatibility.pipelineDescriptorDigest == digest &&
+                   descriptor.compatibility.shaderBackend == descriptor.target.backend &&
+                   descriptor.compatibility.shaderFormat == descriptor.target.payloadFormat &&
+                   descriptor.compatibility.shaderInterface == descriptor.reflection.interfaceCompatibility;
+        }
+
         /** @brief Validates bounded native ABI metadata independently of source provenance and fixed pipeline state. */
         [[nodiscard]] Result<PipelineCacheKey> ValidatePipelineReflection(const RenderGraphicsPipelineDescriptor &descriptor) {
             const auto &reflection = descriptor.reflection;
@@ -123,7 +147,8 @@ namespace Horo::Render {
         if (state.cull > RenderCullMode::Back || state.frontFace > RenderFrontFace::Clockwise || state.blend > RenderBlendMode::Additive ||
             state.depthCompare > RenderCompareFunction::Always || !ColorFormatValid(state.colorFormat) ||
             !DepthFormatValid(state.depthFormat) || (state.depthTest && !state.depthFormat) || (state.depthWrite && !state.depthFormat) ||
-            state.sampleCount == 0 || state.sampleCount > 64 || (state.sampleCount & (state.sampleCount - 1U)) != 0)
+            state.sampleCount == 0 || state.sampleCount > 64 || (state.sampleCount & (state.sampleCount - 1U)) != 0 ||
+            state.viewRouting > RenderViewRouting::VertexLayer)
             return Result<Sha256Digest>::Failure(MakeError(RenderShaderResourceErrors::InvalidPipeline));
         // Version one encodes the established MeshVertex triangle layout plus every fixed-state dimension.
         const std::array<std::uint8_t, 13> bytes{1,
@@ -138,8 +163,37 @@ namespace Horo::Render {
                                                  static_cast<std::uint8_t>(state.depthFormat.has_value()),
                                                  static_cast<std::uint8_t>(state.depthFormat.value_or(RenderTextureFormat::Rgba8Unorm)),
                                                  static_cast<std::uint8_t>(state.sampleCount),
-                                                 0};
+                                                 static_cast<std::uint8_t>(state.viewRouting)};
         return Result<Sha256Digest>::Success(ComputeSha256(std::as_bytes(std::span{bytes})));
+    }
+
+    /** @copydoc ComputeRenderGraphicsPipelineDescriptorDigest */
+    Result<Sha256Digest> ComputeRenderGraphicsPipelineDescriptorDigest(const RenderGraphicsPipelineState &state,
+                                                                       std::span<const ShaderSpecializationValue> values) {
+        const auto fixed = ComputeRenderGraphicsPipelineStateDigest(state);
+        if (fixed.HasError() || values.empty())
+            return fixed;
+        if (values.size() > 64)
+            return Result<Sha256Digest>::Failure(
+                MakeError(RenderShaderResourceErrors::InvalidPipeline, "Too many pipeline specialization values."));
+        Sha256Builder hash;
+        static_cast<void>(hash.Update(std::as_bytes(std::span{fixed.Value().bytes})));
+        ShaderSpecializationId previous;
+        for (const auto &value : values) {
+            if (!IsValidPipelineSpecialization(value) || value.id <= previous)
+                return Result<Sha256Digest>::Failure(
+                    MakeError(RenderShaderResourceErrors::InvalidPipeline,
+                              "Pipeline specialization values must be finite typed scalars with unique increasing IDs."));
+            previous = value.id;
+            std::array<std::uint8_t, 9> bytes{};
+            for (unsigned index = 0; index < 4; ++index) {
+                bytes[index] = static_cast<std::uint8_t>(value.id.value >> (index * 8));
+                bytes[index + 5] = static_cast<std::uint8_t>(value.valueBits >> (index * 8));
+            }
+            bytes[4] = static_cast<std::uint8_t>(value.type);
+            static_cast<void>(hash.Update(std::as_bytes(std::span{bytes})));
+        }
+        return Result<Sha256Digest>::Success(hash.Finalize());
     }
 
     /** @copydoc ValidateRenderGraphicsPipelineDescriptor */
@@ -147,8 +201,7 @@ namespace Horo::Render {
         const auto failure = [] {
             return Result<PipelineCacheKey>::Failure(MakeError(RenderShaderResourceErrors::InvalidPipeline));
         };
-        if (!descriptor.vertex.IsValid() || !descriptor.fragment.IsValid() || descriptor.vertex == descriptor.fragment ||
-            descriptor.vertex.owner != descriptor.fragment.owner)
+        if (!PipelineHandlesValid(descriptor))
             return failure();
         if (const auto manifest = ValidateShaderManifest(descriptor.manifest); manifest.HasError())
             return Result<PipelineCacheKey>::Failure(manifest.ErrorValue());
@@ -156,13 +209,15 @@ namespace Horo::Render {
             return SameTarget(target, descriptor.target);
         }))
             return failure();
-        const auto digest = ComputeRenderGraphicsPipelineStateDigest(descriptor.state);
+        const auto digest = ComputeRenderGraphicsPipelineDescriptorDigest(descriptor.state, descriptor.specializationValues);
         if (digest.HasError())
             return Result<PipelineCacheKey>::Failure(digest.ErrorValue());
-        if (descriptor.compatibility.pipelineDescriptorDigest != digest.Value() ||
-            descriptor.compatibility.shaderBackend != descriptor.target.backend ||
-            descriptor.compatibility.shaderFormat != descriptor.target.payloadFormat ||
-            descriptor.compatibility.shaderInterface != descriptor.reflection.interfaceCompatibility)
+        for (const auto &value : descriptor.specializationValues) {
+            const auto input = std::ranges::find(descriptor.manifest.specializationInputs, value.id, &ShaderSpecializationInput::id);
+            if (input == descriptor.manifest.specializationInputs.end() || input->type != value.type)
+                return failure();
+        }
+        if (!PipelineCacheIdentityMatches(descriptor, digest.Value()))
             return failure();
         return ValidatePipelineReflection(descriptor);
     }

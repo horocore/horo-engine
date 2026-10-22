@@ -1,5 +1,6 @@
 #include "OpenGLGraphWorkloads.h"
 
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "OpenGLExecutionState.h"
 #include "OpenGLRenderBackendErrors.h"
 
@@ -93,11 +94,16 @@ namespace Horo::Render::Detail {
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources,
                                                     const Workload &workload) {
-            if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
+            if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment> || std::is_same_v<Workload, RenderGraphMultiview>) {
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+            } else if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
                 return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
             } else if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
                 if (!ValidCopy(workload, request, resources))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
+            } else if constexpr (std::is_same_v<Workload, PrimaryOutputAttachment>) {
+                if (workload.outputColor)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
             } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
                 if (!ValidColor(workload, request, resources))
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
@@ -148,8 +154,13 @@ namespace Horo::Render::Detail {
 
     /** @copydoc ValidateOpenGLGraphWorkloads */
     Result<void> ValidateOpenGLGraphWorkloads(const RenderGraphExecutionRequest &request, const OpenGLGraphResources &resources) {
+        if (!request.submissions.empty())
+            return Result<void>::Failure(
+                MakeError(OpenGLBackendErrors::UnsupportedResourceOperation, "OpenGL explicit graph submissions are not implemented."));
         if (!request.resources.empty() && request.lease == nullptr)
             return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan));
+        if (!request.graph.ExternalReleases().empty())
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
         if (const auto portable = ValidateRenderGraphExecutionRequest(request); portable.HasError())
             return portable;
         if (request.lease != nullptr && request.transfer == nullptr)

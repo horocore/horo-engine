@@ -55,26 +55,28 @@ namespace {
         }
 
         Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, std::span<const std::byte> bytes,
-                                           const RenderMemoryPlacement &placement) override {
-            return backend_->CreateBuffer(descriptor, bytes, placement);
+                                           const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime = {}) override {
+            return backend_->CreateBuffer(descriptor, bytes, placement, std::move(lifetime));
         }
 
-        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertex, std::uint64_t index) override {
-            return backend_->CreateMesh(descriptor, vertex, index);
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, std::uint64_t vertex, std::uint64_t index,
+                                         RenderResourceNativeLifetime lifetime = {}) override {
+            return backend_->CreateMesh(descriptor, vertex, index, std::move(lifetime));
         }
 
         Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &descriptor, std::span<const std::byte> bytes,
-                                            const RenderMemoryPlacement &placement) override {
-            return backend_->CreateTexture(descriptor, bytes, placement);
+                                            const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime = {}) override {
+            return backend_->CreateTexture(descriptor, bytes, placement, std::move(lifetime));
         }
 
-        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture) override {
-            return backend_->CreateTextureView(descriptor, texture);
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &descriptor, std::uint64_t texture,
+                                                RenderResourceNativeLifetime lifetime = {}) override {
+            return backend_->CreateTextureView(descriptor, texture, std::move(lifetime));
         }
 
-        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t color,
-                                                 std::uint64_t depth) override {
-            return backend_->CreateRenderTarget(descriptor, color, depth);
+        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, std::uint64_t color, std::uint64_t depth,
+                                                 RenderResourceNativeLifetime lifetime = {}) override {
+            return backend_->CreateRenderTarget(descriptor, color, depth, std::move(lifetime));
         }
 
         void DestroyBuffer(std::uint64_t instance) noexcept override {
@@ -131,8 +133,12 @@ namespace {
             return backend_->Resize(extent);
         }
 
-        void Shutdown() noexcept override {
-            backend_->Shutdown();
+        Result<void> BeginShutdown() override {
+            return backend_->BeginShutdown();
+        }
+
+        Result<RenderBackendDrainProgress> PollDrain() override {
+            return backend_->PollDrain();
         }
 
     private:

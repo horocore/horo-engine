@@ -1,11 +1,14 @@
 #include "VulkanNativeRuntime.h"
 
+#include "VulkanGraphRuntime.h"
 #include "VulkanRenderBackendErrors.h"
+#include "VulkanResourceConversions.h"
 #include "VulkanResourceRuntime.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <exception>
 #include <format>
 #include <iterator>
 #include <limits>
@@ -69,7 +72,9 @@ namespace Horo::Render {
             return native;
         }
 
-        class VulkanNativeRuntime final : public IVulkanRuntimePort, public IVulkanResourcePort {  // NOSONAR(cpp:S1448)
+        class VulkanNativeRuntime final : public IVulkanRuntimePort,
+                                          public IVulkanResourcePort,
+                                          public IVulkanCommandPort {  // NOSONAR(cpp:S1448)
         public:
             explicit VulkanNativeRuntime(IVulkanLoaderPort &loaderPort) noexcept : loaderPort_(&loaderPort) {}
 
@@ -86,8 +91,8 @@ namespace Horo::Render {
                 if (Result<void> acquired = loaderPort_->AcquireLoader(); acquired.HasError()) {
                     return acquired;
                 }
-                getInstanceProcAddr_ = loaderPort_->GetInstanceProcAddr();
-                if (getInstanceProcAddr_ == nullptr) {
+                dispatch_.getInstanceProcAddr = loaderPort_->GetInstanceProcAddr();
+                if (dispatch_.getInstanceProcAddr == nullptr) {
                     loaderPort_->ReleaseLoader();
                     return Result<void>::Failure(MissingEntryPoint("vkGetInstanceProcAddr"));
                 }
@@ -96,16 +101,18 @@ namespace Horo::Render {
             }
 
             Result<VulkanLoaderCapabilities> QueryLoaderCapabilities() override {
-                const auto enumerateVersion = LoadInstanceFunction<PFN_vkEnumerateInstanceVersion>(getInstanceProcAddr_, VK_NULL_HANDLE,
-                                                                                                   "vkEnumerateInstanceVersion");
+                const auto enumerateVersion =
+                    LoadInstanceFunction<PFN_vkEnumerateInstanceVersion>(dispatch_.getInstanceProcAddr, VK_NULL_HANDLE,
+                                                                         "vkEnumerateInstanceVersion");
                 const auto enumerateExtensions =
-                    LoadInstanceFunction<PFN_vkEnumerateInstanceExtensionProperties>(getInstanceProcAddr_, VK_NULL_HANDLE,
+                    LoadInstanceFunction<PFN_vkEnumerateInstanceExtensionProperties>(dispatch_.getInstanceProcAddr, VK_NULL_HANDLE,
                                                                                      "vkEnumerateInstanceExtensionProperties");
                 const auto enumerateLayers =
-                    LoadInstanceFunction<PFN_vkEnumerateInstanceLayerProperties>(getInstanceProcAddr_, VK_NULL_HANDLE,
+                    LoadInstanceFunction<PFN_vkEnumerateInstanceLayerProperties>(dispatch_.getInstanceProcAddr, VK_NULL_HANDLE,
                                                                                  "vkEnumerateInstanceLayerProperties");
-                createInstance_ = LoadInstanceFunction<PFN_vkCreateInstance>(getInstanceProcAddr_, VK_NULL_HANDLE, "vkCreateInstance");
-                if (enumerateExtensions == nullptr || enumerateLayers == nullptr || createInstance_ == nullptr) {
+                dispatch_.createInstance =
+                    LoadInstanceFunction<PFN_vkCreateInstance>(dispatch_.getInstanceProcAddr, VK_NULL_HANDLE, "vkCreateInstance");
+                if (enumerateExtensions == nullptr || enumerateLayers == nullptr || dispatch_.createInstance == nullptr) {
                     return Result<VulkanLoaderCapabilities>::Failure(MissingEntryPoint("global instance bootstrap"));
                 }
 
@@ -157,7 +164,7 @@ namespace Horo::Render {
                     .enabledExtensionCount = extensionCount,
                     .ppEnabledExtensionNames = extensionNames.data(),
                 };
-                if (const VkResult result = createInstance_(&createInfo, nullptr, &instance_); result != VK_SUCCESS) {
+                if (const VkResult result = dispatch_.createInstance(&createInfo, nullptr, &instance_); result != VK_SUCCESS) {
                     return Result<void>::Failure(NativeFailure("vkCreateInstance", result));
                 }
                 return LoadInstanceDispatch();
@@ -165,7 +172,7 @@ namespace Horo::Render {
 
             Result<VulkanAdapterEnumeration> EnumeratePhysicalDevices(const std::uint32_t maxAdapters) override {
                 std::uint32_t deviceCount{0};
-                VkResult result = enumeratePhysicalDevices_(instance_, &deviceCount, nullptr);
+                VkResult result = dispatch_.enumeratePhysicalDevices(instance_, &deviceCount, nullptr);
                 if (result != VK_SUCCESS) {
                     return Result<VulkanAdapterEnumeration>::Failure(NativeFailure("vkEnumeratePhysicalDevices(count)", result));
                 }
@@ -174,7 +181,7 @@ namespace Horo::Render {
                         MakeError(VulkanBackendErrors::EnumerationLimitExceeded, "Physical-device count exceeds the requested bound."));
                 }
                 std::vector<VkPhysicalDevice> devices(deviceCount);
-                result = enumeratePhysicalDevices_(instance_, &deviceCount, devices.data());
+                result = dispatch_.enumeratePhysicalDevices(instance_, &deviceCount, devices.data());
                 if (result != VK_SUCCESS) {
                     return Result<VulkanAdapterEnumeration>::Failure(NativeFailure("vkEnumeratePhysicalDevices", result));
                 }
@@ -200,18 +207,18 @@ namespace Horo::Render {
                     return Result<void>::Failure(MakeError(VulkanBackendErrors::AdapterNotFound));
                 }
                 constexpr float priority{1.0F};
-                std::array<VkDeviceQueueCreateInfo, 2> queueInfos{};
-                std::uint32_t queueInfoCount{1};
-                queueInfos[0] = VkDeviceQueueCreateInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                                        .queueFamilyIndex = request.graphicsQueueFamily,
-                                                        .queueCount = 1,
-                                                        .pQueuePriorities = &priority};
-                if (request.presentationQueueFamily != request.graphicsQueueFamily) {
-                    queueInfos[1] = VkDeviceQueueCreateInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-                                                            .queueFamilyIndex = request.presentationQueueFamily,
-                                                            .queueCount = 1,
-                                                            .pQueuePriorities = &priority};
-                    queueInfoCount = 2;
+                std::array<VkDeviceQueueCreateInfo, 3> queueInfos{};
+                std::uint32_t queueInfoCount{0};
+                const std::array families{request.graphicsQueueFamily, request.presentationQueueFamily, request.transferQueueFamily};
+                for (const auto family : families) {
+                    if (std::ranges::any_of(std::span{queueInfos}.first(queueInfoCount), [family](const VkDeviceQueueCreateInfo &info) {
+                        return info.queueFamilyIndex == family;
+                    }))
+                        continue;
+                    queueInfos[queueInfoCount++] = VkDeviceQueueCreateInfo{.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+                                                                           .queueFamilyIndex = family,
+                                                                           .queueCount = 1,
+                                                                           .pQueuePriorities = &priority};
                 }
                 const std::vector<const char *> extensionNames = NativeNames(request.enabledExtensions);
                 VkPhysicalDeviceVulkan13Features features13{
@@ -223,6 +230,7 @@ namespace Horo::Render {
                     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                     .pNext = &features13,
                     .timelineSemaphore = request.enabledFeatures.timelineSemaphore,
+                    .shaderOutputLayer = request.enableVertexLayerRouting,
                 };
                 const VkDeviceCreateInfo createInfo{
                     .sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
@@ -232,37 +240,134 @@ namespace Horo::Render {
                     .enabledExtensionCount = static_cast<std::uint32_t>(extensionNames.size()),
                     .ppEnabledExtensionNames = extensionNames.data(),
                 };
-                if (const VkResult result = createDevice_(selected->device, &createInfo, nullptr, &device_); result != VK_SUCCESS) {
+                if (const VkResult result = dispatch_.createDevice(selected->device, &createInfo, nullptr, &device_);
+                    result != VK_SUCCESS) {
                     return Result<void>::Failure(NativeFailure("vkCreateDevice", result));
                 }
                 if (auto dispatch = LoadDeviceDispatch(request); dispatch.HasError()) {
                     return dispatch;
                 }
+                return InitializeResources(selected->device, request);
+            }
+
+            /** @brief Attaches the sole resource registry and shader owner to the selected native device. */
+            Result<void> InitializeResources(VkPhysicalDevice physical, const VulkanDeviceRequest &request) {
                 VkPhysicalDeviceMemoryProperties memoryProperties{};
-                getPhysicalDeviceMemoryProperties_(selected->device, &memoryProperties);
-                return resources_.Initialize(memoryProperties, device_, getDeviceProcAddr_);
+                dispatch_.getPhysicalDeviceMemoryProperties(physical, &memoryProperties);
+                if (auto resources = resources_.Initialize(memoryProperties, device_, dispatch_.getDeviceProcAddr); resources.HasError())
+                    return resources;
+                VkPhysicalDeviceMaintenance3Properties allocationLimits{.sType =
+                                                                            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES};
+                VkPhysicalDeviceTimelineSemaphoreProperties timeline{.sType =
+                                                                         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_PROPERTIES,
+                                                                     .pNext = &allocationLimits};
+                VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &timeline};
+                dispatch_.getPhysicalDeviceProperties2(physical, &properties);
+                std::vector<Detail::VulkanCommandQueue> queues;
+                for (const auto &assignment : request.queueAssignments) {
+                    if (std::ranges::any_of(queues, [&assignment](const Detail::VulkanCommandQueue &queue) {
+                        return queue.identity == assignment.queue;
+                    }))
+                        continue;
+                    const bool graphics =
+                        assignment.role == RenderQueueRole::Graphics || request.transferQueueFamily == request.graphicsQueueFamily;
+                    queues.emplace_back(assignment.queue, graphics ? request.graphicsQueueFamily : request.transferQueueFamily,
+                                        graphics ? graphicsQueue_ : transferQueue_, graphics);
+                }
+                const auto incarnation = AcquireRenderDeviceIncarnation();
+                if (incarnation.HasError())
+                    return Result<void>::Failure(incarnation.ErrorValue());
+                if (auto shaders = resources_.InitializeShaders(properties.properties, request.adapter, dispatch_.getDeviceProcAddr,
+                                                                incarnation.Value(), request.enableVertexLayerRouting);
+                    shaders.HasError())
+                    return shaders;
+                if (auto prepared = graph_.Initialize({.device = device_,
+                                                       .queues = queues,
+                                                       .frames = request.maxFramesInFlight,
+                                                       .timelineDifference = timeline.maxTimelineSemaphoreValueDifference,
+                                                       .deviceIncarnation = incarnation.Value(),
+                                                       .resources = resources_,
+                                                       .resolver = dispatch_.getDeviceProcAddr,
+                                                       .vertexLayerEnabled = request.enableVertexLayerRouting});
+                    prepared.HasError())
+                    return prepared;
+                return PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
+                                                   incarnation.Value());
             }
 
             IRenderResourceBackend *ResourceBackend() noexcept override {
                 return &resources_;
             }
 
+            RenderCapabilitySnapshot ResourceCapabilities() const noexcept override {
+                return resourceCapabilities_;
+            }
+
+            Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) override {
+                if (!descriptor.outputExtent.IsValid() || nextFrame_ == std::numeric_limits<std::uint64_t>::max())
+                    return Result<FrameToken>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                const FrameToken frame{nextFrame_};
+                if (auto begun = graph_.BeginFrame(frame); begun.HasError())
+                    return Result<FrameToken>::Failure(std::move(begun).ErrorValue());
+                ++nextFrame_;
+                return Result<FrameToken>::Success(frame);
+            }
+
+            Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+                return graph_.ExecuteGraph(request);
+            }
+
+            bool SupportsMaterialCommands() const noexcept override {
+                return true;
+            }
+
+            Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) override {
+                return graph_.ExecuteMaterialPass(request);
+            }
+
+            Result<void> SubmitFrame(const FrameToken frame) override {
+                return graph_.SubmitFrame(frame);
+            }
+
+            void AbortFrame(const FrameToken frame) noexcept override {
+                graph_.AbortFrame(frame);
+            }
+
+            Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
+                return graph_.ObserveSubmission(wait);
+            }
+
+            Result<void> BeginShutdownCommands() override {
+                return graph_.BeginShutdown();
+            }
+
+            Result<RenderBackendDrainProgress> PollCommandDrain() override {
+                return graph_.PollDrain();
+            }
+
             void DestroyDevice() noexcept override {
+                // Private rollback is legal only after explicit terminal drain or before any submission.
+                const auto closing = graph_.BeginShutdown();
+                if (const auto drained = graph_.PollDrain();
+                    closing.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
                 resources_.ShutdownResources();
-                if (device_ != VK_NULL_HANDLE && destroyDevice_ != nullptr) {
-                    destroyDevice_(device_, nullptr);
+                resourceCapabilities_ = {};
+                if (device_ != VK_NULL_HANDLE && dispatch_.destroyDevice != nullptr) {
+                    dispatch_.destroyDevice(device_, nullptr);
                 }
                 device_ = VK_NULL_HANDLE;
                 graphicsQueue_ = VK_NULL_HANDLE;
                 presentationQueue_ = VK_NULL_HANDLE;
-                destroyDevice_ = nullptr;
+                transferQueue_ = VK_NULL_HANDLE;
+                dispatch_.destroyDevice = nullptr;
             }
 
             void DestroyInstance() noexcept override {
                 DestroyDevice();
                 nativeAdapters_.clear();
-                if (instance_ != VK_NULL_HANDLE && destroyInstance_ != nullptr) {
-                    destroyInstance_(instance_, nullptr);
+                if (instance_ != VK_NULL_HANDLE && dispatch_.destroyInstance != nullptr) {
+                    dispatch_.destroyInstance(instance_, nullptr);
                 }
                 instance_ = VK_NULL_HANDLE;
                 ClearInstanceDispatch();
@@ -274,8 +379,8 @@ namespace Horo::Render {
                     loaderPort_->ReleaseLoader();
                 }
                 loaderAcquired_ = false;
-                getInstanceProcAddr_ = nullptr;
-                createInstance_ = nullptr;
+                dispatch_.getInstanceProcAddr = nullptr;
+                dispatch_.createInstance = nullptr;
             }
 
         private:
@@ -283,6 +388,67 @@ namespace Horo::Render {
                 RenderAdapterId id;
                 VkPhysicalDevice device{VK_NULL_HANDLE};
             };
+
+            /** @brief Intersects actual enabled draw/layer dispatch with the selected device's framebuffer layer limit. */
+            void PublishMultiviewCapabilities(const VkPhysicalDeviceProperties &properties) {
+                auto &snapshot = resourceCapabilities_;
+                const auto multiview = graph_.MultiviewSupport();
+                if (multiview.indexedShaders) {
+                    snapshot.features.Enable(RenderCapability::ViewIndexedShaders);
+                    snapshot.limits.maxMultiviewViews = std::min(multiview.maximumViews, properties.limits.maxFramebufferLayers);
+                }
+                if (multiview.instancedTargetRouting)
+                    snapshot.features.Enable(RenderCapability::InstancedViewRouting);
+            }
+
+            /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
+            Result<void> PublishResourceCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties,
+                                                     const VkDeviceSize allocationLimit, const std::uint64_t incarnation) {
+                using enum RenderTextureFormat;
+                auto &snapshot = resourceCapabilities_;
+                snapshot = {.deviceIncarnation = incarnation,
+                            .capabilityRevision = 1,
+                            .synthetic = false,
+                            .features = {},
+                            .queues = {.graphics = true, .compute = false, .copy = true, .present = false},
+                            .limits = {.maxBufferBytes = allocationLimit,
+                                       .maxTextureDimension2D = properties.limits.maxImageDimension2D,
+                                       .maxColorAttachments = std::min(1U, properties.limits.maxColorAttachments),
+                                       .maxVertexAttributes = properties.limits.maxVertexInputAttributes,
+                                       .maxFramesInFlight = 8},
+                            .formats = {}};
+                for (const auto capability :
+                     {RenderCapability::BufferResources, RenderCapability::MeshResources, RenderCapability::TextureResources,
+                      RenderCapability::RenderTargetResources, RenderCapability::OffscreenTargets})
+                    snapshot.features.Enable(capability);
+                PublishMultiviewCapabilities(properties);
+                const auto query = LoadInstanceFunction<PFN_vkGetPhysicalDeviceFormatProperties>(dispatch_.getInstanceProcAddr, instance_,
+                                                                                                 "vkGetPhysicalDeviceFormatProperties");
+                if (query == nullptr) {
+                    snapshot = {};
+                    return Result<void>::Failure(
+                        MakeError(VulkanBackendErrors::EntryPointMissing,
+                                  "vkGetPhysicalDeviceFormatProperties is required to publish native resource capabilities."));
+                }
+                snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
+                for (const auto format : {Rgba8Unorm, Depth24Stencil8, Depth32Float}) {
+                    using enum RenderTextureUsage;
+                    VkFormatProperties native{};
+                    query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);
+                    auto usage = None;
+                    if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0)
+                        usage = usage | Sampled;
+                    if ((native.optimalTilingFeatures &
+                         (VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT)) != 0)
+                        usage = usage | RenderAttachment;
+                    if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT) != 0)
+                        usage = usage | CopySource;
+                    if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0)
+                        usage = usage | CopyDestination;
+                    snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
+                }
+                return Result<void>::Success();
+            }
 
             template <typename Property, typename Enumerator, typename Name>
             [[nodiscard]] Result<std::vector<std::string>> EnumerateNames(const Enumerator &enumerate, const Name &name,
@@ -323,28 +489,35 @@ namespace Horo::Render {
             }
 
             [[nodiscard]] Result<void> LoadInstanceDispatch() {
-                destroyInstance_ = LoadInstanceFunction<PFN_vkDestroyInstance>(getInstanceProcAddr_, instance_, "vkDestroyInstance");
-                enumeratePhysicalDevices_ =
-                    LoadInstanceFunction<PFN_vkEnumeratePhysicalDevices>(getInstanceProcAddr_, instance_, "vkEnumeratePhysicalDevices");
-                getPhysicalDeviceProperties2_ = LoadInstanceFunction<PFN_vkGetPhysicalDeviceProperties2>(getInstanceProcAddr_, instance_,
-                                                                                                         "vkGetPhysicalDeviceProperties2");
-                getPhysicalDeviceFeatures2_ =
-                    LoadInstanceFunction<PFN_vkGetPhysicalDeviceFeatures2>(getInstanceProcAddr_, instance_, "vkGetPhysicalDeviceFeatures2");
-                getPhysicalDeviceMemoryProperties_ =
-                    LoadInstanceFunction<PFN_vkGetPhysicalDeviceMemoryProperties>(getInstanceProcAddr_, instance_,
+                dispatch_.destroyInstance =
+                    LoadInstanceFunction<PFN_vkDestroyInstance>(dispatch_.getInstanceProcAddr, instance_, "vkDestroyInstance");
+                dispatch_.enumeratePhysicalDevices =
+                    LoadInstanceFunction<PFN_vkEnumeratePhysicalDevices>(dispatch_.getInstanceProcAddr, instance_,
+                                                                         "vkEnumeratePhysicalDevices");
+                dispatch_.getPhysicalDeviceProperties2 =
+                    LoadInstanceFunction<PFN_vkGetPhysicalDeviceProperties2>(dispatch_.getInstanceProcAddr, instance_,
+                                                                             "vkGetPhysicalDeviceProperties2");
+                dispatch_.getPhysicalDeviceFeatures2 =
+                    LoadInstanceFunction<PFN_vkGetPhysicalDeviceFeatures2>(dispatch_.getInstanceProcAddr, instance_,
+                                                                           "vkGetPhysicalDeviceFeatures2");
+                dispatch_.getPhysicalDeviceMemoryProperties =
+                    LoadInstanceFunction<PFN_vkGetPhysicalDeviceMemoryProperties>(dispatch_.getInstanceProcAddr, instance_,
                                                                                   "vkGetPhysicalDeviceMemoryProperties");
-                enumerateDeviceExtensions_ =
-                    LoadInstanceFunction<PFN_vkEnumerateDeviceExtensionProperties>(getInstanceProcAddr_, instance_,
+                dispatch_.enumerateDeviceExtensions =
+                    LoadInstanceFunction<PFN_vkEnumerateDeviceExtensionProperties>(dispatch_.getInstanceProcAddr, instance_,
                                                                                    "vkEnumerateDeviceExtensionProperties");
-                getQueueFamilyProperties_ =
-                    LoadInstanceFunction<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(getInstanceProcAddr_, instance_,
+                dispatch_.getQueueFamilyProperties =
+                    LoadInstanceFunction<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(dispatch_.getInstanceProcAddr, instance_,
                                                                                        "vkGetPhysicalDeviceQueueFamilyProperties");
-                createDevice_ = LoadInstanceFunction<PFN_vkCreateDevice>(getInstanceProcAddr_, instance_, "vkCreateDevice");
-                getDeviceProcAddr_ = LoadInstanceFunction<PFN_vkGetDeviceProcAddr>(getInstanceProcAddr_, instance_, "vkGetDeviceProcAddr");
-                if (destroyInstance_ == nullptr || enumeratePhysicalDevices_ == nullptr || getPhysicalDeviceProperties2_ == nullptr ||
-                    getPhysicalDeviceFeatures2_ == nullptr || getPhysicalDeviceMemoryProperties_ == nullptr ||
-                    enumerateDeviceExtensions_ == nullptr || getQueueFamilyProperties_ == nullptr || createDevice_ == nullptr ||
-                    getDeviceProcAddr_ == nullptr) {
+                dispatch_.createDevice =
+                    LoadInstanceFunction<PFN_vkCreateDevice>(dispatch_.getInstanceProcAddr, instance_, "vkCreateDevice");
+                dispatch_.getDeviceProcAddr =
+                    LoadInstanceFunction<PFN_vkGetDeviceProcAddr>(dispatch_.getInstanceProcAddr, instance_, "vkGetDeviceProcAddr");
+                if (dispatch_.destroyInstance == nullptr || dispatch_.enumeratePhysicalDevices == nullptr ||
+                    dispatch_.getPhysicalDeviceProperties2 == nullptr || dispatch_.getPhysicalDeviceFeatures2 == nullptr ||
+                    dispatch_.getPhysicalDeviceMemoryProperties == nullptr || dispatch_.enumerateDeviceExtensions == nullptr ||
+                    dispatch_.getQueueFamilyProperties == nullptr || dispatch_.createDevice == nullptr ||
+                    dispatch_.getDeviceProcAddr == nullptr) {
                     return Result<void>::Failure(MissingEntryPoint("required Vulkan 1.3 instance dispatch"));
                 }
                 return Result<void>::Success();
@@ -353,13 +526,13 @@ namespace Horo::Render {
             [[nodiscard]] Result<VulkanAdapterCandidate> InspectAdapter(const VkPhysicalDevice device) {
                 VkPhysicalDeviceIDProperties identity{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
                 VkPhysicalDeviceProperties2 properties{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, .pNext = &identity};
-                getPhysicalDeviceProperties2_(device, &properties);
+                dispatch_.getPhysicalDeviceProperties2(device, &properties);
 
                 VkPhysicalDeviceVulkan13Features features13{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES};
                 VkPhysicalDeviceVulkan12Features features12{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
                                                             .pNext = &features13};
                 VkPhysicalDeviceFeatures2 features{.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &features12};
-                getPhysicalDeviceFeatures2_(device, &features);
+                dispatch_.getPhysicalDeviceFeatures2(device, &features);
 
                 auto extensions = EnumerateDeviceExtensions(device);
                 if (extensions.HasError()) {
@@ -390,6 +563,7 @@ namespace Horo::Render {
                     .standardApiVariant = VK_API_VERSION_VARIANT(properties.properties.apiVersion) == 0,
                     .portabilitySubset = portabilitySubset,
                     .driverAllowed = driverAllowed.Value(),
+                    .vertexLayerRouting = features12.shaderOutputLayer == VK_TRUE,
                 });
             }
 
@@ -398,7 +572,7 @@ namespace Horo::Render {
                     return 0;
                 }
                 VkPhysicalDeviceMemoryProperties properties{};
-                getPhysicalDeviceMemoryProperties_(device, &properties);
+                dispatch_.getPhysicalDeviceMemoryProperties(device, &properties);
                 std::uint64_t total{0};
                 for (std::uint32_t index = 0; index < properties.memoryHeapCount; ++index) {
                     if ((properties.memoryHeaps[index].flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
@@ -412,7 +586,7 @@ namespace Horo::Render {
 
             [[nodiscard]] Result<std::vector<std::string>> EnumerateDeviceExtensions(const VkPhysicalDevice device) const {
                 return EnumerateNames<VkExtensionProperties>([this, device](std::uint32_t *count, VkExtensionProperties *properties) {
-                    return enumerateDeviceExtensions_(device, nullptr, count, properties);
+                    return dispatch_.enumerateDeviceExtensions(device, nullptr, count, properties);
                 }, [](const VkExtensionProperties &property) {
                     return std::string{property.extensionName};
                 }, "vkEnumerateDeviceExtensionProperties");
@@ -420,12 +594,12 @@ namespace Horo::Render {
 
             [[nodiscard]] Result<std::vector<VulkanQueueFamily>> EnumerateQueues(const VkPhysicalDevice device) const {
                 std::uint32_t count{0};
-                getQueueFamilyProperties_(device, &count, nullptr);
+                dispatch_.getQueueFamilyProperties(device, &count, nullptr);
                 if (count > MaxQueueFamilies) {
                     return Result<std::vector<VulkanQueueFamily>>::Failure(MakeError(VulkanBackendErrors::EnumerationLimitExceeded));
                 }
                 std::vector<VkQueueFamilyProperties> properties(count);
-                getQueueFamilyProperties_(device, &count, properties.data());
+                dispatch_.getQueueFamilyProperties(device, &count, properties.data());
                 std::vector<VulkanQueueFamily> queues;
                 queues.reserve(properties.size());
                 for (std::uint32_t index = 0; index < properties.size(); ++index) {
@@ -437,20 +611,25 @@ namespace Horo::Render {
                         .index = index,
                         .supportsGraphics = properties[index].queueCount > 0 && (properties[index].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0,
                         .supportsPresentation = properties[index].queueCount > 0 && presentation.Value(),
+                        .supportsTransfer =
+                            properties[index].queueCount > 0 &&
+                            (properties[index].queueFlags & (VK_QUEUE_TRANSFER_BIT | VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) != 0,
                     });
                 }
                 return Result<std::vector<VulkanQueueFamily>>::Success(std::move(queues));
             }
 
             [[nodiscard]] Result<void> LoadDeviceDispatch(const VulkanDeviceRequest &request) {
-                destroyDevice_ = LoadDeviceFunction<PFN_vkDestroyDevice>(getDeviceProcAddr_, device_, "vkDestroyDevice");
-                const auto getDeviceQueue = LoadDeviceFunction<PFN_vkGetDeviceQueue>(getDeviceProcAddr_, device_, "vkGetDeviceQueue");
-                if (destroyDevice_ == nullptr || getDeviceQueue == nullptr) {
+                dispatch_.destroyDevice = LoadDeviceFunction<PFN_vkDestroyDevice>(dispatch_.getDeviceProcAddr, device_, "vkDestroyDevice");
+                const auto getDeviceQueue =
+                    LoadDeviceFunction<PFN_vkGetDeviceQueue>(dispatch_.getDeviceProcAddr, device_, "vkGetDeviceQueue");
+                if (dispatch_.destroyDevice == nullptr || getDeviceQueue == nullptr) {
                     return Result<void>::Failure(MissingEntryPoint("required Vulkan device dispatch"));
                 }
                 getDeviceQueue(device_, request.graphicsQueueFamily, 0, &graphicsQueue_);
                 getDeviceQueue(device_, request.presentationQueueFamily, 0, &presentationQueue_);
-                if (graphicsQueue_ == VK_NULL_HANDLE || presentationQueue_ == VK_NULL_HANDLE) {
+                getDeviceQueue(device_, request.transferQueueFamily, 0, &transferQueue_);
+                if (graphicsQueue_ == VK_NULL_HANDLE || presentationQueue_ == VK_NULL_HANDLE || transferQueue_ == VK_NULL_HANDLE) {
                     return Result<void>::Failure(
                         MakeError(VulkanBackendErrors::NativeCallFailed, "Vulkan returned a null required queue."));
                 }
@@ -458,37 +637,50 @@ namespace Horo::Render {
             }
 
             void ClearInstanceDispatch() noexcept {
-                destroyInstance_ = nullptr;
-                enumeratePhysicalDevices_ = nullptr;
-                getPhysicalDeviceProperties2_ = nullptr;
-                getPhysicalDeviceFeatures2_ = nullptr;
-                getPhysicalDeviceMemoryProperties_ = nullptr;
-                enumerateDeviceExtensions_ = nullptr;
-                getQueueFamilyProperties_ = nullptr;
-                createDevice_ = nullptr;
-                getDeviceProcAddr_ = nullptr;
+                dispatch_.destroyInstance = nullptr;
+                dispatch_.enumeratePhysicalDevices = nullptr;
+                dispatch_.getPhysicalDeviceProperties2 = nullptr;
+                dispatch_.getPhysicalDeviceFeatures2 = nullptr;
+                dispatch_.getPhysicalDeviceMemoryProperties = nullptr;
+                dispatch_.enumerateDeviceExtensions = nullptr;
+                dispatch_.getQueueFamilyProperties = nullptr;
+                dispatch_.createDevice = nullptr;
+                dispatch_.getDeviceProcAddr = nullptr;
             }
+
+            /** @brief Native dispatch belongs to this exact loader/instance/device lifetime. */
+            struct Dispatch {
+                PFN_vkGetInstanceProcAddr getInstanceProcAddr{nullptr};
+                PFN_vkCreateInstance createInstance{nullptr};
+                PFN_vkDestroyInstance destroyInstance{nullptr};
+                PFN_vkEnumeratePhysicalDevices enumeratePhysicalDevices{nullptr};
+                PFN_vkGetPhysicalDeviceProperties2 getPhysicalDeviceProperties2{nullptr};
+                PFN_vkGetPhysicalDeviceFeatures2 getPhysicalDeviceFeatures2{nullptr};
+                PFN_vkGetPhysicalDeviceMemoryProperties getPhysicalDeviceMemoryProperties{nullptr};
+                PFN_vkEnumerateDeviceExtensionProperties enumerateDeviceExtensions{nullptr};
+                PFN_vkGetPhysicalDeviceQueueFamilyProperties getQueueFamilyProperties{nullptr};
+                PFN_vkCreateDevice createDevice{nullptr};
+                PFN_vkGetDeviceProcAddr getDeviceProcAddr{nullptr};
+                PFN_vkDestroyDevice destroyDevice{nullptr};
+            };
+
+            Dispatch dispatch_;
 
             IVulkanLoaderPort *loaderPort_{nullptr};
             bool loaderAcquired_{false};
-            PFN_vkGetInstanceProcAddr getInstanceProcAddr_{nullptr};
-            PFN_vkCreateInstance createInstance_{nullptr};
+
             VkInstance instance_{VK_NULL_HANDLE};
-            PFN_vkDestroyInstance destroyInstance_{nullptr};
-            PFN_vkEnumeratePhysicalDevices enumeratePhysicalDevices_{nullptr};
-            PFN_vkGetPhysicalDeviceProperties2 getPhysicalDeviceProperties2_{nullptr};
-            PFN_vkGetPhysicalDeviceFeatures2 getPhysicalDeviceFeatures2_{nullptr};
-            PFN_vkGetPhysicalDeviceMemoryProperties getPhysicalDeviceMemoryProperties_{nullptr};
-            PFN_vkEnumerateDeviceExtensionProperties enumerateDeviceExtensions_{nullptr};
-            PFN_vkGetPhysicalDeviceQueueFamilyProperties getQueueFamilyProperties_{nullptr};
-            PFN_vkCreateDevice createDevice_{nullptr};
-            PFN_vkGetDeviceProcAddr getDeviceProcAddr_{nullptr};
+
             std::vector<NativeAdapter> nativeAdapters_;
             VkDevice device_{VK_NULL_HANDLE};
             VkQueue graphicsQueue_{VK_NULL_HANDLE};
             VkQueue presentationQueue_{VK_NULL_HANDLE};
-            PFN_vkDestroyDevice destroyDevice_{nullptr};
+            VkQueue transferQueue_{VK_NULL_HANDLE};
+            std::uint64_t nextFrame_{1};
+
+            RenderCapabilitySnapshot resourceCapabilities_;
             Detail::VulkanResourceRuntime resources_;
+            Detail::VulkanGraphRuntime graph_;
         };
     }  // namespace
 

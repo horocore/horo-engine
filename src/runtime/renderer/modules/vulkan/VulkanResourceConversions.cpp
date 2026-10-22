@@ -3,13 +3,11 @@
 #include <array>
 
 namespace Horo::Render::Detail::VulkanResourceConversion {
-    namespace {
-        [[nodiscard]] bool IsDepthFormat(const RenderTextureFormat format) noexcept {
-            return format == RenderTextureFormat::Depth16Unorm || format == RenderTextureFormat::Depth24Stencil8 ||
-                   format == RenderTextureFormat::Depth32Float || format == RenderTextureFormat::Depth32FloatStencil8;
-        }
-
-    }  // namespace
+    /** @copydoc IsDepthFormat */
+    bool IsDepthFormat(const RenderTextureFormat format) noexcept {
+        return format == RenderTextureFormat::Depth16Unorm || format == RenderTextureFormat::Depth24Stencil8 ||
+               format == RenderTextureFormat::Depth32Float || format == RenderTextureFormat::Depth32FloatStencil8;
+    }
 
     VkBufferUsageFlags BufferUsage(const RenderBufferUsage usage) noexcept {
         VkBufferUsageFlags flags{0};

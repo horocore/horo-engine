@@ -74,7 +74,9 @@ namespace Horo::Render {
                 return false;
             if (mode.dynamicRange == RenderDisplayDynamicRange::Standard)
                 return mode.transfer == Srgb || mode.transfer == Linear;
-            return mode.colorSpace == RenderDisplayColorSpace::Rec2020 && mode.transfer == Pq;
+            const bool linearEdr = mode.transfer == Linear && (mode.colorSpace == RenderDisplayColorSpace::Srgb ||
+                                                               mode.colorSpace == RenderDisplayColorSpace::DisplayP3);
+            return linearEdr || (mode.colorSpace == RenderDisplayColorSpace::Rec2020 && mode.transfer == Pq);
         }
 
         /** @brief Validates one mode while preserving malformed versus unsupported failure semantics. */

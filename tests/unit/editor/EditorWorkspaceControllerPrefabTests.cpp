@@ -1,69 +1,13 @@
-#include "PrefabHierarchyTestSupport.h"
-#include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "PrefabWorkspaceTestSupport.h"
+
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <string>
+#include <string_view>
 
 namespace Horo::Editor {
-    using namespace PrefabHierarchyTestSupport;
-
-    namespace {
-        /** @brief Captures one actual owner publication as a panel would, without a document mutation capability. */
-        EditorWorkspaceViewCommandData Intent(const EditorWorkspaceViewModel &model, PrefabHierarchyTarget target,
-                                              PrefabHierarchyAction action) {
-            REQUIRE(model.prefabHierarchy != nullptr);
-            EditorWorkspaceViewCommandData command;
-            command.command = EditorWorkspaceViewCommand::PrefabHierarchy;
-            command.prefabHierarchy = PrefabHierarchyCommand{model.prefabHierarchy->documentSession, model.prefabHierarchy->publication,
-                                                             model.prefabHierarchy->documentRevision, target, action};
-            return command;
-        }
-
-        /** @brief Exercises actual Scene persistence, source pair capture, canonical history and workspace routes. */
-        struct Workspace final {
-            Project project;
-            Runtime::RuntimeSceneService runtime;
-            std::size_t captures{};
-            std::optional<std::filesystem::path> navigated;
-            std::optional<std::string> navigatedIdentity;
-            std::optional<std::filesystem::path> diagnosticPath;
-            bool diagnosticRoute{};
-            std::unique_ptr<EditorWorkspaceController> controller;
-
-            explicit Workspace(const std::string &sourceName = "hierarchy", const bool useDiagnosticRoute = false)
-                : project(sourceName), diagnosticRoute(useDiagnosticRoute) {
-                project.WriteScene();
-                Open(PrefabAsset(9).Asset());
-            }
-
-            void Open(const Assets::AssetId session) {
-                controller = std::make_unique<
-                    EditorWorkspaceController>(project.directory.path, runtime, project.registry.Snapshot(),
-                                               EditorWorkspaceDependencies{.mutations = &project.mutations,
-                                                                           .durableFiles = &project.files,
-                                                                           .sourceNavigation =
-                                                                               {.sourceOpenNavigator =
-                                                                                    diagnosticRoute
-                                                                                        ? SourceOpenNavigator{}
-                                                                                        : SourceOpenNavigator{[this](const SourceOpenResult
-                                                                                                                         &source) {
-                    navigated = source.location.absolutePath;
-                    navigatedIdentity = source.location.document.Value();
-                    return true;
-                }},
-                                                                                .diagnosticSourceNavigator =
-                                                                                    [this](const DiagnosticSourceRequest &source) {
-                    diagnosticPath = source.absolutePath;
-                    return true;
-                }},
-                                                                           .documentSessionOwner = session,
-                                                                           .prefabSources = [this](const auto &registry, const auto roots,
-                                                                                                   const auto &limits,
-                                                                                                   const auto &cancellation) {
-                    ++captures;
-                    return project.Capture(registry, roots, limits, cancellation);
-                }});
-                REQUIRE_FALSE(controller->InitializationError().has_value());
-            }
-        };
-    }  // namespace
+    using namespace PrefabWorkspaceTestSupport;
 
     TEST_CASE("Workspace prefab selection and source navigation retain exact ownership without ordinary mutation",
               "[editor][prefab][native]") {
@@ -86,8 +30,19 @@ namespace Horo::Editor {
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
         owner.ProcessCommand(Intent(model, member, PrefabHierarchyAction::OpenSource));
-        REQUIRE(workspace.navigated.has_value());
-        CHECK(std::filesystem::equivalent(*workspace.navigated, workspace.project.source));
+        REQUIRE(model.prefabDocuments.size() == 1);
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
+        CHECK(model.prefabDocuments.front().stageActive);
+        CHECK_FALSE(workspace.navigated.has_value());
+        owner.ProcessCommand(Intent(model, member, PrefabHierarchyAction::LocateInstance));
+        CHECK(model.prefabSelection == member);
+        CHECK(model.documentRevision == revision);
+        owner.ProcessCommand({.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument,
+                              .documentInstance = model.prefabDocuments.front().identity.instance});
+        REQUIRE(model.prefabDocuments.empty());
+        CHECK_FALSE(model.workspacePanelHost.ActiveDocument().has_value());
+        CHECK(model.prefabSelection == member);
+        CHECK(model.documentRevision == revision);
         owner.ProcessCommand(Intent(model, member, PrefabHierarchyAction::LocateInstance));
         REQUIRE(model.prefabSelection.has_value());
         CHECK_FALSE(model.prefabSelection->member.has_value());
@@ -103,9 +58,11 @@ namespace Horo::Editor {
         const auto projection = model.prefabHierarchy;
         const auto revision = model.documentRevision;
         owner.ProcessCommand(Intent(model, projection->entries.back().target, PrefabHierarchyAction::OpenSource));
-        REQUIRE(workspace.navigated.has_value());
-        CHECK(std::filesystem::equivalent(*workspace.navigated, workspace.project.source));
-        CHECK(workspace.navigatedIdentity == workspace.project.record.sourcePath.String());
+        REQUIRE(model.prefabDocuments.size() == 1);
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
+        CHECK(model.prefabDocuments.front().stageActive);
+        CHECK_FALSE(workspace.navigated.has_value());
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
         CHECK(model.prefabHierarchy == projection);
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
@@ -119,9 +76,10 @@ namespace Horo::Editor {
         REQUIRE(model.prefabHierarchy != nullptr);
         const auto revision = model.documentRevision;
         owner.ProcessCommand(Intent(model, model.prefabHierarchy->entries.back().target, PrefabHierarchyAction::OpenSource));
-        REQUIRE(workspace.diagnosticPath.has_value());
-        CHECK(*workspace.diagnosticPath == std::filesystem::canonical(workspace.project.source));
-        CHECK(std::filesystem::equivalent(*workspace.diagnosticPath, workspace.project.source));
+        REQUIRE(model.prefabDocuments.size() == 1);
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
+        CHECK(model.prefabDocuments.front().stageActive);
+        CHECK_FALSE(workspace.diagnosticPath.has_value());
         CHECK_FALSE(workspace.navigated.has_value());
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
@@ -189,9 +147,11 @@ namespace Horo::Editor {
         CHECK_FALSE(workspace.navigated.has_value());
         CHECK_FALSE(workspace.navigatedIdentity.has_value());
         owner.ProcessCommand(Intent(model, projection->entries.front().target, PrefabHierarchyAction::OpenSource));
-        REQUIRE(workspace.navigated.has_value());
-        CHECK(std::filesystem::equivalent(*workspace.navigated, workspace.project.source));
-        CHECK(workspace.navigatedIdentity == workspace.project.record.sourcePath.String());
+        REQUIRE(model.prefabDocuments.size() == 1);
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
+        CHECK(model.prefabDocuments.front().stageActive);
+        CHECK_FALSE(workspace.navigated.has_value());
+        CHECK(model.prefabDocuments.front().identity.key.source.Value() == workspace.project.record.sourcePath.String());
         CHECK(model.documentRevision == revision);
         CHECK_FALSE(model.isDirty);
     }
@@ -302,4 +262,5 @@ namespace Horo::Editor {
         CHECK_FALSE(owner.ViewModel().prefabSelection.has_value());
         CHECK_FALSE(owner.ViewModel().isDirty);
     }
+
 }  // namespace Horo::Editor

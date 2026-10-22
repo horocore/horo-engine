@@ -80,6 +80,9 @@ namespace Horo::Render {
             switch (kind) {
                 case Sampled:
                 case CopySource:
+                case VertexBuffer:
+                case IndexBuffer:
+                case UniformBuffer:
                     return access == Read;
                 case ColorAttachment:
                     return access == Write || access == ReadWrite;
@@ -111,7 +114,10 @@ namespace Horo::Render {
 
         /** @brief Reports whether a resource category can satisfy the semantic use. */
         [[nodiscard]] bool IsResourceCompatible(const RenderGraphResourceKind resource, const RenderGraphUsageKind usage) noexcept {
-            if (usage == RenderGraphUsageKind::ColorAttachment || usage == RenderGraphUsageKind::DepthStencilAttachment) {
+            using enum RenderGraphUsageKind;
+            if (usage == VertexBuffer || usage == IndexBuffer || usage == UniformBuffer)
+                return resource == RenderGraphResourceKind::Buffer;
+            if (usage == ColorAttachment || usage == DepthStencilAttachment) {
                 return resource == RenderGraphResourceKind::Texture;
             }
             return true;

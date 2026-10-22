@@ -74,14 +74,14 @@ namespace Horo::Editor {
           m_sourceOpenService(projectRoot, m_documentRegistry),
           m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcg.document,
                          dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
-          m_pcgPreviewJobs(dependencies.jobs), m_pcgPreviewCatalog(dependencies.pcg.schemas),
-          m_pcgPreviewInputs(dependencies.pcgPreviewInputs), m_prefabSourceCapture(dependencies.prefabSources),
-          m_workspaceSession(dependencies.documentSessionOwner), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
-          m_uiInspectorResources(dependencies.uiInspectorResources), m_collisionInventory(dependencies.collision.inventory),
-          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
-          m_collisionSceneOwner(dependencies.documentSessionOwner), m_mutations(dependencies.mutations),
-          m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assetRegistrySource),
-          m_importerCatalog(dependencies.importerCatalog),
+          m_prefabStageFactory(dependencies.prefab.stageFactory), m_pcgPreviewJobs(dependencies.jobs),
+          m_pcgPreviewCatalog(dependencies.pcg.schemas), m_pcgPreviewInputs(dependencies.pcgPreviewInputs),
+          m_prefabSourceCapture(dependencies.prefab.sources), m_workspaceSession(dependencies.documentSessionOwner),
+          m_mutableAssetRegistry(dependencies.mutableAssetRegistry), m_uiInspectorResources(dependencies.uiInspectorResources),
+          m_collisionInventory(dependencies.collision.inventory), m_collisionActivation(dependencies.collision.activation),
+          m_previewCollisionReceipt(dependencies.collision.previewReceipt), m_collisionSceneOwner(dependencies.documentSessionOwner),
+          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles),
+          m_assetRegistrySource(dependencies.assetRegistrySource), m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceNavigation.sourceOpenNavigator),
           m_diagnosticSourceNavigator(dependencies.sourceNavigation.diagnosticSourceNavigator),
@@ -262,6 +262,14 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::UpdateGameplaySources(const float elapsedSeconds) {
+        if (m_prefabStagePending) {
+            m_prefabStagePending = false;
+            for (const auto &entry : m_prefabDocuments)
+                if (entry->Instance() == m_activePrefabDocument)
+                    ExtractPrefabStage(*entry);
+            if (!m_prefabStagePending)
+                RefreshPrefabDocuments();
+        }
         RefreshSourceDocumentProjection();
         (void)m_gameplayRetirements->Drain();
         UpdateGameplayBuild(elapsedSeconds);

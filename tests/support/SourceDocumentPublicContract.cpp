@@ -34,6 +34,8 @@ void QualifySourceSavePublicContract(Horo::Editor::SourceFileOpenService &open, 
     static_cast<void>(open.ResolveClose(request, Horo::Editor::SourceCloseDecision::Cancel, files));
 }
 
+static_assert(static_cast<unsigned>(Horo::Editor::DocumentKind::Prefab) > static_cast<unsigned>(Horo::Editor::DocumentKind::PCGGraph));
+
 /** @brief Qualifies source history and editing plans through the owning staged public surface. */
 void QualifySourceHistoryPublicContract(Horo::Editor::SourceDocumentService &documents,
                                         const Horo::Editor::SourceDocumentSnapshot &snapshot) {

@@ -4,6 +4,22 @@
   "locale": "tr-TR",
   "namespace": "editor",
   "messages": {
+    "workspace.prefab_document.source_controls": { "text": "Prefab kaynak kontrolleri belgededir. Sahneyi düzenlemek için Sahne görünümüne dönün." },
+    "workspace.prefab_document.undo": { "text": "Kaynak düzenlemesini geri al" },
+    "workspace.prefab_document.redo": { "text": "Kaynak düzenlemesini yinele" },
+    "workspace.prefab_document.reload": { "text": "Kaydedilmiş kaynağı yeniden yükle" },
+    "workspace.prefab_document.recover": { "text": "Kurtarma adayını geri yükle" },
+    "workspace.prefab_document.discard_recovery": { "text": "Kurtarma adayını sil (kaynak düzenlemelerini koru)" },
+    "workspace.prefab_document.discard_reload": { "text": "Değişiklikleri bırak ve kaynağı yeniden yükle" },
+    "workspace.prefab_document.discard_close": { "text": "Değişiklikleri bırak ve prefabı kapat" },
+    "workspace.prefab_document.conflict": { "text": "Kaynak bu oturumun dışında değişti. Devam etmeden önce yeniden yükleyin veya kurtarma kaydını koruyun." },
+    "workspace.prefab_document.name": { "text": "Kaynak nesnenin adı" },
+    "workspace.prefab_document.preview_unavailable": { "text": "Yalıtılmış çalışma zamanı önizlemesi kullanılamıyor. Kaynak ve kurtarma kaydı kullanılabilir durumda." },
+    "workspace.content_browser.asset.unregistered": {"text": "Kayıtsız varlık — kimlik meta verisini inceleyin"},
+    "workspace.content_browser.prefab.type": {"text": "Prefab"},
+    "workspace.content_browser.preview.queued": {"text": "Önizleme hazırlanıyor…"},
+    "workspace.content_browser.preview.unavailable": {"text": "Önizleme kullanılamıyor — tanıyı inceleyin"},
+    "workspace.content_browser.prefab.migration_required": {"text": "Geçiş gerekli"},
     "render_graph.renderer": {
       "text": "İşleyici"
     },
@@ -3149,6 +3165,36 @@
     },
     "settings.navigation.override_cost": {
       "text": "Geçersiz kılınan geçiş maliyeti"
+    },
+    "workspace.prefab.create.action": {
+      "text": "Alt Ağaçtan Prefab Oluştur..."
+    },
+    "workspace.prefab.create.title": {
+      "text": "Prefab Oluştur"
+    },
+    "workspace.prefab.create.help": {
+      "text": "Yeniden kullanılabilir bir prefab oluşturun ve alt ağacı bağlı bir örnekle değiştirin. Desteklenmeyen veya dış referanslar önce çözülmelidir."
+    },
+    "workspace.prefab.create.path": {
+      "text": "Projeye göre prefab yolu"
+    },
+    "workspace.prefab.create.cancel": {
+      "text": "İptal"
+    },
+    "workspace.prefab.create.confirm": {
+      "text": "Prefab Oluştur"
+    },
+    "workspace.prefab.create.failed": {
+      "text": "Prefab oluşturma kaydedilmedi. Bildirilen kaynak ve hedef alanlarını inceleyin."
+    },
+    "workspace.prefab.create.post_commit": {
+      "text": "Prefab oluşturuldu. Çalışma alanı görünümü yenilenmeli; kaynak ve bağlı örnek kaydedildi."
+    },
+    "workspace.prefab.create.more_diagnostics": {
+      "text": "ek başvuru tanısı işlem sonucunda saklanıyor."
+    },
+    "workspace.prefab.create.expired": {
+      "text": "Çalışma alanı oturumu sona erdi. Prefab oluşturmadan önce projeyi yeniden açın."
     },
     "workspace.navigation_overlay.title": {"text": "Navigasyon kaplamaları"},
     "workspace.navigation_overlay.show": {"text": "Navigasyon kaplamalarını göster"},
