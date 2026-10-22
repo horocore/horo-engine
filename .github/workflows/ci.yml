@@ -34,7 +34,7 @@ jobs:
           @'
           import hashlib, json, os, pathlib, platform, subprocess
           root = pathlib.Path.cwd()
-          names = ['cmake/HoroPublicHeaderOwnership.cmake', 'include/Horo/Editor/TerrainBrushTools.h', 'include/Horo/WorldStreaming/StreamingCellDirection.h', 'include/Horo/WorldStreaming/StreamingFeatureBudgetReservations.h', 'src/CMakeLists.txt', 'src/editor/terrain/TerrainBrushAdmission.h', 'src/editor/terrain/TerrainBrushTools.cpp', 'src/runtime/world_streaming/StreamingCellDirection.cpp', 'src/runtime/world_streaming/StreamingFeatureBudgetReservations.cpp', 'tests/CMakeLists.txt', 'tests/unit/editor/TerrainBrushAdmissionCompileTests.cpp', 'tests/unit/editor/TerrainBrushToolsTests.cpp', 'tests/unit/runtime/world_streaming/StreamingDirectionFinalizationTestSupport.h', 'tests/unit/runtime/world_streaming/StreamingDirectionFinalizationTests.cpp', 'tests/unit/runtime/world_streaming/StreamingFeatureBudgetReservationsTests.cpp', '.github/workflows/ci.yml']
+          names = ['cmake/HoroPublicHeaderOwnership.cmake', 'include/Horo/Editor/TerrainBrushTools.h', 'include/Horo/WorldStreaming/StreamingCellDirection.h', 'include/Horo/WorldStreaming/StreamingFeatureBudgetReservations.h', 'src/CMakeLists.txt', 'src/editor/terrain/TerrainBrushAdmission.h', 'src/editor/terrain/TerrainBrushTools.cpp', 'src/runtime/world_streaming/StreamingCellDirection.cpp', 'src/runtime/world_streaming/StreamingFeatureBudgetReservations.cpp', 'tests/CMakeLists.txt', 'tests/unit/editor/TerrainBrushAdmissionCompileTests.cpp', 'tests/unit/editor/TerrainBrushToolsTests.cpp', 'tests/unit/runtime/world_streaming/StreamingDirectionFinalizationTestSupport.h', 'tests/unit/runtime/world_streaming/StreamingDirectionFinalizationTests.cpp', 'tests/unit/runtime/world_streaming/StreamingFeatureBudgetReservationsTests.cpp', '.github/workflows/ci.yml', 'CMakeLists.txt', 'cmake/HoroTargetBoundaries.cmake', 'include/Horo/AI/AIErrors.h', 'include/Horo/AI/AIIdentity.h', 'include/Horo/AI/AISceneComponents.h', 'include/Horo/AI/BlackboardSchema.h', 'include/Horo/AI/DecisionAssetValidation.h', 'include/Horo/Assets/AssetArchive.h', 'include/Horo/Assets/AssetChunkPlan.h', 'include/Horo/Assets/AssetCook.h', 'include/Horo/Assets/AssetCookOutput.h', 'include/Horo/Assets/AssetDependency.h', 'include/Horo/Assets/AssetId.h', 'include/Horo/Assets/AssetPayloadCache.h', 'include/Horo/Assets/AssetProvider.h', 'include/Horo/Assets/AssetRegistry.h', 'include/Horo/Assets/AssetRegistrySource.h', 'include/Horo/Assets/NavMeshAssetType.h', 'include/Horo/Audio/AudioErrors.h', 'include/Horo/Audio/AudioIdentity.h', 'include/Horo/Audio/AudioSoundReference.h', 'include/Horo/Audio/AudioSpatialModel.h', 'include/Horo/Foundation/Assertions.h', 'include/Horo/Foundation/AssetCookTargetId.h', 'include/Horo/Foundation/CancellationToken.h', 'include/Horo/Foundation/Configuration.h', 'include/Horo/Foundation/DataBus.h', 'include/Horo/Foundation/Diagnostics.h', 'include/Horo/Foundation/ErrorCode.h', 'include/Horo/Foundation/Handles.h', 'include/Horo/Foundation/JobSystem.h', 'include/Horo/Foundation/Logging/LogContext.h', 'include/Horo/Foundation/Logging/LogLevel.h', 'include/Horo/Foundation/OperationStore.h', 'include/Horo/Foundation/Paths.h', 'include/Horo/Foundation/Platform.h', 'include/Horo/Foundation/Result.h', 'include/Horo/Foundation/Sha256.h', 'include/Horo/Foundation/StrongId.h', 'include/Horo/Foundation/Telemetry/Operation.h', 'include/Horo/Foundation/Telemetry/Telemetry.h', 'include/Horo/Foundation/Time.h', 'include/Horo/Gameplay/Behavior.h', 'include/Horo/Gameplay/BehaviorTypes.h', 'include/Horo/Gameplay/Component.h', 'include/Horo/Gameplay/ComponentRegistry.h', 'include/Horo/Gameplay/GameServiceRegistry.h', 'include/Horo/Gameplay/GameplayErrors.h', 'include/Horo/Gameplay/GameplayRegistration.h', 'include/Horo/Gameplay/PersistenceInstallation.h', 'include/Horo/Gameplay/PersistenceRegistration.h', 'include/Horo/Gameplay/PersistenceSource.h', 'include/Horo/Math/SceneMath.h', 'include/Horo/Math/WorldCoordinate64.h', 'include/Horo/Navigation/NavMeshData.h', 'include/Horo/Navigation/NavigationAgentProfiles.h', 'include/Horo/Navigation/NavigationAgentRegistry.h', 'include/Horo/Navigation/NavigationAreas.h', 'include/Horo/Navigation/NavigationBackend.h', 'include/Horo/Navigation/NavigationBakeInput.h', 'include/Horo/Navigation/NavigationBakeScopeId.h', 'include/Horo/Navigation/NavigationCapabilities.h', 'include/Horo/Navigation/NavigationCoordinator.h', 'include/Horo/Navigation/NavigationCrowdAvoidance.h', 'include/Horo/Navigation/NavigationCrowdSnapshot.h', 'include/Horo/Navigation/NavigationDynamicRegistry.h', 'include/Horo/Navigation/NavigationErrors.h', 'include/Horo/Navigation/NavigationIdentity.h', 'include/Horo/Navigation/NavigationLinkTypes.h', 'include/Horo/Navigation/NavigationLinkValidation.h', 'include/Horo/Navigation/NavigationMovement.h', 'include/Horo/Navigation/NavigationOutcomes.h', 'include/Horo/Navigation/NavigationPathPolicy.h', 'include/Horo/Navigation/NavigationProjectProfiles.h', 'include/Horo/Navigation/NavigationRuntimeQueues.h', 'include/Horo/Navigation/NavigationSceneActivation.h', 'include/Horo/Navigation/NavigationSceneAgentLifecycle.h', 'include/Horo/Navigation/NavigationSceneLinkCapture.h', 'include/Horo/Navigation/NavigationSourceGeometry.h', 'include/Horo/Navigation/NavigationVelocityPipeline.h', 'include/Horo/Navigation/NavigationWorldLifecycle.h', 'include/Horo/Physics/CharacterPolicies.h', 'include/Horo/Physics/PhysicsFilterIdentity.h', 'include/Horo/Runtime/FrameScheduler.h', 'include/Horo/Runtime/Render/RenderResource.h', 'include/Horo/Runtime/Render/RenderWorldSnapshot.h', 'include/Horo/Runtime/Render/ShaderManifest.h', 'include/Horo/Runtime/Render/ShaderReflection.h', 'include/Horo/Runtime/Render/StandardPbrMaterial.h', 'include/Horo/Runtime/RuntimeDispatchEvidence.h', 'include/Horo/Runtime/RuntimeLifecycle.h', 'include/Horo/Runtime/RuntimeSimulationTiming.h', 'include/Horo/Runtime/Save/SaveArchiveContainerWriter.h', 'include/Horo/Runtime/Save/SaveArchiveFinalization.h', 'include/Horo/Runtime/Save/SaveArchiveFraming.h', 'include/Horo/Runtime/Save/SaveArchiveMetadata.h', 'include/Horo/Runtime/Save/SaveArchiveReader.h', 'include/Horo/Runtime/Save/SaveCanonicalCodec.h', 'include/Horo/Runtime/Save/SaveCaptureBarrier.h', 'include/Horo/Runtime/Save/SaveCaptureSnapshot.h', 'include/Horo/Runtime/Save/SaveErrors.h', 'include/Horo/Runtime/Save/SaveIdentity.h', 'include/Horo/Runtime/Save/SaveNamespace.h', 'include/Horo/Runtime/Save/SaveOperation.h', 'include/Horo/Runtime/Save/SaveParticipantRegistry.h', 'include/Horo/Runtime/Save/SaveReference.h', 'include/Horo/Runtime/Save/SaveRestoreReferenceContext.h', 'include/Horo/Runtime/Save/SaveRestoreTransaction.h', 'include/Horo/Runtime/Save/SaveSafePointCoordinator.h', 'include/Horo/Runtime/Save/SaveSceneCanonicalState.h', 'include/Horo/Runtime/Save/SaveSlotMetadata.h', 'include/Horo/Runtime/Save/SaveStorageAdapter.h', 'include/Horo/Runtime/Scene/AudioSceneExtraction.h', 'include/Horo/Runtime/Scene/BuiltinSceneComponents.h', 'include/Horo/Runtime/Scene/CharacterSceneComponents.h', 'include/Horo/Runtime/Scene/NavigationSceneComponents.h', 'include/Horo/Runtime/Scene/PersistentEntityIdentity.h', 'include/Horo/Runtime/Scene/PhysicsSceneComponents.h', 'include/Horo/Runtime/Scene/PrimitiveCatalog.h', 'include/Horo/Runtime/Scene/PrimitiveMeshDescriptor.h', 'include/Horo/Runtime/Scene/RestoreReferenceGraph.h', 'include/Horo/Runtime/Scene/RuntimeScene.h', 'include/Horo/Runtime/Scene/RuntimeSceneDefinition.h', 'include/Horo/Runtime/Scene/SaveContentReconciliation.h', 'include/Horo/Runtime/Scene/SaveContentRequirements.h', 'include/Horo/Runtime/Scene/SaveContentWorld.h', 'include/Horo/Runtime/Scene/SaveableComponentState.h', 'include/Horo/Runtime/Scene/SavedSceneBootstrap.h', 'include/Horo/Runtime/Scene/SceneComponents.h', 'include/Horo/Runtime/Scene/SceneIdentity.h', 'include/Horo/Runtime/Scene/SceneRestoreBundle.h', 'include/Horo/Runtime/Ui/UiAssetDependency.h', 'include/Horo/Runtime/Ui/UiCanvasSpace.h', 'include/Horo/Runtime/Ui/UiDocument.h', 'include/Horo/Runtime/Ui/UiErrors.h', 'include/Horo/Runtime/Ui/UiIdentity.h', 'include/Horo/Runtime/Ui/UiLocalization.h', 'include/Horo/Vfx/CpuParticleBuffer.h', 'include/Horo/Vfx/VfxErrors.h', 'include/Horo/Vfx/VfxIdentity.h', 'include/Horo/Vfx/VfxWorld.h', 'src/runtime/navigation/integration/NavigationSceneActivation.cpp', 'src/runtime/navigation/integration/NavigationSceneAgentLifecycle.cpp', 'src/runtime/navigation/integration/NavigationSceneLinkCapture.cpp', 'src/runtime/scene/AudioSceneExtraction.cpp', 'src/runtime/scene/BuiltinSceneComponents.cpp', 'src/runtime/scene/InstalledSaveContent.cpp', 'src/runtime/scene/NavigationSceneComponents.cpp', 'src/runtime/scene/NavigationSceneSources.cpp', 'src/runtime/scene/PersistentEntityIdentity.cpp', 'src/runtime/scene/RestoreReferenceGraph.cpp', 'src/runtime/scene/RuntimeScene.cpp', 'src/runtime/scene/RuntimeSceneBaseline.cpp', 'src/runtime/scene/RuntimeSceneBaselineCommands.cpp', 'src/runtime/scene/RuntimeSceneCommandApplier.h', 'src/runtime/scene/RuntimeSceneDefinition.cpp', 'src/runtime/scene/RuntimeSceneErrors.cpp', 'src/runtime/scene/RuntimeSceneErrors.h', 'src/runtime/scene/RuntimeSceneInitialPlacement.cpp', 'src/runtime/scene/RuntimeScenePublicationInternal.h', 'src/runtime/scene/RuntimeSceneService.cpp', 'src/runtime/scene/RuntimeSceneServicePublication.cpp', 'src/runtime/scene/RuntimeSceneView.cpp', 'src/runtime/scene/SaveContentInternal.h', 'src/runtime/scene/SaveContentReconciliation.cpp', 'src/runtime/scene/SaveContentRequirements.cpp', 'src/runtime/scene/SaveContentRequirementsInternal.h', 'src/runtime/scene/SaveContentSnapshot.cpp', 'src/runtime/scene/SaveContentWorld.cpp', 'src/runtime/scene/SaveableComponentState.cpp', 'src/runtime/scene/SavedSceneBootstrap.cpp', 'src/runtime/scene/SceneRestoreBundle.cpp', 'tests/support/AudioScenePublicContract.cpp', 'tests/support/RuntimeSceneTestSupport.h', 'tests/support/SaveContentWorldPublicHeaderConsumer.cpp', 'tests/unit/runtime/scene/RuntimeSceneTrackedBaselineCancellationTests.cpp']
           report = {
               'git_sha': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
               'event_sha': os.environ['GITHUB_SHA'],
@@ -254,10 +254,120 @@ jobs:
               sys.exit(main())
           '@ | python -
           exit $LASTEXITCODE
+      - name: Build Scene owning test executable and OBJECT public-header consumer
+        id: scene_build
+        if: always() && steps.configure.outcome == 'success'
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $log = Join-Path $env:RUNNER_TEMP 'm3-diagnostic/scene-build.log'
+          & cmake --build build/m3-probe --target HoroRuntimeSceneTests HoroRuntimeScenePublicHeaderConsumer --parallel 2 2>&1 | Tee-Object -FilePath $log
+          exit $LASTEXITCODE
+      - name: Execute exact one Scene cancellation receipt case without failure inversion
+        id: scene_focused
+        if: always() && steps.scene_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          @'
+          """Future Windows native entrypoint; locally compiled/guard-tested only, never invoked."""
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import subprocess
+          import sys
+          from defusedxml import ElementTree as ET
+
+          IDENTITY = 'HoroRuntimeSceneTests::Tracked baseline cancellation retires only its own Scene receipt'
+          TITLE = IDENTITY.split('::', 1)[1]
+          REGEX = '^' + IDENTITY + '$'
+          FORBIDDEN = {'DISABLED', 'WILL_FAIL', 'SKIP_REGULAR_EXPRESSION', 'PASS_REGULAR_EXPRESSION'}
+
+          def require(condition, message):
+              if not condition:
+                  raise ValueError(message)
+
+          def discovery(listing, executable):
+              require(listing['kind'] == 'ctestInfo' and listing['version']['major'] == 1, 'wrong CTest JSON schema')
+              tests = listing['tests']
+              require(len(tests) == 1 and tests[0]['name'] == IDENTITY, 'not exactly the one reviewed Scene identity')
+              case = tests[0]
+              command = case['command']
+              require(len(command) == 2 and Path(command[0]).resolve() == executable.resolve() and command[1] == TITLE,
+                      'wrong Scene executable, wrapper, filter, or extra Catch arguments')
+              properties = case.get('properties', [])
+              skip_codes = [p['value'] for p in properties if p['name'] == 'SKIP_RETURN_CODE']
+              require(len(skip_codes) == 1 and type(skip_codes[0]) is int and skip_codes[0] == 4,
+                      'Catch default skip code must remain exactly one integer 4; actual skips still forbidden')
+              require(not any(p['name'] in FORBIDDEN for p in properties), 'Scene skip or failure-inversion property')
+
+          def evidence(folder):
+              root = ET.parse(folder / 'scene-focused.xml').getroot()
+              cases = list(root.iter('testcase'))
+              require(len(cases) == 1 and cases[0].get('name') == IDENTITY, 'Scene JUnit exact one identity mismatch')
+              require(root.tag == 'testsuite' and int(root.attrib['tests']) == 1, 'Scene CTest JUnit count/schema mismatch')
+              for suite in root.iter('testsuite'):
+                  for key in ['failures', 'errors', 'skipped', 'disabled']:
+                      require(int(suite.get(key, '0')) == 0, 'Scene nonzero ' + key)
+              require(cases[0].get('status') == 'run', 'Scene case did not actually run')
+              require(not any(n.tag in ['failure', 'error', 'skipped'] for n in root.iter()), 'Scene failed, errored or skipped case')
+              log = (folder / 'scene-focused-LastTest.log').read_text(encoding='utf-8-sig')
+              output = cases[0].findtext('system-out', '')
+              require(not re.search(r'SKIPPED|FAILED - but was ok|\b[1-9][0-9]* skipped\b', log + '\n' + output),
+                      'Scene Catch skip or tolerated failure')
+              return {'identity': IDENTITY, 'testcase_count': 1, 'failures_errors_skips_disabled': 0}
+
+          def file_hash(path):
+              return hashlib.sha256(path.read_bytes()).hexdigest()
+
+          def main():
+              folder = Path(os.environ['RUNNER_TEMP']) / 'm3-diagnostic'
+              folder.mkdir(exist_ok=True)
+              executable = (Path.cwd() / 'build/m3-probe/tests/HoroRuntimeSceneTests.exe').resolve()
+              report = {'identity': IDENTITY, 'discovery_exit': None, 'native_exit': None, 'status': 'failure',
+                        'qualification': 'Behavioral RED requires successful admission/control, then Pending after exact cancel plus real commit; setup/compiler failure is not behavioral RED.'}
+              native_exit = None
+              try:
+                  listed = subprocess.run(['ctest', '--test-dir', 'build/m3-probe', '-R', REGEX, '--show-only=json-v1'],
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                  report['discovery_exit'] = listed.returncode
+                  (folder / 'scene-focused-discovery.json').write_bytes(listed.stdout)
+                  (folder / 'scene-focused-discovery.log').write_bytes(listed.stderr)
+                  require(listed.returncode == 0, 'Scene CTest discovery failed')
+                  discovery(json.loads(listed.stdout), executable)
+                  report['executable_sha256_before'] = file_hash(executable)
+                  run = subprocess.run(['ctest', '--test-dir', 'build/m3-probe', '-R', REGEX, '--no-tests=error',
+                                        '--output-on-failure', '--output-junit', str(folder / 'scene-focused.xml'),
+                                        '--timeout', '120', '--parallel', '1'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                  native_exit = report['native_exit'] = run.returncode
+                  (folder / 'scene-focused.log').write_bytes(run.stdout)
+                  print(run.stdout.decode('utf-8', errors='replace'))
+                  shutil.copyfile('build/m3-probe/Testing/Temporary/LastTest.log', folder / 'scene-focused-LastTest.log')
+                  report['executable_sha256_after'] = file_hash(executable)
+                  require(report['executable_sha256_after'] == report['executable_sha256_before'], 'Scene executable bytes changed during execution')
+                  report['evidence'] = evidence(folder)
+                  require(native_exit == 0, 'Scene CTest native exit failed')
+                  report['status'] = 'success'
+              except Exception as error:
+                  report['error'] = str(error)
+              finally:
+                  # Preserve a failed native result; neither an expected RED nor an evidence exception turns it GREEN.
+                  code = native_exit if native_exit not in [None, 0] else int(report['status'] != 'success')
+                  report['step_exit'] = code
+                  (folder / 'scene-focused-outcome.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+                  print(json.dumps(report, indent=2))
+              return code
+
+          if __name__ == '__main__':
+              sys.exit(main())
+          '@ | python -
+          exit $LASTEXITCODE
       - name: Record honest step outcomes
         if: always()
         run: |
-          $result = @{ configure = '${{ steps.configure.outcome }}'; world_build = '${{ steps.world_build.outcome }}'; world_tests = '${{ steps.world_red.outcome }}'; terrain_compilation = '${{ steps.terrain_red.outcome }}'; public_header_consumers = '${{ steps.public_consumers_build.outcome }}'; world_suite = '${{ steps.world_suite.outcome }}'; terrain_build = '${{ steps.terrain_build.outcome }}'; terrain_suite = '${{ steps.terrain_suite.outcome }}'; evidence_validation = '${{ steps.evidence_check.outcome }}' }
+          $result = @{ configure = '${{ steps.configure.outcome }}'; world_build = '${{ steps.world_build.outcome }}'; world_tests = '${{ steps.world_red.outcome }}'; terrain_compilation = '${{ steps.terrain_red.outcome }}'; public_header_consumers = '${{ steps.public_consumers_build.outcome }}'; world_suite = '${{ steps.world_suite.outcome }}'; terrain_build = '${{ steps.terrain_build.outcome }}'; terrain_suite = '${{ steps.terrain_suite.outcome }}'; evidence_validation = '${{ steps.evidence_check.outcome }}'; scene_build = '${{ steps.scene_build.outcome }}'; scene_focused = '${{ steps.scene_focused.outcome }}' }
           $folder = Join-Path $env:RUNNER_TEMP 'm3-diagnostic'
           New-Item -ItemType Directory -Force -Path $folder | Out-Null
           $result | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $folder 'outcomes.json')
@@ -275,4 +385,4 @@ jobs:
       - name: Keep RED failures visible - never label expected failures GREEN
         if: always()
         run: |
-          if ('${{ steps.configure.outcome }}' -ne 'success' -or '${{ steps.world_build.outcome }}' -ne 'success' -or '${{ steps.world_red.outcome }}' -ne 'success' -or '${{ steps.terrain_red.outcome }}' -ne 'success' -or '${{ steps.public_consumers_build.outcome }}' -ne 'success' -or '${{ steps.world_suite.outcome }}' -ne 'success' -or '${{ steps.terrain_build.outcome }}' -ne 'success' -or '${{ steps.terrain_suite.outcome }}' -ne 'success' -or '${{ steps.evidence_check.outcome }}' -ne 'success') { exit 1 }
+          if ('${{ steps.configure.outcome }}' -ne 'success' -or '${{ steps.world_build.outcome }}' -ne 'success' -or '${{ steps.world_red.outcome }}' -ne 'success' -or '${{ steps.terrain_red.outcome }}' -ne 'success' -or '${{ steps.public_consumers_build.outcome }}' -ne 'success' -or '${{ steps.world_suite.outcome }}' -ne 'success' -or '${{ steps.terrain_build.outcome }}' -ne 'success' -or '${{ steps.terrain_suite.outcome }}' -ne 'success' -or '${{ steps.evidence_check.outcome }}' -ne 'success' -or '${{ steps.scene_build.outcome }}' -ne 'success' -or '${{ steps.scene_focused.outcome }}' -ne 'success') { exit 1 }
