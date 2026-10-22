@@ -1,6 +1,7 @@
 #include "Horo/Editor/TerrainBrushTools.h"
-#include <catch2/catch_test_macros.hpp>
+
 #include <array>
+#include <catch2/catch_test_macros.hpp>
 #include <utility>
 
 using namespace Horo;
@@ -20,17 +21,18 @@ namespace {
         source.holes.assign(81, 0);
         source.layerCount = 3;
         source.weights.resize(243);
-        for (std::size_t i = 0; i < 81; ++i) source.weights[i * 3] = 65535;
-        return std::move(TerrainAuthoringDocument::Open(TerrainDocumentSessionId::Create(1).Value(), std::move(source),
-            4, TerrainAuthoringCapability::Edit)).Value();
+        for (std::size_t i = 0; i < 81; ++i)
+            source.weights[i * 3] = 65535;
+        return std::move(TerrainAuthoringDocument::Open(TerrainDocumentSessionId::Create(1).Value(), std::move(source), 4,
+                                                        TerrainAuthoringCapability::Edit))
+            .Value();
     }
-}
+}  // namespace
 
 TEST_CASE("Terrain brush gesture plans bounded patches and commits exactly once", "[terrain][brush]") {
     auto document = BrushDocument();
     const std::array dabs{TerrainBrushDab{4, 4}, TerrainBrushDab{4, 4}};
-    const auto operation = PlanTerrainBrush(document, {.radiusMeters = 1, .strength = 2}, dabs,
-        TerrainEditOperationId::Create(1).Value());
+    const auto operation = PlanTerrainBrush(document, {.radiusMeters = 1, .strength = 2}, dabs, TerrainEditOperationId::Create(1).Value());
     REQUIRE(operation.HasValue());
     REQUIRE(document.UndoCount() == 0);
     REQUIRE(document.Source().heightsMeters[40] == 0);
@@ -114,12 +116,17 @@ namespace {
         }
 
     private:
-        /** @brief Compares complete canonical content with an explicit monotonic publication revision. */
-        void requireSource(const Terrain::TerrainCanonicalSource &expected, auto revision) const {
-            const auto &actual = document.Source();
+        /** @brief Compares canonical source identity and shape without borrowing document state. */
+        static void RequireSourceMetadata(const Terrain::TerrainCanonicalSource &actual, const Terrain::TerrainCanonicalSource &expected) {
             REQUIRE((actual.dataset == expected.dataset && actual.sourceAsset == expected.sourceAsset &&
                      actual.capability == expected.capability && actual.width == expected.width && actual.height == expected.height &&
                      actual.layerCount == expected.layerCount));
+        }
+
+        /** @brief Compares complete canonical content with an explicit monotonic publication revision. */
+        void requireSource(const Terrain::TerrainCanonicalSource &expected, auto revision) const {
+            const auto &actual = document.Source();
+            RequireSourceMetadata(actual, expected);
             REQUIRE(actual.revision.Value() == revision);
             const auto &a = actual.coordinates;
             const auto &e = expected.coordinates;

@@ -198,6 +198,21 @@ namespace Horo::WorldStreaming {
         /** @brief Excludes aggregate mutation during a rejected activation's receipt rollback without consuming a revision. */
         void RollbackActivation(StreamingCellActivationTransaction &transaction) noexcept;
 
+        /** @brief Reads current owner and selected scheduler admission for activation without caching authority state. */
+        [[nodiscard]] StreamingCellActivationLifecycle ActivationLifecycle() const noexcept;
+        /** @brief Validates interruption identity, supported disposition and live lifecycle before mutation. */
+        [[nodiscard]] Result<void> ValidateInterruption(const StreamingCellOperationHandle &expected,
+                                                        StreamingCellOperationTransition reason) const;
+
+        /** @brief Validates demand identity and revision before consulting live lifecycle or mutating demand. */
+        [[nodiscard]] Result<void> ValidateDemandUpdate(const StreamingCellOperationHandle &expected, StreamingCellDemandRevision revision,
+                                                        StreamingCellDemandRevision successor, StreamingDesiredResidency desired) const;
+        /** @brief Validates exact forward progress evidence, preserving short-circuit transition evaluation. */
+        [[nodiscard]] Result<void> ValidateAdvance(const StreamingCellOperation &expected,
+                                                   StreamingCellOperationTransition transition) const;
+        /** @brief Advances only the selected bounded retirement step; true retains pending participants, false admits finalization. */
+        [[nodiscard]] Result<bool> ProgressSelectedRetirement(StreamingOwnerFrameBudget &budget, std::uint64_t elapsedNanoseconds);
+
         StreamingSchedulerAdmissionLedger *scheduler_{};
         StreamingFeatureBudgetReservations *budgets_{};
         StreamingCellOperation operation_;

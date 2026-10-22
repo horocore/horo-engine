@@ -7,7 +7,16 @@
 
 namespace Horo::Editor {
     /** @brief Explicit brush semantics; unsupported channels are rejected rather than initialized implicitly. */
-    enum class TerrainBrushMode : std::uint8_t { Raise, Lower, Smooth, Flatten, Noise, Paint, Carve, Restore };
+    enum class TerrainBrushMode : std::uint8_t {
+        Raise,
+        Lower,
+        Smooth,
+        Flatten,
+        Noise,
+        Paint,
+        Carve,
+        Restore
+    };
 
     /** @brief One source-space dab; sample coordinates may be fractional, including at dataset edges. */
     struct TerrainBrushDab final {
@@ -39,6 +48,7 @@ namespace Horo::Editor {
      * @return Exact affected patch command or typed denial; no canonical/history change.
      */
     [[nodiscard]] Result<TerrainEditOperation> PlanTerrainBrush(const TerrainAuthoringDocument &document,
-        const TerrainBrushSettings &settings, std::span<const TerrainBrushDab> dabs, TerrainEditOperationId operation,
-        const TerrainBrushLimits &limits = {}, const CancellationToken &cancellation = {});
-}
+                                                                const TerrainBrushSettings &settings, std::span<const TerrainBrushDab> dabs,
+                                                                TerrainEditOperationId operation, const TerrainBrushLimits &limits = {},
+                                                                const CancellationToken &cancellation = {});
+}  // namespace Horo::Editor
