@@ -459,12 +459,16 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> CanPrepareInteractionReplacement(const UiActionOwnerContext &owner) const;
         /** @brief Load-time reservation for a distinct inactive immutable action-source generation. @return Reservation or failure. */
         [[nodiscard]] Result<void> ReserveInteractionReplacement();
-        /** @brief Copies compatible logical state into a new source generation only after pending work is drained. @return Admission. */
-        [[nodiscard]] Result<void> PrepareInteractionReplacement(const UiActionOwnerContext &owner);
+        /** @brief Stages bounded logical state and optional async projection before visual-state evaluation. @return Admission. */
+        [[nodiscard]] Result<void> PrepareInteractionReplacement(const UiActionOwnerContext &owner, const UiAsyncActionStore *actions);
+        /** @brief Stamps the staged state with the actual candidate layout owner, preserving issued async identity. */
+        [[nodiscard]] Result<void> RebasePreparedInteraction(const UiActionOwnerContext &owner);
         /** @brief Checks copied source state and replacement admission without publishing. @return Admission or stale failure. */
         [[nodiscard]] Result<void> CanPublishInteractionReplacement(const UiActionOwnerContext &owner) const;
         /** @brief Borrows the copied replacement state only while its private reservation is admitted. @return State. */
         [[nodiscard]] const UiControlState &PreparedInteractionState() const noexcept;
+        /** @brief Borrows copied operation progress/error from the private candidate. @return Optional projection. */
+        [[nodiscard]] const std::optional<UiAsyncActionSnapshot> &PreparedAsyncAction() const noexcept;
         /** @brief Swaps already prepared uniquely owned generations without allocation; the old descriptor is never mutated. */
         void PublishInteractionReplacement() noexcept;
         /** @brief Drops the unpublished replacement reservation without altering active logical state. */
@@ -476,5 +480,6 @@ namespace Horo::Runtime::Ui {
         std::unique_ptr<Storage> replacement_;
         std::optional<UiControlReloadStamp> replacementSource_;
         bool replacementSwap_{};
+        const UiAsyncActionStore *replacementActions_{}; /**< Borrowed only while the candidate pins its actual canvas generation. */
     };
 }  // namespace Horo::Runtime::Ui

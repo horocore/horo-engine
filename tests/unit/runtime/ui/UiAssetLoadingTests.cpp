@@ -1,5 +1,6 @@
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Runtime/Ui/UiAssetLoading.h"
+#include "Horo/Runtime/Ui/UiDocumentSerialization.h"
 
 #include <array>
 #include <atomic>
@@ -368,6 +369,50 @@ namespace Horo::Runtime::Ui {
             REQUIRE(result.ErrorValue().code.Value() == UiErrors::AssetLoadCancelled.code.Value());
             assetLoads.Shutdown();
             jobs.Shutdown(ShutdownPolicy::Drain);
+        }
+
+        /** @brief Replace only the length-delimited format-four profile trailer in a real cooked document. */
+        std::vector<std::uint8_t> ProfileTrailer(std::string_view text) {
+            const auto cooked = CookedUiDocument::Cook(MakeDocument(Asset(7)));
+            REQUIRE(cooked.HasValue());
+            auto bytes = std::vector<std::uint8_t>{cooked.Value().Payload().begin(), cooked.Value().Payload().end()};
+            REQUIRE(bytes.size() >= 6);
+            REQUIRE(bytes[bytes.size() - 2] == '[');
+            REQUIRE(bytes.back() == ']');
+            bytes.resize(bytes.size() - 6);
+            for (std::uint32_t i = 0; i < 4; ++i)
+                bytes.push_back(static_cast<std::uint8_t>(text.size() >> (8 * i)));
+            bytes.insert(bytes.end(), text.begin(), text.end());
+            return bytes;
+        }
+
+        TEST_CASE("Cooked profile arrays retain strict root duplicate depth and canonical JSON checks", "[runtime_ui][cook][profiles]") {
+            const auto neutral = CookedUiDocument::Decode(ProfileTrailer("[]"));
+            REQUIRE(neutral.HasValue());
+            CHECK(neutral.Value().PresentationProfiles().empty());
+            for (const auto text : std::array<std::string_view, 5>{"{}", "[ ]", "[{\"canvas\":1,\"canvas\":2}]", "null", "["})
+                CHECK(CookedUiDocument::Decode(ProfileTrailer(text)).HasError());
+            std::string deep(80, '[');
+            deep.append(80, ']');
+            CHECK(CookedUiDocument::Decode(ProfileTrailer(deep)).HasError());
+            CHECK(DeserializeUiDocument("[]").HasError());
+        }
+
+        TEST_CASE("Cooked profile arrays decode nonempty authored alternatives through the real codec", "[runtime_ui][cook][profiles]") {
+            UiDocumentBuilder builder{UiId<UiDocumentId>(1), Revision(1)};
+            REQUIRE(builder.AddCanvas({UiId<UiCanvasId>(2), UiId<UiElementId>(3)}).HasValue());
+            UiPresentationProfile row{UiId<UiPresentationProfileId>(8), 1};
+            row.selector.formFactor = UiPresentationFormFactor::Handheld;
+            REQUIRE(
+                builder.AddPresentationProfiles({UiId<UiCanvasId>(2), UiPresentationProfileRevision::Create(1).Value(), {row}}).HasValue());
+            auto source = std::move(builder).Build();
+            REQUIRE(source.HasValue());
+            auto cooked = CookedUiDocument::Cook(source.Value());
+            REQUIRE(cooked.HasValue());
+            auto decoded = CookedUiDocument::Decode(cooked.Value().Payload());
+            REQUIRE(decoded.HasValue());
+            REQUIRE(decoded.Value().PresentationProfiles().size() == 1);
+            CHECK(decoded.Value().PresentationProfiles().front() == source.Value().PresentationProfiles().front());
         }
     }  // namespace
 }  // namespace Horo::Runtime::Ui

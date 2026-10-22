@@ -3965,6 +3965,7 @@ target_include_directories(HoroRuntimeUiAnimationTests PRIVATE ${PROJECT_SOURCE_
 target_link_libraries(HoroRuntimeUiAnimationTests PRIVATE HoroEngine::RuntimeUi HoroRationalDurationInternal)
 add_executable(HoroRuntimeUiAnimationIntegrationTests
         unit/runtime/ui/UiAnimationOwnerIntegrationTests.cpp
+        unit/runtime/ui/UiAnimationOwnerAsyncIntegrationTests.cpp
         unit/runtime/ui/UiPresentationProfilesTests.cpp
         unit/runtime/ui/UiPresentationProfileDocumentTests.cpp
         unit/runtime/ui/UiLayoutInspectorTests.cpp
@@ -4028,6 +4029,7 @@ target_link_libraries(HoroRuntimeUiPointerCaptureTests PRIVATE HoroEngine::Runti
 add_executable(HoroRuntimeUiActionsTests
         unit/runtime/ui/UiActionsTests.cpp
         unit/runtime/ui/UiAsyncActionsTests.cpp
+        unit/runtime/ui/UiAsyncActionLifetimeTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeUiActionsTests PRIVATE cxx_std_20)

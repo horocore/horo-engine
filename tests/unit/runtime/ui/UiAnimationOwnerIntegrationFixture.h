@@ -84,8 +84,8 @@ namespace Horo::Runtime::Ui::AnimationTests {
             {Stable<UiRouteId>(9), Stable<UiElementId>(10), Stable<UiAnimationId>(2), Stable<UiAnimationId>(3), UiDuration{deadline}});
     }
 
-    inline AnimationResources Resources(const UiReloadCanvas &canvas, const bool routeMotion = false,
-                                        const std::int64_t deadline = 1000000000) {
+    /** @brief Actual registry authority with an optional Busy layout override for host integration coverage. */
+    inline RuntimeStyleRegistry AnimationRegistry(const bool busyStyle) {
         UiStyleRegistryDefinition schema;
         schema.properties.push_back({.id = Stable<UiStylePropertyId>(1),
                                      .category = UiStyleValueCategory::Dimension,
@@ -93,8 +93,20 @@ namespace Horo::Runtime::Ui::AnimationTests {
                                      .effects = {.measure = true, .paint = true},
                                      .maximumScalar = 1000});
         schema.assets.push_back({.id = Stable<RuntimeStyleAssetId>(1)});
+        if (busyStyle)
+            schema.assets.back().states.push_back(
+                {UiVisualStateMask{UiVisualState::Busy},
+                 {},
+                 UiStateLayer::Availability,
+                 {{Stable<UiStylePropertyId>(1), UiStyleValueSource::Literal(UiStyleDimension{240}), false}}});
         auto registry = RuntimeStyleRegistry::Create(std::move(schema), Revision<RuntimeStyleGeneration>(1));
         REQUIRE(registry.HasValue());
+        return std::move(registry).Value();
+    }
+
+    inline AnimationResources Resources(const UiReloadCanvas &canvas, const bool routeMotion = false,
+                                        const std::int64_t deadline = 1000000000, const bool busyStyle = false) {
+        auto registry = AnimationRegistry(busyStyle);
         // Three retained owner frames need one additional style slot for a prepared candidate.
         auto styles = UiStyleResolver::Create({Instance(), canvas.tree.Canvas(), canvas.tree.SourceDocument(), 8, 1, 8, 4,
                                                Revision<RuntimeStyleGeneration>(1), Revision<UiStylePublicationRevision>(1)});
@@ -123,7 +135,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         definition.animations.push_back(std::move(motion));
         if (routeMotion)
             AppendRouteAnimations(definition, deadline);
-        return {std::move(registry).Value(), std::move(styles).Value(), std::move(definition)};
+        return {std::move(registry), std::move(styles).Value(), std::move(definition)};
     }
 
     /** @brief Explicit load-time choices for the real host and owned UI integration fixture. */
@@ -131,6 +143,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         bool routeMotion{};
         std::int64_t deadline{1000000000};
         bool actions{};
+        bool busyStyle{};
         bool writes{};
         bool routeActions{};
         UiElementSlotAllocator *allocator{};
@@ -163,7 +176,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         }
         auto *routeStack = routeActions ? &*initial.Canvas(canvas.id)->routes : nullptr;
         const auto routeOwner = canvas.controls.front().control.Owner();
-        auto resources = Resources(canvas, options.routeMotion, options.deadline);
+        auto resources = Resources(canvas, options.routeMotion, options.deadline, options.busyStyle);
         if (options.boundWidth)
             resources.definition.layoutBindings.front().field = UiAnimationLayoutField::Width;
         if (options.accessibilityWidth)
@@ -203,7 +216,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
     /** @brief Owns the actual lifecycle host, animation participant and source issuer. */
     class HostFixture final {
     public:
-        explicit HostFixture(const HostOptions &options = {}) {
+        explicit HostFixture(const HostOptions &options = {}, std::unique_ptr<RuntimeLifecycleParticipant> handoff = {}) {
             auto created = RuntimeHost::Create(clock);
             REQUIRE(created.HasValue());
             host = std::move(created).Value();
@@ -228,6 +241,8 @@ namespace Horo::Runtime::Ui::AnimationTests {
             participant = composition.participant.get();
             controller = std::move(composition.controller);
             REQUIRE(host->AddParticipant(std::move(composition.participant)).HasValue());
+            if (handoff)
+                REQUIRE(host->AddParticipant(std::move(handoff)).HasValue());
             REQUIRE(host->Startup().HasValue());
         }
 

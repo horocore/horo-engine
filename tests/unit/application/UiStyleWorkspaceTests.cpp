@@ -86,6 +86,8 @@ TEST_CASE("Real factory style capability validates canonical edits before histor
     REQUIRE(owner.Select(owner.CurrentState(), project.Identity<UiElementId>(13)).HasValue());
     const auto now = Context(owner, resources);
     value.state.enabled = false;
+    // The actual selected theme has a later matching Availability write after sealing Fill.
+    REQUIRE(resources.Validate(owner.Document(), value).HasError());
     CHECK(ExecuteUiInspectorPresentation(owner, now, 1, {now.element, value}, &resources).HasError());
     CHECK(SerializeUiDocument(owner.Document()).Value() == bytes);
     CHECK_FALSE(owner.CanUndo());

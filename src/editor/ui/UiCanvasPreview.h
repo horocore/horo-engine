@@ -74,4 +74,13 @@ namespace Horo::Editor {
                                                                                Runtime::Ui::UiLogicalPoint delta,
                                                                                Runtime::Ui::UiLogicalExtent parentExtent,
                                                                                const UiCanvasPreviewState &state);
+    /** @brief Execute a completed visual gesture under source and selection-publication fences.
+     * @param owner Canonical session. @param state Exact gesture source state.
+     * @param expectedSelection Captured selection publication. @param currentSelection Current workspace publication.
+     * @param command Complete canonical presentation edit.
+     * @return Typed stale/closed failure or the single canonical transaction result.
+     */
+    [[nodiscard]] Result<void> ExecuteUiCanvasLayoutGesture(UiCanvasDocument &owner, UiCanvasDocumentStateId state,
+                                                            std::uint64_t expectedSelection, std::uint64_t currentSelection,
+                                                            const UiCanvasSetPresentation &command);
 }  // namespace Horo::Editor

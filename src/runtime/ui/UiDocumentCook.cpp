@@ -531,7 +531,7 @@ namespace Horo::Runtime::Ui {
                 auto text = reader.Text(UiDocumentSerializationLimits::MaximumSourceBytes);
                 if (text.HasError())
                     return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
-                auto json = SerializationInternal::ParseJson(text.Value(), {});
+                auto json = SerializationInternal::ParseJsonArray(text.Value(), {});
                 if (json.HasError())
                     return Failure<UiDocument>(UiErrors::CookedPayloadMalformed);
                 auto profiles = ProfileCodec::Decode(json.Value());

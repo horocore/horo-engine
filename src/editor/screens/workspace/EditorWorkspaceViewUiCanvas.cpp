@@ -283,6 +283,108 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    namespace {
+        /** @brief Convert through captured presentation scale with an explicit fixed-point overflow bound. */
+        Runtime::Ui::UiScalar PreviewLogicalDelta(const float value, const float scale) {
+            return static_cast<Runtime::Ui::UiScalar>(
+                std::clamp(std::round(value / scale), static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::min() / 2),
+                           static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::max() / 2)));
+        }
+
+        /** @brief Add one bounded workspace guide without touching authored layout. */
+        bool AddPreviewGuide(UiCanvasPreviewState &state, const ImVec2 mouse, const ImVec2 origin, const float scale) {
+            if (ImGui::GetIO().KeyCtrl && state.horizontalGuideCount < state.horizontalGuides.size()) {
+                state.horizontalGuides[state.horizontalGuideCount++] = PreviewLogicalDelta(mouse.y - origin.y, scale);
+                return true;
+            }
+            if (!ImGui::GetIO().KeyCtrl && state.verticalGuideCount < state.verticalGuides.size()) {
+                state.verticalGuides[state.verticalGuideCount++] = PreviewLogicalDelta(mouse.x - origin.x, scale);
+                return true;
+            }
+            return false;
+        }
+
+        /** @brief Apply a completed pan with saturating session coordinates. */
+        void OffsetPreviewPan(UiCanvasPreviewState &state, const Runtime::Ui::UiLogicalPoint delta) {
+            const auto offset = [](const auto value, const auto change) {
+                return static_cast<Runtime::Ui::UiScalar>(
+                    std::clamp(static_cast<std::int64_t>(value) + change,
+                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::min()),
+                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::max())));
+            };
+            state.pan = {offset(state.pan.x, delta.x), offset(state.pan.y, delta.y)};
+        }
+    }  // namespace
+
+    /** @copydoc EditorWorkspaceView::HandleUiCanvasPreviewPress */
+    void EditorWorkspaceView::HandleUiCanvasPreviewPress(const UiCanvasWorkspaceDocument &document, const ImVec2 origin, const float scale,
+                                                         const bool changed, EditorWorkspaceViewCommandData &output) const {
+        if (changed || !ImGui::IsItemHovered())
+            return;
+        const auto mouse = ImGui::GetIO().MousePos;
+        const auto capture = [&](const bool pan) {
+            m_uiCanvasGesture = UiCanvasGesture{document.identity.instance,
+                                                document.state,
+                                                document.selection,
+                                                document.selectionRevision,
+                                                mouse,
+                                                scale,
+                                                document.previewState,
+                                                pan};
+        };
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
+            capture(true);
+            return;
+        }
+        if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            return;
+        if (ImGui::GetIO().KeyShift) {
+            auto state = document.previewState;
+            if (AddPreviewGuide(state, mouse, origin, scale)) {
+                output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
+                output.uiCanvasPreviewState = state;
+            }
+            return;
+        }
+        const auto &boxes = document.preview->boxes;
+        const auto hit = std::find_if(boxes.rbegin(), boxes.rend(), [&](const auto &box) {
+            const float x = origin.x + static_cast<float>(box.bounds.origin.x) * scale;
+            const float y = origin.y + static_cast<float>(box.bounds.origin.y) * scale;
+            return mouse.x >= x && mouse.y >= y && mouse.x <= x + static_cast<float>(box.bounds.extent.width) * scale &&
+                   mouse.y <= y + static_cast<float>(box.bounds.extent.height) * scale;
+        });
+        if (hit == boxes.rend())
+            return;
+        if (hit->element != document.selection) {
+            output.command = EditorWorkspaceViewCommand::UiCanvasSelect;
+            output.uiCanvasElement = hit->element;
+        } else if (document.previewState.tool != UiCanvasLayoutTool::Select)
+            capture(false);
+    }
+
+    /** @copydoc EditorWorkspaceView::FinishUiCanvasGesture */
+    void EditorWorkspaceView::FinishUiCanvasGesture(const UiCanvasWorkspaceDocument &document,
+                                                    EditorWorkspaceViewCommandData &output) const {
+        if (!m_uiCanvasGesture || !ImGui::IsMouseReleased(m_uiCanvasGesture->pan ? ImGuiMouseButton_Middle : ImGuiMouseButton_Left))
+            return;
+        const auto gesture = *m_uiCanvasGesture;
+        m_uiCanvasGesture.reset();
+        const auto mouse = ImGui::GetIO().MousePos;
+        if (mouse.x == gesture.start.x && mouse.y == gesture.start.y)
+            return;
+        output.command = EditorWorkspaceViewCommand::UiCanvasCommitLayout;
+        output.uiCanvasElement = gesture.element;
+        output.uiCanvasSelectionRevision = gesture.selectionRevision;
+        output.uiCanvasLayoutDelta = {PreviewLogicalDelta(mouse.x - gesture.start.x, gesture.scale),
+                                      PreviewLogicalDelta(mouse.y - gesture.start.y, gesture.scale)};
+        if (gesture.pan) {
+            auto state = document.previewState;
+            OffsetPreviewPan(state, output.uiCanvasLayoutDelta);
+            output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
+            output.uiCanvasPreviewState = state;
+        }
+    }
+
     /** @copydoc EditorWorkspaceView::DrawUiCanvasPreview */
     void EditorWorkspaceView::DrawUiCanvasPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const {
         auto state = document.previewState;
@@ -301,7 +403,6 @@ namespace Horo::Editor {
             return;
         }
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, label("workspace.ui_canvas.preview.hint"), Theme::Muted(), m_context.theme.fonts);
-        const auto &preview = *document.preview;
         const float height = ImGui::GetContentRegionAvail().y * 0.45F;
         if (height <= 0)
             return;
@@ -312,80 +413,14 @@ namespace Horo::Editor {
         const auto start = ImGui::GetCursorScreenPos();
         const auto available = ImGui::GetContentRegionAvail();
         const auto geometry = DrawPreviewGeometry(document, start, available);
-        const auto origin = geometry.origin;
-        const float scale = geometry.scale;
-        const auto point = [&](Runtime::Ui::UiLogicalPoint p) {
-            return ImVec2{origin.x + static_cast<float>(p.x) * scale, origin.y + static_cast<float>(p.y) * scale};
-        };
         ImGui::InvisibleButton("canvas_interaction", available);
-        const auto mouse = ImGui::GetIO().MousePos;
-        const auto logical = [&](float value) {
-            return static_cast<Runtime::Ui::UiScalar>(
-                std::clamp(std::round(value / scale), static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::min()),
-                           static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::max() / 2)));
-        };
-        if (m_uiCanvasGesture && (m_uiCanvasGesture->document != document.identity.instance || m_uiCanvasGesture->state != document.state ||
-                                  m_uiCanvasGesture->element != document.selection || m_uiCanvasGesture->preview != state ||
-                                  m_uiCanvasGesture->scale != scale || ImGui::IsKeyPressed(ImGuiKey_Escape)))
+        if (m_uiCanvasGesture &&
+            (m_uiCanvasGesture->document != document.identity.instance || m_uiCanvasGesture->state != document.state ||
+             m_uiCanvasGesture->element != document.selection || m_uiCanvasGesture->selectionRevision != document.selectionRevision ||
+             m_uiCanvasGesture->preview != state || m_uiCanvasGesture->scale != geometry.scale || ImGui::IsKeyPressed(ImGuiKey_Escape)))
             m_uiCanvasGesture.reset();
-        if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Middle) && !changed) {
-            m_uiCanvasGesture = UiCanvasGesture{document.identity.instance, document.state, document.selection, mouse, scale, state, true};
-        }
-        if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !changed) {
-            if (ImGui::GetIO().KeyShift) {
-                if (ImGui::GetIO().KeyCtrl && state.horizontalGuideCount < state.horizontalGuides.size()) {
-                    state.horizontalGuides[state.horizontalGuideCount++] = logical(mouse.y - origin.y);
-                    output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
-                    output.uiCanvasPreviewState = state;
-                } else if (!ImGui::GetIO().KeyCtrl && state.verticalGuideCount < state.verticalGuides.size()) {
-                    state.verticalGuides[state.verticalGuideCount++] = logical(mouse.x - origin.x);
-                    output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
-                    output.uiCanvasPreviewState = state;
-                }
-            } else {
-                const auto hit = std::find_if(preview.boxes.rbegin(), preview.boxes.rend(), [&](const auto &box) {
-                    const auto a = point(box.bounds.origin);
-                    return mouse.x >= a.x && mouse.y >= a.y && mouse.x <= a.x + static_cast<float>(box.bounds.extent.width) * scale &&
-                           mouse.y <= a.y + static_cast<float>(box.bounds.extent.height) * scale;
-                });
-                if (hit != preview.boxes.rend()) {
-                    if (hit->element != document.selection) {
-                        output.command = EditorWorkspaceViewCommand::UiCanvasSelect;
-                        output.uiCanvasElement = hit->element;
-                    } else if (state.tool != UiCanvasLayoutTool::Select) {
-                        m_uiCanvasGesture = UiCanvasGesture{document.identity.instance, document.state, hit->element, mouse, scale, state};
-                    }
-                }
-            }
-        }
-        if (m_uiCanvasGesture && ImGui::IsMouseReleased(m_uiCanvasGesture->pan ? ImGuiMouseButton_Middle : ImGuiMouseButton_Left)) {
-            const auto gesture = *m_uiCanvasGesture;
-            m_uiCanvasGesture.reset();
-            if (mouse.x == gesture.start.x && mouse.y == gesture.start.y) {
-                ImGui::EndChild();
-                return;
-            }
-            output.command = EditorWorkspaceViewCommand::UiCanvasCommitLayout;
-            output.uiCanvasElement = gesture.element;
-            const auto delta = [&](const float value) {
-                return static_cast<Runtime::Ui::UiScalar>(
-                    std::clamp(std::round(value / gesture.scale), static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::min() / 2),
-                               static_cast<float>(std::numeric_limits<Runtime::Ui::UiScalar>::max() / 2)));
-            };
-            output.uiCanvasLayoutDelta = {delta(mouse.x - gesture.start.x), delta(mouse.y - gesture.start.y)};
-            if (gesture.pan) {
-                state.pan.x = static_cast<Runtime::Ui::UiScalar>(
-                    std::clamp(static_cast<std::int64_t>(state.pan.x) + output.uiCanvasLayoutDelta.x,
-                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::min()),
-                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::max())));
-                state.pan.y = static_cast<Runtime::Ui::UiScalar>(
-                    std::clamp(static_cast<std::int64_t>(state.pan.y) + output.uiCanvasLayoutDelta.y,
-                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::min()),
-                               static_cast<std::int64_t>(std::numeric_limits<Runtime::Ui::UiScalar>::max())));
-                output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
-                output.uiCanvasPreviewState = state;
-            }
-        }
+        HandleUiCanvasPreviewPress(document, geometry.origin, geometry.scale, changed, output);
+        FinishUiCanvasGesture(document, output);
         ImGui::EndChild();
     }
 

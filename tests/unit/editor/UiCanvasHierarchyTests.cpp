@@ -316,3 +316,27 @@ TEST_CASE("Visual layout commits one owner transaction and rejects gestures acro
     REQUIRE(owner.Close().HasValue());
     CHECK(owner.Execute(beforeClose, edit.Value()).HasError());
 }
+
+TEST_CASE("Visual layout selection fence rejects A to B to A after real canonical selection changes",
+          "[ui_canvas][manipulation][selection]") {
+    Fixture fixture;
+    auto owner = fixture.Open();
+    Create(owner, 4);
+    Create(owner, 5);
+    REQUIRE(owner.Select(owner.CurrentState(), Id<UiElementId>(4)).HasValue());
+    const auto element = std::ranges::find(owner.Document().Elements(), Id<UiElementId>(4), &UiDocumentElement::id);
+    REQUIRE(element != owner.Document().Elements().end());
+    auto presentation = *element->presentation;
+    presentation.layout.offsets.left = 17;
+    const UiCanvasSetPresentation edit{element->id, presentation};
+    const auto state = owner.CurrentState();
+    const std::uint64_t capturedSelection = 10;
+    REQUIRE(owner.Select(state, Id<UiElementId>(5)).HasValue());
+    REQUIRE(owner.Select(state, Id<UiElementId>(4)).HasValue());
+    CHECK(owner.CurrentState() == state);
+    CHECK(owner.Selection() == edit.element);
+    CHECK(ExecuteUiCanvasLayoutGesture(owner, state, capturedSelection, capturedSelection + 2, edit).HasError());
+    CHECK(owner.CurrentState() == state);
+    REQUIRE(ExecuteUiCanvasLayoutGesture(owner, state, capturedSelection + 2, capturedSelection + 2, edit).HasValue());
+    CHECK(std::ranges::find(owner.Document().Elements(), edit.element, &UiDocumentElement::id)->presentation->layout.offsets.left == 17);
+}

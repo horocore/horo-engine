@@ -587,6 +587,8 @@ namespace Horo::Runtime::Ui {
             return Failure(UiErrors::RouteOperationReentrant);
         if (auto reserved = router.ReserveInteractionReplacement(); reserved.HasError())
             return reserved;
+        if (auto bound = router.BindRouteIncarnation(route); bound.HasError())
+            return bound;
         storage_->actions.emplace_back(route, std::move(router));
         return Result<void>::Success();
     }
@@ -653,16 +655,20 @@ namespace Horo::Runtime::Ui {
         DrainPublisher drain{storage_};
 
         auto &owner = *drain.held;
-        std::size_t reclaimed = owner.retiredActions.size();
+        std::size_t reclaimed{};
         for (const auto &actions : owner.actions)
             reclaimed += actions.router.DrainInteractionReplacement();
-        for (auto &actions : owner.retiredActions)
-            actions.router.Shutdown();
-        owner.retiredActions.clear();
-        if (owner.state == UiScreenStackState::Stopped) {
-            reclaimed += owner.actions.size();
-            owner.actions.clear();
-        }
+        const auto collect = [](auto &routers) {
+            for (auto &actions : routers)
+                if (actions.router.CanCollectRetired())
+                    actions.router.Shutdown();
+            return std::erase_if(routers, [](const auto &actions) {
+                return actions.router.CanCollectRetired();
+            });
+        };
+        reclaimed += collect(owner.retiredActions);
+        if (owner.state == UiScreenStackState::Stopped)
+            reclaimed += collect(owner.actions);
         return Result<std::size_t>::Success(reclaimed);
     }
 

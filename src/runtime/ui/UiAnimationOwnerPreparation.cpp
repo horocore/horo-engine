@@ -49,6 +49,8 @@ namespace Horo::Runtime::Ui {
     Result<void> UiAnimationOwner::PreparePresentation(Storage &storage, const UiAnimationViewport &viewport) {
         auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
         const auto &tree = canvas->tree;
+        if (auto projections = PrepareControlProjections(storage); projections.HasError())
+            return projections;
         if (auto visual = PrepareVisualState(storage); visual.HasError())
             return visual;
         const UiStyleSourceRevisions lineage{tree.SourceDocumentRevision(),     tree.Revision(),
@@ -85,6 +87,13 @@ namespace Horo::Runtime::Ui {
         if (layout.HasError())
             return Result<void>::Failure(layout.ErrorValue());
         storage.candidate.layout.emplace(std::move(layout).Value());
+        return PrepareDerivedPresentation(storage);
+    }
+
+    /** @copydoc UiAnimationOwner::PrepareDerivedPresentation */
+    Result<void> UiAnimationOwner::PrepareDerivedPresentation(Storage &storage) {
+        auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
+        const auto &tree = canvas->tree;
         if (canvas->clipping) {
             auto clipped = canvas->clipping->Prepare(tree, storage.candidate.layout->Candidate(), {canvas->clipPolicies, {}});
             if (clipped.HasError())

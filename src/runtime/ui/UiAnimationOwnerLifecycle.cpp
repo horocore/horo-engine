@@ -103,10 +103,13 @@ namespace Horo::Runtime::Ui {
         if (!storage_ || storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching)
             return Result<std::size_t>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         // The application calls this outside frame work; owned frame slots retain snapshots until external leases drain.
-        if (storage_->lifecycle.stopped) {
-            for (const auto &frame : storage_->frames) {
-                if (frame.use_count() != 1)
-                    continue;
+        for (std::size_t index = 0; index < storage_->frames.size(); ++index) {
+            auto &frame = storage_->frames[index];
+            if (frame.use_count() != 1)
+                continue;
+            if (storage_->lifecycle.stopped || !storage_->currentFrame || index != *storage_->currentFrame)
+                frame->controls.clear();
+            if (storage_->lifecycle.stopped) {
                 frame->styles.reset();
                 frame->layout.reset();
                 frame->clipped.reset();

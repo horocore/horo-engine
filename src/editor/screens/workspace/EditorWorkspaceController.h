@@ -765,6 +765,10 @@ namespace Horo::Editor {
         void RefreshUiCanvasProjection();
         /** @brief Routes revision-fenced hierarchy and persistence operations to the canonical canvas owner. */
         bool ProcessUiCanvasCommand(const EditorWorkspaceViewCommandData &command);
+        /** @brief Dispatch a validated canvas intent to its canonical owner or session preview capability. */
+        [[nodiscard]] Result<void> ExecuteUiCanvasCommand(UiCanvasDocument &owner, UiCanvasWorkspaceDocument &projection,
+                                                          const EditorWorkspaceViewCommandData &command,
+                                                          const UiInspectorResourceSnapshot &resources);
         /** @brief Saves one canvas through the shared project mutation boundary and returns its typed outcome. */
         [[nodiscard]] Result<void> SaveUiCanvasSource(UiCanvasDocument &owner) const;
         /** @brief Joins explicit canvas close admission with workspace routing and presents dirty-state errors. */

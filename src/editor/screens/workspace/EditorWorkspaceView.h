@@ -95,6 +95,7 @@ namespace Horo::Editor {
             DocumentInstanceId document;
             UiCanvasDocumentStateId state;
             Runtime::Ui::UiElementId element;
+            std::uint64_t selectionRevision{};
             ImVec2 start;
             float scale{};
             UiCanvasPreviewState preview;
@@ -103,6 +104,11 @@ namespace Horo::Editor {
 
         mutable std::optional<UiCanvasGesture> m_uiCanvasGesture;
         void DrawUiCanvasPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const;
+        /** @brief Begin a source/selection-fenced visual gesture or emit one bounded guide/selection intent. */
+        void HandleUiCanvasPreviewPress(const UiCanvasWorkspaceDocument &document, ImVec2 origin, float scale, bool changed,
+                                        EditorWorkspaceViewCommandData &output) const;
+        /** @brief Finish at captured scale, preserving source and selection publication fences. */
+        void FinishUiCanvasGesture(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const;
         const WorkspacePanelRegistry &m_panelRegistry;
         std::uintptr_t m_logoTexture;
         Input::InputRouter &m_inputRouter;

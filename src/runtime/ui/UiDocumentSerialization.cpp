@@ -651,7 +651,13 @@ namespace Horo::Runtime::Ui::SerializationInternal {
         return Result<void>::Success();
     }
 
-    [[nodiscard]] Result<Json> ParseJsonValue(const std::string_view source, const UiDocumentSerializationLimits &limits) {
+    enum class JsonRootKind {
+        Object,
+        Array
+    };
+
+    [[nodiscard]] Result<Json> ParseJsonValue(const std::string_view source, const UiDocumentSerializationLimits &limits,
+                                              const JsonRootKind kind = JsonRootKind::Object) {
         try {
             Horo::Foundation::JsonParseGuard guard{limits.maximumJsonDepth};
             Json root = Json::parse(source, std::ref(guard), true, false);
@@ -659,8 +665,9 @@ namespace Horo::Runtime::Ui::SerializationInternal {
                 return Failed<Json>(UiErrors::DocumentSerializationInvalid, "Runtime UI source contains a duplicate JSON field.");
             if (guard.IsTooDeep())
                 return Failed<Json>(UiErrors::DocumentPayloadTooLarge);
-            if (root.is_discarded() || !root.is_object())
-                return Failed<Json>(UiErrors::DocumentSerializationInvalid, "Runtime UI source is not an object.");
+            const bool expected = kind == JsonRootKind::Object ? root.is_object() : root.is_array();
+            if (root.is_discarded() || !expected)
+                return Failed<Json>(UiErrors::DocumentSerializationInvalid, "Runtime UI JSON root has the wrong container type.");
             return Result<Json>::Success(std::move(root));
         } catch (const Json::exception &) {
             return Failed<Json>(UiErrors::DocumentSerializationInvalid, "Runtime UI source is not valid JSON.");
@@ -673,6 +680,13 @@ namespace Horo::Runtime::Ui::SerializationInternal {
         if (auto valid = ValidateJsonSource(source, limits); valid.HasError())
             return Result<Json>::Failure(valid.ErrorValue());
         return ParseJsonValue(source, limits);
+    }
+
+    /** @copydoc ParseJsonArray */
+    Result<Json> ParseJsonArray(const std::string_view source, const UiDocumentSerializationLimits &limits) {
+        if (auto valid = ValidateJsonSource(source, limits); valid.HasError())
+            return Result<Json>::Failure(valid.ErrorValue());
+        return ParseJsonValue(source, limits, JsonRootKind::Array);
     }
 
     template Result<std::uint16_t> ReadUnsigned<std::uint16_t>(const Json &value);

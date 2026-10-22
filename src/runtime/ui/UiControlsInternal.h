@@ -58,8 +58,10 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<void> ReconcileText(const UiActionValue &value);
         /** @brief Checks text kind, exact source, ordering and edit admission without mutation. */
         [[nodiscard]] Result<void> AdmitTextEdit(const UiActionSource &source, std::uint64_t sequence) const;
-        /** @brief Detects a pending default or a busy asynchronous action that prevents interaction replacement. */
-        [[nodiscard]] bool BlocksInteractionReplacement() const noexcept;
+        /** @brief Copies bounded logical and transient state into an already reserved inactive owner. */
+        void CopyInteractionState(const Storage &source);
+        /** @brief Copies only operation presentation and applies the shared effective-availability policy. */
+        void ProjectAsync(std::optional<UiAsyncActionSnapshot> projection);
 
         [[nodiscard]] Result<UiControlTransitionKind> ApplyInput(const UiControlInput &input);
         [[nodiscard]] Result<UiControlTransitionKind> HandleFocusGained();

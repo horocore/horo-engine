@@ -6,7 +6,7 @@ Desktop (1920x1080, 1x), phone (1170x2532, 3x) and tablet (2048x2732, 2x) eviden
 
 Selection uses the actual evaluated bounds in reverse paint hierarchy order. Move, resize and anchor tools operate on absolute layout elements; flow elements require an explicit positioning change in the existing inspector. Logical deltas use the scale captured at gesture start, and preview-scale/source/selection/device changes cancel the gesture. Escape, host input cancellation, project reset and document disappearance also cancel. Shift-click adds a vertical guide; Ctrl-Shift-click adds a horizontal guide; Clear guides removes them. Middle-drag pans. Grid and nearest-guide snapping happen in canvas logical coordinates; nested elements retain their authored parent-relative offsets. Resize authors content width/height, preserving box-model fields. Anchors use normalized Runtime UI units derived from parent content extents.
 
-A completed drag submits one `UiCanvasCommitLayout` typed intent. The controller checks the document instance/state and selection, prepares a complete canonical presentation preserving unrelated style/control/accessibility values, then calls `UiCanvasDocument::Execute`. Semantic history supplies undo/redo; reload/close fences reject old gestures. Preview failure does not change the document.
+A completed drag also retains the selection publication revision, so selection A to B to A cannot revive an earlier gesture even when the selected ID and document state match again. A completed drag submits one `UiCanvasCommitLayout` typed intent. The controller checks the document instance/state and selection, prepares a complete canonical presentation preserving unrelated style/control/accessibility values, then calls `UiCanvasDocument::Execute`. Semantic history supplies undo/redo; reload/close fences reject old gestures. Preview failure does not change the document.
 
 ## Additive runtime API
 
@@ -14,10 +14,16 @@ A completed drag submits one `UiCanvasCommitLayout` typed intent. The controller
 
 `ProjectUiThemeSurface` is an additive copied authoring projection over an actual computed publication. Its existing owning header/target does not change. It delegates to the runtime theme projection, preserves typed failure, and leaves inputs untouched. Existing runtime callers retain their original path; the editor calls this public ingress rather than including private Runtime UI helpers. Public consumer and actual selected-theme regression coverage exercise both additive ingresses.
 
+## Source registry and cooked profile integration
+
+The canonical asset registry recognizes `.uistyle` sources and their `.uistyle.horo` identity sidecars as one asset. The prior source whitelist omitted `.uistyle`, which skipped styles and misclassified the sidecar as an ordinary `.horo` source. Native filesystem coverage includes spaces and non-ASCII source names.
+
+Cooked document format four writes its profile trailer as a JSON array, including the neutral empty array. That trailer now uses a narrow internal array parsing ingress with the existing UTF-8, byte, duplicate-key and depth checks. Ordinary authored documents and presentation records retain object-only parsing. Canonical profile re-encoding, sorted identity/priority rules and the outer binary bounds remain unchanged. Real cook/decode and asset-loader regression targets cover both neutral and authored alternatives plus malformed trailers.
+
 ## Ticket audit boundaries
 
 - HORO-785 / #785 / [RUI-009.3]: device, DPI, safe-area, orientation and responsive layout preview surface.
 - HORO-786 / #786 / [RUI-009.4]: canonical visual layout commands, select/move/resize/anchors, rulers, guides, zoom/pan and snapping.
-- HORO-752 / #752 / [RUI-006.6]: existing store/router/control and screen lifecycle APIs have leaf/integration tests, but automatic host busy projection across interaction-generation changes remains a gap. No closure is claimed here.
+- HORO-752 / #752 / [RUI-006.6]: router-owned operations now survive interaction-only layout publications and the actual VariableUpdate path stages busy/progress/error copies before style preparation. Expanded current-head host/action execution remains the qualification gate.
 - HORO-770 / #770 / [RUI-008.3]: existing actual overlay lifecycle tests cover modal input exclusion, default/prior focus, destroyed targets, cooked reload, suspension and shutdown. Current-head execution evidence must qualify those existing contracts before closure.
 - HORO-760 / #760 / [RUI-007.4]: geometry carries clip/mask references and per-command opacity, but runtime UI geometry is retained for submission lifetime without a native backend draw workload. Nested stencil/rounded-mask/opacity-group pixel realization remains open. Layout outlines do not satisfy it.

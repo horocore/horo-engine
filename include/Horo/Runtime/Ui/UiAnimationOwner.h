@@ -118,6 +118,7 @@ namespace Horo::Runtime::Ui {
         UiElementId element;
         UiActionSource source;
         UiControlState state;
+        std::optional<UiAsyncActionSnapshot> asyncAction; /**< Copied operation identity/progress/error; never execution ownership. */
     };
 
     class UiAnimationOwner;
@@ -525,6 +526,14 @@ namespace Horo::Runtime::Ui {
         static void CaptureInspection(Storage &storage) noexcept;
         /** @brief Prepares actual style, layout, clipping and focus owners without publishing any generation. */
         [[nodiscard]] static Result<void> PreparePresentation(Storage &storage, const UiAnimationViewport &viewport);
+        /** @brief Stages dependent clipping, focus, attachments and control identities after the primary layout candidate. */
+        [[nodiscard]] static Result<void> PrepareDerivedPresentation(Storage &storage);
+        /** @brief Resolves exact route-incarnation or canvas operation ownership for one retained control. */
+        [[nodiscard]] static UiActionRouter *ControlActionOwner(Storage &storage, UiElementHandle element);
+        /** @brief Checks bounded actual retained-tree lineage against an authored route root. */
+        [[nodiscard]] static bool WithinRouteRoot(const UiElementTree &tree, UiElementHandle target, UiElementId root);
+        /** @brief Stages real control operation projection before computing visual style, without mutating active state. */
+        [[nodiscard]] static Result<void> PrepareControlProjections(Storage &storage);
         /** @brief Reads visual participation from the actual owned focus/control state, never an authored visual-state DTO. */
         [[nodiscard]] static Result<void> PrepareVisualState(Storage &storage);
         /** @brief Borrows a real current control only inside a receipt-fenced owner command. @return Control or typed failure. */

@@ -51,57 +51,82 @@ namespace Horo::Editor {
             return snapped;
         }
 
+        struct PreviewStyleInputs final {
+            std::vector<UiStyleElementInput> inputs;
+            std::vector<UiThemeSurfaceInput> surfaces;
+            std::vector<std::vector<UiStyleClassReference>> classes;
+        };
+
+        /** @brief Keeps copied qualified classes alive through the synchronous canonical style resolution. */
+        Result<PreviewStyleInputs> PreparePreviewStyleInputs(const std::vector<const UiDocumentElement *> &authored,
+                                                             const std::vector<UiLayoutElementDescriptor> &descriptors,
+                                                             RuntimeStyleAssetId theme) {
+            PreviewStyleInputs result;
+            result.inputs.reserve(authored.size());
+            result.surfaces.reserve(authored.size());
+            result.classes.reserve(authored.size());
+            for (std::size_t i = 0; i < authored.size(); ++i) {
+                auto input = authored[i] ? ProjectUiElementStyle(*authored[i], descriptors[i].element)
+                                         : Result<UiStyleElementInput>::Success({.element = descriptors[i].element});
+                if (input.HasError())
+                    return Result<PreviewStyleInputs>::Failure(input.ErrorValue());
+                auto value = input.Value();
+                const auto asset = value.asset.IsValid() ? value.asset : theme;
+                value.asset = asset;
+                if (value.typeClass.id.IsValid() && !value.typeClass.asset.IsValid())
+                    value.typeClass.asset = asset;
+                result.classes.emplace_back(value.classes.begin(), value.classes.end());
+                for (auto &reference : result.classes.back())
+                    if (!reference.asset.IsValid())
+                        reference.asset = asset;
+                value.classes = result.classes.back();
+                result.inputs.push_back(value);
+                result.surfaces.push_back({value, descriptors[i].style, descriptors[i].intrinsic});
+            }
+            return Result<PreviewStyleInputs>::Success(std::move(result));
+        }
+
+        /** @brief Run the sole Runtime UI style resolver against exact preview tree and actual registry evidence. */
+        Result<UiComputedStyleSnapshot> ComputePreviewStyles(const UiDocument &source, const UiElementTree &tree,
+                                                             const RuntimeStyleRegistry &registry,
+                                                             std::span<const UiStyleElementInput> inputs) {
+            const auto capacity = tree.Size();
+            const auto instance = tree.Instance();
+            const auto canvas = tree.Canvas();
+            const auto properties = registry.Properties().size();
+            if (properties > MaximumUiStyleProperties)
+                return Result<UiComputedStyleSnapshot>::Failure(MakeError(UiErrors::CapacityExceeded));
+            auto resolverResult = UiStyleResolver::Create({instance, canvas, source.Id(), capacity, static_cast<std::uint32_t>(properties),
+                                                           std::min(capacity, MaximumUiStructuralCommands), 2, registry.Generation(),
+                                                           UiStylePublicationRevision::Create(1).Value()});
+            if (resolverResult.HasError())
+                return Result<UiComputedStyleSnapshot>::Failure(resolverResult.ErrorValue());
+            auto resolver = std::move(resolverResult).Value();
+            const UiStyleSourceRevisions styleSources{source.Revision(),
+                                                      tree.Revision(),
+                                                      registry.Generation(),
+                                                      UiStyleContentRevision::Create(1).Value(),
+                                                      UiStylePolicyRevision::Create(1).Value(),
+                                                      UiInteractionRevision::Create(1).Value()};
+            auto computed = resolver.Update(tree, registry, {styleSources, inputs});
+            if (computed.HasError())
+                return Result<UiComputedStyleSnapshot>::Failure(computed.ErrorValue());
+            return computed;
+        }
+
         /** @brief Resolve real selected styles through the canonical theme projection after responsive base selection. */
         Result<void> ResolvePreviewStyles(const UiDocument &source, const UiElementTree &tree,
                                           const std::vector<const UiDocumentElement *> &authored,
                                           std::vector<UiLayoutElementDescriptor> &descriptors,
                                           const UiInspectorResourceSnapshot *resources) {
-            const auto capacity = tree.Size();
-            const auto instance = tree.Instance();
-            const auto canvas = tree.Canvas();
             if (resources && resources->styles) {
                 const auto &registry = *resources->styles;
-                std::vector<UiStyleElementInput> inputs;
-                std::vector<UiThemeSurfaceInput> surfaces;
-                std::vector<std::vector<UiStyleClassReference>> classes;
-                inputs.reserve(authored.size());
-                surfaces.reserve(authored.size());
-                classes.reserve(authored.size());
-                for (std::size_t i = 0; i < authored.size(); ++i) {
-                    auto input = authored[i] ? ProjectUiElementStyle(*authored[i], descriptors[i].element)
-                                             : Result<UiStyleElementInput>::Success({.element = descriptors[i].element});
-                    if (input.HasError())
-                        return Result<void>::Failure(input.ErrorValue());
-                    auto value = input.Value();
-                    const auto asset = value.asset.IsValid() ? value.asset : resources->theme;
-                    value.asset = asset;
-                    if (value.typeClass.id.IsValid() && !value.typeClass.asset.IsValid())
-                        value.typeClass.asset = asset;
-                    classes.emplace_back(value.classes.begin(), value.classes.end());
-                    for (auto &reference : classes.back())
-                        if (!reference.asset.IsValid())
-                            reference.asset = asset;
-                    value.classes = classes.back();
-                    inputs.push_back(value);
-                    surfaces.push_back({value, descriptors[i].style, descriptors[i].intrinsic});
-                }
-                const auto properties = registry.Properties().size();
-                if (properties > MaximumUiStyleProperties)
-                    return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
-                auto resolverResult =
-                    UiStyleResolver::Create({instance, canvas, source.Id(), capacity, static_cast<std::uint32_t>(properties),
-                                             std::min(capacity, MaximumUiStructuralCommands), 2, registry.Generation(),
-                                             UiStylePublicationRevision::Create(1).Value()});
-                if (resolverResult.HasError())
-                    return Result<void>::Failure(resolverResult.ErrorValue());
-                auto resolver = std::move(resolverResult).Value();
-                const UiStyleSourceRevisions styleSources{source.Revision(),
-                                                          tree.Revision(),
-                                                          registry.Generation(),
-                                                          UiStyleContentRevision::Create(1).Value(),
-                                                          UiStylePolicyRevision::Create(1).Value(),
-                                                          UiInteractionRevision::Create(1).Value()};
-                auto computed = resolver.Update(tree, registry, {styleSources, inputs});
+                auto prepared = PreparePreviewStyleInputs(authored, descriptors, resources->theme);
+                if (prepared.HasError())
+                    return Result<void>::Failure(prepared.ErrorValue());
+                const auto &inputs = prepared.Value().inputs;
+                const auto &surfaces = prepared.Value().surfaces;
+                auto computed = ComputePreviewStyles(source, tree, registry, inputs);
                 if (computed.HasError())
                     return Result<void>::Failure(computed.ErrorValue());
                 for (std::size_t i = 0; i < descriptors.size(); ++i) {
@@ -119,6 +144,128 @@ namespace Horo::Editor {
             }
             return Result<void>::Success();
         }
+
+        struct PreviewSource final {
+            UiElementTree tree;
+            std::vector<const UiDocumentElement *> authored;
+            std::vector<UiLayoutElementDescriptor> descriptors;
+        };
+
+        /** @brief Copy canonical layout inputs with handles issued by this exact authoring tree. */
+        Result<std::vector<UiLayoutElementDescriptor>> CreatePreviewLayouts(const UiElementTree &tree,
+                                                                            const std::vector<const UiDocumentElement *> &authored) {
+            std::vector<UiLayoutElementDescriptor> descriptors;
+            descriptors.reserve(authored.size());
+            for (std::size_t i = 0; i < authored.size(); ++i) {
+                const auto handle = authored[i] ? tree.Find(authored[i]->id) : Result<UiElementHandle>::Success(tree.Root().Value().handle);
+                if (handle.HasError())
+                    return Result<std::vector<UiLayoutElementDescriptor>>::Failure(handle.ErrorValue());
+                const auto presentation = authored[i] ? authored[i]->presentation : std::nullopt;
+                descriptors.push_back({handle.Value(), presentation ? presentation->layout : UiLayoutStyle{},
+                                       presentation ? presentation->intrinsic : UiLayoutIntrinsicSource{}});
+            }
+            std::ranges::sort(descriptors, {}, &UiLayoutElementDescriptor::element);
+            return Result<std::vector<UiLayoutElementDescriptor>>::Success(std::move(descriptors));
+        }
+
+        /** @brief Admit one complete isolated source subtree and typed layout inputs outside draw work. */
+        Result<PreviewSource> CreatePreviewSource(const UiDocument &source, UiOwnershipGeneration owner) {
+            auto allocatorResult = UiElementSlotAllocator::Create(owner);
+            if (allocatorResult.HasError())
+                return Result<PreviewSource>::Failure(allocatorResult.ErrorValue());
+            auto allocator = std::move(allocatorResult).Value();
+            std::vector<UiElementDescriptor> elements;
+            std::vector<const UiDocumentElement *> authored;
+            std::set<UiElementId> included{source.Canvases().front().rootElement};
+            for (const auto &element : source.Elements()) {
+                if (included.contains(element.id) || included.contains(element.parent)) {
+                    included.insert(element.id);
+                    elements.push_back({element.id, element.parent});
+                    authored.push_back(&element);
+                }
+            }
+            if (elements.empty()) {
+                elements.push_back({source.Canvases().front().rootElement, {}});
+                authored.push_back(nullptr);
+            }
+            if (elements.size() > MaximumUiTreeElements)
+                return Failure<PreviewSource>();
+            const auto capacity = static_cast<std::uint32_t>(elements.size());
+            const RuntimeUiInstanceId instance{owner, 1, 1};
+            const UiCanvasInstanceId canvas{owner, 2, 1};
+            auto tree = UiElementTree::Create(allocator,
+                                              {instance,
+                                               canvas,
+                                               source.Id(),
+                                               source.Revision(),
+                                               UiRuntimeTreeRevision::Create(1).Value(),
+                                               {capacity, MaximumUiTreeDepth, 1}},
+                                              elements);
+            if (tree.HasError())
+                return Result<PreviewSource>::Failure(tree.ErrorValue());
+            auto layouts = CreatePreviewLayouts(tree.Value(), authored);
+            if (layouts.HasError())
+                return Result<PreviewSource>::Failure(layouts.ErrorValue());
+            return Result<PreviewSource>::Success({std::move(tree).Value(), std::move(authored), std::move(layouts).Value()});
+        }
+
+        /** @brief Apply the canonical profile selector to the actual admitted source and device evidence. */
+        Result<std::optional<UiPresentationProfileId>> ApplyPreviewProfiles(const UiDocument &source, const UiElementTree &tree,
+                                                                            const UiCanvasPreviewState &state,
+                                                                            const UiResolvedScreenCanvas &resolved,
+                                                                            std::vector<UiLayoutElementDescriptor> &descriptors) {
+            auto profiles = UiPresentationProfileTable::CreateForAuthoring(source, tree, source.Canvases().front().id);
+            if (profiles.HasError())
+                return Result<std::optional<UiPresentationProfileId>>::Failure(profiles.ErrorValue());
+            const auto selected =
+                profiles.Value().Select(tree,
+                                        {.canvas = source.Canvases().front().id,
+                                         .instance = tree.Instance(),
+                                         .runtimeCanvas = tree.Canvas(),
+                                         .tree = tree.Revision(),
+                                         .attachment = {tree.Instance().ownership, 3, 1},
+                                         .revision = UiPresentationEvidenceRevision::Create(1).Value(),
+                                         .content = resolved.logicalExtent,
+                                         .formFactor = state.device == UiCanvasPreviewDevice::Desktop ? UiPresentationFormFactor::Desktop
+                                                                                                      : UiPresentationFormFactor::Handheld,
+                                         .available = state.device == UiCanvasPreviewDevice::Desktop ? UiPresentationCapabilities::Pointer
+                                                                                                     : UiPresentationCapabilities::Touch});
+            if (selected.HasError())
+                return Result<std::optional<UiPresentationProfileId>>::Failure(selected.ErrorValue());
+            if (const auto applied = profiles.Value().ApplyLayouts(tree, selected.Value(), descriptors); applied.HasError())
+                return Result<std::optional<UiPresentationProfileId>>::Failure(applied.ErrorValue());
+            return Result<std::optional<UiPresentationProfileId>>::Success(selected.Value().profile);
+        }
+
+        /** @brief Evaluate the complete shared layout authority and return its immutable publication lease. */
+        Result<UiLayoutSnapshot> EvaluatePreviewLayout(const UiDocument &source, const UiElementTree &tree,
+                                                       const std::vector<UiLayoutElementDescriptor> &descriptors,
+                                                       const UiResolvedScreenCanvas &resolved) {
+            const auto capacity = tree.Size();
+            const auto instance = tree.Instance();
+            const auto canvas = tree.Canvas();
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            if (evaluator.HasError())
+                return Result<UiLayoutSnapshot>::Failure(evaluator.ErrorValue());
+            auto engine = UiLayoutEngine::Create({instance, canvas, source.Id(), capacity, std::min(capacity, MaximumUiStructuralCommands),
+                                                  2, UiInteractionRevision::Create(1).Value()});
+            if (engine.HasError())
+                return Result<UiLayoutSnapshot>::Failure(engine.ErrorValue());
+            const UiLogicalExtent extent{resolved.logicalExtent.width, resolved.logicalExtent.height};
+            const UiLayoutSourceRevisions revisions{source.Revision(),
+                                                    UiRuntimeTreeRevision::Create(1).Value(),
+                                                    UiLayoutContentRevision::Create(1).Value(),
+                                                    UiLayoutStyleRevision::Create(1).Value(),
+                                                    UiLayoutIntrinsicRevision::Create(1).Value(),
+                                                    UiLayoutCanvasRevision::Create(1).Value(),
+                                                    UiLayoutPolicyRevision::Create(1).Value()};
+            auto layout =
+                engine.Value().Update(tree, {revisions, {extent, extent}, {{0, 0}, extent}, &evaluator.Value(), resolved.fontScale});
+            if (layout.HasError())
+                return Result<UiLayoutSnapshot>::Failure(layout.ErrorValue());
+            return layout;
+        }
+
     }  // namespace
 
     /** @copydoc UiCanvasPreviewState::IsValid */
@@ -142,96 +289,24 @@ namespace Horo::Editor {
             const auto owner = UiOwnershipGeneration::Create(ownership.Value());
             if (owner.HasError())
                 return Result<UiCanvasPreview>::Failure(owner.ErrorValue());
-            auto allocatorResult = UiElementSlotAllocator::Create(owner.Value());
-            if (allocatorResult.HasError())
-                return Result<UiCanvasPreview>::Failure(allocatorResult.ErrorValue());
-            auto allocator = std::move(allocatorResult).Value();
-            std::vector<UiElementDescriptor> elements;
-            std::vector<const UiDocumentElement *> authored;
-            std::set<UiElementId> included{source.Canvases().front().rootElement};
-            for (const auto &element : source.Elements()) {
-                if (included.contains(element.id) || included.contains(element.parent)) {
-                    included.insert(element.id);
-                    elements.push_back({element.id, element.parent});
-                    authored.push_back(&element);
-                }
-            }
-            if (elements.empty()) {
-                elements.push_back({source.Canvases().front().rootElement, {}});
-                authored.push_back(nullptr);
-            }
-            if (elements.size() > MaximumUiTreeElements)
-                return Failure<UiCanvasPreview>();
-            const auto capacity = static_cast<std::uint32_t>(elements.size());
-            const RuntimeUiInstanceId instance{owner.Value(), 1, 1};
-            const UiCanvasInstanceId canvas{owner.Value(), 2, 1};
-            auto tree = UiElementTree::Create(allocator,
-                                              {instance,
-                                               canvas,
-                                               source.Id(),
-                                               source.Revision(),
-                                               UiRuntimeTreeRevision::Create(1).Value(),
-                                               {capacity, MaximumUiTreeDepth, 1}},
-                                              elements);
-            if (tree.HasError())
-                return Result<UiCanvasPreview>::Failure(tree.ErrorValue());
-            std::vector<UiLayoutElementDescriptor> descriptors;
-            descriptors.reserve(elements.size());
-            for (std::size_t i = 0; i < elements.size(); ++i) {
-                const auto handle = tree.Value().Find(elements[i].id);
-                if (handle.HasError())
-                    return Result<UiCanvasPreview>::Failure(handle.ErrorValue());
-                const auto presentation = authored[i] ? authored[i]->presentation : std::nullopt;
-                descriptors.push_back({handle.Value(), presentation ? presentation->layout : UiLayoutStyle{},
-                                       presentation ? presentation->intrinsic : UiLayoutIntrinsicSource{}});
-            }
-            std::ranges::sort(descriptors, {}, &UiLayoutElementDescriptor::element);
-            auto profiles = UiPresentationProfileTable::CreateForAuthoring(source, tree.Value(), source.Canvases().front().id);
-            if (profiles.HasError())
-                return Result<UiCanvasPreview>::Failure(profiles.ErrorValue());
-            const auto selected =
-                profiles.Value().Select(tree.Value(),
-                                        {.canvas = source.Canvases().front().id,
-                                         .instance = instance,
-                                         .runtimeCanvas = canvas,
-                                         .tree = tree.Value().Revision(),
-                                         .attachment = {owner.Value(), 3, 1},
-                                         .revision = UiPresentationEvidenceRevision::Create(1).Value(),
-                                         .content = result.canvas.logicalExtent,
-                                         .formFactor = state.device == UiCanvasPreviewDevice::Desktop ? UiPresentationFormFactor::Desktop
-                                                                                                      : UiPresentationFormFactor::Handheld,
-                                         .available = state.device == UiCanvasPreviewDevice::Desktop ? UiPresentationCapabilities::Pointer
-                                                                                                     : UiPresentationCapabilities::Touch});
+            auto prepared = CreatePreviewSource(source, owner.Value());
+            if (prepared.HasError())
+                return Result<UiCanvasPreview>::Failure(prepared.ErrorValue());
+            auto values = std::move(prepared).Value();
+            const auto &tree = values.tree;
+            auto &descriptors = values.descriptors;
+            auto selected = ApplyPreviewProfiles(source, tree, state, result.canvas, descriptors);
             if (selected.HasError())
                 return Result<UiCanvasPreview>::Failure(selected.ErrorValue());
-            if (const auto applied = profiles.Value().ApplyLayouts(tree.Value(), selected.Value(), descriptors); applied.HasError())
-                return Result<UiCanvasPreview>::Failure(applied.ErrorValue());
-            result.profile = selected.Value().profile;
-            if (const auto styled = ResolvePreviewStyles(source, tree.Value(), authored, descriptors, resources); styled.HasError())
+            result.profile = selected.Value();
+            if (const auto styled = ResolvePreviewStyles(source, tree, values.authored, descriptors, resources); styled.HasError())
                 return Result<UiCanvasPreview>::Failure(styled.ErrorValue());
-            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
-            if (evaluator.HasError())
-                return Result<UiCanvasPreview>::Failure(evaluator.ErrorValue());
-            auto engine = UiLayoutEngine::Create({instance, canvas, source.Id(), capacity, std::min(capacity, MaximumUiStructuralCommands),
-                                                  2, UiInteractionRevision::Create(1).Value()});
-            if (engine.HasError())
-                return Result<UiCanvasPreview>::Failure(engine.ErrorValue());
-            const UiLogicalExtent extent{result.canvas.logicalExtent.width, result.canvas.logicalExtent.height};
-            const UiLayoutSourceRevisions revisions{source.Revision(),
-                                                    UiRuntimeTreeRevision::Create(1).Value(),
-                                                    UiLayoutContentRevision::Create(1).Value(),
-                                                    UiLayoutStyleRevision::Create(1).Value(),
-                                                    UiLayoutIntrinsicRevision::Create(1).Value(),
-                                                    UiLayoutCanvasRevision::Create(1).Value(),
-                                                    UiLayoutPolicyRevision::Create(1).Value()};
-            auto layout =
-                engine.Value().Update(tree.Value(),
-                                      {revisions, {extent, extent}, {{0, 0}, extent}, &evaluator.Value(), result.canvas.fontScale});
+            auto layout = EvaluatePreviewLayout(source, tree, descriptors, result.canvas);
             if (layout.HasError())
                 return Result<UiCanvasPreview>::Failure(layout.ErrorValue());
-            result.boxes.reserve(elements.size());
+            result.boxes.reserve(tree.Size());
             for (const auto &record : layout.Value().Records()) {
-                const auto element = tree.Value().Get(record.element);
+                const auto element = tree.Get(record.element);
                 if (element.HasError())
                     return Result<UiCanvasPreview>::Failure(element.ErrorValue());
                 result.boxes.push_back({element.Value().id, record.arrangement.contentBox});
@@ -293,5 +368,15 @@ namespace Horo::Editor {
         } catch (const std::bad_alloc &) {
             return Result<UiCanvasSetPresentation>::Failure(MakeError(UiErrors::CapacityExceeded));
         }
+    }
+
+    /** @copydoc ExecuteUiCanvasLayoutGesture */
+    Result<void> ExecuteUiCanvasLayoutGesture(UiCanvasDocument &owner, const UiCanvasDocumentStateId state,
+                                              const std::uint64_t expectedSelection, const std::uint64_t currentSelection,
+                                              const UiCanvasSetPresentation &command) {
+        if (expectedSelection == 0 || expectedSelection != currentSelection ||
+            currentSelection == std::numeric_limits<std::uint64_t>::max() || owner.Selection() != command.element)
+            return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+        return owner.Execute(state, command);
     }
 }  // namespace Horo::Editor

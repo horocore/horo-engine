@@ -145,7 +145,12 @@ move-only completion lease in its operation coordinator and owns execution throu
 structured jobs. Workers may observe its lock-free cancellation token but never
 invoke a control, tree or widget, or publish directly into mutable UI state.
 Prepared results cross the existing bounded owner-command handoff before
-VariableUpdate projects busy/progress/typed failure state into controls.
+VariableUpdate stages busy/progress/typed failure state into inactive controls
+before visual-style preparation and commits those copies with the actual frame.
+Interaction-only layout publications preserve issued operation keys and the
+preallocated store while advancing exact input admission. Document/tree/route
+replacement still retires that semantic authority. Copied errors and released
+records reclaim only at explicit application quiescence.
 
 Screen stacks may own routers by exact route incarnation. Committed close/back/
 clear, replacement and shutdown cancel their pending operations before releasing

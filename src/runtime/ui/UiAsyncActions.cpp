@@ -15,6 +15,14 @@ namespace Horo::Runtime::Ui {
             return Result<T>::Failure(MakeError(descriptor));
         }
 
+        /** @brief Layout publications preserve semantic control identity while exact input admission advances. */
+        bool SameSemanticSource(const UiActionSource &left, const UiActionSource &right) noexcept {
+            const auto &a = left.owner;
+            const auto &b = right.owner;
+            return left.element == right.element && a.instance == b.instance && a.canvas == b.canvas && a.document == b.document &&
+                   a.documentRevision == b.documentRevision && a.treeRevision == b.treeRevision;
+        }
+
         /** @brief Checks the closed cancellation vocabulary without mutating state. */
         bool ValidReason(const UiActionCancellationReason reason) noexcept {
             return reason < UiActionCancellationReason::Count;
@@ -68,7 +76,7 @@ namespace Horo::Runtime::Ui {
             bool retained{};
 
             [[nodiscard]] UiAsyncActionKey Key() const noexcept {
-                return {snapshot.source, snapshot.request, snapshot.operation};
+                return {snapshot.source, snapshot.request, snapshot.operation, snapshot.route};
             }
 
             [[nodiscard]] Result<void> Writable() const {
@@ -224,7 +232,7 @@ namespace Horo::Runtime::Ui {
             const UiAsyncActionDetail::Record *latest{};
             for (const auto &slot : records) {
                 const auto *const record = slot.get();
-                if (record->retained && record->snapshot.source == source &&
+                if (record->retained && SameSemanticSource(record->snapshot.source, source) &&
                     (!latest || record->snapshot.request.sequence > latest->snapshot.request.sequence))
                     latest = record;
             }
@@ -232,6 +240,7 @@ namespace Horo::Runtime::Ui {
         }
 
         UiActionOwnerContext owner;
+        UiRouteInstanceId route;
         std::vector<std::shared_ptr<UiAsyncActionDetail::Record>> records;
         std::thread::id ownerThread{std::this_thread::get_id()};
         std::uint64_t lastRequestSequence{};
@@ -291,15 +300,16 @@ namespace Horo::Runtime::Ui {
             return Failure<UiAsyncActionProducer>(UiErrors::ActionSourceStale);
         std::shared_ptr<UiAsyncActionDetail::Record> free;
         for (const auto &record : storage->records) {
-            if (record->retained && record->snapshot.Busy() && record->snapshot.source == request.source)
+            if (record->retained && record->snapshot.Busy() && SameSemanticSource(record->snapshot.source, request.source))
                 return Failure<UiAsyncActionProducer>(UiErrors::AsyncActionBusy);
-            if (!record->retained && record.use_count() == 1 && !free)
+            if (!record->retained && record.use_count() == 1 && !record->snapshot.error && !free)
                 free = record;
         }
         if (!free)
             return Failure<UiAsyncActionProducer>(UiErrors::AsyncActionCapacityExceeded);
         const UiActionOperationId operation{request.id.ownership, UiActionOperationSequence::Create(request.id.sequence.Value()).Value()};
         free->snapshot = {request.source, request.id, operation};
+        free->snapshot.route = storage->route;
         free->cancelled.store(false);
         free->retained = true;
         storage->lastRequestSequence = request.id.sequence.Value();
@@ -367,6 +377,42 @@ namespace Horo::Runtime::Ui {
                 record->Cancel(reason);
     }
 
+    /** @copydoc UiAsyncActionStore::CanPublishObservation */
+    bool UiAsyncActionStore::CanPublishObservation(const UiActionSource &source, const UiAsyncActionSnapshot *observation) const noexcept {
+        const auto *const storage = StateStorage();
+        return storage && storage->active && storage->ownerThread == std::this_thread::get_id() && source.IsValid() &&
+               source.owner == storage->owner &&
+               (!observation || (observation->route == storage->route && SameSemanticSource(observation->source, source)));
+    }
+
+    /** @copydoc UiAsyncActionStore::BindRouteIncarnation */
+    Result<void> UiAsyncActionStore::BindRouteIncarnation(const UiRouteInstanceId route) {
+        auto *const storage = StateStorage();
+        if (!storage || !storage->active || storage->ownerThread != std::this_thread::get_id() || !route.IsValid() ||
+            route.ownership != storage->owner.instance.ownership || storage->route.IsValid() || storage->lastRequestSequence != 0)
+            return Failure(UiErrors::ActionSourceStale);
+        storage->route = route;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiAsyncActionStore::HasErrorObservers */
+    bool UiAsyncActionStore::HasErrorObservers() const noexcept {
+        const auto *storage = StateStorage();
+        return storage && std::ranges::any_of(storage->records, [](const auto &record) {
+            return record->snapshot.error && record->snapshot.error.use_count() > 1;
+        });
+    }
+
+    /** @copydoc UiAsyncActionStore::AdvanceInteractionSource */
+    void UiAsyncActionStore::AdvanceInteractionSource(const UiActionOwnerContext &owner) noexcept {
+        storage_->owner = owner;
+    }
+
+    /** @copydoc UiAsyncActionStore::SwapOperationStorage */
+    void UiAsyncActionStore::SwapOperationStorage(UiAsyncActionStore &other) noexcept {
+        storage_.swap(other.storage_);
+    }
+
     /** @copydoc UiAsyncActionStore::CanPrepareReplacementSource */
     bool UiAsyncActionStore::CanPrepareReplacementSource() const noexcept {
         const auto *const storage = StateStorage();
@@ -389,14 +435,14 @@ namespace Horo::Runtime::Ui {
         }
     }
 
-    /** @copydoc UiAsyncActionStore::DrainReplacementSource */
-    std::size_t UiAsyncActionStore::DrainReplacementSource() noexcept {
-        const auto *const storage = StateStorage();
+    /** @copydoc UiAsyncActionStore::CollectReleased */
+    std::size_t UiAsyncActionStore::CollectReleased() noexcept {
+        auto *const storage = StateStorage();
         if (!storage || storage->ownerThread != std::this_thread::get_id())
             return 0;
         std::size_t drained{};
-        for (const auto &record : storage->records) {
-            if (record.use_count() == 1 && !record->retained && record->snapshot.error) {
+        for (auto &record : storage->records) {
+            if (record.use_count() == 1 && !record->retained && record->snapshot.error && record->snapshot.error.use_count() == 1) {
                 record->snapshot.error.reset();
                 ++drained;
             }
