@@ -14,6 +14,7 @@ namespace Horo::Render::Detail {
     };
 
     struct MetalBufferInstance {
+        RenderResourceNativeLifetime lifetime;
         __strong id<MTLBuffer> buffer{nil};
         RenderBufferUsage usage{RenderBufferUsage::None};
         RenderMemoryPoolId pool;
@@ -23,11 +24,13 @@ namespace Horo::Render::Detail {
     };
 
     struct MetalMeshInstance {
+        RenderResourceNativeLifetime lifetime;
         __strong id<MTLBuffer> vertexBuffer{nil};
         __strong id<MTLBuffer> indexBuffer{nil};
     };
 
     struct MetalTextureInstance {
+        RenderResourceNativeLifetime lifetime;
         __strong id<MTLTexture> texture{nil};
         RenderTextureDescriptor descriptor;
         RenderMemoryPoolId pool;
@@ -35,6 +38,7 @@ namespace Horo::Render::Detail {
     };
 
     struct MetalTextureViewInstance {
+        RenderResourceNativeLifetime lifetime;
         __strong id<MTLTexture> texture{nil};
         RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm};
         RenderTextureAspect aspect{RenderTextureAspect::Color};
@@ -42,6 +46,7 @@ namespace Horo::Render::Detail {
     };
 
     struct MetalRenderTargetInstance {
+        RenderResourceNativeLifetime lifetime;
         __strong id<MTLTexture> colorTexture{nil};
         __strong id<MTLTexture> depthTexture{nil};
     };

@@ -122,7 +122,7 @@ namespace Horo::Render::Detail {
                 request.kind = RenderResourceUploadQueue::RequestKind::Texture;
                 request.texture = std::get<RenderTextureDescriptor>(claim.descriptor);
             }
-            const auto created = RealizeResourceRequest(backend, registry, request, {});
+            const auto created = RealizeResourceRequest(backend, budget, registry, request, {});
             CompleteResourceRequest(backend, budget, registry, request, created);
             return registry.OperationResult(claim.resource.operation);
         }

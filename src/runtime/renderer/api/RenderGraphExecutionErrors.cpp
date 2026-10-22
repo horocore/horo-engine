@@ -7,6 +7,26 @@ namespace Horo::Render::RenderGraphExecutionErrors {
         const ErrorDomainId Domain{"render.graph.execution"};
     }
 
+    const ErrorCodeDescriptor DeviceIncarnationExhausted{.domain = ErrorDomainId{"horo.render"},
+                                                         .code = ErrorCode{"render.device.incarnation_exhausted"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "The process-wide device incarnation range is exhausted.",
+                                                         .remediationHint = "Retain and drain existing native owners before restarting the "
+                                                                            "process; identities are never reused.",
+                                                         .retryable = false,
+                                                         .userActionable = false};
+
+    const ErrorCodeDescriptor SubmissionObservationUnsupported{.domain = ErrorDomainId{"horo.render"},
+                                                               .code = ErrorCode{"render.submission.observation_unsupported"},
+                                                               .defaultSeverity = ErrorSeverity::Error,
+                                                               .summary =
+                                                                   "The selected backend does not expose issued timeline observation.",
+                                                               .remediationHint =
+                                                                   "Use an explicitly supported queue-completion capability; no fallback "
+                                                                   "or synthetic signal is provided.",
+                                                               .retryable = false,
+                                                               .userActionable = false};
+
     const ErrorCodeDescriptor UnsupportedWorkload =
         Detail::MakeErrorDescriptor(Domain, "render.graph.execution.workload_unsupported", ErrorSeverity::Error,
                                     "The selected backend cannot execute this graph workload or resource class.",

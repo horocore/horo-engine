@@ -42,13 +42,15 @@ under test still accepts offline libraries only. The test requires a native Meta
 device and covers exact shader entries, malformed bytes, pipeline/cache identity,
 reflected uniform size, material range admission, stale identities and shutdown.
 
-The existing macOS CI smoke step cooks this fixture in its dedicated
-`build/ci-metal-shader` configuration and uploads the library, exact source and
-checkout identities, tool hashes, build commands and device-test outcome with the
-test reports. Missing offline compiler tools fail fixture preparation. A runner
-without a Metal device records `skipped_no_device`; successful hosted compilation
-alone does not qualify native behavior. The main CI test registration remains in
-its existing configuration.
+The macOS CI shader build cooks this fixture through its existing CMake target in
+`build/ci-metal`, shared with the Metal graph and presentation smoke tests. CI
+uploads the library, CTest JUnit report and test log; the Actions run identifies
+the checkout and records build commands. Missing offline compiler tools fail
+fixture preparation. A runner without a Metal device emits an explicit skip
+notice; successful hosted compilation alone does not qualify native behavior.
+Catch's all-skipped exit code is registered with CTest so hardware-dependent
+cases, such as HDR on an SDR display, appear as skipped in JUnit. The main CI
+test registration remains in its existing configuration.
 
 The current typed graph workload has no mesh/material draw operation, and the
 Metal graph implementation encodes clear/copy/light operations without binding a

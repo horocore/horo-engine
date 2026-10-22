@@ -214,9 +214,10 @@ namespace Horo::Render::Detail {
         /** @pre All fallible upload setup has completed; callers return success after this terminal submission step. */
         void CommitStagingBlit(const StagingBlit &transfer) {
             [transfer.blit endEncoding];
-            [transfer.commands commit];
+            // Tracking owns the command before commit; an exception after native acceptance cannot lose its drain proof.
             [submittedUploads addObject:transfer.commands];
             lastSubmittedUpload = transfer.commands;
+            [transfer.commands commit];
         }
 
         [[nodiscard]] Result<void> UploadBuffer(id<MTLBuffer> buffer, const std::span<const std::byte> data,
@@ -282,11 +283,14 @@ namespace Horo::Render::Detail {
         template <typename Instance, typename Resource>
         void RollBackResident(Instance *instance, HeapRecord &heap, const RenderMemoryPlacement &placement,
                               std::unordered_set<Instance *> &instances, Resource Instance::*resource, const bool retained) noexcept {
+            if (retained) {
+                instance->use.last = lastSubmittedUpload;
+                DestroyResident(instances, Identity(instance), resource);
+                return;
+            }
             instances.erase(instance);
             [(instance->*resource) makeAliasable];
             delete instance;
-            if (retained)
-                static_cast<void>(ReleaseMetalHeapResource(heap.state));
             DiscardEmptyHeap(placement);
         }
 

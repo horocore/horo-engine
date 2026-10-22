@@ -14,6 +14,12 @@ PRESETS = json.loads((ROOT / "CMakePresets.json").read_text(encoding="utf-8"))
 TERRAIN_RENDER_TARGETS = {"HoroTerrainRenderIntegrationTests", "HoroTerrainRenderIntegrationPublicHeaderConsumer"}
 
 
+def workflow_job(name: str) -> str:
+    match = re.search(rf"^  {re.escape(name)}:\n(.*?)(?=^  [a-z-]+:\n|\Z)", WORKFLOW, re.M | re.S)
+    assert match, f"Missing workflow job: {name}"
+    return match.group(1)
+
+
 def preset(kind: str, name: str) -> dict:
     return next(item for item in PRESETS[kind] if item["name"] == name)
 
@@ -73,7 +79,7 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroAISceneIntegrationPublicHeaderConsumer", "HoroAISightIntegrationPublicHeaderConsumer",
     "HoroGameplayPerceptionIntegrationPublicHeaderConsumer",
     "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
-    "HoroD3D12InitializationTests",
+    "HoroD3D12InitializationTests", "HoroD3D12ResourceTests",
     "HoroMaterialBindingTests", "HoroMaterialBindingPublicHeaderConsumer",
     "HoroNetworkDebuggerTests", "HoroNetworkDebuggerPublicHeaderConsumer",
     "HoroPlayTopologyTests", "HoroPlayTopologyPublicHeaderConsumer",
@@ -384,9 +390,12 @@ def test_fracture_consumer_extends_the_owned_header_boundary_target() -> None:
 
 
 def test_audio_keeps_both_modes_and_all_platforms() -> None:
-    assert set(re.findall(r"^  ([a-z-]+):$", WORKFLOW.split("jobs:\n", 1)[1], re.M)) == {"tooling", "android-storage", "test"}
+    # Independent native qualification jobs do not change the audio matrix contract.
+    audio_job = workflow_job("test")
     for platform in ("Linux / GCC", "macOS / Clang", "Windows / MSVC"):
-        assert f"name: {platform}" in WORKFLOW
+        assert f"name: {platform}" in audio_job
+    assert "Build Release audio checks" in audio_job
+    assert "Test Release audio checks" in audio_job
     assert targets("HORO_CI_AUDIO_TARGETS") == {
         "HoroAudioRealtimeSafetyHarnessTests", "HoroAudioWatchdogTests", "HoroAudioNullTests",
         "HoroAudioDspTests", "HoroCoreAudioDspTests", "HoroAudioCommandTests", "HoroAudioMixerTests",
@@ -401,6 +410,46 @@ def test_audio_keeps_both_modes_and_all_platforms() -> None:
     for name in ("ci-linux-debug", "ci-macos-debug"):
         assert "targets" not in preset("buildPresets", name)  # Debug builds audio with all native targets.
         assert preset("testPresets", name)["filter"]["exclude"]["label"] == "gui|tooling"
+
+
+def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
+    native_job = workflow_job("shaders")
+    assert "os: ubuntu-24.04" in native_job
+    assert "os: windows-2022" in native_job
+    assert "timeout-minutes: 90" in native_job
+    assert "-DHORO_BUILD_RENDER_VULKAN=ON" in native_job
+    assert "-DHORO_BUILD_EDITOR_GUI=OFF" in native_job
+    assert "-DHORO_ENABLE_GPU_SMOKE_TESTS=ON" in native_job
+    assert "cmake --build build/ci" in native_job
+    assert "ctest --test-dir build/ci" in native_job
+    build_arguments = native_job.split("cmake --build build/ci", 1)[1].split("      - name:", 1)[0]
+    for target in ("HoroRenderVulkanTests", "HoroVulkanCommandExecutionSmoke", "HoroRenderGraphTests",
+                   "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
+        assert target in native_job, f"Shader job must build {target}"
+        if target != "HoroVulkanCommandExecutionSmoke":
+            assert target in build_arguments
+    assert "-DHORO_BUILD_XR_OPENXR=ON" in native_job
+    assert "--no-tests=error" in native_job
+    setup = (ROOT / ".github/actions/setup-build-tools/action.yml").read_text(encoding="utf-8")
+    for dependency in ("vulkan-validationlayers", "mesa-vulkan-drivers", "glslang-tools"):
+        assert dependency in setup
+    assert "scripts/dev.py select-lavapipe-icd" in native_job
+    assert "VK_DRIVER_FILES=%s" in native_job
+    assert "lvp_icd.x86_64.json" not in native_job
+    assert "--output-junit" in native_job
+    selection = re.search(r"-R '([^']+)'", native_job)
+    assert selection is not None
+    selected = re.compile(selection.group(1))
+    for target in ("HoroRenderVulkanTests", "HoroRenderGraphTests", "HoroRenderFrontendTests",
+                   "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
+        assert selected.search(f"{target}::representative case [tag]")
+        assert not selected.search(f"{target}Unrelated::case")
+    assert "-R '^HoroVulkanCommandExecutionSmoke$'" in native_job
+    assert not selected.search("UnrelatedTests::case")
+    assert "continue-on-error" not in native_job
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
+    assert 'FAIL_REGULAR_EXPRESSION "Validation Error;VUID-"' in tests_cmake
 
 
 def test_required_checks_and_sdl_composition_are_preserved() -> None:
@@ -572,3 +621,34 @@ def test_windows_trigger_migration_builds_real_runtime_and_cook_oracles() -> Non
         registration = re.search(rf'set_tests_properties\({consumer} PROPERTIES LABELS "([^"]+)"\)', tests_cmake)
         assert registration is not None
         assert "ci-windows" in registration.group(1).split(";")
+
+
+def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform_draws() -> None:
+    shader_workflow = workflow_job("shaders")
+    assert not (ROOT / ".github/workflows/vulkan-shader.yml").exists()
+    assert "ubuntu-24.04" in shader_workflow
+    assert "windows-2022" in shader_workflow
+    flat_targets = {"HoroMaterialBindingPublicHeaderConsumer", "HoroMultiviewSceneExtractionPublicHeaderConsumer"}
+    expected_targets = {"HoroRenderVulkanTests", "HoroMaterialBindingTests", "HoroPipelineCacheTests",
+                        "HoroShaderPermutationTests", "HoroMultiviewSceneExtractionTests", "HoroXRApiTests",
+                        "HoroXROpenXRTests"} | flat_targets
+    build_targets = re.search(r"cmake --build build/ci --target\s+(.*?) --parallel 2", shader_workflow, re.S)
+    assert build_targets is not None
+    expected_targets |= {"HoroRenderGraphTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests",
+                         "HoroXROpenXRHostInterfaceConsumer"}
+    assert set(build_targets.group(1).split()) == expected_targets
+    test_selection = re.search(r"ctest --test-dir build/ci .*?\s+-R '([^']+)'", shader_workflow, re.S)
+    assert test_selection is not None
+    selected = re.compile(test_selection.group(1))
+    for target in expected_targets - flat_targets - {"HoroXROpenXRHostInterfaceConsumer"}:
+        assert selected.search(f"{target}::representative case") is not None
+        assert selected.search(f"Unrelated{target}::representative case") is None
+    for target in flat_targets:
+        assert selected.fullmatch(target) is not None
+        assert selected.search(f"{target}Extra") is None
+    assert "--no-tests=error" in shader_workflow
+    assert "VulkanTransform.vert" in shader_workflow
+    assert "VulkanTransform.frag" in shader_workflow
+    assert "HORO_VULKAN_TRANSFORM_VERTEX" in shader_workflow
+    assert "'[native-smoke]'" in shader_workflow
+    assert "continue-on-error" not in shader_workflow

@@ -2008,6 +2008,7 @@ add_library(HoroXRApi STATIC
         runtime/xr/api/XRSpacePose.cpp
         runtime/xr/api/XRTrackingSnapshot.cpp
         runtime/xr/api/XRViewRenderPlan.cpp
+        runtime/xr/api/XRMultiviewScene.cpp
 )
 add_library(HoroEngine::XRApi ALIAS HoroXRApi)
 target_compile_features(HoroXRApi PUBLIC cxx_std_20)
@@ -2059,7 +2060,8 @@ if(HORO_BUILD_XR_OPENXR)
         HoroEngine::XRRuntime HoroEngine::XRInputBindings HoroEngine::Platform HoroOpenXRHeaders)
     target_compile_features(HoroXROpenXRHostInterface INTERFACE cxx_std_20)
 
-    add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRActionBindings.cpp)
+    add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRActionBindings.cpp
+        runtime/xr/openxr/OpenXRSwapchain.cpp)
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)
@@ -2412,6 +2414,10 @@ target_compile_features(HoroRuntimeUiInput PUBLIC cxx_std_20)
 target_link_libraries(HoroRuntimeUiInput PUBLIC HoroEngine::Input HoroEngine::RuntimeUi)
 
 add_library(HoroRenderApi STATIC
+        runtime/renderer/api/MultiviewSceneExtraction.cpp
+        runtime/renderer/api/MultiviewGraphWorkload.cpp
+        runtime/renderer/api/MultiviewShaderParameters.cpp
+        runtime/renderer/api/MultiviewExtractionErrors.cpp
         runtime/renderer/api/PostProcessErrors.cpp
         runtime/renderer/api/PostProcessSettings.cpp
         runtime/renderer/api/PostProcessVolumes.cpp
@@ -2430,6 +2436,8 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderAdapterErrors.cpp
         runtime/renderer/api/RenderDisplay.cpp
         runtime/renderer/api/RenderDisplayErrors.cpp
+        runtime/renderer/api/RenderPresentationOutput.cpp
+        runtime/renderer/api/RenderPresentationErrors.cpp
         runtime/renderer/api/FramePacing.cpp
         runtime/renderer/api/FramePacingErrors.cpp
         runtime/renderer/api/PresentMode.cpp
@@ -2447,6 +2455,7 @@ add_library(HoroRenderApi STATIC
         runtime/renderer/api/RenderGraphSynchronizationErrors.cpp
         runtime/renderer/api/RenderGraphLifetime.cpp
         runtime/renderer/api/RenderGraphWorkload.cpp
+        runtime/renderer/api/RenderDeviceIncarnation.cpp
         runtime/renderer/api/LightCulling.cpp
         runtime/renderer/api/LightCullingKernel.cpp
         runtime/renderer/api/LightFrameLayout.cpp
@@ -2518,6 +2527,13 @@ target_include_directories(HoroRenderBackendRegistry
 )
 target_link_libraries(HoroRenderBackendRegistry PUBLIC HoroEngine::RenderApi)
 
+# Dedicated non-installed external-allocation handoff; native source subclasses stay in
+# selected backend adapters and no repository-wide source include root is exported.
+add_library(HoroRenderExternalImagesInterface INTERFACE)
+target_include_directories(HoroRenderExternalImagesInterface INTERFACE
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/external_images/include>")
+target_link_libraries(HoroRenderExternalImagesInterface INTERFACE HoroEngine::RenderApi)
+
 add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/BoundedRenderQueueCore.h
         runtime/renderer/frontend/RenderTransferErrorDescriptor.h
@@ -2526,6 +2542,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/RenderFrameParallelExecution.cpp
         runtime/renderer/frontend/RenderFrameGraphResources.cpp
         runtime/renderer/frontend/RenderFrameMaterialExecution.cpp
+        runtime/renderer/frontend/RenderMultiviewResources.cpp
         runtime/renderer/frontend/RenderGraphTransientResourcePool.cpp
         runtime/renderer/frontend/RenderParallelWorkInternal.cpp
         runtime/renderer/frontend/RenderParallelWorkErrors.cpp
@@ -2535,6 +2552,8 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/LightFrameBufferPool.cpp
         runtime/renderer/frontend/RenderFrontendInspection.cpp
         runtime/renderer/frontend/RenderFrontendResourceAccess.cpp
+        runtime/renderer/frontend/RenderFrontendExternalTextures.cpp
+        runtime/renderer/frontend/RenderResourceExternalImages.cpp
         runtime/renderer/frontend/RenderFrontendResourceValidation.cpp
         runtime/renderer/frontend/RenderFrontendResources.cpp
         runtime/renderer/frontend/RenderFrontendShaderResources.cpp
@@ -2558,6 +2577,7 @@ add_library(HoroRenderFrontend STATIC
         runtime/renderer/frontend/UiRenderTextureRealization.cpp
 )
 add_library(HoroEngine::RenderFrontend ALIAS HoroRenderFrontend)
+target_link_libraries(HoroRenderFrontend PRIVATE HoroRenderExternalImagesInterface)
 
 target_compile_features(HoroRenderFrontend PUBLIC cxx_std_20)
 target_include_directories(HoroRenderFrontend
@@ -2685,6 +2705,8 @@ if (HORO_BUILD_RENDER_METAL)
             runtime/renderer/modules/metal/MetalMaterialResources.mm
             runtime/renderer/modules/metal/MetalParallelRecording.mm
             runtime/renderer/modules/metal/MetalDeviceDiscovery.mm
+            runtime/renderer/modules/metal/MetalDrawableAcquisition.mm
+            runtime/renderer/modules/metal/MetalPresentationOutput.mm
             runtime/renderer/modules/metal/MetalSubmittedGraphQueue.mm
             runtime/renderer/modules/metal/MetalResourceGraphRuntime.mm
             runtime/renderer/modules/metal/MetalLightCullingKernel.mm
@@ -2706,12 +2728,19 @@ if (HORO_BUILD_RENDER_METAL)
             "-framework Foundation"
             "-framework Metal"
             "-framework QuartzCore"
+            "-framework CoreGraphics"
     )
 endif ()
 
 add_library(HoroRenderD3D12 STATIC
         runtime/renderer/modules/d3d12/D3D12Initialization.cpp
         runtime/renderer/modules/d3d12/D3D12NativeInitialization.cpp
+        runtime/renderer/modules/d3d12/D3D12NativeResources.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceMemory.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceLifecycle.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceTransfers.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceViews.cpp
+        runtime/renderer/modules/d3d12/D3D12ResourceConversions.cpp
 )
 add_library(HoroEngine::RenderD3D12 ALIAS HoroRenderD3D12)
 target_compile_features(HoroRenderD3D12 PRIVATE cxx_std_20)
@@ -2721,7 +2750,24 @@ if (WIN32)
     target_link_libraries(HoroRenderD3D12 PRIVATE d3d12 dxgi ole32)
 endif ()
 
+# Tests receive only the deliberate D3D12 startup/resource seams, never broad src visibility.
+if (BUILD_TESTING)
+    add_library(HoroRenderD3D12TestingInternal INTERFACE)
+    set(_horo_d3d12_test_headers "${CMAKE_CURRENT_BINARY_DIR}/internal/d3d12-testing")
+    file(MAKE_DIRECTORY "${_horo_d3d12_test_headers}")
+    foreach(_horo_d3d12_test_header IN ITEMS D3D12Initialization.h D3D12Resources.h D3D12NativeResources.h)
+        configure_file("runtime/renderer/modules/d3d12/${_horo_d3d12_test_header}"
+            "${_horo_d3d12_test_headers}/${_horo_d3d12_test_header}" COPYONLY)
+    endforeach ()
+    target_include_directories(HoroRenderD3D12TestingInternal INTERFACE "${_horo_d3d12_test_headers}")
+    target_link_libraries(HoroRenderD3D12TestingInternal INTERFACE HoroEngine::RenderD3D12 HoroEngine::RenderApi)
+endif ()
+
 if (HORO_BUILD_RENDER_VULKAN)
+    add_library(HoroRenderVulkanExternalImagesInterface INTERFACE)
+    target_include_directories(HoroRenderVulkanExternalImagesInterface INTERFACE
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/renderer/vulkan_external/include>")
+    target_link_libraries(HoroRenderVulkanExternalImagesInterface INTERFACE HoroRenderExternalImagesInterface Vulkan::Headers)
     add_library(HoroRenderVulkan STATIC
             runtime/renderer/modules/vulkan/VulkanAdapterDiscovery.cpp
             runtime/renderer/modules/vulkan/VulkanBackendModule.cpp
@@ -2729,7 +2775,20 @@ if (HORO_BUILD_RENDER_VULKAN)
             runtime/renderer/modules/vulkan/VulkanNativeRuntime.cpp
             runtime/renderer/modules/vulkan/VulkanResourceConversions.cpp
             runtime/renderer/modules/vulkan/VulkanResourceRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanShaderRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanPipelineResources.cpp
+            runtime/renderer/modules/vulkan/VulkanMaterialResources.cpp
+            runtime/renderer/modules/vulkan/VulkanCommandRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanCommandSubmission.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphRuntime.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphPreparation.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanMaterialCommands.cpp
+            runtime/renderer/modules/vulkan/VulkanMultiviewEncoding.cpp
+            runtime/renderer/modules/vulkan/VulkanMultiviewPreparation.cpp
+            runtime/renderer/modules/vulkan/VulkanGraphBarriers.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackend.cpp
+        runtime/renderer/modules/vulkan/VulkanBackendAdmission.cpp
             runtime/renderer/modules/vulkan/VulkanRenderBackendErrors.cpp
     )
     add_library(HoroEngine::RenderVulkan ALIAS HoroRenderVulkan)
@@ -2737,8 +2796,23 @@ if (HORO_BUILD_RENDER_VULKAN)
     target_compile_features(HoroRenderVulkan PUBLIC cxx_std_20)
     target_link_libraries(HoroRenderVulkan
             PUBLIC HoroEngine::RenderBackendRegistry
-            PRIVATE Vulkan::Headers
+            PRIVATE Vulkan::Headers HoroRenderVulkanExternalImagesInterface
     )
+endif ()
+
+if (HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN)
+    add_library(HoroXROpenXRVulkanHostInterface INTERFACE)
+    target_include_directories(HoroXROpenXRVulkanHostInterface INTERFACE
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/runtime/xr/openxr/vulkan/host>")
+    target_compile_definitions(HoroXROpenXRVulkanHostInterface INTERFACE XR_USE_GRAPHICS_API_VULKAN)
+    target_link_libraries(HoroXROpenXRVulkanHostInterface INTERFACE
+        HoroXROpenXRHostInterface HoroRenderVulkanExternalImagesInterface)
+    add_library(HoroXROpenXRVulkan STATIC
+        runtime/xr/openxr/vulkan/OpenXRVulkanSwapchain.cpp
+        runtime/xr/openxr/vulkan/OpenXRMultiviewGraph.cpp)
+    target_link_libraries(HoroXROpenXRVulkan PRIVATE HoroXROpenXRVulkanHostInterface
+        HoroEngine::XROpenXR HoroEngine::RenderFrontend HoroEngine::RenderVulkan)
+    target_compile_features(HoroXROpenXRVulkan PRIVATE cxx_std_20)
 endif ()
 
 add_library(HoroSceneSourceModel INTERFACE)
@@ -2949,6 +3023,7 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_METAL)
             ${HORO_SDL3_TARGET}
             PRIVATE
             HoroThirdParty::ImGuiMetal
+            "-framework AppKit"
             "-framework Metal"
             "-framework QuartzCore"
     )

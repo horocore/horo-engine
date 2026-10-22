@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderBackend.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
@@ -329,8 +330,8 @@ namespace {
 
         Check(backend->Present(token).HasValue());
         Check(backend->Resize(FramebufferExtent{1920, 1080}).HasValue());
-        backend->Shutdown();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Null backend satisfies the shared backend contract", "[unit][runtime][renderer][contract][qualification]") {
@@ -351,6 +352,25 @@ namespace {
         const Result<void> initialized = backend->Initialize(RenderBackendConfig{.requirePresentation = true});
         Check(initialized.HasError());
         Check(initialized.ErrorValue().code.Value() == "render.null.presentation_unsupported");
+    }
+
+    TEST_CASE("Null never silently consumes explicit native output configuration or workload encoding", "[renderer][presentation]") {
+        auto backend = CreateNullBackend();
+        const auto rejected = backend->Initialize({.presentationOutput = RenderPresentationOutputRequest{}});
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
+        REQUIRE(backend->Initialize({}).HasValue());
+        CHECK(backend->PresentationOutput().HasError());
+        CHECK(backend->ConfigurePresentationOutput({}).HasError());
+        const auto frame = BeginNullFrame(*backend);
+        const std::array passes{
+            RenderPassDescriptor{.id = RenderPassId{1}, .primaryOutput = PrimaryOutputAttachment{.outputColor = RenderOutputColor{}}}};
+        const auto executed = backend->Execute({frame, passes});
+        REQUIRE(executed.HasError());
+        CHECK(executed.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
+        backend->AbortFrame(frame);
+        REQUIRE(backend->BeginShutdown().HasValue());
+        REQUIRE(backend->PollDrain().Value() == RenderBackendDrainProgress::Drained);
     }
 
     TEST_CASE("Null Backend Validates And Realizes Generic Resources", "[unit][runtime][renderer][resource]") {
@@ -397,7 +417,7 @@ namespace {
         backend->DestroyMesh(mesh.Value());
         backend->DestroyBuffer(vertex.Value());
         backend->DestroyBuffer(index.Value());
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Null Backend Rejects Invalid Configuration And Frame Extent", "[unit][runtime][renderer]") {

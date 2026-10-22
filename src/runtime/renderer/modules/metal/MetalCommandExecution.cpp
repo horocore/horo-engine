@@ -1,8 +1,13 @@
 #include "MetalCommandExecution.h"
 
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+
 namespace Horo::Render::Detail {
     /** @copydoc ValidateMetalRenderGraph */
     Result<void> ValidateMetalRenderGraph(const IMetalRuntime &runtime, const RenderGraphExecutionRequest &request) {
+        if (!request.submissions.empty())
+            return Result<void>::Failure(
+                MakeError(MetalBackendErrors::UnsupportedGraphExecution, "Metal explicit graph submissions are not implemented."));
         const auto &graph = request.graph;
         if (!graph.Owner().IsValid() || request.workloads.size() != graph.Passes().size() ||
             request.resources.size() != graph.Resources().size()) {
@@ -25,10 +30,15 @@ namespace Horo::Render::Detail {
                 return Result<void>::Failure(
                     MakeError(MetalBackendErrors::UnsupportedGraphExecution, "Metal graph execution admits exactly one effective queue."));
         }
+        if (!request.graph.ExternalReleases().empty())
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
         if (const auto valid = ValidateRenderGraphExecutionRequest(request); valid.HasError())
             return Result<void>::Failure(
                 MakeError(MetalBackendErrors::InvalidExecutionPlan, "Graph operation, bindings or declared resource uses are invalid."));
         for (const auto &binding : request.workloads) {
+            if (std::holds_alternative<RenderGraphDepthAttachment>(binding.workload) ||
+                std::holds_alternative<RenderGraphMultiview>(binding.workload))
+                return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
             if (const auto valid = runtime.ValidateGraphWorkload(binding.workload, request.resources); valid.HasError()) {
                 return valid;
             }

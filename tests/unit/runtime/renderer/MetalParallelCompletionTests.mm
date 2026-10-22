@@ -6,6 +6,7 @@
 /** @brief Native status seam for deterministic polling-policy tests, not qualification of driver execution. */
 @interface HoroTestParallelCommandStatus : NSObject
 @property(nonatomic) MTLCommandBufferStatus status;
+@property(nonatomic, strong) NSError *error;
 @end
 @implementation HoroTestParallelCommandStatus
 @end
@@ -51,7 +52,7 @@ namespace Horo::Render::Detail {
         }
     }
 
-    TEST_CASE("Native submitted graph queue keeps its owner lease until every worker completes or the domain closes",
+    TEST_CASE("Native submitted graph queue keeps its owner lease until every worker is terminal",
               "[unit][renderer][metal][parallel][completion][lease]") {
         HoroTestParallelCommandStatus *worker = [[HoroTestParallelCommandStatus alloc] init];
         HoroTestParallelCommandStatus *tail = [[HoroTestParallelCommandStatus alloc] init];
@@ -81,9 +82,40 @@ namespace Horo::Render::Detail {
             worker.status = MTLCommandBufferStatusError;
             REQUIRE(queue.Poll().HasError());
             CHECK(lease.released == 0);
-            queue.ReleaseLeases();
+            REQUIRE(queue.DrainTerminals().HasError());
+            CHECK(queue.Count() == 0);
             CHECK(lease.released == 1);
         }
+        queue.Clear();
+        CHECK(budget->live.load() == 0);
+    }
+
+    TEST_CASE("Metal shutdown retains all graph parents while one failed graph buffer still has a pending sibling",
+              "[unit][renderer][metal][parallel][shutdown]") {
+        HoroTestParallelCommandStatus *failed = [[HoroTestParallelCommandStatus alloc] init];
+        HoroTestParallelCommandStatus *pending = [[HoroTestParallelCommandStatus alloc] init];
+        HoroTestParallelCommandStatus *tail = [[HoroTestParallelCommandStatus alloc] init];
+        failed.status = MTLCommandBufferStatusError;
+        pending.status = MTLCommandBufferStatusScheduled;
+        tail.status = MTLCommandBufferStatusCompleted;
+        std::vector<MetalRecordedOperation> operations{{.commands = (id<MTLCommandBuffer>)failed},
+                                                       {.commands = (id<MTLCommandBuffer>)pending}};
+        auto budget = std::make_shared<MetalRecordingBudget>();
+        auto recording = std::make_shared<MetalParallelRecording>(FrameToken{1}, std::move(operations), budget);
+        CHECK_FALSE(recording->NativeTerminal());
+        CountingGraphLease lease;
+        IRenderGraphResourceLease *activeLease = &lease;
+        MetalSubmittedGraphQueue queue;
+        queue.Initialize(3);
+        queue.Remember((id<MTLCommandBuffer>)tail, activeLease, recording);
+        REQUIRE(queue.DrainTerminals().HasValue());
+        CHECK(queue.Count() == 1);
+        CHECK(lease.released == 0);
+        pending.status = MTLCommandBufferStatusCompleted;
+        REQUIRE(queue.DrainTerminals().HasError());
+        CHECK(queue.Count() == 0);
+        CHECK(lease.released == 1);
+        REQUIRE(queue.DrainTerminals().HasValue());
         queue.Clear();
         CHECK(budget->live.load() == 0);
     }

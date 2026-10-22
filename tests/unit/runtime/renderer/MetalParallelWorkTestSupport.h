@@ -174,10 +174,17 @@ namespace Horo::Render::MetalBackendTests {
             FakeMetalRuntime::AbortFrame();
         }
 
-        void Shutdown() noexcept override {
-            AbortFrame();
+        Result<void> BeginShutdown() override {
+            return FakeMetalRuntime::BeginShutdown();
+        }
+
+        Result<RenderBackendDrainProgress> PollDrain() override {
+            if (observation_->accepted && !observation_->nativeComplete)
+                return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Pending);
             ReleaseLease();
-            FakeMetalRuntime::Shutdown();
+            if (observation_->liveRecordings.load() != 0)
+                return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Pending);
+            return FakeMetalRuntime::PollDrain();
         }
 
     private:
@@ -237,6 +244,15 @@ namespace Horo::Render::MetalBackendTests {
         MetalEditorGraphicsBridge bridge;
         std::shared_ptr<ParallelObservation> observation{std::make_shared<ParallelObservation>()};
         std::unique_ptr<RenderFrontend> frontend{MakeParallelFrontend(state, port, bridge, observation)};
+
+        /** @brief Exercises the actual host close boundary before destroying the owning fake-native composition. */
+        void Close() {
+            REQUIRE(frontend->BeginShutdown().HasValue());
+            const auto drained = frontend->PollDrain();
+            REQUIRE(drained.HasValue());
+            REQUIRE(drained.Value() == RenderBackendDrainProgress::Drained);
+            frontend.reset();
+        }
     };
 
     /** @brief Owned two-pass producer input; callers may destroy or mutate it immediately after capture. */

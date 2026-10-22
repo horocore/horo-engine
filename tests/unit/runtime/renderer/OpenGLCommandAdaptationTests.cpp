@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "OpenGLRenderTestSupport.h"
 
 #include <limits>
@@ -180,6 +181,9 @@ namespace Horo::Render::OpenGLBackendTests {
         SECTION("Invalid load") {
             second.primaryOutput->loadOperation = static_cast<AttachmentLoadOperation>(255);
         }
+        SECTION("Explicit output encoding has no admitted OpenGL output contract") {
+            second.primaryOutput->outputColor = RenderOutputColor{};
+        }
         SECTION("Invalid store") {
             second.primaryOutput->storeOperation = static_cast<AttachmentStoreOperation>(255);
         }
@@ -252,10 +256,20 @@ namespace Horo::Render::OpenGLBackendTests {
         fixture.backend->AbortActiveFrame();
         Check(commandState.fenceCount == 1);
         Check(fixture.backend->BeginFrame({.frameNumber = 2, .outputExtent = {640, 480}}).HasError());
-        fixture.backend->Shutdown();
-        fixture.backend->Shutdown();
-        Check(commandState.deleteFenceCount == 1);
+        REQUIRE(fixture.backend->BeginShutdown().HasValue());
+        const auto pending = fixture.backend->PollDrain();
+        REQUIRE(pending.HasValue());
+        CHECK(pending.Value() == RenderBackendDrainProgress::Pending);
+        CHECK(commandState.deleteFenceCount == 0);
+        CHECK(fixture.portState.destroyCount == 0);
+        commandState.pollStatus = 0x911C;  // Actual closing-fence evidence from the deterministic dispatch.
+        Horo::Render::Test::RequireDrainedOwner(*fixture.backend);
+        Horo::Render::Test::RequireDrainedOwner(*fixture.backend);
+        Check(commandState.deleteFenceCount == 2);
+        Check(fixture.portState.destroyCount == 0);
+        fixture.backend.reset();
         Check(fixture.portState.destroyCount == 1);
+        fixture.backend = CreateBackend(fixture.port);
         Check(fixture.backend->Initialize({}).HasValue());
         Check(fixture.backend->BeginFrame({.frameNumber = 3, .outputExtent = {640, 480}}).HasValue());
     }
@@ -278,6 +292,9 @@ namespace Horo::Render::OpenGLBackendTests {
         const auto failed = fixture.backend->BeginFrame({.frameNumber = 2, .outputExtent = {640, 480}});
         Check(failed.HasError());
         Check(failed.ErrorValue().code.Value() == "render.opengl.synchronization_failed");
+        commandState.fenceFails = false;
+        commandState.pollStatus = 0x911A;
+        Horo::Render::Test::RequireDrainedOwner(*fixture.backend);
     }
 
     TEST_CASE("OpenGL Swap Retry Replaces Fence And Preserves Active Token", "[unit][runtime][renderer][opengl_commands]") {
@@ -290,8 +307,8 @@ namespace Horo::Render::OpenGLBackendTests {
         Check(commandState.fenceCount == 2);
         Check(commandState.deleteFenceCount == 1);
         Check(fixture.backend->Present(frame).HasError());
-        fixture.backend->Shutdown();
-        Check(commandState.deleteFenceCount == 2);
+        Horo::Render::Test::RequireDrainedOwner(*fixture.backend);
+        Check(commandState.deleteFenceCount == 3);
     }
 
     TEST_CASE("OpenGL Requires Loaded State And Sync Dispatch Before Publishing Readiness", "[unit][runtime][renderer][opengl_commands]") {
@@ -313,14 +330,21 @@ namespace Horo::Render::OpenGLBackendTests {
         CommandFixture fixture;
         const FrameToken frame = fixture.Begin();
         bool rejected = false;
+        bool closeRejected = false;
+        bool drainRejected = false;
         std::thread foreign{[&] {
             const auto presented = fixture.backend->Present(frame);
             rejected = presented.HasError() && presented.ErrorValue().code.Value() == "render.opengl.wrong_thread";
             fixture.backend->AbortFrame(frame);
-            fixture.backend->Shutdown();
+            const auto close = fixture.backend->BeginShutdown();
+            closeRejected = close.HasError() && close.ErrorValue().code.Value() == "render.opengl.wrong_thread";
+            const auto drain = fixture.backend->PollDrain();
+            drainRejected = drain.HasError() && drain.ErrorValue().code.Value() == "render.opengl.wrong_thread";
         }};
         foreign.join();
         Check(rejected);
+        Check(closeRejected);
+        Check(drainRejected);
         Check(commandState.fenceCount == 0);
         Check(fixture.portState.destroyCount == 0);
         Check(fixture.backend->Present(frame).HasValue());

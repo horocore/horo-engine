@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Render/RenderGraphLifetime.h"
 #include "Horo/Runtime/Render/RenderGraphTransientResources.h"
 #include "Horo/Runtime/Render/RenderGraphWorkload.h"
+#include "Horo/Runtime/Render/RenderPresentationOutput.h"
 #include "Horo/Runtime/Render/UiRenderSubmission.h"
 
 #include <type_traits>
@@ -37,3 +38,18 @@ static_assert(
                        std::declval<const Horo::Render::CompiledRenderGraphExecution &>(),
                        std::span<const Horo::Render::RenderGraphPassWorkload>{}, Horo::Render::RenderGraphTransientResourcesHandle{})),
                    Horo::Result<void>>);
+
+static_assert(
+    std::is_same_v<decltype(std::declval<Horo::Render::RenderFrontend &>().PollPresentationAvailability(Horo::Render::FramebufferExtent{})),
+                   Horo::Result<bool>>);
+static_assert(std::is_same_v<decltype(std::declval<Horo::Render::RenderFrontend &>().ConfigurePresentationOutput(
+                                 Horo::Render::RenderPresentationOutputRequest{})),
+                             Horo::Result<Horo::Render::RenderPresentationOutput>>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::RenderFrontend &>().PresentationOutput()),
+                             Horo::Result<Horo::Render::RenderPresentationOutput>>);
+
+static_assert(Horo::Render::RenderOutputColor{}.matching == Horo::Render::RenderOutputColorMatching::Unmanaged);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::CompiledRenderGraphExecution &>().ExternalReleases()),
+                             std::span<const Horo::Render::RenderGraphExternalRelease>>);
+static_assert(std::is_same_v<decltype(std::declval<const Horo::Render::RenderGraphSynchronizationPlan &>().ExternalReleases()),
+                             std::span<const Horo::Render::RenderGraphExternalRelease>>);
