@@ -206,6 +206,18 @@ namespace Horo::XR {
          */
         [[nodiscard]] XRFrameStatus End(const XRFrameId &frame, std::uint32_t layerCount) noexcept;
 
+        /**
+         * @brief Validate native end admission without closing the transaction.
+         * @param frame Exact begun frame. @param layerCount Complete intended native layer count.
+         * @return Same status as End without mutation; host must serialize validation, native end and End.
+         */
+        [[nodiscard]] XRFrameStatus ValidateEnd(const XRFrameId &frame, std::uint32_t layerCount) const noexcept;
+
+        /** @brief Fence one exact released image before native composition encoding.
+         * @param frame Exact current frame. @param image Image acquired and released in this transaction.
+         * @return Ok or typed stale/not-acquired/not-released status without mutation. */
+        [[nodiscard]] XRFrameStatus ValidateReleasedImage(const XRFrameId &frame, const XRSwapchainImageId &image) const noexcept;
+
         /** @brief Return a fixed-size current publication. @return Copy of frame identity, phase, prediction, and counts. */
         [[nodiscard]] XRFrameSnapshot Snapshot() const noexcept;
 

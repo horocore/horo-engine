@@ -141,6 +141,12 @@ namespace Horo::XR::OpenXRInternal {
         Render::RenderTextureHandle texture;
     };
 
+    /** @brief Synchronous compositor borrow, valid only until the next acquisition or Close. */
+    struct NativeReleasedSwapchainImage final {
+        XrSwapchain swapchain{XR_NULL_HANDLE};
+        NativeSwapchainRequest allocation;
+    };
+
     /**
      * @brief One immovable runtime allocation owner; it never owns XR frame or GPU submission state.
      *
@@ -217,6 +223,11 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Fences one exact ready/imported acquisition before backend import or graph admission.
          * @param image Exact owner-issued identity. @return Success or stale/unavailable without native work. */
         [[nodiscard]] Result<void> ValidateAcquisition(const XRSwapchainImageId &image) const;
+        /** @brief Borrows only the latest successfully released acquisition for native compositor encoding.
+         * @param image Exact image generation released after Renderer retirement.
+         * @return Native swapchain and allocation or stale/unavailable; no ownership is transferred.
+         * @pre The host serializes this borrow and xrEndFrame before the next acquisition or Close. */
+        [[nodiscard]] Result<NativeReleasedSwapchainImage> BorrowReleased(const XRSwapchainImageId &image) const;
         /** @brief Returns lifecycle evidence without native calls. @return Current retained ownership phase. */
         [[nodiscard]] NativeSwapchainPhase Phase() const noexcept;
 
@@ -282,6 +293,7 @@ namespace Horo::XR::OpenXRInternal {
         XrSwapchain native_{XR_NULL_HANDLE};
         NativeSwapchainPhase phase_{NativeSwapchainPhase::Empty};
         NativeSwapchainAcquisition acquisition_{};
+        XRSwapchainImageId releasedImage_{};
         std::uint32_t count_{};
         std::uint32_t generation_{};
         std::uint32_t index_{};

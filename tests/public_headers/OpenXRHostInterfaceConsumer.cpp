@@ -1,4 +1,5 @@
 #include "OpenXRActionBindings.h"
+#include "OpenXRFrameCompositor.h"
 #include "OpenXRHostBindings.h"
 #include "OpenXRNativeNames.h"
 #include "OpenXRNativeSession.h"
@@ -27,3 +28,5 @@ Horo::Result<Horo::XR::OpenXRInternal::NativeSessionBorrow> BorrowComposedNative
     const Horo::XR::OpenXRInternal::OpenXRNativeSession &owner, const Horo::XR::XRSessionId &session) {
     return owner.Borrow(session);
 }
+
+static_assert(!std::is_copy_constructible_v<Horo::XR::OpenXRInternal::OpenXRFrameCompositor>);

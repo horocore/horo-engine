@@ -2061,7 +2061,7 @@ if(HORO_BUILD_XR_OPENXR)
     target_compile_features(HoroXROpenXRHostInterface INTERFACE cxx_std_20)
 
     add_library(HoroXROpenXR STATIC runtime/xr/openxr/OpenXRNativeSession.cpp runtime/xr/openxr/OpenXRActionBindings.cpp
-        runtime/xr/openxr/OpenXRSwapchain.cpp)
+        runtime/xr/openxr/OpenXRSwapchain.cpp runtime/xr/openxr/OpenXRFrameCompositor.cpp)
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)
