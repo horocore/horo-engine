@@ -209,7 +209,33 @@ namespace Horo::WorldStreaming {
 
     private:
         friend class Detail::StreamingFeatureBudgetRevisionTestAccess;
+        friend class StreamingCellDirectionOwner;
         using Matrix = StreamingFeatureBudgetPlan::Matrix;
+
+        /** @brief Private, exact terminal admission; excludes aggregate mutation until completion or scope exit. */
+        class FinalizationPermit final {
+        public:
+            FinalizationPermit(const FinalizationPermit &) = delete;
+            FinalizationPermit &operator=(const FinalizationPermit &) = delete;
+            FinalizationPermit(FinalizationPermit &&other) noexcept;
+            FinalizationPermit &operator=(FinalizationPermit &&) = delete;
+            ~FinalizationPermit();
+            /** @brief Performs the prevalidated no-callback terminal transition and release with one publication. */
+            [[nodiscard]] StreamingCellOperation Complete() && noexcept;
+
+        private:
+            FinalizationPermit(StreamingFeatureBudgetReservations &owner, std::size_t index,
+                               StreamingCellOperationTransition transition) noexcept;
+            StreamingFeatureBudgetReservations *owner_;
+            std::size_t index_;
+            StreamingCellOperationTransition transition_;
+            friend class StreamingFeatureBudgetReservations;
+        };
+
+        /** @brief Validates the exact canonical terminal successor before any irreversible publication. */
+        [[nodiscard]] Result<FinalizationPermit> PrepareFinalization(const StreamingFeatureBudgetContext &context,
+                                                                     const StreamingFeatureBudgetReservation &reservation,
+                                                                     StreamingCellOperationTransition transition);
 
         struct Entry {
             StreamingFeatureBudgetReservation reservation;
@@ -235,5 +261,6 @@ namespace Horo::WorldStreaming {
         Matrix used_{};
         std::vector<Entry> entries_;
         std::vector<ChargeSlice> chargeSlices_;
+        bool finalizing_{}; /**< Authority-thread-only exclusion owned by an exact private terminal permit. */
     };
 }  // namespace Horo::WorldStreaming

@@ -71,6 +71,8 @@ namespace Horo::WorldStreaming {
     }
 
     Result<void> StreamingFeatureBudgetReservations::Validate(const StreamingFeatureBudgetContext &context) const {
+        if (finalizing_)
+            return Failure<void>(FeatureBudgetLifecycleUnavailable);
         if (!context.owner.IsValid() || !context.policyRevision.IsValid() || !context.revision.IsValid())
             return Failure<void>(FeatureBudgetInvalid);
         if (context.owner != runtime_.Owner() || context.policyRevision != policy_.Revision() || context.revision != revision_)
@@ -130,6 +132,56 @@ namespace Horo::WorldStreaming {
 
     void StreamingFeatureBudgetReservations::Publish() noexcept {
         revision_ = StreamingFeatureBudgetRevision::Create(revision_.Value() + 1).Value();
+    }
+
+    /** @copydoc StreamingFeatureBudgetReservations::PrepareFinalization */
+    Result<StreamingFeatureBudgetReservations::FinalizationPermit> StreamingFeatureBudgetReservations::PrepareFinalization(
+        const StreamingFeatureBudgetContext &context, const StreamingFeatureBudgetReservation &reservation,
+        const StreamingCellOperationTransition transition) {
+        if (auto valid = Validate(context); valid.HasError())
+            return Result<FinalizationPermit>::Failure(std::move(valid).ErrorValue());
+        auto index = Find(reservation);
+        if (index.HasError())
+            return Result<FinalizationPermit>::Failure(std::move(index).ErrorValue());
+        auto operation = runtime_.Scheduler().Inspect(reservation.scheduler);
+        if (operation.HasError())
+            return Result<FinalizationPermit>::Failure(std::move(operation).ErrorValue());
+        auto successor = operation.Value().Advance(reservation.scheduler.operation, transition);
+        if (successor.HasError())
+            return Result<FinalizationPermit>::Failure(std::move(successor).ErrorValue());
+        if (!successor.Value().IsTerminal())
+            return Failure<FinalizationPermit>(FeatureBudgetLifecycleUnavailable);
+        finalizing_ = true;
+        return Result<FinalizationPermit>::Success(FinalizationPermit{*this, index.Value(), transition});
+    }
+
+    StreamingFeatureBudgetReservations::FinalizationPermit::FinalizationPermit(StreamingFeatureBudgetReservations &owner,
+                                                                               const std::size_t index,
+                                                                               const StreamingCellOperationTransition transition) noexcept
+        : owner_(&owner), index_(index), transition_(transition) {}
+
+    StreamingFeatureBudgetReservations::FinalizationPermit::FinalizationPermit(FinalizationPermit &&other) noexcept
+        : owner_(std::exchange(other.owner_, nullptr)), index_(other.index_), transition_(other.transition_) {}
+
+    StreamingFeatureBudgetReservations::FinalizationPermit::~FinalizationPermit() {
+        if (owner_)
+            owner_->finalizing_ = false;
+    }
+
+    /** @copydoc StreamingFeatureBudgetReservations::FinalizationPermit::Complete */
+    StreamingCellOperation StreamingFeatureBudgetReservations::FinalizationPermit::Complete() && noexcept {
+        auto &owner = *owner_;
+        const auto reservation = owner.entries_[index_].reservation.scheduler;
+        // Admission proved both scheduler calls; exclusion preserves that exact state and the available revision.
+        const auto terminal = owner.runtime_.Scheduler().Advance(reservation, transition_).Value();
+        const auto released = owner.runtime_.Scheduler().Release(reservation);
+        HORO_INVARIANT_MSG(released.HasValue(), "An admitted finalization must release its exact terminal reservation.");
+        owner.Apply(owner.entries_[index_].remaining, true);
+        owner.entries_.erase(owner.entries_.begin() + static_cast<std::ptrdiff_t>(index_));
+        owner.Publish();
+        owner.finalizing_ = false;
+        owner_ = nullptr;
+        return terminal;
     }
 
     /** @copydoc StreamingFeatureBudgetReservations::TryAdmit */

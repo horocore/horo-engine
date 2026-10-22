@@ -16,6 +16,7 @@
 namespace Horo::WorldStreaming {
     class StreamingFeatureBudgetReservations;
     class StreamingFeatureBudgetPlan;
+
     namespace Detail {
         /** @brief Distinct identity for an authority-issued effective-demand revision. */
         struct StreamingCellDemandRevisionTag;
@@ -111,9 +112,8 @@ namespace Horo::WorldStreaming {
          * shared allocations remain charged through final consumer release and actual cache retirement acknowledgement.
          */
         [[nodiscard]] static Result<StreamingCellDirectionOwner> Create(
-            StreamingFeatureBudgetReservations &budgets, const StreamingCellDirectionConfig &config,
-            const StreamingFeatureBudgetPlan &peak, const StreamingFence &currentAttempt,
-            std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> &participants);
+            StreamingFeatureBudgetReservations &budgets, const StreamingCellDirectionConfig &config, const StreamingFeatureBudgetPlan &peak,
+            const StreamingFence &currentAttempt, std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> &participants);
 
         /**
          * @brief Applies a strictly newer effective demand at an owner stage boundary.
@@ -139,6 +139,8 @@ namespace Horo::WorldStreaming {
          * @param budget Unique shared owner-frame budget. @param elapsedNanoseconds Monotonic elapsed owner-service time.
          * @return Success or the preserved activation/scheduler error. Frame deferral retains the attempt and its scheduler charge;
          *          interrupted attempts revoke/transfer prepared resources to retirement.
+         * @details Aggregate finalization is admitted before receipt publication and consumes one revision for terminal plus release.
+         *          Reentrant owner/aggregate mutations are rejected through commit and rollback; both owners must remain stationary.
          */
         [[nodiscard]] Result<void> CommitActivation(StreamingCellActivationTransaction &transaction,
                                                     StreamingCellActivationCommitPoint point, StreamingOwnerFrameBudget &budget,
@@ -180,8 +182,8 @@ namespace Horo::WorldStreaming {
 
     private:
         StreamingCellDirectionOwner(StreamingSchedulerAdmissionLedger *scheduler, StreamingFeatureBudgetReservations *budgets,
-                                    StreamingCellOperation operation,
-                                    StreamingSchedulerReservation reservation, const StreamingCellDirectionConfig &config,
+                                    StreamingCellOperation operation, StreamingSchedulerReservation reservation,
+                                    const StreamingCellDirectionConfig &config,
                                     std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants) noexcept;
         /** @brief Inspects the selected scheduler without exposing mutable aggregate children. */
         [[nodiscard]] const StreamingSchedulerAdmissionLedger *Scheduler() const noexcept;
@@ -193,6 +195,8 @@ namespace Horo::WorldStreaming {
         void RevokeParticipants() const noexcept;
         /** @brief Releases canonical terminal capacity exactly once. @return Success or the scheduler error. */
         [[nodiscard]] Result<void> ReleaseTerminal();
+        /** @brief Excludes aggregate mutation during a rejected activation's receipt rollback without consuming a revision. */
+        void RollbackActivation(StreamingCellActivationTransaction &transaction) noexcept;
 
         StreamingSchedulerAdmissionLedger *scheduler_{};
         StreamingFeatureBudgetReservations *budgets_{};
@@ -206,5 +210,6 @@ namespace Horo::WorldStreaming {
         bool demandClosed_{};
         bool terminalConsumed_{};
         bool participantsConsumed_{};
+        bool committing_{}; /**< Authority-thread-only callback exclusion; never a second operation authority. */
     };
 }  // namespace Horo::WorldStreaming

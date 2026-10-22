@@ -1,12 +1,29 @@
 #include "Horo/WorldStreaming/StreamingCellDirection.h"
-#include "Horo/WorldStreaming/StreamingFeatureBudgetReservations.h"
 
+#include "Horo/WorldStreaming/StreamingFeatureBudgetReservations.h"
 #include "WorldStreamingInternal.h"
 
 #include <utility>
 
 namespace Horo::WorldStreaming {
     namespace {
+        /** @brief Keeps owner callback exclusion scoped across success, typed failure and exception unwinding. */
+        class CommitScope final {
+        public:
+            explicit CommitScope(bool &committing) noexcept : committing_(committing), previous_(std::exchange(committing, true)) {}
+
+            ~CommitScope() {
+                committing_ = previous_;
+            }
+
+            CommitScope(const CommitScope &) = delete;
+            CommitScope &operator=(const CommitScope &) = delete;
+
+        private:
+            bool &committing_;
+            bool previous_;
+        };
+
         /** @brief Checks supported effective residency without selecting a fallback. */
         [[nodiscard]] bool IsKnown(const StreamingDesiredResidency desired) noexcept {
             return desired <= StreamingDesiredResidency::Activated;
@@ -68,9 +85,8 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingCellDirectionOwner::Create */
     Result<StreamingCellDirectionOwner> StreamingCellDirectionOwner::Create(
-        StreamingFeatureBudgetReservations &budgets, const StreamingCellDirectionConfig &config,
-        const StreamingFeatureBudgetPlan &peak, const StreamingFence &currentAttempt,
-        std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> &participants) {
+        StreamingFeatureBudgetReservations &budgets, const StreamingCellDirectionConfig &config, const StreamingFeatureBudgetPlan &peak,
+        const StreamingFence &currentAttempt, std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> &participants) {
         if (const auto valid = ValidateParticipants(config, participants); valid.HasError())
             return Result<StreamingCellDirectionOwner>::Failure(valid.ErrorValue());
         auto reservation = budgets.TryAdmit(budgets.Context(), config.operation, peak, config.capacityUnits, currentAttempt);
@@ -88,6 +104,15 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingCellDirectionOwner::AdvanceReservation */
     Result<StreamingCellOperation> StreamingCellDirectionOwner::AdvanceReservation(const StreamingCellOperationTransition transition) {
+        if (budgets_ && (transition == StreamingCellOperationTransition::Complete ||
+                         transition == StreamingCellOperationTransition::AcknowledgeRetirement)) {
+            auto permit = budgets_->PrepareFinalization(budgets_->Context(), {budgets_->Context().owner, *reservation_}, transition);
+            if (permit.HasError())
+                return Result<StreamingCellOperation>::Failure(std::move(permit).ErrorValue());
+            const auto terminal = std::move(permit).Value().Complete();
+            reservation_.reset();
+            return Result<StreamingCellOperation>::Success(terminal);
+        }
         if (budgets_)
             return budgets_->Advance(budgets_->Context(), {budgets_->Context().owner, *reservation_}, transition);
         return scheduler_->Advance(*reservation_, transition);
@@ -95,9 +120,9 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingCellDirectionOwner::StreamingCellDirectionOwner */
     StreamingCellDirectionOwner::StreamingCellDirectionOwner(StreamingCellDirectionOwner &&other) noexcept
-        : scheduler_(std::exchange(other.scheduler_, nullptr)), budgets_(std::exchange(other.budgets_, nullptr)), operation_(other.operation_),
-          reservation_(std::exchange(other.reservation_, std::nullopt)), revision_(other.revision_), desired_(other.desired_),
-          participants_(std::move(other.participants_)), nextRetirement_(other.nextRetirement_),
+        : scheduler_(std::exchange(other.scheduler_, nullptr)), budgets_(std::exchange(other.budgets_, nullptr)),
+          operation_(other.operation_), reservation_(std::exchange(other.reservation_, std::nullopt)), revision_(other.revision_),
+          desired_(other.desired_), participants_(std::move(other.participants_)), nextRetirement_(other.nextRetirement_),
           retirementStarted_(other.retirementStarted_), demandClosed_(other.demandClosed_), terminalConsumed_(other.terminalConsumed_),
           participantsConsumed_(other.participantsConsumed_) {
         other.demandClosed_ = true;
@@ -110,6 +135,8 @@ namespace Horo::WorldStreaming {
                                                            const StreamingCellDemandRevision revision,
                                                            const StreamingCellDemandRevision successor,
                                                            const StreamingDesiredResidency desired) {
+        if (committing_)
+            return Internal::Failure<void>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         if (!expected.IsValid() || !revision.IsValid() || !successor.IsValid())
             return Internal::Failure<void>(WorldStreamingErrors::CellDirectionInvalid);
         if (!IsKnown(desired))
@@ -130,6 +157,8 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellDirectionOwner::Advance */
     Result<StreamingCellOperation> StreamingCellDirectionOwner::Advance(const StreamingCellOperation &expected,
                                                                         const StreamingCellOperationTransition transition) {
+        if (committing_)
+            return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         using enum StreamingCellOperationTransition;
         if (!Matches(expected, operation_))
             return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionStale);
@@ -154,19 +183,37 @@ namespace Horo::WorldStreaming {
     Result<void> StreamingCellDirectionOwner::CommitActivation(StreamingCellActivationTransaction &transaction,
                                                                const StreamingCellActivationCommitPoint point,
                                                                StreamingOwnerFrameBudget &budget, const std::uint64_t elapsedNanoseconds) {
+        if (committing_)
+            return Internal::Failure<void>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
+        const CommitScope scope{committing_};
         using enum StreamingCellActivationLifecycle;
         const auto lifecycle = Scheduler() && Scheduler()->State() == StreamingSchedulerAdmissionState::Accepting && !demandClosed_ &&
                                        reservation_ && operation_.State() == StreamingCellOperationState::Activating
                                    ? Active
                                    : Cancelling;
         if (lifecycle != Active) {
-            transaction.Rollback();
+            RollbackActivation(transaction);
             return Internal::Failure<void>(WorldStreamingErrors::CellActivationLifecycleUnavailable);
         }
         if (budget.Limits().owner != Scheduler()->Owner())
             return Internal::Failure<void>(WorldStreamingErrors::OwnerFrameStale);
+        std::optional<StreamingFeatureBudgetReservations::FinalizationPermit> finalization;
+        if (budgets_) {
+            auto permit = budgets_->PrepareFinalization(budgets_->Context(), {budgets_->Context().owner, *reservation_},
+                                                        StreamingCellOperationTransition::Complete);
+            if (permit.HasError()) {
+                RollbackActivation(transaction);
+                return Result<void>::Failure(std::move(permit).ErrorValue());
+            }
+            finalization.emplace(std::move(permit).Value());
+        }
         if (const auto committed = transaction.Commit(operation_, point, lifecycle, budget, elapsedNanoseconds); committed.HasError())
             return committed;
+        if (finalization) {
+            operation_ = std::move(*finalization).Complete();
+            reservation_.reset();
+            return Result<void>::Success();
+        }
         auto next = AdvanceReservation(StreamingCellOperationTransition::Complete);
         if (next.HasError())
             return Result<void>::Failure(next.ErrorValue());
@@ -174,9 +221,21 @@ namespace Horo::WorldStreaming {
         return ReleaseTerminal();
     }
 
+    /** @copydoc StreamingCellDirectionOwner::RollbackActivation */
+    void StreamingCellDirectionOwner::RollbackActivation(StreamingCellActivationTransaction &transaction) noexcept {
+        if (budgets_) {
+            const CommitScope exclusion{budgets_->finalizing_};
+            transaction.Rollback();
+        } else {
+            transaction.Rollback();
+        }
+    }
+
     /** @copydoc StreamingCellDirectionOwner::Interrupt */
     Result<void> StreamingCellDirectionOwner::Interrupt(const StreamingCellOperationHandle &expected,
                                                         const StreamingCellOperationTransition reason) {
+        if (committing_)
+            return Internal::Failure<void>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         using enum StreamingCellOperationTransition;
         if (!expected.IsValid())
             return Internal::Failure<void>(WorldStreamingErrors::CellDirectionInvalid);
@@ -214,6 +273,8 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellDirectionOwner::PollRetirement */
     Result<StreamingCellOperation> StreamingCellDirectionOwner::PollRetirement(StreamingOwnerFrameBudget &budget,
                                                                                const std::uint64_t elapsedNanoseconds) {
+        if (committing_)
+            return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         if (!Scheduler() || operation_.State() != StreamingCellOperationState::Retiring)
             return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         if (budget.Limits().owner != Scheduler()->Owner())
@@ -267,8 +328,9 @@ namespace Horo::WorldStreaming {
     /** @copydoc StreamingCellDirectionOwner::TakeSucceededParticipants */
     Result<std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>>> StreamingCellDirectionOwner::TakeSucceededParticipants() {
         using Participants = std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>>;
-        if (!Scheduler() || !operation_.IsTerminal() || reservation_ || operation_.Kind() == StreamingCellOperationKind::Retire ||
-            operation_.Outcome() != StreamingCellOperationOutcome::Succeeded || participantsConsumed_)
+        if (committing_ || !Scheduler() || !operation_.IsTerminal() || reservation_ ||
+            operation_.Kind() == StreamingCellOperationKind::Retire || operation_.Outcome() != StreamingCellOperationOutcome::Succeeded ||
+            participantsConsumed_)
             return Internal::Failure<Participants>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         participantsConsumed_ = true;
         return Result<Participants>::Success(std::move(participants_));
@@ -276,7 +338,7 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc StreamingCellDirectionOwner::TakeTerminalResult */
     Result<StreamingCellOperation> StreamingCellDirectionOwner::TakeTerminalResult() {
-        if (!Scheduler() || !operation_.IsTerminal() || reservation_ || terminalConsumed_)
+        if (committing_ || !Scheduler() || !operation_.IsTerminal() || reservation_ || terminalConsumed_)
             return Internal::Failure<StreamingCellOperation>(WorldStreamingErrors::CellDirectionLifecycleUnavailable);
         terminalConsumed_ = true;
         return Result<StreamingCellOperation>::Success(operation_);
@@ -308,8 +370,8 @@ namespace Horo::WorldStreaming {
 
     StreamingCellDirectionOwner::StreamingCellDirectionOwner(
         StreamingSchedulerAdmissionLedger *scheduler, StreamingFeatureBudgetReservations *budgets, StreamingCellOperation operation,
-        StreamingSchedulerReservation reservation,
-        const StreamingCellDirectionConfig &config, std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants) noexcept
+        StreamingSchedulerReservation reservation, const StreamingCellDirectionConfig &config,
+        std::vector<std::unique_ptr<IStreamingCellRetirementParticipant>> participants) noexcept
         : scheduler_(scheduler), budgets_(budgets), operation_(std::move(operation)), reservation_(reservation), revision_(config.revision),
           desired_(config.desired), participants_(std::move(participants)) {}
 }  // namespace Horo::WorldStreaming
