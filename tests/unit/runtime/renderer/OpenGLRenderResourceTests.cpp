@@ -435,6 +435,63 @@ namespace Horo::Render::OpenGLResourceTests {
         Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
+    /** @brief Counts native ownership independently of reused API object names. */
+    struct NativeLease final : IRenderResourceRetirementLease {
+        unsigned claims{};
+        unsigned releases{};
+
+        void Claim() noexcept override {
+            ++claims;
+        }
+
+        void Release() noexcept override {
+            ++releases;
+        }
+    };
+
+    TEST_CASE("Recycled OpenGL names retain independent GPU retirement leases", "[unit][runtime][renderer][resource][native_retirement]") {
+        resourceCommandState = {};
+        OpenGLBackendTests::commandState = {};
+        OpenGLBackendTests::commandState.pollStatus = 0x911BU;  // GL_TIMEOUT_EXPIRED
+        std::array<NativeLease, 71> leases;
+        ResourcePresentationPort port;
+        auto backend = CreateInitializedResourceBackend(port);
+        const RenderTextureDescriptor descriptor{.extent = {16, 16},
+                                                 .format = RenderTextureFormat::Rgba8Unorm,
+                                                 .usage = RenderTextureUsage::Sampled};
+        const auto plan = backend->QueryTextureMemoryCost(descriptor);
+        REQUIRE(plan.HasValue());
+        for (std::size_t index = 0; index < leases.size(); ++index) {
+            resourceCommandState.nextObject = 7;
+            const auto texture = backend->CreateTexture(descriptor, {}, TestSupport::PlacementFor(plan.Value(), index + 1),
+                                                        RenderResourceNativeLifetime{leases[index]});
+            INFO("Native name reuse at allocation " << index);
+            if (texture.HasError()) {
+                OpenGLBackendTests::commandState.pollStatus = 0x911AU;
+                Horo::Render::Test::RequireDrainedOwner(*backend);
+            }
+            REQUIRE(texture.HasValue());
+            REQUIRE(texture.Value() == 7);
+            CHECK(leases[index].claims == 1);
+            if (index + 1 != leases.size())
+                backend->DestroyTexture(texture.Value());
+        }
+        for (const auto &lease : leases)
+            CHECK(lease.releases == 0);
+        OpenGLBackendTests::commandState.pollStatus = 0x911AU;  // GL_ALREADY_SIGNALED
+        for (std::uint64_t batch = 1; batch <= 2; ++batch) {
+            const auto frame = backend->BeginFrame({.frameNumber = batch, .outputExtent = {640, 480}});
+            REQUIRE(frame.HasValue());
+            backend->AbortFrame(frame.Value());
+        }
+        for (std::size_t index = 0; index + 1 < leases.size(); ++index)
+            CHECK(leases[index].releases == 1);
+        CHECK(leases.back().releases == 0);
+        backend->DestroyTexture(7);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        CHECK(leases.back().releases == 1);
+    }
+
     TEST_CASE("OpenGL Generic Resources Realize And Roll Back Through Typed Contracts", "[unit][runtime][renderer][resource]") {
         resourceCommandState = {};
         ResourcePresentationPort port;
