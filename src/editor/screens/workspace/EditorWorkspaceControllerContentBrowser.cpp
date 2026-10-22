@@ -110,9 +110,9 @@ namespace Horo::Editor {
             if (submitted.HasError()) {
                 if (submitted.ErrorValue().code.Value() == "asset.preview.queue_full")
                     return false;
-                const auto entry =
-                    std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
-                if (entry != m_viewModel.contentBrowser.entries.end() && pending.generation == m_contentBrowserPreviewGeneration) {
+                if (const auto entry =
+                        std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
+                    entry != m_viewModel.contentBrowser.entries.end() && pending.generation == m_contentBrowserPreviewGeneration) {
                     entry->previewState = ContentBrowserPreviewState::Unavailable;
                     entry->previewError = submitted.ErrorValue();
                 }
@@ -126,8 +126,7 @@ namespace Horo::Editor {
         const auto entry = std::ranges::find(m_viewModel.contentBrowser.entries, pending.absolutePath, &ContentBrowserEntry::absolutePath);
         if (pending.generation != m_contentBrowserPreviewGeneration || entry == m_viewModel.contentBrowser.entries.end())
             return true;
-        auto completed = pending.handle->TakeResult();
-        if (completed.HasValue()) {
+        if (auto completed = pending.handle->TakeResult(); completed.HasValue()) {
             entry->previewImage = std::move(completed).Value().image;
             entry->previewState = ContentBrowserPreviewState::Ready;
             entry->previewError.reset();

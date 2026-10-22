@@ -17,6 +17,31 @@ namespace Horo::Editor {
     namespace {
         constexpr std::array ForbiddenFilenameCharacters{'<', '>', ':', '"', '/', '\\', '|', '?', '*'};
 
+        /** @brief Validates one portable UTF-8 path component without consulting the filesystem. */
+        Result<void> ValidatePathPart(const std::filesystem::path &part) {
+            const auto invalid = [] {
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::InvalidPath));
+            };
+            const auto bytes = part.generic_u8string();
+            if (bytes.empty() || bytes.size() > 128)
+                return invalid();
+            const std::string text{bytes.begin(), bytes.end()};
+            if (text.front() == '.' || text.back() == '.' || text.back() == ' ' || !IsValidUtf8ScalarSequence(text) ||
+                std::ranges::any_of(text, [](const unsigned char value) {
+                return value < 32U ||
+                       std::ranges::find(ForbiddenFilenameCharacters, static_cast<char>(value)) != ForbiddenFilenameCharacters.end();
+            }))
+                return invalid();
+            std::string name{text.substr(0, text.find('.'))};
+            std::ranges::transform(name, name.begin(), [](const unsigned char c) {
+                return static_cast<char>(std::toupper(c));
+            });
+            if (name == "CON" || name == "PRN" || name == "AUX" || name == "NUL" ||
+                (name.size() == 4 && (name.starts_with("COM") || name.starts_with("LPT")) && name[3] >= '1' && name[3] <= '9'))
+                return invalid();
+            return Result<void>::Success();
+        }
+
         /** @brief Admits only portable filenames in existing ordinary project asset directories. */
         Result<void> ValidateDestination(const std::filesystem::path &root, const std::filesystem::path &destination,
                                          const DurableFileSystem &files) {
@@ -30,23 +55,8 @@ namespace Horo::Editor {
             if (const auto assetRoot = ProjectLayout::AssetRoot(root); relative.empty() || *relative.begin() != assetRoot.filename())
                 return invalid();
             for (const auto &part : relative) {
-                const auto bytes = part.generic_u8string();
-                if (bytes.empty() || bytes.size() > 128)
-                    return invalid();
-                const std::string text{bytes.begin(), bytes.end()};
-                if (text.front() == '.' || text.back() == '.' || text.back() == ' ' || !IsValidUtf8ScalarSequence(text) ||
-                    std::ranges::any_of(text, [](const unsigned char value) {
-                    return value < 32U ||
-                           std::ranges::find(ForbiddenFilenameCharacters, static_cast<char>(value)) != ForbiddenFilenameCharacters.end();
-                }))
-                    return invalid();
-                std::string name{text.substr(0, text.find('.'))};
-                std::ranges::transform(name, name.begin(), [](const unsigned char c) {
-                    return static_cast<char>(std::toupper(c));
-                });
-                if (name == "CON" || name == "PRN" || name == "AUX" || name == "NUL" ||
-                    (name.size() == 4 && (name.starts_with("COM") || name.starts_with("LPT")) && name[3] >= '1' && name[3] <= '9'))
-                    return invalid();
+                if (auto admitted = ValidatePathPart(part); admitted.HasError())
+                    return admitted;
             }
             auto current = root;
             for (auto part = relative.begin(); part != relative.end(); ++part) {
@@ -214,7 +224,7 @@ namespace Horo::Editor {
         }
 
         /** @brief Completes schema/reference/path/state validation and reserves canonical publication before file writes. */
-        Result<PreparedCreation> PrepareCreation(SceneDocumentTransactions &scene, const PrefabCreationRequest &request,
+        Result<PreparedCreation> PrepareCreation(const SceneDocumentTransactions &scene, const PrefabCreationRequest &request,
                                                  PrefabCreationOutcome &outcome, DurableFileSystem &files,
                                                  std::array<std::optional<ExclusiveFileLock>, 3> &locks) {
             using Return = Result<PreparedCreation>;

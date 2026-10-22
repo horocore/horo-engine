@@ -129,7 +129,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::BindControllerDependencies */
     EditorWorkspaceDependencies EditorWorkspaceScreen::BindControllerDependencies(
         const std::filesystem::path &projectRoot, const Application::GameplayBuildEnvironment *gameplayEnvironment,
-        const Assets::AssetId &sessionOwner, std::shared_ptr<const Assets::IAssetRegistrySource> &&registrySource,
+        const Assets::AssetId &sessionOwner, std::shared_ptr<const Assets::IAssetRegistrySource> registrySource,
         PCGEditorCatalog &&pcgCatalog, PCGPreviewInputs &&pcgPreviewInputs) const {
         return EditorWorkspaceDependencies{
             .mutableAssetRegistry = projectServices_.assetRegistry,
@@ -222,7 +222,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             LOG_WARN("editor.workspace", "Cannot admit workspace surface state: %s", restored.ErrorValue().message.c_str());
             return;
         }
-        workspacePersistenceAdmitted_ = true;
+        contributions_.workspacePersistenceAdmitted = true;
         activities->Update();
         while (const auto destination = view_.UpdateExtensionActivities())
             controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
@@ -233,7 +233,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::SaveExtensionWorkspace */
     void EditorWorkspaceScreen::SaveExtensionWorkspace() {
         auto *const activities = services_.TryGet<Extensions::EditorActivityHost>();
-        if (!activities || !controller_ || !workspacePersistenceAdmitted_)
+        if (!activities || !controller_ || !contributions_.workspacePersistenceAdmitted)
             return;
         auto layout = controller_->ViewModel().workspacePanelHost.Layout();
         layout.surfaces.clear();
@@ -254,7 +254,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             LOG_WARN("editor.workspace", "Cannot confirm workspace state publication: %s", error.c_str());
             return;
         }
-        workspacePersistenceAdmitted_ = false;
+        contributions_.workspacePersistenceAdmitted = false;
     }
 
     /** @copydoc EditorWorkspaceScreen::LoadProjectInputProfile */

@@ -290,8 +290,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                       PrefabCreationIntent intent) -> std::optional<std::string> {
             if (lifetime.expired())
                 return expired;
-            const auto admission = controller->CapturePrefabCreationIntent(intent.root);
-            if (admission.HasError() || admission.Value().documentRevision != intent.documentRevision ||
+            if (const auto admission = controller->CapturePrefabCreationIntent(intent.root);
+                admission.HasError() || admission.Value().documentRevision != intent.documentRevision ||
                 admission.Value().replacementEpoch != intent.replacementEpoch)
                 return expired;
             EditorWorkspaceViewCommandData command;

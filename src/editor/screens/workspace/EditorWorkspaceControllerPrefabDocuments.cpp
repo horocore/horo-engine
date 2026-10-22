@@ -282,24 +282,21 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::SavePrefabDocuments() {
         Result<void> outcome = Result<void>::Success();
         bool savedAny{};
-        for (const auto &entry : m_prefabDocuments) {
-            const auto snapshot = entry->Snapshot();
-            if (!snapshot.dirty)
-                continue;
-            if (!m_mutations || !m_durableFiles) {
-                outcome = Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
-                break;
-            }
-            auto result = entry->Save(snapshot.fence, *m_mutations, *m_durableFiles);
-            if (result.HasError()) {
-                outcome = Result<void>::Failure(result.ErrorValue());
-                break;
-            }
+        const auto save = [this, &savedAny](PrefabDocumentSession &document, const PrefabDocumentFence &fence) {
+            if (!m_mutations || !m_durableFiles)
+                return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+            auto result = document.Save(fence, *m_mutations, *m_durableFiles);
+            if (result.HasError())
+                return Result<void>::Failure(result.ErrorValue());
             savedAny = true;
-            if (result.Value().status != Assets::AssetSourcePublicationStatus::Durable) {
-                outcome = Result<void>::Failure(*result.Value().durabilityError);
-                break;
-            }
+            return result.Value().status == Assets::AssetSourcePublicationStatus::Durable
+                       ? Result<void>::Success()
+                       : Result<void>::Failure(*result.Value().durabilityError);
+        };
+        for (auto entry = m_prefabDocuments.begin(); entry != m_prefabDocuments.end() && outcome.HasValue(); ++entry) {
+            const auto snapshot = (*entry)->Snapshot();
+            if (snapshot.dirty)
+                outcome = save(**entry, snapshot.fence);
         }
         // A partial multi-document save still invalidates every preview of a source already published.
         if (savedAny)

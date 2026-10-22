@@ -28,6 +28,26 @@ namespace Horo::Editor {
                     -(point.x * 0.512F + point.y * 0.384F + point.z * 0.768F)};
         }
 
+        /** @brief Appends bounded projected mesh triangles while retaining cancellation and finite-point admission. */
+        Result<void> AppendTriangles(const Render::MeshData &mesh, const Math::Mat4 &world, std::vector<Triangle> &triangles,
+                                     const CancellationToken &cancellation) {
+            for (std::size_t index = 0; index < mesh.indices.size(); index += 3) {
+                if (cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(MakeError(Prefab::PrefabErrors::Cancelled));
+                Triangle triangle;
+                for (std::size_t corner = 0; corner < 3; ++corner) {
+                    auto point = Math::TryTransformPoint(world, mesh.vertices[mesh.indices[index + corner]].position);
+                    if (point.HasError())
+                        return Result<void>::Failure(point.ErrorValue());
+                    triangle.points[corner] = Project(point.Value());
+                    if (!Math::IsFinite(triangle.points[corner]))
+                        return Result<void>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
+                }
+                triangles.push_back(triangle);
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Collects real canonical primitive triangles in deterministic parent-before-child order. */
         Result<std::vector<Triangle>> Collect(const Prefab::EffectivePrefabCandidate &candidate, const CancellationToken &cancellation) {
             std::vector<Triangle> triangles;
@@ -45,7 +65,7 @@ namespace Horo::Editor {
                         return Result<std::vector<Triangle>>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
                     world = Math::Multiply(parent->second, world);
                 }
-                transforms.emplace(resolved.key, world);
+                transforms.try_emplace(resolved.key, world);
                 Runtime::RuntimeComponentSet components;
                 std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
                 for (const auto &component : resolved.object.components) {
@@ -61,20 +81,8 @@ namespace Horo::Editor {
                 const auto &mesh = generated.Value();
                 if (!mesh.IsValid() || mesh.indices.size() / 3 > MaximumTriangles - triangles.size())
                     return Result<std::vector<Triangle>>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
-                for (std::size_t index = 0; index < mesh.indices.size(); index += 3) {
-                    if (cancellation.IsCancellationRequested())
-                        return Result<std::vector<Triangle>>::Failure(MakeError(Prefab::PrefabErrors::Cancelled));
-                    Triangle triangle;
-                    for (std::size_t corner = 0; corner < 3; ++corner) {
-                        auto point = Math::TryTransformPoint(world, mesh.vertices[mesh.indices[index + corner]].position);
-                        if (point.HasError())
-                            return Result<std::vector<Triangle>>::Failure(point.ErrorValue());
-                        triangle.points[corner] = Project(point.Value());
-                        if (!Math::IsFinite(triangle.points[corner]))
-                            return Result<std::vector<Triangle>>::Failure(MakeError(Prefab::PrefabErrors::AdmissionRejected));
-                    }
-                    triangles.push_back(triangle);
-                }
+                if (auto appended = AppendTriangles(mesh, world, triangles, cancellation); appended.HasError())
+                    return Result<std::vector<Triangle>>::Failure(appended.ErrorValue());
             }
             return Result<std::vector<Triangle>>::Success(std::move(triangles));
         }
@@ -86,8 +94,12 @@ namespace Horo::Editor {
 
         /** @brief Fits all projected geometry inside the image without depending on editor camera state. */
         Result<void> Fit(std::vector<Triangle> &triangles, const std::uint32_t width, const std::uint32_t height) {
-            double minX = std::numeric_limits<double>::max(), minY = minX, minZ = minX;
-            double maxX = std::numeric_limits<double>::lowest(), maxY = maxX, maxZ = maxX;
+            double minX = std::numeric_limits<double>::max();
+            double minY = minX;
+            double minZ = minX;
+            double maxX = std::numeric_limits<double>::lowest();
+            double maxY = maxX;
+            double maxZ = maxX;
             for (const auto &triangle : triangles)
                 for (const auto &point : triangle.points) {
                     minX = std::min(minX, static_cast<double>(point.x));
@@ -129,9 +141,9 @@ namespace Horo::Editor {
                 for (int x = minX; x <= maxX; ++x) {
                     if (++samples > MaximumSamples)
                         return Result<void>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
-                    const float w0 = Edge(b, c, x + 0.5F, y + 0.5F) / area;
-                    const float w1 = Edge(c, a, x + 0.5F, y + 0.5F) / area;
-                    const float w2 = Edge(a, b, x + 0.5F, y + 0.5F) / area;
+                    const float w0 = Edge(b, c, static_cast<float>(x) + 0.5F, static_cast<float>(y) + 0.5F) / area;
+                    const float w1 = Edge(c, a, static_cast<float>(x) + 0.5F, static_cast<float>(y) + 0.5F) / area;
+                    const float w2 = Edge(a, b, static_cast<float>(x) + 0.5F, static_cast<float>(y) + 0.5F) / area;
                     if (std::min({w0, w1, w2}) < 0)
                         continue;
                     const auto pixel = static_cast<std::size_t>(y) * image.width + static_cast<std::size_t>(x);
@@ -157,13 +169,13 @@ namespace Horo::Editor {
             /** @copydoc Assets::IAssetPreviewProvider::GeneratePreview */
             Result<Assets::AssetPreviewImage> GeneratePreview(const Assets::AssetPreviewInput &input,
                                                               const CancellationToken &cancellation) const override {
-                static const auto prefabType = Assets::AssetTypeId::Parse("core.prefab").Value();
-                if (!capture_ || input.assetType != prefabType)
+                if (static const auto prefabType = Assets::AssetTypeId::Parse("core.prefab").Value();
+                    !capture_ || input.assetType != prefabType)
                     return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::DependencyUnavailable));
                 auto limits = Prefab::PrefabLimitProfile::Create({});
                 const std::array roots{asset_};
                 // Release the project lease before CPU rasterization so background previews do not hold up source saves.
-                auto captured = [&]() -> Result<PrefabHierarchySources> {
+                auto captured = [&]() {
                     auto prepared = capture_(registry_, roots, limits.Value(), cancellation);
                     if (prepared.HasError())
                         return Result<PrefabHierarchySources>::Failure(prepared.ErrorValue());
@@ -171,8 +183,8 @@ namespace Horo::Editor {
                 }();
                 if (captured.HasError())
                     return PreviewResult::Failure(captured.ErrorValue());
-                const auto *source = captured.Value().inputs.Find(asset_);
-                if (!source || !std::ranges::equal(source->bytes, input.editorPayload))
+                if (const auto *source = captured.Value().inputs.Find(asset_);
+                    !source || !std::ranges::equal(source->bytes, input.editorPayload))
                     return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
                 auto candidate =
                     captured.Value().resolver.Resolve(asset_, Prefab::PrefabInstanceId::Create(1).Value(), limits.Value(), cancellation);
@@ -186,8 +198,7 @@ namespace Horo::Editor {
                     return PreviewResult::Failure(current.ErrorValue());
                 if (current.Value().sources.inputs.ClosureDigest() != captured.Value().inputs.ClosureDigest())
                     return PreviewResult::Failure(MakeError(Prefab::PrefabErrors::ResolutionStale));
-                auto unchanged = current.Value().sources.inputs.VerifyUnchanged(cancellation);
-                if (unchanged.HasError())
+                if (auto unchanged = current.Value().sources.inputs.VerifyUnchanged(cancellation); unchanged.HasError())
                     return PreviewResult::Failure(unchanged.ErrorValue());
                 return image;
             }
@@ -213,7 +224,7 @@ namespace Horo::Editor {
         if (auto fit = Fit(triangles, width, height); fit.HasError())
             return PreviewResult::Failure(fit.ErrorValue());
         Assets::AssetPreviewImage image{width, height, std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height * 4)};
-        std::vector<float> depth(static_cast<std::size_t>(width) * height, std::numeric_limits<float>::infinity());
+        std::vector depth(static_cast<std::size_t>(width) * height, std::numeric_limits<float>::infinity());
         std::size_t samples{};
         for (const auto &triangle : triangles) {
             if (auto rendered = Rasterize(triangle, image, depth, samples, cancellation); rendered.HasError())
