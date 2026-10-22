@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "editor/screens/workspace/panels/inspector/InspectorPanelInternal.h"
 
 #include <algorithm>
@@ -30,7 +31,7 @@ namespace Horo::Editor {
             std::uint64_t value = id.Value();
             const auto edit = Ui::DrawUnsignedPropRow(Label(context, key), key, value, context.theme.fonts, value == 0);
             if (edit.changed) {
-                auto parsed = Id::Create(value);
+                auto parsed = GuiLive::HostSymbol<&Id::Create>()(value);
                 id = parsed.HasValue() ? parsed.Value() : Id{};
             }
             return edit.committed;
@@ -43,7 +44,7 @@ namespace Horo::Editor {
             const bool committed = ImGui::IsItemDeactivatedAfterEdit();
             if (changed) {
                 const auto parsed = Assets::AssetId::Parse(text);
-                id = parsed.HasValue() ? Id::Create(parsed.Value()).Value() : Id{};
+                id = parsed.HasValue() ? GuiLive::HostSymbol<&Id::Create>()(parsed.Value()).Value() : Id{};
             }
             return committed;
         }
@@ -53,7 +54,7 @@ namespace Horo::Editor {
             std::uint64_t value = id ? id->Value() : 0;
             const auto edit = Ui::DrawUnsignedPropRow(Label(context, key), key, value, context.theme.fonts);
             if (edit.changed)
-                id = value == 0 ? std::nullopt : std::optional{Id::Create(value).Value()};
+                id = value == 0 ? std::nullopt : std::optional{GuiLive::HostSymbol<&Id::Create>()(value).Value()};
             return edit.committed;
         }
 
@@ -185,17 +186,17 @@ namespace Horo::Editor {
         /** @brief Maps a typed preview failure to localized copy without changing its retained diagnostic. */
         const char *PreviewFailureMessage(const Error &error) {
             const auto &code = error.code.Value();
-            if (code == AudioComponentPreviewErrors::MissingAsset.code.Value())
+            if (code == GuiLive::HostSymbol<&AudioComponentPreviewErrors::MissingAsset>().code.Value())
                 return "workspace.inspector.audio.asset_missing";
-            if (code == AudioComponentPreviewErrors::MissingListener.code.Value())
+            if (code == GuiLive::HostSymbol<&AudioComponentPreviewErrors::MissingListener>().code.Value())
                 return "workspace.inspector.audio.listener_missing";
-            if (code == AudioComponentPreviewErrors::MissingBus.code.Value())
+            if (code == GuiLive::HostSymbol<&AudioComponentPreviewErrors::MissingBus>().code.Value())
                 return "workspace.inspector.audio.bus_missing";
-            if (code == AudioComponentPreviewErrors::ProviderUnavailable.code.Value())
+            if (code == GuiLive::HostSymbol<&AudioComponentPreviewErrors::ProviderUnavailable>().code.Value())
                 return "workspace.inspector.audio.provider_missing";
-            if (code == AudioComponentPreviewErrors::Busy.code.Value())
+            if (code == GuiLive::HostSymbol<&AudioComponentPreviewErrors::Busy>().code.Value())
                 return "workspace.inspector.audio.busy";
-            if (code == AudioComponentPreviewErrors::Stale.code.Value())
+            if (code == GuiLive::HostSymbol<&AudioComponentPreviewErrors::Stale>().code.Value())
                 return "workspace.inspector.audio.stale";
             return "workspace.inspector.audio.preview_failed";
         }

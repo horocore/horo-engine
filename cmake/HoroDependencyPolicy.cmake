@@ -290,7 +290,7 @@ horo_allow_target_dependencies(TARGET HoroEditorViewportOpenGL
 horo_allow_target_dependencies(TARGET HoroEditorViewportMetal
     DEPENDENCIES HoroEditorViewportScene HoroEditorViewportResources HoroRenderMetal HoroRenderFrontend)
 horo_allow_target_dependencies(TARGET HoroGui
-    DEPENDENCIES HoroPackageApplication HoroEditorPackageAdapters HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions HoroEditorPlayXrHostInterface)
+    DEPENDENCIES HoroGuiLiveReloadInternal HoroThirdPartyRccpp HoroPackageApplication HoroEditorPackageAdapters HoroPlayTopologyApplication HoroEditorServices HoroCinematicCameraRuntime HoroFoundation HoroEditorRenderExtraction HoroExtensions HoroEditorPlayXrHostInterface)
 horo_allow_target_dependencies(TARGET HoroPackageContentStagingInternal
     DEPENDENCIES HoroPackageSecurity)
 horo_allow_target_dependencies(TARGET HoroPackageGameplayHost
@@ -327,8 +327,10 @@ horo_allow_target_dependencies(TARGET horo-package DEPENDENCIES HoroPackageSecur
 horo_allow_target_dependencies(TARGET HoroExtensionSdkPackageStage DEPENDENCIES horo-package)
 horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
+horo_allow_target_dependencies(TARGET HoroGuiLiveReloadInternal)
+horo_allow_target_dependencies(TARGET HoroThirdPartyRccpp)
 horo_allow_target_dependencies(TARGET HoroEditor
-    DEPENDENCIES HoroEditorUiStyleHostInternal HoroRuntimeUiPaintHost
+    DEPENDENCIES HoroGuiLiveReloadInternal HoroThirdPartyRccpp HoroEditorUiStyleHostInternal HoroRuntimeUiPaintHost
         HoroPlatformProjectReadFiles
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo

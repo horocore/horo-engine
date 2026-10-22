@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "NavigationSettingsDraft.h"
 
 #include <algorithm>
@@ -123,8 +124,8 @@ namespace Horo::Editor::SettingsModalInternal {
                 if (const auto policy = state.navigationSettings.Resolve()->Policy())
                     draft.policy = policy->Input();
                 else if (Ui::Button({.label = Text(ctx, "settings.navigation.create_policy").c_str()})) {
-                    Nav::NavigationProjectProfileInput profile{Nav::NavigationProjectProfileId::Create(1).Value(),
-                                                               Nav::NavigationProjectProfileRevision::Create(1).Value(),
+                    Nav::NavigationProjectProfileInput profile{GuiLive::HostSymbol<&Nav::NavigationProjectProfileId::Create>()(1).Value(),
+                                                               GuiLive::HostSymbol<&Nav::NavigationProjectProfileRevision::Create>()(1).Value(),
                                                                {64, 8, 128, 8, 1024 * 1024, 128 * 1024 * 1024, 8192},
                                                                {Nav::NavigationQueryKind::Path,
                                                                 Nav::NavigationQualityLevel::Balanced,
@@ -143,7 +144,7 @@ namespace Horo::Editor::SettingsModalInternal {
                     (previous->Input().revision != UINT64_MAX && previous->Input().runtimeProfile.revision.Value() != UINT64_MAX)) {
                     policy.revision = previous ? previous->Input().revision + 1 : 1;
                     policy.runtimeProfile.revision =
-                        Nav::NavigationProjectProfileRevision::Create(previous ? previous->Input().runtimeProfile.revision.Value() + 1 : 1)
+                        GuiLive::HostSymbol<&Nav::NavigationProjectProfileRevision::Create>()(previous ? previous->Input().runtimeProfile.revision.Value() + 1 : 1)
                             .Value();
                     auto result = state.navigationSettings.Resolve()->SavePolicy(policy);
                     if (result.HasError())

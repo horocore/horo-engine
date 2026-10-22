@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "EditorPageView.h"
 
 #include "Horo/Editor/EditorSettingsService.h"
@@ -106,7 +107,7 @@ namespace Horo::Editor {
     bool EditorPageView::PrepareRender(const EditorPageProjection &page) {
         if (!theme_ || theme_->revision == 0) {
             if (!failure_)
-                failure_ = MakeError(ExtensionErrors::EditorThemeTokenInvalid);
+                failure_ = MakeError(GuiLive::HostSymbol<&ExtensionErrors::EditorThemeTokenInvalid>());
             return false;
         }
         const float width = ImGui::GetContentRegionAvail().x;

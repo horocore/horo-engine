@@ -27,7 +27,7 @@ namespace Horo::Editor {
 
     /** @copydoc GamePanel::DrawPanel */
     void GamePanel::DrawPanel([[maybe_unused]] const ImVec2 &position, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
-                              EditorWorkspaceViewCommandData &, const EditorGuiContext &context) {
+                              EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
         ImGui::BeginChild("##GameContent", ImVec2(size.x, size.y), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
         const bool selectedXr = viewModel.playViewSource == EditorPlayViewSource::SelectedXr;

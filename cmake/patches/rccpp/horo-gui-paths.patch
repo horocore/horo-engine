@@ -1,0 +1,8 @@
+diff --git a/Aurora/RuntimeCompiler/BuildTool.cpp b/Aurora/RuntimeCompiler/BuildTool.cpp
+--- a/Aurora/RuntimeCompiler/BuildTool.cpp
++++ b/Aurora/RuntimeCompiler/BuildTool.cpp
+@@ -82,1 +82,3 @@
+-		Path buildFile = buildFileList_[i].filePath;
++		// Include tracking and source dependencies may spell one Windows path differently.
++		Path buildFile = buildFileList_[i].filePath.DelimitersToOSDefault().GetCleanPath();
++		buildFile.ToOSCanonicalCase();

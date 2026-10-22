@@ -445,7 +445,8 @@ namespace Horo::Editor {
             return panel->GetId() == PCGGraphPanelId;
         });
             presenter != panels.end())
-            (*presenter)->DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), viewModel, outCommand, m_context);
+            GuiLive::InvokeVirtual<&IWorkspacePanel::DrawPanel>(m_context.theme.liveReload, **presenter, ImGui::GetWindowPos(),
+                                                                ImGui::GetWindowSize(), viewModel, outCommand, m_context);
         else
             Ui::ErrorText(m_context.localization.Get("editor", "workspace.source_open.unavailable").c_str(), m_context.theme.fonts);
         return true;

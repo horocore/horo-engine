@@ -3294,6 +3294,7 @@ target_link_libraries(HoroEditorPlayXrHostInterface INTERFACE HoroEngine::Input)
 target_compile_features(HoroEditorPlayXrHostInterface INTERFACE cxx_std_20)
 
 add_library(HoroEditorServices STATIC
+        editor/navigation/NavigationBakeWorkspace.cpp
         editor/document/WorkspaceReadSources.cpp
         editor/navigation/NavigationViewportSnapshot.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
@@ -3567,6 +3568,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
             editor/app/EditorTheme.cpp
+            editor/app/EditorThemeLiveReload.cpp
             editor/menu/EditorMenuPlatform.cpp
             editor/status_bar/EditorStatusBar.cpp
             editor/modals/settings/SettingsModal.cpp

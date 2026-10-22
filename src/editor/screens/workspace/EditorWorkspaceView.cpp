@@ -569,9 +569,11 @@ namespace Horo::Editor {
             const float x = playX - width - gap;
             if (x < ImGui::GetCursorPosX() + gap)
                 return;
-            ImGui::SetCursorPosX(x);
+            const float height = Ui::ScaledLayoutValue(26.0F);
+            ImGui::SetCursorPos({x, (ImGui::GetWindowHeight() - height) * 0.5F});
             if (const std::string stableLabel = label + "###workspace_play_profiles";
                 Ui::Button({.label = stableLabel.c_str(),
+                            .size = {0.0F, 26.0F},
                             .variant = Ui::ButtonVariant::Secondary,
                             .enabled = idle,
                             .font = context.theme.fonts.sans,
@@ -597,6 +599,7 @@ namespace Horo::Editor {
             const auto drawButton = [&](const char *labelKey, const char *stableId, const bool enabled,
                                         const EditorWorkspaceViewCommand command) {
                 const std::string label = context.localization.Get("editor", labelKey) + "###" + stableId;
+                ImGui::SetCursorPosY((ImGui::GetWindowHeight() - Ui::ScaledLayoutValue(26.0F)) * 0.5F);
                 if (Ui::Button({.label = label.c_str(),
                                 .size = {64.0F, 26.0F},
                                 .variant = Ui::ButtonVariant::Secondary,
@@ -655,6 +658,7 @@ namespace Horo::Editor {
         if (ImGui::BeginMenuBar()) {
             if (!UsesNativeEditorMenuBar()) {
                 constexpr ImVec2 logoSize(26.0F, 26.0F);
+                ImGui::SetCursorPosY((ImGui::GetWindowHeight() - logoSize.y) * 0.5F);
                 const ImVec2 logoMin = ImGui::GetCursorScreenPos();
                 if (ImGui::InvisibleButton("##HoroAppLogo", logoSize)) {
                     outCommand.menuInvocation = EditorMenuInvocation{EditorMenuAction::OpenProject, std::nullopt};
@@ -665,6 +669,7 @@ namespace Horo::Editor {
                     ImGui::GetWindowDrawList()->AddText(logoMin, Theme::U32(Theme::Accent()), "HORO");
                 }
                 ImGui::SameLine(0.0F, 10.0F);
+                ImGui::SetCursorPosY(0.0F);
 
                 DrawFallbackMenus(viewModel, outCommand, m_context);
             }
@@ -674,7 +679,7 @@ namespace Horo::Editor {
             const float versionX = display.x - versionWidth - 12.0F;
             DrawPlayControls(versionX - 12.0F, viewModel, outCommand, m_context);
             if (ImGui::GetCursorPosX() + 12.0F < versionX) {
-                ImGui::SetCursorPosX(versionX);
+                ImGui::SetCursorPos({versionX, (ImGui::GetWindowHeight() - ImGui::GetTextLineHeight()) * 0.5F});
                 ImGui::PushStyleColor(ImGuiCol_Text, Theme::Dim());
                 ImGui::TextUnformatted(version.c_str());
                 ImGui::PopStyleColor();
@@ -912,9 +917,11 @@ namespace Horo::Editor {
         ImGui::PushID(panelId.c_str());
         const char *title =
             panel == panels.end() ? panelId.c_str() : m_context.localization.Get("editor", (*panel)->GetDisplayName()).c_str();
-        const float scale = Theme::GetActiveTokens().sizes.uiScale;
-        const float tabHeight = 28.0F * scale;
-        const float textInset = 10.0F * scale;
+        const auto &tokens = Theme::GetActiveTokens();
+        const float scale = tokens.sizes.uiScale;
+        const float tabHeight = DocumentTabHeight(WorkspaceDockArea::Document);
+        const float textInset = tokens.spacing.sidebarPaddingX;
+        Theme::ScopedTextStyle textStyle(m_context.theme.fonts.sans, Theme::TextPx::Label(), Theme::FontPx::Sans);
         const float closeWidth = 24.0F * scale;
         const bool closable = panelId != "horo.viewport";
         const float tabWidth = ImGui::CalcTextSize(title).x + textInset * 2.0F + (closable ? closeWidth : 0.0F);
@@ -923,11 +930,12 @@ namespace Horo::Editor {
         const bool clicked = ImGui::InvisibleButton("##DocumentTab", {tabWidth, tabHeight});
         const bool hovered = ImGui::IsItemHovered();
         ImDrawList *drawList = ImGui::GetWindowDrawList();
-        ImVec4 tabSurface = hovered ? Theme::Hover() : Theme::Bg1();
+        ImVec4 tabSurface = hovered ? Theme::Hover() : Theme::Bg0();
         if (active)
             tabSurface = Theme::Bg2();
-        drawList->AddRectFilled(tabMin, tabMax, Theme::U32(tabSurface), 4.0F * scale);
-        drawList->AddRect(tabMin, tabMax, Theme::U32(Theme::Border()), 4.0F * scale);
+        drawList->AddRectFilled(tabMin, tabMax, Theme::U32(tabSurface));
+        if (active)
+            drawList->AddRectFilled({tabMin.x, tabMax.y - 2.0F * scale}, tabMax, Theme::U32(Theme::Accent()));
         const ImVec2 textSize = ImGui::CalcTextSize(title);
         drawList->AddText({tabMin.x + textInset, tabMin.y + (tabHeight - textSize.y) * 0.5F}, Theme::U32(Theme::Text()), title);
         if (closable) {
@@ -960,13 +968,18 @@ namespace Horo::Editor {
 
         const auto &tokens = Theme::GetActiveTokens();
         const float height = DocumentTabHeight(WorkspaceDockArea::Document);
-        ImGui::BeginChild("##DocumentTabStrip", {0.0F, height}, false, ImGuiWindowFlags_HorizontalScrollbar);
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tokens.spacing.propertyRowGap, 0.0F));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, Theme::Bg0());
+        ImGui::BeginChild("##DocumentTabStrip", {0.0F, height}, false, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollbar);
+        ImGui::SetCursorPos({tokens.spacing.sidebarPaddingX, 0.0F});
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0F, 0.0F));
         for (const std::string &panelId : stack->tabs)
             DrawDocumentTab(panelId, outCommand, !viewModel.workspacePanelHost.ActiveDocument().has_value() && stack->activeTab == panelId);
         DrawWorkspaceDocumentTabs(viewModel, outCommand);
         ImGui::PopStyleVar();
         ImGui::EndChild();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
     }
 
     void EditorWorkspaceView::DrawMiddleAndBottomDocks(const WorkspaceLayoutGeometry &geo, const EditorWorkspaceViewModel &viewModel,

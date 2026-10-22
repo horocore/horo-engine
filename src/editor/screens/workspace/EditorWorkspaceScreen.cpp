@@ -168,7 +168,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum EditorWorkspaceViewCommand;
         EditorWorkspaceViewCommandData command;
         controller_->RefreshWorldDocumentProjection();
-        view_.Draw(controller_->ViewModel(), command, contentRegion);
+        GuiLive::Invoke<&EditorWorkspaceView::Draw>(context_.theme.liveReload, view_, controller_->ViewModel(), command, contentRegion);
 
         if (command.command == None && !command.menuInvocation.has_value()) {
             sourceCommands_.RouteInput(input_.router, input_.context, *controller_, command);
@@ -206,7 +206,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         PublishViewportSceneIfChanged();
 
         if (snackbarHost_) {
-            const std::optional<SnackbarActionInvokedEvent> action = snackbarHost_->Draw(context_, ImGui::GetIO().DeltaTime);
+            const std::optional<SnackbarActionInvokedEvent> action =
+                GuiLive::Invoke<&EditorSnackbarHost::Draw>(context_.theme.liveReload, *snackbarHost_, context_, ImGui::GetIO().DeltaTime);
             if (action.has_value() && action->actionId == "open_logs") {
                 controller_->ProcessCommand(
                     EditorWorkspaceViewCommandData{.command = ChangeActivePanel, .stringPayload = "horo.global_dock"});

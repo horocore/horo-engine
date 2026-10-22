@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "EditorPageThemeCapture.h"
 
 #include "Horo/Editor/EditorTheme.h"
@@ -164,11 +165,11 @@ namespace Horo::Editor {
     /** @copydoc EditorPageThemeCapture::Update */
     Result<void> EditorPageThemeCapture::Update(const EditorGuiContext &context) {
         if (exhausted_ || !ImGui::GetCurrentContext())
-            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::EditorThemeTokenInvalid));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Extensions::ExtensionErrors::EditorThemeTokenInvalid>()));
         if (!context.theme.fonts.sans || !context.theme.fonts.sansCompact || !context.theme.fonts.sansEmphasis ||
             !context.theme.fonts.icon) {
             frame_->revision = 0;
-            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::EditorThemeTokenInvalid));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Extensions::ExtensionErrors::EditorThemeTokenInvalid>()));
         }
         const auto &tokens = Theme::GetActiveTokens();
         const auto &style = ImGui::GetStyle();
@@ -180,7 +181,7 @@ namespace Horo::Editor {
         if (revision_ == std::numeric_limits<std::uint64_t>::max()) {
             exhausted_ = true;
             frame_->revision = 0;
-            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::EditorThemeTokenInvalid));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Extensions::ExtensionErrors::EditorThemeTokenInvalid>()));
         }
         EditorThemeFrame candidate;
         candidate.revision = revision_ + 1;

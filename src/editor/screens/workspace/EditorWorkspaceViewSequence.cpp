@@ -41,8 +41,7 @@ namespace Horo::Editor {
         if (area != WorkspaceDockArea::Document)
             return 0.0F;
         const auto &tokens = Theme::GetActiveTokens();
-        return DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Medium).minimumHeight + tokens.spacing.propertyRowGap * 2.0F +
-               ImGui::GetStyle().ScrollbarSize;
+        return std::max(36.0F * tokens.sizes.uiScale, Theme::TextPx::Label() + tokens.spacing.propertyRowGap * 2.0F);
     }
 
     /** @copydoc EditorWorkspaceView::DrawDockContent */
@@ -68,7 +67,8 @@ namespace Horo::Editor {
             return;
         }
         if (panel)
-            panel->DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), viewModel, outCommand, m_context);
+            GuiLive::InvokeVirtual<&IWorkspacePanel::DrawPanel>(m_context.theme.liveReload, *panel, ImGui::GetWindowPos(),
+                                                                ImGui::GetWindowSize(), viewModel, outCommand, m_context);
     }
 
     /** @copydoc EditorWorkspaceView::DrawWorkspaceDocumentTabs */
@@ -240,7 +240,8 @@ namespace Horo::Editor {
         });
             source.stageActive && viewport != panels.end()) {
             EditorWorkspaceViewCommandData previewOnly;
-            (*viewport)->DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), viewModel, previewOnly, m_context);
+            GuiLive::InvokeVirtual<&IWorkspacePanel::DrawPanel>(m_context.theme.liveReload, **viewport, ImGui::GetCursorScreenPos(),
+                                                                ImGui::GetContentRegionAvail(), viewModel, previewOnly, m_context);
         } else
             Ui::WrappedText(ImGui::GetContentRegionAvail().x,
                             m_context.localization.Get("editor", "workspace.prefab_document.preview_unavailable"), Theme::Muted(),

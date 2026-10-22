@@ -5,6 +5,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <limits>
+#include <string_view>
 #include <vector>
 
 TEST_CASE("Welcome project search and sorting preserve original project indices", "[unit][editor][welcome]") {

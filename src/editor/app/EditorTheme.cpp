@@ -6,7 +6,6 @@
 #include <fstream>
 #include <imgui.h>
 #include <nlohmann/json.hpp>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -65,7 +64,6 @@ namespace Horo::Editor::Theme {
             };
             InstallUnscaledTokens(std::move(tokens));
         }
-
         /** @brief Midnight theme design tokens — dark surface with purple accents. */
         void ApplyMidnightDesignTokens() {
             DesignTokens tokens = DefaultDesignTokens();
@@ -252,7 +250,24 @@ namespace Horo::Editor::Theme {
                     OverrideFloat(*spacingIt, names[index], tokens.components.spacing[index + 1U]);
             }
             if (const auto spacingIt = tokenJson.find("layoutSpacing"); spacingIt != tokenJson.end() && spacingIt->is_object()) {
+                OverrideFloat(*spacingIt, "cardPadding", tokens.spacing.cardPadding);
+                OverrideFloat(*spacingIt, "gridGap", tokens.spacing.gridGap);
+                OverrideFloat(*spacingIt, "bodyPaddingX", tokens.spacing.bodyPaddingX);
+                OverrideFloat(*spacingIt, "bodyPaddingY", tokens.spacing.bodyPaddingY);
+                OverrideFloat(*spacingIt, "sidebarPaddingX", tokens.spacing.sidebarPaddingX);
+                OverrideFloat(*spacingIt, "sidebarPaddingY", tokens.spacing.sidebarPaddingY);
                 OverrideFloat(*spacingIt, "propertyRowGap", tokens.spacing.propertyRowGap);
+            }
+            if (const auto sizes = tokenJson.find("layoutSizes"); sizes != tokenJson.end() && sizes->is_object()) {
+                OverrideFloat(*sizes, "welcomeSideWidth", tokens.sizes.welcomeSideWidth);
+                OverrideFloat(*sizes, "welcomePadding", tokens.sizes.welcomePadding);
+                OverrideFloat(*sizes, "modalWidth", tokens.sizes.modalWidth);
+                OverrideFloat(*sizes, "modalHeight", tokens.sizes.modalHeight);
+                OverrideFloat(*sizes, "modalHeaderHeight", tokens.sizes.modalHeaderHeight);
+                OverrideFloat(*sizes, "modalFooterHeight", tokens.sizes.modalFooterHeight);
+                OverrideFloat(*sizes, "modalSidebarWidth", tokens.sizes.modalSidebarWidth);
+                OverrideFloat(*sizes, "settingsWidth", tokens.sizes.settingsWidth);
+                OverrideFloat(*sizes, "settingsHeight", tokens.sizes.settingsHeight);
             }
 
             ReadSourceSyntaxOverrides(tokenJson, tokens.sourceSyntax);
@@ -430,14 +445,19 @@ namespace Horo::Editor::Theme {
     }
 
     bool LoadThemeFromJson(const char *path, ThemeEntry &outEntry) {
-        std::ifstream file(path);  // NOSONAR(cpp:S2083)
+        std::ifstream file(path, std::ios::binary);  // NOSONAR(cpp:S2083)
         if (!file.is_open())
             return false;
 
-        std::ostringstream oss;
-        oss << file.rdbuf();
+        constexpr std::size_t maximumThemeBytes = 256U * 1024U;
+        std::string text(maximumThemeBytes + 1U, '\0');
+        file.read(text.data(), static_cast<std::streamsize>(text.size()));
+        const auto size = static_cast<std::size_t>(file.gcount());
+        if (file.bad() || size > maximumThemeBytes)
+            return false;
+        text.resize(size);
         try {
-            const nlohmann::json document = nlohmann::json::parse(oss.str(), nullptr, false, true);
+            const nlohmann::json document = nlohmann::json::parse(text, nullptr, false, true);
             if (document.is_discarded() || !document.is_object())
                 return false;
 
@@ -523,10 +543,29 @@ namespace Horo::Editor::Theme {
             tokens.colors.textOnActionPrimary = c[ImGuiCol_WindowBg];
             InstallUnscaledTokens(std::move(tokens));
         }
+        auto &style = ImGui::GetStyle();
+        const auto &tokens = GetActiveTokens();
+        style.FrameRounding = tokens.radii.control;
+        style.GrabRounding = tokens.radii.control;
+        style.ChildRounding = tokens.radii.card;
+        style.PopupRounding = tokens.radii.modal;
     }
 
     int GetActiveThemeIndex() {
         return ActiveThemeIndex();
+    }
+
+    /** @copydoc ApplyReloadedTheme */
+    bool ApplyReloadedTheme(ThemeEntry candidate) {
+        const int index = GetActiveThemeIndex();
+        if (index < 0 || static_cast<std::size_t>(index) >= ThemeList().size() || candidate.isBuiltIn)
+            return false;
+        const auto &current = ThemeList()[static_cast<std::size_t>(index)];
+        if (current.isBuiltIn || current.sourcePath != candidate.sourcePath)
+            return false;
+        ThemeList()[static_cast<std::size_t>(index)] = std::move(candidate);
+        SelectThemeByIndex(index);
+        return true;
     }
 
     // ── Legacy preset API (for backward compat) ──────────────────────────
