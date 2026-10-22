@@ -1544,6 +1544,7 @@ set_tests_properties(HoroTerrainProducerSnapshotPublicHeaderConsumer PROPERTIES 
 add_executable(HoroTerrainAuthoringTests
         unit/editor/TerrainAuthoringDocumentTests.cpp
         unit/editor/TerrainBrushToolsTests.cpp
+        unit/editor/TerrainBrushPaintPlanningTests.cpp
         unit/editor/TerrainBrushAdmissionCompileTests.cpp
 )
 target_compile_features(HoroTerrainAuthoringTests PRIVATE cxx_std_20)
