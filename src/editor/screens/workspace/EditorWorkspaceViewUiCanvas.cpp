@@ -1,6 +1,6 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
-#include "editor/screens/workspace/EditorWorkspaceView.h"
+#include "UiCanvasDocumentView.h"
 #include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
 
 #include <algorithm>
@@ -187,37 +187,36 @@ namespace Horo::Editor {
         /** @brief Edits finite workspace controls through the shared editor design system. */
         bool DrawPreviewControls(const EditorGuiContext &context, UiCanvasPreviewState &state) {
             const auto label = [&](const char *key) {
-                return Text(context, key);
+                return context.localization.Get("editor", key).c_str();
             };
-            std::array<std::string, 3> deviceText{label("workspace.ui_canvas.preview.desktop"), label("workspace.ui_canvas.preview.phone"),
-                                                  label("workspace.ui_canvas.preview.tablet")};
-            std::array<const char *, 3> devices{deviceText[0].c_str(), deviceText[1].c_str(), deviceText[2].c_str()};
+            // Catalog references are borrowed only for this immediate-mode call, never retained across locale changes.
+            auto devices = std::array{label("workspace.ui_canvas.preview.desktop"), label("workspace.ui_canvas.preview.phone"),
+                                      label("workspace.ui_canvas.preview.tablet")};
             int device = static_cast<int>(state.device);
             bool changed =
                 Ui::ComboControl("preview_device", &device, devices.data(), static_cast<int>(devices.size()), context.theme.fonts);
             state.device = static_cast<UiCanvasPreviewDevice>(device);
-            changed |= Ui::CheckboxControl(label("workspace.ui_canvas.preview.rotate").c_str(), &state.rotated, context.theme.fonts);
-            std::array<std::string, 4> toolText{label("workspace.ui_canvas.preview.select"), label("workspace.ui_canvas.preview.move"),
-                                                label("workspace.ui_canvas.preview.resize"), label("workspace.ui_canvas.preview.anchors")};
-            std::array<const char *, 4> tools{toolText[0].c_str(), toolText[1].c_str(), toolText[2].c_str(), toolText[3].c_str()};
+            changed |= Ui::CheckboxControl(label("workspace.ui_canvas.preview.rotate"), &state.rotated, context.theme.fonts);
+            auto tools = std::array{label("workspace.ui_canvas.preview.select"), label("workspace.ui_canvas.preview.move"),
+                                    label("workspace.ui_canvas.preview.resize"), label("workspace.ui_canvas.preview.anchors")};
             int tool = static_cast<int>(state.tool);
             changed |= Ui::ComboControl("preview_tool", &tool, tools.data(), static_cast<int>(tools.size()), context.theme.fonts);
             state.tool = static_cast<UiCanvasLayoutTool>(tool);
-            changed |= Ui::CheckboxControl(label("workspace.ui_canvas.preview.snap").c_str(), &state.snap, context.theme.fonts);
-            if (Ui::Button({.label = label("workspace.ui_canvas.preview.zoom_out").c_str(),
+            changed |= Ui::CheckboxControl(label("workspace.ui_canvas.preview.snap"), &state.snap, context.theme.fonts);
+            if (Ui::Button({.label = label("workspace.ui_canvas.preview.zoom_out"),
                             .enabled = state.zoomPercent > 10,
                             .font = context.theme.fonts.sans})) {
                 state.zoomPercent = std::max(10U, state.zoomPercent - 10);
                 changed = true;
             }
             ImGui::SameLine();
-            if (Ui::Button({.label = label("workspace.ui_canvas.preview.zoom_in").c_str(),
+            if (Ui::Button({.label = label("workspace.ui_canvas.preview.zoom_in"),
                             .enabled = state.zoomPercent < 800,
                             .font = context.theme.fonts.sans})) {
                 state.zoomPercent = std::min(800U, state.zoomPercent + 10);
                 changed = true;
             }
-            if (Ui::Button({.label = label("workspace.ui_canvas.preview.clear_guides").c_str(),
+            if (Ui::Button({.label = label("workspace.ui_canvas.preview.clear_guides"),
                             .enabled = state.verticalGuideCount != 0 || state.horizontalGuideCount != 0,
                             .font = context.theme.fonts.sans})) {
                 state.verticalGuideCount = 0;
@@ -234,11 +233,11 @@ namespace Horo::Editor {
 
         /** @brief Draws copied Runtime UI layout output and bounded session guides with semantic theme colors. */
         PreviewGeometry DrawPreviewGeometry(const UiCanvasWorkspaceDocument &document, const ImVec2 start, const ImVec2 available) {
-            const auto &preview = *document.preview;
-            const auto &state = document.previewState;
+            const auto &preview = *document.preview.layout;
+            const auto &state = document.preview.state;
             const float padding = Theme::GetActiveTokens().spacing.propertyRowGap * 2;
-            const float pixelWidth = static_cast<float>(preview.viewport.pixelExtent.width);
-            const float pixelHeight = static_cast<float>(preview.viewport.pixelExtent.height);
+            const auto pixelWidth = static_cast<float>(preview.viewport.pixelExtent.width);
+            const auto pixelHeight = static_cast<float>(preview.viewport.pixelExtent.height);
             const float fit =
                 std::max(0.001F, std::min((available.x - padding * 2) / pixelWidth, (available.y - padding * 2) / pixelHeight));
             const float deviceScale = fit * static_cast<float>(state.zoomPercent) / 100;
@@ -316,21 +315,40 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    /** @copydoc EditorWorkspaceView::HandleUiCanvasPreviewPress */
-    void EditorWorkspaceView::HandleUiCanvasPreviewPress(const UiCanvasWorkspaceDocument &document, const ImVec2 origin, const float scale,
-                                                         const bool changed, EditorWorkspaceViewCommandData &output) const {
+    /** @copydoc UiCanvasDocumentView::UiCanvasDocumentView */
+    UiCanvasDocumentView::UiCanvasDocumentView(const EditorGuiContext &context)
+        : m_context(context), m_inspector(std::make_unique<UiCanvasInspectorPanel>()) {}
+
+    UiCanvasDocumentView::~UiCanvasDocumentView() = default;
+
+    /** @copydoc UiCanvasDocumentView::CancelGesture */
+    void UiCanvasDocumentView::CancelGesture() const noexcept {
+        m_gesture.reset();
+    }
+
+    /** @copydoc UiCanvasDocumentView::Reset */
+    void UiCanvasDocumentView::Reset() const noexcept {
+        CancelGesture();
+        m_inspector->Clear();
+    }
+
+    /** @copydoc UiCanvasDocumentView::HandlePress */
+    void UiCanvasDocumentView::HandlePress(const UiCanvasWorkspaceDocument &document, const ImVec2 viewportExtent, const ImVec2 origin,
+                                           const float scale, const bool changed, EditorWorkspaceViewCommandData &output) const {
         if (changed || !ImGui::IsItemHovered())
             return;
         const auto mouse = ImGui::GetIO().MousePos;
         const auto capture = [&](const bool pan) {
-            m_uiCanvasGesture = UiCanvasGesture{document.identity.instance,
-                                                document.state,
-                                                document.selection,
-                                                document.selectionRevision,
-                                                mouse,
-                                                scale,
-                                                document.previewState,
-                                                pan};
+            m_gesture = Gesture{document.identity.instance,
+                                document.state,
+                                document.selection,
+                                document.selectionRevision,
+                                mouse,
+                                viewportExtent,
+                                origin,
+                                scale,
+                                document.preview.state,
+                                pan};
         };
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Middle)) {
             capture(true);
@@ -339,14 +357,13 @@ namespace Horo::Editor {
         if (!ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             return;
         if (ImGui::GetIO().KeyShift) {
-            auto state = document.previewState;
-            if (AddPreviewGuide(state, mouse, origin, scale)) {
+            if (auto state = document.preview.state; AddPreviewGuide(state, mouse, origin, scale)) {
                 output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
                 output.uiCanvasPreviewState = state;
             }
             return;
         }
-        const auto &boxes = document.preview->boxes;
+        const auto &boxes = document.preview.layout->boxes;
         const auto hit = std::find_if(boxes.rbegin(), boxes.rend(), [&](const auto &box) {
             const float x = origin.x + static_cast<float>(box.bounds.origin.x) * scale;
             const float y = origin.y + static_cast<float>(box.bounds.origin.y) * scale;
@@ -358,17 +375,16 @@ namespace Horo::Editor {
         if (hit->element != document.selection) {
             output.command = EditorWorkspaceViewCommand::UiCanvasSelect;
             output.uiCanvasElement = hit->element;
-        } else if (document.previewState.tool != UiCanvasLayoutTool::Select)
+        } else if (document.preview.state.tool != UiCanvasLayoutTool::Select)
             capture(false);
     }
 
-    /** @copydoc EditorWorkspaceView::FinishUiCanvasGesture */
-    void EditorWorkspaceView::FinishUiCanvasGesture(const UiCanvasWorkspaceDocument &document,
-                                                    EditorWorkspaceViewCommandData &output) const {
-        if (!m_uiCanvasGesture || !ImGui::IsMouseReleased(m_uiCanvasGesture->pan ? ImGuiMouseButton_Middle : ImGuiMouseButton_Left))
+    /** @copydoc UiCanvasDocumentView::FinishGesture */
+    void UiCanvasDocumentView::FinishGesture(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const {
+        if (!m_gesture || !ImGui::IsMouseReleased(m_gesture->pan ? ImGuiMouseButton_Middle : ImGuiMouseButton_Left))
             return;
-        const auto gesture = *m_uiCanvasGesture;
-        m_uiCanvasGesture.reset();
+        const auto gesture = *m_gesture;
+        m_gesture.reset();
         const auto mouse = ImGui::GetIO().MousePos;
         if (mouse.x == gesture.start.x && mouse.y == gesture.start.y)
             return;
@@ -378,34 +394,36 @@ namespace Horo::Editor {
         output.uiCanvasLayoutDelta = {PreviewLogicalDelta(mouse.x - gesture.start.x, gesture.scale),
                                       PreviewLogicalDelta(mouse.y - gesture.start.y, gesture.scale)};
         if (gesture.pan) {
-            auto state = document.previewState;
+            auto state = document.preview.state;
             OffsetPreviewPan(state, output.uiCanvasLayoutDelta);
             output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
             output.uiCanvasPreviewState = state;
         }
     }
 
-    /** @copydoc EditorWorkspaceView::DrawUiCanvasPreview */
-    void EditorWorkspaceView::DrawUiCanvasPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const {
-        auto state = document.previewState;
+    /** @copydoc UiCanvasDocumentView::DrawPreview */
+    void UiCanvasDocumentView::DrawPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const {
+        auto state = document.preview.state;
         const auto label = [&](const char *key) {
-            return Text(m_context, key);
+            return m_context.localization.Get("editor", key).c_str();
         };
         const bool changed = DrawPreviewControls(m_context, state);
         if (changed) {
             output.command = EditorWorkspaceViewCommand::UiCanvasUpdatePreview;
             output.uiCanvasPreviewState = state;
-            m_uiCanvasGesture.reset();
+            m_gesture.reset();
         }
-        if (document.previewDiagnostic || !document.preview) {
-            Ui::ErrorText(label("workspace.ui_canvas.preview.unavailable").c_str(), m_context.theme.fonts);
-            m_uiCanvasGesture.reset();
+        if (document.preview.diagnostic || !document.preview.layout) {
+            Ui::ErrorText(label("workspace.ui_canvas.preview.unavailable"), m_context.theme.fonts);
+            m_gesture.reset();
             return;
         }
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, label("workspace.ui_canvas.preview.hint"), Theme::Muted(), m_context.theme.fonts);
-        const float height = ImGui::GetContentRegionAvail().y * 0.45F;
-        if (height <= 0)
-            return;
+        // Wrapped controls may exhaust a narrow pane; retain a scrollable preview instead of removing its interaction surface.
+        const auto &tokens = Theme::GetActiveTokens();
+        const float minimumHeight = DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Medium).minimumHeight * 4;
+        const float height = std::max(minimumHeight, ImGui::GetContentRegionAvail().y * 0.45F);
+        const auto viewportExtent = ImGui::GetWindowSize();
         if (!ImGui::BeginChild("canvas_preview", {0, height})) {
             ImGui::EndChild();
             return;
@@ -414,47 +432,47 @@ namespace Horo::Editor {
         const auto available = ImGui::GetContentRegionAvail();
         const auto geometry = DrawPreviewGeometry(document, start, available);
         ImGui::InvisibleButton("canvas_interaction", available);
-        if (m_uiCanvasGesture &&
-            (m_uiCanvasGesture->document != document.identity.instance || m_uiCanvasGesture->state != document.state ||
-             m_uiCanvasGesture->element != document.selection || m_uiCanvasGesture->selectionRevision != document.selectionRevision ||
-             m_uiCanvasGesture->preview != state || m_uiCanvasGesture->scale != geometry.scale || ImGui::IsKeyPressed(ImGuiKey_Escape)))
-            m_uiCanvasGesture.reset();
-        HandleUiCanvasPreviewPress(document, geometry.origin, geometry.scale, changed, output);
-        FinishUiCanvasGesture(document, output);
+        if (m_gesture &&
+            (m_gesture->document != document.identity.instance || m_gesture->state != document.state ||
+             m_gesture->element != document.selection || m_gesture->selectionRevision != document.selectionRevision ||
+             m_gesture->presentation != state || m_gesture->scale != geometry.scale || m_gesture->viewportExtent.x != viewportExtent.x ||
+             m_gesture->viewportExtent.y != viewportExtent.y || m_gesture->origin.x != geometry.origin.x ||
+             m_gesture->origin.y != geometry.origin.y || ImGui::IsKeyPressed(ImGuiKey_Escape)))
+            m_gesture.reset();
+        HandlePress(document, viewportExtent, geometry.origin, geometry.scale, changed, output);
+        FinishGesture(document, output);
         ImGui::EndChild();
     }
 
-    /** @copydoc EditorWorkspaceView::DrawUiCanvasDocument */
-    bool EditorWorkspaceView::DrawUiCanvasDocument(const EditorWorkspaceViewModel &viewModel,
-                                                   EditorWorkspaceViewCommandData &outCommand) const {
+    /** @copydoc UiCanvasDocumentView::Draw */
+    bool UiCanvasDocumentView::Draw(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const {
         const auto document = std::ranges::find_if(viewModel.uiCanvasDocuments, [&](const auto &entry) {
             return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
         });
         if (document == viewModel.uiCanvasDocuments.end()) {
-            m_uiCanvasInspector->Clear();
-            m_uiCanvasGesture.reset();
+            Reset();
             return false;
         }
         ImGui::PushID(static_cast<int>(document->identity.instance.Value()));
         DrawToolbar(m_context, *document, outCommand);
         DrawPalette(m_context, *document, outCommand);
-        DrawUiCanvasPreview(*document, outCommand);
+        DrawPreview(*document, outCommand);
         const float available = ImGui::GetContentRegionAvail().x;
-        const float minimumColumn = ImGui::CalcTextSize(Text(m_context, "workspace.ui_inspector.title").c_str()).x +
-                                    Theme::GetActiveTokens().spacing.propertyRowGap * 2;
-        if (available >= minimumColumn * 2 &&
+        if (const float minimumColumn = ImGui::CalcTextSize(Text(m_context, "workspace.ui_inspector.title").c_str()).x +
+                                        Theme::GetActiveTokens().spacing.propertyRowGap * 2;
+            available >= minimumColumn * 2 &&
             ImGui::BeginTable("ui_canvas_inspector_split", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp)) {
             ImGui::TableNextColumn();
             DrawHierarchy(m_context, *document, outCommand);
             ImGui::TableNextColumn();
             if (ImGui::BeginChild("ui_inspector"))
-                m_uiCanvasInspector->Draw(*document, m_context, outCommand);
+                m_inspector->Draw(*document, m_context, outCommand);
             ImGui::EndChild();
             ImGui::EndTable();
         } else {
             DrawHierarchy(m_context, *document, outCommand, ImGui::GetContentRegionAvail().y * 0.35F);
             if (ImGui::BeginChild("ui_inspector"))
-                m_uiCanvasInspector->Draw(*document, m_context, outCommand);
+                m_inspector->Draw(*document, m_context, outCommand);
             ImGui::EndChild();
         }
         ImGui::PopID();

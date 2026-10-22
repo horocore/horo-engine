@@ -38,7 +38,7 @@ namespace {
         PartitionedWorldWorkspace world{Owner()};
         auto root = world.Open(Document()).Value();
         Runtime::RuntimeSceneService runtime;
-        EditorWorkspaceController controller{"test-project", runtime, {}, {.partitionedWorld = &world}};
+        EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.document = &world}}};
         const WorldViewportBinding binding{root, Point::FromMillimeters(9'000'000'000'000'000, 0, 0), 1};
         REQUIRE(controller.SetWorldViewportBinding(binding).HasValue());
         controller.ProcessCommand(Create(binding));
@@ -70,7 +70,7 @@ namespace {
         auto world = std::make_unique<PartitionedWorldWorkspace>(Owner());
         const auto root = world->Open(Document()).Value();
         Runtime::RuntimeSceneService runtime;
-        EditorWorkspaceController controller{"test-project", runtime, {}, {.partitionedWorld = world.get()}};
+        EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.document = world.get()}}};
         const WorldViewportBinding binding{root, {}, 1};
         REQUIRE(controller.SetWorldViewportBinding(binding).HasValue());
         controller.DetachWorldSourceOwner();
@@ -144,7 +144,7 @@ namespace {
                                     .priority = WS::StreamingSourcePriority::Create(1).Value()});
         const auto root = world.Open(document).Value();
         Runtime::RuntimeSceneService runtime;
-        EditorWorkspaceController controller{"test-project", runtime, {}, {.partitionedWorld = &world}};
+        EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.document = &world}}};
         const WorldViewportBinding binding{root, {}, 1};
         REQUIRE(controller.SetWorldViewportBinding(binding).HasValue());
         controller.ProcessCommand(Create(binding));
@@ -172,7 +172,7 @@ TEST_CASE("Registered workspace streaming capture uses its composed bridge and c
     const auto root = world.Open(Document()).Value();
     Runtime::RuntimeSceneService runtime;
     WorldStreamingPreviewHost capture;
-    EditorWorkspaceController controller{"test-project", runtime, {}, {.streamingPreview = &capture, .partitionedWorld = &world}};
+    EditorWorkspaceController controller{"test-project", runtime, {}, {.world = {.streamingPreview = &capture, .document = &world}}};
     REQUIRE(controller.SetWorldViewportBinding({root, {}, 1}).HasValue());
     controller.RefreshWorldDocumentProjection();
     CHECK_FALSE(controller.ViewModel().worldStreamingPreview);

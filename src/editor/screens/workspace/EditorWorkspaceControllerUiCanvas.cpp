@@ -91,9 +91,9 @@ namespace Horo::Editor {
             }
             if (sourceChanged || projection.inspectorResourcePublication != resources.publication ||
                 projection.inspectorStyles != resources.StyleGeneration() || projection.inspectorTheme != resources.theme) {
-                auto preview = BuildUiCanvasPreview(owner.Document(), projection.previewState, owner.Identity().instance, &resources);
-                projection.previewDiagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
-                projection.preview = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
+                auto preview = BuildUiCanvasPreview(owner.Document(), projection.preview.state, owner.Identity().instance, &resources);
+                projection.preview.diagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
+                projection.preview.layout = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
             }
         }
 
@@ -102,13 +102,13 @@ namespace Horo::Editor {
                                          const EditorWorkspaceViewCommandData &command, const UiInspectorResourceSnapshot &resources) {
             if (!command.uiCanvasPreviewState || !command.uiCanvasPreviewState->IsValid())
                 return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
-            const bool resolve = projection.previewState.device != command.uiCanvasPreviewState->device ||
-                                 projection.previewState.rotated != command.uiCanvasPreviewState->rotated;
-            projection.previewState = *command.uiCanvasPreviewState;
+            const bool resolve = projection.preview.state.device != command.uiCanvasPreviewState->device ||
+                                 projection.preview.state.rotated != command.uiCanvasPreviewState->rotated;
+            projection.preview.state = *command.uiCanvasPreviewState;
             if (resolve) {
-                auto preview = BuildUiCanvasPreview(owner.Document(), projection.previewState, owner.Identity().instance, &resources);
-                projection.previewDiagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
-                projection.preview = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
+                auto preview = BuildUiCanvasPreview(owner.Document(), projection.preview.state, owner.Identity().instance, &resources);
+                projection.preview.diagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
+                projection.preview.layout = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
             }
             return Result<void>::Success();
         }
@@ -116,16 +116,16 @@ namespace Horo::Editor {
         /** @brief Resolve the actual selected layout and submit one fenced canonical transaction. */
         Result<void> CommitCanvasLayout(UiCanvasDocument &owner, const UiCanvasWorkspaceDocument &projection,
                                         const EditorWorkspaceViewCommandData &command) {
-            if (!projection.preview || !projection.selectedElement || command.uiCanvasElement != owner.Selection())
+            if (!projection.preview.layout || !projection.selectedElement || command.uiCanvasElement != owner.Selection())
                 return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
-            const auto &boxes = projection.preview->boxes;
+            const auto &boxes = projection.preview.layout->boxes;
             const auto box = std::ranges::find(boxes, owner.Selection(), &UiCanvasPreviewBox::element);
             if (box == boxes.end())
                 return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
             const auto parent = std::ranges::find(boxes, projection.selectedElement->parent, &UiCanvasPreviewBox::element);
             const auto edit = PrepareUiCanvasLayoutGesture(*projection.selectedElement, box->bounds, command.uiCanvasLayoutDelta,
                                                            parent == boxes.end() ? Runtime::Ui::UiLogicalExtent{} : parent->bounds.extent,
-                                                           projection.previewState);
+                                                           projection.preview.state);
             return edit.HasError() ? Result<void>::Failure(edit.ErrorValue())
                                    : ExecuteUiCanvasLayoutGesture(owner, command.uiCanvasState, command.uiCanvasSelectionRevision,
                                                                   projection.selectionRevision, edit.Value());

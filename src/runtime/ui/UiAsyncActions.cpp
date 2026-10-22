@@ -437,11 +437,11 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAsyncActionStore::CollectReleased */
     std::size_t UiAsyncActionStore::CollectReleased() noexcept {
-        auto *const storage = StateStorage();
+        const auto *storage = StateStorage();
         if (!storage || storage->ownerThread != std::this_thread::get_id())
             return 0;
         std::size_t drained{};
-        for (auto &record : storage->records) {
+        for (const auto &record : storage->records) {
             if (record.use_count() == 1 && !record->retained && record->snapshot.error && record->snapshot.error.use_count() == 1) {
                 record->snapshot.error.reset();
                 ++drained;

@@ -3,6 +3,7 @@
 #include "UiCanvasPreview.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 
 namespace {
@@ -16,7 +17,7 @@ namespace {
         return T::Create(bytes).Value();
     }
 
-    UiDocument Document(bool profiles = false) {
+    UiDocument Document(bool profiles = false, const UiElementPresentation *presentation = nullptr) {
         UiDocumentBuilder builder{Id<UiDocumentId>(1), UiDocumentRevision::Create(1).Value()};
         REQUIRE(builder
                     .AddCanvas({.id = Id<UiCanvasId>(2),
@@ -31,6 +32,8 @@ namespace {
         panel.presentation->layout.height = UiLength::Dip(60 * 64);
         panel.presentation->layout.offsets.left = 20 * 64;
         panel.presentation->layout.offsets.top = 30 * 64;
+        if (presentation)
+            panel.presentation = *presentation;
         REQUIRE(builder.AddElement(panel).HasValue());
         if (profiles) {
             auto compact = panel.presentation->layout;
@@ -51,6 +54,40 @@ namespace {
     DocumentInstanceId Instance() {
         DocumentIdentityRegistry identities;
         return identities.Open({DocumentKind::UiCanvas, SourceDocumentId::Parse("Hud.uicanvas").Value()}).Value().identity.instance;
+    }
+
+    UiInspectorResourceSnapshot Resources(const UiStyleAssetDocument &style) {
+        auto schema = CreateCoreUiStyleSchema({});
+        REQUIRE(schema.HasValue());
+        auto registry = PrepareUiStyleRegistry(std::span{&style, 1}, schema.Value(), RuntimeStyleGeneration::Create(1).Value());
+        REQUIRE(registry.HasValue());
+        UiInspectorResourceSnapshot result;
+        result.styles = std::make_shared<RuntimeStyleRegistry>(std::move(registry).Value());
+        result.theme = style.style.id;
+        result.publication = 1;
+        return result;
+    }
+
+    UiStyleAssetDocument ZeroStyle(UiStyleOrigin origin, UiCoreStyleProperty property, UiElementPresentation &presentation) {
+        UiStyleAssetDocument style{UiStyleContentRevision::Create(1).Value(), {.id = Id<RuntimeStyleAssetId>(8)}, {}, {}};
+        const std::vector<UiStyleAssignment> values{
+            {CoreUiStylePropertyId(property), UiStyleValueSource::Literal(UiStyleDimension{0}), false}};
+        if (origin == UiStyleOrigin::StyleAsset)
+            style.style.assignments = values;
+        else if (origin == UiStyleOrigin::Inline)
+            presentation.inlineStyle = values;
+        else if (origin == UiStyleOrigin::VisualState) {
+            presentation.state.enabled = false;
+            style.style.states.push_back({UiVisualStateMask{UiVisualState::Disabled}, {}, UiStateLayer::Availability, values});
+        } else {
+            const auto id = Id<UiStyleClassId>(7);
+            style.style.classes.push_back({.id = id, .assignments = values});
+            if (origin == UiStyleOrigin::ElementTypeClass)
+                presentation.typeClass = {style.style.id, id};
+            else
+                presentation.classes.push_back({style.style.id, id});
+        }
+        return style;
     }
 }  // namespace
 
@@ -213,4 +250,109 @@ TEST_CASE("Canvas preview uses the real selected theme computed projection after
     CHECK(preview.Value().boxes.back().bounds.extent.height == 29 * 64);
     resources.theme = Id<RuntimeStyleAssetId>(9);
     CHECK(BuildUiCanvasPreview(source, state, Instance(), &resources).HasError());
+}
+
+TEST_CASE("Preview registered layout defaults preserve authored percentages padding and responsive bases", "[ui_canvas][preview][styles]") {
+    auto presentation = *Document().Elements().back().presentation;
+    presentation.layout.width = UiLength::Percent(64);
+    presentation.layout.height = UiLength::Percent(64);
+    presentation.layout.padding = {64, 128, 192, 256};
+    const auto source = Document(true, &presentation);
+    const auto before = SerializeUiDocument(source).Value();
+    UiStyleAssetDocument style{UiStyleContentRevision::Create(1).Value(), {.id = Id<RuntimeStyleAssetId>(8)}, {}, {}};
+    const auto resources = Resources(style);
+    for (const auto device : {UiCanvasPreviewDevice::Desktop, UiCanvasPreviewDevice::Phone}) {
+        UiCanvasPreviewState state;
+        state.device = device;
+        const auto unstyled = BuildUiCanvasPreview(source, state, Instance());
+        const auto styled = BuildUiCanvasPreview(source, state, Instance(), &resources);
+        REQUIRE(unstyled.HasValue());
+        REQUIRE(styled.HasValue());
+        REQUIRE(unstyled.Value().boxes.back().bounds.extent.width > 0);
+        CHECK(styled.Value().boxes.back().bounds == unstyled.Value().boxes.back().bounds);
+        CHECK(styled.Value().profile == unstyled.Value().profile);
+    }
+    CHECK(SerializeUiDocument(source).Value() == before);
+}
+
+TEST_CASE("Preview explicit asset class inline and availability zero layout values retain precedence", "[ui_canvas][preview][styles]") {
+    const auto origin = GENERATE(UiStyleOrigin::StyleAsset, UiStyleOrigin::ElementTypeClass, UiStyleOrigin::AuthoredClass,
+                                 UiStyleOrigin::Inline, UiStyleOrigin::VisualState);
+    const auto property = GENERATE(UiCoreStyleProperty::Width, UiCoreStyleProperty::Height, UiCoreStyleProperty::Padding);
+    INFO("origin=" << static_cast<unsigned>(origin) << " property=" << static_cast<unsigned>(property));
+    auto presentation = *Document().Elements().back().presentation;
+    presentation.layout.padding = {64, 128, 192, 256};
+    const auto style = ZeroStyle(origin, property, presentation);
+    const auto source = Document(false, &presentation);
+    const auto resources = Resources(style);
+    const auto preview = BuildUiCanvasPreview(source, {}, Instance(), &resources);
+    REQUIRE(preview.HasValue());
+    if (property == UiCoreStyleProperty::Width)
+        CHECK(preview.Value().boxes.back().bounds.extent.width == 0);
+    else if (property == UiCoreStyleProperty::Height)
+        CHECK(preview.Value().boxes.back().bounds.extent.height == 0);
+    else {
+        presentation.layout.padding = {};
+        presentation.inlineStyle.clear();
+        presentation.classes.clear();
+        presentation.typeClass = {};
+        const auto expected = BuildUiCanvasPreview(Document(false, &presentation), {}, Instance());
+        REQUIRE(expected.HasValue());
+        CHECK(preview.Value().boxes.back().bounds == expected.Value().boxes.back().bounds);
+    }
+}
+
+TEST_CASE("Preview invalid session evidence never changes the canonical document", "[ui_canvas][preview][validation]") {
+    const auto source = Document();
+    const auto before = SerializeUiDocument(source).Value();
+    std::array<UiCanvasPreviewState, 7> invalid{};
+    invalid[0].device = UiCanvasPreviewDevice::Count;
+    invalid[1].tool = UiCanvasLayoutTool::Count;
+    invalid[2].zoomPercent = 9;
+    invalid[3].zoomPercent = 801;
+    invalid[4].grid = 0;
+    invalid[5].horizontalGuideCount = 9;
+    invalid[6].verticalGuideCount = 9;
+    for (const auto &state : invalid)
+        CHECK(BuildUiCanvasPreview(source, state, Instance()).HasError());
+    CHECK(SerializeUiDocument(source).Value() == before);
+}
+
+TEST_CASE("Preview admits the legacy implicit root and rejects world projection without changing source", "[ui_canvas][preview][legacy]") {
+    for (const auto mode : {UiRenderMode::ScreenSpaceOverlay, UiRenderMode::WorldSpace}) {
+        UiDocumentBuilder builder{Id<UiDocumentId>(1), UiDocumentRevision::Create(1).Value()};
+        REQUIRE(builder.AddCanvas({.id = Id<UiCanvasId>(2), .rootElement = Id<UiElementId>(3), .renderMode = mode}).HasValue());
+        const auto source = std::move(builder).Build();
+        REQUIRE(source.HasValue());
+        const auto before = SerializeUiDocument(source.Value()).Value();
+        const auto preview = BuildUiCanvasPreview(source.Value(), {}, Instance());
+        if (mode == UiRenderMode::ScreenSpaceOverlay) {
+            REQUIRE(preview.HasValue());
+            CHECK(preview.Value().boxes.size() == 1);
+        } else {
+            REQUIRE(preview.HasError());
+            CHECK(preview.ErrorValue().domain.Value() == UiErrors::CanvasSpaceModeMismatch.domain.Value());
+            CHECK(preview.ErrorValue().code.Value() == UiErrors::CanvasSpaceModeMismatch.code.Value());
+        }
+        CHECK(SerializeUiDocument(source.Value()).Value() == before);
+    }
+}
+
+TEST_CASE("Preview preserves typed missing style and intrinsic capability failures", "[ui_canvas][preview][capabilities]") {
+    auto presentation = *Document().Elements().back().presentation;
+    presentation.styleAsset = Id<RuntimeStyleAssetId>(8);
+    const auto styled = Document(false, &presentation);
+    const auto missingStyle = BuildUiCanvasPreview(styled, {}, Instance());
+    REQUIRE(missingStyle.HasError());
+    CHECK(missingStyle.ErrorValue().domain.Value() == UiErrors::StyleReferenceInvalid.domain.Value());
+    CHECK(missingStyle.ErrorValue().code.Value() == UiErrors::StyleReferenceInvalid.code.Value());
+    presentation.styleAsset = {};
+    presentation.intrinsic = {.kind = UiLayoutIntrinsicKind::Text, .required = true};
+    const auto source = Document(false, &presentation);
+    const auto before = SerializeUiDocument(source).Value();
+    const auto missingIntrinsic = BuildUiCanvasPreview(source, {}, Instance());
+    REQUIRE(missingIntrinsic.HasError());
+    CHECK(missingIntrinsic.ErrorValue().domain.Value() == UiErrors::LayoutIntrinsicUnavailable.domain.Value());
+    CHECK(missingIntrinsic.ErrorValue().code.Value() == UiErrors::LayoutIntrinsicUnavailable.code.Value());
+    CHECK(SerializeUiDocument(source).Value() == before);
 }

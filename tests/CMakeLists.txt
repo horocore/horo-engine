@@ -229,6 +229,7 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
             gui/PackageModalUiTests.cpp
             gui/InspectorCharacterUiTests.cpp
             gui/SourceEditorToolsUiTests.cpp
+            gui/UiCanvasPreviewUiScenarios.cpp
             helpers/editor_ui/EditorUiTestHarness.cpp
             helpers/editor_ui/EditorUiTestSurface.cpp
             helpers/editor_ui/InteractiveEditorUiTestRenderer.cpp
@@ -251,6 +252,8 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
     )
     target_link_libraries(HoroEditorUiAutomationTests PRIVATE
             HoroEngine::Gui
+            HoroUiInspectorInternal
+            HoroEditorUiStyleHostInternal
             HoroEngine::PlatformProjectReadFiles
             HoroEngine::ProjectMigrations
             HoroEngine::RenderFrontend
@@ -3994,6 +3997,7 @@ target_compile_features(HoroRuntimeUiStyleTests PRIVATE cxx_std_20)
 target_link_libraries(HoroRuntimeUiStyleTests PRIVATE HoroEngine::RuntimeUi)
 add_executable(HoroRuntimeUiThemeTests
         unit/runtime/ui/UiThemeTests.cpp
+        unit/runtime/ui/UiThemeAuthoringProjectionTests.cpp
         support/AllocationProbe.cpp
 )
 target_compile_features(HoroRuntimeUiThemeTests PRIVATE cxx_std_20)

@@ -84,39 +84,52 @@ namespace Horo::Editor {
         DiagnosticSourceNavigator diagnosticSourceNavigator{};
     };
 
+    /** @brief Borrowed canonical world authoring/capture capabilities; each absent member stays explicitly unavailable. */
+    struct EditorWorkspaceWorldSourceServices {
+        EditorWorkspaceCollisionEvidence collision{};
+        const WorldStreamingPreviewRuntimePolicy *streamingPolicy{};
+        WorldStreamingPreviewHost *streamingPreview{};
+        PartitionedWorldWorkspace *document{};
+        std::shared_ptr<const Platform::IProjectReadFiles> files;
+        std::optional<SceneSource::TriggerVolumeConversionContext> triggerBinding;
+    };
+
+    /** @brief Existing bake operation/output owners and immutable project/dependency captures, with unchanged individual readiness. */
+    struct EditorWorkspaceWorldBakeServices {
+        OperationStore *operations{};
+        BuildOutputStore *output{};
+        std::optional<Application::WorldBakeProjectCapture> project;
+        std::optional<Application::WorldBakeDependencySource> dependencies;
+    };
+
+    /** @brief Explicit procedural source catalog, optional migrator and detached preview inputs. */
+    struct EditorWorkspaceProceduralServices {
+        const PCG::IPCGGraphSourceMigrator *migrator{};
+        PCGEditorCatalog catalog{.document = {.revision = 1}};
+        std::optional<PCGPreviewInputs> previewInputs;
+    };
+
     /** @brief Optional services used by the workspace without transferring their ownership. */
     struct EditorWorkspaceDependencies {
         Assets::AssetRegistry *mutableAssetRegistry{};
-        UiInspectorResources *uiInspectorResources{}; /**< Actual host resource publisher, outliving the workspace. */
-        EditorWorkspaceCollisionEvidence collision{};
+        UiInspectorResources *uiInspectorResources{}; /**< Host publisher outlives this workspace. */
+        EditorWorkspaceWorldSourceServices world;
         ProjectMutationCoordinator *mutations{};
         DurableFileSystem *durableFiles{};
         std::shared_ptr<const Assets::IAssetRegistrySource> assetRegistrySource;
         const Assets::AssetImporterCatalogSnapshot *importerCatalog{};
         JobSystem *jobs{};
-        OperationStore *worldBakeOperations{};
-        BuildOutputStore *worldBakeOutput{};
-        std::optional<Application::WorldBakeProjectCapture> worldBakeProject;
-        std::optional<Application::WorldBakeDependencySource> worldBakeDependencies;
+        EditorWorkspaceWorldBakeServices worldBake;
         EditorWorkspaceSourceNavigation sourceNavigation{};
         EditorWorkspaceGameplayServices gameplay{};
         const ILocalizationService *localization{};
         EngineDataBus *engineEvents{};
         Application::NetworkDebuggerService *networkDebugger{};
-        const WorldStreamingPreviewRuntimePolicy *streamingPreviewPolicy{}; /**< Explicit app-owned index inspection profile. */
-        WorldStreamingPreviewHost *streamingPreview{}; /**< Application-owned read-only native capture bridge; outlives this workspace. */
-        PartitionedWorldWorkspace *partitionedWorld{}; /**< Borrowed host-owned canonical world; outlives this session. */
-        std::shared_ptr<const Platform::IProjectReadFiles> worldSourceFiles; /**< Host-composed retained project root; no draw-path I/O. */
-        Assets::AssetId documentSessionOwner;              /**< Host-issued never-reused workspace incarnation; no ambient generation. */
-        const PCG::IPCGGraphSourceMigrator *pcgMigrator{}; /**< Explicit host-owned compatible schema converter. */
-        Extensions::EditorInspectorHost *inspectorHost{};  /**< Explicit borrowed host, outliving this workspace. */
-        IAudioComponentPreview *audioPreview{};            /**< Explicit application-owned output capability; absent means unavailable. */
-        EditorWorkspacePrefabServices prefab;              /**< Explicit authoring composition; never discovered by panels. */
-        PCGEditorCatalog pcg{
-            .document = {.revision = 1}};                 /**< One host-composed source support, executable schemas and creation recipes. */
-        std::optional<PCGPreviewInputs> pcgPreviewInputs; /**< Explicit detached provider; absent rejects preview. */
-        std::optional<SceneSource::TriggerVolumeConversionContext>
-            triggerBinding; /**< Explicit immutable project capture; omitted in Null composition. */
+        Assets::AssetId documentSessionOwner; /**< Never-reused host-issued workspace incarnation. */
+        Extensions::EditorInspectorHost *inspectorHost{};
+        IAudioComponentPreview *audioPreview{};
+        EditorWorkspacePrefabServices prefab;
+        EditorWorkspaceProceduralServices procedural;
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller

@@ -32,9 +32,9 @@ namespace Horo::Editor {
                 }
                 const auto files = Platform::CreateNativeProjectReadFiles(directory.Path(), owner.ToString(), 1).Value();
                 controller = std::make_unique<EditorWorkspaceController>(directory.Path(), scene, Assets::AssetRegistrySnapshot{},
-                                                                         EditorWorkspaceDependencies{.streamingPreviewPolicy = &policy,
-                                                                                                     .streamingPreview = &bridge,
-                                                                                                     .worldSourceFiles = files,
+                                                                         EditorWorkspaceDependencies{.world = {.streamingPolicy = &policy,
+                                                                                                               .streamingPreview = &bridge,
+                                                                                                               .files = files},
                                                                                                      .documentSessionOwner = owner});
                 REQUIRE(controller->OpenWorldCompositionSource("source.horoworld").HasValue());
                 const auto root = controller->WorldDocuments().Snapshot().Value();

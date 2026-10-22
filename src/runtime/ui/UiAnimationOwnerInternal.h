@@ -33,6 +33,11 @@ namespace Horo::Runtime::Ui {
     };
 
     struct UiAnimationOwner::Storage final {
+        /** @brief Release unobserved frame snapshots only at the explicit quiescent collection boundary. */
+        void ReleaseUnobservedFrames();
+        /** @brief Validate each active attachment's prepared geometry before the shared publication cutoff. */
+        [[nodiscard]] Result<void> CanPublishAttachments(const UiElementTree &tree) const;
+
         struct Timeline final {
             std::uint32_t generation{};
             std::uint32_t definition{};

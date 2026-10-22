@@ -107,6 +107,24 @@ namespace Horo::Runtime::Ui {
         return PrepareControlSources(storage);
     }
 
+    /** @copydoc UiAnimationOwner::Storage::CanPublishAttachments */
+    Result<void> UiAnimationOwner::Storage::CanPublishAttachments(const UiElementTree &tree) const {
+        for (const auto &attachment : attachments) {
+            if (!attachment || !attachment->active)
+                continue;
+            if (!attachment->preparedLayout)
+                return Result<void>::Failure(MakeError(UiErrors::LayoutSourceStale));
+            if (auto valid = attachment->preparedLayout->CanPublish(tree); valid.HasError())
+                return valid;
+            if (attachment->clipping && !attachment->preparedClipping)
+                return Result<void>::Failure(MakeError(UiErrors::LayoutClipSourceStale));
+            if (attachment->preparedClipping)
+                if (auto valid = attachment->preparedClipping->CanPublish(tree); valid.HasError())
+                    return valid;
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc UiAnimationOwner::CanPublish */
     Result<void> UiAnimationOwner::CanPublish(const Storage &storage) {
         const auto &candidate = storage.candidate;
@@ -128,19 +146,8 @@ namespace Horo::Runtime::Ui {
             if (auto clipping = candidate.clipping->CanPublish(canvas->tree); clipping.HasError())
                 return clipping;
         }
-        for (const auto &attachment : storage.attachments) {
-            if (!attachment || !attachment->active)
-                continue;
-            if (!attachment->preparedLayout)
-                return Result<void>::Failure(MakeError(UiErrors::LayoutSourceStale));
-            if (auto valid = attachment->preparedLayout->CanPublish(canvas->tree); valid.HasError())
-                return valid;
-            if (attachment->clipping && !attachment->preparedClipping)
-                return Result<void>::Failure(MakeError(UiErrors::LayoutClipSourceStale));
-            if (attachment->preparedClipping)
-                if (auto valid = attachment->preparedClipping->CanPublish(canvas->tree); valid.HasError())
-                    return valid;
-        }
+        if (const auto attachments = storage.CanPublishAttachments(canvas->tree); attachments.HasError())
+            return attachments;
         if (canvas->captures) {
             if (auto captures = canvas->captures->CanPublishInteraction(canvas->tree.Canvas()); captures.HasError())
                 return captures;

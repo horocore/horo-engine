@@ -18,17 +18,18 @@ namespace Horo::Editor {
 
         UiCanvasViewportEvidence Viewport(const UiCanvasPreviewState &state) {
             UiCanvasViewportEvidence result;
+            using enum UiCanvasPreviewDevice;
             switch (state.device) {
-                case UiCanvasPreviewDevice::Desktop:
+                case Desktop:
                     result = {{1920, 1080}, {1, 1}, {}};
                     break;
-                case UiCanvasPreviewDevice::Phone:
+                case Phone:
                     result = {{1170, 2532}, {3, 1}, {0, 141, 0, 102}};
                     break;
-                case UiCanvasPreviewDevice::Tablet:
+                case Tablet:
                     result = {{2048, 2732}, {2, 1}, {0, 48, 0, 40}};
                     break;
-                case UiCanvasPreviewDevice::Count:
+                case Count:
                     break;
             }
             if (state.rotated) {
@@ -80,7 +81,7 @@ namespace Horo::Editor {
                     if (!reference.asset.IsValid())
                         reference.asset = asset;
                 value.classes = result.classes.back();
-                result.inputs.push_back(value);
+                result.inputs.emplace_back(value);
                 result.surfaces.push_back({value, descriptors[i].style, descriptors[i].intrinsic});
             }
             return Result<PreviewStyleInputs>::Success(std::move(result));
@@ -114,6 +115,22 @@ namespace Horo::Editor {
             return computed;
         }
 
+        /** @brief Admit explicit computed layout overrides; registered defaults do not replace the authored responsive base. */
+        Result<UiThemeSurfaceProperties> PreviewStyleBindings(const UiComputedStyleSnapshot &computed, UiElementHandle element) {
+            auto bindings = CoreUiStyleSurfaceProperties();
+            const auto record = computed.Get(element);
+            if (record.HasError())
+                return Result<UiThemeSurfaceProperties>::Failure(record.ErrorValue());
+            for (const auto &property : computed.Properties(record.Value())) {
+                if (property.provenance.origin != UiStyleOrigin::RegisteredDefault)
+                    continue;
+                for (auto *layout : {&bindings.width, &bindings.height, &bindings.padding})
+                    if (*layout == property.property)
+                        *layout = {};
+            }
+            return Result<UiThemeSurfaceProperties>::Success(bindings);
+        }
+
         /** @brief Resolve real selected styles through the canonical theme projection after responsive base selection. */
         Result<void> ResolvePreviewStyles(const UiDocument &source, const UiElementTree &tree,
                                           const std::vector<const UiDocumentElement *> &authored,
@@ -130,7 +147,10 @@ namespace Horo::Editor {
                 if (computed.HasError())
                     return Result<void>::Failure(computed.ErrorValue());
                 for (std::size_t i = 0; i < descriptors.size(); ++i) {
-                    const auto projection = ProjectUiThemeSurface(computed.Value(), surfaces[i], CoreUiStyleSurfaceProperties());
+                    const auto bindings = PreviewStyleBindings(computed.Value(), surfaces[i].style.element);
+                    if (bindings.HasError())
+                        return Result<void>::Failure(bindings.ErrorValue());
+                    const auto projection = ProjectUiThemeSurface(computed.Value(), surfaces[i], bindings.Value());
                     if (projection.HasError())
                         return Result<void>::Failure(projection.ErrorValue());
                     descriptors[i] = projection.Value().layout;
@@ -156,13 +176,13 @@ namespace Horo::Editor {
                                                                             const std::vector<const UiDocumentElement *> &authored) {
             std::vector<UiLayoutElementDescriptor> descriptors;
             descriptors.reserve(authored.size());
-            for (std::size_t i = 0; i < authored.size(); ++i) {
-                const auto handle = authored[i] ? tree.Find(authored[i]->id) : Result<UiElementHandle>::Success(tree.Root().Value().handle);
+            for (const auto *element : authored) {
+                const auto handle = element ? tree.Find(element->id) : Result<UiElementHandle>::Success(tree.Root().Value().handle);
                 if (handle.HasError())
                     return Result<std::vector<UiLayoutElementDescriptor>>::Failure(handle.ErrorValue());
-                const auto presentation = authored[i] ? authored[i]->presentation : std::nullopt;
-                descriptors.push_back({handle.Value(), presentation ? presentation->layout : UiLayoutStyle{},
-                                       presentation ? presentation->intrinsic : UiLayoutIntrinsicSource{}});
+                const auto presentation = element ? element->presentation : std::nullopt;
+                descriptors.emplace_back(handle.Value(), presentation ? presentation->layout : UiLayoutStyle{},
+                                         presentation ? presentation->intrinsic : UiLayoutIntrinsicSource{});
             }
             std::ranges::sort(descriptors, {}, &UiLayoutElementDescriptor::element);
             return Result<std::vector<UiLayoutElementDescriptor>>::Success(std::move(descriptors));
@@ -180,12 +200,12 @@ namespace Horo::Editor {
             for (const auto &element : source.Elements()) {
                 if (included.contains(element.id) || included.contains(element.parent)) {
                     included.insert(element.id);
-                    elements.push_back({element.id, element.parent});
+                    elements.emplace_back(element.id, element.parent);
                     authored.push_back(&element);
                 }
             }
             if (elements.empty()) {
-                elements.push_back({source.Canvases().front().rootElement, {}});
+                elements.emplace_back(source.Canvases().front().rootElement, UiElementId{});
                 authored.push_back(nullptr);
             }
             if (elements.size() > MaximumUiTreeElements)
@@ -309,7 +329,7 @@ namespace Horo::Editor {
                 const auto element = tree.Get(record.element);
                 if (element.HasError())
                     return Result<UiCanvasPreview>::Failure(element.ErrorValue());
-                result.boxes.push_back({element.Value().id, record.arrangement.contentBox});
+                result.boxes.emplace_back(element.Value().id, record.arrangement.contentBox);
             }
             return Result<UiCanvasPreview>::Success(std::move(result));
         } catch (const std::bad_alloc &) {

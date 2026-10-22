@@ -98,24 +98,29 @@ namespace Horo::Runtime::Ui {
             (void)storage_->registry.BeginRetirement();
     }
 
-    /** @copydoc UiAnimationOwner::DrainRetired */
-    Result<std::size_t> UiAnimationOwner::DrainRetired() {
-        if (!storage_ || storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching)
-            return Result<std::size_t>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+    /** @copydoc UiAnimationOwner::Storage::ReleaseUnobservedFrames */
+    void UiAnimationOwner::Storage::ReleaseUnobservedFrames() {
         // The application calls this outside frame work; owned frame slots retain snapshots until external leases drain.
-        for (std::size_t index = 0; index < storage_->frames.size(); ++index) {
-            auto &frame = storage_->frames[index];
+        for (std::size_t index = 0; index < frames.size(); ++index) {
+            const auto &frame = frames[index];
             if (frame.use_count() != 1)
                 continue;
-            if (storage_->lifecycle.stopped || !storage_->currentFrame || index != *storage_->currentFrame)
+            if (lifecycle.stopped || !currentFrame.has_value() || index != *currentFrame)
                 frame->controls.clear();
-            if (storage_->lifecycle.stopped) {
+            if (lifecycle.stopped) {
                 frame->styles.reset();
                 frame->layout.reset();
                 frame->clipped.reset();
                 frame->generation = {};
             }
         }
+    }
+
+    /** @copydoc UiAnimationOwner::DrainRetired */
+    Result<std::size_t> UiAnimationOwner::DrainRetired() {
+        if (!storage_ || storage_->lifecycle.draining || storage_->candidate.admitted || storage_->lifecycle.pointerDispatching)
+            return Result<std::size_t>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        storage_->ReleaseUnobservedFrames();
         std::size_t reclaimed{};
         if (auto *generation = storage_->publisher.Current()) {
             for (const auto &canvas : generation->Canvases()) {

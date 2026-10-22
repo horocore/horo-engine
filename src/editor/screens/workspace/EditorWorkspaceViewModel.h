@@ -300,14 +300,19 @@ namespace Horo::Editor {
         SequenceTimelineState timeline;
     };
 
+    /** @brief Workspace-only preview session and its correlated immutable layout result or typed diagnostic. */
+    struct UiCanvasPreviewPresentation final {
+        UiCanvasPreviewState state;
+        std::optional<UiCanvasPreview> layout;
+        std::optional<Error> diagnostic;
+    };
+
     /** @brief Cached immutable hierarchy presentation; no source data is rebuilt during drawing. */
     struct UiCanvasWorkspaceDocument final {
         DocumentIdentity identity;
         UiCanvasDocumentStateId state;
         Runtime::Ui::UiElementId root;
-        UiCanvasPreviewState previewState;
-        std::optional<UiCanvasPreview> preview;
-        std::optional<Error> previewDiagnostic;
+        UiCanvasPreviewPresentation preview;
         Runtime::Ui::UiElementId selection;
         std::uint64_t selectionRevision{1};
         Assets::AssetRegistryRevision inspectorAssets;

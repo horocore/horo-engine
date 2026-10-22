@@ -79,21 +79,21 @@ namespace Horo::Editor {
                                                          Runtime::RuntimeSceneService &runtimeScene,
                                                          const Assets::AssetRegistrySnapshot &assetRegistry,
                                                          const EditorWorkspaceDependencies &dependencies)
-        : m_partitionedWorld(dependencies.partitionedWorld), m_runtimeScene(runtimeScene), m_triggerBinding(dependencies.triggerBinding),
-          m_playSceneFactory(dependencies.gameplay.sceneFactory), m_assetRegistry(assetRegistry),
-          m_sourceOpenService(projectRoot, m_documentRegistry),
-          m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.pcg.document,
-                         dependencies.mutations, dependencies.durableFiles, dependencies.pcgMigrator),
+        : m_partitionedWorld(dependencies.world.document), m_runtimeScene(runtimeScene),
+          m_triggerBinding(dependencies.world.triggerBinding), m_playSceneFactory(dependencies.gameplay.sceneFactory),
+          m_assetRegistry(assetRegistry), m_sourceOpenService(projectRoot, m_documentRegistry),
+          m_pcgDocuments(m_sourceOpenService.ProjectRoot(), dependencies.documentSessionOwner, dependencies.procedural.catalog.document,
+                         dependencies.mutations, dependencies.durableFiles, dependencies.procedural.migrator),
           m_prefabStageFactory(dependencies.prefab.stageFactory), m_pcgPreviewJobs(dependencies.jobs),
-          m_pcgPreviewCatalog(dependencies.pcg.schemas), m_pcgPreviewInputs(dependencies.pcgPreviewInputs),
+          m_pcgPreviewCatalog(dependencies.procedural.catalog.schemas), m_pcgPreviewInputs(dependencies.procedural.previewInputs),
           m_prefabSourceCapture(dependencies.prefab.sources), m_workspaceSession(dependencies.documentSessionOwner),
-          m_streamingPreviewPolicy(dependencies.streamingPreviewPolicy), m_streamingPreview(dependencies.streamingPreview),
-          m_worldSourceFiles(dependencies.worldSourceFiles), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
-          m_uiInspectorResources(dependencies.uiInspectorResources), m_collisionInventory(dependencies.collision.inventory),
-          m_collisionActivation(dependencies.collision.activation), m_previewCollisionReceipt(dependencies.collision.previewReceipt),
-          m_collisionSceneOwner(dependencies.documentSessionOwner), m_mutations(dependencies.mutations),
-          m_durableFiles(dependencies.durableFiles), m_assetRegistrySource(dependencies.assetRegistrySource),
-          m_importerCatalog(dependencies.importerCatalog),
+          m_streamingPreviewPolicy(dependencies.world.streamingPolicy), m_streamingPreview(dependencies.world.streamingPreview),
+          m_worldSourceFiles(dependencies.world.files), m_mutableAssetRegistry(dependencies.mutableAssetRegistry),
+          m_uiInspectorResources(dependencies.uiInspectorResources), m_collisionInventory(dependencies.world.collision.inventory),
+          m_collisionActivation(dependencies.world.collision.activation),
+          m_previewCollisionReceipt(dependencies.world.collision.previewReceipt), m_collisionSceneOwner(dependencies.documentSessionOwner),
+          m_mutations(dependencies.mutations), m_durableFiles(dependencies.durableFiles),
+          m_assetRegistrySource(dependencies.assetRegistrySource), m_importerCatalog(dependencies.importerCatalog),
           m_assetPreviews(dependencies.jobs != nullptr ? std::make_unique<Assets::AssetPreviewService>(*dependencies.jobs) : nullptr),
           m_sourceOpenNavigator(dependencies.sourceNavigation.sourceOpenNavigator),
           m_diagnosticSourceNavigator(dependencies.sourceNavigation.diagnosticSourceNavigator),
@@ -102,8 +102,8 @@ namespace Horo::Editor {
           m_sceneFileWatch(dependencies.jobs != nullptr ? std::make_unique<SceneFileWatchService>(*dependencies.jobs) : nullptr),
           m_worldDocuments(dependencies.documentSessionOwner), m_playSession(dependencies.networkDebugger),
           m_audioPreview(dependencies.audioPreview), m_audioPreviewWorkspace(dependencies.documentSessionOwner) {
-        m_viewModel.pcgPalette = dependencies.pcg.palette;
-        m_viewModel.pcgSchemas = dependencies.pcg.schemas;
+        m_viewModel.pcgPalette = dependencies.procedural.catalog.palette;
+        m_viewModel.pcgSchemas = dependencies.procedural.catalog.schemas;
         m_viewModel.audioPreviewAvailable = m_audioPreview != nullptr;
         InitializeWorldBake(dependencies);
         if (dependencies.gameplay.retirements)
