@@ -173,11 +173,18 @@ namespace {
         CHECK(timing.ErrorValue().code.Value() == "render.frame_pacing.native_timing_unsupported");
 
         REQUIRE(backend->Initialize(RenderBackendConfig{.requirePresentation = true}).HasValue());
+        REQUIRE_FALSE(backend->Capabilities().presentsToWindow);
+        const auto initializedLifecycle = state.lifecycle;
         Test::RequireErrorCode(backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {1280, 720}}),
                                "render.vulkan.presentation_unsupported", "horo.render.vulkan");
-        Test::RequireErrorCode(backend->Execute(RenderExecutionPlan{}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Execute(RenderExecutionPlan{}), "render.vulkan.presentation_unsupported", "horo.render.vulkan");
         Test::RequireErrorCode(backend->Present(FrameToken{1}), "render.vulkan.presentation_unsupported", "horo.render.vulkan");
-        Test::RequireErrorCode(backend->Resize(FramebufferExtent{1280, 720}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Resize(FramebufferExtent{1280, 720}), "render.vulkan.presentation_unsupported",
+                               "horo.render.vulkan");
+        CHECK(state.lifecycle == initializedLifecycle);
+        CHECK(state.destroyDeviceCount == 0);
+        CHECK(state.destroyInstanceCount == 0);
+        CHECK(state.releaseLoaderCount == 0);
 
         Horo::Render::Test::RequireDrainedOwner(*backend);
         Horo::Render::Test::RequireDrainedOwner(*backend);
@@ -314,8 +321,22 @@ namespace {
         }
     }
 
+    TEST_CASE("Vulkan admission-only offscreen commands retain a distinct unsupported result", "[unit][runtime][renderer][vulkan]") {
+        RuntimeState state = DefaultState();
+        FakeRuntimePort port{state};
+        std::unique_ptr<IRenderBackend> backend = CreateBackend(port);
+        REQUIRE(backend->Initialize({}).HasValue());
+        const auto initializedLifecycle = state.lifecycle;
+        Test::RequireErrorCode(backend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {1280, 720}}),
+                               "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Execute(RenderExecutionPlan{}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        Test::RequireErrorCode(backend->Resize(FramebufferExtent{1280, 720}), "render.vulkan.unsupported_operation", "horo.render.vulkan");
+        CHECK(state.lifecycle == initializedLifecycle);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+    }
+
     TEST_CASE("Vulkan module info reserves native interactive composition", "[unit][runtime][renderer][vulkan]") {
-        Test::CheckModuleInfo(GetVulkanRenderBackendModuleInfo(), {.id = RenderBackendId{"vulkan"}, .presentsToWindow = true},
+        Test::CheckModuleInfo(GetVulkanRenderBackendModuleInfo(), {.id = RenderBackendId{"vulkan"}, .presentsToWindow = false},
                               RenderPresentationKind::Vulkan);
     }
 }  // namespace

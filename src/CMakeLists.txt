@@ -3348,8 +3348,8 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
     target_compile_features(HoroEditorVulkanGuiInternal PRIVATE cxx_std_20)
     target_include_directories(HoroEditorVulkanGuiInternal PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(HoroEditorVulkanGuiInternal
-        PUBLIC HoroRenderVulkanHostInterface HoroEngine::RenderFrontend HoroEditorVulkanShaderInternal
-        PRIVATE HoroRenderFrontendResourceAccessInternal HoroEngine::RenderVulkan HoroEngine::EditorViewportResources HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
+        PUBLIC HoroRenderVulkanHostInterface HoroEngine::RenderFrontend HoroEditorVulkanShaderInternal HoroEngine::EditorViewportResources
+        PRIVATE HoroRenderFrontendResourceAccessInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})
 endif ()
 
 if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_OPENGL)
