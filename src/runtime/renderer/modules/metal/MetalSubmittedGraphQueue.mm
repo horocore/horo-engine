@@ -3,6 +3,7 @@
 #include "MetalRenderBackendErrors.h"
 
 #include <algorithm>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -76,18 +77,26 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
-    /** @copydoc MetalSubmittedGraphQueue::ReleaseLeases */
-    void MetalSubmittedGraphQueue::ReleaseLeases() noexcept {
-        for (auto *&lease : leases_) {
-            if (lease != nullptr) {
-                lease->Release();
-                lease = nullptr;
-            }
+    /** @copydoc MetalSubmittedGraphQueue::DrainTerminals */
+    Result<void> MetalSubmittedGraphQueue::DrainTerminals() {
+        std::optional<Error> failure;
+        while (Count() != 0) {
+            id<MTLCommandBuffer> commands = commands_.firstObject;
+            const auto status = commands.status;
+            if ((status != MTLCommandBufferStatusCompleted && status != MTLCommandBufferStatusError) ||
+                (recordings_[0] && !recordings_[0]->NativeTerminal()))
+                break;
+            if (const auto complete = OldestComplete(); complete.HasError() && !failure)
+                failure = complete.ErrorValue();
+            RetireOldest();
         }
+        return failure ? Result<void>::Failure(std::move(*failure)) : Result<void>::Success();
     }
 
     /** @copydoc MetalSubmittedGraphQueue::Clear */
     void MetalSubmittedGraphQueue::Clear() noexcept {
+        if (Count() != 0)
+            std::terminate();
         for (auto &recording : recordings_)
             recording.reset();
         commands_ = nil;

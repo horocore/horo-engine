@@ -277,13 +277,27 @@ namespace Horo::Application::Internal {
             std::uint64_t tick_{};
             Runtime::SceneRuntimeId identity_;
         };
+
+        /** @brief Composes identical project resources under an explicitly disjoint host identity grant. */
+        Editor::EditorProjectPlaySceneFactory ProjectFactory(JobSystem &jobs, EditorProjectScenePolicy policy,
+                                                             const ScenePhysicsIdentityRange range) {
+            return [&jobs, policy = std::move(policy), range](const std::filesystem::path &root, const Runtime::SceneRuntimeId identity,
+                                                              const Runtime::RuntimeSceneDefinition &definition) {
+                if (identity.value < range.first.value || identity.value > range.last.value)
+                    return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(MakeError(InvalidProjectScene));
+                auto host = std::make_unique<ProjectPlaySceneHost>(identity, range);
+                if (auto prepared = host->Prepare(root, jobs, policy, &definition); prepared.HasError())
+                    return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(prepared.ErrorValue());
+                return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Success(std::move(host));
+            };
+        }
     }  // namespace
 
     /** @copydoc PrepareEditorProjectPreview */
     Result<EditorProjectPreviewScene> PrepareEditorProjectPreview(const std::filesystem::path &root, JobSystem &jobs,
                                                                   const EditorProjectScenePolicy &policy) {
         auto owner = std::make_unique<ProjectPlaySceneHost>(Runtime::SceneRuntimeId{1},
-                                                            ScenePhysicsIdentityRange{{1}, {Editor::EditorPlaySceneNamespace - 1}});
+                                                            ScenePhysicsIdentityRange{{1}, {Editor::EditorPrefabStageNamespace - 1}});
         if (auto prepared = owner->Prepare(root, jobs, policy, nullptr); prepared.HasError())
             return Result<EditorProjectPreviewScene>::Failure(prepared.ErrorValue());
         const auto mode = owner->PhysicsMode();
@@ -305,16 +319,11 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MakeEditorProjectSceneFactory */
     Editor::EditorProjectPlaySceneFactory MakeEditorProjectSceneFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
-        return [&jobs, policy = std::move(policy)](const std::filesystem::path &root, const Runtime::SceneRuntimeId identity,
-                                                   const Runtime::RuntimeSceneDefinition &definition) {
-            if (identity.value < Editor::EditorFirstPlayScene.value)
-                return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(MakeError(InvalidProjectScene));
-            auto host =
-                std::make_unique<ProjectPlaySceneHost>(identity, ScenePhysicsIdentityRange{Editor::EditorFirstPlayScene,
-                                                                                           {std::numeric_limits<std::uint64_t>::max()}});
-            if (auto prepared = host->Prepare(root, jobs, policy, &definition); prepared.HasError())
-                return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Failure(prepared.ErrorValue());
-            return Result<std::unique_ptr<Editor::EditorPlaySceneHost>>::Success(std::move(host));
-        };
+        return ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPlayScene, {std::numeric_limits<std::uint64_t>::max()}});
+    }
+
+    /** @copydoc MakeEditorProjectPrefabStageFactory */
+    Editor::EditorProjectPrefabStageFactory MakeEditorProjectPrefabStageFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
+        return {ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPrefabStage, Editor::EditorLastPrefabStage})};
     }
 }  // namespace Horo::Application::Internal

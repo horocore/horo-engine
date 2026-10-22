@@ -119,6 +119,15 @@ namespace Horo::Editor {
     using EditorProjectPlaySceneFactory =
         std::function<Result<std::unique_ptr<EditorPlaySceneHost>>(const std::filesystem::path &, Runtime::SceneRuntimeId,
                                                                    const Runtime::RuntimeSceneDefinition &)>;
+
+    /** @brief Separate application capability for isolated authoring stages; never grants Play or gameplay execution. */
+    struct EditorProjectPrefabStageFactory final {
+        EditorProjectPlaySceneFactory create;
+    };
+
+    inline constexpr std::uint64_t EditorPrefabStageNamespace = 0x4000000000000000ULL;
+    inline constexpr Runtime::SceneRuntimeId EditorFirstPrefabStage{EditorPrefabStageNamespace + 1};
+    inline constexpr Runtime::SceneRuntimeId EditorLastPrefabStage{0x7fffffffffffffffULL};
 }  // namespace Horo::Editor
 
 #endif  // HORO_EDITOR_INTERNAL_PLAY_SCENE_HOST_H

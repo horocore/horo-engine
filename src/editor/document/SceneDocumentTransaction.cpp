@@ -2,11 +2,13 @@
 
 #include "Horo/Scene/SceneSource.h"
 #include "editor/document/SceneDocumentInternal.h"
+#include "editor/document/SceneDocumentTransactionCapture.h"
 
 #include <limits>
 
 namespace Horo::Editor {
     using namespace SceneDocumentDetail;
+    using namespace SceneTransactionCapture;
 
     namespace {
         /** @brief Build a stable typed rejection without translating a lower-layer error. */
@@ -14,140 +16,6 @@ namespace Horo::Editor {
             return MakeError(SceneTransactionError(reason));
         }
 
-        /** @brief Compare exact semantic content and its independent generation ownership. */
-        Result<void> Matches(const SceneObjectSnapshot &object, const Sha256Digest &content,
-                             const std::optional<SceneSource::SceneGeneratedOwnership> &ownership) {
-            if (object.generated != ownership)
-                return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
-            const auto fingerprint = FingerprintSceneObjectContent(object, kMaximumHistoryBytes);
-            if (fingerprint.HasError())
-                return Result<void>::Failure(fingerprint.ErrorValue());
-            if (fingerprint.Value() != content)
-                return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
-            return Result<void>::Success();
-        }
-
-        /** @brief Charge fixed and nested authored storage against a finite envelope before cloning roots. */
-        bool ChargeObjects(const std::span<const SceneObjectSnapshot> objects, const std::size_t limit, std::size_t &bytes) {
-            for (const auto &object : objects) {
-                const auto nested = EstimateSceneObjectOwnedMemoryBytes(object);
-                if (nested > limit || sizeof(object) > limit - nested || bytes > limit - nested - sizeof(object))
-                    return false;
-                bytes += nested + sizeof(object);
-            }
-            return true;
-        }
-
-        /** @brief Prove a generated fragment's authored/retirement reservation before copying it. */
-        bool FitsReservation(const SceneObjectReplacement &change, const SceneObjectSnapshot *before) {
-            if (!(change.desired && change.desired->generated) && !(before && before->generated))
-                return true;
-            const std::size_t afterBytes =
-                change.desired ? sizeof(SceneObjectSnapshot) + EstimateSceneObjectOwnedMemoryBytes(*change.desired) : 0;
-            const std::size_t beforeBytes = before ? sizeof(SceneObjectSnapshot) + EstimateSceneObjectOwnedMemoryBytes(*before) : 0;
-            return afterBytes <= change.resources.residentBytes && beforeBytes <= change.resources.retirementBytes &&
-                   afterBytes <= change.resources.preparationBytes && beforeBytes <= change.resources.preparationBytes - afterBytes;
-        }
-
-        /** @brief Derive committed indices from surviving authored order before applying detached changes. */
-        void ResolveReplacementIndices(SceneObjectsReplacedDelta &delta, const std::size_t objectCount) {
-            const auto removed = static_cast<std::size_t>(std::ranges::count_if(delta.objects, [](const auto &change) {
-                return change.before && !change.after;
-            }));
-            std::size_t appended = objectCount - removed;
-            for (auto &change : delta.objects) {
-                if (!change.after)
-                    continue;
-                if (!change.before) {
-                    change.after->index = appended++;
-                    continue;
-                }
-                const auto removedBefore = std::ranges::count_if(delta.objects, [&change](const auto &other) {
-                    return other.before && !other.after && other.before->index < change.before->index;
-                });
-                change.after->index = change.before->index - static_cast<std::size_t>(removedBefore);
-            }
-        }
-
-        /** @brief Capture one validated before/after pair; absence denotes an exact semantic no-op. */
-        Result<std::optional<SceneObjectReplacementDelta>> CaptureReplacement(const std::vector<SceneObjectSnapshot> &objects,
-                                                                              const SceneObjectReplacement &change) {
-            using Return = Result<std::optional<SceneObjectReplacementDelta>>;
-            const auto current = FindObject(objects, change.object);
-            if (!FitsReservation(change, current == objects.end() ? nullptr : std::to_address(current)))
-                return Return::Failure(Rejected(SceneTransactionFailure::Capacity));
-            SceneObjectReplacementDelta captured{change.object, {}, {}};
-            if (current == objects.end()) {
-                if (change.priorContent != Sha256Digest{} || change.expectedOwnership || !change.desired)
-                    return Return::Failure(Rejected(SceneTransactionFailure::Stale));
-            } else {
-                if (IsEffectivelyLocked(objects, change.object))
-                    return Return::Failure(LockedObjectError());
-                if (const auto matches = Matches(*current, change.priorContent, change.expectedOwnership); matches.HasError())
-                    return Return::Failure(matches.ErrorValue());
-                captured.before = IndexedSceneObject{*current, static_cast<std::size_t>(current - objects.begin())};
-            }
-            if (change.desired) {
-                if (change.desired->id != change.object)
-                    return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
-                // Existing objects keep their index; ResolveReplacementIndices assigns final positions after removals.
-                captured.after = IndexedSceneObject{*change.desired, captured.before ? captured.before->index : objects.size()};
-            }
-            if (captured.before && captured.after && captured.before->object.generated == captured.after->object.generated) {
-                const auto desired = FingerprintSceneObjectContent(captured.after->object, kMaximumHistoryBytes);
-                if (desired.HasError())
-                    return Return::Failure(desired.ErrorValue());
-                if (desired.Value() == change.priorContent)
-                    return Return::Success(std::nullopt);
-            }
-            return Return::Success(std::move(captured));
-        }
-
-        /** @brief Validate all submitted identities before no-op filtering and capture the complete detached delta. */
-        Result<SceneObjectsReplacedDelta> CaptureReplacements(const std::vector<SceneObjectSnapshot> &objects,
-                                                              const std::span<const SceneObjectReplacement> changes) {
-            SceneObjectsReplacedDelta delta;
-            delta.objects.reserve(changes.size());
-            std::vector<SceneObjectId> submitted;
-            submitted.reserve(changes.size());
-            for (const auto &change : changes) {
-                if (!change.object.IsValid() || std::ranges::find(submitted, change.object) != submitted.end())
-                    return Result<SceneObjectsReplacedDelta>::Failure(Rejected(SceneTransactionFailure::Invalid));
-                submitted.push_back(change.object);
-                auto captured = CaptureReplacement(objects, change);
-                if (captured.HasError())
-                    return Result<SceneObjectsReplacedDelta>::Failure(captured.ErrorValue());
-                auto owned = std::move(captured).Value();
-                if (owned)
-                    delta.objects.push_back(std::move(*owned));
-            }
-            ResolveReplacementIndices(delta, objects.size());
-            return Result<SceneObjectsReplacedDelta>::Success(std::move(delta));
-        }
-
-        /** @brief Guard exact generated ownership/content before historical cleanup or replacement. */
-        Result<void> ValidateReplay(const std::vector<SceneObjectSnapshot> &objects, const SceneCommandDelta &delta, const bool redo) {
-            const auto *batch = std::get_if<SceneObjectsReplacedDelta>(&delta);
-            if (!batch)
-                return Result<void>::Success();
-            for (const auto &change : batch->objects) {
-                const auto &expected = redo ? change.before : change.after;
-                const auto current = FindObject(objects, change.object);
-                if (!expected) {
-                    if (current != objects.end())
-                        return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
-                    continue;
-                }
-                if (current == objects.end())
-                    return Result<void>::Failure(Rejected(SceneTransactionFailure::Stale));
-                const auto fingerprint = FingerprintSceneObjectContent(expected->object, kMaximumHistoryBytes);
-                if (fingerprint.HasError())
-                    return Result<void>::Failure(fingerprint.ErrorValue());
-                if (auto matched = Matches(*current, fingerprint.Value(), expected->object.generated); matched.HasError())
-                    return matched;
-            }
-            return Result<void>::Success();
-        }
     }  // namespace
 
     struct SceneDocumentTransactions::State final {
@@ -283,21 +151,6 @@ namespace Horo::Editor {
                                                           std::move(value.prefabInstances)});
     }
 
-    /** @copydoc FingerprintSceneObjectContent */
-    Result<Sha256Digest> FingerprintSceneObjectContent(const SceneObjectSnapshot &object, const std::size_t maximumBytes) {
-        if (!maximumBytes || maximumBytes > MaximumSceneObjectFingerprintBytes ||
-            EstimateSceneObjectOwnedMemoryBytes(object) > maximumBytes)
-            return Result<Sha256Digest>::Failure(Rejected(SceneTransactionFailure::Capacity));
-        auto authored = object;
-        authored.generated.reset();
-        const auto encoded = SceneSource::EncodeSceneSource({std::span{&authored, 1}, {}});
-        if (encoded.size() > maximumBytes)
-            return Result<Sha256Digest>::Failure(Rejected(SceneTransactionFailure::Capacity));
-        if (auto parsed = SceneSource::DecodeSceneSource(encoded); parsed.HasError())
-            return Result<Sha256Digest>::Failure(parsed.ErrorValue());
-        return Result<Sha256Digest>::Success(ComputeSha256(std::as_bytes(std::span{encoded.data(), encoded.size()})));
-    }
-
     /** @copydoc SceneDocumentTransactions::PreparationBudget */
     Result<std::size_t> SceneDocumentTransactions::PreparationBudget(const std::span<const SceneObjectReplacement> changes,
                                                                      const SceneTransactionLimits limits) const {
@@ -326,6 +179,7 @@ namespace Horo::Editor {
         State *owner{};
         SceneTransactionContext context;
         std::vector<SceneObjectSnapshot> objects;
+        std::optional<std::vector<ScenePrefabInstance>> instances;
         std::unique_ptr<SceneDocument> validated;
         std::unique_ptr<EditorHistory::Impl> history;
         bool consumed{};
@@ -339,8 +193,13 @@ namespace Horo::Editor {
             if (candidate.size() > limits.maximumSnapshotObjects ||
                 owner->document->m_prefabInstances.size() > limits.maximumSnapshotObjects - candidate.size())
                 return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
+            auto candidateInstances = owner->document->m_prefabInstances;
+            if (delta.prefabCreation)
+                ApplyPrefabTypedDelta(candidateInstances, *delta.prefabCreation);
+            if (candidateInstances.size() > limits.maximumSnapshotObjects - candidate.size())
+                return Result<void>::Failure(Rejected(SceneTransactionFailure::Capacity));
             SceneDocument validatedRoot;
-            if (auto valid = validatedRoot.LoadSaved(candidate, owner->document->m_prefabInstances); valid.HasError())
+            if (auto valid = validatedRoot.LoadSaved(candidate, candidateInstances); valid.HasError())
                 return Result<void>::Failure(valid.ErrorValue());
             const auto &document = *owner->document;
             if (document.m_revision.value == std::numeric_limits<std::uint64_t>::max() ||
@@ -360,7 +219,11 @@ namespace Horo::Editor {
             if (auto admitted = port.Admit(context); admitted.HasError())
                 return Result<void>::Failure(admitted.ErrorValue());
             preparedHistory.undo.back().coordinated = coordinated;
+            if (const auto &replacement = std::get<SceneObjectsReplacedDelta>(preparedHistory.undo.back().delta);
+                replacement.prefabCreation)
+                preparedHistory.undo.back().affectedPrefabInstances.push_back(replacement.prefabCreation->instance.instanceId);
             objects = std::move(candidate);
+            instances = std::move(candidateInstances);
             this->validated = std::make_unique<SceneDocument>(std::move(validatedRoot));
             this->history = std::make_unique<EditorHistory::Impl>(std::move(preparedHistory));
             return Result<void>::Success();
@@ -410,6 +273,8 @@ namespace Horo::Editor {
         state_->history->m_impl->undo.swap(prepared.history->undo);
         state_->history->m_impl->redo.swap(prepared.history->redo);
         state_->history->m_impl->memoryBytes = prepared.history->memoryBytes;
+        if (prepared.instances)
+            state_->document->m_prefabInstances.swap(*prepared.instances);
         auto result = PublishRoot(prepared.objects, *prepared.validated);
         if (prepared.replayState) {
             state_->document->m_state = *prepared.replayState;
@@ -452,6 +317,7 @@ namespace Horo::Editor {
         prepared->validated = std::make_unique<SceneDocument>();
         if (auto valid = prepared->validated->LoadSaved(prepared->objects, instances); valid.HasError())
             return Return::Failure(valid.ErrorValue());
+        prepared->instances = std::move(instances);
         prepared->replayState = redo ? entry.afterState : entry.beforeState;
         prepared->history = std::make_unique<EditorHistory::Impl>(*state_->history->m_impl);
         auto &from = redo ? prepared->history->redo : prepared->history->undo;
@@ -459,6 +325,49 @@ namespace Horo::Editor {
         to.push_back(std::move(from.back()));
         from.pop_back();
         return Return::Success(std::move(prepared));
+    }
+
+    /** @copydoc SceneDocumentTransactions::PreparePrefabReplacement */
+    Result<SceneDocumentTransactions::PrefabReplacement> SceneDocumentTransactions::PreparePrefabReplacement(
+        const SceneTransactionContext &context, const SceneObjectId root, const Prefab::PrefabAssetReference &source,
+        const SceneTransactionLimits limits) const {
+        using Return = Result<PrefabReplacement>;
+        if (auto admitted = Admit(context); admitted.HasError())
+            return Return::Failure(admitted.ErrorValue());
+        const auto budget = PreparationBudget({}, limits);
+        if (budget.HasError())
+            return Return::Failure(budget.ErrorValue());
+        const auto &document = *state_->document;
+        const auto selected = FindObject(document.m_objects, root);
+        if (selected == document.m_objects.end() || !source.IsValid())
+            return Return::Failure(Rejected(SceneTransactionFailure::Invalid));
+        auto captured = CapturePrefabSubtree(document.m_objects, document.m_prefabInstances, root, limits.maximumChanges);
+        if (captured.HasError())
+            return Return::Failure(captured.ErrorValue());
+        auto instance = AllocatePrefabInstanceId(document.m_nextPrefabInstanceId);
+        if (instance.HasError())
+            return Return::Failure(instance.ErrorValue());
+        auto delta = std::move(captured).Value();
+        delta.prefabCreation = CreatedPrefabInstanceDelta{{instance.Value(), source, selected->parent, selected->localTransform},
+                                                          document.m_prefabInstances.size()};
+        auto prepared = std::make_shared<Prepared>();
+        prepared->owner = state_.get();
+        prepared->context = context;
+        if (auto staged = prepared->StageRoot(*this, std::move(delta), limits, budget.Value(), false); staged.HasError())
+            return Return::Failure(staged.ErrorValue());
+        PrefabReplacement result;
+        result.prepared_ = std::move(prepared);
+        result.instance_ = instance.Value();
+        return Return::Success(std::move(result));
+    }
+
+    /** @copydoc SceneDocumentTransactions::CommitPrefabReplacement */
+    Result<SceneTransactionResult> SceneDocumentTransactions::CommitPrefabReplacement(const PrefabReplacement &replacement) {
+        if (!replacement.prepared_)
+            return Result<SceneTransactionResult>::Failure(Rejected(SceneTransactionFailure::Invalid));
+        if (auto valid = ValidatePrepared(*replacement.prepared_); valid.HasError())
+            return Result<SceneTransactionResult>::Failure(valid.ErrorValue());
+        return Result<SceneTransactionResult>::Success(PublishPrepared(*replacement.prepared_));
     }
 
     /** @copydoc SceneDocumentTransactions::Execute */

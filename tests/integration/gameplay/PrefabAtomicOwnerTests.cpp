@@ -65,6 +65,37 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(fixture.ai.Find(resident).Value().hasRunningTask);
         }
 
+        TEST_CASE("Cooked prefab root zero Physics endpoints resolve through exact group fixups before native publication",
+                  "[prefab][integration][atomic][physics][creation]") {
+            Fixture fixture{false, RootPhysicsEndpoints};
+            fixture.Tick(1);
+            fixture.Reach(3);
+            RequireAllOwners(fixture, 3, 2);
+            const auto operation = fixture.SpawnOperation();
+            const auto spawned = operation.Spawned();
+            REQUIRE(spawned.HasValue());
+            const auto root = spawned.Value().Root();
+            const auto view = fixture.scenes.ActiveScene()->Get(root);
+            REQUIRE(view.HasValue());
+            REQUIRE(view.Value().physicsReferences.size() == 1);
+            CHECK(view.Value().physicsReferences.front().target == root);
+            CHECK(view.Value().physicsReferences.front().body == Runtime::PhysicsBodySlotId{1});
+            bool foundChild{};
+            for (std::size_t index = 0; index < fixture.scenes.ActiveScene()->SlotCount(); ++index) {
+                const auto entity = fixture.scenes.ActiveScene()->EntityAt(index);
+                if (!entity || entity->entity == root)
+                    continue;
+                if (entity->components->physicsConstraints.empty())
+                    continue;
+                foundChild = true;
+                REQUIRE(entity->physicsReferences.size() == 3);
+                CHECK(std::ranges::any_of(entity->physicsReferences, [root](const auto &reference) {
+                    return reference.kind == Runtime::GroupPhysicsReferenceKind::ConstraintSecond && reference.target == root;
+                }));
+            }
+            CHECK(foundChild);
+        }
+
         TEST_CASE("Every real prefab owner failure leaves the previous aggregate and resident AI task intact",
                   "[prefab][integration][atomic][rollback]") {
             Fault fault{};

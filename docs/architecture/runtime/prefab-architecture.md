@@ -321,6 +321,11 @@ pre-existing scene requirements, while excluding captured prefab-source nodes;
 their source revisions remain closure evidence for cook keys and stale-result
 rejection but never leak into the packaged runtime definition.
 
+The implemented bounded create-from-selection transaction and its explicit unsupported
+reference/codec cases are documented in [Create Prefab from Selection Subtree](../../guides/create-prefab-from-selection.md).
+It composes existing source publication and canonical Scene/history owners; a failed
+postcommit presentation refresh cannot undo authoritative publication.
+
 ### External Reference Boundary And Binding Slots
 
 [ADR-096](../../adr/096-prefab-external-reference-and-binding-slot-contract.md)
@@ -1086,3 +1091,17 @@ drains its owners before host AI shutdown and native module retirement. Owned
 providers and borrowed providers obey the same exact Scene identity fences.
 Public-header consumers and real multi-owner rollback/lifecycle tests qualify
 the two narrow headers and the application composition.
+
+### Selection Physics endpoint codec domain
+
+Selection creation rewrites internal collider and constraint body endpoints into
+the established prefab-local object domain, preserving body slots and reserved
+root zero. The shared component codec uses a non-installed, narrow PhysicsModel
+validation interface to distinguish Scene from PrefabLocal identity admission.
+PhysicsModel remains the single field-validation owner; existing public validation
+and ordinary Scene decoding retain nonzero Scene identity requirements. No
+sentinel substitution, new persistent binding algebra, or runtime handle is added.
+Source conversion resolves locals through the canonical occurrence identity map
+before Scene definition admission. Cooked hosts retain local endpoints only until
+exact source-provenance resolution produces typed group body fixups; Runtime Scene
+resolves those fixups against candidate entities before Physics binding.

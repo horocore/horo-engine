@@ -5,11 +5,11 @@
 
 namespace Horo::Render::Detail {
     Result<void> RenderResourceRegistry::AddSubmissionPin(const RenderResourceClass resourceClass, const RenderResourceIdentity identity) {
-        const auto validated = Validate(resourceClass, identity);
+        const auto validated = slots_.Validate(resourceClass, identity);
         if (validated.HasError()) {
             return Result<void>::Failure(validated.ErrorValue());
         }
-        Entry &entry = entries_[validated.Value()];
+        Entry &entry = slots_.At(validated.Value());
         if (entry.state != RenderResourceState::Ready) {
             return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady, "Only a ready resource may enter a new submission."));
         }
@@ -28,11 +28,11 @@ namespace Horo::Render::Detail {
 
     Result<void> RenderResourceRegistry::ReleaseSubmissionPin(const RenderResourceClass resourceClass,
                                                               const RenderResourceIdentity identity) {
-        const auto validated = Validate(resourceClass, identity);
+        const auto validated = slots_.Validate(resourceClass, identity);
         if (validated.HasError()) {
             return Result<void>::Failure(validated.ErrorValue());
         }
-        Entry &entry = entries_[validated.Value()];
+        Entry &entry = slots_.At(validated.Value());
         if (entry.submissionPins == 0) {
             return Result<void>::Failure(
                 MakeError(FrontendErrors::ResourceHandleMalformed, "The renderer resource has no submission pin to release."));

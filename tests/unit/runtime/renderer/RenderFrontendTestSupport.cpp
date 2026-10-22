@@ -24,6 +24,11 @@ namespace Horo::Tests::RenderFrontendTesting {
         Result<void> Initialize(const RenderBackendConfig &) override {
             ++lifecycleState.initializeCount;
             initialized_ = true;
+            const auto incarnation = AcquireRenderDeviceIncarnation();
+            if (incarnation.HasError())
+                return Result<void>::Failure(incarnation.ErrorValue());
+            capabilities_.support.deviceIncarnation = incarnation.Value();
+            capabilities_.supportsSubmissionObservation = lifecycleState.supportsSubmissionObservation;
             if (lifecycleState.throwDuringInitialize) {
                 throw InjectedBackendException{"Injected initialization failure."};
             }
@@ -44,30 +49,33 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, const std::span<const std::byte> initialData,
-                                           const RenderMemoryPlacement &) override {
+                                           const RenderMemoryPlacement &, RenderResourceNativeLifetime lifetime = {}) override {
             ++lifecycleState.createBufferCount;
             lifecycleState.lastBufferInitialData.assign(initialData.begin(), initialData.end());
             return CompleteResourceCreation();
         }
 
-        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t,
+                                         RenderResourceNativeLifetime lifetime = {}) override {
             ++lifecycleState.createMeshCount;
             return CompleteResourceCreation();
         }
 
         Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, const std::span<const std::byte> initialData,
-                                            const RenderMemoryPlacement &) override {
+                                            const RenderMemoryPlacement &, RenderResourceNativeLifetime lifetime = {}) override {
             ++lifecycleState.createTextureCount;
             lifecycleState.lastTextureInitialData.assign(initialData.begin(), initialData.end());
             return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
         }
 
-        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t) override {
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t,
+                                                RenderResourceNativeLifetime lifetime = {}) override {
             ++lifecycleState.createTextureViewCount;
             return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
         }
 
-        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t) override {
+        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t,
+                                                 RenderResourceNativeLifetime lifetime = {}) override {
             ++lifecycleState.createRenderTargetCount;
             return Result<std::uint64_t>::Success(lifecycleState.nextResourceInstance++);
         }
@@ -129,6 +137,8 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+            if (!request.submissions.empty())
+                return IRenderBackend::ExecuteGraph(request);
             lifecycleState.graphResources.assign(request.resources.begin(), request.resources.end());
             lifecycleState.graphLease = request.lease;
             return Execute({request.frame, {}});
@@ -196,7 +206,34 @@ namespace Horo::Tests::RenderFrontendTesting {
             return Result<void>::Success();
         }
 
-        void Shutdown() noexcept override {
+        Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
+            if (!capabilities_.supportsSubmissionObservation)
+                return IRenderBackend::ObserveSubmission(wait);
+            ++lifecycleState.submissionObservations;
+            switch (lifecycleState.observationFailure) {
+                case ObservationFailure::StandardException:
+                    throw InjectedBackendException{"Injected observation failure."};
+                case ObservationFailure::ForeignException:
+                    throw ObservationFailure::ForeignException;
+                case ObservationFailure::TypedError:
+                    return Result<bool>::Failure(Error{ErrorCode{"render.test.observation"},
+                                                       ErrorDomainId{"horo.render.test"},
+                                                       ErrorSeverity::Error,
+                                                       "Injected typed observation failure.",
+                                                       {}});
+                case ObservationFailure::None:
+                    break;
+            }
+            return Result<bool>::Success(!lifecycleState.drainPending);
+        }
+
+        Result<void> BeginShutdown() override {
+            return Result<void>::Success();
+        }
+
+        Result<RenderBackendDrainProgress> PollDrain() override {
+            if (lifecycleState.drainPending)
+                return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Pending);
             if (lifecycleState.graphLease != nullptr) {
                 lifecycleState.graphLease->Release();
                 lifecycleState.graphLease = nullptr;
@@ -205,6 +242,7 @@ namespace Horo::Tests::RenderFrontendTesting {
                 ++lifecycleState.shutdownCount;
                 initialized_ = false;
             }
+            return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
         }
 
     private:

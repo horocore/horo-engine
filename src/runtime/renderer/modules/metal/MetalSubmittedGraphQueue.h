@@ -24,9 +24,9 @@ namespace Horo::Render::Detail {
         /** @brief Transfers the active lease/capsule into an already admitted frame slot before commit. */
         void Remember(id<MTLCommandBuffer> commands, IRenderGraphResourceLease *&lease, std::shared_ptr<MetalParallelRecording> &recording);
         [[nodiscard]] Result<void> Poll();
-        /** @brief Closes frontend ownership before its registry is destroyed, even after teardown timeout. */
-        void ReleaseLeases() noexcept;
-        /** @brief Drops native queue references only after resource-domain shutdown. */
+        /** @brief Retires only fully terminal heads, preserving a native error without treating it as successful execution. */
+        [[nodiscard]] Result<void> DrainTerminals();
+        /** @brief Drops empty native queue storage only after all terminal entries retired. @pre Count() == 0. */
         void Clear() noexcept;
 
     private:

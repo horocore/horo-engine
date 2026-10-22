@@ -103,6 +103,17 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return playSceneFactory;
     }
 
+    /** @copydoc EditorWorkspaceScreen::BindPrefabStageFactory */
+    EditorPlaySceneFactory EditorWorkspaceScreen::BindPrefabStageFactory(const std::filesystem::path &projectRoot) const {
+        const auto *factory = services_.TryGet<EditorProjectPrefabStageFactory>();
+        if (!factory || !factory->create)
+            return {};
+        return [create = factory->create, root = projectRoot](Runtime::SceneRuntimeId identity,
+                                                              const Runtime::RuntimeSceneDefinition &definition) {
+            return create(root, identity, definition);
+        };
+    }
+
     /** @copydoc EditorWorkspaceScreen::InitializeController */
     Result<void> EditorWorkspaceScreen::InitializeController(const std::filesystem::path &projectRoot) {
         const Assets::AssetRegistrySnapshot assetSnapshot =
@@ -118,8 +129,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         view_.ResetSourceSession();
         controller_ =
             std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
-                                                        CreateControllerDependencies(projectRoot, std::move(sources),
-                                                                                     std::move(pcg.catalog), std::move(pcg.previewInputs)));
+                                                        BindControllerDependencies(projectRoot, std::move(sources), std::move(pcg.catalog),
+                                                                                   std::move(pcg.previewInputs)));
         if (controller_->InitializationError().has_value()) {
             const Error error = *controller_->InitializationError();
             controller_.reset();
@@ -128,10 +139,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorWorkspaceScreen::CreateControllerDependencies */
-    EditorWorkspaceDependencies EditorWorkspaceScreen::CreateControllerDependencies(const std::filesystem::path &projectRoot,
-                                                                                    WorkspaceReadSources sources, PCGEditorCatalog catalog,
-                                                                                    PCGPreviewInputs previewInputs) const {
+    /** @copydoc EditorWorkspaceScreen::BindControllerDependencies */
+    EditorWorkspaceDependencies EditorWorkspaceScreen::BindControllerDependencies(const std::filesystem::path &projectRoot,
+                                                                                  WorkspaceReadSources &&sources,
+                                                                                  PCGEditorCatalog &&catalog,
+                                                                                  PCGPreviewInputs &&previewInputs) const {
         const Application::GameplayBuildEnvironment *gameplayEnvironment = services_.TryGet<Application::GameplayBuildEnvironment>();
         const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
         return EditorWorkspaceDependencies{
@@ -160,7 +172,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .documentSessionOwner = sources.owner,
             .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
             .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-            .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
+            .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
+                       .stageFactory = BindPrefabStageFactory(projectRoot)},
             .pcg = std::move(catalog),
             .pcgPreviewInputs = std::move(previewInputs),
         };
@@ -201,7 +214,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             LOG_WARN("editor.workspace", "Cannot admit workspace surface state: %s", restored.ErrorValue().message.c_str());
             return;
         }
-        workspacePersistenceAdmitted_ = true;
+        contributions_.workspacePersistenceAdmitted = true;
         activities->Update();
         while (const auto destination = view_.UpdateExtensionActivities())
             controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
@@ -212,7 +225,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::SaveExtensionWorkspace */
     void EditorWorkspaceScreen::SaveExtensionWorkspace() {
         auto *const activities = services_.TryGet<Extensions::EditorActivityHost>();
-        if (!activities || !controller_ || !workspacePersistenceAdmitted_)
+        if (!activities || !controller_ || !contributions_.workspacePersistenceAdmitted)
             return;
         auto layout = controller_->ViewModel().workspacePanelHost.Layout();
         layout.surfaces.clear();
@@ -233,7 +246,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             LOG_WARN("editor.workspace", "Cannot confirm workspace state publication: %s", error.c_str());
             return;
         }
-        workspacePersistenceAdmitted_ = false;
+        contributions_.workspacePersistenceAdmitted = false;
     }
 
     /** @copydoc EditorWorkspaceScreen::LoadProjectInputProfile */

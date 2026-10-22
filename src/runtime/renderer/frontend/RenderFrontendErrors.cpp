@@ -6,6 +6,13 @@ namespace Horo::Render::FrontendErrors {
         const ErrorDomainId Domain{"render.frontend"};
     }  // namespace
 
+    const ErrorCodeDescriptor Closing{Domain, ErrorCode{"render.frontend.closing"}, ErrorSeverity::Error,
+                                      "Renderer admission is closed for shutdown.",
+                                      "Retain and poll the closing owner; create a new owner only after Drained."};
+    const ErrorCodeDescriptor WrongThread{Domain, ErrorCode{"render.frontend.wrong_thread"}, ErrorSeverity::Error,
+                                          "Renderer lifecycle work was requested on a foreign thread.",
+                                          "Use the initializing render owner thread."};
+
     const ErrorCodeDescriptor AmbiguousPassWorkload{.domain = Domain,
                                                     .code = ErrorCode{"render.frontend.ambiguous_pass_workload"},
                                                     .defaultSeverity = ErrorSeverity::Error,

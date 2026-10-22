@@ -19,6 +19,7 @@ namespace Horo::Render {
         bool enableValidation{false};
         std::uint32_t maxFramesInFlight{2};
         PresentMode presentMode{PresentMode::Fifo};
+        std::optional<RenderPresentationOutputRequest> output;
     };
 
     /** @brief Returns immutable native-free metadata used before creating the host window. */
@@ -55,6 +56,15 @@ namespace Horo::Render {
          * @return Current CAMetalLayer pointer, or nullptr when no surface exists.
          */
         [[nodiscard]] virtual void *Layer() const noexcept = 0;  // NOSONAR(cpp:S5008) Required opaque platform seam.
+
+        /** @brief Reads fixed-size facts published by the platform attachment owner on its event thread.
+         * @return Current display evidence, or typed unavailable/thread failure; no native handle or inferred HDR support escapes.
+         * @details Concrete host adapters refresh their cache from actual window/display notifications. Native frame work
+         * consumes this value without enumerating displays, allocating a snapshot, or querying an unrelated window.
+         */
+        [[nodiscard]] virtual Result<RenderOutputDisplayFacts> OutputDisplayFacts() const {
+            return Result<RenderOutputDisplayFacts>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+        }
 
         /** @brief Releases the host Metal view and layer attachment; repeated calls are safe. */
         virtual void DestroySurface() noexcept = 0;

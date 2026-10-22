@@ -56,7 +56,7 @@ class OpenXRCIContractTests(unittest.TestCase):
         cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         self.assertRegex(cmake, r'option\(HORO_BUILD_XR_OPENXR\s+"[^"]+"\s+OFF\)')
         policy = (ROOT / "cmake/HoroDependencyPolicy.cmake").read_text(encoding="utf-8")
-        self.assertIn("foreach(target HoroXROpenXR HoroXROpenXRHostInterface HoroOpenXRHeaders)", policy)
+        self.assertIn("foreach(target HoroXROpenXR HoroXROpenXRHostInterface HoroOpenXRHeaders HoroXROpenXRVulkan HoroXROpenXRVulkanHostInterface)", policy)
         self.assertIn("FetchContent_GetProperties(horo_openxr_sdk POPULATED", policy)
         for name in ("ci-linux-debug", "ci-macos-debug", "ci-windows-debug"):
             self.assertNotIn("HORO_BUILD_XR_OPENXR", self.variables(name))

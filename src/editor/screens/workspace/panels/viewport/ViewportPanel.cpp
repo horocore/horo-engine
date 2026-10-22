@@ -167,6 +167,19 @@ namespace Horo::Editor {
         const bool hasRenderedViewport = viewportRenderer_ != nullptr && viewportRenderer_->IsReady() && textureView.IsValid();
         DrawViewportSurface(drawList, surfaceLayout, textureView, hasRenderedViewport);
 
+        if (std::ranges::any_of(viewModel.prefabDocuments, [&](const auto &entry) {
+            return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        })) {
+            OnPresentationHidden(command);
+            // Source-local controls own this stage. Scene picking, overlays and drag/drop
+            // cannot bind its isolated runtime projection to the containing Scene document.
+            if (!hasRenderedViewport)
+                DrawMissingRendererMessage(centerX, origin.y, height, context);
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            return;
+        }
+
         if (navigationOverlays_ && hasRenderedViewport)
             navigationLayer_.Draw(*navigationOverlays_, {.projectRoot = navigationProjectRoot_,
                                                          .scenePath = viewModel.navigationScenePath,
@@ -225,7 +238,11 @@ namespace Horo::Editor {
             .visible = gridOverride_.value_or(context.settings.settings.gridOverlay),
         });
         EditorViewportLightVisualizerOptions lightVisualizer;
-        if (viewModel.primarySelection.has_value()) {
+        if (const bool prefab = std::ranges::any_of(viewModel.prefabDocuments,
+                                                    [&](const auto &entry) {
+            return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        });
+            !prefab && viewModel.primarySelection.has_value()) {
             const auto selected =
                 std::ranges::find(viewModel.viewportLights, *viewModel.primarySelection, &ViewportLightPresentation::object);
             if (selected != viewModel.viewportLights.end())
@@ -282,6 +299,7 @@ namespace Horo::Editor {
             .aspect = layout.width / layout.height,
             .depthRange = depthRange,
             .documentRevision = viewModel.documentRevision,
+            .fence = payload->fence,
         };
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             CancelAssetPlacementPreview(command);

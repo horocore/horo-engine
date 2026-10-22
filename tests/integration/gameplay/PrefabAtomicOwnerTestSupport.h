@@ -91,7 +91,8 @@ namespace Horo::Application::PrefabAtomicTest {
         DuplicateFacts,
         ForeignFacts,
         MissingFacts,
-        DuplicateProducer
+        DuplicateProducer,
+        RootPhysicsEndpoints  // Positive codec-domain scenario, not an injected failure.
     };
 
     /** @brief Deliberately corrupts facts around a real AI candidate to test Scene's independent host-authority fence. */
@@ -329,8 +330,25 @@ namespace Horo::Application::PrefabAtomicTest {
         Sha256Digest PublishTemplate(Fault fault) {
             Prefab::CookedPrefabData data;
             data.assetId = asset;
-            const auto root = Root();
-            data.entities = {root, Child(root, fault)};
+            auto root = Root();
+            auto child = Child(root, fault);
+            if (fault == Fault::RootPhysicsEndpoints) {
+                SceneSource::SceneObjectComponentSet
+                    values{.rigidBody = Runtime::RigidBodyComponent{.id = {200},
+                                                                    .body = {1},
+                                                                    .motion = Runtime::AuthoredPhysicsMotionType::Dynamic,
+                                                                    .mass = Runtime::AuthoredPhysicsMass{1.0F}},
+                           .colliders = {Physics::Collider(201, 1, 0, 1, material,
+                                                           Runtime::PhysicsAnalyticCollider{Runtime::PhysicsBoxCollider{}})},
+                           .physicsConstraints = {{.id = {203},
+                                                   .constraint = {1},
+                                                   .first = {.body = {{7}, {1}}},
+                                                   .second = Runtime::PhysicsConstraintBodyEndpoint{.body = {{0}, {1}}}}}};
+                root.members.emplace_back(Builtin(values, Kind::RigidBody, "rigidBody", 201));
+                root.members.emplace_back(Builtin(values, Kind::Collider, "colliders", 202, true));
+                child.members.emplace_back(Builtin(values, Kind::PhysicsConstraint, "physicsConstraints", 203, true));
+            }
+            data.entities = {std::move(root), std::move(child)};
             data.dependencies = {{{material, Assets::AssetTypeId::Parse("core.physics_material").Value()}, materialArtifact}};
             auto cooked = Prefab::CookedPrefab::Create(std::move(data), Prefab::PrefabLimitProfile::Create({}).Value());
             REQUIRE(cooked.HasValue());

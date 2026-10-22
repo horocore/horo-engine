@@ -46,6 +46,10 @@ namespace Horo::Editor {
         DetachWorldSourceOwner();
         if (m_worldBake)
             m_worldBake->Close();
+        // Preview providers may borrow host project authority. Join them before any document/service retirement.
+        if (m_assetPreviews)
+            m_assetPreviews->Shutdown();
+        m_pendingContentBrowserPreviews.clear();
         StopAudioPreview();
         m_prefabCancellation.RequestCancellation();
         RetirePrefabHierarchy();

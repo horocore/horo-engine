@@ -32,6 +32,7 @@ namespace Horo::Editor {
                 case Source:
                 case UiCanvas:
                 case Sequence:
+                case Prefab:
                 case PCGGraph:
                 case Shader:
                 case Asset:
@@ -244,6 +245,8 @@ namespace Horo::Editor {
                 return "sequence";
             case PCGGraph:
                 return "pcg_graph";
+            case Prefab:
+                return "prefab";
             case Shader:
                 return "shader";
             case Asset:
@@ -258,7 +261,7 @@ namespace Horo::Editor {
 
     Result<DocumentKind> ParseDocumentKind(const std::string_view value) {
         using enum DocumentKind;
-        for (const DocumentKind kind : {Scene, Source, UiCanvas, Sequence, PCGGraph, Shader, Asset, Project, Custom}) {
+        for (const DocumentKind kind : {Scene, Source, UiCanvas, Sequence, PCGGraph, Prefab, Shader, Asset, Project, Custom}) {
             if (ToString(kind) == value) {
                 return Result<DocumentKind>::Success(kind);
             }

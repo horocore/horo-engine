@@ -30,6 +30,7 @@ namespace Horo::Render {
         DepthStencilAttachment,
         CopySource,
         CopyDestination,
+        GraphicsInputBuffer, /**< Read-only uniform, vertex and index inputs; whole-buffer state conservatively covers all three. */
     };
 
     /** @brief Pipeline scope in which one logical resource access occurs. */
@@ -62,10 +63,38 @@ namespace Horo::Render {
         [[nodiscard]] constexpr auto operator<=>(const RenderGraphLogicalState &) const noexcept = default;
     };
 
+    /** @brief Explicit contents policy for one exact imported resident generation. */
+    enum class RenderGraphInitialContents : std::uint8_t {
+        Preserved,
+        Discarded,
+    };
+
     /** @brief Exact initial state evidence for one imported graph resource generation. */
     struct RenderGraphImportedState {
         RenderGraphResourceId resource;
         RenderGraphLogicalState state;
+        RenderGraphInitialContents contents{RenderGraphInitialContents::Preserved};
+        /**< Discarded requires the exact undefined state and a dominating first write;
+         * it grants no permission to discard queue ownership or overlap prior GPU readers. */
+    };
+
+    /** @brief Required external state after the final retained use of one imported external resource. */
+    struct RenderGraphFinalState {
+        RenderGraphResourceId resource;
+        RenderGraphLogicalState state;
+    };
+
+    /**
+     * @brief Compiled external release obligation, encoded after its producer and before completion signaling.
+     * @details This is a requirement, never proof of completion or native ownership transfer. The selected
+     * backend must validate the matching acquired external registration and encode the state/ownership
+     * operation; absence of that native evidence rejects admission before any commands are submitted.
+     */
+    struct RenderGraphExternalRelease {
+        RenderGraphResourceId resource;
+        RenderGraphPassRef releaseAfter;
+        RenderGraphLogicalState oldState;
+        RenderGraphLogicalState newState;
     };
 
     /** @brief Independent hazard reasons carried as a complete typed bit set. */
@@ -127,24 +156,32 @@ namespace Horo::Render {
          * @return Immutable role-ordered view valid for the lifetime of this plan.
          */
         [[nodiscard]] std::span<const RenderQueueAssignment> QueueAssignments() const noexcept;
+        /** @brief Returns owned exact imported generation states, including explicit discard policy. */
+        [[nodiscard]] std::span<const RenderGraphImportedState> ImportedStates() const noexcept;
         /** @brief Returns normalized transitions in scheduled-pass and authored-use order. */
         [[nodiscard]] std::span<const RenderGraphTransition> Transitions() const noexcept;
+        /** @brief Returns external release obligations in authored final-state order. @return Owned immutable requirements. */
+        [[nodiscard]] std::span<const RenderGraphExternalRelease> ExternalReleases() const noexcept;
         /** @brief Returns matched ownership transfers in transition order. */
         [[nodiscard]] std::span<const RenderGraphOwnershipTransfer> OwnershipTransfers() const noexcept;
 
     private:
         friend Result<RenderGraphSynchronizationPlan> SynthesizeRenderGraphSynchronization(const RenderGraph &, const RenderGraphSchedule &,
                                                                                            std::span<const RenderQueueAssignment>,
-                                                                                           std::span<const RenderGraphImportedState>);
+                                                                                           std::span<const RenderGraphImportedState>,
+                                                                                           std::span<const RenderGraphFinalState>);
 
         RenderGraphSynchronizationPlan(RenderGraphOwnerId owner, std::vector<RenderQueueAssignment> queueAssignments,
-                                       std::vector<RenderGraphTransition> transitions,
-                                       std::vector<RenderGraphOwnershipTransfer> transfers) noexcept;
+                                       std::vector<RenderGraphTransition> transitions, std::vector<RenderGraphOwnershipTransfer> transfers,
+                                       std::vector<RenderGraphImportedState> importedStates,
+                                       std::vector<RenderGraphExternalRelease> externalReleases) noexcept;
 
         RenderGraphOwnerId owner_;
         std::vector<RenderQueueAssignment> queueAssignments_;
         std::vector<RenderGraphTransition> transitions_;
         std::vector<RenderGraphOwnershipTransfer> transfers_;
+        std::vector<RenderGraphImportedState> importedStates_;
+        std::vector<RenderGraphExternalRelease> externalReleases_;
     };
 
     /**
@@ -162,17 +199,18 @@ namespace Horo::Render {
      *
      * Current graph usages do not yet declare buffer or texture subresource ranges, so this stage
      * deliberately normalizes each use to the whole logical resource. It does not silently claim
-     * fine-grained tracking. Likewise, current import/export records carry no required final state;
-     * this function cannot invent one, and final boundary-state transitions remain deferred until
-     * that graph authoring contract exists. Failure publishes no plan.
+     * fine-grained tracking. Explicit final states are accepted only for used external resources and
+     * compile into post-producer native release obligations. An omitted final state creates no
+     * external handoff requirement. Failure publishes no plan.
      *
      * @param graph Immutable finalized graph.
      * @param schedule Valid schedule compiled from `graph`.
      * @param queues Complete effective queue assignment for every retained pass role.
      * @param importedStates Exact initial state evidence for every non-transient resource.
+     * @param finalStates Required external states; each used external resource may appear at most once.
      * @return Owning normalized plan or a typed actionable validation/allocation failure.
      */
     [[nodiscard]] Result<RenderGraphSynchronizationPlan> SynthesizeRenderGraphSynchronization(
         const RenderGraph &graph, const RenderGraphSchedule &schedule, std::span<const RenderQueueAssignment> queues,
-        std::span<const RenderGraphImportedState> importedStates);
+        std::span<const RenderGraphImportedState> importedStates, std::span<const RenderGraphFinalState> finalStates = {});
 }  // namespace Horo::Render

@@ -14,15 +14,15 @@ namespace Horo::Render::Detail {
         }
     }  // namespace
 
-    /** @copydoc RenderResourceRegistry::LookupOperation */
-    Result<const RenderResourceRegistry::OperationRecord *> RenderResourceRegistry::LookupOperation(
+    /** @copydoc RenderResourceRegistry::OperationJournal::Lookup */
+    Result<const RenderResourceRegistry::OperationRecord *> RenderResourceRegistry::OperationJournal::Lookup(
         const ResourceOperationId operation) const {
         using Lookup = Result<const OperationRecord *>;
         if (!operation.IsValid())
             return Lookup::Failure(
                 ObservationError(FrontendErrors::ResourceOperationUnknown, "The resource operation identity is invalid."));
-        const auto record = std::ranges::find(operations_, operation, &OperationRecord::id);
-        if (record == operations_.end())
+        const auto record = std::ranges::find(records_, operation, &OperationRecord::id);
+        if (record == records_.end())
             return Lookup::Failure(
                 ObservationError(FrontendErrors::ResourceOperationUnknown, "The resource operation does not belong to this registry."));
         return Lookup::Success(std::to_address(record));
@@ -35,7 +35,7 @@ namespace Horo::Render::Detail {
         if (!acceptingRequests_)
             return Observation::Failure(
                 ObservationError(FrontendErrors::ResourceRegistryStopped, "Resource observations are disabled during frontend shutdown."));
-        const auto found = LookupOperation(operation);
+        const auto found = journal_.Lookup(operation);
         if (found.HasError())
             return Observation::Failure(found.ErrorValue());
         const auto &record = *found.Value();
@@ -45,7 +45,7 @@ namespace Horo::Render::Detail {
     }
 
     Result<void> RenderResourceRegistry::OperationResult(const ResourceOperationId operation) const {
-        const auto found = LookupOperation(operation);
+        const auto found = journal_.Lookup(operation);
         if (found.HasError())
             return Result<void>::Failure(found.ErrorValue());
         const auto &record = *found.Value();

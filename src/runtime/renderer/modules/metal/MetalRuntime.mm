@@ -2,9 +2,11 @@
 #include "MetalBackendInternal.h"
 #include "MetalColorAttachmentEncoding.h"
 #include "MetalCommandCompletion.h"
+#include "MetalDrawableAcquisition.h"
 #include "MetalNativeDeviceFacts.h"
 #include "MetalParallelRecording.h"
 #include "MetalPresentationFeedback.h"
+#include "MetalPresentationOutput.h"
 #include "MetalRenderBackendErrors.h"
 #include "MetalResourceRuntime.h"
 #include "MetalSubmittedGraphQueue.h"
@@ -15,7 +17,9 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <exception>
 #include <format>
+#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -53,12 +57,17 @@ namespace Horo::Render::Detail {
                 : presentationPort_(&presentationPort), editorGraphicsBridge_(&editorGraphicsBridge) {}
 
             ~MetalRuntime() override {
-                Shutdown();
+                const auto begun = BeginShutdown();
+                const auto drained = PollDrain();
+                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
             }
 
             Result<MetalDeviceCapabilities> Initialize(const MetalPresentationDescriptor &descriptor,
                                                        const MetalDeviceAdmissionRequest &request) override {
-                if (device_ != nil || surfaceCreated_) {
+                if (ownerThread_ != std::thread::id{} && std::this_thread::get_id() != ownerThread_)
+                    return Result<MetalDeviceCapabilities>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (device_ != nil || surfaceCreated_ || (closing_ && !drained_)) {
                     return Result<MetalDeviceCapabilities>::Failure(
                         MakeMetalRuntimeError("render.metal.presentation_exists",
                                               "Metal runtime presentation resources are already retained."));
@@ -67,49 +76,45 @@ namespace Horo::Render::Detail {
                 if (validRequest.HasError()) {
                     return Result<MetalDeviceCapabilities>::Failure(validRequest.ErrorValue());
                 }
+                ownerThread_ = std::this_thread::get_id();
+                closing_ = false;
+                drained_ = false;
+                drainError_.reset();
+                drainErrorReported_ = false;
+                drawableExtent_ = {};
 
-                std::uint64_t discoveryRevision = 0;
-                device_ = FindMetalDevice(request.adapter, discoveryRevision);
-                if (device_ == nil) {
-                    return Result<MetalDeviceCapabilities>::Failure(
-                        MakeError(MetalBackendErrors::AdapterNotFound, "The requested Metal adapter is unavailable."));
-                }
-                // Eight live recording leases x sixteen buffers, at most four owner
-                // buffers and sixty-four retained uploads stay below this native cap.
-                // The editor bridge borrows our current buffer; it must not allocate its own.
-                commandQueue_ = [device_ newCommandQueueWithMaxCommandBufferCount:MetalRecordingBudget::NativeQueueCapacity];
-                Result<MetalDeviceCapabilities> admitted =
-                    AdmitMetalDevice(QueryMetalDeviceFacts(device_, discoveryRevision, commandQueue_ != nil), request);
+                auto admitted = AcquireAdmittedDevice(request);
                 if (admitted.HasError()) {
-                    Shutdown();
+                    CloseUnsubmittedInitialization();
                     return Result<MetalDeviceCapabilities>::Failure(admitted.ErrorValue());
                 }
-
-                const Result<void> surface = presentationPort_->CreateSurface();
-                if (surface.HasError()) {
-                    Shutdown();
-                    return Result<MetalDeviceCapabilities>::Failure(surface.ErrorValue());
-                }
-                surfaceCreated_ = true;
-                layer_ = (__bridge CAMetalLayer *)presentationPort_->Layer();
-                if (layer_ == nil) {
-                    Shutdown();
-                    return Result<MetalDeviceCapabilities>::Failure(
-                        MakeMetalRuntimeError("render.metal.layer_unavailable",
-                                              "The platform presentation port did not expose a CAMetalLayer."));
+                if (const auto prepared = PreparePresentation(descriptor, request.requirePresentation); prepared.HasError()) {
+                    CloseUnsubmittedInitialization();
+                    return Result<MetalDeviceCapabilities>::Failure(prepared.ErrorValue());
                 }
 
-                ConfigurePresentationLayer(descriptor.maxFramesInFlight);
                 maxFramesInFlight_ = descriptor.maxFramesInFlight;
                 feedback_ = std::make_shared<MetalPresentationFeedback>();
                 ownerThread_ = std::this_thread::get_id();
                 submitted_.Initialize(maxFramesInFlight_);
-                layer_.displaySyncEnabled = descriptor.presentMode == PresentMode::Fifo;
                 MetalEditorGraphicsAccess::PublishPersistent(*editorGraphicsBridge_, (__bridge void *)device_,
                                                              (__bridge void *)commandQueue_, this, &WaitUntilIdleThunk);
                 resources_.Initialize((__bridge void *)device_, (__bridge void *)commandQueue_);
                 auto capabilities = std::move(admitted).Value();
+                const auto incarnation = AcquireRenderDeviceIncarnation();
+                if (incarnation.HasError()) {
+                    CloseUnsubmittedInitialization();
+                    return Result<MetalDeviceCapabilities>::Failure(incarnation.ErrorValue());
+                }
+                capabilities.deviceIncarnation = incarnation.Value();
+                capabilities.implemented.support.deviceIncarnation = incarnation.Value();
                 capabilities.implemented.support.features.Enable(RenderCapability::LightCulling);
+                auto acquisition = MetalDrawableAcquisition::Create(layer_, device_, MakeMetalDrawableSource());
+                if (acquisition.HasError()) {
+                    CloseUnsubmittedInitialization();
+                    return Result<MetalDeviceCapabilities>::Failure(acquisition.ErrorValue());
+                }
+                acquisition_ = std::move(acquisition).Value();
                 return Result<MetalDeviceCapabilities>::Success(std::move(capabilities));
             }
 
@@ -232,27 +237,28 @@ namespace Horo::Render::Detail {
             }
 
             ResourceInstanceResult CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                                const RenderMemoryPlacement &placement) override {
-                return Resources().CreateBuffer(descriptor, initialData, placement);
+                                                const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateBuffer(descriptor, initialData, placement, std::move(lifetime));
             }
 
             ResourceInstanceResult CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
-                                              const std::uint64_t indexBuffer) override {
-                return Resources().CreateMesh(descriptor, vertexBuffer, indexBuffer);
+                                              const std::uint64_t indexBuffer, RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateMesh(descriptor, vertexBuffer, indexBuffer, std::move(lifetime));
             }
 
             ResourceInstanceResult CreateTexture(const RenderTextureDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                                 const RenderMemoryPlacement &placement) override {
-                return Resources().CreateTexture(descriptor, initialData, placement);
+                                                 const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateTexture(descriptor, initialData, placement, std::move(lifetime));
             }
 
-            ResourceInstanceResult CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture) override {
-                return Resources().CreateTextureView(descriptor, texture);
+            ResourceInstanceResult CreateTextureView(const RenderTextureViewDescriptor &descriptor, const std::uint64_t texture,
+                                                     RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateTextureView(descriptor, texture, std::move(lifetime));
             }
 
             ResourceInstanceResult CreateRenderTarget(const RenderTargetDescriptor &descriptor, const std::uint64_t colorAttachment,
-                                                      const std::uint64_t depthAttachment) override {
-                return Resources().CreateRenderTarget(descriptor, colorAttachment, depthAttachment);
+                                                      const std::uint64_t depthAttachment, RenderResourceNativeLifetime lifetime) override {
+                return Resources().CreateRenderTarget(descriptor, colorAttachment, depthAttachment, std::move(lifetime));
             }
 
             void DestroyBuffer(const std::uint64_t backendInstance) noexcept override {
@@ -275,7 +281,98 @@ namespace Horo::Render::Detail {
                 resources_.DestroyRenderTarget(backendInstance);
             }
 
+            Result<RenderPresentationOutput> ConfigurePresentationOutput(const RenderPresentationOutputRequest &request) override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<RenderPresentationOutput>::Failure(access.ErrorValue());
+                const auto display = presentationPort_->OutputDisplayFacts();
+                if (display.HasError())
+                    return Result<RenderPresentationOutput>::Failure(display.ErrorValue());
+                if (const auto candidate = NegotiatePresentationOutput(request, outputCapabilities_, display.Value(), outputRevision_ + 1);
+                    candidate.HasError())
+                    return candidate;
+                if (outputRevision_ == std::numeric_limits<std::uint64_t>::max() ||
+                    drawableGeneration_ == std::numeric_limits<std::uint64_t>::max())
+                    return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::InvalidOutput));
+                if (const auto capacity = PollSubmissionAvailability(); capacity.HasError())
+                    return Result<RenderPresentationOutput>::Failure(capacity.ErrorValue());
+                readyDrawable_ = nil;
+                const auto quiescent = QuiesceAcquisition();
+                if (quiescent.HasError())
+                    return Result<RenderPresentationOutput>::Failure(quiescent.ErrorValue());
+                if (!quiescent.Value() || submitted_.Count() != 0 || recordingBudget_->live.load(std::memory_order_acquire) != 0)
+                    return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::AcquisitionPending));
+                auto configured =
+                    ConfigureMetalPresentationOutput(layer_, device_, request, outputCapabilities_, display.Value(), outputRevision_ + 1);
+                if (configured.HasError()) {
+                    if (configured.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnavailable.code.Value())
+                        output_.reset();
+                    return configured;
+                }
+                output_ = configured.Value();
+                ++outputRevision_;
+                ++drawableGeneration_;
+                return configured;
+            }
+
+            Result<RenderPresentationOutput> PresentationOutput() const override {
+                if (std::this_thread::get_id() != ownerThread_)
+                    return Result<RenderPresentationOutput>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (closing_ || !output_)
+                    return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+                const auto facts = presentationPort_->OutputDisplayFacts();
+                if (facts.HasError())
+                    return Result<RenderPresentationOutput>::Failure(facts.ErrorValue());
+                auto result = *output_;
+                result.display = facts.Value();
+                const auto admitted = NegotiatePresentationOutput(result.requested, outputCapabilities_, result.display, result.revision);
+                return admitted.HasError() ? Result<RenderPresentationOutput>::Failure(admitted.ErrorValue())
+                                           : Result<RenderPresentationOutput>::Success(result);
+            }
+
+            Result<bool> PollPresentationAvailability(FramebufferExtent extent) override {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<bool>::Failure(access.ErrorValue());
+                if (!extent.IsValid())
+                    return Result<bool>::Failure(MakeError(MetalBackendErrors::InvalidFrameDescriptor));
+                if (!output_)
+                    return Result<bool>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+                if (const auto capacity = PollSubmissionAvailability(); capacity.HasError() || !capacity.Value())
+                    return capacity;
+                if (const auto facts = AdmitCurrentDisplay(); facts.HasError())
+                    return Result<bool>::Failure(facts.ErrorValue());
+                if (extent.width != drawableExtent_.width || extent.height != drawableExtent_.height) {
+                    if (const auto resized = TryResize(extent); resized.HasError() || !resized.Value())
+                        return resized;
+                }
+                if (readyDrawable_ != nil)
+                    return Result<bool>::Success(true);
+                auto result = acquisition_->Poll(drawableGeneration_);
+                switch (result.progress) {
+                    case MetalDrawablePoll::Pending:
+                    case MetalDrawablePoll::Stale:
+                        static_cast<void>(acquisition_->Request(drawableGeneration_, extent));
+                        return Result<bool>::Success(false);
+                    case MetalDrawablePoll::Unavailable:
+                        return Result<bool>::Failure(MakeError(RenderPresentationErrors::DrawableUnavailable));
+                    case MetalDrawablePoll::WrongThread:
+                    case MetalDrawablePoll::Failed:
+                        return Result<bool>::Failure(DrawableFailure(result));
+                    case MetalDrawablePoll::Ready:
+                        break;
+                }
+                id<MTLTexture> texture = result.drawable.texture;
+                const auto format =
+                    output_->active.format == RenderTextureFormat::Bgra8Unorm ? MTLPixelFormatBGRA8Unorm : MTLPixelFormatRGBA16Float;
+                if (texture == nil || texture.device != device_ || texture.width != extent.width || texture.height != extent.height ||
+                    texture.pixelFormat != format || result.extent.width != extent.width || result.extent.height != extent.height)
+                    return Result<bool>::Failure(MakeError(RenderPresentationErrors::OutputMismatch));
+                readyDrawable_ = result.drawable;
+                return Result<bool>::Success(true);
+            }
+
             Result<void> BeginFrame(const FramebufferExtent extent) override {
+                if (closing_)
+                    return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
                 if (device_ == nil || commandQueue_ == nil || layer_ == nil) {
                     return Result<void>::Failure(
                         MakeMetalRuntimeError("render.metal.not_initialized", "Metal runtime presentation resources are not initialized."));
@@ -287,19 +384,20 @@ namespace Horo::Render::Detail {
                 if (const Result<void> available = CheckSubmissionCapacity(); available.HasError()) {
                     return available;
                 }
+                const auto ready = PollPresentationAvailability(extent);
+                if (ready.HasError())
+                    return Result<void>::Failure(ready.ErrorValue());
+                if (!ready.Value())
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::AcquisitionPending));
                 resources_.DrainGraphRetirements();
-                if (const Result<void> resized = Resize(extent); resized.HasError()) {
-                    return resized;
-                }
 
                 @autoreleasepool {
-                    drawable_ = [layer_ nextDrawable];
+                    drawable_ = readyDrawable_;
+                    readyDrawable_ = nil;
                     commandBuffer_ = [commandQueue_ commandBuffer];
-                    if (drawable_ == nil || commandBuffer_ == nil) {
+                    if (commandBuffer_ == nil) {
                         drawable_ = nil;
-                        commandBuffer_ = nil;
-                        return Result<void>::Failure(MakeMetalRuntimeError("render.metal.frame_acquisition_failed",
-                                                                           "Failed to acquire a Metal drawable or command buffer."));
+                        return Result<void>::Failure(MakeError(MetalBackendErrors::CommandSubmissionFailed));
                     }
                     renderPassDescriptor_ = [MTLRenderPassDescriptor renderPassDescriptor];
                     renderPassDescriptor_.colorAttachments[0].texture = drawable_.texture;
@@ -318,6 +416,8 @@ namespace Horo::Render::Detail {
                     return Result<void>::Failure(
                         MakeMetalRuntimeError("render.metal.no_active_frame", "No Metal presentation frame is active."));
                 }
+                if (const auto encoding = ValidatePrimaryOutput(attachment); encoding.HasError())
+                    return encoding;
                 EndPrimaryEncoder();
 
                 MTLRenderPassColorAttachmentDescriptor *color = renderPassDescriptor_.colorAttachments[0];
@@ -339,6 +439,10 @@ namespace Horo::Render::Detail {
                 }
                 if (commandBuffer_ == nil) {
                     return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
+                }
+                if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&workload)) {
+                    if (const auto encoding = ValidatePrimaryOutput(*primary); encoding.HasError())
+                        return encoding;
                 }
                 return resources_.ValidateGraphWorkload(workload, resources);
             }
@@ -498,35 +602,196 @@ namespace Horo::Render::Detail {
             }
 
             Result<void> Resize(const FramebufferExtent extent) override {
-                if (!extent.IsValid()) {
-                    return Result<void>::Failure(
-                        MakeMetalRuntimeError("render.metal.invalid_extent", "Metal drawable extent must be non-zero."));
-                }
-                if (layer_ == nil) {
-                    return Result<void>::Failure(
-                        MakeMetalRuntimeError("render.metal.not_initialized", "Metal runtime presentation resources are not initialized."));
-                }
-                if (std::this_thread::get_id() != ownerThread_) {
-                    return WrongThread();
-                }
-                layer_.drawableSize = CGSizeMake(static_cast<CGFloat>(extent.width), static_cast<CGFloat>(extent.height));
-                return Result<void>::Success();
+                const auto resized = TryResize(extent);
+                if (resized.HasError())
+                    return Result<void>::Failure(resized.ErrorValue());
+                return resized.Value() ? Result<void>::Success()
+                                       : Result<void>::Failure(MakeError(RenderPresentationErrors::AcquisitionPending));
             }
 
-            void Shutdown() noexcept override {
+            /** @brief Coalesces resize without allocating an error for ordinary outstanding acquisition. */
+            [[nodiscard]] Result<bool> TryResize(const FramebufferExtent extent) {
+                if (const auto access = ValidatePreparationAccess(); access.HasError())
+                    return Result<bool>::Failure(access.ErrorValue());
+                if (!extent.IsValid())
+                    return Result<bool>::Failure(MakeError(MetalBackendErrors::InvalidFrameDescriptor));
+                if (extent.width == drawableExtent_.width && extent.height == drawableExtent_.height)
+                    return Result<bool>::Success(true);
+                readyDrawable_ = nil;
+                if (const auto quiescent = QuiesceAcquisition(); quiescent.HasError() || !quiescent.Value())
+                    return quiescent;
+                if (drawableGeneration_ == std::numeric_limits<std::uint64_t>::max())
+                    return Result<bool>::Failure(MakeError(RenderPresentationErrors::InvalidOutput));
+                @try {
+                    layer_.drawableSize = CGSizeMake(static_cast<CGFloat>(extent.width), static_cast<CGFloat>(extent.height));
+                    if (layer_.bounds.size.height > 0)
+                        layer_.contentsScale = static_cast<CGFloat>(extent.height) / layer_.bounds.size.height;
+                    if (layer_.drawableSize.width != extent.width || layer_.drawableSize.height != extent.height) {
+                        output_.reset();
+                        return Result<bool>::Failure(MakeError(RenderPresentationErrors::OutputMismatch));
+                    }
+                } @catch (NSException *exception) {
+                    (void)exception;
+                    output_.reset();
+                    return Result<bool>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+                }
+                drawableExtent_ = extent;
+                ++drawableGeneration_;
+                return Result<bool>::Success(true);
+            }
+
+            /** @copydoc IMetalRuntime::BeginShutdown */
+            Result<void> BeginShutdown() override {
+                if (ownerThread_ != std::thread::id{} && std::this_thread::get_id() != ownerThread_)
+                    return WrongThread();
+                if (closing_)
+                    return Result<void>::Success();
+                closing_ = true;
                 feedback_->Close();
+                readyDrawable_ = nil;
+                if (acquisition_)
+                    static_cast<void>(acquisition_->Close());
                 AbortFrame();
-                WaitUntilIdle();
-                // Closing the domain prevents submission/reuse. Outstanding CPU capsules own
-                // their native resources AND heaps and can finish cancellation after this runtime.
                 for (auto &retired : cancelledRecordings_) {
                     if (retired.recording)
                         retired.recording->Cancel();
-                    if (retired.lease != nullptr)
-                        retired.lease->Release();
-                    retired = {};
                 }
-                submitted_.ReleaseLeases();
+                return Result<void>::Success();
+            }
+
+            /** @copydoc IMetalRuntime::PollDrain */
+            Result<RenderBackendDrainProgress> PollDrain() override {
+                if (ownerThread_ != std::thread::id{} && std::this_thread::get_id() != ownerThread_)
+                    return Result<RenderBackendDrainProgress>::Failure(MakeError(MetalBackendErrors::WrongThread));
+                if (!closing_)
+                    return Result<RenderBackendDrainProgress>::Failure(
+                        MakeError(MetalBackendErrors::InvalidConfig, "Begin Metal shutdown before polling retirement."));
+                if (drained_)
+                    return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
+                DrainCancelledRecordings();
+                if (const auto submitted = submitted_.DrainTerminals(); submitted.HasError() && !drainError_)
+                    drainError_ = submitted.ErrorValue();
+                const auto uploads = resources_.PollUploadDrain();
+                if (uploads.HasError() && !drainError_)
+                    drainError_ = uploads.ErrorValue();
+                const bool pendingUploads = uploads.HasValue() && !uploads.Value();
+                const bool pendingAcquisition = acquisition_ && (!acquisition_->Close() || !acquisition_->IsDrained());
+                if (acquisition_ && !pendingAcquisition) {
+                    const auto result = acquisition_->Poll(drawableGeneration_);
+                    if ((result.progress == MetalDrawablePoll::Failed || result.progress == MetalDrawablePoll::WrongThread) && !drainError_)
+                        drainError_ = DrawableFailure(result);
+                }
+                if (submitted_.Count() == 0 && recordingBudget_->live.load(std::memory_order_acquire) == 0 && !pendingUploads &&
+                    !pendingAcquisition) {
+                    ReleaseDrainedResources();
+                    drained_ = true;
+                }
+                if (drainError_ && !drainErrorReported_) {
+                    drainErrorReported_ = true;
+                    return Result<RenderBackendDrainProgress>::Failure(*drainError_);
+                }
+                return Result<RenderBackendDrainProgress>::Success(drained_ ? RenderBackendDrainProgress::Drained
+                                                                            : RenderBackendDrainProgress::Pending);
+            }
+
+        private:
+            /** @brief Acquires only the admitted native device/queue; the initializer owns every failure cleanup. */
+            [[nodiscard]] Result<MetalDeviceCapabilities> AcquireAdmittedDevice(const MetalDeviceAdmissionRequest &request) {
+                std::uint64_t discoveryRevision = 0;
+                device_ = FindMetalDevice(request.adapter, discoveryRevision);
+                if (device_ == nil)
+                    return Result<MetalDeviceCapabilities>::Failure(MakeError(MetalBackendErrors::AdapterNotFound));
+                // Eight recording leases x sixteen buffers, four owner buffers and sixty-four uploads stay below this cap.
+                commandQueue_ = [device_ newCommandQueueWithMaxCommandBufferCount:MetalRecordingBudget::NativeQueueCapacity];
+                return AdmitMetalDevice(QueryMetalDeviceFacts(device_, discoveryRevision, commandQueue_ != nil), request);
+            }
+
+            /** @brief Attaches the explicitly supplied host surface and probes its real native output combinations. */
+            [[nodiscard]] Result<void> PreparePresentation(const MetalPresentationDescriptor &descriptor, bool required) {
+                if (const auto surface = presentationPort_->CreateSurface(); surface.HasError())
+                    return surface;
+                surfaceCreated_ = true;
+                layer_ = (__bridge CAMetalLayer *)presentationPort_->Layer();
+                if (layer_ == nil)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+                if (const auto layer = ConfigurePresentationLayer(descriptor.maxFramesInFlight, descriptor.presentMode); layer.HasError())
+                    return layer;
+                const auto capabilities = QueryMetalOutputCapabilities(device_);
+                if (capabilities.HasError())
+                    return Result<void>::Failure(capabilities.ErrorValue());
+                outputCapabilities_ = capabilities.Value();
+                return AdmitInitialOutput(descriptor, required);
+            }
+
+            /** @brief Keeps nonpresenting preparation genuinely output-less; required or explicit output never falls back. */
+            [[nodiscard]] Result<void> AdmitInitialOutput(const MetalPresentationDescriptor &descriptor, bool required) {
+                const auto display = presentationPort_->OutputDisplayFacts();
+                if (display.HasError()) {
+                    if (!required && !descriptor.output &&
+                        display.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnavailable.code.Value())
+                        return Result<void>::Success();
+                    return Result<void>::Failure(display.ErrorValue());
+                }
+                const auto output = ConfigurePresentationOutput(descriptor.output.value_or(RenderPresentationOutputRequest{}));
+                return output.HasError() ? Result<void>::Failure(output.ErrorValue()) : Result<void>::Success();
+            }
+
+            /** @brief Republishes validated current platform facts without native layer mutation or color-space allocation. */
+            [[nodiscard]] Result<void> AdmitCurrentDisplay() {
+                const auto facts = presentationPort_->OutputDisplayFacts();
+                if (facts.HasError())
+                    return Result<void>::Failure(facts.ErrorValue());
+                if (facts.Value().revision < output_->display.revision ||
+                    (facts.Value().revision == output_->display.revision && facts.Value() != output_->display))
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::InvalidOutput));
+                if (facts.Value().revision != output_->display.revision) {
+                    const auto admitted =
+                        NegotiatePresentationOutput(output_->requested, outputCapabilities_, facts.Value(), output_->revision);
+                    if (admitted.HasError())
+                        return Result<void>::Failure(admitted.ErrorValue());
+                    // Headroom/display evidence can change without changing the exact layer encoding. Publish its value
+                    // projection without rebuilding a color space or mutating a layer observed by the acquisition worker.
+                    output_->display = facts.Value();
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Consumes any old generation before the owner mutates layer properties; never waits. */
+            [[nodiscard]] Result<bool> QuiesceAcquisition() {
+                if (!acquisition_)
+                    return Result<bool>::Success(true);
+                const auto result = acquisition_->Poll(drawableGeneration_);
+                if (result.progress == MetalDrawablePoll::Failed || result.progress == MetalDrawablePoll::WrongThread)
+                    return Result<bool>::Failure(DrawableFailure(result));
+                return Result<bool>::Success(acquisition_->Idle());
+            }
+
+            /** @brief Preserves owned bounded worker failure context while translating at the native boundary. */
+            [[nodiscard]] static Error DrawableFailure(const MetalDrawableResult &result) {
+                if (result.progress == MetalDrawablePoll::WrongThread)
+                    return MakeError(RenderPresentationErrors::ThreadAffinityViolation);
+                return MakeError(RenderPresentationErrors::OutputUnavailable,
+                                 result.failure[0] == '\0' ? "Metal drawable acquisition worker could not start or complete."
+                                                           : std::string{result.failure.data()});
+            }
+
+            /** @brief Checks that graph-final pixels declare exactly the encoding admitted by native presentation. */
+            [[nodiscard]] Result<void> ValidatePrimaryOutput(const PrimaryOutputAttachment &attachment) const override {
+                if (!output_)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+                if (attachment.outputColor && *attachment.outputColor != output_->active)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputMismatch));
+                if (!attachment.outputColor && output_->active != RenderOutputColor{})
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputMismatch));
+                return Result<void>::Success();
+            }
+
+            /** @brief Releases native parents only after every submitted command and external CPU capsule is terminal. */
+            void ReleaseDrainedResources() noexcept {
+                acquisition_.reset();
+                readyDrawable_ = nil;
+                output_.reset();
+
                 resources_.Shutdown();
                 submitted_.Clear();
                 MetalEditorGraphicsAccess::Clear(*editorGraphicsBridge_);
@@ -536,7 +801,6 @@ namespace Horo::Render::Detail {
                 }
                 lastSubmittedCommandBuffer_ = nil;
                 submissionError_.reset();
-                ownerThread_ = {};
                 commandQueue_ = nil;
                 device_ = nil;
                 if (surfaceCreated_) {
@@ -545,7 +809,14 @@ namespace Horo::Render::Detail {
                 }
             }
 
-        private:
+            /** @brief Failed initialization has admitted no GPU work and must close synchronously without a hidden wait. */
+            void CloseUnsubmittedInitialization() noexcept {
+                const auto begun = BeginShutdown();
+                const auto drained = PollDrain();
+                if (begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                    std::terminate();
+            }
+
             /**
              * @brief Admits preparation without reading native state from a foreign thread.
              * Initialization and shutdown are externally serialized owner lifecycle operations.
@@ -553,7 +824,7 @@ namespace Horo::Render::Detail {
              * callers must join them before owner shutdown. This is not concurrent-shutdown admission.
              */
             [[nodiscard]] Result<void> ValidatePreparationAccess() const {
-                if (ownerThread_ == std::thread::id{})
+                if (closing_ || ownerThread_ == std::thread::id{})
                     return Result<void>::Failure(MakeError(MetalBackendErrors::NotInitialized));
                 if (std::this_thread::get_id() != ownerThread_)
                     return Result<void>::Failure(MakeError(MetalBackendErrors::WrongThread));
@@ -565,22 +836,42 @@ namespace Horo::Render::Detail {
             }
 
             /** @brief Configures the admitted native presentation layer before publishing graphics access. */
-            void ConfigurePresentationLayer(const std::uint32_t maxFramesInFlight) {
-                layer_.device = device_;
-                layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
-                layer_.framebufferOnly = YES;
-                layer_.opaque = YES;
-                layer_.maximumDrawableCount = maxFramesInFlight;
+            [[nodiscard]] Result<void> ConfigurePresentationLayer(const std::uint32_t maxFramesInFlight, PresentMode mode) {
+                @try {
+                    layer_.device = device_;
+                    layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
+                    layer_.framebufferOnly = YES;
+                    layer_.opaque = YES;
+                    layer_.maximumDrawableCount = maxFramesInFlight;
+                    layer_.allowsNextDrawableTimeout = YES;
+                    layer_.displaySyncEnabled = mode == PresentMode::Fifo;
+                    if (layer_.device != device_ || layer_.maximumDrawableCount != maxFramesInFlight || !layer_.allowsNextDrawableTimeout ||
+                        layer_.displaySyncEnabled != (mode == PresentMode::Fifo))
+                        return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputMismatch));
+                } @catch (NSException *exception) {
+                    (void)exception;
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+                }
+                return Result<void>::Success();
             }
 
             /** @brief Checks native capture state and all command-count bounds before any buffer allocation. */
             [[nodiscard]] Result<void> ValidateParallelCapture(const RenderGraphExecutionRequest &request) const {
+                if (!request.submissions.empty())
+                    return Result<void>::Failure(
+                        MakeError(MetalBackendErrors::UnsupportedGraphExecution, "Metal explicit graph submissions are not implemented."));
                 if (commandBuffer_ == nil || drawable_ == nil || renderEncoder_ != nil || activeGraphLease_ != nullptr || activeRecording_)
                     return Result<void>::Failure(MakeError(MetalBackendErrors::InvalidExecutionPlan));
                 if (request.workloads.size() > MetalRecordingBudget::MaximumPasses)
                     return Result<void>::Failure(
                         MakeError(MetalBackendErrors::UnsupportedGraphExecution,
                                   "Metal parallel graphs admit at most sixteen independent command buffers per frame."));
+                for (const auto &binding : request.workloads) {
+                    if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&binding.workload)) {
+                        if (const auto encoding = ValidatePrimaryOutput(*primary); encoding.HasError())
+                            return encoding;
+                    }
+                }
                 if (recordingBudget_->live.load(std::memory_order_acquire) >= MetalRecordingBudget::MaximumLiveRecordings)
                     return Result<void>::Failure(
                         MakeError(MetalBackendErrors::SubmissionBusy,
@@ -614,29 +905,35 @@ namespace Horo::Render::Detail {
             }
 
             /** @brief Polls bounded retained submissions; ordinary frames never wait for GPU completion. */
-            [[nodiscard]] Result<void> CheckSubmissionCapacity() {
+            [[nodiscard]] Result<bool> PollSubmissionAvailability() {
                 if (std::this_thread::get_id() != ownerThread_) {
-                    return WrongThread();
+                    return Result<bool>::Failure(MakeError(MetalBackendErrors::WrongThread));
                 }
                 if (submissionError_) {
-                    return Result<void>::Failure(*submissionError_);
+                    return Result<bool>::Failure(*submissionError_);
                 }
                 DrainCancelledRecordings();
                 if (const auto polled = submitted_.Poll(); polled.HasError()) {
                     submissionError_ = polled.ErrorValue();
-                    return polled;
+                    return Result<bool>::Failure(polled.ErrorValue());
                 }
                 if (submitted_.Count() >= maxFramesInFlight_)
-                    return Result<void>::Failure(MakeError(MetalBackendErrors::SubmissionBusy));
+                    return Result<bool>::Success(false);
                 const std::size_t gpuRecordings = submitted_.RecordingCount();
                 if (recordingBudget_->live.load(std::memory_order_acquire) > static_cast<std::size_t>(gpuRecordings)) {
                     // A cancelled callback may still retain its CAMetalDrawable parent. Do
                     // not enter nextDrawable and accidentally wait for that CPU lease to drain.
-                    return Result<void>::Failure(
-                        MakeError(MetalBackendErrors::SubmissionBusy,
-                                  "Cancelled CPU recording leases must drain before acquiring another presentation drawable."));
+                    return Result<bool>::Success(false);
                 }
-                return Result<void>::Success();
+                return Result<bool>::Success(true);
+            }
+
+            /** @brief Keeps direct BeginFrame failure typed while ordinary host readiness uses a nonallocating pending value. */
+            [[nodiscard]] Result<void> CheckSubmissionCapacity() {
+                const auto available = PollSubmissionAvailability();
+                if (available.HasError())
+                    return Result<void>::Failure(available.ErrorValue());
+                return available.Value() ? Result<void>::Success() : Result<void>::Failure(MakeError(MetalBackendErrors::SubmissionBusy));
             }
 
             [[nodiscard]] MetalResourceRuntime &Resources() noexcept {
@@ -696,6 +993,13 @@ namespace Horo::Render::Detail {
             __strong id<MTLDevice> device_{nil};
             __strong id<MTLCommandQueue> commandQueue_{nil};
             __strong id<CAMetalDrawable> drawable_{nil};
+            __strong id<CAMetalDrawable> readyDrawable_{nil};
+            std::unique_ptr<MetalDrawableAcquisition> acquisition_;
+            RenderOutputCapabilities outputCapabilities_;
+            std::optional<RenderPresentationOutput> output_;
+            std::uint64_t outputRevision_{};
+            std::uint64_t drawableGeneration_{1};
+            FramebufferExtent drawableExtent_;
             __strong id<MTLCommandBuffer> commandBuffer_{nil};
             __strong id<MTLRenderCommandEncoder> renderEncoder_{nil};
             __strong MTLRenderPassDescriptor *renderPassDescriptor_{nil};
@@ -720,6 +1024,10 @@ namespace Horo::Render::Detail {
             std::uint32_t maxFramesInFlight_{0};
             MetalResourceRuntime resources_;
             bool surfaceCreated_{false};
+            bool closing_{false};
+            bool drained_{false};
+            std::optional<Error> drainError_;
+            bool drainErrorReported_{false};
         };
     }  // namespace
 

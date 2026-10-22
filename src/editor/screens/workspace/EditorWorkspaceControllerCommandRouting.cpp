@@ -2,10 +2,13 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <algorithm>
 #include <filesystem>
 
 namespace Horo::Editor {
     void EditorWorkspaceController::ProcessCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (m_prefabRefreshing)
+            return;
         // A transient overlay must not survive the interaction or workspace action that owns it.
         if (!m_viewport.Current().transformPreviews.empty() && cmd.command != EditorWorkspaceViewCommand::None &&
             cmd.command != EditorWorkspaceViewCommand::PreviewObjectTransform &&
@@ -19,7 +22,7 @@ namespace Horo::Editor {
             cmd.command != EditorWorkspaceViewCommand::CancelLightComponentPreview) {
             CancelLightComponentPreview();
         }
-        if (m_assetPlacementPreviewActive && cmd.command != EditorWorkspaceViewCommand::None &&
+        if ((m_assetPlacementPreviewActive || m_prefabDrop) && cmd.command != EditorWorkspaceViewCommand::None &&
             cmd.command != EditorWorkspaceViewCommand::PreviewAssetPlacement &&
             cmd.command != EditorWorkspaceViewCommand::InstantiateAsset &&
             cmd.command != EditorWorkspaceViewCommand::CancelAssetPlacementPreview) {
@@ -40,7 +43,10 @@ namespace Horo::Editor {
             ++m_viewModel.colliderSelectionRevision;
         }
         DispatchWorkspaceCommand(cmd);
+        RefreshWorldDocumentProjection();
+        UpdateWorldBake();
         RefreshSourceDocumentProjection();
+        RefreshPrefabDocuments();
     }
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
@@ -53,14 +59,18 @@ namespace Horo::Editor {
             RefreshWorldDocumentProjection();
             return;
         }
-        static_cast<void>(ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
-                          ProcessWorldSourceCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
-                          ProcessSourceDocumentCommand(cmd) || ProcessPCGDocumentCommand(cmd) || ProcessDocumentCommand(cmd) ||
-                          ProcessPlayCommand(cmd) || ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) ||
-                          ProcessViewportPickCommand(cmd) || ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd) ||
-                          ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd));
-        RefreshWorldDocumentProjection();
-        UpdateWorldBake();
+        if (ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
+            ProcessWorldSourceCommand(cmd) || ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) ||
+            ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) || ProcessPCGDocumentCommand(cmd) ||
+            ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd))
+            return;
+        if (m_activePrefabDocument) {
+            ProcessFocusedPrefabCommand(cmd);
+            return;
+        }
+        static_cast<void>(ProcessDocumentCommand(cmd) || ProcessPlayCommand(cmd) || ProcessCreatePrefabCommand(cmd) ||
+                          ProcessPrefabHierarchyCommand(cmd) || ProcessSceneObjectCommand(cmd) || ProcessViewportPickCommand(cmd) ||
+                          ProcessViewportCommand(cmd) || ProcessComponentCommand(cmd));
     }
 
     /** @copydoc EditorWorkspaceController::ApplyWorldLayerIntent */
@@ -76,6 +86,44 @@ namespace Horo::Editor {
             default:
                 return Result<PartitionedWorldSnapshotLease>::Failure(MakeError(WorldDocumentErrors::Unsupported));
         }
+    }
+
+    /** @copydoc EditorWorkspaceController::ProcessFocusedPrefabCommand */
+    void EditorWorkspaceController::ProcessFocusedPrefabCommand(const EditorWorkspaceViewCommandData &command) {
+        using enum EditorWorkspaceViewCommand;
+        if (command.command == DiscardSceneRecovery) {
+            static_cast<void>(ProcessDocumentCommand(command));
+            return;
+        }
+        if (command.command == StopPlay || command.command == PausePlay || command.command == ResumePlay || command.command == StepPlay) {
+            static_cast<void>(ProcessPlayCommand(command));
+            return;
+        }
+        using enum PrefabDocumentAction;
+        PrefabDocumentAction action;
+        switch (command.command) {
+            case SaveScene:
+                action = Save;
+                break;
+            case UndoScene:
+                action = Undo;
+                break;
+            case RedoScene:
+                action = Redo;
+                break;
+            default:
+                return;
+        }
+        const auto entry = std::ranges::find_if(m_prefabDocuments, [this](const auto &document) {
+            return document->Instance() == m_activePrefabDocument;
+        });
+        if (entry == m_prefabDocuments.end())
+            return;
+        EditorWorkspaceViewCommandData request;
+        request.command = PrefabDocument;
+        request.prefabFence = (*entry)->Snapshot().fence;
+        request.prefabAction = action;
+        static_cast<void>(ProcessPrefabDocumentCommand(request));
     }
 
     bool EditorWorkspaceController::ProcessDocumentCommand(const EditorWorkspaceViewCommandData &cmd) {

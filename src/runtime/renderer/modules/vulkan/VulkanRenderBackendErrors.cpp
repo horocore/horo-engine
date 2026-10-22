@@ -168,4 +168,34 @@ namespace Horo::Render::VulkanBackendErrors {
                                                     "Select a compatible device or resource access policy.",
                                                     false,
                                                     true};
+    const ErrorCodeDescriptor WrongThread{Domain, ErrorCode{"render.vulkan.wrong_thread"}, ErrorSeverity::Error,
+                                          "Vulkan work was requested on a foreign thread.", "Use the initializing render owner thread."};
+    const ErrorCodeDescriptor InvalidCommandState{Domain, ErrorCode{"render.vulkan.invalid_command_state"}, ErrorSeverity::Error,
+                                                  "Vulkan command ownership or frame state is invalid.",
+                                                  "Use the active owner-issued ticket and explicit lifecycle sequence."};
+    const ErrorCodeDescriptor SubmissionBusy{Domain,
+                                             ErrorCode{"render.vulkan.submission_busy"},
+                                             ErrorSeverity::Warning,
+                                             "All bounded Vulkan command slots remain in use.",
+                                             "Poll completion and retry at a later owner safe point without CPU waiting.",
+                                             true};
+    const ErrorCodeDescriptor TimelineInvalid{Domain, ErrorCode{"render.vulkan.timeline_invalid"}, ErrorSeverity::Error,
+                                              "Queue, order or completion evidence is stale or invalid.",
+                                              "Supply exact frontend-issued queue submissions and monotonic timeline values."};
+    const ErrorCodeDescriptor TimelineExhausted{Domain, ErrorCode{"render.vulkan.timeline_exhausted"}, ErrorSeverity::Critical,
+                                                "A Vulkan command or timeline identity reached its non-wrapping limit.",
+                                                "Stop admission and recreate the device lifetime through host recovery."};
+    const ErrorCodeDescriptor CompletionTimeout{Domain,
+                                                ErrorCode{"render.vulkan.completion_timeout"},
+                                                ErrorSeverity::Error,
+                                                "The finite authorized Vulkan completion wait timed out.",
+                                                "Retain pending ownership and invoke the host's explicit recovery policy.",
+                                                true};
+    const ErrorCodeDescriptor DeviceLost{Domain,
+                                         ErrorCode{"render.vulkan.device_lost"},
+                                         ErrorSeverity::Critical,
+                                         "The Vulkan driver reported device loss.",
+                                         "Stop admission and recreate the device through explicit host recovery.",
+                                         false,
+                                         true};
 }  // namespace Horo::Render::VulkanBackendErrors

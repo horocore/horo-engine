@@ -97,7 +97,40 @@ namespace Horo::Editor {
      * authored values without invoking a generator or asset provider. Only this target sees Scene private headers.
      */
     class SceneDocumentTransactions final {
+        struct Prepared;
+
     public:
+        /** @brief Fully reserved subtree-to-instance replacement; no authored state changes before CommitPrefabReplacement. */
+        class PrefabReplacement final {
+        public:
+            /** @brief Borrows the fresh placement identity. @return Stable scene-local instance ID. */
+            [[nodiscard]] Prefab::PrefabInstanceId Instance() const noexcept {
+                return instance_;
+            }
+
+        private:
+            friend class SceneDocumentTransactions;
+            std::shared_ptr<Prepared> prepared_;
+            Prefab::PrefabInstanceId instance_;
+        };
+
+        /** @brief Reserves one canonical subtree removal, linked placement and history entry before any external publication.
+         * @param context Exact editable opening/state fence. @param root Selected ordinary scene subtree root.
+         * @param source New validated prefab identity. @param limits Finite preparation bounds.
+         * @return Detached no-fail publication candidate or a typed zero-mutation rejection.
+         * @details Rejects locked/generated objects and prefab boundaries. Callers must audit reference portability before writing files.
+         */
+        [[nodiscard]] Result<PrefabReplacement> PreparePrefabReplacement(const SceneTransactionContext &context,
+                                                                         SceneSource::SceneObjectId root,
+                                                                         const Prefab::PrefabAssetReference &source,
+                                                                         SceneTransactionLimits limits = {}) const;
+        /** @brief Revalidates and publishes the reserved Scene root and single history record without callbacks.
+         * @param replacement Borrowed wrapper to the mutable canonical Prepared owner created by this exact live port.
+         * The wrapper is not consumed or deeply immutable; the owner still enforces one publication through its state fence.
+         * @return Commit metadata or stale/cancelled rejection.
+         */
+        [[nodiscard]] Result<SceneTransactionResult> CommitPrefabReplacement(const PrefabReplacement &replacement);
+
         /** @brief Construct an inert port. */
         SceneDocumentTransactions() noexcept;
         /** @brief Release this port and any owned headless document/history. */
@@ -172,7 +205,6 @@ namespace Horo::Editor {
         };
 
         std::shared_ptr<Lifetime> lifetime_;
-        struct Prepared;
         /** @brief Stages canonical root/history without publication for an owner-thread multi-document transaction. */
         [[nodiscard]] Result<std::shared_ptr<Prepared>> Prepare(const SceneTransactionContext &context,
                                                                 std::span<const SceneObjectReplacement> changes,

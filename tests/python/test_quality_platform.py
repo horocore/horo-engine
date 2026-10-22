@@ -125,7 +125,7 @@ def test_timeout_and_cancel_remove_entire_owned_tree(tmp_path, cancel, leader_ex
             try:
                 # The command in parentheses can itself contain spaces or ')'.
                 state = status.read_text().rsplit(")", 1)[1].split()[0]
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 continue
             assert state == "Z", f"owned process {pid} survived cleanup in state {state}"
 

@@ -19,6 +19,10 @@ namespace Horo::Render::RenderGraphSynchronizationErrors {
         Detail::MakeErrorDescriptor(Domain, "render.graph.synchronization.initial_state_invalid", ErrorSeverity::Error,
                                     "An imported resource initial state is malformed or incompatible.",
                                     "Provide a valid state, effective queue, and layout compatible with the imported resource kind.");
+    const ErrorCodeDescriptor InvalidExternalRelease =
+        Detail::MakeErrorDescriptor(Domain, "render.graph.synchronization.external_release_invalid", ErrorSeverity::Error,
+                                    "An external release obligation is malformed, duplicate or has no retained producer.",
+                                    "Name each used external resource once with its exact required external state and queue.");
     const ErrorCodeDescriptor InvalidQueueTopology =
         Detail::MakeErrorDescriptor(Domain, "render.graph.synchronization.queue_topology_invalid", ErrorSeverity::Error,
                                     "The effective queue topology is incomplete or ambiguous.",

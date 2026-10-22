@@ -146,7 +146,8 @@ Result<RenderMemoryCostPlan> QueryGraphicsPipelineMemoryCost(const RenderGraphic
         return Result<RenderMemoryCostPlan>::Failure(
             MakeError(OpenGLBackendErrors::ResourceIdentityInvalid,
                       "Graphics pipeline references stale native modules or a different cooked artifact/interface/target."));
-    if (descriptor.state.sampleCount != 1 || descriptor.state.colorFormat != RenderTextureFormat::Rgba8Unorm ||
+    if (descriptor.state.viewRouting != RenderViewRouting::SingleView || descriptor.state.sampleCount != 1 ||
+        descriptor.state.colorFormat != RenderTextureFormat::Rgba8Unorm ||
         (descriptor.state.depthFormat && *descriptor.state.depthFormat != RenderTextureFormat::Depth24Stencil8 &&
          *descriptor.state.depthFormat != RenderTextureFormat::Depth32Float) ||
         !descriptor.manifest.inlineConstants.empty() || !descriptor.manifest.specializationInputs.empty())
@@ -394,7 +395,7 @@ Result<RenderMemoryCostPlan> QueryTextureMemoryCost(const RenderTextureDescripto
 
 /** @copydoc IRenderBackend::CreateBuffer */
 Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
-                                   const RenderMemoryPlacement &placement) override {
+                                   const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime = {}) override {
     if (auto failure = ResourceCreationFailure(); failure.has_value())
         return std::move(*failure);
     const auto cost = QueryBufferMemoryCost(descriptor);
@@ -419,8 +420,11 @@ Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, con
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL failed to allocate a buffer object."));
     const auto deleteCandidate = [this](const std::uint32_t *object) noexcept {
         functions_.buffers.deleteBuffers(1, object);
+        RetireNativeLifetime(NativeResourceKind::Buffer, *object);
     };
     std::unique_ptr<const std::uint32_t, decltype(deleteCandidate)> candidate{&buffer, deleteCandidate};
+    if (auto tracked = TrackNativeLifetime(NativeResourceKind::Buffer, buffer, std::move(lifetime)); tracked.HasError())
+        return Result<std::uint64_t>::Failure(std::move(tracked).ErrorValue());
     constexpr std::uint32_t target = GL_ARRAY_BUFFER;
     functions_.buffers.bindBuffer(target, buffer);
     functions_.buffers.bufferData(target, descriptor.byteSize, initialData, GL_STATIC_DRAW);
@@ -441,8 +445,8 @@ Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &descriptor, con
 }
 
 /** @copydoc IRenderBackend::CreateMesh */
-Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
-                                 const std::uint64_t indexBuffer) override {
+Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer, const std::uint64_t indexBuffer,
+                                 RenderResourceNativeLifetime lifetime = {}) override {
     if (auto failure = ResourceCreationFailure(); failure.has_value())
         return std::move(*failure);
     // The initial OpenGL 4.1 path deliberately realizes only Horo's canonical MeshVertex layout;
@@ -491,12 +495,16 @@ Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &descriptor, const s
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL mesh tracking allocation failed."));
     }
+    if (auto tracked = TrackNativeLifetime(NativeResourceKind::Mesh, vertexArray, std::move(lifetime)); tracked.HasError()) {
+        DestroyMesh(vertexArray);
+        return Result<std::uint64_t>::Failure(std::move(tracked).ErrorValue());
+    }
     return Result<std::uint64_t>::Success(vertexArray);
 }
 
 /** @copydoc IRenderBackend::CreateTexture */
 Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescriptor, const std::span<const std::byte> textureData,
-                                    const RenderMemoryPlacement &placement) override {
+                                    const RenderMemoryPlacement &placement, RenderResourceNativeLifetime lifetime = {}) override {
     if (auto failure = ResourceCreationFailure(); failure.has_value())
         return std::move(*failure);
     const auto bytes = RenderTextureBaseLevelByteSize(textureDescriptor);
@@ -517,6 +525,10 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
     if (texture == 0)
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL failed to allocate a texture object."));
+    if (auto tracked = TrackNativeLifetime(NativeResourceKind::Texture, texture, std::move(lifetime)); tracked.HasError()) {
+        functions_.textures.deleteTextures(1, &texture);
+        return Result<std::uint64_t>::Failure(std::move(tracked).ErrorValue());
+    }
     functions_.textures.bindTexture(GL_TEXTURE_2D, texture);
     functions_.textures.textureParameter(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     functions_.textures.textureParameter(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -542,6 +554,7 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
         const auto attachment = Detail::CreateOpenGLGraphFramebuffer(functions_, texture);
         if (attachment.HasError()) {
             functions_.textures.deleteTextures(1, &texture);
+            RetireNativeLifetime(NativeResourceKind::Texture, texture);
             return Result<std::uint64_t>::Failure(attachment.ErrorValue());
         }
         graphFramebuffer = attachment.Value();
@@ -556,6 +569,7 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
         if (graphFramebuffer != 0)
             functions_.framebuffers.deleteFramebuffers(1, &graphFramebuffer);
         functions_.textures.deleteTextures(1, &texture);
+        RetireNativeLifetime(NativeResourceKind::Texture, texture);
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL texture tracking allocation failed."));
     }
@@ -563,7 +577,8 @@ Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &textureDescri
 }
 
 /** @copydoc IRenderBackend::CreateTextureView */
-Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &viewDescriptor, const std::uint64_t sourceTexture) override {
+Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &viewDescriptor, const std::uint64_t sourceTexture,
+                                        RenderResourceNativeLifetime lifetime = {}) override {
     if (auto failure = ResourceCreationFailure(); failure.has_value())
         return std::move(*failure);
     if (!viewDescriptor.IsValid() || sourceTexture == 0 || sourceTexture > std::numeric_limits<std::uint32_t>::max())
@@ -581,7 +596,7 @@ Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &viewD
         return entry.second.texture == sourceTexture && entry.second.format == viewDescriptor.format &&
                entry.second.aspect == viewDescriptor.aspect;
     });
-    if (matchingView != textureViews_.end()) {
+    if (matchingView != textureViews_.end() && !lifetime.HasLease()) {
         auto &existing = matchingView->second;
         if (existing.references == std::numeric_limits<std::uint32_t>::max())
             return Result<std::uint64_t>::Failure(
@@ -605,12 +620,16 @@ Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &viewD
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL texture-view tracking allocation failed."));
     }
+    if (auto tracked = TrackNativeLifetime(NativeResourceKind::View, identity, std::move(lifetime)); tracked.HasError()) {
+        textureViews_.erase(identity);
+        return Result<std::uint64_t>::Failure(std::move(tracked).ErrorValue());
+    }
     return Result<std::uint64_t>::Success(identity);
 }
 
 /** @copydoc IRenderBackend::CreateRenderTarget */
 Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descriptor, const std::uint64_t colorAttachment,
-                                         const std::uint64_t depthAttachment) override {
+                                         const std::uint64_t depthAttachment, RenderResourceNativeLifetime lifetime = {}) override {
     if (auto failure = ResourceCreationFailure(); failure.has_value())
         return std::move(*failure);
     if (!IsValidRenderTargetRequest(descriptor, colorAttachment, depthAttachment))
@@ -666,6 +685,10 @@ Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &descripto
         return Result<std::uint64_t>::Failure(
             MakeError(OpenGLBackendErrors::ResourceCreationFailed, "OpenGL render-target tracking allocation failed."));
     }
+    if (auto tracked = TrackNativeLifetime(NativeResourceKind::Target, framebuffer, std::move(lifetime)); tracked.HasError()) {
+        DestroyRenderTarget(framebuffer);
+        return Result<std::uint64_t>::Failure(std::move(tracked).ErrorValue());
+    }
     return Result<std::uint64_t>::Success(framebuffer);
 }
 
@@ -696,6 +719,7 @@ void DestroyBuffer(const std::uint64_t backendInstance) noexcept override {
     if (backendInstance <= std::numeric_limits<std::uint32_t>::max())
         bufferDescriptors_.erase(static_cast<std::uint32_t>(backendInstance));
     DeleteTrackedObject(functions_.buffers.deleteBuffers, buffers_, backendInstance);
+    RetireNativeLifetime(NativeResourceKind::Buffer, backendInstance);
 }
 
 /** @copydoc IRenderBackend::DestroyMesh */
@@ -705,6 +729,7 @@ void DestroyMesh(const std::uint64_t backendInstance) noexcept override {
     if (backendInstance <= std::numeric_limits<std::uint32_t>::max())
         prepared_.meshDescriptors.erase(static_cast<std::uint32_t>(backendInstance));
     DeleteTrackedObject(functions_.vertexArrays.deleteVertexArrays, meshes_, backendInstance);
+    RetireNativeLifetime(NativeResourceKind::Mesh, backendInstance);
 }
 
 /** @copydoc IRenderBackend::DestroyTexture */
@@ -731,8 +756,10 @@ void DestroyTextureView(const std::uint64_t backendInstance) noexcept override {
     const std::uint32_t texture = view->second.texture;
     if (view->second.references > 1)
         --view->second.references;
-    else
+    else {
         textureViews_.erase(view);
+        RetireNativeLifetime(NativeResourceKind::View, backendInstance);
+    }
     TryDestroyPendingTexture(texture);
 }
 
@@ -743,4 +770,5 @@ void DestroyRenderTarget(const std::uint64_t backendInstance) noexcept override 
     if (backendInstance <= std::numeric_limits<std::uint32_t>::max())
         prepared_.materialTargets.erase(static_cast<std::uint32_t>(backendInstance));
     DeleteTrackedObject(functions_.framebuffers.deleteFramebuffers, renderTargets_, backendInstance);
+    RetireNativeLifetime(NativeResourceKind::Target, backendInstance);
 }

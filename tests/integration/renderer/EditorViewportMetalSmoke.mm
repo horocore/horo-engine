@@ -2,6 +2,7 @@
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
 #include "editor/renderer/metal/EditorViewportRendererMetal.h"
 #include "editor/renderer/metal/SdlMetalPresentationPort.h"
+#include "renderer/RenderBackendDrainTestSupport.h"
 #include "runtime/renderer/modules/metal/MetalBackendModule.h"
 
 #import <Metal/Metal.h>
@@ -9,10 +10,12 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -22,6 +25,20 @@ namespace {
 
     void Check(const bool condition) {
         REQUIRE((condition));
+    }
+
+    void AwaitPresentation(RenderFrontend &frontend, FramebufferExtent extent) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (std::chrono::steady_clock::now() < deadline) {
+            SDL_PumpEvents();
+            const auto ready = frontend.PollPresentationAvailability(extent);
+            if (ready.HasValue() && ready.Value())
+                return;
+            if (ready.HasError())
+                Check(ready.ErrorValue().code.Value() == RenderPresentationErrors::DrawableUnavailable.code.Value());
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        FAIL("The actual Metal presentation did not become ready within five seconds");
     }
 
     RenderTargetHandle PrepareViewportTarget(EditorViewportRendererMetal &viewport, RenderFrontend &frontend,
@@ -67,6 +84,7 @@ namespace {
             const EditorViewportExtent passExtent = viewport.RequestedExtent();
             Check(passExtent.IsValid());
 
+            AwaitPresentation(frontend, {256, 256});
             auto begun = frontend.BeginFrame(FrameDescriptor{.frameNumber = 2 + attempt, .outputExtent = {256, 256}});
             Check(begun.HasValue());
             RenderFrameScope frame = std::move(begun).Value();
@@ -91,6 +109,7 @@ namespace {
 
 TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     Check(SDL_Init(SDL_INIT_VIDEO));
+    Check(SDL_SetHint(SDL_HINT_VIDEO_METAL_AUTO_RESIZE_DRAWABLE, "0"));
     SDL_Window *window = SDL_CreateWindow("Horo Metal viewport smoke", 256, 256, SDL_WINDOW_METAL | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     Check(window != nullptr);
 
@@ -153,6 +172,7 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
     Check(frontend->AttachStaticMeshPassExecutor(viewport).HasValue());
     const RenderTargetHandle viewportTarget = PrepareViewportTarget(viewport, *frontend, viewportScene, {128, 128});
     Check(frontend->Resize(FramebufferExtent{256, 256}).HasValue());
+    AwaitPresentation(*frontend, {256, 256});
     auto begun = frontend->BeginFrame(FrameDescriptor{.frameNumber = 1, .outputExtent = {256, 256}});
     Check(begun.HasValue());
     RenderFrameScope frame = std::move(begun).Value();
@@ -228,6 +248,7 @@ TEST_CASE("Editor Viewport Metal Smoke", "[integration][renderer][gpu]") {
 
     CheckSeamlessResourceTransition(viewport, *frontend, viewportScene, viewportTarget, textureView);
     frontend->DetachStaticMeshPassExecutor(viewport);
+    Horo::Render::Test::RequireDrainedOwner(*frontend);
     viewport.Shutdown();
     frontend.reset();
     SDL_DestroyWindow(window);

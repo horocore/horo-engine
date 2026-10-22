@@ -6,6 +6,7 @@
 
 #include "Horo/Runtime/Render/PipelineCache.h"
 #include "Horo/Runtime/Render/RenderResourceDescriptors.h"
+#include "Horo/Runtime/Render/ShaderPermutation.h"
 #include "Horo/Runtime/Render/ShaderReflection.h"
 
 namespace Horo::Render {
@@ -49,6 +50,12 @@ namespace Horo::Render {
         Additive
     };
 
+    /** @brief Explicit cooked vertex-shader output routing; device support is admitted before pipeline creation. */
+    enum class RenderViewRouting : std::uint8_t {
+        SingleView,
+        VertexLayer
+    };
+
     /**
      * @brief Immutable graphics state for the established MeshVertex triangle layout.
      * @details Pipeline creation neither chooses a frame recipe nor changes active rendering state. Output formats and
@@ -65,6 +72,7 @@ namespace Horo::Render {
         RenderTextureFormat colorFormat{RenderTextureFormat::Rgba8Unorm};
         std::optional<RenderTextureFormat> depthFormat{RenderTextureFormat::Depth24Stencil8};
         std::uint32_t sampleCount{1};
+        RenderViewRouting viewRouting{RenderViewRouting::SingleView};
         [[nodiscard]] bool operator==(const RenderGraphicsPipelineState &) const noexcept = default;
     };
 
@@ -82,6 +90,9 @@ namespace Horo::Render {
         NormalizedShaderReflection reflection;
         RenderGraphicsPipelineState state;
         PipelineCacheCompatibility compatibility;
+        /** @brief Canonical sorted runtime overrides from permutation resolution; omitted IDs use manifest defaults.
+         * @details Immutable for this generation and included in pipelineDescriptorDigest. Values never mutate cooked artifacts. */
+        std::vector<ShaderSpecializationValue> specializationValues{};
     };
 
     /** @brief Validates finite cooked module identity without invoking a native API.
@@ -93,6 +104,14 @@ namespace Horo::Render {
      * @param state Complete immutable fixed state and established MeshVertex layout.
      * @return State digest or a typed invalid state failure. */
     [[nodiscard]] Result<Sha256Digest> ComputeRenderGraphicsPipelineStateDigest(const RenderGraphicsPipelineState &state);
+
+    /** @brief Computes immutable graphics state and runtime specialization identity without native objects.
+     * @param state Complete immutable fixed graphics state.
+     * @param values At most 64 unique ID-sorted typed scalar overrides from permutation resolution.
+     * @return Canonical digest or typed invalid value/state failure. Empty values preserve the existing state-only digest.
+     * @details Callers supplying overrides use this digest for PipelineCacheCompatibility::pipelineDescriptorDigest. */
+    [[nodiscard]] Result<Sha256Digest> ComputeRenderGraphicsPipelineDescriptorDigest(const RenderGraphicsPipelineState &state,
+                                                                                     std::span<const ShaderSpecializationValue> values);
 
     /** @brief Validates exact pipeline identity and final-artifact reflection before native admission.
      * @param descriptor Complete immutable shader, reflection and fixed-state contract.
