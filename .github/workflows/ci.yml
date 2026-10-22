@@ -106,10 +106,153 @@ jobs:
           $log = Join-Path $env:RUNNER_TEMP 'm3-diagnostic/terrain-compiler-red.log'
           & cmake --build build/m3-probe --target tests/CMakeFiles/HoroTerrainAuthoringTests.dir/unit/editor/TerrainBrushAdmissionCompileTests.cpp.obj --parallel 1 2>&1 | Tee-Object -FilePath $log
           exit $LASTEXITCODE
+      - name: Compile affected public-header consumers
+        id: public_consumers_build
+        if: always() && steps.configure.outcome == 'success'
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $log = Join-Path $env:RUNNER_TEMP 'm3-diagnostic/public-header-consumers-build.log'
+          & cmake --build build/m3-probe --target HoroWorldStreamingPublicHeaderConsumer HoroTerrainAuthoringPublicHeaderConsumer HoroFeatureBudgetReservationsPublicConsumer --parallel 2 2>&1 | Tee-Object -FilePath $log
+          exit $LASTEXITCODE
+      - name: Execute complete HoroWorldStreamingTests CTest suite
+        id: world_suite
+        if: always() && steps.world_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'm3-diagnostic'
+          & ctest --test-dir build/m3-probe -R '^HoroWorldStreamingTests::' --show-only=json-v1 | Set-Content -Encoding utf8 (Join-Path $folder 'world-ctest-list.json')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ctest --test-dir build/m3-probe -R '^HoroWorldStreamingTests::' --no-tests=error --output-on-failure --output-junit (Join-Path $folder 'world-ctest.xml') --timeout 120 --parallel 1 2>&1 | Tee-Object -FilePath (Join-Path $folder 'world-ctest.log')
+          $code = $LASTEXITCODE
+          Copy-Item build/m3-probe/Testing/Temporary/LastTest.log (Join-Path $folder 'world-ctest-LastTest.log') -ErrorAction Stop
+          exit $code
+      - name: Build complete Terrain authoring runtime executable
+        id: terrain_build
+        if: always() && steps.configure.outcome == 'success'
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $log = Join-Path $env:RUNNER_TEMP 'm3-diagnostic/terrain-build.log'
+          & cmake --build build/m3-probe --target HoroTerrainAuthoringTests --parallel 2 2>&1 | Tee-Object -FilePath $log
+          exit $LASTEXITCODE
+      - name: Execute complete HoroTerrainAuthoringTests CTest suite
+        id: terrain_suite
+        if: always() && steps.terrain_build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $folder = Join-Path $env:RUNNER_TEMP 'm3-diagnostic'
+          & ctest --test-dir build/m3-probe -R '^HoroTerrainAuthoringTests::' --show-only=json-v1 | Set-Content -Encoding utf8 (Join-Path $folder 'terrain-ctest-list.json')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & ctest --test-dir build/m3-probe -R '^HoroTerrainAuthoringTests::' --no-tests=error --output-on-failure --output-junit (Join-Path $folder 'terrain-ctest.xml') --timeout 120 --parallel 1 2>&1 | Tee-Object -FilePath (Join-Path $folder 'terrain-ctest.log')
+          $code = $LASTEXITCODE
+          Copy-Item build/m3-probe/Testing/Temporary/LastTest.log (Join-Path $folder 'terrain-ctest-LastTest.log') -ErrorAction Stop
+          exit $code
+      - name: Require exact affected-suite execution without skips
+        id: evidence_check
+        if: always()
+        continue-on-error: true
+        run: |
+          @'
+          """Exact evidence accounting embedded verbatim in the workflow candidate."""
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import sys
+          from defusedxml import ElementTree as ET
+
+          EXPECTED = {
+              'HoroWorldStreamingTests': (434, 'c75403a2e33f42ddfb6a96798a47418c7c88a8cb778a59d33df418da73e75bbd', 'world'),
+              'HoroTerrainAuthoringTests': (17, '491df9a9ef51c992900a61d65a90f974efee67903a8597634a679ad3d0bf41b2', 'terrain'),
+          }
+          FIX1 = (4, '902acbb5c90eed9cd97461491a345637895d97408f747e3c88e816d462ec6c74')
+
+          def require(condition, message):
+              if not condition:
+                  raise ValueError(message)
+
+          def identities(names, expected):
+              require(len(names) == len(set(names)) == expected[0], 'missing, extra, duplicate or zero test identities')
+              digest = hashlib.sha256(('\n'.join(sorted(names)) + '\n').encode()).hexdigest()
+              require(digest == expected[1], 'exact source-reviewed test identity set changed')
+              return digest
+
+          def junit(path, expected, ctest):
+              root = ET.parse(path).getroot()
+              cases = list(root.iter('testcase'))
+              names = [case.attrib['name'] for case in cases]
+              digest = identities(names, expected)
+              for suite in root.iter('testsuite'):
+                  for key in ['failures', 'errors', 'skipped', 'disabled']:
+                      require(int(suite.get(key, '0')) == 0, f'{path.name}: nonzero {key}')
+              for case in cases:
+                  require(case.get('status') == 'run', f'{case.get("name")}: not actually run')
+                  require(not any(node.tag in ['failure', 'error', 'skipped'] for node in case.iter()), 'failed or skipped case')
+                  output = case.findtext('system-out', '')
+                  require(not re.search(r'SKIPPED|FAILED - but was ok|\b[1-9][0-9]* skipped\b', output), 'Catch skip or tolerated failure')
+              if ctest:
+                  require(root.tag == 'testsuite' and int(root.attrib['tests']) == len(cases), 'CTest JUnit count mismatch')
+              else:
+                  # Catch JUnit suite tests counts assertions, not testcase elements.
+                  require(sum(int(suite.get('tests', '0')) for suite in root.iter('testsuite')) > 0, 'no Catch assertions')
+                  filters = [node.get('value') for node in root.iter('property') if node.get('name') == 'filters']
+                  require(filters == ['[fix1]'], 'focused filter changed')
+              return {'testcase_count': len(cases), 'identity_sha256': digest,
+                      'suite_test_attributes': [suite.get('tests') for suite in root.iter('testsuite')],
+                      'failures_errors_skips_disabled': 0}
+
+          def suite(folder, target, expected):
+              count, digest, stem = expected
+              listing = json.loads((folder / f'{stem}-ctest-list.json').read_text(encoding='utf-8-sig'))
+              require(listing['kind'] == 'ctestInfo' and listing['version']['major'] == 1, 'unexpected CTest JSON schema')
+              tests = listing['tests']
+              identities([test['name'] for test in tests], (count, digest))
+              executable = (Path.cwd() / 'build/m3-probe/tests' / (target + '.exe')).resolve()
+              for test in tests:
+                  require(test['name'].startswith(target + '::'), 'foreign CTest registration')
+                  command = test['command']
+                  escaped = test['name'][len(target) + 2:]
+                  for char in ['\\', ',', '[', ']', ';']:
+                      escaped = escaped.replace(char, '\\' + char)
+                  require(len(command) == 2 and Path(command[0]).resolve() == executable and command[1] == escaped,
+                          'wrong executable, filtered subset, wrapper or extra Catch arguments')
+                  for prop in test.get('properties', []):
+                      require(prop['name'] not in ['DISABLED', 'WILL_FAIL', 'SKIP_RETURN_CODE', 'SKIP_REGULAR_EXPRESSION',
+                                                    'PASS_REGULAR_EXPRESSION'], 'skip or failure-inversion property')
+              log = (folder / f'{stem}-ctest-LastTest.log').read_text(encoding='utf-8-sig')
+              require(not re.search(r'SKIPPED|FAILED - but was ok|\b[1-9][0-9]* skipped\b', log), 'Catch skip or tolerated failure in full log')
+              result = junit(folder / f'{stem}-ctest.xml', (count, digest), True)
+              result['executable_sha256'] = hashlib.sha256(executable.read_bytes()).hexdigest()
+              return result
+
+          def main():
+              folder = Path(os.environ['RUNNER_TEMP']) / 'm3-diagnostic'
+              folder.mkdir(exist_ok=True)
+              report = {}
+              checks = {target: lambda target=target, expected=expected: suite(folder, target, expected)
+                        for target, expected in EXPECTED.items()}
+              checks['focused_fix1'] = lambda: junit(folder / 'world-red.xml', FIX1, False)
+              for name, check in checks.items():
+                  try:
+                      report[name] = {'status': 'success', **check()}
+                  except Exception as error:
+                      report[name] = {'status': 'failure', 'error': str(error)}
+              (folder / 'evidence-validation.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+              print(json.dumps(report, indent=2))
+              return int(any(result['status'] != 'success' for result in report.values()))
+
+          if __name__ == '__main__':
+              sys.exit(main())
+          '@ | python -
+          exit $LASTEXITCODE
       - name: Record honest step outcomes
         if: always()
         run: |
-          $result = @{ configure = '${{ steps.configure.outcome }}'; world_build = '${{ steps.world_build.outcome }}'; world_tests = '${{ steps.world_red.outcome }}'; terrain_compilation = '${{ steps.terrain_red.outcome }}' }
+          $result = @{ configure = '${{ steps.configure.outcome }}'; world_build = '${{ steps.world_build.outcome }}'; world_tests = '${{ steps.world_red.outcome }}'; terrain_compilation = '${{ steps.terrain_red.outcome }}'; public_header_consumers = '${{ steps.public_consumers_build.outcome }}'; world_suite = '${{ steps.world_suite.outcome }}'; terrain_build = '${{ steps.terrain_build.outcome }}'; terrain_suite = '${{ steps.terrain_suite.outcome }}'; evidence_validation = '${{ steps.evidence_check.outcome }}' }
           $folder = Join-Path $env:RUNNER_TEMP 'm3-diagnostic'
           New-Item -ItemType Directory -Force -Path $folder | Out-Null
           $result | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $folder 'outcomes.json')
@@ -127,4 +270,4 @@ jobs:
       - name: Keep RED failures visible - never label expected failures GREEN
         if: always()
         run: |
-          if ('${{ steps.configure.outcome }}' -ne 'success' -or '${{ steps.world_build.outcome }}' -ne 'success' -or '${{ steps.world_red.outcome }}' -ne 'success' -or '${{ steps.terrain_red.outcome }}' -ne 'success') { exit 1 }
+          if ('${{ steps.configure.outcome }}' -ne 'success' -or '${{ steps.world_build.outcome }}' -ne 'success' -or '${{ steps.world_red.outcome }}' -ne 'success' -or '${{ steps.terrain_red.outcome }}' -ne 'success' -or '${{ steps.public_consumers_build.outcome }}' -ne 'success' -or '${{ steps.world_suite.outcome }}' -ne 'success' -or '${{ steps.terrain_build.outcome }}' -ne 'success' -or '${{ steps.terrain_suite.outcome }}' -ne 'success' -or '${{ steps.evidence_check.outcome }}' -ne 'success') { exit 1 }
