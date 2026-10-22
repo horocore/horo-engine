@@ -665,8 +665,7 @@ namespace Horo::Runtime::Ui::SerializationInternal {
                 return Failed<Json>(UiErrors::DocumentSerializationInvalid, "Runtime UI source contains a duplicate JSON field.");
             if (guard.IsTooDeep())
                 return Failed<Json>(UiErrors::DocumentPayloadTooLarge);
-            const bool expected = kind == JsonRootKind::Object ? root.is_object() : root.is_array();
-            if (root.is_discarded() || !expected)
+            if (const bool expected = kind == JsonRootKind::Object ? root.is_object() : root.is_array(); root.is_discarded() || !expected)
                 return Failed<Json>(UiErrors::DocumentSerializationInvalid, "Runtime UI JSON root has the wrong container type.");
             return Result<Json>::Success(std::move(root));
         } catch (const Json::exception &) {
