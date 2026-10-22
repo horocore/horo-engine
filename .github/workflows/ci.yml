@@ -167,7 +167,7 @@ jobs:
 
           EXPECTED = {
               'HoroWorldStreamingTests': (434, 'c75403a2e33f42ddfb6a96798a47418c7c88a8cb778a59d33df418da73e75bbd', 'world'),
-              'HoroTerrainAuthoringTests': (17, '491df9a9ef51c992900a61d65a90f974efee67903a8597634a679ad3d0bf41b2', 'terrain'),
+              'HoroTerrainAuthoringTests': (18, '7cb3bf68aee3170ddafd3d9e9498b2b5fcbdbebeaaeb68a519ed32562aee78c9', 'terrain'),
           }
           FIX1 = (4, '902acbb5c90eed9cd97461491a345637895d97408f747e3c88e816d462ec6c74')
 
@@ -220,8 +220,13 @@ jobs:
                       escaped = escaped.replace(char, '\\' + char)
                   require(len(command) == 2 and Path(command[0]).resolve() == executable and command[1] == escaped,
                           'wrong executable, filtered subset, wrapper or extra Catch arguments')
-                  for prop in test.get('properties', []):
-                      require(prop['name'] not in ['DISABLED', 'WILL_FAIL', 'SKIP_RETURN_CODE', 'SKIP_REGULAR_EXPRESSION',
+                  properties = test.get('properties', [])
+                  skip_codes = [prop['value'] for prop in properties if prop['name'] == 'SKIP_RETURN_CODE']
+                  # Pinned Catch discovery declares code 4; JUnit/full logs must still prove zero actual skips.
+                  require(len(skip_codes) == 1 and type(skip_codes[0]) is int and skip_codes[0] == 4,
+                          'missing, duplicate or unexpected Catch skip return code')
+                  for prop in properties:
+                      require(prop['name'] not in ['DISABLED', 'WILL_FAIL', 'SKIP_REGULAR_EXPRESSION',
                                                     'PASS_REGULAR_EXPRESSION'], 'skip or failure-inversion property')
               log = (folder / f'{stem}-ctest-LastTest.log').read_text(encoding='utf-8-sig')
               require(not re.search(r'SKIPPED|FAILED - but was ok|\b[1-9][0-9]* skipped\b', log), 'Catch skip or tolerated failure in full log')
