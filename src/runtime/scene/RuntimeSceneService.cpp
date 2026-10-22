@@ -336,6 +336,9 @@ namespace Horo::Runtime {
             !matches)
             return Result<void>::Failure(MakeError(SceneErrors::BaselineStale));
         const LifecycleMutation mutation{*this};
+        if (structuralReceipt_ && !structuralReceipt_->Complete())
+            structuralReceipt_->error_ = MakeError(SceneErrors::BaselineStale, "The pending baseline transaction was cancelled.");
+        structuralReceipt_.reset();
         structuralCommands_.reset();
         return Result<void>::Success();
     }
