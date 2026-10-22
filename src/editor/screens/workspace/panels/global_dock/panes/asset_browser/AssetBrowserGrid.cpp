@@ -5,6 +5,7 @@
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "Horo/Prefab/PrefabErrors.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
@@ -88,13 +89,14 @@ namespace Horo::Editor {
             ImGui::EndDragDropTarget();
         }
 
-        void HandleAssetDragDropSource(const ContentBrowserEntry &entry, const ILocalizationService &localization) {
+        void HandleAssetDragDropSource(const ContentBrowserEntry &entry, const ILocalizationService &localization,
+                                       const AssetSceneDropFence &fence) {
             if (entry.kind != ContentBrowserEntryKind::Asset || !ImGui::BeginDragDropSource(ImGuiDragDropFlags_SourceAllowNullID)) {
                 return;
             }
-            const AssetSceneDragPayload payload =
-                MakeAssetSceneDragPayload(entry.assetId, entry.assetType, entry.absolutePath, entry.registered);
-            ImGui::SetDragDropPayload(AssetSceneDragPayloadType, &payload, sizeof(payload));
+            AssetSceneDragPayload payload = MakeAssetSceneDragPayload(entry.assetId, entry.assetType, entry.absolutePath, entry.registered);
+            payload.fence = fence;
+            ImGui::SetDragDropPayload(AssetSceneDragPayloadType, &payload, sizeof(payload), ImGuiCond_Once);
             ImGui::TextUnformatted(entry.displayName.c_str());
             const bool copy = ImGui::GetIO().KeyCtrl || ImGui::GetIO().KeySuper;
             ImGui::TextColored(Theme::Dim(), "%s",
@@ -150,7 +152,29 @@ namespace Horo::Editor {
                                                                              : "workspace.content_browser.count.items");
                 return std::format("{} {}", entry.containedItemCount, unit);
             }
+            if (entry.previewError) {
+                const auto &migration = Prefab::PrefabErrors::MigrationRequired;
+                const bool needsMigration = entry.previewError->domain.Value() == migration.domain.Value() &&
+                                            entry.previewError->code.Value() == migration.code.Value();
+                return localization.Get("editor", needsMigration ? "workspace.content_browser.prefab.migration_required"
+                                                                 : "workspace.content_browser.preview.unavailable");
+            }
+            if (entry.previewState == ContentBrowserPreviewState::Queued)
+                return localization.Get("editor", "workspace.content_browser.preview.queued");
+            if (!entry.registered)
+                return localization.Get("editor", "workspace.content_browser.asset.unregistered");
+            if (entry.IsPrefab())
+                return localization.Get("editor", "workspace.content_browser.prefab.type");
             return entry.assetType;
+        }
+
+        /** @brief Presents preserved thumbnail/source diagnostics without changing asset or document authority. */
+        void ShowPreviewDiagnostic(const ContentBrowserEntry &entry, const EditorGuiContext &context) {
+            if (!entry.previewError)
+                return;
+            const auto diagnostic = std::format("{}\n{}\n{}", EntrySecondaryText(entry, context.localization),
+                                                entry.previewError->code.Value(), entry.previewError->message);
+            Ui::ShowTooltip(diagnostic.c_str(), &context.theme.fonts);
         }
 
         [[nodiscard]] const char *EmptyGridMessageKey(const ContentBrowserDirectory &directory) noexcept {
@@ -251,11 +275,13 @@ namespace Horo::Editor {
                     context.command.sourceOpenRequest = SourceOpenRequest{
                         .path = entry.absolutePath,
                         .origin = SourceOpenOrigin::AssetActivation,
-                        .mode = SourceOpenMode::AllowExternalFallback,
+                        .mode = entry.IsPrefab() ? SourceOpenMode::EmbeddedOnly : SourceOpenMode::AllowExternalFallback,
                     };
                 }
             }
-            HandleAssetDragDropSource(entry, context.gui.localization);
+            if (hovered)
+                ShowPreviewDiagnostic(entry, context.gui);
+            HandleAssetDragDropSource(entry, context.gui.localization, context.viewModel.assetDropFence);
             HandleDirectoryDragDropTarget(entry, interactionMin, metrics.cardWidth, metrics.cardHeight, &context.drawList, context.command);
             DrawAssetBrowserEntryActions(entry, context.viewModel, context.interactionSession, context.command, context.gui);
             ImGui::PopID();

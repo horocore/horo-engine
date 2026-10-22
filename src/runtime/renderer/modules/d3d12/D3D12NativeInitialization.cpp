@@ -1,4 +1,5 @@
 #include "D3D12Initialization.h"
+#include "D3D12NativeResources.h"
 
 #if defined(_WIN32) && defined(_M_X64)
 #ifndef NOMINMAX
@@ -168,7 +169,20 @@ namespace Horo::Render {
                 return Result<void>::Success();
             }
 
+            Result<void> InitializeResources(const D3D12ResourceLimits &limits) override {
+                auto result = CreateD3D12Resources(device_.Get(), queues_[0].Get(), limits);
+                if (result.HasError())
+                    return Result<void>::Failure(result.ErrorValue());
+                resources_ = std::move(result).Value();
+                return Result<void>::Success();
+            }
+
+            ID3D12Resources *Resources() noexcept override {
+                return resources_.get();
+            }
+
             void Release() noexcept override {
+                resources_.reset();
                 for (auto &queue : queues_) {
                     queue.Reset();
                 }
@@ -187,6 +201,7 @@ namespace Horo::Render {
             std::vector<Adapter> adapters_;
             ComPtr<ID3D12Device> device_;
             std::array<ComPtr<ID3D12CommandQueue>, 3> queues_;
+            std::unique_ptr<ID3D12Resources> resources_;
         };
 #else
         /** @brief Returns actionable unsupported-host errors without native acquisition. */

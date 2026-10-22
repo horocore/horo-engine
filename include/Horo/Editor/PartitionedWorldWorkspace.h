@@ -5,15 +5,20 @@
  */
 
 #include "Horo/Scene/SceneSourceModel.h"
+#include "Horo/WorldStreaming/StreamingDesiredState.h"
+#include "Horo/WorldStreaming/StreamingSourceRange.h"
 #include "Horo/WorldStreaming/WorldAuthoringContract.h"
 #include "Horo/WorldStreaming/WorldSpanningObjectPlan.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <span>
 #include <stop_token>
+#include <string>
 #include <string_view>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace Horo::Editor {
@@ -85,12 +90,56 @@ namespace Horo::Editor {
         [[nodiscard]] auto operator<=>(const PartitionedWorldPage &) const noexcept = default;
     };
 
+    /** @brief Authored relevance volume; runtime owner tokens are deliberately absent. */
+    struct PartitionedWorldSource final {
+        WorldStreaming::StreamingSourceId id;
+        WorldStreaming::StreamingSourceRevision revision;
+        WorldStreaming::StreamingSourceShape shape;
+        WorldStreaming::StreamingSourceIntent intent{WorldStreaming::StreamingSourceIntent::Gameplay};
+        WorldStreaming::StreamingDesiredResidency target{WorldStreaming::StreamingDesiredResidency::Loaded};
+        WorldStreaming::StreamingSourcePriority priority;
+        std::array<float, 3> debugColor{0.2F, 0.7F, 1.0F}; /**< Linear display color, each component in [0,1]. */
+        [[nodiscard]] bool operator==(const PartitionedWorldSource &) const = default;
+    };
+
+    /** @brief Fixed-capacity control-point result; viewport draw paths allocate no point storage. */
+    class WorldSourceGizmoPointSet final {
+    public:
+        /** @brief Returns the admitted active prefix. @return Immutable shape control points. */
+        [[nodiscard]] std::span<const Math::WorldCoordinate64> Points() const noexcept {
+            return {points_.data(), count_};
+        }
+
+    private:
+        friend Result<WorldSourceGizmoPointSet> WorldSourceGizmoPoints(const PartitionedWorldSource &source);
+        std::array<Math::WorldCoordinate64, WorldStreaming::StreamingSourceRangeLimits::MaximumPathPointCount + 1> points_{};
+        std::size_t count_{};
+    };
+
+    /** @brief Projects canonical shape control points without runtime registration or floating-origin conversion.
+     * Sphere: center/radius; box: min/max; frustum: anchor/six plane offsets; path: vertices/half-extent.
+     * @param source Authored source. @return Exact bounded handle points or typed geometry/arithmetic failure. */
+    [[nodiscard]] Result<WorldSourceGizmoPointSet> WorldSourceGizmoPoints(const PartitionedWorldSource &source);
+    /** @brief Applies a viewport handle draft; the workspace command remains the sole publication path.
+     * @param source Original authored value. @param handle Index from WorldSourceGizmoPoints.
+     * @param position Exact millimeter position, borrowed only for this call. @return Complete valid source draft or typed rejection. */
+    [[nodiscard]] Result<PartitionedWorldSource> MoveWorldSourceGizmo(const PartitionedWorldSource &source, std::size_t handle,
+                                                                      const Math::WorldCoordinate64 &position);
+
+    /** @brief One atomic source insert/replace/remove command against the exact document publication. */
+    struct WorldSourceEdit final {
+        WorldDocumentFence expected;
+        WorldStreaming::StreamingSourceId source;
+        std::optional<PartitionedWorldSource> value; /**< Empty removes; present values keep the exact source ID. */
+    };
+
     /** @brief Owned editable source metadata; pages may describe unloaded geometry. */
     struct PartitionedWorldDocument final {
         std::uint16_t version{1}; /**< In-memory model schema; not a persistent file-format version. */
         PartitionedWorldSettings settings;
         std::vector<WorldStreaming::WorldLayerDescriptor> layers;
         std::vector<PartitionedWorldPage> pages;
+        std::vector<PartitionedWorldSource> sources; /**< Canonical authored sources, never an independent viewport store. */
     };
 
     /** @brief Mandatory finite ceilings; requested ceilings cannot exceed these default hard maxima. */
@@ -100,6 +149,8 @@ namespace Horo::Editor {
         std::size_t maximumObjects{65536};
         std::size_t maximumLayerNameBytes{65536};
         std::uint32_t maximumOpenPages{64};
+        std::size_t maximumSources{1024};
+        std::size_t maximumSourceHistory{128};
         std::size_t maximumSelectedObjects{256};
         std::size_t maximumPageSourceBytes{16 * 1024 * 1024};     /**< Canonical source input ceiling per loaded page. */
         std::size_t maximumResidentSourceBytes{64 * 1024 * 1024}; /**< Aggregate admitted source bytes, excluding historical readers. */
@@ -128,11 +179,47 @@ namespace Horo::Editor {
         bool pinned{};             /**< Explicit owner-local pin; does not bypass capacity. */
     };
 
+    /** @brief Undoable presentation filter; matching is exact UTF-8 substring, never locale-dependent. */
+    struct WorldLayerOutlinerFilter final {
+        std::string name;
+        std::optional<WorldStreaming::WorldLayerOwnership> ownership;
+        [[nodiscard]] auto operator<=>(const WorldLayerOutlinerFilter &) const noexcept = default;
+    };
+
+    /** @brief Inserts one explicitly identified layer at a document ordinal; IDs are never row indices. */
+    struct CreateWorldLayer final {
+        WorldStreaming::WorldLayerDescriptor layer;
+        std::size_t position{};
+    };
+
+    /** @brief Moves an existing stable layer to its final ordinal in the complete unfiltered document. */
+    struct ReorderWorldLayer final {
+        WorldStreaming::StreamingLayerId layer;
+        std::size_t position{};
+    };
+
+    /** @brief Changes the outliner filter without changing authored layers or current authoring context. */
+    struct FilterWorldLayers final {
+        WorldLayerOutlinerFilter filter;
+    };
+
+    /** @brief Selects an existing layer, or explicitly clears authoring context; filtering never retargets it. */
+    struct SetCurrentWorldLayer final {
+        std::optional<WorldStreaming::StreamingLayerId> layer;
+    };
+
+    /** @brief Canonical typed outliner intent, executed by the document/history owner. */
+    using WorldLayerCommand = std::variant<CreateWorldLayer, ReorderWorldLayer, FilterWorldLayers, SetCurrentWorldLayer>;
+
     /** @brief Immutable read lease; retained leases survive replacement, close and workspace destruction. */
     struct PartitionedWorldSnapshot final {
         WorldDocumentFence fence;
         PartitionedWorldDocument document;
         std::vector<Assets::AssetId> openPages; /**< Transient authoring working set, never runtime residency. */
+        WorldLayerOutlinerFilter layerFilter;
+        std::optional<WorldStreaming::StreamingLayerId> currentLayer;
+        std::size_t layerUndoCount{};
+        std::size_t layerRedoCount{};
         std::vector<WorldLoadedPage> loadedPages;
         std::vector<WorldStreaming::WorldAuthoringObjectAddress> selectedObjects; /**< Transient selection; never runtime entities. */
         std::optional<WorldStreaming::WorldAuthoringObjectAddress> primary;       /**< Optional selected primary address. */
@@ -141,6 +228,23 @@ namespace Horo::Editor {
 
     /** @brief Shared immutable snapshot safe for synchronized handoff to readers. */
     using PartitionedWorldSnapshotLease = std::shared_ptr<const PartitionedWorldSnapshot>;
+
+    /** @brief One coherent world-view capture. The camera/renderer use meters relative to this exact global origin.
+     * Host increments viewRevision whenever the origin or active view changes, independently of source document revisions. */
+    struct WorldViewportBinding final {
+        PartitionedWorldSnapshotLease snapshot;
+        Math::WorldCoordinate64 globalOrigin;
+        std::uint64_t viewRevision{};
+    };
+
+    /** @brief Converts an exact global point into a bounded, millimeter-resolvable viewport position.
+     * @param point Canonical source point, borrowed for this call. @param origin Exact view origin, borrowed for this call.
+     * @return Local meters, or Unsupported outside the +/-8000 meter local precision window. */
+    [[nodiscard]] Result<Math::Vec3> WorldSourceViewportPoint(const Math::WorldCoordinate64 &point, const Math::WorldCoordinate64 &origin);
+    /** @brief Adds a bounded local meter position to an exact global origin without converting absolute coordinates to float.
+     * @param origin Exact view origin, borrowed for this call. @param local Local meters, quantized to the nearest millimeter.
+     * @return Canonical global point or typed invalid/arithmetic rejection. */
+    [[nodiscard]] Result<Math::WorldCoordinate64> WorldSourceViewportGlobal(const Math::WorldCoordinate64 &origin, Math::Vec3 local);
 
     /** @brief Finite query budgets; automatic plus effective cell lists share the aggregate ceiling. */
     struct WorldObjectInspectionLimits final {
@@ -172,6 +276,53 @@ namespace Horo::Editor {
 
     /** @brief Shared immutable Inspector result; no source, runtime or widget mutation capability. */
     using WorldObjectInspectionLease = std::shared_ptr<const WorldObjectSelectionInspection>;
+
+    /** @brief Authoring working-set filter; never represents runtime residency. */
+    enum class WorldBrowserStatus : std::uint8_t {
+        All,
+        Open,
+        Closed,
+        Mixed
+    };
+
+    /** @brief Bounded presentation query over one exact canonical document publication. */
+    struct WorldBrowserQuery final {
+        std::string search; /**< UTF-8 substring, ASCII case insensitive; at most 256 bytes. */
+        std::optional<WorldStreaming::StreamingLayerId> layer;
+        WorldBrowserStatus status{WorldBrowserStatus::All};
+        std::uint32_t maximumCells{8192}; /**< Finite output ceiling, at most 65536; overflow rejects the whole query. */
+        [[nodiscard]] auto operator<=>(const WorldBrowserQuery &) const noexcept = default;
+    };
+
+    /** @brief One stable cell's source coverage, independent from cooked packages and runtime state. */
+    struct WorldBrowserCell final {
+        WorldStreaming::StreamingCellId id;
+        std::uint32_t objects{};
+        std::uint32_t openObjects{};
+    };
+
+    /** @brief Layer metadata and unfiltered authoring status, including always-present objects. */
+    struct WorldBrowserLayer final {
+        WorldStreaming::WorldLayerDescriptor descriptor;
+        std::uint32_t objects{};
+        std::uint32_t openObjects{};
+        std::uint32_t alwaysPresentObjects{};
+    };
+
+    /** @brief Detached complete query output; source lease fences every row and survives owner teardown. */
+    struct WorldBrowserSnapshot final {
+        PartitionedWorldSnapshotLease source;
+        std::vector<WorldBrowserLayer> layers;
+        std::vector<WorldBrowserCell> cells;
+    };
+
+    /** @brief Decodes bounded version-one .horoworld JSON metadata; no file I/O, activation or publication.
+     * @param source At most 8 MiB UTF-8 source. @param cancellation Cooperative cancellation.
+     * @return Complete admitted metadata or typed invalid, unsupported, capacity or cancelled rejection.
+     * @details Duplicate JSON keys are invalid. The canonical workspace validates all identities, memberships and bounds.
+     */
+    [[nodiscard]] Result<PartitionedWorldDocument> DecodePartitionedWorldDocument(std::string_view source,
+                                                                                  std::stop_token cancellation = {});
 
     /** @brief Explicit dirty-state disposition; Cancel is never equivalent to discard. */
     enum class WorldDocumentDisposition : std::uint8_t {
@@ -206,6 +357,13 @@ namespace Horo::Editor {
                                                                  std::stop_token cancellation = {});
         /** @brief Captures current immutable state. @return Lease or typed unavailable/wrong-thread failure. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Snapshot() const;
+        /** @brief Queries bounded searchable cell coverage and layer status without editing source or selection.
+         * @param query Filter and output ceiling. @param expected Exact owner/generation/revision.
+         * @param cancellation Cooperative cancellation. @return Complete detached projection or typed rejection; no hidden cache/state.
+         * @details Owner thread only. Cancelling owners remain readable. Spatial coverage uses the ordinary authoring assignment kernel.
+         */
+        [[nodiscard]] Result<WorldBrowserSnapshot> Browse(const WorldBrowserQuery &query, WorldDocumentFence expected,
+                                                          std::stop_token cancellation = {}) const;
         /** @brief Commits a complete typed source-metadata transaction without replacing its incarnation.
          * Unchanged pages retain their exact immutable head and objects; changed pages require the next non-wrapping revision.
          * Loaded pages must remain unchanged; use CommitLoadedPage for their metadata/content successor.
@@ -215,6 +373,40 @@ namespace Horo::Editor {
          * rejection. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Commit(const PartitionedWorldDocument &document,
                                                                    const WorldDocumentFence &expected, std::stop_token cancellation = {});
+        /** @brief Applies one source command and records one bounded undo step. Revisions are owner-issued.
+         * @param edit Exact fence, identity and complete desired value, or removal.
+         * @param cancellation Cancellation before publication preserves source and history.
+         * @return Committed snapshot or typed rejection; no-op commands consume no history or revision. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> EditSource(const WorldSourceEdit &edit, std::stop_token cancellation = {});
+        /** @brief Replays one source-history step with fresh monotonic revisions; other metadata remains unchanged.
+         * @param expected Exact current document fence, borrowed for this call. @param redo Selects redo instead of undo.
+         * @param cancellation Cancellation fence. @return Snapshot or typed unavailable/stale/cancelled rejection. */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ReplaySources(const WorldDocumentFence &expected, bool redo,
+                                                                          std::stop_token cancellation = {});
+        /** @brief Applies one undoable layer command atomically on the owning thread.
+         * Source creates/reorders mark dirty; filter/context commands remain transient. No-ops retain revision/history.
+         * @param command Typed semantic intent. @param expected Exact current document fence.
+         * @param cancellation Cancellation checked before publication. @return New snapshot or typed atomic rejection.
+         */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ExecuteLayerCommand(const WorldLayerCommand &command,
+                                                                                const WorldDocumentFence &expected,
+                                                                                std::stop_token cancellation = {});
+        /** @brief Creates a named layer with an owner-selected unused stable identity, appended in authored order.
+         * @param name Complete UTF-8 layer name. @param expected Exact current fence.
+         * @param cancellation Cancellation checked before publication. @return One undoable source command result or typed failure.
+         */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> CreateLayer(std::string name, const WorldDocumentFence &expected,
+                                                                        std::stop_token cancellation = {});
+        /** @brief Replays the next exact semantic layer transaction without changing pages or working-set state.
+         * @param redo False for undo, true for redo. @param expected Exact current fence.
+         * @param cancellation Cancellation checked before publication. @return New snapshot or typed rejection; empty history is Conflict.
+         */
+        [[nodiscard]] Result<PartitionedWorldSnapshotLease> ReplayLayerCommand(bool redo, const WorldDocumentFence &expected,
+                                                                               std::stop_token cancellation = {});
+        /** @brief Projects visible stable IDs in authored order from the canonical filter.
+         * @return Complete owned rows or typed lifecycle/thread rejection; current layer may be filtered out.
+         */
+        [[nodiscard]] Result<std::vector<WorldStreaming::StreamingLayerId>> VisibleLayers() const;
         /** @brief Atomically changes metadata admission without touching payloads, source pages or dirty state.
          * Loaded pages cannot be removed here; use UnloadPage after resolving dirty/selection/pin dependencies.
          * @param pages Distinct admitted page assets; order is preserved. @param expected Exact current owner fence.
@@ -298,6 +490,43 @@ namespace Horo::Editor {
         /** @brief Publishes one fully prepared successor after a final cancellation check. */
         [[nodiscard]] Result<PartitionedWorldSnapshotLease> Publish(std::shared_ptr<PartitionedWorldSnapshot> candidate,
                                                                     std::stop_token cancellation);
+
+        /** @brief History contains authored source values only; generic metadata commits invalidate it. */
+        struct SourceHistoryStep {
+            std::vector<PartitionedWorldSource> before;
+            std::vector<PartitionedWorldSource> after;
+        };
+
+        /** @brief Invalidates source history after external metadata publication or lifecycle change. */
+        void ClearSourceHistory() noexcept;
+        std::vector<SourceHistoryStep> sourceHistory_;
+        std::size_t sourceHistoryCursor_{};
+        std::uint64_t sourceRevision_{};
+
+        /** @brief Exact reversible layer-section values; no pages, runtime data or presentation widgets are retained. */
+        struct LayerState final {
+            std::vector<WorldStreaming::WorldLayerDescriptor> layers;
+            WorldLayerOutlinerFilter filter;
+            std::optional<WorldStreaming::StreamingLayerId> current;
+        };
+
+        /** @brief One semantic transaction charged against finite entry and byte budgets. */
+        struct LayerTransaction final {
+            LayerState before;
+            LayerState after;
+            std::size_t bytes{};
+            bool beforeDirty{};
+            bool afterDirty{};
+        };
+
+        /** @brief Shares complete document validation with ordinary metadata transactions. */
+        [[nodiscard]] Result<void> ValidateLayerCandidate(const PartitionedWorldDocument &document) const;
+        /** @brief Validates and applies a typed intent to detached candidate storage. */
+        [[nodiscard]] Result<void> ApplyLayerCommand(const WorldLayerCommand &command, PartitionedWorldSnapshot &candidate) const;
+        /** @brief Resets layer history after complete external metadata commits or lifecycle replacement. */
+        void ClearLayerHistory() noexcept;
+        std::vector<LayerTransaction> layerHistory_;
+        std::size_t layerCursor_{};
         /** @brief Prepares a real SceneDocument payload and checks exact metadata/content membership and finite admission charges. */
         [[nodiscard]] Result<WorldLoadedPage> PreparePage(const PartitionedWorldPage &page, std::string_view source, bool dirty,
                                                           std::stop_token cancellation) const;

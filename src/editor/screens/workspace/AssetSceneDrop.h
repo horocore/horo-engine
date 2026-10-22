@@ -17,12 +17,21 @@
 namespace Horo::Editor {
     inline constexpr char AssetSceneDragPayloadType[] = "HORO_ASSET_REFERENCE";
 
+    /** @brief Exact workspace opening and scene state at drag start; never reconstructed from the drop target. */
+    struct AssetSceneDropFence final {
+        Assets::AssetId session;
+        DocumentRevision revision;
+        std::uint64_t replacementEpoch{};
+        [[nodiscard]] bool operator==(const AssetSceneDropFence &) const noexcept = default;
+    };
+
     /** @brief Bounded stable reference copied into the process-local ImGui drag payload. */
     struct AssetSceneDragPayload {
         std::array<char, 37> assetId{};
         std::array<char, 64> assetType{};
         std::array<char, 1024> absolutePath{};
         bool registered{};
+        AssetSceneDropFence fence;
     };
 
     /** @brief Destination semantics shared by viewport and hierarchy adapters. */
@@ -59,6 +68,7 @@ namespace Horo::Editor {
         float aspect{1.0F};
         Math::ClipDepthRange depthRange{Math::ClipDepthRange::NegativeOneToOne};
         DocumentRevision documentRevision{};
+        AssetSceneDropFence fence;
     };
 
     enum class AssetSceneDropRejection : std::uint8_t {
@@ -116,6 +126,27 @@ namespace Horo::Editor {
     /** @brief Replaces the transient, non-pickable asset placement preview in one viewport snapshot. */
     [[nodiscard]] Result<void> ApplyAssetViewportPlacementPreview(EditorViewportSceneSnapshot &scene, const EditorAssetMeshView &mesh,
                                                                   const AssetViewportPlacement &placement);
+
+    /** @brief Detached ordinary-path prefab geometry; leases own every borrowed preview resource. */
+    struct PrefabDropGeometry final {
+        std::vector<Runtime::PrimitiveMeshLease> leases;
+        std::vector<EditorViewportInstance> instances;
+        Math::Aabb bounds{{-0.5F, -0.5F, -0.5F}, {0.5F, 0.5F, 0.5F}};
+    };
+
+    /** @brief Extracts prefab geometry without activation or document mutation.
+     * @param definition Canonical detached Scene conversion with identity placement. @param meshes Bounded owner cache.
+     * @return Complete geometry with exact composed bounds, or typed failure; non-renderable prefabs use the unit placement marker.
+     */
+    [[nodiscard]] Result<PrefabDropGeometry> PreparePrefabDropGeometry(const Runtime::RuntimeSceneDefinition &definition,
+                                                                       Runtime::PrimitiveMeshCache &meshes);
+
+    /** @brief Appends non-pickable prefab ghosts through the same placement transform used by the final command.
+     * @param scene Owner snapshot. @param geometry Complete pinned geometry. @param placement World-space placement.
+     * @return Success or invalid geometry failure. This never activates a RuntimeScene.
+     */
+    [[nodiscard]] Result<void> ApplyPrefabDropPreview(EditorViewportSceneSnapshot &scene, const PrefabDropGeometry &geometry,
+                                                      const Math::Transform &placement);
 
     /** @brief Removes the transient asset placement preview and its orphaned resource view. */
     [[nodiscard]] bool ClearAssetViewportPlacementPreview(EditorViewportSceneSnapshot &scene) noexcept;

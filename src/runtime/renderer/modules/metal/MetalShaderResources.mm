@@ -377,9 +377,9 @@ namespace Horo::Render::Detail {
             return Result<RenderMemoryCostPlan>::Failure(
                 MakeError(MetalBackendErrors::UnsupportedResourceOperation,
                           "Generated Metal helper bindings require a separately implemented native material ABI."));
-        if (descriptor.target.backend != ShaderTargetBackend::Metal || descriptor.state.sampleCount != 1 ||
-            !descriptor.manifest.inlineConstants.empty() || !descriptor.manifest.specializationInputs.empty() ||
-            impl_->graphicsPipelines.size() >= Impl::MaxResidentInstances)
+        if (descriptor.target.backend != ShaderTargetBackend::Metal || descriptor.state.viewRouting != RenderViewRouting::SingleView ||
+            descriptor.state.sampleCount != 1 || !descriptor.manifest.inlineConstants.empty() ||
+            !descriptor.manifest.specializationInputs.empty() || impl_->graphicsPipelines.size() >= Impl::MaxResidentInstances)
             return Result<RenderMemoryCostPlan>::Failure(MakeError(MetalBackendErrors::UnsupportedResourceOperation));
         return Result<RenderMemoryCostPlan>::Success(Estimate(31, v->cookedBytes + f->cookedBytes, 131072));
     }

@@ -14,7 +14,8 @@ namespace Horo::Application::Internal {
     // Network and presentation factories remain explicit application decisions.
     [[nodiscard]] Network::NetworkModeFactories ComposeHeadlessNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> sceneDefinition, Network::NetworkModeFactories selectedFactories = {},
-        const std::optional<GameplayWorldSelection> &gameplay = std::nullopt);
+        const std::optional<GameplayWorldSelection> &gameplay = std::nullopt,
+        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission = std::nullopt);
 
     /** @brief Explicit application input for real project Scene activation; no policy is inferred from source data.
      * @details The registry and load service (including its running JobSystem/provider) outlive every
@@ -42,7 +43,8 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] Result<Network::NetworkModeFactories> ComposeHeadlessSceneNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition, HeadlessSceneActivationInput input,
-        Network::NetworkModeFactories selectedFactories = {}, const std::optional<GameplayWorldSelection> &gameplay = std::nullopt);
+        Network::NetworkModeFactories selectedFactories = {}, const std::optional<GameplayWorldSelection> &gameplay = std::nullopt,
+        const std::optional<Gameplay::GameplayReplicationAdmissionPolicy> &replicationAdmission = std::nullopt);
 
     /** @brief Inspect the already-bound execution context of an explicitly selected headless world service.
      * @param service Borrowed application-owned service, not a process-global discovery source.

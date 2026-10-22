@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -77,9 +78,11 @@ namespace Horo::Render::BackendTestSupport {
         const Result<void> overlapping = second->Initialize(RenderBackendConfig{});
         Check(overlapping.HasError());
         Check(overlapping.ErrorValue().code.Value() == overlapErrorCode);
-        first->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*first);
+        first.reset();
         Check(second->Initialize(RenderBackendConfig{}).HasValue());
-        second->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*second);
+        second.reset();
         verifyDestruction();
     }
 }  // namespace Horo::Render::BackendTestSupport

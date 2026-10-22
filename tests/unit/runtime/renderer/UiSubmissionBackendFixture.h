@@ -55,6 +55,8 @@ namespace Horo::Render::Test {
         }
 
         Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
+            if (!request.submissions.empty())
+                return IRenderBackend::ExecuteGraph(request);
             ++state_->executions;
             state_->active = request.lease;
             if (state_->throwExecute)
@@ -90,9 +92,14 @@ namespace Horo::Render::Test {
             return Result<void>::Success();
         }
 
-        void Shutdown() noexcept override {
+        Result<void> BeginShutdown() override {
             AbortActiveFrame();
+            return Result<void>::Success();
+        }
+
+        Result<RenderBackendDrainProgress> PollDrain() override {
             state_->Complete();
+            return Result<RenderBackendDrainProgress>::Success(RenderBackendDrainProgress::Drained);
         }
 
         Result<RenderMemoryCostPlan> QueryBufferMemoryCost(const RenderBufferDescriptor &) const override {
@@ -104,25 +111,28 @@ namespace Horo::Render::Test {
                 TestSupport::DedicatedMemoryCost(RenderTextureBaseLevelByteSize(descriptor).value(), 2));
         }
 
-        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>,
-                                           const RenderMemoryPlacement &) override {
+        Result<std::uint64_t> CreateBuffer(const RenderBufferDescriptor &, std::span<const std::byte>, const RenderMemoryPlacement &,
+                                           RenderResourceNativeLifetime lifetime = {}) override {
             return Unsupported<std::uint64_t>();
         }
 
-        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t) override {
+        Result<std::uint64_t> CreateMesh(const RenderMeshDescriptor &, std::uint64_t, std::uint64_t,
+                                         RenderResourceNativeLifetime lifetime = {}) override {
             return Unsupported<std::uint64_t>();
         }
 
-        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>,
-                                            const RenderMemoryPlacement &) override {
+        Result<std::uint64_t> CreateTexture(const RenderTextureDescriptor &, std::span<const std::byte>, const RenderMemoryPlacement &,
+                                            RenderResourceNativeLifetime lifetime = {}) override {
             return Result<std::uint64_t>::Success(state_->nextInstance++);
         }
 
-        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t) override {
+        Result<std::uint64_t> CreateTextureView(const RenderTextureViewDescriptor &, std::uint64_t,
+                                                RenderResourceNativeLifetime lifetime = {}) override {
             return Unsupported<std::uint64_t>();
         }
 
-        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t) override {
+        Result<std::uint64_t> CreateRenderTarget(const RenderTargetDescriptor &, std::uint64_t, std::uint64_t,
+                                                 RenderResourceNativeLifetime lifetime = {}) override {
             return Unsupported<std::uint64_t>();
         }
 

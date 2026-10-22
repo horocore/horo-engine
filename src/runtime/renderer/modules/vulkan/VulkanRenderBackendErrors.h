@@ -32,4 +32,11 @@ namespace Horo::Render::VulkanBackendErrors {
     extern const ErrorCodeDescriptor ResourceCreationFailed;
     extern const ErrorCodeDescriptor ResourceIdentityInvalid;
     extern const ErrorCodeDescriptor MemoryTypeUnavailable;
+    extern const ErrorCodeDescriptor WrongThread;
+    extern const ErrorCodeDescriptor InvalidCommandState;
+    extern const ErrorCodeDescriptor SubmissionBusy;
+    extern const ErrorCodeDescriptor TimelineInvalid;
+    extern const ErrorCodeDescriptor TimelineExhausted;
+    extern const ErrorCodeDescriptor CompletionTimeout;
+    extern const ErrorCodeDescriptor DeviceLost;
 }  // namespace Horo::Render::VulkanBackendErrors

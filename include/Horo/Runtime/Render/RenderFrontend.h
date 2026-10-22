@@ -22,6 +22,7 @@
 namespace Horo::Render {
     class RenderFrontend;
     struct RenderMaterialPass;
+    struct RenderGraphQueueSubmission;
     class CompiledRenderGraphExecution;
     class RenderGraphLifetimePlan;
     struct RenderGraphPassWorkload;
@@ -46,6 +47,7 @@ namespace Horo::Render {
         class RenderResourceRegistry;
         class RenderResourceUploadQueue;
         class RenderFrontendResourceAccess;
+        class RenderExternalTextureAccess;
         class RenderGraphResourceLeasePool;
         class RenderGraphTransientResourcePool;
         class RenderParallelWorkState;
@@ -184,6 +186,21 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> ExecuteGraph(const CompiledRenderGraphExecution &graph,
                                                 std::span<const RenderGraphPassWorkload> workloads);
         /**
+         * @brief Executes a graph with one explicit frontend-owned submission authority.
+         * @param graph Exact compiled graph borrowed through synchronous admission.
+         * @param workloads One typed workload for each compiled pass.
+         * @param submissions Exhaustive ordered pass partitions with exact queue waits/signals.
+         * @param transientResources Optional exact prepared transient set owned by this frontend.
+         * @return Success or typed stage, identity, submission, unsupported or native failure.
+         * @details The caller's frontend scheduler owns submission values and wait storage.
+         * They are not synthesized by the backend. Existing ExecuteGraph remains the
+         * transitional single-queue surface; neither path retries through the other.
+         */
+        [[nodiscard]] Result<void> ExecuteSubmittedGraph(const CompiledRenderGraphExecution &graph,
+                                                         std::span<const RenderGraphPassWorkload> workloads,
+                                                         std::span<const RenderGraphQueueSubmission> submissions,
+                                                         RenderGraphTransientResourcesHandle transientResources = {});
+        /**
          * @brief Freezes borrowed inputs and schedules bounded preparation and CPU command recording.
          * @param jobs Const facade of the host worker pool; its owned scheduler continues servicing accepted jobs until host shutdown.
          * @param orderedPasses Immutable source views borrowed only during this call; all arrays are copied.
@@ -280,7 +297,8 @@ namespace Horo::Render {
         /** @brief Common graph admission preserving one authoritative native completion lease. */
         [[nodiscard]] Result<void> ExecuteGraphInternal(const CompiledRenderGraphExecution &graph,
                                                         std::span<const RenderGraphPassWorkload> workloads, UiRenderSubmission *ui,
-                                                        RenderGraphTransientResourcesHandle transientResources = {});
+                                                        RenderGraphTransientResourcesHandle transientResources = {},
+                                                        std::span<const RenderGraphQueueSubmission> submissions = {});
         /** @brief Transfers one acquired material lease to backend completion; failures retain frontend rollback authority. */
         [[nodiscard]] Result<void> ExecuteMaterialRequest(RenderMaterialExecutionRequest request);
         struct MaterialExecutionOutcome;
@@ -319,7 +337,10 @@ namespace Horo::Render {
      * @brief Owns the initialized renderer backend for one host lifetime.
      *
      * Construction performs explicit registry selection and backend initialization.
-     * Destruction deterministically shuts the backend down before releasing it.
+     * BeginShutdown closes admission; PollDrain proves terminal retirement before
+     * native parents and registries can be released. Hosts retain the complete
+     * composition while Pending, including after their finite deadline expires.
+     * Destruction of an unresolved closing owner is a fail-closed invariant violation.
      * All methods and destruction must run serially on one host-declared render-capable
      * thread. The frontend and its frame scope are not thread-safe.
      */
@@ -350,6 +371,17 @@ namespace Horo::Render {
 
         /** @brief Shuts down and releases the owned backend. */
         ~RenderFrontend();
+        /** @brief Observes exact issued GPU completion on the render owner, including retained closing state.
+         * @param wait Existing Horo finite-purpose policy; normal frames permit zero-time Poll only.
+         * @return Native completion, pending(false), or the selected backend's typed failure. */
+        [[nodiscard]] Result<bool> ObserveSubmission(const RenderCpuWait &wait);
+
+        /** @brief Closes owner-thread frame/resource admission and cancels unsent work without waiting.
+         * @return Success or original typed shutdown failure; no failure proves completion. */
+        [[nodiscard]] Result<void> BeginShutdown();
+        /** @brief Polls native drain and releases frontend registries only after terminal proof.
+         * @return Pending, Drained or original failure; the host retains this owner until Drained. */
+        [[nodiscard]] Result<RenderBackendDrainProgress> PollDrain();
 
         RenderFrontend(const RenderFrontend &) = delete;
         RenderFrontend &operator=(const RenderFrontend &) = delete;
@@ -450,6 +482,20 @@ namespace Horo::Render {
          * backend exception. Destroying the frontend first safely invalidates the scope.
          */
         [[nodiscard]] Result<RenderFrameScope> BeginFrame(const FrameDescriptor &descriptor);
+
+        /** @brief Polls exact output readiness on the owner outside an active frame.
+         * @param extent Current coalesced framebuffer size. @return Ready, pending value, or original typed failure.
+         * @details Closing frontends reject admission. The call never starts a frame or waits for native completion.
+         */
+        [[nodiscard]] Result<bool> PollPresentationAvailability(FramebufferExtent extent);
+        /** @brief Realizes the host's exact output request outside an active frame.
+         * @param request Required graph-final output encoding. @return Read-back output or original typed failure/pending.
+         */
+        [[nodiscard]] Result<RenderPresentationOutput> ConfigurePresentationOutput(const RenderPresentationOutputRequest &request);
+        /** @brief Queries admitted output and current host evidence on the owner.
+         * @return Exact snapshot or original unavailable/unsupported/lifecycle failure.
+         */
+        [[nodiscard]] Result<RenderPresentationOutput> PresentationOutput() const;
 
         /**
          * @brief Executes and presents one ordered frame, aborting backend frame state on failure.
@@ -659,6 +705,7 @@ namespace Horo::Render {
     private:
         friend class RenderFrameScope;
         friend class Detail::RenderFrontendResourceAccess;
+        friend class Detail::RenderExternalTextureAccess;
 
         class ConstructionKey {
             ConstructionKey() = default;
@@ -717,7 +764,12 @@ namespace Horo::Render {
         };
 
         std::unique_ptr<IRenderBackend> backend_;
+        /** @brief Checks owner affinity before closing state; no mutable native work is admitted after close. */
+        [[nodiscard]] Result<void> RequireOpenOwner() const;
+
         const std::thread::id preparationOwner_{std::this_thread::get_id()};
+        bool closing_{false};
+        bool drained_{false};
         std::unique_ptr<RenderMemoryBudget> memoryBudget_;
         std::shared_ptr<Detail::VfxSchedulingStorage> vfxScheduling_;
         std::thread::id vfxSchedulingOwner_{std::this_thread::get_id()};

@@ -936,6 +936,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRSpacePose.h
     Horo/XR/XRTrackingSnapshot.h
     Horo/XR/XRViewRenderPlan.h
+    Horo/XR/XRMultiviewScene.h
 )
 horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
     Horo/XR/XRProjectSettings.h
@@ -1102,6 +1103,10 @@ horo_configure_target_header_boundary(HoroPrefabCookHost PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroRenderApi PUBLIC_HEADERS
+    Horo/Runtime/Render/MultiviewSceneExtraction.h
+    Horo/Runtime/Render/MultiviewGraphWorkload.h
+    Horo/Runtime/Render/MultiviewShaderParameters.h
+    Horo/Runtime/Render/MultiviewExtractionErrors.h
 Horo/Runtime/Render/RenderWorldSnapshot.h
 Horo/Runtime/Render/VfxGraphWorkload.h
 Horo/Runtime/Render/VfxGraphScheduling.h
@@ -1115,6 +1120,7 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/PostProcessErrors.h
     Horo/Runtime/Render/MaterialBindingBackend.h
     Horo/Runtime/Render/MaterialBinding.h
+    Horo/Runtime/Render/MaterialBindingIdentity.h
     Horo/Runtime/Render/MaterialBindingErrors.h
     Horo/Runtime/Render/MotionHistory.h
     Horo/Runtime/Render/MotionHistoryErrors.h
@@ -1130,6 +1136,7 @@ Horo/Runtime/Render/VfxGraphScheduling.h
     Horo/Runtime/Render/RenderCapabilities.h
     Horo/Runtime/Render/RenderDisplay.h
     Horo/Runtime/Render/RenderDisplayErrors.h
+    Horo/Runtime/Render/RenderPresentationOutput.h
     Horo/Runtime/Render/FramePacing.h
     Horo/Runtime/Render/FramePacingErrors.h
     Horo/Runtime/Render/PresentMode.h
@@ -1211,6 +1218,8 @@ horo_configure_target_header_boundary(HoroRenderVulkan)
 horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
+    Horo/Editor/WorldStreamingPreview.h
+    Horo/Editor/WorldStreamingPreviewRuntime.h
     Horo/Editor/PartitionedWorldWorkspace.h
     Horo/Editor/NavigationDefinitionDocument.h
     Horo/Editor/NavigationSettingsWorkflow.h
@@ -1230,6 +1239,7 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/WorkspaceReadSources.h
     Horo/Editor/NavigationBakeWorkspace.h
     Horo/Editor/NavigationViewportSnapshot.h
     Horo/Editor/ProjectCollisionSettingsStore.h
@@ -1402,6 +1412,8 @@ horo_configure_target_header_boundary(HoroProjectCollisionSettings PUBLIC_HEADER
 
 horo_configure_target_header_boundary(HoroCliNavigationAdapters PUBLIC_HEADERS Horo/Cli/NavigationCommands.h)
 horo_configure_target_header_boundary(HoroMcpNavigationAdapters PUBLIC_HEADERS Horo/Mcp/NavigationTools.h)
+
+horo_configure_target_header_boundary(HoroWorldBakeApplication PUBLIC_HEADERS Horo/Application/WorldBakeApplication.h)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

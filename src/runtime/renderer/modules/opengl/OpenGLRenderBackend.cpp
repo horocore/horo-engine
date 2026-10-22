@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <array>
+#include <exception>
 #include <functional>
 #include <glad/gl.h>
 #include <limits>
+#include <map>
 #include <memory>
 #include <new>
 #include <optional>
@@ -136,7 +138,18 @@ namespace Horo::Render {
 
             /** @brief Releases a remaining OpenGL context as a lifecycle fallback. */
             ~OpenGLRenderBackend() override {
-                Shutdown();
+                try {
+                    const auto begun = BeginShutdown();
+                    if (const auto drained = PollDrain();
+                        begun.HasError() || drained.HasError() || drained.Value() != RenderBackendDrainProgress::Drained)
+                        std::terminate();
+                    DestroyContext();
+                    ownerThread_ = {};
+
+                } catch (...) {
+                    // Destruction cannot release native owners without proven terminal retirement.
+                    std::terminate();
+                }
             }
 
             OpenGLRenderBackend(const OpenGLRenderBackend &) = delete;
@@ -146,13 +159,19 @@ namespace Horo::Render {
 
             /** @copydoc IRenderBackend::Initialize */
             Result<void> Initialize(const RenderBackendConfig &config) override {
-                if (initialized_) {
+                if (initialized_ || (closing_ && contextCreated_)) {
                     return Result<void>::Failure(
                         MakeError(OpenGLBackendErrors::AlreadyInitialized, "Renderer backend is already initialized."));
                 }
                 if (!functions_.IsValid() || options_.majorVersion == 0 || !config.IsValid()) {
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::InvalidConfig, "OpenGL backend configuration is invalid."));
                 }
+                if (!config.HasSingleEffectiveQueue())
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                                                           "OpenGL does not implement distinct effective graph queues."));
+                if (config.presentationOutput)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+
                 if (contextLease_->claimed) {
                     return Result<void>::Failure(MakeError(OpenGLBackendErrors::PresentationInUse,
                                                            "OpenGL presentation attachment is already owned by another backend."));
@@ -162,6 +181,8 @@ namespace Horo::Render {
                                                            "This OpenGL presentation port cannot realize an explicit adapter selection; no "
                                                            "default device substitution occurs."));
                 contextLease_->claimed = true;
+                closing_ = false;
+                drained_ = false;
                 ownsContextLease_ = true;
                 ownerThread_ = std::this_thread::get_id();
                 if (Result<void> attempt = InitializeAttempt(config, config.enableValidation); attempt.HasError()) {
@@ -179,6 +200,10 @@ namespace Horo::Render {
                         return Result<void>::Failure(WithCause(std::move(retryFailure), std::move(debugFailure)));
                     }
                 }
+                const auto incarnation = AcquireRenderDeviceIncarnation();
+                if (incarnation.HasError())
+                    return Result<void>::Failure(incarnation.ErrorValue());
+                capabilities_.support.deviceIncarnation = incarnation.Value();
                 frameSlotCount_ = config.maxFramesInFlight;
                 initialized_ = true;
                 return Result<void>::Success();
@@ -219,6 +244,8 @@ namespace Horo::Render {
                     return Result<FrameToken>::Failure(current.ErrorValue());
                 }
 
+                if (auto retired = PollNativeLifetimes(); retired.HasError())
+                    return Result<FrameToken>::Failure(std::move(retired).ErrorValue());
                 const Result<std::size_t> slot = execution_.AdmitFrameSlot(frameSlotCount_);
                 if (slot.HasError())
                     return Result<FrameToken>::Failure(slot.ErrorValue());
@@ -302,23 +329,159 @@ namespace Horo::Render {
                 return presentationPort_->MakeCurrent();
             }
 
-            /** @copydoc IRenderBackend::Shutdown */
-            void Shutdown() noexcept override {
-                // Native cleanup is illegal from another thread. Preserve the owner-visible
-                // state so the host can dispatch shutdown back to the context owner.
+            /** @copydoc IRenderBackend::BeginShutdown */
+            Result<void> BeginShutdown() override {
                 if (ownerThread_ != std::thread::id{} && !IsOwnerThread())
-                    return;
-                // Context destruction owns queued native references; no normal-frame or teardown GPU wait is introduced.
+                    return WrongThread<void>();
+                if (drained_)
+                    return Result<void>::Success();
+                closing_ = true;
+                initialized_ = false;
+                if (!contextCreated_)
+                    return Result<void>::Success();
+                if (const auto current = presentationPort_->MakeCurrent(); current.HasError())
+                    return current;
+                AbortActiveFrame();
                 CompleteActiveFrame();
+                if (functions_.sync.IsValid() && closingFence_ == 0) {
+                    closingFence_ = functions_.sync.fence();
+                    if (closingFence_ == 0)
+                        return SynchronizationFailure<void>();
+                    functions_.sync.flush();
+                }
+                return Result<void>::Success();
+            }
+
+            /** @copydoc IRenderBackend::PollDrain */
+            Result<RenderBackendDrainProgress> PollDrain() override {
+                using DrainResult = Result<RenderBackendDrainProgress>;
+                if (ownerThread_ != std::thread::id{} && !IsOwnerThread())
+                    return WrongThread<RenderBackendDrainProgress>();
+                if (drained_)
+                    return DrainResult::Success(RenderBackendDrainProgress::Drained);
+                if (!closing_)
+                    return DrainResult::Failure(MakeError(OpenGLBackendErrors::InvalidExecutionPlan,
+                                                          "BeginShutdown must close the OpenGL owner before drain polling."));
+                if (contextCreated_) {
+                    if (const auto current = presentationPort_->MakeCurrent(); current.HasError())
+                        return DrainResult::Failure(current.ErrorValue());
+                    if (functions_.sync.IsValid()) {
+                        if (closingFence_ == 0)
+                            return DrainResult::Success(RenderBackendDrainProgress::Pending);
+                        const auto status = functions_.sync.poll(closingFence_);
+                        if (status == GL_TIMEOUT_EXPIRED)
+                            return DrainResult::Success(RenderBackendDrainProgress::Pending);
+                        if (status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED)
+                            return SynchronizationFailure<RenderBackendDrainProgress>();
+                        functions_.sync.destroy(std::exchange(closingFence_, 0));
+                    }
+                }
                 execution_.Reset();
                 prepared_.DestroyPrepared(functions_.shaders, functions_.samplers);
                 DestroyRemainingResources();
-                initialized_ = false;
-                DestroyContext();
-                ownerThread_ = {};
+                ReleaseDrainedNativeLifetimes();
+                // Host GUI/viewport teardown still needs this current context after renderer work drains.
+                // Context/port attachment retire only with the final backend owner.
+                drained_ = true;
+                return DrainResult::Success(RenderBackendDrainProgress::Drained);
             }
 
         private:
+            enum class NativeResourceKind : std::uint8_t {
+                Buffer,
+                Texture,
+                Mesh,
+                View,
+                Target
+            };
+            using NativeLifetimeKey = std::pair<NativeResourceKind, std::uint64_t>;
+
+            struct NativeLifetimeRecord {
+                RenderResourceNativeLifetime lifetime;
+                std::uintptr_t fence{};
+                bool retiring{false};
+            };
+
+            static constexpr std::size_t MaximumNativeLifetimes = 65'535;
+            std::map<NativeLifetimeKey, NativeLifetimeRecord> nativeLifetimes_;
+            NativeLifetimeKey nativeLifetimeCursor_{};
+
+            /** @brief Allocates tracking before any upload command can be accepted; lifetime remains charged on native failure. */
+            [[nodiscard]] Result<void> TrackNativeLifetime(const NativeResourceKind kind, const std::uint64_t identity,
+                                                           RenderResourceNativeLifetime lifetime) {
+                if (!lifetime.HasLease())
+                    return Result<void>::Success();
+                if (!functions_.sync.IsValid())
+                    return Result<void>::Failure(
+                        MakeError(OpenGLBackendErrors::UnsupportedResourceOperation,
+                                  "Charged native allocations require real nonblocking retirement-fence dispatch."));
+                if (auto polled = PollNativeLifetimes(); polled.HasError())
+                    return polled;
+                if (nativeLifetimes_.size() >= MaximumNativeLifetimes || nativeLifetimes_.contains({kind, identity}))
+                    return Result<void>::Failure(
+                        MakeError(OpenGLBackendErrors::ResourceCreationFailed,
+                                  "Native lifetime storage or a recycled native identity remains owned by pending retirement."));
+                try {
+                    nativeLifetimes_.try_emplace({kind, identity}, std::move(lifetime));
+                } catch (const std::bad_alloc &) {
+                    return Result<void>::Failure(MakeError(OpenGLBackendErrors::ResourceCreationFailed,
+                                                           "Native lifetime tracking allocation failed before upload."));
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Marks deletion after all native references are dropped; pending/failed fences retain the exact charge. */
+            void RetireNativeLifetime(const NativeResourceKind kind, const std::uint64_t identity) noexcept {
+                const auto found = nativeLifetimes_.find({kind, identity});
+                if (found == nativeLifetimes_.end() || found->second.retiring)
+                    return;
+                found->second.retiring = true;
+                found->second.fence = functions_.sync.fence();
+                functions_.sync.flush();
+            }
+
+            /** @brief Polls a bounded owner-thread retirement batch without CPU waiting or callback mutation. */
+            [[nodiscard]] Result<void> PollNativeLifetimes() {
+                if (nativeLifetimes_.empty())
+                    return Result<void>::Success();
+                auto current = nativeLifetimes_.upper_bound(nativeLifetimeCursor_);
+                if (current == nativeLifetimes_.end())
+                    current = nativeLifetimes_.begin();
+                const auto count = std::min(std::size_t{64}, nativeLifetimes_.size());
+                for (std::size_t examined = 0; examined < count && !nativeLifetimes_.empty(); ++examined) {
+                    nativeLifetimeCursor_ = current->first;
+                    const auto &record = current->second;
+                    bool complete = false;
+                    if (record.retiring) {
+                        if (record.fence == 0)
+                            return SynchronizationFailure<void>();
+                        const auto status = functions_.sync.poll(record.fence);
+                        if (status != GL_TIMEOUT_EXPIRED && status != GL_ALREADY_SIGNALED && status != GL_CONDITION_SATISFIED)
+                            return SynchronizationFailure<void>();
+                        complete = status != GL_TIMEOUT_EXPIRED;
+                    }
+                    if (complete) {
+                        functions_.sync.destroy(record.fence);
+                        current = nativeLifetimes_.erase(current);
+                    } else
+                        ++current;
+                    if (current == nativeLifetimes_.end())
+                        current = nativeLifetimes_.begin();
+                }
+                return Result<void>::Success();
+            }
+
+            /** @pre The final closing fence has proved all previously accepted GPU work terminal. */
+            void ReleaseDrainedNativeLifetimes() noexcept {
+                for (const auto &[key, record] : nativeLifetimes_) {
+                    (void)key;
+                    if (record.fence != 0)
+                        functions_.sync.destroy(record.fence);
+                }
+                nativeLifetimes_.clear();
+                nativeLifetimeCursor_ = {};
+            }
+
             void CompleteActiveFrame() noexcept {
                 frameActive_ = false;
                 activeFrame_ = {};
@@ -432,6 +595,7 @@ namespace Horo::Render {
                     functions_.framebuffers.deleteFramebuffers(1, &tracked->second.graphFramebuffer);
                 textureDescriptors_.erase(tracked);
                 DeleteTrackedObject(functions_.textures.deleteTextures, textures_, texture);
+                RetireNativeLifetime(NativeResourceKind::Texture, texture);
             }
 
             void DestroyRemainingResources() noexcept {
@@ -540,6 +704,9 @@ namespace Horo::Render {
             bool contextCreated_{false};
             bool ownsContextLease_{false};
             bool frameActive_{false};
+            bool closing_{false};
+            bool drained_{false};
+            std::uintptr_t closingFence_{};
         };
 
         /** @brief Provides inert OpenGL backend instances bound to one borrowed presentation port. */

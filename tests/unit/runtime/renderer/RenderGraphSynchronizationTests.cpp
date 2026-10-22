@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/RenderGraphExecution.h"
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
 #include "Horo/Runtime/Render/RenderGraphSynchronizationErrors.h"
 #include "RenderGraphTestUtils.h"
@@ -227,5 +228,118 @@ namespace Horo::Render {
         const std::array initial{ComputeBufferReadState(fixture.resource)};
 
         RequireError(Synthesize(compiled.graph, compiled.schedule, initial), "render.graph.synchronization.state_unsupported");
+    }
+
+    TEST_CASE("Discarded imported contents require an exact undefined state and first write", "[renderer][render-graph][sync]") {
+        auto builder = RequireBuilder();
+        const auto pass = RequirePass(builder, RenderPassKind::Copy, RenderQueueRole::Transfer);
+        const auto resource = RequireResource(builder.ImportBuffer(BufferHandle(), RenderGraphResourceClass::Persistent));
+        bool read = false;
+        SECTION("first write") {}
+        SECTION("first read rejected") {
+            read = true;
+        }
+        RequireUsage(builder, {pass, resource, read ? RenderGraphAccess::Read : RenderGraphAccess::Write,
+                               read ? RenderGraphUsageKind::CopySource : RenderGraphUsageKind::CopyDestination});
+        auto compiled = RequireCompiledGraph(builder);
+        std::array initial{RenderGraphImportedState{resource, {}, RenderGraphInitialContents::Discarded}};
+        const auto synthesized = Synthesize(compiled.graph, compiled.schedule, initial);
+        if (read) {
+            REQUIRE(synthesized.HasError());
+        } else {
+            REQUIRE(synthesized.HasValue());
+            REQUIRE(synthesized.Value().Transitions().size() == 1);
+            CHECK(synthesized.Value().Transitions()[0].oldState == RenderGraphLogicalState{});
+            CHECK(synthesized.Value().ImportedStates()[0].contents == RenderGraphInitialContents::Discarded);
+        }
+        initial[0].state.queue = {1};
+        CHECK(Synthesize(compiled.graph, compiled.schedule, initial).HasError());
+        initial[0].state = {};
+        initial[0].contents = static_cast<RenderGraphInitialContents>(255);
+        CHECK(Synthesize(compiled.graph, compiled.schedule, initial).HasError());
+    }
+
+    TEST_CASE("Discarded imported buffer storage cannot begin with read-write access", "[renderer][render-graph][sync]") {
+        auto builder = RequireBuilder();
+        const auto pass = RequirePass(builder, RenderPassKind::Compute, RenderQueueRole::Compute);
+        const auto resource = RequireResource(builder.ImportBuffer(BufferHandle(), RenderGraphResourceClass::Persistent));
+        RequireUsage(builder, {pass, resource, RenderGraphAccess::ReadWrite, RenderGraphUsageKind::Storage});
+        auto compiled = RequireCompiledGraph(builder);
+        const std::array initial{RenderGraphImportedState{resource, {}, RenderGraphInitialContents::Discarded}};
+        CHECK(Synthesize(compiled.graph, compiled.schedule, initial).HasError());
+    }
+
+    TEST_CASE("External final states survive compilation as post-producer obligations", "[render][graph][synchronization]") {
+        using namespace Test;
+        auto builder = RequireBuilder();
+        const auto pass = RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        const auto resource = RequireResource(builder.ImportTexture(TextureHandle(), RenderGraphResourceClass::External));
+        RequireUsage(builder, {pass, resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+        const auto graph = RequireGraph(builder);
+        const auto schedule = RequireSchedule(graph);
+        const RenderGraphLogicalState state{RenderGraphSynchronizationAccess::Write,
+                                            RenderGraphSynchronizationOperation::ColorAttachment,
+                                            RenderGraphPipelineScope::External,
+                                            RenderGraphTextureLayout::ColorAttachment,
+                                            {1}};
+        const std::array initial{RenderGraphImportedState{resource, state}};
+        const std::array final{RenderGraphFinalState{resource, state}};
+        auto synchronization = SynthesizeRenderGraphSynchronization(graph, schedule, SharedQueue, initial, final);
+        REQUIRE(synchronization.HasValue());
+        REQUIRE(synchronization.Value().ExternalReleases().size() == 1);
+        const auto &release = synchronization.Value().ExternalReleases().front();
+        CHECK(release.releaseAfter == pass);
+        CHECK(release.resource == resource);
+        CHECK(release.newState == state);
+        auto execution = CompileRenderGraphExecution(graph, schedule, synchronization.Value(), SharedQueue);
+        REQUIRE(execution.HasValue());
+        REQUIRE(execution.Value().ExternalReleases().size() == 1);
+        CHECK(execution.Value().ExternalReleases().front().releaseAfter == pass);
+        auto moved = std::move(execution).Value();
+        CHECK(moved.ExternalReleases().size() == 1);
+    }
+
+    TEST_CASE("Malformed duplicate and nonexternal final states cannot produce release obligations", "[render][graph][synchronization]") {
+        using namespace Test;
+        auto builder = RequireBuilder();
+        const auto pass = RequirePass(builder, RenderPassKind::Graphics, RenderQueueRole::Graphics);
+        RenderGraphResourceClass resourceClass = RenderGraphResourceClass::External;
+        SECTION("persistent resource is not an external handoff") {
+            resourceClass = RenderGraphResourceClass::Persistent;
+        }
+        const auto resource = RequireResource(builder.ImportTexture(TextureHandle(), resourceClass));
+        RequireUsage(builder, {pass, resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment});
+        const auto graph = RequireGraph(builder);
+        const auto schedule = RequireSchedule(graph);
+        const RenderGraphLogicalState state{RenderGraphSynchronizationAccess::Write,
+                                            RenderGraphSynchronizationOperation::ColorAttachment,
+                                            RenderGraphPipelineScope::External,
+                                            RenderGraphTextureLayout::ColorAttachment,
+                                            {1}};
+        const std::array initial{RenderGraphImportedState{resource, state}};
+        std::vector final{RenderGraphFinalState{resource, state}};
+        if (resourceClass == RenderGraphResourceClass::External) {
+            SECTION("duplicate") {
+                final.push_back(final.front());
+            }
+            SECTION("foreign resource") {
+                final.front().resource.owner = {};
+            }
+            SECTION("unknown resource") {
+                final.front().resource.value = 99;
+            }
+            SECTION("undefined required state") {
+                final.front().state.access = RenderGraphSynchronizationAccess::None;
+            }
+            SECTION("missing external scope") {
+                final.front().state.scope = RenderGraphPipelineScope::Graphics;
+            }
+            SECTION("invalid queue") {
+                final.front().state.queue = {};
+            }
+        }
+        const auto synchronization = SynthesizeRenderGraphSynchronization(graph, schedule, SharedQueue, initial, final);
+        REQUIRE(synchronization.HasError());
+        RequireError(synchronization, "render.graph.synchronization.external_release_invalid");
     }
 }  // namespace Horo::Render

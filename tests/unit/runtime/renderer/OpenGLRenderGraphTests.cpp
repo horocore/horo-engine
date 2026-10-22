@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "OpenGLRenderTestSupport.h"
 #include "OpenGLResourceGraphTestSupport.h"
 #include "RenderTransientGraphTestSupport.h"
@@ -50,6 +51,22 @@ namespace Horo::Render::OpenGLResourceTests {
         CHECK(graphCommandState.copyCount == 1);
         REQUIRE(frontend->ReleaseTransientGraphResources(prepared.Value()).HasValue());
         CHECK(resourceCommandState.deletedBuffers == 0);
+        const auto failedClose = frontend->BeginShutdown();
+        REQUIRE(failedClose.HasError());
+        CHECK(failedClose.ErrorValue().code.Value() == "render.opengl.synchronization_failed");
+        const auto pending = frontend->PollDrain();
+        REQUIRE(pending.HasValue());
+        CHECK(pending.Value() == RenderBackendDrainProgress::Pending);
+        CHECK(resourceCommandState.deletedBuffers == 0);
+        OpenGLBackendTests::commandState.fenceFails = false;
+        OpenGLBackendTests::commandState.pollStatus = 0x911BU;
+        REQUIRE(frontend->BeginShutdown().HasValue());
+        const auto closing = frontend->PollDrain();
+        REQUIRE(closing.HasValue());
+        CHECK(closing.Value() == RenderBackendDrainProgress::Pending);
+        CHECK(resourceCommandState.deletedBuffers == 0);
+        OpenGLBackendTests::commandState.pollStatus = 0x911AU;
+        Horo::Render::Test::RequireDrainedOwner(*frontend);
         frontend.reset();
         CHECK(resourceCommandState.deletedBuffers == 3);
         CHECK(OpenGLBackendTests::commandState.fenceCount >= 1);

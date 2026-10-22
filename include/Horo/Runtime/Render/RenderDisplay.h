@@ -54,7 +54,10 @@ namespace Horo::Render {
         Rec2020,
     };
 
-    /** @brief Transfer function attached to a reported output mode. */
+    /** @brief Transfer function attached to a reported output mode.
+     * @details High + Linear with sRGB/Display P3 denotes separately qualified platform linear EDR, not HDR10 PQ.
+     * Reported transfer facts never select or prove a scene tone map or output conversion.
+     */
     enum class RenderDisplayTransferFunction : std::uint8_t {
         Srgb,
         Linear,

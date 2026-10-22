@@ -18,10 +18,11 @@ namespace Horo::Editor {
 
         [[nodiscard]] Result<void> CreateSurface() override;
         [[nodiscard]] void *Layer() const noexcept override;
+        [[nodiscard]] Result<Render::RenderOutputDisplayFacts> OutputDisplayFacts() const override;
         void DestroySurface() noexcept override;
 
     private:
         struct Impl;
-        std::unique_ptr<Impl> impl_;
+        std::shared_ptr<Impl> impl_;
     };
 }  // namespace Horo::Editor

@@ -5,6 +5,9 @@ Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
         return WrongThread<void>();
     if (const auto state = ValidateActiveFrame(request.frame); state.HasError())
         return state;
+    if (!request.submissions.empty())
+        return Result<void>::Failure(
+            MakeError(OpenGLBackendErrors::UnsupportedResourceOperation, "OpenGL explicit graph submissions are not implemented."));
     if (!capabilities_.supportsExactTransientResourceReuse)
         return Result<void>::Failure(MakeError(OpenGLBackendErrors::UnsupportedResourceOperation));
     const Detail::OpenGLGraphResources resources{bufferDescriptors_, textureDescriptors_};

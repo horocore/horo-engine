@@ -7,6 +7,7 @@
 
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/PersistenceInstallation.h"
+#include "Horo/Gameplay/ReplicationRegistration.h"
 #include "Horo/Gameplay/SaveGameplayPersistence.h"
 
 #include <filesystem>
@@ -42,6 +43,8 @@ namespace Horo::Gameplay {
 
         std::vector<GameplayCapabilityId> hostCapabilities;
         GameModuleRuntimeServices runtimeServices;
+        std::optional<GameplayReplicationAdmissionPolicy>
+            replicationAdmission; /**< Checked after inert freeze, before service/Start callbacks. */
     };
 
     /** @brief Loaded module whose registry and callable objects are destroyed before its library unloads. */
@@ -224,5 +227,6 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> BindRuntimeServices(LoadedGameModule::Impl &impl) const;
         std::vector<GameplayCapabilityId> hostCapabilities_;
         GameModuleRuntimeServices runtimeServices_;
+        std::optional<GameplayReplicationAdmissionPolicy> replicationAdmission_;
     };
 }  // namespace Horo::Gameplay

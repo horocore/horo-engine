@@ -189,3 +189,35 @@ TEST_CASE("Unknown project payload remains available to the explicit custom comp
     CHECK(components == Runtime::RuntimeComponentSet{});
     CHECK_FALSE(primitive);
 }
+
+TEST_CASE("Prefab Physics decoding accepts local root zero without weakening Scene or body slot admission", "[prefab][codec][physics]") {
+    SceneObjectComponentSet authored;
+    authored.colliders.push_back({.id = {2},
+                                  .collider = {1},
+                                  .body = {{0}, {1}},
+                                  .collisionProfile = Physics::CollisionProfileId::Parse("00000000-0000-0000-0000-000000000001").Value(),
+                                  .materials = {{Physics::PhysicsMaterialSlotId::FromValue(1),
+                                                 Assets::AssetId::Parse("00000000-0000-0000-0000-000000000002").Value()}}});
+    auto encoded = Detail::ComponentsJson(authored).ToJson();
+    std::size_t recognized{};
+    CHECK(Detail::ParseComponents(encoded, recognized).HasError());
+    CHECK(Runtime::ValidateColliderComponent(authored.colliders.front()).HasError());
+    Runtime::RuntimeComponentSet projected;
+    std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
+    REQUIRE(ProjectPrefabBuiltinComponent(Payload(Type(Kind::Collider), encoded.at("colliders").front().dump()), projected, primitive)
+                .HasValue());
+    REQUIRE(projected.colliders.size() == 1);
+    CHECK(projected.colliders.front().body.object.value == 0);
+
+    for (const auto invalid : {std::uint64_t{0}, (std::uint64_t{1} << 32U)}) {
+        auto malformed = encoded.at("colliders").front();
+        if (invalid == 0)
+            malformed["body"]["body"] = 0U;
+        else
+            malformed["body"]["object"] = invalid;
+        Runtime::RuntimeComponentSet retained{.camera = Runtime::CameraComponent{}};
+        const auto before = retained;
+        CHECK(ProjectPrefabBuiltinComponent(Payload(Type(Kind::Collider), malformed.dump()), retained, primitive).HasError());
+        CHECK(retained == before);
+    }
+}

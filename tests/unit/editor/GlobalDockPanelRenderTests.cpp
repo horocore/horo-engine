@@ -9,6 +9,7 @@
 #include "Horo/Foundation/DataBus.h"
 #include "Horo/Foundation/Logging/StructuredLogStore.h"
 #include "Horo/Foundation/OperationStore.h"
+#include "WorldCompositionSourceTestSupport.h"
 #include "editor/input/EditorScrollSmoother.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
@@ -17,6 +18,7 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPane.h"
 #include "editor/screens/workspace/panels/global_dock/panes/operations/GlobalDockOperationsPane.h"
+#include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
 #include <array>
@@ -175,6 +177,12 @@ namespace {
         WorkspacePanelRegistry registry;
         RegisterDefaultWorkspacePanels(registry, factories);
         REQUIRE((factoryCalls == 1));
+        const auto world = std::ranges::find_if(registry.GetAllPanels(), [](const auto &panel) {
+            return panel->GetId() == "horo.world_composition";
+        });
+        REQUIRE(world != registry.GetAllPanels().end());
+        CHECK((*world)->GetDefaultDockArea() == WorkspaceDockArea::Document);
+        CHECK((*world)->GetDisplayName() == "workspace.panel.world_composition");
 
         const auto &panels = registry.GetAllPanels();
         REQUIRE(std::ranges::none_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
@@ -718,5 +726,69 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
     ImGui::Render();
     liveOperations.OnDetach();
 
+    ImGui::DestroyContext();
+}
+
+namespace {
+    void DrawWorldCompositionFrame(Horo::Editor::WorldCompositionTab &tab, const Horo::Editor::EditorWorkspaceViewModel &vm,
+                                   const Horo::Editor::EditorGuiContext &context, const float width) {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowSize({width, 600});
+        ImGui::Begin("WorldCompositionRender", nullptr, ImGuiWindowFlags_NoSavedSettings);
+        Horo::Editor::EditorWorkspaceViewCommandData command;
+        tab.DrawPanel(ImGui::GetWindowPos(), ImGui::GetWindowSize(), vm, command, context);
+        ImGui::End();
+        ImGui::Render();
+        CHECK(command.command == Horo::Editor::EditorWorkspaceViewCommand::None);
+    }
+}  // namespace
+
+TEST_CASE("World Composition renders empty populated filtered error and narrow localized states", "[unit][editor][gui][world_browser]") {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    ImGui::CreateContext();
+    auto &io = ImGui::GetIO();
+    io.DisplaySize = {1280, 720};
+    io.DeltaTime = 1.0F / 60.0F;
+    io.IniFilename = nullptr;
+    io.Fonts->AddFontDefault();
+    static_cast<void>(io.Fonts->Build());
+    EngineDataBus engineEvents;
+    EditorDataBus editorEvents;
+    TestLocalization localization;
+    auto *font = io.Fonts->Fonts.front();
+    const Theme::Fonts fonts{.sans = font, .sansCompact = font, .sansEmphasis = font};
+    const ThemeContext theme{.fonts = fonts};
+    const EditorSettingsSnapshot settings{};
+    const EditorGuiContext context{.engineEvents = engineEvents,
+                                   .editorEvents = editorEvents,
+                                   .localization = localization,
+                                   .theme = theme,
+                                   .settings = settings};
+    const auto owner = Assets::AssetId::Parse("00000000-0000-0000-0000-000000000009").Value();
+    PartitionedWorldWorkspace workspace{owner};
+    const auto document = DecodePartitionedWorldDocument(WorldCompositionTests::WorldSource()).Value();
+    const auto source = workspace.Open(document).Value();
+    WorldCompositionTab tab;
+    EditorWorkspaceViewModel vm;
+    for (const int state : {0, 1, 2, 3, 4}) {
+        if (state == 1) {
+            vm.worldDocument = source;
+            vm.worldBrowser = workspace.Browse({}, source->fence).Value();
+        }
+        if (state == 2) {
+            vm.worldBrowserQuery.search = "no match";
+            vm.worldBrowser = workspace.Browse(vm.worldBrowserQuery, source->fence).Value();
+        }
+        if (state == 3)
+            vm.worldDocumentError = MakeError(WorldDocumentErrors::Capacity);
+        if (state == 4) {
+            vm.worldDocument.reset();
+            vm.worldBrowser.reset();
+        }
+        for (const float width : {260.0F, 900.0F})
+            DrawWorldCompositionFrame(tab, vm, context, width);
+    }
+    tab.OnDetach();
     ImGui::DestroyContext();
 }

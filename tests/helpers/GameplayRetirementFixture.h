@@ -15,6 +15,8 @@ namespace Horo::Tests {
         unsigned created{};
         unsigned registered{};
         unsigned started{};
+        unsigned serviceCreated{};
+        unsigned serviceStarted{};
         unsigned prepared{};
         unsigned stopped{};
         unsigned destroyed{};

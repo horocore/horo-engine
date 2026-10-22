@@ -235,3 +235,45 @@ TEST_CASE("Native publication reads preserve permission failures and restore own
     CHECK(files.ListDirectory(directory.Path(), 4).HasValue());
 }
 #endif
+
+TEST_CASE("Native metadata inspection preserves unreadable file metadata without requiring identity evidence",
+          "[platform][publication-read]") {
+#if defined(_WIN32)
+    SKIP("File mode bits do not model Windows content-read ACL denial.");
+#else
+    Tests::OwnedTestDirectory directory{"publication metadata permissions"};
+    NativeDurableFileSystem files;
+    const auto path = directory.Path() / "metadata";
+    const std::string text{"metadata"};
+    REQUIRE(files.WriteDurable(path, std::as_bytes(std::span{text.data(), text.size()})).HasValue());
+    RestrictedPermissions restricted{path};
+    if (files.ReadFileBounded(path, 32).HasValue())
+        SKIP("This host's effective authority bypasses file mode read denial; metadata fallback cannot be exercised.");
+    const auto inspected = files.InspectEntry(path);
+    REQUIRE(inspected.HasValue());
+    REQUIRE(inspected.Value());
+    CHECK(inspected.Value()->kind == FileEntryKind::RegularFile);
+    CHECK(inspected.Value()->sizeBytes == text.size());
+    CHECK(inspected.Value()->hardLinks == 1);
+    CHECK_FALSE(inspected.Value()->identity);
+#endif
+}
+
+TEST_CASE("Native file identity is stable across reads and changes on same byte replacement", "[platform][publication-read]") {
+    Tests::OwnedTestDirectory directory{"publication identity"};
+    NativeDurableFileSystem files;
+    const auto path = directory.Path() / "original";
+    const auto replacement = directory.Path() / "replacement";
+    const std::string text{"same"};
+    const auto bytes = std::as_bytes(std::span{text.data(), text.size()});
+    REQUIRE(files.WriteDurable(path, bytes).HasValue());
+    const auto first = files.InspectEntry(path);
+    REQUIRE(first.HasValue());
+    REQUIRE(first.Value());
+    REQUIRE(first.Value()->identity);
+    REQUIRE(files.ReadFileBounded(path, 32).HasValue());
+    CHECK(files.InspectEntry(path).Value()->identity == first.Value()->identity);
+    REQUIRE(files.WriteDurable(replacement, bytes).HasValue());
+    REQUIRE(files.AtomicReplace(replacement, path).HasValue());
+    CHECK(files.InspectEntry(path).Value()->identity != first.Value()->identity);
+}

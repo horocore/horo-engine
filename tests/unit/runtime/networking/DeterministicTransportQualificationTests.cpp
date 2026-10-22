@@ -287,29 +287,11 @@ namespace Horo::Network::Qualification {
             std::vector<std::byte> bytes;
             bool operator==(const ChaosPacket &) const = default;
         };
-    }  // namespace
 
-    TEST_CASE("Chaos timeline replays seed topology impairments and expected checkpoints", "[network][qualification][chaos]") {
-        const auto connection = ConnectionHandle::Create(0, 1).Value();
-        const std::array topology{connection};
-        auto loss = Descriptor(DeterministicTransportMode::Simulated).scenario;
-        loss.revision = 2;
-        loss.lossPerTenThousand = 10'000;
-        auto duplicate = loss;
-        duplicate.revision = 3;
-        duplicate.lossPerTenThousand = 0;
-        duplicate.duplicatePerTenThousand = 10'000;
-        duplicate.reorderPerTenThousand = 10'000;
-        duplicate.jitterTicks = 1;
-        const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Stall},
-                                  NetworkChaosAction{3, NetworkChaosActionKind::Resume},
-                                  NetworkChaosAction{4, NetworkChaosActionKind::Impairment, {}, loss},
-                                  NetworkChaosAction{5, NetworkChaosActionKind::Impairment, {}, duplicate},
-                                  NetworkChaosAction{7, NetworkChaosActionKind::Disconnect, connection},
-                                  NetworkChaosAction{8, NetworkChaosActionKind::Restart, connection}};
-        const std::array checkpoints{NetworkChaosCheckpoint{3, 2, 0, 2}, NetworkChaosCheckpoint{4, 4, 0, 3}};
-        const auto replay = [&] {
-            auto created = NetworkChaosScenario::Create(ChaosDescriptor(topology, timeline, checkpoints));
+        /** @brief Replay the fixed send schedule and retain owned event bytes for an exact second-run comparison. */
+        std::vector<ChaosPacket> ReplayScriptedChaosTraffic(const NetworkChaosScenarioDescriptor &descriptor) {
+            const auto connection = descriptor.topology.front();
+            auto created = NetworkChaosScenario::Create(descriptor);
             REQUIRE(created.HasValue());
             auto scenario = std::move(created).Value();
             std::vector<ChaosPacket> trace;
@@ -334,12 +316,53 @@ namespace Horo::Network::Qualification {
                 }
             }
             REQUIRE(scenario.Evidence().checkpoints == 2);
-            REQUIRE(scenario.Evidence().actions == timeline.size());
+            REQUIRE(scenario.Evidence().actions == descriptor.timeline.size());
             REQUIRE(scenario.Advance(ChaosScope(), 11, {}).HasError());
             return trace;
-        };
-        const auto first = replay();
-        REQUIRE(first == replay());
+        }
+
+        /** @brief Reject restart generation wrap before any scenario connection is opened. */
+        void RequireExhaustedRestartRejected(NetworkChaosScenarioDescriptor descriptor) {
+            const std::array exhausted{ConnectionHandle::Create(0, std::numeric_limits<std::uint32_t>::max()).Value()};
+            const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Restart, exhausted[0]}};
+            descriptor.topology = exhausted;
+            descriptor.timeline = timeline;
+            REQUIRE(NetworkChaosScenario::Create(descriptor).HasError());
+        }
+
+        /** @brief Reject a replacement that would invalidate the scenario's prepared fragment storage. */
+        void RequireFragmentStorageChangeRejected(NetworkChaosScenarioDescriptor descriptor) {
+            auto replacement = descriptor.transport.scenario;
+            ++replacement.revision;
+            ++replacement.maximumFragmentBytes;
+            const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Impairment, {}, replacement}};
+            descriptor.timeline = timeline;
+            REQUIRE(NetworkChaosScenario::Create(descriptor).HasError());
+        }
+    }  // namespace
+
+    TEST_CASE("Chaos timeline replays seed topology impairments and expected checkpoints", "[network][qualification][chaos]") {
+        const auto connection = ConnectionHandle::Create(0, 1).Value();
+        const std::array topology{connection};
+        auto loss = Descriptor(DeterministicTransportMode::Simulated).scenario;
+        loss.revision = 2;
+        loss.lossPerTenThousand = 10'000;
+        auto duplicate = loss;
+        duplicate.revision = 3;
+        duplicate.lossPerTenThousand = 0;
+        duplicate.duplicatePerTenThousand = 10'000;
+        duplicate.reorderPerTenThousand = 10'000;
+        duplicate.jitterTicks = 1;
+        const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Stall},
+                                  NetworkChaosAction{3, NetworkChaosActionKind::Resume},
+                                  NetworkChaosAction{4, NetworkChaosActionKind::Impairment, {}, loss},
+                                  NetworkChaosAction{5, NetworkChaosActionKind::Impairment, {}, duplicate},
+                                  NetworkChaosAction{7, NetworkChaosActionKind::Disconnect, connection},
+                                  NetworkChaosAction{8, NetworkChaosActionKind::Restart, connection}};
+        const std::array checkpoints{NetworkChaosCheckpoint{3, 2, 0, 2}, NetworkChaosCheckpoint{4, 4, 0, 3}};
+        const auto descriptor = ChaosDescriptor(topology, timeline, checkpoints);
+        const auto first = ReplayScriptedChaosTraffic(descriptor);
+        REQUIRE(first == ReplayScriptedChaosTraffic(descriptor));
         REQUIRE_FALSE(first.empty());
     }
 
@@ -366,7 +389,9 @@ namespace Horo::Network::Qualification {
         REQUIRE(scenario.Close(ChaosScope(99), connection).HasError());
         REQUIRE(scenario.Evidence() == before);
         REQUIRE(scenario.Advance(ChaosScope(), 3, events).Value() == 0);
-        REQUIRE(scenario.Advance(ChaosScope(), 4, events).Value() == 0);
+        REQUIRE(scenario.Advance(ChaosScope(), 4, events).Value() == 1);
+        REQUIRE(events[0].kind == DeterministicTransportEventKind::Disconnected);
+        REQUIRE(events[0].connection == connection);
         REQUIRE(scenario.Send(ChaosScope(), connection, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasError());
         REQUIRE(scenario.Send(ChaosScope(), connection.NextGeneration().Value(), ChannelId{}, TransportTrafficClass::Reliable, 0, payload)
                     .HasValue());
@@ -376,6 +401,173 @@ namespace Horo::Network::Qualification {
         REQUIRE(scenario.Shutdown() == 0);
         REQUIRE(scenario.Shutdown() == 0);
         REQUIRE(scenario.Advance(ChaosScope(), 6, events).HasError());
+    }
+
+    TEST_CASE("Restart without a preceding disconnect returns the real old terminal before next generation traffic",
+              "[network][qualification][chaos]") {
+        const auto old = ConnectionHandle::Create(0, 1).Value();
+        const auto next = old.NextGeneration().Value();
+        const std::array topology{old};
+        const std::array timeline{NetworkChaosAction{2, NetworkChaosActionKind::Restart, old}};
+        auto descriptor = ChaosDescriptor(topology, timeline);
+        descriptor.maximumEventsPerTick = 1;
+        auto created = NetworkChaosScenario::Create(descriptor);
+        REQUIRE(created.HasValue());
+        auto scenario = std::move(created).Value();
+        std::array<DeterministicTransportEvent, 1> events{};
+        const std::array payload{std::byte{1}};
+        REQUIRE(scenario.Advance(ChaosScope(), 1, events).Value() == 0);
+        REQUIRE(scenario.Send(ChaosScope(), old, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasValue());
+        REQUIRE(scenario.Advance(ChaosScope(), 2, events).Value() == 1);
+        REQUIRE(events[0].kind == DeterministicTransportEventKind::Disconnected);
+        REQUIRE(events[0].connection == old);
+        REQUIRE(scenario.Send(ChaosScope(), old, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasError());
+        REQUIRE(scenario.Send(ChaosScope(), next, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasValue());
+        REQUIRE(scenario.Advance(ChaosScope(), 3, events).Value() == 1);
+        REQUIRE(events[0].kind == DeterministicTransportEventKind::Packet);
+        REQUIRE(events[0].connection == next);
+    }
+
+    TEST_CASE("Restart admission waits through stalls and a saturated single event drain", "[network][qualification][chaos]") {
+        const auto old = ConnectionHandle::Create(0, 1).Value();
+        const auto next = old.NextGeneration().Value();
+        const auto other = ConnectionHandle::Create(1, 1).Value();
+        const std::array topology{old, other};
+        const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Stall},
+                                  NetworkChaosAction{3, NetworkChaosActionKind::Restart, old},
+                                  NetworkChaosAction{4, NetworkChaosActionKind::Resume}};
+        auto descriptor = ChaosDescriptor(topology, timeline);
+        descriptor.maximumEventsPerTick = 1;
+        descriptor.transport.budgetCapacity.maximumConnections = 2;
+        descriptor.transport.budgetPolicy.maximumActiveConnections = 2;
+        auto created = NetworkChaosScenario::Create(descriptor);
+        REQUIRE(created.HasValue());
+        auto scenario = std::move(created).Value();
+        std::array<DeterministicTransportEvent, 1> events{};
+        const std::array payload{std::byte{1}};
+        REQUIRE(scenario.Advance(ChaosScope(), 1, events).Value() == 0);
+        REQUIRE(scenario.Send(ChaosScope(), other, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasValue());
+        REQUIRE(scenario.Advance(ChaosScope(), 2, events).Value() == 0);
+        REQUIRE(scenario.Advance(ChaosScope(), 3, {}).HasError());
+        REQUIRE(scenario.Advance(ChaosScope(), 3, events).Value() == 0);
+        REQUIRE(scenario.Send(ChaosScope(), next, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasError());
+        REQUIRE(scenario.Advance(ChaosScope(), 4, events).Value() == 1);
+        REQUIRE(events[0].connection == other);
+        REQUIRE(scenario.Send(ChaosScope(), next, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasError());
+        REQUIRE(scenario.Advance(ChaosScope(), 5, events).Value() == 1);
+        REQUIRE(events[0].kind == DeterministicTransportEventKind::Disconnected);
+        REQUIRE(events[0].connection == old);
+        REQUIRE(scenario.Send(ChaosScope(), next, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasValue());
+        REQUIRE(scenario.Send(ChaosScope(), old, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasError());
+        REQUIRE(scenario.Advance(ChaosScope(), 6, events).Value() == 1);
+        REQUIRE(events[0].connection == next);
+    }
+
+    TEST_CASE("Insufficient event buffers preserve restart actions and the original active connection", "[network][qualification][chaos]") {
+        const auto old = ConnectionHandle::Create(0, 1).Value();
+        const std::array topology{old};
+        const std::array timeline{NetworkChaosAction{2, NetworkChaosActionKind::Restart, old}};
+        auto descriptor = ChaosDescriptor(topology, timeline);
+        descriptor.maximumEventsPerTick = 2;
+        auto created = NetworkChaosScenario::Create(descriptor);
+        REQUIRE(created.HasValue());
+        auto scenario = std::move(created).Value();
+        std::array<DeterministicTransportEvent, 2> events{};
+        REQUIRE(scenario.Advance(ChaosScope(), 1, events).Value() == 0);
+        SECTION("Zero capacity") {
+            REQUIRE(scenario.Advance(ChaosScope(), 2, {}).HasError());
+        }
+        SECTION("Tiny capacity") {
+            REQUIRE(scenario.Advance(ChaosScope(), 2, std::span{events}.first(1)).HasError());
+        }
+        REQUIRE(scenario.Evidence().tick == 1);
+        REQUIRE(scenario.Evidence().actions == 0);
+        const std::array payload{std::byte{1}};
+        REQUIRE(scenario.Send(ChaosScope(), old, ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasValue());
+        REQUIRE(scenario.Advance(ChaosScope(), 2, events).Value() == 1);
+        REQUIRE(events[0].kind == DeterministicTransportEventKind::Disconnected);
+        REQUIRE(events[0].connection == old);
+    }
+
+    TEST_CASE("Duration shutdown and explicit shutdown cancel a pending restart", "[network][qualification][chaos]") {
+        const auto old = ConnectionHandle::Create(0, 1).Value();
+        const std::array topology{old};
+        const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Stall},
+                                  NetworkChaosAction{2, NetworkChaosActionKind::Restart, old}};
+        auto descriptor = ChaosDescriptor(topology, timeline);
+        descriptor.maximumEventsPerTick = 1;
+        descriptor.durationTicks = 3;
+        auto created = NetworkChaosScenario::Create(descriptor);
+        REQUIRE(created.HasValue());
+        auto scenario = std::move(created).Value();
+        std::array<DeterministicTransportEvent, 1> events{};
+        REQUIRE(scenario.Advance(ChaosScope(), 1, events).Value() == 0);
+        REQUIRE(scenario.Advance(ChaosScope(), 2, events).Value() == 0);
+        SECTION("Explicit shutdown") {
+            REQUIRE(scenario.Shutdown() == 1);
+        }
+        SECTION("Finite duration") {
+            REQUIRE(scenario.Advance(ChaosScope(), 3, events).Value() == 0);
+        }
+        const std::array payload{std::byte{1}};
+        REQUIRE(
+            scenario.Send(ChaosScope(), old.NextGeneration().Value(), ChannelId{}, TransportTrafficClass::Reliable, 0, payload).HasError());
+        REQUIRE(scenario.Advance(ChaosScope(), 4, events).HasError());
+        REQUIRE(scenario.Shutdown() == 0);
+    }
+
+    TEST_CASE("Pending restart ownership survives moves and explicit close cancels deferred admission", "[network][qualification][chaos]") {
+        const auto old = ConnectionHandle::Create(0, 1).Value();
+        const std::array topology{old};
+        const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Stall},
+                                  NetworkChaosAction{2, NetworkChaosActionKind::Restart, old},
+                                  NetworkChaosAction{3, NetworkChaosActionKind::Resume}};
+        auto descriptor = ChaosDescriptor(topology, timeline);
+        descriptor.maximumEventsPerTick = 1;
+        auto created = NetworkChaosScenario::Create(descriptor);
+        REQUIRE(created.HasValue());
+        auto scenario = std::move(created).Value();
+        std::array<DeterministicTransportEvent, 1> events{};
+        REQUIRE(scenario.Advance(ChaosScope(), 1, events).Value() == 0);
+        REQUIRE(scenario.Advance(ChaosScope(), 2, events).Value() == 0);
+        auto moved = std::move(scenario);
+        REQUIRE(scenario.Shutdown() == 0);
+        SECTION("Moved pending owner") {
+            REQUIRE(moved.Advance(ChaosScope(), 3, events).Value() == 1);
+            REQUIRE(events[0].connection == old);
+            const std::array payload{std::byte{1}};
+            REQUIRE(moved.Send(ChaosScope(), old.NextGeneration().Value(), ChannelId{}, TransportTrafficClass::Reliable, 0, payload)
+                        .HasValue());
+        }
+        SECTION("Explicit close wins over queued restart") {
+            REQUIRE(moved.Close(ChaosScope(), old).HasValue());
+            REQUIRE(moved.Advance(ChaosScope(), 3, events).Value() == 1);
+            const std::array payload{std::byte{1}};
+            REQUIRE(moved.Send(ChaosScope(), old.NextGeneration().Value(), ChannelId{}, TransportTrafficClass::Reliable, 0, payload)
+                        .HasError());
+        }
+    }
+
+    TEST_CASE("Overlapping generation actions terminalize an undrained restart deterministically", "[network][qualification][chaos]") {
+        const auto old = ConnectionHandle::Create(0, 1).Value();
+        const std::array topology{old};
+        const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Stall},
+                                  NetworkChaosAction{2, NetworkChaosActionKind::Restart, old},
+                                  NetworkChaosAction{3, NetworkChaosActionKind::Restart, old.NextGeneration().Value()}};
+        auto descriptor = ChaosDescriptor(topology, timeline);
+        descriptor.maximumEventsPerTick = 1;
+        auto created = NetworkChaosScenario::Create(descriptor);
+        REQUIRE(created.HasValue());
+        auto scenario = std::move(created).Value();
+        std::array<DeterministicTransportEvent, 1> events{};
+        REQUIRE(scenario.Advance(ChaosScope(), 1, events).Value() == 0);
+        REQUIRE(scenario.Advance(ChaosScope(), 2, events).Value() == 0);
+        const auto failed = scenario.Advance(ChaosScope(), 3, events);
+        REQUIRE(failed.HasError());
+        REQUIRE(failed.ErrorValue().code.Value() == NetworkChaosErrors::Invalid.code.Value());
+        REQUIRE(scenario.Evidence().actions == 2);
+        REQUIRE(scenario.Advance(ChaosScope(), 4, events).HasError());
+        REQUIRE(scenario.Shutdown() == 0);
     }
 
     TEST_CASE("Chaos validates hostile replay input before preparing state and fails closed in release profiles",
@@ -418,20 +610,11 @@ namespace Horo::Network::Qualification {
             return;
         }
         SECTION("generation exhaustion") {
-            const std::array exhausted{ConnectionHandle::Create(0, std::numeric_limits<std::uint32_t>::max()).Value()};
-            const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Restart, exhausted[0]}};
-            descriptor.topology = exhausted;
-            descriptor.timeline = timeline;
-            REQUIRE(NetworkChaosScenario::Create(descriptor).HasError());
+            RequireExhaustedRestartRejected(descriptor);
             return;
         }
         SECTION("unsafe fragment storage replacement") {
-            auto replacement = descriptor.transport.scenario;
-            ++replacement.revision;
-            ++replacement.maximumFragmentBytes;
-            const std::array timeline{NetworkChaosAction{1, NetworkChaosActionKind::Impairment, {}, replacement}};
-            descriptor.timeline = timeline;
-            REQUIRE(NetworkChaosScenario::Create(descriptor).HasError());
+            RequireFragmentStorageChangeRejected(descriptor);
             return;
         }
         REQUIRE(NetworkChaosScenario::Create(descriptor).HasError());

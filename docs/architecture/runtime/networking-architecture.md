@@ -91,6 +91,19 @@ failure retains the old pair. Shutdown revokes role views first and releases
 participants in reverse construction order. Host-provided factories remain
 responsible for their concrete worker, lease, and native-resource teardown.
 
+Headless network world activation consumes the complete authored replication
+inventory against the actual immutable native/Lua registration generation. The
+actual world request selects ServerActivation or ClientActivation; missing policy,
+Unknown completeness and an explicit mismatching operation fail closed. Empty
+complete inventory remains distinct from unknown metadata, and a no-gameplay
+world assesses against no installed modules. Standalone intentionally omits this
+network gate. Admission grants neither authentication nor state-apply authority.
+Native policy runs after inert registry freeze and before service factories or
+module Start; Lua policy runs before behavior activation. Gameplay retains the
+accepted descriptor/code lease until callbacks and registries are retired, then
+releases it before native module retirement. Failed travel keeps the old world
+and its accepted generation; no schema or module is inferred from requirements.
+
 ## Target Topology and Module Ownership
 
 The network subsystem is organized into four distinct CMake targets with strict compile-time boundaries:
@@ -177,9 +190,13 @@ Timeline actions run before the tick's delivery drain, using consecutive relativ
 ticks. Impairment replacements preserve seed/random-stream identity and fragment
 storage; they affect future sends without rewriting queued deliveries. Stalls
 retain bounded work while rate-budget ticks advance. Disconnect removes pending
-old-generation deliveries; restart opens only the exact next connection generation
-and grants no session authentication or replication authority. Hosts must route
-these lifecycle changes through their ordinary session revocation/admission path.
+old-generation deliveries. Restart retains the real old-generation disconnect
+event and defers opening the exact next generation until that event is drained.
+Stalls and a saturated output budget preserve this bounded pending state; explicit
+close, duration expiry and shutdown cancel it. Overlapping lifecycle actions for
+an undrained restart fail terminally. The ordinary session router receives the
+actual disconnect before any next-generation packet admission. Restart grants
+no session authentication or replication authority.
 
 Checkpoint mismatch terminates and discards the remaining run. Optional evidence
 contains only local ticks and aggregate action/fragment/disconnect/checkpoint

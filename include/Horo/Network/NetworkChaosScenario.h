@@ -93,7 +93,9 @@ namespace Horo::Network {
      * The host serializes all calls and retires this owner on session replacement. Creation prepares all storage;
      * Advance and Send allocate no storage. Events retain DeterministicTransport's borrowed-payload lifetime.
      * Timeline changes affect future sends; stalls retain bounded queues while ticks and rate limits advance.
-     * Restart discards old-generation work and opens the next generation, never authenticating that connection.
+     * Restart discards old-generation work and opens the next generation only after the real old-generation
+     * disconnect event is drained. Stalls or a full event budget defer that admission; shutdown cancels it.
+     * No restart authenticates a connection.
      */
     class NetworkChaosScenario final {
     public:
@@ -122,7 +124,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<std::size_t> Advance(NetworkChaosScope scope, std::uint64_t tick,
                                                   std::span<DeterministicTransportEvent> output);
 
-        /** @brief Cancels one exact selected connection; subsequent incompatible timeline work fails terminally.
+        /** @brief Cancels one exact selected connection and any deferred restart of that occurrence.
+         * Subsequent incompatible timeline work fails terminally.
          * @param scope Exact pinned host/session correlation.
          * @param connection Exact active generation.
          * @return Discarded deliveries or typed stale/terminal failure. */
@@ -141,15 +144,25 @@ namespace Horo::Network {
         NetworkChaosScenario &operator=(const NetworkChaosScenario &) = delete;
 
     private:
+        struct PendingRestart final {
+            ConnectionHandle previous{};
+            ConnectionHandle next{};
+        };
+
         NetworkChaosScenario(const NetworkChaosScenarioDescriptor &descriptor, DeterministicTransport transport) noexcept;
         void RebindViews() noexcept;
+        [[nodiscard]] std::size_t TopologyIndex(ConnectionHandle connection) const noexcept;
         [[nodiscard]] Result<void> Apply(const NetworkChaosAction &action);
+        [[nodiscard]] Result<void> CompleteRestarts(std::span<const DeterministicTransportEvent> events);
 
         NetworkChaosScenarioDescriptor descriptor_;
         DeterministicTransport transport_;
         std::array<ConnectionHandle, 16> topology_{};
         std::array<NetworkChaosAction, 128> timeline_{};
         std::array<NetworkChaosCheckpoint, 64> checkpoints_{};
+        // Owner-thread state only: a next generation cannot open before the previous terminal event is drained.
+        std::array<ConnectionHandle, 16> disconnected_{};
+        std::array<PendingRestart, 16> pendingRestarts_{};
         NetworkChaosEvidence evidence_{};
         std::size_t nextAction_{};
         std::size_t nextCheckpoint_{};

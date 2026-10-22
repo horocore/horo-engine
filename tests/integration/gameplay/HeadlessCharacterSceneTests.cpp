@@ -44,15 +44,20 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                     "tests/fixtures/gameplay_physics/PhysicsContext.horo_script.meta",
                                                                 .physicsPermission = Internal::GameplayPhysicsPermission::Granted,
                                                                 .characterPermission = Internal::GameplayCharacterPermission::Granted};
-                auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
-                                                                                  std::move(definition).Value()),
-                                                                              {Physics::PhysicsRuntimeMode::Canonical,
-                                                                               {std::move(physics).Value(), std::move(character).Value(),
-                                                                                std::move(simulation).Value()},
-                                                                               project.project.registry,
-                                                                               *loads,
-                                                                               load},
-                                                                              {}, gameplay);
+                auto composed =
+                    Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
+                                                                      std::move(definition).Value()),
+                                                                  {Physics::PhysicsRuntimeMode::Canonical,
+                                                                   {std::move(physics).Value(), std::move(character).Value(),
+                                                                    std::move(simulation).Value()},
+                                                                   project.project.registry,
+                                                                   *loads,
+                                                                   load},
+                                                                  {}, gameplay,
+                                                                  Gameplay::GameplayReplicationAdmissionPolicy{
+                                                                      .inventory = {
+                                                                          .completeness =
+                                                                              Network::NetworkReplicationInventoryCompleteness::Complete}});
                 REQUIRE(composed.HasValue());
                 factories = std::move(composed).Value();
             }

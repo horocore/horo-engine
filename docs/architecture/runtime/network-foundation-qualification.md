@@ -39,18 +39,21 @@ there is no safe static credential or fake-session fallback.
 
 ## Replication declarations — HORO-1090 / #1090 / [NET-003]
 
-**Integration incomplete.** `AssessReplicationDeclarations` is exercised by
-contract tests but has no production caller. In particular, the existing typed
-EditorInspection/Cook/ServerActivation/ClientActivation cases in the model do not
-prove actual editor, cook or product activation integration. The product host
-currently checks inventory completeness, not registered native/script schemas
-against the authored declarations. The canonical descriptor acceptance criterion
-requires those real consumers and a module-lifetime-owned registry snapshot;
-model-only qualification is insufficient to close this parent.
+**Integration incomplete.** The headless product now consumes the canonical
+policy against its actual loaded native or Lua generation. Native admission runs
+after inert registration freezes and before service factories or module Start;
+Lua admission precedes behavior activation. Both retain the accepted generation
+through behavior shutdown and release it before native retirement. Actual world
+roles select server/client operations, and a no-gameplay world checks the complete
+inventory against no installed modules. Unknown inventory, missing required code
+and incompatible descriptors fail closed. Editor inspection and cook assessment
+consumers remain missing; runtime integration alone cannot close the parent.
+The PR validation record must distinguish these added regressions from executed
+current-source tests.
 
 | Acceptance | Implementation and executable evidence |
 | --- | --- |
-| Canonical descriptors across runtime/editor/cook/compatibility | Typed model exists in `ReplicationDescriptorRegistry`, `ReplicationDeclarationPolicy`, project inventory and gameplay registration. Actual editor/cook/product assessment consumers are missing; leaf tests do not satisfy this integrated criterion. |
+| Canonical descriptors across runtime/editor/cook/compatibility | Product activation consumes project inventory and actual frozen gameplay descriptors through `GameplayReplicationAdmissionPolicy`; editor/cook assessment consumers remain missing. |
 | Identity survives rename/layout changes | Explicit schema/field/RPC IDs and canonical serializers, independent `NetworkObjectIdentity`/local mappings; descriptor rename and serializer/mapping tests. |
 | Explicit authority and mutation phases | `ReplicationRoles`, `ReplicationWorldLifecycle`, `RpcGameplayDispatch`, `ReplicationInboundApply` and Scene-owned safe-point commits; role, permissions, RPC and actual Scene apply tests. |
 | Deterministic missing/duplicate/skew outcomes | Registry, descriptor/declaration compatibility, missing native/script metadata and Lua registration tests. |
@@ -94,6 +97,10 @@ impairment changes, loss/duplication/reordering/jitter, saturation during stalls
 stale/foreign scope, generation exhaustion, hostile late actions, copied input
 and move lifetime, insufficient event buffers, explicit shutdown, no-allocation
 successful operations and disabled evidence with checkpoint enforcement.
+Restart-specific coverage retains the actual old-generation disconnect across
+stalls and a saturated drain budget, rejects next-generation sends before that
+event is returned, fences old handles, moves pending ownership, cancels deferred
+opens on explicit close/shutdown/duration and terminalizes overlapping actions.
 The existing impaired RPC fixture now composes the same timeline core for real
 session/envelope replay and Gameplay dispatch tests, and for the runtime scheduler
 integration that applies replication to an actual Scene only at its declared safe
@@ -117,3 +124,14 @@ The added scenario header belongs only to `HoroNetworkTransportNull`; no
 static-scenario callers keep their semantics. `ReplaceScenario` is additive and
 rejects fragment-storage or seed changes, stale revisions and terminal owners.
 No project settings, credentials or serialized replication identities migrate.
+
+`GameModuleHostOptions` and the non-installed headless composition inputs add an
+optional owned replication admission policy. Existing non-network constructors
+intentionally omit it. Rebuild host consumers of these C++ layouts; native module
+ABI contexts and SDK fingerprints are unchanged. Actual network world factories
+require a complete inventory, including the explicitly empty case. A factory-level
+`Count` operation means unresolved until the actual world request selects server
+or client; an explicit mismatching operation is rejected. Module/Lua admission
+accepts only resolved server/client operations. Editor inspection and cook never
+authorize runtime activation. Public header ownership remains with the existing
+Gameplay targets and their declared NetworkApi dependency.

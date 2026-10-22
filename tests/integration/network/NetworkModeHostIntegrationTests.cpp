@@ -1,3 +1,4 @@
+#include "../gameplay/GameplayReplicationAdmissionTestSupport.h"
 #include "GameplayWorldComposition.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/Network/DeterministicTransport.h"
@@ -247,7 +248,8 @@ namespace Horo::Network {
         [[nodiscard]] Result<std::unique_ptr<Application::Internal::NetworkProductHost>> Product(
             Clock &clock, const NetworkProjectRole mode, const std::span<const NetworkModeWorld> worlds,
             const NetworkModePresentation presentation, const std::shared_ptr<ProductOwners> &owners,
-            const bool omitRoleFromPackage = false, const bool unknownReplicationInventory = false) {
+            const bool omitRoleFromPackage = false, const bool unknownReplicationInventory = false,
+            const std::optional<Application::Internal::GameplayWorldSelection> &gameplay = std::nullopt) {
             auto input = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
             input.supportedRoles = NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::Client | NetworkProjectRoleSet::ListenServer |
                                    NetworkProjectRoleSet::DedicatedServer;
@@ -257,18 +259,27 @@ namespace Horo::Network {
             input.transport.capabilities.requiredMaximumMessageBytes = 1024;
             if (unknownReplicationInventory)
                 input.replication.completeness = NetworkReplicationInventoryCompleteness::Unknown;
+            if (gameplay && gameplay->replicationAdmission)
+                input.replication = gameplay->replicationAdmission->inventory;
             const auto project = NetworkProjectSettings::Create(input);
             REQUIRE(project.HasValue());
             const auto facts = ProductFacts(project.Value(), mode, omitRoleFromPackage);
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{19}, Runtime::SceneDefinitionRevision{1}};
             Runtime::RuntimeEntityDefinition entity;
             entity.object = Runtime::SceneObjectId{1};
+            if (gameplay)
+                entity.components.behaviors.emplace_back(Gameplay::BehaviorInstanceId{1},
+                                                         Gameplay::BehaviorTypeId::Parse("game.tests.replicated").Value(), 1, true,
+                                                         std::vector<Gameplay::BehaviorField>{});
             builder.Add(std::move(entity));
             auto definition = std::move(builder).Build();
             REQUIRE(definition.HasValue());
-            auto factories = Application::Internal::ComposeHeadlessNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
-                                                                                       std::move(definition).Value()),
-                                                                                   ProductFactories(owners));
+            auto factories =
+                Application::Internal::ComposeHeadlessNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
+                                                                          std::move(definition).Value()),
+                                                                      ProductFactories(owners), gameplay,
+                                                                      Gameplay::GameplayReplicationAdmissionPolicy{
+                                                                          .inventory = project.Value().ReplicationInventory()});
             auto &sceneFactory = factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)];
             sceneFactory = [owners, original = std::move(sceneFactory)](const NetworkModeServiceRequest &request) {
                 ++owners->sceneFactoryCalls;
@@ -352,6 +363,96 @@ namespace Horo::Network {
                 CHECK(host.Role(world.kind, world.scene).HasError());
         }
     }  // namespace
+
+    TEST_CASE("Real loaded replication generations reject travel without replacing either active listen world",
+              "[integration][network][mode][replication]") {
+        if constexpr (!HORO_TEST_PHYSICS_NATIVE)
+            SKIP("Canonical Physics is required for actual product world activation.");
+        for (const auto mode : {NetworkProjectRole::DedicatedServer, NetworkProjectRole::ListenServer}) {
+            Application::Internal::TestSupport::ReplicatedScriptFixture script;
+            DeterministicClock clock;
+            std::array<NetworkModeWorld, 2> worlds{};
+            const auto count = ProductWorlds(mode, worlds);
+            auto owners = std::make_shared<ProductOwners>();
+            auto created = Product(clock, mode, {worlds.data(), count}, {.localPlayer = mode == NetworkProjectRole::ListenServer}, owners,
+                                   false, false, script.selection);
+            if (created.HasError()) {
+                UNSCOPED_INFO(created.ErrorValue().domain.Value());
+                UNSCOPED_INFO(created.ErrorValue().code.Value());
+                UNSCOPED_INFO(created.ErrorValue().message);
+            }
+            REQUIRE(created.HasValue());
+            auto host = std::move(created).Value();
+            REQUIRE(host->Startup().HasValue());
+            std::optional<NetworkOperationGeneration> admittedSession;
+            if (mode == NetworkProjectRole::ListenServer) {
+                auto active = AdmittedSession();
+                REQUIRE(host->AdmitClientSession(NetworkModeWorldKind::Client, active, Connection(), Session(), 22).HasValue());
+                admittedSession = Session();
+            }
+            REQUIRE(host->RunFrame().HasValue());
+            script.ChangeCodec();
+            std::array replacement{World(NetworkModeWorldKind::AuthorityServer, 203, 210), World(NetworkModeWorldKind::Client, 204)};
+            REQUIRE(host->RequestTravel({replacement.data(), count}, admittedSession).HasValue());
+            REQUIRE(host->RunFrame().HasValue());
+            auto failure = host->TakeTravelFailure();
+            REQUIRE(failure.has_value());
+            CHECK(failure->code.Value() == NetworkErrors::ReplicationDescriptorIncompatible.code.Value());
+            for (std::size_t index = 0; index < count; ++index) {
+                CHECK(host->Role(worlds[index].kind, worlds[index].scene).HasValue());
+                CHECK(host->Role(replacement[index].kind, replacement[index].scene).HasError());
+            }
+            REQUIRE(host->RunFrame().HasValue());
+            host->Shutdown();
+        }
+    }
+
+    TEST_CASE("Actual no-gameplay world activation requires explicit complete replication admission",
+              "[integration][network][replication]") {
+        if constexpr (!HORO_TEST_PHYSICS_NATIVE)
+            SKIP("Canonical Physics is required for actual product world activation.");
+        Application::Internal::TestSupport::ReplicatedScriptFixture script;
+        std::optional<Gameplay::GameplayReplicationAdmissionPolicy> policy;
+        bool admitted{};
+        auto world = NetworkModeWorldKind::AuthorityServer;
+        SECTION("absent policy") {}
+        SECTION("network mode cannot disguise a standalone world") {
+            world = NetworkModeWorldKind::Standalone;
+        }
+        SECTION("unknown inventory") {
+            policy.emplace();
+        }
+        SECTION("mismatched operation") {
+            policy = script.selection.replicationAdmission;
+            policy->use = ReplicationDeclarationUse::ClientActivation;
+        }
+        SECTION("missing actual module") {
+            policy = script.selection.replicationAdmission;
+        }
+        SECTION("complete empty inventory") {
+            policy.emplace();
+            policy->inventory.completeness = NetworkReplicationInventoryCompleteness::Complete;
+            admitted = true;
+        }
+        Runtime::SceneDefinitionBuilder builder{{1}, {1}};
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        auto factories = Application::Internal::ComposeHeadlessNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
+                                                                                   std::move(definition).Value()),
+                                                                               {}, std::nullopt, policy);
+        NetworkModeServiceRequest request{NetworkModeServiceKind::Scene, NetworkProjectRole::DedicatedServer, {}, world, {75}};
+        auto scene = factories.services[static_cast<std::size_t>(request.service)](request);
+        REQUIRE(scene.HasValue());
+        request.service = NetworkModeServiceKind::Physics;
+        auto physics = factories.services[static_cast<std::size_t>(request.service)](request);
+        REQUIRE(physics.HasValue());
+        REQUIRE(scene.Value()->Prepare().HasValue());
+        REQUIRE(physics.Value()->Prepare().HasValue());
+        REQUIRE(scene.Value()->Activate().HasValue());
+        CHECK(physics.Value()->Activate().HasValue() == admitted);
+        physics.Value()->Shutdown();
+        scene.Value()->Shutdown();
+    }
 
     TEST_CASE("Concrete headless product compositions honor canonical Physics availability across all four modes",
               "[integration][network][mode][headless]") {

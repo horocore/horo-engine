@@ -148,6 +148,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::CreateOffscreenTarget */
     Result<RenderTargetHandle> RenderFrontend::CreateOffscreenTarget(const FramebufferExtent extent) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<RenderTargetHandle>::Failure(std::move(admission).ErrorValue());
         if (!extent.IsValid())
             return Result<RenderTargetHandle>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTargetExtent, "Offscreen target extent is invalid."));
@@ -175,6 +177,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ResizeOffscreenTarget */
     Result<void> RenderFrontend::ResizeOffscreenTarget(const RenderTargetHandle target, const FramebufferExtent extent) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<void>::Failure(std::move(admission).ErrorValue());
         if (!extent.IsValid()) {
             return Result<void>::Failure(MakeFrontendError(FrontendErrors::InvalidTargetExtent, "Offscreen target extent is invalid."));
         }
@@ -192,6 +196,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseOffscreenTarget */
     Result<void> RenderFrontend::ReleaseOffscreenTarget(const RenderTargetHandle target) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::TargetReleaseDuringFrame, "Offscreen target cannot be released during a frame."));
@@ -208,6 +214,8 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::CreateBuffer */
     Result<ResourceCreation<RenderBufferHandle>> RenderFrontend::CreateBuffer(const RenderBufferDescriptor &descriptor,
                                                                               const std::span<const std::byte> initialData) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<ResourceCreation<RenderBufferHandle>>::Failure(std::move(admission).ErrorValue());
         return CreateBuffer(memoryConfig_.defaultResourceScope, descriptor, initialData);
     }
 
@@ -215,6 +223,8 @@ namespace Horo::Render {
     Result<ResourceCreation<RenderBufferHandle>> RenderFrontend::CreateBuffer(const RenderMemoryScopeId scope,
                                                                               const RenderBufferDescriptor &descriptor,
                                                                               const std::span<const std::byte> initialData) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<ResourceCreation<RenderBufferHandle>>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr)
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be created during an active frame."));
@@ -266,6 +276,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::CreateMesh */
     Result<ResourceCreation<RenderMeshHandle>> RenderFrontend::CreateMesh(const RenderMeshDescriptor &descriptor) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<ResourceCreation<RenderMeshHandle>>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr) {
             return Result<ResourceCreation<RenderMeshHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A mesh cannot be created during an active frame."));
@@ -309,6 +321,8 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::CreateTexture */
     Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::CreateTexture(const RenderTextureDescriptor &descriptor,
                                                                                 const std::span<const std::byte> initialData) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(std::move(admission).ErrorValue());
         return CreateTexture(memoryConfig_.defaultResourceScope, descriptor, initialData);
     }
 
@@ -316,6 +330,8 @@ namespace Horo::Render {
     Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::CreateTexture(const RenderMemoryScopeId scope,
                                                                                 const RenderTextureDescriptor &descriptor,
                                                                                 const std::span<const std::byte> initialData) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<ResourceCreation<RenderTextureHandle>>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr)
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be created during an active frame."));
@@ -366,6 +382,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::CreateTextureView */
     Result<ResourceCreation<RenderTextureViewHandle>> RenderFrontend::CreateTextureView(const RenderTextureViewDescriptor &descriptor) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr) {
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture view cannot be created during an active frame."));
@@ -408,6 +426,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::CreateRenderTarget */
     Result<ResourceCreation<RenderTargetHandle>> RenderFrontend::CreateRenderTarget(const RenderTargetDescriptor &descriptor) {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<ResourceCreation<RenderTargetHandle>>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr) {
             return Result<ResourceCreation<RenderTargetHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A render target cannot be created during an active frame."));
@@ -469,6 +489,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ProcessResourceRequests */
     Result<std::size_t> RenderFrontend::ProcessResourceRequests() {
+        if (auto admission = RequireOpenOwner(); admission.HasError())
+            return Result<std::size_t>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr) {
             return Result<std::size_t>::Failure(MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame,
                                                                   "Resource requests can only be processed at a frame boundary."));
@@ -480,7 +502,8 @@ namespace Horo::Render {
             const Detail::RenderResourceUploadQueue::Request &request = resourceUploadQueue_->Front();
             const std::span<const std::byte> initialData = resourceUploadQueue_->FrontInitialData();
             completedBytes += initialData.size();
-            const Result<std::uint64_t> created = RealizeResourceRequest(*backend_, *resourceRegistry_, request, initialData);
+            const Result<std::uint64_t> created =
+                RealizeResourceRequest(*backend_, *memoryBudget_, *resourceRegistry_, request, initialData);
             CompleteResourceRequest(*backend_, *memoryBudget_, *resourceRegistry_, request, created);
             static_cast<void>(resourceUploadQueue_->Pop());
             ++completedRequests;
@@ -493,6 +516,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseBuffer */
     Result<void> RenderFrontend::ReleaseBuffer(const RenderBufferHandle buffer) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr) {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A buffer cannot be released during an active frame."));
@@ -503,6 +528,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseMesh */
     Result<void> RenderFrontend::ReleaseMesh(const RenderMeshHandle mesh) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr) {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A mesh cannot be released during an active frame."));
@@ -513,6 +540,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseTexture */
     Result<void> RenderFrontend::ReleaseTexture(const RenderTextureHandle texture) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture cannot be released during an active frame."));
@@ -522,6 +551,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseTextureView */
     Result<void> RenderFrontend::ReleaseTextureView(const RenderTextureViewHandle view) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A texture view cannot be released during an active frame."));
@@ -531,6 +562,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::ReleaseRenderTarget */
     Result<void> RenderFrontend::ReleaseRenderTarget(const RenderTargetHandle target) {
+        if (std::this_thread::get_id() != preparationOwner_)
+            return Result<void>::Failure(MakeError(FrontendErrors::WrongThread));
         if (activeFrameScope_ != nullptr)
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceChangeDuringFrame, "A render target cannot be released during an active frame."));

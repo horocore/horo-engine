@@ -7,6 +7,36 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class PrefabHierarchyCiTests(unittest.TestCase):
+    def test_prefab_test_translation_units_have_exact_existing_target_membership(self):
+        cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+        expected = {
+            "HoroSceneDocumentTests": (
+                "PrefabDocumentSessionTests.cpp", "PrefabDocumentSessionByteBoundaryTests.cpp",
+            ),
+            "HoroEditorWorkspaceControllerTests": (
+                "EditorWorkspaceControllerPrefabTests.cpp",
+                "EditorWorkspaceControllerPrefabAssetDropTests.cpp",
+                "EditorWorkspaceControllerPrefabAuthoringTests.cpp",
+            ),
+        }
+        for target, names in expected.items():
+            sources = cmake.split(f"add_executable({target}", 1)[1].split(")", 1)[0].split()
+            for name in names:
+                relative = f"unit/editor/{name}"
+                self.assertEqual(sources.count(relative), 1, (target, name))
+                self.assertEqual(cmake.split().count(relative), 1, name)
+                self.assertTrue((ROOT / "tests" / relative).is_file(), name)
+
+    def test_document_session_dirty_close_assertion_includes_declaring_header(self):
+        path = ROOT / "tests/unit/editor/PrefabDocumentSessionByteBoundaryTests.cpp"
+        self.assertTrue(path.is_file(), "byte-boundary tests must have a registered owning translation unit")
+        source = path.read_text(encoding="utf-8")
+        self.assertIn('#include "Horo/Editor/WorkspacePanelHost.h"', source)
+        self.assertIn(
+            "CHECK(dirty.ErrorValue().code.Value() == WorkspaceDocumentErrors::DirtyDocument.code.Value());",
+            source,
+        )
+
     def test_headless_sources_belong_to_real_owner_targets(self):
         source = (ROOT / "src/CMakeLists.txt").read_text(encoding="utf-8")
         model = source.split("add_library(HoroEditorModel STATIC", 1)[1].split(")", 1)[0]

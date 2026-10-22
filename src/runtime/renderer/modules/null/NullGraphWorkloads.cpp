@@ -1,5 +1,6 @@
 #include "NullGraphWorkloads.h"
 
+#include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
 #include "NullRenderBackendErrors.h"
 
 #include <type_traits>
@@ -46,11 +47,16 @@ namespace Horo::Render::Detail {
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &resources, const RenderGraphExecutionRequest &request,
                                                     const Workload &workload) {
-            if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
+            if constexpr (std::is_same_v<Workload, RenderGraphDepthAttachment> || std::is_same_v<Workload, RenderGraphMultiview>) {
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+            } else if constexpr (std::is_same_v<Workload, RenderGraphLightCulling>) {
                 return Result<void>::Failure(MakeError(LightCullingErrors::Unsupported));
             } else if constexpr (std::is_same_v<Workload, RenderGraphBufferCopy>) {
                 if (!ValidCopy(resources, request, workload))
                     return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
+            } else if constexpr (std::is_same_v<Workload, PrimaryOutputAttachment>) {
+                if (workload.outputColor)
+                    return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
             } else if constexpr (std::is_same_v<Workload, RenderGraphColorAttachment>) {
                 if (!ValidColor(resources, request, workload))
                     return Result<void>::Failure(MakeError(NullBackendErrors::UnsupportedResourceOperation));
@@ -61,8 +67,13 @@ namespace Horo::Render::Detail {
 
     /** @copydoc ValidateNullGraphWorkloads */
     Result<void> ValidateNullGraphWorkloads(const NullGraphResources &resources, const RenderGraphExecutionRequest &request) {
+        if (!request.submissions.empty())
+            return Result<void>::Failure(
+                MakeError(NullBackendErrors::UnsupportedResourceOperation, "Null explicit graph submissions are not implemented."));
         if (!request.resources.empty() && request.lease == nullptr)
             return Result<void>::Failure(MakeError(NullBackendErrors::InvalidExecutionPlan));
+        if (!request.graph.ExternalReleases().empty())
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
         if (const auto portable = ValidateRenderGraphExecutionRequest(request); portable.HasError())
             return portable;
         for (std::size_t index = 0; index < request.resources.size(); ++index) {

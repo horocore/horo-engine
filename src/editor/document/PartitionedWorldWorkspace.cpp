@@ -1,6 +1,7 @@
 #include "Horo/Editor/PartitionedWorldWorkspace.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "WorldSourceValidation.h"
 
 #include <algorithm>
 #include <cmath>
@@ -155,7 +156,8 @@ namespace Horo::Editor {
             return ValidLimit(limits.maximumLayers, hard.maximumLayers) && ValidLimit(limits.maximumPages, hard.maximumPages) &&
                    ValidLimit(limits.maximumObjects, hard.maximumObjects) &&
                    ValidLimit(limits.maximumLayerNameBytes, hard.maximumLayerNameBytes) &&
-                   ValidLimit(limits.maximumOpenPages, hard.maximumOpenPages) &&
+                   ValidLimit(limits.maximumOpenPages, hard.maximumOpenPages) && ValidLimit(limits.maximumSources, hard.maximumSources) &&
+                   ValidLimit(limits.maximumSourceHistory, hard.maximumSourceHistory) &&
                    ValidLimit(limits.maximumSelectedObjects, hard.maximumSelectedObjects) &&
                    ValidLimit(limits.maximumPageSourceBytes, hard.maximumPageSourceBytes) &&
                    ValidLimit(limits.maximumResidentSourceBytes, hard.maximumResidentSourceBytes);
@@ -185,9 +187,10 @@ namespace Horo::Editor {
             const auto &a = left.settings;
             const auto &b = right.settings;
             return left.version == right.version && left.layers == right.layers && left.pages == right.pages &&
-                   a.partition == b.partition && a.bounds == b.bounds && a.grid.Origin() == b.grid.Origin() &&
-                   a.grid.Bounds() == b.grid.Bounds() && a.grid.BaseCellSizeMillimeters() == b.grid.BaseCellSizeMillimeters() &&
-                   a.grid.LodLevels() == b.grid.LodLevels() && a.maximumDirectCellsPerObject == b.maximumDirectCellsPerObject;
+                   left.sources == right.sources && a.partition == b.partition && a.bounds == b.bounds &&
+                   a.grid.Origin() == b.grid.Origin() && a.grid.Bounds() == b.grid.Bounds() &&
+                   a.grid.BaseCellSizeMillimeters() == b.grid.BaseCellSizeMillimeters() && a.grid.LodLevels() == b.grid.LodLevels() &&
+                   a.maximumDirectCellsPerObject == b.maximumDirectCellsPerObject;
         }
 
         /** @brief Validates source topology and its explicit direct-placement policy together. */
@@ -249,6 +252,8 @@ namespace Horo::Editor {
                 return Failure<void>(WorldDocumentErrors::Capacity);
             if (const auto valid = ValidateLayers(document, limits); valid.HasError())
                 return valid;
+            if (const auto valid = Detail::ValidateWorldDocumentSources(document, limits); valid.HasError())
+                return valid;
             return ValidatePages(document, limits);
         }
     }  // namespace
@@ -292,6 +297,11 @@ namespace Horo::Editor {
             return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Cancelled);
         snapshot_ = std::move(candidate);
         generation_ = generation.Value();
+        ClearLayerHistory();
+        ClearSourceHistory();
+        sourceRevision_ = 0;
+        for (const auto &source : document.sources)
+            sourceRevision_ = std::max(sourceRevision_, source.revision.Value());
         return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);
     }
 
@@ -309,6 +319,8 @@ namespace Horo::Editor {
             return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
         if (!PreservesLoadedHeads(document, *snapshot_))
             return Failure<PartitionedWorldSnapshotLease>(WorldDocumentErrors::Conflict);
+        if (const auto valid = Detail::ValidateWorldSourceSuccessors(document, snapshot_->document); valid.HasError())
+            return Result<PartitionedWorldSnapshotLease>::Failure(valid.ErrorValue());
         if (SameDocument(document, snapshot_->document))
             return Result<PartitionedWorldSnapshotLease>::Success(snapshot_);
         auto candidate = std::make_shared<PartitionedWorldSnapshot>(*snapshot_);
@@ -328,7 +340,20 @@ namespace Horo::Editor {
         });
         if (candidate->primary && std::ranges::find(candidate->selectedObjects, *candidate->primary) == candidate->selectedObjects.end())
             candidate->primary.reset();
-        return Publish(std::move(candidate), cancellation);
+        if (candidate->currentLayer && std::ranges::none_of(document.layers, [&](const auto &layer) {
+            return layer.id == *candidate->currentLayer;
+        }))
+            candidate->currentLayer.reset();
+        candidate->layerUndoCount = 0;
+        candidate->layerRedoCount = 0;
+        auto published = Publish(std::move(candidate), cancellation);
+        if (published.HasValue()) {
+            ClearLayerHistory();
+            ClearSourceHistory();
+            for (const auto &source : snapshot_->document.sources)
+                sourceRevision_ = std::max(sourceRevision_, source.revision.Value());
+        }
+        return published;
     }
 
     /** @copydoc PartitionedWorldWorkspace::PreparePageEdit */
@@ -379,7 +404,21 @@ namespace Horo::Editor {
         *loaded = std::move(replacement);
         candidate->document = std::move(document).Value();
         candidate->dirty = true;
-        return Publish(std::move(candidate), cancellation);
+        candidate->layerUndoCount = 0;
+        candidate->layerRedoCount = 0;
+        auto published = Publish(std::move(candidate), cancellation);
+        if (published.HasValue()) {
+            ClearLayerHistory();
+            ClearSourceHistory();
+            for (const auto &authoredSource : snapshot_->document.sources)
+                sourceRevision_ = std::max(sourceRevision_, authoredSource.revision.Value());
+        }
+        return published;
+    }
+
+    /** @copydoc PartitionedWorldWorkspace::ValidateLayerCandidate */
+    Result<void> PartitionedWorldWorkspace::ValidateLayerCandidate(const PartitionedWorldDocument &document) const {
+        return ValidateDocument(document, limits_);
     }
 
     /** @copydoc PartitionedWorldWorkspace::CheckFence */
@@ -463,6 +502,8 @@ namespace Horo::Editor {
         if (snapshot_->dirty && disposition != Discard)
             return Failure<void>(WorldDocumentErrors::Dirty);
         snapshot_.reset();
+        ClearLayerHistory();
+        ClearSourceHistory();
         return Result<void>::Success();
     }
 

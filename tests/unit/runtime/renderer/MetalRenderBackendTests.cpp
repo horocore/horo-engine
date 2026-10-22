@@ -1,3 +1,4 @@
+#include "../../../support/renderer/RenderBackendDrainTestSupport.h"
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "MetalRenderTestSupport.h"
@@ -253,8 +254,8 @@ namespace {
 
         ExerciseFrameLifecycle(*backend, state);
 
-        backend->Shutdown();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         Check(state.destroyCount == 1);
         Check(!backend->Capabilities().presentsToWindow);
     }
@@ -271,7 +272,7 @@ namespace {
                       .requirePresentation = true,
                   })
                   .HasValue());
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
 
         const Result<void> stale = backend->Initialize(RenderBackendConfig{
             .adapter = RenderAdapterId{"metal:test"},
@@ -322,7 +323,7 @@ namespace {
         Check(backend->BeginFrame(FrameDescriptor{.frameNumber = 3, .outputExtent = {800, 600}}).HasValue());
         backend->AbortActiveFrame();
         Check(state.abortCount == 2);
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Shared Presentation Port Rejects Overlapping Backends", "[unit][runtime][renderer]") {
@@ -355,7 +356,7 @@ namespace {
         Check(invalid.ErrorValue().code.Value() == "render.metal.unsupported_pass_kind");
         Check(state.executeCount == 0);
         backend->AbortActiveFrame();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Generic Resources Delegate To Metal Runtime", "[unit][runtime][renderer]") {
@@ -372,7 +373,7 @@ namespace {
         Check(state.resourceCreateCount == 8);
         DestroyGenericResources(*backend, resources);
         Check(state.resourceDestroyCount == 8);
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
     }
 
     TEST_CASE("Module Info Describes Metal Window Before Backend Creation", "[unit][runtime][renderer]") {
@@ -418,7 +419,7 @@ namespace {
         REQUIRE(backend->BeginFrame({.frameNumber = 1, .outputExtent = {640, 480}}).HasValue());
         CheckPreparationSurface(*backend, "render.backend.frame_active");
         backend->AbortActiveFrame();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         CheckPreparationSurface(*backend, "render.backend.not_initialized");
         backend->DestroyShaderModule(109);
         backend->DestroyGraphicsPipeline(113);
@@ -449,10 +450,37 @@ namespace {
         REQUIRE(active.HasError());
         CHECK(active.ErrorValue().code.Value() == "render.backend.frame_active");
         backend->AbortActiveFrame();
-        backend->Shutdown();
+        Horo::Render::Test::RequireDrainedOwner(*backend);
         const auto closed = backend->RealizeResolved({}, 0, {});
         REQUIRE(closed.HasError());
         CHECK(closed.ErrorValue().code.Value() == "render.backend.not_initialized");
     }
 
 }  // namespace
+
+TEST_CASE("Metal validates exact primary declarations and finite plan bounds before any encoding", "[metal][presentation]") {
+    PortState state;
+    FakePresentationPort port{state};
+    MetalEditorGraphicsBridge bridge;
+    auto backend = CreateInitializedBackend(port, state, bridge);
+    const auto frame = backend->BeginFrame({1, {64, 64}});
+    REQUIRE(frame.HasValue());
+    SECTION("unadmitted explicit encoding rejects the entire plan") {
+        const std::array passes{BackendTestSupport::MakeClearGraphicsPass(RenderPassId{1}, {}),
+                                RenderPassDescriptor{.id = RenderPassId{2},
+                                                     .primaryOutput = PrimaryOutputAttachment{.outputColor = RenderOutputColor{}}}};
+        const auto rejected = backend->Execute({frame.Value(), passes});
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == RenderPresentationErrors::OutputUnsupported.code.Value());
+    }
+    SECTION("oversized metadata rejects before quadratic identity validation") {
+        std::array<RenderPassDescriptor, 1025> passes;
+        const auto rejected = backend->Execute({frame.Value(), passes});
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == MetalBackendErrors::InvalidExecutionPlan.code.Value());
+    }
+    CHECK(state.executeCount == 0);
+    backend->AbortFrame(frame.Value());
+    REQUIRE(backend->BeginShutdown().HasValue());
+    REQUIRE(backend->PollDrain().Value() == RenderBackendDrainProgress::Drained);
+}

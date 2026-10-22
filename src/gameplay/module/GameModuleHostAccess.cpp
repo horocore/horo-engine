@@ -236,5 +236,6 @@ namespace Horo::Gameplay {
 
     /** @copydoc GameModuleHost::GameModuleHost */
     GameModuleHost::GameModuleHost(GameModuleHostOptions options)
-        : hostCapabilities_(std::move(options.hostCapabilities)), runtimeServices_(std::move(options.runtimeServices)) {}
+        : hostCapabilities_(std::move(options.hostCapabilities)), runtimeServices_(std::move(options.runtimeServices)),
+          replicationAdmission_(std::move(options.replicationAdmission)) {}
 }  // namespace Horo::Gameplay

@@ -7,6 +7,7 @@
 
 #include "Horo/Gameplay/Behavior.h"
 #include "Horo/Gameplay/GameplayRegistration.h"
+#include "Horo/Network/NetworkProjectSettings.h"
 #include "Horo/Network/ReplicationDescriptorRegistry.h"
 #include "Horo/Network/ReplicationSerializer.h"
 
@@ -23,6 +24,21 @@ namespace Horo::Gameplay::Detail {
 
 namespace Horo::Gameplay {
     inline constexpr std::size_t MaximumGameplayReplicationRegistrations = 512;
+
+    /** @brief Inert host-owned complete authored inventory checked before runtime activation. */
+    struct GameplayReplicationAdmissionPolicy final {
+        Network::NetworkReplicationInventory inventory;
+        Network::ReplicationDeclarationUse use{Network::ReplicationDeclarationUse::Count};
+        Network::ReplicationDeclarationPolicyLimits limits{Network::NetworkReplicationInventory::DescriptorLimits, 64, 512};
+
+        /** @brief Admits one actual immutable loaded generation without invoking its adapters.
+         * @param registered Exact frozen descriptor snapshot, or null for a successfully frozen empty generation.
+         * @param modules Actual successfully loaded module identities, never inferred from requirements.
+         * @return Original policy failure, or success for complete server/client admission only.
+         */
+        [[nodiscard]] Result<void> RequireAdmission(const Network::ReplicationDescriptorSnapshotPtr &registered,
+                                                    std::span<const ModuleId> modules) const;
+    };
 
     /** @brief Existing gameplay identity that owns one replication schema and its safe points. */
     using GameplayReplicationOwner = std::variant<ComponentTypeId, BehaviorTypeId, GameplayServiceId>;

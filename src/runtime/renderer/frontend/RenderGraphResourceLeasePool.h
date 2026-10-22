@@ -31,7 +31,8 @@ namespace Horo::Render::Detail {
         /** @brief Acquires a bounded lease, rolling back every acquired pin on failure. */
         [[nodiscard]] Result<IRenderGraphResourceLease *> Acquire(std::span<const RenderGraphResource> resources,
                                                                   UiRenderSubmission *ui = nullptr,
-                                                                  RenderGraphTransientResourceSet *transient = nullptr);
+                                                                  RenderGraphTransientResourceSet *transient = nullptr,
+                                                                  std::span<const RenderGraphPassWorkload> workloads = {});
         /** @brief Retains material consumers and exact target/mesh pins using the same preallocated frame-completion pool.
          * @param pins Resolved target and mesh generations. @param draws Immutable materials to retain through completion.
          * @return Existing frame lease or typed capacity/residency failure with complete rollback. */
@@ -53,6 +54,8 @@ namespace Horo::Render::Detail {
             [[nodiscard]] Result<void> PinResource(const RenderGraphResource &resource);
             /** @brief Adds one exact distinct registry pin without allocating storage. */
             [[nodiscard]] Result<void> PinIdentity(const Pin &pin);
+            /** @brief Retains exact multiview mesh/material/view generations using this existing completion lease. */
+            [[nodiscard]] Result<void> PinMultiview(const RenderGraphMultiview &workload);
             RenderGraphResourceLeasePool *pool{nullptr};
             bool active{false};
             std::vector<Pin> pins;

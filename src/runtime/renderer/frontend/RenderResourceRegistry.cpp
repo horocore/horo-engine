@@ -1,5 +1,7 @@
 #include "RenderResourceRegistry.h"
 
+#include "Horo/Runtime/Render/RenderMemoryBudget.h"
+#include "RenderExternalImages.h"
 #include "RenderFrontendErrors.h"
 
 #include <algorithm>
@@ -8,6 +10,7 @@
 #include <cassert>
 #include <limits>
 #include <new>
+#include <ranges>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -31,14 +34,128 @@ namespace Horo::Render::Detail {
     }
 
     RenderResourceRegistry::RenderResourceRegistry(const RenderResourceOwnerId owner, const RenderResourceRegistryLimits &limits,
-                                                   BackendResourceRelease releaseBackendResource)
-        : owner_(owner), limits_(limits), retirementQueue_(limits.maximumSlots),
-          releaseBackendResource_(std::move(releaseBackendResource)) {
+                                                   BackendResourceRelease releaseBackendResource, RenderMemoryBudget *memoryBudget)
+        : owner_(owner), limits_(limits), slots_(owner, limits.maximumSlots), retirementQueue_(limits.maximumSlots),
+          releaseBackendResource_(std::move(releaseBackendResource)), memoryBudget_(memoryBudget) {
         assert(owner_.IsValid());
         assert(limits_.IsValid());
-        freeSlots_.reserve(limits_.maximumSlots);
+        slots_.PrepareCapacity();
         submissionPins_.reserve(limits_.maximumSubmissionPins);
         queueProgress_.reserve(limits_.maximumTrackedQueues);
+    }
+
+    /** @copydoc RenderResourceRegistry::SlotStore::PrepareCapacity */
+    void RenderResourceRegistry::SlotStore::PrepareCapacity() {
+        entries_.reserve(static_cast<std::size_t>(maximumSlots_) + 1);
+        freeSlots_.reserve(maximumSlots_);
+    }
+
+    /** @copydoc RenderResourceRegistry::SlotStore::ReturnUnpublished */
+    void RenderResourceRegistry::SlotStore::ReturnUnpublished(const std::size_t slot) noexcept {
+        assert(slot != 0 && slot < entries_.size());
+        freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
+    }
+
+    /** @copydoc RenderResourceRegistry::SlotStore::RecycleTerminal */
+    void RenderResourceRegistry::SlotStore::RecycleTerminal(const std::size_t slot) noexcept {
+        Entry &entry = entries_[slot];
+        assert(entry.state == RenderResourceState::Retired);
+        assert(!entry.nativeLease.claimed || entry.nativeLease.released);
+        if (entry.generation == std::numeric_limits<std::uint32_t>::max()) {
+            entry.generationExhausted = true;
+        } else {
+            ++entry.generation;
+            freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
+        }
+    }
+
+    /** @copydoc RenderResourceRegistry::OperationJournal::PreparePending */
+    RenderResourceRegistry::OperationRecord RenderResourceRegistry::OperationJournal::PreparePending() const {
+        return {.id = ResourceOperationId{nextIdentity_},
+                .error = RegistryError(FrontendErrors::ResourceRegistryStopped,
+                                       "The pending resource operation was cancelled by frontend shutdown."),
+                .rollbackError = RegistryError(FrontendErrors::ResourceOperationCancelled,
+                                               "The pending resource operation was cancelled before realization.")};
+    }
+
+    /** @copydoc RenderResourceRegistry::OperationJournal::AppendPending */
+    ResourceOperationId RenderResourceRegistry::OperationJournal::AppendPending(OperationRecord record) {
+        assert(record.id.value == nextIdentity_ && CanIssue());
+        records_.push_back(std::move(record));
+        return ResourceOperationId{nextIdentity_++};
+    }
+
+    /** @copydoc RenderResourceRegistry::OperationJournal::CompleteRollback */
+    void RenderResourceRegistry::OperationJournal::CompleteRollback(const ResourceOperationId id) noexcept {
+        const auto record = std::ranges::find(records_, id, &OperationRecord::id);
+        assert(record != records_.end() && record->rollbackError.has_value());
+        Complete(id, std::move(record->rollbackError));
+    }
+
+    /** @copydoc RenderResourceRegistry::OperationJournal::CompleteShutdown */
+    void RenderResourceRegistry::OperationJournal::CompleteShutdown(const ResourceOperationId id) noexcept {
+        const auto record = std::ranges::find(records_, id, &OperationRecord::id);
+        assert(record != records_.end() && record->error.has_value());
+        record->complete = true;
+        record->rollbackError.reset();
+    }
+
+    RenderResourceRegistry::~RenderResourceRegistry() {
+        if (HasPendingNativeRetirements())
+            std::terminate();
+    }
+
+    bool RenderResourceRegistry::HasPendingNativeRetirements() const noexcept {
+        return std::ranges::any_of(std::views::iota(std::size_t{0}, slots_.Size()), [this](const std::size_t slot) {
+            const auto &entry = slots_.At(slot);
+            return entry.nativeLease.claimed && !entry.nativeLease.released;
+        });
+    }
+
+    bool RenderResourceRegistry::HasNativeLifetime(const RenderResourceIdentity identity) const noexcept {
+        const auto *entry = slots_.FindExact(identity);
+        return entry != nullptr && entry->nativeLease.claimed;
+    }
+
+    Result<RenderResourceNativeLifetime> RenderResourceRegistry::PrepareNativeLifetime(const RenderResourceClass resourceClass,
+                                                                                       const RenderResourceIdentity identity,
+                                                                                       const RenderMemoryReservationId memoryReservation,
+                                                                                       RenderMemoryBudget *memoryBudget) {
+        auto slot = slots_.Validate(resourceClass, identity);
+        if (slot.HasError())
+            return Result<RenderResourceNativeLifetime>::Failure(std::move(slot).ErrorValue());
+        auto &entry = slots_.At(slot.Value());
+        if (entry.state != RenderResourceState::Pending || entry.nativeLease.claimed)
+            return Result<RenderResourceNativeLifetime>::Failure(
+                RegistryError(FrontendErrors::ResourceNotPending,
+                              "Native lifetime transfer requires one exact unclaimed pending generation."));
+        if (memoryBudget != nullptr && memoryBudget_ != nullptr && memoryBudget_ != memoryBudget)
+            return Result<RenderResourceNativeLifetime>::Failure(
+                RegistryError(FrontendErrors::ResourceNotPending, "Native creation cannot change its registry memory ledger."));
+        if (memoryBudget != nullptr)
+            memoryBudget_ = memoryBudget;
+        entry.memoryReservation = memoryReservation;
+        if (!memoryReservation.IsValid())
+            return Result<RenderResourceNativeLifetime>::Success({});
+        return Result<RenderResourceNativeLifetime>::Success(RenderResourceNativeLifetime{entry.nativeLease});
+    }
+
+    Result<void> RenderResourceRegistry::AttachNativeCreation(const RenderResourceClass resourceClass,
+                                                              const RenderResourceIdentity identity, const std::uint64_t backendInstance,
+                                                              const std::optional<RenderMemoryAllocationId> allocation) {
+        auto slot = slots_.Validate(resourceClass, identity);
+        if (slot.HasError())
+            return Result<void>::Failure(std::move(slot).ErrorValue());
+        auto &entry = slots_.At(slot.Value());
+        if (entry.state != RenderResourceState::Pending || backendInstance == 0 ||
+            (entry.backendInstance != 0 && entry.backendInstance != backendInstance))
+            return Result<void>::Failure(
+                RegistryError(FrontendErrors::ResourceNotPending, "Native creation ownership requires its exact pending generation."));
+        entry.backendInstance = backendInstance;
+        entry.memoryAllocation = allocation;
+        if (allocation.has_value())
+            entry.memoryReservation = {};
+        return Result<void>::Success();
     }
 
     Result<ResourceReservation> RenderResourceRegistry::Reserve(const RenderResourceClass resourceClass,
@@ -46,44 +163,45 @@ namespace Horo::Render::Detail {
         if (const Result<void> admitted = ValidateReservationAdmission(); admitted.HasError()) {
             return Result<ResourceReservation>::Failure(admitted.ErrorValue());
         }
-        if (const Result<void> validDependencies = ValidateDependencies(dependencies); validDependencies.HasError()) {
+        if (const Result<void> validDependencies = slots_.ValidateDependencies(dependencies); validDependencies.HasError()) {
             return Result<ResourceReservation>::Failure(validDependencies.ErrorValue());
         }
-        if (const Result<void> resultCapacity = EnsureOperationResultCapacity(); resultCapacity.HasError()) {
+        if (const Result<void> resultCapacity = journal_.EnsureCapacity(limits_.maximumOperationResults); resultCapacity.HasError()) {
             return Result<ResourceReservation>::Failure(resultCapacity.ErrorValue());
         }
         std::vector<RenderResourceIdentity> ownedDependencies(dependencies.begin(), dependencies.end());
-        OperationRecord operation{.id = ResourceOperationId{nextOperation_},
-                                  .error = RegistryError(FrontendErrors::ResourceRegistryStopped,
-                                                         "The pending resource operation was cancelled by frontend shutdown."),
-                                  .rollbackError = RegistryError(FrontendErrors::ResourceOperationCancelled,
-                                                                 "The pending resource operation was cancelled before realization.")};
-        auto acquiredSlot = AcquireSlot();
+        auto operation = journal_.PreparePending();
+        auto acquiredSlot = slots_.Acquire();
         if (acquiredSlot.HasError()) {
             return Result<ResourceReservation>::Failure(acquiredSlot.ErrorValue());
         }
         const std::size_t slot = acquiredSlot.Value();
+        ResourceOperationId operationId;
         try {
-            operations_.push_back(std::move(operation));
+            operationId = journal_.AppendPending(std::move(operation));
         } catch (const std::bad_alloc &) {
-            freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
+            slots_.ReturnUnpublished(slot);
             throw;
         } catch (const std::length_error &) {
-            freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
+            slots_.ReturnUnpublished(slot);
             throw;
         }
-        Entry &entry = entries_[slot];
+        Entry &entry = slots_.At(slot);
         entry.resourceClass = resourceClass;
         entry.state = RenderResourceState::Pending;
         entry.dependentPins = 0;
         entry.submissionPins = 0;
         entry.backendInstance = 0;
         entry.memoryAllocation.reset();
-        entry.operation = ResourceOperationId{nextOperation_++};
+        entry.memoryReservation = {};
+        entry.nativeLease = {};
+        entry.nativeDestroyRequested = false;
+        entry.memoryRetirementBegun = false;
+        entry.operation = operationId;
         entry.dependencies = std::move(ownedDependencies);
         entry.retirementQueued = false;
         for (const RenderResourceIdentity dependency : dependencies) {
-            ++entries_[dependency.slot].dependentPins;
+            ++slots_.At(dependency.slot).dependentPins;
         }
         ++pendingRequests_;
         return Result<ResourceReservation>::Success(
@@ -99,14 +217,14 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceQueueFull, "The bounded renderer resource request queue is full."));
         }
-        if (nextOperation_ == 0) {
+        if (!journal_.CanIssue()) {
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceCapacityExhausted, "The renderer resource operation identity space is exhausted."));
         }
         return Result<void>::Success();
     }
 
-    Result<void> RenderResourceRegistry::ValidateDependencies(const std::span<const RenderResourceIdentity> dependencies) const {
+    Result<void> RenderResourceRegistry::SlotStore::ValidateDependencies(const std::span<const RenderResourceIdentity> dependencies) const {
         for (std::size_t dependencyIndex = 0; dependencyIndex < dependencies.size(); ++dependencyIndex) {
             const RenderResourceIdentity dependency = dependencies[dependencyIndex];
             if (const auto earlierDependencies = dependencies.first(dependencyIndex);
@@ -127,25 +245,25 @@ namespace Horo::Render::Detail {
         return Result<void>::Success();
     }
 
-    Result<void> RenderResourceRegistry::EnsureOperationResultCapacity() {
-        if (operations_.size() < limits_.maximumOperationResults) {
+    Result<void> RenderResourceRegistry::OperationJournal::EnsureCapacity(const std::uint32_t maximumResults) {
+        if (records_.size() < maximumResults) {
             return Result<void>::Success();
         }
-        if (!operations_.front().complete) {
+        if (!records_.front().complete) {
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceQueueFull, "The bounded renderer resource result store is full."));
         }
-        operations_.pop_front();
+        records_.pop_front();
         return Result<void>::Success();
     }
 
-    Result<std::size_t> RenderResourceRegistry::AcquireSlot() {
+    Result<std::size_t> RenderResourceRegistry::SlotStore::Acquire() {
         if (!freeSlots_.empty()) {
             const std::uint32_t slot = freeSlots_.back();
             freeSlots_.pop_back();
             return Result<std::size_t>::Success(slot);
         }
-        if (entries_.size() - 1 >= limits_.maximumSlots) {
+        if (entries_.size() - 1 >= maximumSlots_) {
             return Result<std::size_t>::Failure(
                 RegistryError(FrontendErrors::ResourceCapacityExhausted, "The renderer resource slot pool is exhausted."));
         }
@@ -156,11 +274,11 @@ namespace Horo::Render::Detail {
     Result<void> RenderResourceRegistry::Publish(const RenderResourceClass resourceClass, const RenderResourceIdentity identity,
                                                  const std::uint64_t backendInstance,
                                                  const std::optional<RenderMemoryAllocationId> memoryAllocation) {
-        auto validated = Validate(resourceClass, identity);
+        auto validated = slots_.Validate(resourceClass, identity);
         if (validated.HasError()) {
             return Result<void>::Failure(validated.ErrorValue());
         }
-        Entry &entry = entries_[validated.Value()];
+        Entry &entry = slots_.At(validated.Value());
         if (entry.state != RenderResourceState::Pending) {
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceNotPending, "Only a pending resource generation can be published."));
@@ -171,20 +289,22 @@ namespace Horo::Render::Detail {
         }
         entry.backendInstance = backendInstance;
         entry.memoryAllocation = memoryAllocation;
+        if (memoryAllocation.has_value())
+            entry.memoryReservation = {};
         entry.state = RenderResourceState::Ready;
         --pendingRequests_;
-        CompleteOperation(entry.operation, std::nullopt);
+        journal_.Complete(entry.operation, std::nullopt);
         return Result<void>::Success();
     }
 
     Result<void> RenderResourceRegistry::Fail(const RenderResourceClass resourceClass, const RenderResourceIdentity identity, Error error) {
         using enum RenderResourceState;
 
-        auto validated = Validate(resourceClass, identity);
+        auto validated = slots_.Validate(resourceClass, identity);
         if (validated.HasError()) {
             return Result<void>::Failure(validated.ErrorValue());
         }
-        Entry &entry = entries_[validated.Value()];
+        Entry &entry = slots_.At(validated.Value());
         if (entry.state != Pending) {
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceNotPending, "Only a pending resource generation can fail creation."));
@@ -192,18 +312,18 @@ namespace Horo::Render::Detail {
         entry.state = Failed;
         QueueRetirementIfEligible(identity.slot);
         --pendingRequests_;
-        CompleteOperation(entry.operation, std::move(error));
+        journal_.Complete(entry.operation, std::move(error));
         return Result<void>::Success();
     }
 
     Result<void> RenderResourceRegistry::Release(const RenderResourceClass resourceClass, const RenderResourceIdentity identity) {
         using enum RenderResourceState;
 
-        auto validated = Validate(resourceClass, identity);
+        auto validated = slots_.Validate(resourceClass, identity);
         if (validated.HasError()) {
             return Result<void>::Failure(validated.ErrorValue());
         }
-        Entry &entry = entries_[validated.Value()];
+        Entry &entry = slots_.At(validated.Value());
         if (entry.state == Retiring) {
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceAlreadyRetiring, "The resource generation is already retiring."));
@@ -218,17 +338,17 @@ namespace Horo::Render::Detail {
     }
 
     Result<void> RenderResourceRegistry::CancelPending(const RenderResourceClass resourceClass, const RenderResourceIdentity identity) {
-        auto validated = Validate(resourceClass, identity);
+        auto validated = slots_.Validate(resourceClass, identity);
         if (validated.HasError())
             return Result<void>::Failure(validated.ErrorValue());
-        Entry &entry = entries_[validated.Value()];
+        Entry &entry = slots_.At(validated.Value());
         if (entry.state != RenderResourceState::Pending)
             return Result<void>::Failure(
                 RegistryError(FrontendErrors::ResourceNotPending, "Only a pending resource operation can be cancelled."));
         Error cancelled =
             RegistryError(FrontendErrors::ResourceOperationCancelled, "The pending resource operation was cancelled before realization.");
         --pendingRequests_;
-        CompleteOperation(entry.operation, std::move(cancelled));
+        journal_.Complete(entry.operation, std::move(cancelled));
         entry.state = RenderResourceState::Retiring;
         QueueRetirementIfEligible(identity.slot);
         return Result<void>::Success();
@@ -236,37 +356,39 @@ namespace Horo::Render::Detail {
 
     Result<RenderResourceState> RenderResourceRegistry::State(const RenderResourceClass resourceClass,
                                                               const RenderResourceIdentity identity) const {
-        auto validated = Validate(resourceClass, identity);
+        auto validated = slots_.Validate(resourceClass, identity);
         if (validated.HasError()) {
             return Result<RenderResourceState>::Failure(validated.ErrorValue());
         }
-        return Result<RenderResourceState>::Success(entries_[validated.Value()].state);
+        return Result<RenderResourceState>::Success(slots_.At(validated.Value()).state);
     }
 
     /** @copydoc RenderResourceRegistry::RollbackPending */
     void RenderResourceRegistry::RollbackPending(const RenderResourceClass resourceClass, const ResourceReservation reservation) noexcept {
-        if (const Entry *found = FindExact(reservation.identity); found == nullptr || found->state != RenderResourceState::Pending ||
-                                                                  found->resourceClass != resourceClass ||
-                                                                  found->operation != reservation.operation)
+        if (const Entry *found = slots_.FindExact(reservation.identity); found == nullptr || found->state != RenderResourceState::Pending ||
+                                                                         found->resourceClass != resourceClass ||
+                                                                         found->operation != reservation.operation)
             return;
-        const auto operation = std::ranges::find(operations_, reservation.operation, &OperationRecord::id);
-        assert(operation != operations_.end() && operation->rollbackError.has_value());
-        CompleteOperation(reservation.operation, std::move(operation->rollbackError));
+        journal_.CompleteRollback(reservation.operation);
         --pendingRequests_;
-        entries_[reservation.identity.slot].state = RenderResourceState::Retiring;
+        slots_.At(reservation.identity.slot).state = RenderResourceState::Retiring;
         QueueRetirementIfEligible(reservation.identity.slot);
     }
 
     Result<std::uint64_t> RenderResourceRegistry::BackendInstance(const RenderResourceClass resourceClass,
                                                                   const RenderResourceIdentity identity) const {
-        const auto validated = Validate(resourceClass, identity);
+        const auto validated = slots_.Validate(resourceClass, identity);
         if (validated.HasError()) {
             return Result<std::uint64_t>::Failure(validated.ErrorValue());
         }
-        const Entry &entry = entries_[validated.Value()];
+        const Entry &entry = slots_.At(validated.Value());
         if (entry.state != RenderResourceState::Ready) {
             return Result<std::uint64_t>::Failure(
                 RegistryError(FrontendErrors::ResourceNotReady, "The renderer resource has no usable backend instance."));
+        }
+        if (entry.externalSource) {
+            if (auto current = entry.externalSource->Validate(); current.HasError())
+                return Result<std::uint64_t>::Failure(current.ErrorValue());
         }
         return Result<std::uint64_t>::Success(entry.backendInstance);
     }
@@ -355,12 +477,15 @@ namespace Horo::Render::Detail {
 
     std::size_t RenderResourceRegistry::DrainRetirements(const BackendResourceReleaseMode releaseMode) noexcept {
         std::size_t retired = 0;
-        while (retired < limits_.retirementDrainBudget && retirementQueueCount_ > 0) {
+        // Retiring a child can enqueue its now-unpinned parents. Consume those within the same
+        // fixed work budget; a still-live native lease may requeue but cannot cause an unbounded scan.
+        for (std::size_t examined = 0; examined < limits_.retirementDrainBudget && retirementQueueCount_ != 0; ++examined) {
             const std::uint32_t slot = retirementQueue_[retirementQueueHead_];
             retirementQueueHead_ = (retirementQueueHead_ + 1) % retirementQueue_.size();
             --retirementQueueCount_;
-            Retire(slot, releaseMode);
-            ++retired;
+            slots_.At(slot).retirementQueued = false;
+            if (Retire(slot, releaseMode))
+                ++retired;
         }
         return retired;
     }
@@ -369,6 +494,9 @@ namespace Horo::Render::Detail {
         using enum RenderResourceState;
 
         if (!acceptingRequests_) {
+            while (DrainRetirements(releaseMode) != 0) {
+                // A bounded pass may expose a dependency-free generation for the next pass.
+            }
             return;
         }
         acceptingRequests_ = false;
@@ -377,13 +505,10 @@ namespace Horo::Render::Detail {
         activeSubmissionPins_ = 0;
         queueProgress_.clear();
         completionScanCursor_ = 0;
-        for (std::size_t slot = 1; slot < entries_.size(); ++slot) {
-            Entry &entry = entries_[slot];
+        for (std::size_t slot = 1; slot < slots_.Size(); ++slot) {
+            Entry &entry = slots_.At(slot);
             if (entry.state == Pending) {
-                const auto operation = std::ranges::find(operations_, entry.operation, &OperationRecord::id);
-                assert(operation != operations_.end() && operation->error.has_value());
-                operation->complete = true;
-                operation->rollbackError.reset();
+                journal_.CompleteShutdown(entry.operation);
                 entry.state = Retiring;
             } else if (entry.state == Ready) {
                 entry.state = Retiring;
@@ -394,21 +519,23 @@ namespace Horo::Render::Detail {
         while (DrainRetirements(releaseMode) != 0) {
             // Continue until dependency retirement makes no further entry eligible.
         }
-        for (std::size_t slot = 1; slot < entries_.size(); ++slot) {
-            if (entries_[slot].state != Retired) {
-                Retire(slot, releaseMode);
+        for (std::size_t slot = 1; slot < slots_.Size(); ++slot) {
+            if (slots_.At(slot).state != Retired) {
+                (void)Retire(slot, releaseMode);
             }
         }
-        retirementQueueHead_ = 0;
-        retirementQueueCount_ = 0;
+        if (!HasPendingNativeRetirements()) {
+            retirementQueueHead_ = 0;
+            retirementQueueCount_ = 0;
+        }
     }
 
     RenderResourceOwnerId RenderResourceRegistry::Owner() const noexcept {
         return owner_;
     }
 
-    Result<std::size_t> RenderResourceRegistry::Validate(const RenderResourceClass resourceClass,
-                                                         const RenderResourceIdentity identity) const {
+    Result<std::size_t> RenderResourceRegistry::SlotStore::Validate(const RenderResourceClass resourceClass,
+                                                                    const RenderResourceIdentity identity) const {
         if (const std::array<std::uint64_t, 3> identityFields{identity.owner.value, identity.slot, identity.generation};
             std::ranges::find(identityFields, 0) != identityFields.end()) {
             return Result<std::size_t>::Failure(
@@ -434,7 +561,8 @@ namespace Horo::Render::Detail {
         return Result<std::size_t>::Success(identity.slot);
     }
 
-    const RenderResourceRegistry::Entry *RenderResourceRegistry::FindExact(const RenderResourceIdentity identity) const noexcept {
+    const RenderResourceRegistry::Entry *RenderResourceRegistry::SlotStore::FindExact(
+        const RenderResourceIdentity identity) const noexcept {
         if (identity.owner != owner_) {
             return nullptr;
         }
@@ -448,16 +576,16 @@ namespace Horo::Render::Detail {
         return &entry;
     }
 
-    void RenderResourceRegistry::CompleteOperation(const ResourceOperationId operationId, std::optional<Error> error) noexcept {
-        const auto operation = std::ranges::find(operations_, operationId, &OperationRecord::id);
-        assert(operation != operations_.end());
+    void RenderResourceRegistry::OperationJournal::Complete(const ResourceOperationId operationId, std::optional<Error> error) noexcept {
+        const auto operation = std::ranges::find(records_, operationId, &OperationRecord::id);
+        assert(operation != records_.end());
         operation->complete = true;
         operation->error = std::move(error);
         operation->rollbackError.reset();
     }
 
     void RenderResourceRegistry::QueueRetirementIfEligible(const std::size_t slot) {
-        Entry &entry = entries_[slot];
+        Entry &entry = slots_.At(slot);
         const bool retiring = entry.state == RenderResourceState::Retiring || entry.state == RenderResourceState::Failed;
         if (const std::array eligibility{retiring, entry.dependentPins == 0, entry.submissionPins == 0, !entry.retirementQueued};
             !std::ranges::all_of(eligibility, std::identity{})) {
@@ -470,31 +598,48 @@ namespace Horo::Render::Detail {
         ++retirementQueueCount_;
     }
 
-    void RenderResourceRegistry::Retire(const std::size_t slot, const BackendResourceReleaseMode releaseMode) noexcept {
-        Entry &entry = entries_[slot];
+    bool RenderResourceRegistry::Retire(const std::size_t slot, const BackendResourceReleaseMode releaseMode) noexcept {
+        Entry &entry = slots_.At(slot);
+        if (entry.backendInstance != 0 && !entry.nativeDestroyRequested && releaseBackendResource_) {
+            releaseBackendResource_(entry.resourceClass, entry.backendInstance, entry.memoryAllocation, releaseMode);
+            entry.nativeDestroyRequested = true;
+        }
+        if (memoryBudget_ != nullptr && entry.memoryAllocation.has_value() &&
+            releaseMode != BackendResourceReleaseMode::NativeUnavailable && !entry.memoryRetirementBegun) {
+            if (memoryBudget_->BeginRetire(*entry.memoryAllocation).HasError())
+                std::terminate();
+            entry.memoryRetirementBegun = true;
+        }
+        if (entry.nativeLease.claimed && !entry.nativeLease.released) {
+            QueueRetirementIfEligible(slot);
+            return false;
+        }
+        if (memoryBudget_ != nullptr) {
+            if (entry.memoryReservation.IsValid()) {
+                if (memoryBudget_->Cancel(entry.memoryReservation).HasError())
+                    std::terminate();
+            } else if (entry.memoryAllocation.has_value() && releaseMode != BackendResourceReleaseMode::NativeUnavailable &&
+                       memoryBudget_->AcknowledgeRetirement(*entry.memoryAllocation).HasError()) {
+                std::terminate();
+            }
+        }
         for (const RenderResourceIdentity dependency : entry.dependencies) {
-            if (FindExact(dependency) != nullptr) {
-                Entry &dependencyEntry = entries_[dependency.slot];
+            if (slots_.FindExact(dependency) != nullptr) {
+                Entry &dependencyEntry = slots_.At(dependency.slot);
                 assert(dependencyEntry.dependentPins > 0);
                 --dependencyEntry.dependentPins;
                 QueueRetirementIfEligible(dependency.slot);
             }
         }
         entry.dependencies.clear();
-        if (entry.backendInstance != 0 && releaseBackendResource_) {
-            releaseBackendResource_(entry.resourceClass, entry.backendInstance, entry.memoryAllocation, releaseMode);
-        }
         entry.backendInstance = 0;
+        entry.externalSource.reset();
         entry.memoryAllocation.reset();
         entry.operation = {};
         entry.state = RenderResourceState::Retired;
         entry.retirementQueued = false;
-        if (entry.generation == std::numeric_limits<std::uint32_t>::max()) {
-            entry.generationExhausted = true;
-        } else {
-            ++entry.generation;
-            freeSlots_.emplace_back(static_cast<std::uint32_t>(slot));
-        }
+        slots_.RecycleTerminal(slot);
+        return true;
     }
 
     Result<RenderResourceOwnerId> AcquireRenderResourceOwnerId() {

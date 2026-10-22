@@ -29,6 +29,10 @@ namespace Horo::Render::Detail {
             const auto identity = ResolveGraphResidentIdentity(*binding);
             if (identity.HasError())
                 return ResolveResult::Failure(identity.ErrorValue());
+            if (identity.Value().resourceClass == RenderResourceClass::Texture) {
+                if (auto release = registry.ValidateExternalRelease(identity.Value().identity, graph, resource.id); release.HasError())
+                    return ResolveResult::Failure(release.ErrorValue());
+            }
             const auto instance = registry.BackendInstance(identity.Value().resourceClass, identity.Value().identity);
             if (instance.HasError())
                 return ResolveResult::Failure(instance.ErrorValue());

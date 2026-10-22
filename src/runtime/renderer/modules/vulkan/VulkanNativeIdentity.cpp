@@ -38,7 +38,17 @@ namespace Horo::Render::Detail {
             mix(candidate->requiredFeatures.dynamicRendering);
             mix(candidate->requiredFeatures.synchronization2);
             mix(candidate->requiredFeatures.timelineSemaphore);
+            mix(candidate->vertexLayerRouting);
             mix(candidate->driverAllowed);
+            auto queues = candidate->queueFamilies;
+            std::ranges::sort(queues, {}, &VulkanQueueFamily::index);
+            mix(queues.size());
+            for (const auto &queue : queues) {
+                mix(queue.index);
+                mix(queue.supportsGraphics);
+                mix(queue.supportsPresentation);
+                mix(queue.supportsTransfer);
+            }
         }
         return revision == 0 ? 1 : revision;
     }

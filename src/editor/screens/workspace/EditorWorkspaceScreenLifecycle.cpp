@@ -10,11 +10,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (HasDirtyDocuments()) {
             static_cast<void>(controller_->HasDirtySourceDocuments());
             leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
+            leaveCapture_.prefabDocuments = controller_->ViewModel().prefabDocuments;
             auto graphs = controller_->PCGDocuments().Snapshots();
             if (graphs.HasError())
                 return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
             leaveCapture_.pcgDocuments = std::move(graphs).Value();
-            if (const auto collision = CaptureLeaveCollision(); collision.HasError())
+            if (const auto collision = leaveCapture_.CaptureLeaveCollision(*controller_); collision.HasError())
                 return LeaveDecision{.disposition = Deny, .requirement = std::nullopt};
             const auto world = controller_->WorldDocuments().Snapshot();
             leaveCapture_.worldFence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt;
@@ -37,16 +38,18 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(MakeError(WorldDocumentErrors::Dirty));
         if (const auto navigation = controller_->SaveNavigationDocuments(); navigation.HasError())
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+        if (const auto prefabs = controller_->SavePrefabDocuments(); prefabs.HasError())
+            return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
         if (const auto sources = controller_->SaveSourceDocuments(); sources.HasError())
             return Result<LeaveDecision>::Failure(sources.ErrorValue());
-        EditorWorkspaceViewCommandData command;
-        command.command = EditorWorkspaceViewCommand::SaveScene;
-        controller_->ProcessCommand(command);
+        controller_->SaveScene();
         if (controller_->ViewModel().isDirty || controller_->SaveCollisionSettings().HasError() ||
             controller_->SavePCGDocuments().HasError() || controller_->HasDirtyPCGDocuments())
             return Result<LeaveDecision>::Success({.disposition = Deny, .requirement = std::nullopt});
         if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
+        if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())
+            return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
         if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
         return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
@@ -64,7 +67,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(collision.ErrorValue());
         if (const auto navigation = controller_->ShutdownNavigationDocuments(true); navigation.HasError())
             return Result<LeaveDecision>::Failure(navigation.ErrorValue());
-        if (const auto current = ValidateLeaveWorld(); current.HasError())
+        if (const auto prefabs = controller_->ShutdownPrefabDocuments(true); prefabs.HasError())
+            return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
+        if (const auto current = leaveCapture_.ValidateLeaveWorld(*controller_); current.HasError())
             return Result<LeaveDecision>::Failure(current.ErrorValue());
         if (const auto world = controller_->WorldDocuments().Shutdown(WorldDocumentDisposition::Discard); world.HasError())
             return Result<LeaveDecision>::Failure(world.ErrorValue());
@@ -106,6 +111,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnLeave */
     void EditorWorkspaceScreen::OnLeave() {
+        workspaceControllerLifetime_.reset();
         view_.ResetSourceSession();
         sourceCommands_.EndSession();
         LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
@@ -115,12 +121,15 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
             SaveExtensionWorkspace();
             controller_->FlushAutosave();
+            if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())
+                LOG_ERROR("editor.prefab_document", "Prefab recovery shutdown incomplete: %s", prefabs.ErrorValue().message.c_str());
             if (const auto gameplay = controller_->ShutdownGameplayModules(); gameplay.HasError())
                 LOG_WARN("editor.gameplay", "Gameplay retirement remains owned by the application: %s",
                          gameplay.ErrorValue().message.c_str());
             if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
                 LOG_ERROR("editor.navigation_document", "Navigation document shutdown is incomplete: %s",
                           navigation.ErrorValue().message.c_str());
+            controller_->DetachWorldSourceOwner();
             if (const auto world = controller_->WorldDocuments().Shutdown(); world.HasError())
                 LOG_ERROR("editor.world_document", "World shutdown requires an explicit dirty decision: %s",
                           world.ErrorValue().message.c_str());
@@ -144,69 +153,87 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::HasDirtyDocuments */
     bool EditorWorkspaceScreen::HasDirtyDocuments() const {
-        return controller_ && (controller_->ViewModel().isDirty || controller_->HasDirtyPCGDocuments() ||
-                               controller_->HasDirtyCollisionSettings() || controller_->HasDirtyNavigationDocuments() ||
-                               controller_->HasDirtyWorldDocuments() || controller_->HasDirtySourceDocuments());
+        return controller_ &&
+               (controller_->ViewModel().isDirty || controller_->HasDirtyPrefabDocuments() || controller_->HasDirtyPCGDocuments() ||
+                controller_->HasDirtyCollisionSettings() || controller_->HasDirtyNavigationDocuments() ||
+                controller_->HasDirtyWorldDocuments() || controller_->HasDirtySourceDocuments());
     }
 
     /** @copydoc EditorWorkspaceScreen::ValidateLeaveCapture */
     Result<void> EditorWorkspaceScreen::ValidateLeaveCapture() const {
-        if (const auto current = ValidateLeaveWorld(); current.HasError())
+        if (const auto current = leaveCapture_.ValidateLeavePrefabs(*controller_); current.HasError())
             return current;
-        if (const auto current = ValidateLeavePCGDocuments(); current.HasError())
+        if (const auto current = leaveCapture_.ValidateLeaveWorld(*controller_); current.HasError())
             return current;
-        return ValidateLeaveCollision();
+        if (const auto current = leaveCapture_.ValidateLeavePCGDocuments(*controller_); current.HasError())
+            return current;
+        return leaveCapture_.ValidateLeaveCollision(*controller_);
     }
 
-    /** @copydoc EditorWorkspaceScreen::ValidateLeaveWorld */
-    Result<void> EditorWorkspaceScreen::ValidateLeaveWorld() const {
-        const auto world = controller_->WorldDocuments().Snapshot();
-        if (const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt; fence != leaveCapture_.worldFence)
+    /** @copydoc WorkspaceLeaveCapture::ValidateLeavePrefabs */
+    Result<void> WorkspaceLeaveCapture::ValidateLeavePrefabs(EditorWorkspaceController &controller) const {
+        const auto &prefabs = controller.ViewModel().prefabDocuments;
+        if (prefabs.size() != prefabDocuments.size())
+            return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+        for (std::size_t index = 0; index < prefabs.size(); ++index) {
+            const auto &captured = prefabDocuments[index];
+            const auto &current = prefabs[index];
+            if (current.identity != captured.identity || current.fence.revision != captured.fence.revision ||
+                current.acceptedSource != captured.acceptedSource || current.savedState != captured.savedState)
+                return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc WorkspaceLeaveCapture::ValidateLeaveWorld */
+    Result<void> WorkspaceLeaveCapture::ValidateLeaveWorld(EditorWorkspaceController &controller) const {
+        const auto world = controller.WorldDocuments().Snapshot();
+        if (const auto fence = world.HasValue() ? std::optional{world.Value()->fence} : std::nullopt; fence != worldFence)
             return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorWorkspaceScreen::CaptureLeaveCollision */
-    Result<void> EditorWorkspaceScreen::CaptureLeaveCollision() const {
-        leaveCapture_.collisionOwner.reset();
-        leaveCapture_.collisionRoot.reset();
-        if (!controller_->HasDirtyCollisionSettings())
+    /** @copydoc WorkspaceLeaveCapture::CaptureLeaveCollision */
+    Result<void> WorkspaceLeaveCapture::CaptureLeaveCollision(EditorWorkspaceController &controller) {
+        collisionOwner.reset();
+        collisionRoot.reset();
+        if (!controller.HasDirtyCollisionSettings())
             return Result<void>::Success();
-        auto owner = controller_->CollisionSettings();
+        auto owner = controller.CollisionSettings();
         if (owner.HasError())
             return Result<void>::Failure(owner.ErrorValue());
         auto root = owner.Value()->Snapshot();
         if (root.HasError())
             return Result<void>::Failure(root.ErrorValue());
-        leaveCapture_.collisionOwner = owner.Value();
-        leaveCapture_.collisionRoot = std::move(root).Value();
+        collisionOwner = owner.Value();
+        collisionRoot = std::move(root).Value();
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorWorkspaceScreen::ValidateLeaveCollision */
-    Result<void> EditorWorkspaceScreen::ValidateLeaveCollision() const {
-        if (controller_->HasDirtyCollisionSettings() != static_cast<bool>(leaveCapture_.collisionRoot))
+    /** @copydoc WorkspaceLeaveCapture::ValidateLeaveCollision */
+    Result<void> WorkspaceLeaveCapture::ValidateLeaveCollision(EditorWorkspaceController &controller) const {
+        if (controller.HasDirtyCollisionSettings() != static_cast<bool>(collisionRoot))
             return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
-        if (!leaveCapture_.collisionRoot)
+        if (!collisionRoot)
             return Result<void>::Success();
-        const auto owner = leaveCapture_.collisionOwner.lock();
-        if (const auto currentOwner = controller_->CollisionSettings(); !owner || currentOwner.HasError() || currentOwner.Value() != owner)
+        const auto owner = collisionOwner.lock();
+        if (const auto currentOwner = controller.CollisionSettings(); !owner || currentOwner.HasError() || currentOwner.Value() != owner)
             return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
-        if (const auto snapshot = owner->Snapshot(); snapshot.HasError() || snapshot.Value() != leaveCapture_.collisionRoot)
+        if (const auto snapshot = owner->Snapshot(); snapshot.HasError() || snapshot.Value() != collisionRoot)
             return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
         return Result<void>::Success();
     }
 
-    /** @copydoc EditorWorkspaceScreen::ValidateLeavePCGDocuments */
-    Result<void> EditorWorkspaceScreen::ValidateLeavePCGDocuments() const {
-        const auto graphs = controller_->PCGDocuments().Snapshots();
+    /** @copydoc WorkspaceLeaveCapture::ValidateLeavePCGDocuments */
+    Result<void> WorkspaceLeaveCapture::ValidateLeavePCGDocuments(EditorWorkspaceController &controller) const {
+        const auto graphs = controller.PCGDocuments().Snapshots();
         if (graphs.HasError())
             return Result<void>::Failure(graphs.ErrorValue());
-        if (graphs.Value().size() != leaveCapture_.pcgDocuments.size())
+        if (graphs.Value().size() != pcgDocuments.size())
             return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
         for (std::size_t index = 0; index < graphs.Value().size(); ++index) {
             const auto &current = graphs.Value()[index];
-            const auto &captured = leaveCapture_.pcgDocuments[index];
+            const auto &captured = pcgDocuments[index];
             if (current.session != captured.session || current.revision != captured.revision ||
                 current.catalogRevision != captured.catalogRevision)
                 return Result<void>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));

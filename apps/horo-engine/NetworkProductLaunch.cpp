@@ -373,6 +373,26 @@ namespace Horo::Application::Internal {
             return worlds;
         }
 
+        /** @brief Owns complete project admission policy while binding the explicitly selected world services. */
+        [[nodiscard]] Result<Net::NetworkModeFactories> ComposeProductWorldServices(
+            std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductLaunch &launch,
+            const Net::NetworkProjectSettings &project, Net::NetworkModeFactories factories, HeadlessProjectSceneResources *resources) {
+            std::optional<Gameplay::GameplayReplicationAdmissionPolicy> replicationAdmission;
+            if (launch.role != Net::NetworkProjectRole::Standalone)
+                replicationAdmission.emplace(Gameplay::GameplayReplicationAdmissionPolicy{.inventory = project.ReplicationInventory()});
+            if (!resources)
+                return Result<Net::NetworkModeFactories>::Success(
+                    ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay, replicationAdmission));
+            HeadlessSceneActivationInput input{.mode = launch.sceneInput.physicsMode,
+                                               .settings = *resources->settings,
+                                               .registry = resources->registry,
+                                               .loads = *resources->loads,
+                                               .load = resources->load,
+                                               .prefabLoads = resources->prefabLoads.get()};
+            return ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay,
+                                                       replicationAdmission);
+        }
+
         [[nodiscard]] Result<std::unique_ptr<NetworkProductHost>> ComposeProduct(
             Clock &clock, const ProductLaunch &launch, const Net::NetworkProjectSettings &project,
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductWorlds &worlds,
@@ -398,22 +418,10 @@ namespace Horo::Application::Internal {
             auto debugger = std::make_shared<NetworkDebuggerService>();
             (void)debugger->Begin(worlds.values[0].scene.value, 1, launch.role != Net::NetworkProjectRole::Standalone,
                                   Net::NetworkDiagnosticProvider::Native);
-            auto factories = ProductFactories(launch.role, launch.bind, launch.connect, debugger);
-            if (resources) {
-                HeadlessSceneActivationInput input{.mode = launch.sceneInput.physicsMode,
-                                                   .settings = *resources->settings,
-                                                   .registry = resources->registry,
-                                                   .loads = *resources->loads,
-                                                   .load = resources->load,
-                                                   .prefabLoads = resources->prefabLoads.get()};
-                auto configured =
-                    ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), std::move(factories), launch.gameplay);
-                if (configured.HasError())
-                    return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
-                factories = std::move(configured).Value();
-            } else {
-                factories = ComposeHeadlessNetworkServices(std::move(scene), std::move(factories), launch.gameplay);
-            }
+            auto configured = ComposeProductWorldServices(std::move(scene), launch, project,
+                                                          ProductFactories(launch.role, launch.bind, launch.connect, debugger), resources);
+            if (configured.HasError())
+                return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
             return NetworkProductHost::Create(clock,
                                               {project,
                                                product,
@@ -424,7 +432,7 @@ namespace Horo::Application::Internal {
                                                1,
                                                {worlds.values.data(), worlds.count},
                                                presentation},
-                                              std::move(factories), &diagnostic, debugger);
+                                              std::move(configured).Value(), &diagnostic, debugger);
         }
 
         [[nodiscard]] int RunProductFrames(NetworkProductHost &runtime, const ProductLaunch &launch, const ProductWorlds &worlds) {

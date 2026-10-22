@@ -58,7 +58,7 @@ namespace Horo::Editor {
             if (entry.previewFallback == Assets::AssetPreviewFallback::Audio) {
                 return TintedPresentation(entry.displayName, Theme::Warn(), 0.10F, Ui::UiIcon::AudioFile);
             }
-            if (entry.assetType.find("prefab") != std::string::npos) {
+            if (entry.IsPrefab()) {
                 return TintedPresentation(entry.displayName, Theme::Accent(), 0.09F, Ui::UiIcon::HierarchyGeneric);
             }
             if (entry.previewFallback == Assets::AssetPreviewFallback::Mesh) {

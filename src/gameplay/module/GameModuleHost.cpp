@@ -168,7 +168,7 @@ namespace Horo::Gameplay {
             impl->gameplayModule = validated.bundle->lifecycle.create();
             if (impl->gameplayModule == nullptr)
                 diagnostic = MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object.");
-            else if (auto activated = impl->RegisterAndStart(hostCapabilities_); activated.HasError())
+            else if (auto activated = impl->RegisterAndStart(hostCapabilities_, replicationAdmission_); activated.HasError())
                 diagnostic = activated.ErrorValue();
         } catch (...) {  // NOSONAR(cpp:S2738) Native module boundary contains arbitrary plugin exceptions and preserves rollback ownership.
             diagnostic = std::move(initializationFailure);
