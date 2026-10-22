@@ -85,7 +85,8 @@ if(HORO_BUILD_RENDER_VULKAN AND NOT (WIN32 OR (UNIX AND NOT APPLE)))
     message(FATAL_ERROR "HORO_BUILD_RENDER_VULKAN is supported only on native Windows and Linux platforms")
 endif()
 
-if(HORO_BUILD_EDITOR_GUI AND NOT HORO_BUILD_RENDER_OPENGL AND NOT HORO_BUILD_RENDER_METAL)
+# Build composition admits concrete peers; selected-host runtime availability is a separate gate.
+if(HORO_BUILD_EDITOR_GUI AND NOT HORO_BUILD_RENDER_OPENGL AND NOT HORO_BUILD_RENDER_METAL AND NOT HORO_BUILD_RENDER_VULKAN)
     message(FATAL_ERROR "The editor GUI composition requires at least one interactive renderer")
 endif()
 
