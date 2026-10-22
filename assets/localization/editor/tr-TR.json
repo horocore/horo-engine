@@ -1517,6 +1517,71 @@
     "workspace.panel.inspector": {"text": "Denetçi"},
     "workspace.panel.scene": {"text": "Sahne"},
     "workspace.panel.viewport": {"text": "Görünüm"},
+    "workspace.streaming.accepted": {"text": "Kabul edildi"},
+    "workspace.streaming.deferred": {"text": "Ertelendi"},
+    "workspace.streaming.rejected": {"text": "Reddedildi"},
+    "workspace.streaming.pinned": {"text": "Sabitlenen asgari ikamet"},
+    "workspace.streaming.predicted": {"text": "Öngörülen kaynak / hedef"},
+    "workspace.streaming.source": {"text": "Kaynak / hedef"},
+    "workspace.streaming.visible_counts": {"text": "Görünür / hassasiyet alanı dışında"},
+    "workspace.streaming.capacity": {"text": "Akış önizlemesi hücre veya geometri bütçesini aşıyor"},
+    "workspace.streaming.stale": {"text": "Akış önizlemesi kayıtları güncel değil; tutarlı kayıt bekleniyor"},
+    "workspace.streaming.inspection": {"text": "Salt okunur akış incelemesi için pişirilmiş dizini bağlayın. Hücre yüklemesi veya bütçe kullanımı varsayılmaz."},
+    "workspace.streaming.index_path": {"text": "Proje içindeki world.index yolu"},
+    "workspace.streaming.mount": {"text": "Akış önizlemesini bağla"},
+    "workspace.streaming.unmount": {"text": "Akış önizlemesini durdur"},
+    "workspace.streaming.preparing": {"text": "Gerçek sınırlı kaynak planı hazırlanıyor…"},
+    "workspace.streaming.mount_failed": {"text": "Akış önizlemesi bağlanamadı; mümkün olduğunda mevcut bağlantı korundu"},
+    "workspace.streaming.stability": {"text": "Planlayıcı tutma nedeni"},
+    "workspace.streaming.retained": {"text": "Tutulan talep"},
+    "workspace.streaming.lingering": {"text": "Kaynak çıkışı sonrası bekleme aralığı"},
+    "workspace.streaming.cooldown": {"text": "Yeniden yükleme bekleme süresi"},
+    "workspace.streaming.watching": {"text": "Sınır geçmişi izleniyor"},
+    "workspace.streaming.legend": {"text": "Akış: sınır = istenen, nokta = gerçek; nedenler için noktanın üzerine gelin"},
+    "workspace.streaming.unavailable": {"text": "Akış önizlemesi kullanılamıyor: güncel bağlı çalışma zamanı kaydı yok"},
+    "workspace.streaming.unknown": {"text": "Bilinmiyor / gözlemlenmedi"},
+    "workspace.streaming.unloaded": {"text": "Yüklenmemiş"},
+    "workspace.streaming.loaded": {"text": "Yüklü"},
+    "workspace.streaming.activated": {"text": "Etkinleştirilmiş"},
+    "workspace.streaming.loading": {"text": "Yükleniyor"},
+    "workspace.streaming.resident": {"text": "Bellekte"},
+    "workspace.streaming.active": {"text": "Etkin"},
+    "workspace.streaming.evicting": {"text": "Boşaltılıyor"},
+    "workspace.streaming.failed": {"text": "Başarısız"},
+    "workspace.streaming.succeeded": {"text": "Başarılı"},
+    "workspace.streaming.cancelled": {"text": "İptal edildi"},
+    "workspace.streaming.replaced": {"text": "Değiştirildi"},
+    "workspace.streaming.shutdown": {"text": "Kapatıldı"},
+    "workspace.streaming.cell": {"text": "Hücre / LOD / katman"},
+    "workspace.streaming.desired": {"text": "İstenen"},
+    "workspace.streaming.runtime": {"text": "Gerçek çalışma zamanı"},
+    "workspace.streaming.reason": {"text": "Otorite nedeni"},
+    "workspace.streaming.evidence_counts": {"text": "Kaynak / deneme / hata / karar"},
+    "workspace.streaming.no_demand": {"text": "Planlanmış talep yok"},
+    "workspace.panel.world_composition": {"text": "Dünya Kompozisyonu"},
+    "workspace.world.source_hint": {"text": "Projeye göreli .horoworld kaynak belgesini açın. Değiştirmeden önce kaydedilmemiş değişiklikleri çözümleyin."},
+    "workspace.world.path": {"text": "Projeye göreli kaynak yolu"},
+    "workspace.world.open_source": {"text": "Dünya kaynağını aç"},
+    "workspace.world.close_source": {"text": "Dünya kaynağını kapat"},
+    "workspace.world.no_document": {"text": "Bölümlenmiş bir dünya açık değil."},
+    "workspace.world.error": {"text": "Dünya Kompozisyonu işlemi tamamlayamadı. Mevcut kaynak durumu korundu."},
+    "workspace.world.authoring_status": {"text": "Kaynak kapsamı ve düzenleme çalışma kümesi. Pişirilmiş kullanılabilirlik ve çalışma zamanı yerleşimi bağımsızdır."},
+    "workspace.world.search": {"text": "Katman adı, kimliği, hücre koordinatları veya LOD ara"},
+    "workspace.world.all": {"text": "Tüm durumlar"},
+    "workspace.world.all_layers": {"text": "Tüm katmanlar"},
+    "workspace.world.open": {"text": "Düzenleme kümesinde açık"},
+    "workspace.world.closed": {"text": "Düzenleme kümesi dışında"},
+    "workspace.world.mixed": {"text": "Kısmen açık"},
+    "workspace.world.layers": {"text": "Katmanlar"},
+    "workspace.world.cells": {"text": "Hücreler"},
+    "workspace.world.layer": {"text": "Katman"},
+    "workspace.world.id": {"text": "Kimlik"},
+    "workspace.world.status": {"text": "Düzenleme durumu"},
+    "workspace.world.objects": {"text": "Nesneler"},
+    "workspace.world.always_present": {"text": "Her zaman mevcut"},
+    "workspace.world.coordinate": {"text": "Hücre koordinatları"},
+    "workspace.world.lod": {"text": "LOD"},
+    "workspace.world.no_matches": {"text": "Filtrelere uyan hücre veya katman yok."},
     "workspace.panel.game": {"text": "Oyun"},
     "workspace.panel.global_dock": {"text": "Alt Panel"},
     "workspace.game.idle": {"text": "Oyunu başlatmak için Oynat'a basın."},
@@ -1837,6 +1902,102 @@
     "workspace.value.on": {"text": "Açık"},
     "workspace.value.off": {"text": "Kapalı"},
     "workspace.value.static": {"text": "✓ Statik"},
+    "workspace.world_sources.radius": {
+      "text": "Yarıçap (mm)"
+    },
+    "workspace.world_sources.maximum_extent": {
+      "text": "Azami kapsam (mm)"
+    },
+    "workspace.world_sources.half_extent": {
+      "text": "Yarı kapsam (mm)"
+    },
+    "workspace.world_sources.plane_normal": {
+      "text": "Düzlem normali"
+    },
+    "workspace.world_sources.plane_distance": {
+      "text": "Düzlem uzaklığı (mm)"
+    },
+    "workspace.world_sources.normalize": {
+      "text": "Normali birimleştir"
+    },
+    "workspace.world_sources.add_point": {
+      "text": "Yol noktası ekle"
+    },
+    "workspace.world_sources.remove_point": {
+      "text": "Son noktayı kaldır"
+    },
+    "workspace.world_sources.title": {
+      "text": "Akış kaynakları"
+    },
+    "workspace.world_sources.unavailable": {
+      "text": "Akış kaynaklarını düzenlemek için bölümlenmiş bir dünya açın."
+    },
+    "workspace.world_sources.authoring_only": {
+      "text": "Kaynak şekillerini ve akış taleplerini düzenleyin. Konum ve boyutları değiştirmek için tutamaçları sürükleyin."
+    },
+    "workspace.world_sources.sphere": {
+      "text": "Küre oluştur"
+    },
+    "workspace.world_sources.box": {
+      "text": "Kutu oluştur"
+    },
+    "workspace.world_sources.frustum": {
+      "text": "Görüş hacmi oluştur"
+    },
+    "workspace.world_sources.path": {
+      "text": "Yol hacmi oluştur"
+    },
+    "workspace.world_sources.priority": {
+      "text": "Öncelik"
+    },
+    "workspace.world_sources.target": {
+      "text": "Hedef durum"
+    },
+    "workspace.world_sources.unloaded": {
+      "text": "Yüklü değil"
+    },
+    "workspace.world_sources.loaded": {
+      "text": "Yüklü"
+    },
+    "workspace.world_sources.activated": {
+      "text": "Etkin"
+    },
+    "workspace.world_sources.intent": {
+      "text": "Amaç"
+    },
+    "workspace.world_sources.camera": {
+      "text": "Kamera"
+    },
+    "workspace.world_sources.gameplay": {
+      "text": "Oynanış"
+    },
+    "workspace.world_sources.network": {
+      "text": "Ağ ilgisi"
+    },
+    "workspace.world_sources.preload": {
+      "text": "Ön yükleme"
+    },
+    "workspace.world_sources.color": {
+      "text": "Hata ayıklama rengi"
+    },
+    "workspace.world_sources.apply": {
+      "text": "Kaynağı uygula"
+    },
+    "workspace.world_sources.remove": {
+      "text": "Kaynağı kaldır"
+    },
+    "workspace.world_sources.cancel": {
+      "text": "Önizlemeyi iptal et"
+    },
+    "workspace.world_sources.undo": {
+      "text": "Kaynak düzenlemesini geri al"
+    },
+    "workspace.world_sources.redo": {
+      "text": "Kaynak düzenlemesini yinele"
+    },
+    "workspace.world_sources.rejected": {
+      "text": "Kaynak düzenlemesi reddedildi"
+    },
     "workspace.viewport.object_count": {"text": "{} nesne"},
     "workspace.viewport.perspective": {"text": "Perspektif"},
     "workspace.viewport.orthographic": {"text": "Ortografik"},
@@ -3166,6 +3327,33 @@
     "settings.navigation.override_cost": {
       "text": "Geçersiz kılınan geçiş maliyeti"
     },
+    "workspace.world_layers.title": {"text": "Katmanlar"},
+    "workspace.world_layers.create": {"text": "Katman oluştur"},
+    "workspace.world_layers.undo": {"text": "Katman komutunu geri al"},
+    "workspace.world_layers.redo": {"text": "Katman komutunu yinele"},
+    "workspace.world_layers.filter": {"text": "Katmanları filtrele"},
+    "workspace.world_layers.all_owners": {"text": "Tüm sahipler"},
+    "workspace.world_layers.streaming": {"text": "Dünya akışı"},
+    "workspace.world_layers.gameplay": {"text": "Oynanış betiği"},
+    "workspace.world_layers.network": {"text": "Ağ çoğaltması"},
+    "workspace.world_layers.current": {"text": "Geçerli düzenleme katmanı"},
+    "workspace.world_layers.set_current": {"text": "Geçerli katman yap"},
+    "workspace.world_layers.clear_current": {"text": "Geçerli katmanı temizle"},
+    "workspace.world_layers.move_up": {"text": "Yukarı taşı"},
+    "workspace.world_layers.move_down": {"text": "Aşağı taşı"},
+    "workspace.world_layers.empty": {"text": "Bu filtreyle eşleşen katman yok."},
+    "workspace.world_layers.current_hidden": {"text": "Geçerli düzenleme katmanı filtre tarafından gizlendi."},
+    "workspace.world_layers.name": {"text": "Katman adı"},
+    "workspace.world_layers.name_hint": {"text": "Boş olmayan bir katman adı girin."},
+    "workspace.world_layers.cancel": {"text": "İptal"},
+    "workspace.world_layers.stale": {"text": "Dünya değişti veya kapatıldı. İptal edip bu iletişim kutusunu yeniden açın."},
+    "workspace.world.bake": {"text": "Akış hücrelerini pişir"},
+    "workspace.world.validate": {"text": "Akış hücrelerini doğrula"},
+    "workspace.world.cancel_bake": {"text": "Pişirmeyi iptal et"},
+    "workspace.world.bake_running": {"text": "Dünya hücreleri işleniyor. İlerlemeyi İşlemler, tanıları Derleme Çıktısı bölümünde izleyin."},
+    "workspace.world.bake_current": {"text": "Pişirilen hücreler bu dünya ve proje revizyonuyla eşleşiyor."},
+    "workspace.world.bake_needed": {"text": "Dünyanın tamamını pişirin veya doğrulayın. Tanılar Derleme Çıktısı bölümünde görünür."},
+    "workspace.world_layers.rejected": {"text": "Katman oluşturma reddedildi. Adı ve belge sınırlarını kontrol edin."},
     "workspace.prefab.create.action": {
       "text": "Alt Ağaçtan Prefab Oluştur..."
     },

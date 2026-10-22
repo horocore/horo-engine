@@ -209,8 +209,8 @@ namespace Horo::Editor {
         return SourceFilePolicy{
             .nativeSourceExtensions = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".tpp"},
             .horoScriptExtensions = {".horo_script", ".lua"},
-            .projectTextExtensions = {".cfg", ".cmake", ".glsl", ".hlsl", ".ini", ".json", ".md", ".metal", ".shader", ".toml", ".txt",
-                                      ".vert", ".frag", ".xml", ".yaml", ".yml"},
+            .projectTextExtensions = {".cfg", ".cmake", ".glsl", ".hlsl", ".horoworld", ".ini", ".json", ".md", ".metal", ".shader",
+                                      ".toml", ".txt", ".vert", ".frag", ".xml", ".yaml", ".yml"},
             .projectTextFileNames = {".gitignore", "LICENSE"},
             .allowSymlinkedFiles = true,
             .embeddedEditorAvailable = true,

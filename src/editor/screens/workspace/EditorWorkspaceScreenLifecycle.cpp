@@ -129,6 +129,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (const auto navigation = controller_->ShutdownNavigationDocuments(); navigation.HasError())
                 LOG_ERROR("editor.navigation_document", "Navigation document shutdown is incomplete: %s",
                           navigation.ErrorValue().message.c_str());
+            controller_->DetachWorldSourceOwner();
             if (const auto world = controller_->WorldDocuments().Shutdown(); world.HasError())
                 LOG_ERROR("editor.world_document", "World shutdown requires an explicit dirty decision: %s",
                           world.ErrorValue().message.c_str());

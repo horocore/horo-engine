@@ -5,11 +5,13 @@
 #include "Horo/Editor/EditorMenuModel.h"
 #include "Horo/Editor/EditorWorkspaceEvents.h"
 #include "Horo/Editor/NavigationInspector.h"
+#include "Horo/Editor/PartitionedWorldWorkspace.h"
 #include "Horo/Editor/PhysicsInspector.h"
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceEditingCommands.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
+#include "Horo/Editor/WorldStreamingPreview.h"
 #include "Horo/Foundation/Result.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "editor/document/SceneDocument.h"
@@ -20,6 +22,7 @@
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
+#include "editor/screens/workspace/WorldLayerOutliner.h"
 #include "editor/screens/workspace/prefab/PrefabCreation.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
@@ -74,6 +77,22 @@ namespace Horo::Editor {
         Render::RenderLight light;
     };
 
+    /** @brief Typed viewport intent, executed only by the controller against its composed world owner. */
+    enum class WorldSourceToolAction : std::uint8_t {
+        Create,
+        Edit,
+        Remove,
+        Undo,
+        Redo
+    };
+
+    struct WorldSourceToolCommand {
+        WorldSourceToolAction action{};
+        WorldSourceEdit edit;
+        Math::WorldCoordinate64 globalOrigin;
+        std::uint64_t viewRevision{};
+    };
+
     /** @brief Closed prefab application intents; destructive decisions are explicit. */
     enum class PrefabDocumentAction {
         Save,
@@ -88,6 +107,18 @@ namespace Horo::Editor {
 
     enum class EditorWorkspaceViewCommand {
         None,
+        WorldSourceTool,
+        WorldLayerAuthoring,
+        OpenCreateWorldLayer,
+
+        MountWorldStreamingPreview,
+        UnmountWorldStreamingPreview,
+        OpenWorldCompositionSource,
+        QueryWorldComposition,
+        CloseWorldComposition,
+        BakeWorldCells,
+        ValidateWorldCells,
+        CancelWorldBake,
         PrefabDocument,
         FocusWorkspaceDocument,
         CloseWorkspaceDocument,
@@ -290,6 +321,11 @@ namespace Horo::Editor {
 
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
+        std::optional<WorldBrowserQuery> worldBrowserQuery;
+        std::optional<WorldDocumentFence> worldDocumentFence;
+        std::optional<OperationId> worldBakeOperation; /**< Exact accepted operation targeted by a cancellation intent. */
+        std::optional<WorldSourceToolCommand> worldSource;
+        std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<DocumentInstanceId> documentMoveBefore;
         std::optional<PrefabDocumentFence> prefabFence;
@@ -370,6 +406,23 @@ namespace Horo::Editor {
     };
 
     struct EditorWorkspaceViewModel {  // NOSONAR(cpp:S1820) Comprehensive workspace presentation model
+        WorldViewportBinding worldViewport;
+        std::shared_ptr<const WorldStreamingPreviewGeometry> worldStreamingPreview;
+        std::optional<Error> worldStreamingPreviewError;
+        std::optional<Error> worldStreamingMountError;
+        std::string worldStreamingIndexPath;
+        bool worldStreamingPreparing{};
+        std::optional<Error> worldSourceError;
+        std::optional<Error> worldLayerFailure; /**< Canonical layer failure; presentation resolves localized copy. */
+
+        PartitionedWorldSnapshotLease worldDocument; /**< Immutable capture from the controller's canonical owner. */
+        std::optional<WorldBrowserSnapshot> worldBrowser;
+        WorldBrowserQuery worldBrowserQuery;
+        std::optional<Error> worldDocumentError;
+        std::string worldDocumentSource;
+        bool worldBakeAvailable{};
+        std::optional<OperationId> worldBakeOperation;
+        bool worldBakeCurrent{}; /**< Exact published output matches current source and project capture. */
         bool audioPreviewAvailable{};
         std::optional<AudioComponentPreviewSnapshot> audioPreview;
         std::optional<Error> audioPreviewFailure;

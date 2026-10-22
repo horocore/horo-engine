@@ -1217,6 +1217,8 @@ horo_configure_target_header_boundary(HoroRenderVulkan)
 horo_configure_target_header_boundary(HoroRenderD3D12)
 
 horo_configure_target_header_boundary(HoroEditorModel PUBLIC_HEADERS
+    Horo/Editor/WorldStreamingPreview.h
+    Horo/Editor/WorldStreamingPreviewRuntime.h
     Horo/Editor/PartitionedWorldWorkspace.h
     Horo/Editor/NavigationDefinitionDocument.h
     Horo/Editor/NavigationSettingsWorkflow.h
@@ -1236,6 +1238,7 @@ horo_configure_target_header_boundary(HoroModelProviderAdapters PUBLIC_HEADERS
 )
 
 horo_configure_target_header_boundary(HoroEditorServices PUBLIC_HEADERS
+    Horo/Editor/WorkspaceReadSources.h
     Horo/Editor/NavigationBakeWorkspace.h
     Horo/Editor/NavigationViewportSnapshot.h
     Horo/Editor/ProjectCollisionSettingsStore.h
@@ -1408,6 +1411,8 @@ horo_configure_target_header_boundary(HoroProjectCollisionSettings PUBLIC_HEADER
 
 horo_configure_target_header_boundary(HoroCliNavigationAdapters PUBLIC_HEADERS Horo/Cli/NavigationCommands.h)
 horo_configure_target_header_boundary(HoroMcpNavigationAdapters PUBLIC_HEADERS Horo/Mcp/NavigationTools.h)
+
+horo_configure_target_header_boundary(HoroWorldBakeApplication PUBLIC_HEADERS Horo/Application/WorldBakeApplication.h)
 
 horo_verify_public_header_inventory()
 message(STATUS "Target-specific public header inventory is complete")

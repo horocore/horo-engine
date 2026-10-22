@@ -114,6 +114,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (projectServices_.assetRegistry != nullptr) {
                 controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
             }
+            controller_->UpdateWorldBake();
             controller_->UpdateContentBrowser();
             controller_->SynchronizeRuntimeScenePreview();
             controller_->UpdateFps(ImGui::GetIO().Framerate);
@@ -155,6 +156,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
         using enum EditorWorkspaceViewCommand;
         EditorWorkspaceViewCommandData command;
+        controller_->RefreshWorldDocumentProjection();
         view_.Draw(controller_->ViewModel(), command, contentRegion);
 
         if (command.command == None && !command.menuInvocation.has_value()) {
@@ -166,7 +168,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         if (command.command != None) {
-            if (command.command == OpenPlayTopologyProfiles) {
+            if (command.command == OpenCreateWorldLayer && command.worldLayerIntent) {
+                OpenWorldLayerCreation(command.worldLayerIntent->expected);
+            } else if (command.command == OpenPlayTopologyProfiles) {
                 OpenPlayTopologyProfilesModal();
             } else if (command.command == CompareExternalScene) {
                 OpenSceneComparison();

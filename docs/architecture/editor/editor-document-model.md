@@ -872,3 +872,41 @@ neither loads pages nor mutates runtime demand. Presentation retains the result
 lease and queries only after an owner revision changes. See the
 [world document migration guide](../../guides/partitioned-world-document-migration.md#object-assignment-and-bounds-inspection-wst-0095)
 for diagnostics, budgets, lifecycle and consumer migration.
+
+
+## World Composition projection
+
+The registered persistent `WorldCompositionTab` is a presentation surface over the
+controller's canonical `PartitionedWorldWorkspace`, never another source or
+selection authority. Project-relative `.horoworld` source admission is an explicit
+bounded command-phase operation through the Platform read capability and the
+existing Open/Replace dirty/revision guards. `Browse` derives bounded cell coverage
+through the ordinary authoring spatial-assignment kernel and publishes complete
+immutable source-fenced cell/layer results. Search/status/layer filters change
+presentation only. Authoring working-set, loaded payload, cooked availability and
+runtime residency remain independent. See the partitioned-world document migration
+guide for schema, ownership, rejection and lifecycle details.
+
+### World Composition offline bake
+
+The persistent World Composition tab submits typed revision-fenced bake/validation
+commands to the controller-owned `WorldBakeApplication`. Actual immutable page
+content and root-bound source capture feed the canonical Scene conversion, cell
+cooker, HOROCELL encoder and `ValidateWorldBuild` pipeline. Operations and Build
+Output project their shared bounded stores; panel lifetime never owns the job.
+Fresh successful bake output is retained independently from source dirty state,
+runtime activation and Assets release publication. The complete source, identity,
+cancellation, publication and migration contract is in the
+[world bake workflow guide](../../guides/world-bake-workflow.md).
+
+### Workspace source authority composition
+
+The executable host supplies `WorkspaceReadSourceFactory` for project opening.
+Its capture returns one fresh workspace identity and retained registry/world
+read capabilities bound to that identity at generation one. The factory outlives
+its screen-host registration; captured readers outlive any controller work that
+uses them. `CaptureWorkspaceReadSources` rejects missing factories, relative
+roots and incomplete pairs before a controller is published. Host capture errors
+retain their typed identity. GUI code consumes these interfaces and never selects
+a native reader as a fallback. Concrete native creation belongs in application
+or test composition roots.
