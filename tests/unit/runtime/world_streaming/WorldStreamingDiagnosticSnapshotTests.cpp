@@ -132,6 +132,18 @@ namespace Horo::WorldStreaming {
             return event;
         }
 
+        TEST_CASE("State-only native diagnostics preserve explicit budget unavailability", "[unit][world_streaming][diagnostics]") {
+            const auto result = WorldStreamingDiagnosticSnapshot::CreateStateOnly(Input(), {});
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().BudgetPolicy() == nullptr);
+            CHECK(result.Value().BudgetSample() == nullptr);
+            CHECK(result.Value().Cells().empty());
+            auto invalid = Input();
+            invalid.queue.reservedOperations = 5;
+            RequireError(WorldStreamingDiagnosticSnapshot::CreateStateOnly(invalid, {}),
+                         WorldStreamingErrors::DiagnosticProjectionCapacityExceeded);
+        }
+
         TEST_CASE("World Streaming diagnostics own and canonically order complete authority facts",
                   "[unit][world_streaming][diagnostics]") {
             auto input = Input();
@@ -150,8 +162,10 @@ namespace Horo::WorldStreaming {
             REQUIRE(snapshot.OwnerRevision() == input.ownerRevision);
             REQUIRE(snapshot.Lifecycle() == WorldStreamingRuntimeCompositionState::Active);
             REQUIRE(snapshot.Queue().reservedOperations == 2);
-            REQUIRE(snapshot.BudgetPolicy().Revision() == policy.Revision());
-            REQUIRE(snapshot.BudgetSample().Revision() == sample.Revision());
+            REQUIRE(snapshot.BudgetPolicy() != nullptr);
+            REQUIRE(snapshot.BudgetPolicy()->Revision() == policy.Revision());
+            REQUIRE(snapshot.BudgetSample() != nullptr);
+            REQUIRE(snapshot.BudgetSample()->Revision() == sample.Revision());
             REQUIRE(snapshot.Sources().size() == 2);
             REQUIRE(snapshot.Sources()[0].Source().id.Value() == 10);
             REQUIRE(snapshot.Cells().size() == 2);

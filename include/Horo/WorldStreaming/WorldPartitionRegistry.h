@@ -150,6 +150,13 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] Result<const WorldPartitionCellDescriptor *> Resolve(const WorldPartitionCellHandle &handle) const;
 
         /**
+         * @brief Reads canonical inclusive cell bounds from the same index used by spatial queries.
+         * @param handle Exact publication and slot returned by this snapshot.
+         * @return Exact millimeter bounds or the same invalid/stale error as Resolve; no coordinate arithmetic is repeated by consumers.
+         */
+        [[nodiscard]] Result<WorldPartitionBounds> CellBounds(const WorldPartitionCellHandle &handle) const;
+
+        /**
          * @brief Executes a bounded allocation-free intersection query in canonical cell order.
          * @param query Ordered exact bounds and optional layer/LOD filters.
          * @param output Caller-owned handle storage; no element is modified on failure.

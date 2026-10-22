@@ -8,16 +8,24 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace Horo::Render {
     class RenderMemoryBudget;
-}
+    class CompiledRenderGraphExecution;
+    struct RenderGraphResourceId;
+}  // namespace Horo::Render
 
 namespace Horo::Render::Detail {
+    class IRenderExternalTextureSource;
+    struct RenderExternalTextureFacts;
+
     enum class RenderResourceClass : std::uint8_t {
         Buffer,
         Texture,
@@ -69,8 +77,8 @@ namespace Horo::Render::Detail {
     class RenderResourceRegistry final {
     public:
         RenderResourceRegistry(RenderResourceOwnerId owner, const RenderResourceRegistryLimits &limits,
-                               BackendResourceRelease releaseBackendResource = {});
-        ~RenderResourceRegistry() = default;
+                               BackendResourceRelease releaseBackendResource = {}, RenderMemoryBudget *memoryBudget = nullptr);
+        ~RenderResourceRegistry();
 
         RenderResourceRegistry(const RenderResourceRegistry &) = delete;
         RenderResourceRegistry &operator=(const RenderResourceRegistry &) = delete;
@@ -79,6 +87,30 @@ namespace Horo::Render::Detail {
 
         [[nodiscard]] Result<ResourceReservation> Reserve(RenderResourceClass resourceClass,
                                                           std::span<const RenderResourceIdentity> dependencies = {});
+        /** @brief Claims stable native-retirement evidence for one exact pending creation and its existing charge. */
+        [[nodiscard]] Result<RenderResourceNativeLifetime> PrepareNativeLifetime(RenderResourceClass resourceClass,
+                                                                                 RenderResourceIdentity identity,
+                                                                                 RenderMemoryReservationId memoryReservation,
+                                                                                 RenderMemoryBudget *memoryBudget = nullptr);
+        /** @brief Attaches native ownership before publication/commit rollback can fail. */
+        [[nodiscard]] Result<void> AttachNativeCreation(RenderResourceClass resourceClass, RenderResourceIdentity identity,
+                                                        std::uint64_t backendInstance,
+                                                        std::optional<RenderMemoryAllocationId> allocation = std::nullopt);
+        /** @brief Reports retained native ownership that prevents registry destruction, including failed creation without an instance. */
+        [[nodiscard]] bool HasPendingNativeRetirements() const noexcept;
+        [[nodiscard]] bool HasNativeLifetime(RenderResourceIdentity identity) const noexcept;
+        /** @brief Claims the same stable native lease for a borrowed allocation with no Horo memory reservation. */
+        [[nodiscard]] Result<RenderResourceNativeLifetime> PrepareExternalNativeLifetime(RenderResourceIdentity identity);
+        /** @brief Retains exact external acquisition proof before publishing a ready registry generation. */
+        [[nodiscard]] Result<void> AttachExternalSource(RenderResourceIdentity identity,
+                                                        std::shared_ptr<const IRenderExternalTextureSource> source);
+        /** @brief Checks a used external registration's mandatory final-state obligation before graph admission. */
+        [[nodiscard]] Result<void> ValidateExternalRelease(RenderResourceIdentity identity, const CompiledRenderGraphExecution &graph,
+                                                           RenderGraphResourceId resource) const;
+        /** @brief Observes exact previously issued external registration retirement, including generation advance. */
+        [[nodiscard]] Result<bool> ExternalRetirementComplete(RenderResourceIdentity identity) const;
+        /** @brief Revalidates and copies the sole external source's exact immutable allocation/acquisition/release facts. */
+        [[nodiscard]] Result<RenderExternalTextureFacts> DescribeExternalTexture(RenderResourceIdentity identity) const;
         [[nodiscard]] Result<void> Publish(RenderResourceClass resourceClass, RenderResourceIdentity identity,
                                            std::uint64_t backendInstance,
                                            std::optional<RenderMemoryAllocationId> memoryAllocation = std::nullopt);
@@ -111,7 +143,29 @@ namespace Horo::Render::Detail {
         [[nodiscard]] RenderResourceOwnerId Owner() const noexcept;
 
     private:
+        /** @brief Callback only marks owner-thread evidence; registry/budget mutation happens later in Retire. */
+        struct NativeLease final : IRenderResourceRetirementLease {
+            bool claimed{false};
+            bool released{true};
+            std::thread::id owner;
+
+            void Claim() noexcept override {
+                if (claimed || !released)
+                    std::terminate();
+                owner = std::this_thread::get_id();
+                claimed = true;
+                released = false;
+            }
+
+            void Release() noexcept override {
+                if (!claimed || released || owner != std::this_thread::get_id())
+                    std::terminate();
+                released = true;
+            }
+        };
+
         struct Entry {
+            std::shared_ptr<const IRenderExternalTextureSource> externalSource;
             RenderResourceClass resourceClass{RenderResourceClass::Buffer};
             RenderResourceState state{RenderResourceState::Retired};
             std::uint32_t generation{1};
@@ -119,6 +173,10 @@ namespace Horo::Render::Detail {
             std::uint32_t submissionPins{0};
             std::uint64_t backendInstance{0};
             std::optional<RenderMemoryAllocationId> memoryAllocation;
+            RenderMemoryReservationId memoryReservation;
+            NativeLease nativeLease;
+            bool nativeDestroyRequested{false};
+            bool memoryRetirementBegun{false};
             ResourceOperationId operation;
             std::vector<RenderResourceIdentity> dependencies;
             bool generationExhausted{false};
@@ -133,6 +191,80 @@ namespace Horo::Render::Detail {
             std::optional<Error> rollbackError; /**< Pre-owned cancellation identity for non-allocating admission rollback. */
         };
 
+        /** @brief Sole bounded operation history and non-reused identity authority; never owns resource retirement. */
+        class OperationJournal final {
+            friend class RenderResourceRegistry;
+
+            OperationJournal() = default;
+            OperationJournal(const OperationJournal &) = delete;
+            OperationJournal &operator=(const OperationJournal &) = delete;
+            OperationJournal(OperationJournal &&) = delete;
+            OperationJournal &operator=(OperationJournal &&) = delete;
+
+            [[nodiscard]] bool CanIssue() const noexcept {
+                return nextIdentity_ != 0;
+            }
+
+            /** @brief Evicts only the oldest completed result before resource slot acquisition. */
+            [[nodiscard]] Result<void> EnsureCapacity(std::uint32_t maximumResults);
+            /** @brief Prepares both terminal diagnostics before any slot or operation is published. */
+            [[nodiscard]] OperationRecord PreparePending() const;
+            /** @brief Appends the prepared record before advancing its identity; allocation failure leaves identity unchanged. */
+            [[nodiscard]] ResourceOperationId AppendPending(OperationRecord record);
+            /** @brief Looks up a retained record without copying its diagnostic. */
+            [[nodiscard]] Result<const OperationRecord *> Lookup(ResourceOperationId operation) const;
+            void Complete(ResourceOperationId operation, std::optional<Error> error) noexcept;
+            /** @brief Moves the pre-owned rollback error into its exact record without allocating. */
+            void CompleteRollback(ResourceOperationId operation) noexcept;
+            /** @brief Retains the pre-owned shutdown error while closing the pending record. */
+            void CompleteShutdown(ResourceOperationId operation) noexcept;
+
+            std::deque<OperationRecord> records_;
+            std::uint64_t nextIdentity_{1};
+        };
+
+        /** @brief Sole generational slot storage; its embedded native lease addresses remain stable after preparation. */
+        class SlotStore final {
+            friend class RenderResourceRegistry;
+
+            SlotStore(RenderResourceOwnerId owner, std::uint32_t maximumSlots) : owner_(owner), maximumSlots_(maximumSlots) {}
+
+            SlotStore(const SlotStore &) = delete;
+            SlotStore &operator=(const SlotStore &) = delete;
+            SlotStore(SlotStore &&) = delete;
+            SlotStore &operator=(SlotStore &&) = delete;
+
+            /** @brief Reserves the entire bounded slot/free-list envelope before native lease exposure. */
+            void PrepareCapacity();
+            [[nodiscard]] Result<std::size_t> Validate(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
+            [[nodiscard]] Result<void> ValidateDependencies(std::span<const RenderResourceIdentity> dependencies) const;
+            [[nodiscard]] Result<std::size_t> Acquire();
+            [[nodiscard]] const Entry *FindExact(RenderResourceIdentity identity) const noexcept;
+
+            /** @brief Exact owner-only borrow; acquisition cannot reallocate the prepared entry storage. */
+            [[nodiscard]] Entry &At(std::size_t slot) noexcept {
+                return entries_[slot];
+            }
+
+            [[nodiscard]] const Entry &At(std::size_t slot) const noexcept {
+                return entries_[slot];
+            }
+
+            [[nodiscard]] std::size_t Size() const noexcept {
+                return entries_.size();
+            }
+
+            /** @brief Restores an acquired unpublished slot after failed operation-record admission. */
+            void ReturnUnpublished(std::size_t slot) noexcept;
+            /** @brief Advances only a cleared, natively terminal generation after registry retirement completes. */
+            void RecycleTerminal(std::size_t slot) noexcept;
+
+            const RenderResourceOwnerId owner_;
+            const std::uint32_t maximumSlots_;
+            std::vector<Entry> entries_{{}};
+            std::vector<std::uint32_t> freeSlots_;
+        };
+
         struct SubmissionPin {
             RenderResourceClass resourceClass{RenderResourceClass::Buffer};
             RenderResourceIdentity identity;
@@ -145,34 +277,26 @@ namespace Horo::Render::Detail {
             std::uint64_t completed{0};
         };
 
-        /** @brief Resolves the single authoritative bounded operation record without copying its diagnostic. */
-        [[nodiscard]] Result<const OperationRecord *> LookupOperation(ResourceOperationId operation) const;
-        [[nodiscard]] Result<std::size_t> Validate(RenderResourceClass resourceClass, RenderResourceIdentity identity) const;
         [[nodiscard]] Result<void> ValidateReservationAdmission() const;
-        [[nodiscard]] Result<void> ValidateDependencies(std::span<const RenderResourceIdentity> dependencies) const;
-        [[nodiscard]] Result<void> EnsureOperationResultCapacity();
-        [[nodiscard]] Result<std::size_t> AcquireSlot();
-        [[nodiscard]] const Entry *FindExact(RenderResourceIdentity identity) const noexcept;
-        void CompleteOperation(ResourceOperationId operation, std::optional<Error> error) noexcept;
         void QueueRetirementIfEligible(std::size_t slot);
-        void Retire(std::size_t slot, BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative) noexcept;
+        [[nodiscard]] bool Retire(std::size_t slot,
+                                  BackendResourceReleaseMode releaseMode = BackendResourceReleaseMode::DestroyNative) noexcept;
 
         RenderResourceOwnerId owner_;
         RenderResourceRegistryLimits limits_;
-        std::vector<Entry> entries_{{}};
-        std::vector<std::uint32_t> freeSlots_;
+        SlotStore slots_;
         std::vector<std::uint32_t> retirementQueue_;
         std::size_t retirementQueueHead_{0};
         std::size_t retirementQueueCount_{0};
-        std::deque<OperationRecord> operations_;
+        OperationJournal journal_;
         std::vector<SubmissionPin> submissionPins_;
         std::vector<QueueProgress> queueProgress_;
         std::size_t completionScanCursor_{0};
-        std::uint64_t nextOperation_{1};
         std::uint32_t pendingRequests_{0};
         std::uint32_t activeSubmissionPins_{0};
         bool acceptingRequests_{true};
         BackendResourceRelease releaseBackendResource_;
+        RenderMemoryBudget *memoryBudget_{};
     };
 
     /** @brief Rolls back an unpublished registry generation and optional valid memory claim on the owner thread. */

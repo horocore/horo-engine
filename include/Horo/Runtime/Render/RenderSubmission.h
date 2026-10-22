@@ -156,6 +156,10 @@ namespace Horo::Render {
         RenderTimelinePoint completion;                           /**< GPU completion point to observe. */
         RenderCpuWaitPurpose purpose{RenderCpuWaitPurpose::Poll}; /**< Authorized observation reason. */
         std::chrono::nanoseconds timeout{0};                      /**< Zero for polls; positive for bounded waits. */
+        std::uint64_t expectedDeviceIncarnation{0};
+
+        /**< Required by backend timeline observation: exact selected capability incarnation.
+         * Owner-bound readback/query ports already validate their own owner handles and may leave this zero. */
 
         /**
          * @brief Reports whether the completion point, purpose, and timeout agree.

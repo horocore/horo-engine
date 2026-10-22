@@ -27,6 +27,13 @@ namespace Horo::Tests::RenderFrontendTesting {
         Present,
     };
 
+    enum class ObservationFailure {
+        None,
+        StandardException,
+        ForeignException,
+        TypedError
+    };
+
     struct BackendLifecycleState {  // NOSONAR(cpp:S1820) Flat assertion ledger keeps injected backend transitions directly observable.
         int initializeCount{0};
         int shutdownCount{0};
@@ -46,6 +53,10 @@ namespace Horo::Tests::RenderFrontendTesting {
         int destroyRenderTargetCount{0};
         std::vector<std::byte> lastBufferInitialData;
         std::vector<std::byte> lastTextureInitialData;
+        bool drainPending{false};
+        bool supportsSubmissionObservation{false};
+        int submissionObservations{0};
+        ObservationFailure observationFailure{ObservationFailure::None};
         bool failPresentation{false};
         bool throwDuringInitialize{false};
         bool throwDuringResize{false};

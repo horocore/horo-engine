@@ -14,6 +14,7 @@ namespace Horo::Render::NullBackendErrors {
     extern const ErrorCodeDescriptor InvalidFrameDescriptor;
     extern const ErrorCodeDescriptor NoActiveFrame;
     extern const ErrorCodeDescriptor NotInitialized;
+    extern const ErrorCodeDescriptor WrongThread;
     extern const ErrorCodeDescriptor UnsupportedPassKind;
     extern const ErrorCodeDescriptor PresentationUnsupported;
     extern const ErrorCodeDescriptor ResourceInstanceExhausted;

@@ -10,6 +10,21 @@
 #include <type_traits>
 
 namespace Horo::Render::Detail {
+    namespace {
+        /** @brief Pins multiview workloads in order; the caller's lease transaction owns partial-prefix rollback. */
+        template <typename Lease>
+        [[nodiscard]] Result<void> PinMultiviewWorkloads(Lease &lease, const std::span<const RenderGraphPassWorkload> workloads) {
+            for (const auto &entry : workloads) {
+                const auto *scene = std::get_if<RenderGraphMultiview>(&entry.workload);
+                if (scene == nullptr)
+                    continue;
+                if (auto pinned = lease.PinMultiview(*scene); pinned.HasError())
+                    return pinned;
+            }
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @copydoc ResolveGraphResidentIdentity */
     Result<RenderGraphResidentIdentity> ResolveGraphResidentIdentity(const RenderGraphResourceBinding &binding) {
         return std::visit([]<typename Handle>(const Handle &handle) -> Result<RenderGraphResidentIdentity> {
@@ -117,10 +132,39 @@ namespace Horo::Render::Detail {
         return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
     }
 
+    /** @copydoc RenderGraphResourceLeasePool::Lease::PinMultiview */
+    Result<void> RenderGraphResourceLeasePool::Lease::PinMultiview(const RenderGraphMultiview &workload) {
+        if (!workload.scene || workload.geometry.size() > materials.size() - materialCount)
+            return Result<void>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));
+        for (const auto &geometry : workload.geometry) {
+            if (geometry.instanceIndex >= workload.scene->Instances().size() || !geometry.material ||
+                geometry.material->Id().owner != pool->registry_->Owner())
+                return Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady));
+            const auto mesh = workload.scene->Instances()[geometry.instanceIndex].mesh;
+            if (const auto pin = PinIdentity({RenderResourceClass::Mesh, {mesh.owner, mesh.slot, mesh.generation}}); pin.HasError())
+                return pin;
+            materials[materialCount++] = geometry.material;
+        }
+        for (const auto &target : workload.targets) {
+            const auto color = target.colorView;
+            if (const auto pin = PinIdentity({RenderResourceClass::TextureView, {color.owner, color.slot, color.generation}});
+                pin.HasError())
+                return pin;
+            if (target.depth.IsValid()) {
+                const auto depth = target.depthView;
+                if (const auto pin = PinIdentity({RenderResourceClass::TextureView, {depth.owner, depth.slot, depth.generation}});
+                    pin.HasError())
+                    return pin;
+            }
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc RenderGraphResourceLeasePool::Acquire */
     Result<IRenderGraphResourceLease *> RenderGraphResourceLeasePool::Acquire(const std::span<const RenderGraphResource> resources,
                                                                               UiRenderSubmission *ui,
-                                                                              RenderGraphTransientResourceSet *transient) {
+                                                                              RenderGraphTransientResourceSet *transient,
+                                                                              const std::span<const RenderGraphPassWorkload> workloads) {
         if (transient != nullptr && (transient->inFlight || transient->released))
             return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceNotReady));
         if (resources.size() > RenderGraphLimits::HardMaxResources) {
@@ -148,6 +192,8 @@ namespace Horo::Render::Detail {
                     return Result<IRenderGraphResourceLease *>::Failure(captured.ErrorValue());
                 }
             }
+            if (const auto pinned = PinMultiviewWorkloads(lease, workloads); pinned.HasError())
+                return Result<IRenderGraphResourceLease *>::Failure(pinned.ErrorValue());
             return Result<IRenderGraphResourceLease *>::Success(transaction.release());
         }
         return Result<IRenderGraphResourceLease *>::Failure(MakeError(FrontendErrors::ResourceCapacityExhausted));

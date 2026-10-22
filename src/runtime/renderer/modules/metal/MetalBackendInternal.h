@@ -28,13 +28,38 @@ namespace Horo::Render::Detail {
 
         [[nodiscard]] virtual Result<MetalDeviceCapabilities> Initialize(const MetalPresentationDescriptor &descriptor,
                                                                          const MetalDeviceAdmissionRequest &request) = 0;
+
+        [[nodiscard]] virtual Result<bool> PollPresentationAvailability(FramebufferExtent) {
+            return Result<bool>::Success(true);
+        }
+
+        [[nodiscard]] virtual Result<RenderPresentationOutput> ConfigurePresentationOutput(const RenderPresentationOutputRequest &) {
+            return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+        }
+
+        [[nodiscard]] virtual Result<RenderPresentationOutput> PresentationOutput() const {
+            return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+        }
+
         [[nodiscard]] virtual Result<void> BeginFrame(FramebufferExtent extent) = 0;
+
+        /** @brief Admits exact primary encoding before any operation in the frame is encoded.
+         * @param attachment Complete graph-final pixel declaration. @return Exact native admission or typed failure.
+         * @details Legacy injected runtimes admit only an absent declaration and cannot accidentally claim HDR output.
+         */
+        [[nodiscard]] virtual Result<void> ValidatePrimaryOutput(const PrimaryOutputAttachment &attachment) const {
+            return attachment.outputColor ? Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported))
+                                          : Result<void>::Success();
+        }
+
         [[nodiscard]] virtual Result<void> ExecutePrimaryOutput(const PrimaryOutputAttachment &attachment) = 0;
 
         /** @brief Checks all native resource identities and ranges before any graph command is encoded. */
         [[nodiscard]] virtual Result<void> ValidateGraphWorkload(const RenderGraphWorkload &workload,
                                                                  std::span<const RenderGraphResourceInstance>) const {
-            if (std::holds_alternative<std::monostate>(workload) || std::holds_alternative<PrimaryOutputAttachment>(workload)) {
+            if (const auto *primary = std::get_if<PrimaryOutputAttachment>(&workload))
+                return ValidatePrimaryOutput(*primary);
+            if (std::holds_alternative<std::monostate>(workload)) {
                 return Result<void>::Success();
             }
             return Result<void>::Failure(MakeError(MetalBackendErrors::UnsupportedGraphExecution));
@@ -86,7 +111,10 @@ namespace Horo::Render::Detail {
 
         virtual void AbortFrame() noexcept = 0;
         [[nodiscard]] virtual Result<void> Resize(FramebufferExtent extent) = 0;
-        virtual void Shutdown() noexcept = 0;
+        /** @brief Closes owner-thread admission and cancels unsent work without waiting or releasing pending parents. */
+        [[nodiscard]] virtual Result<void> BeginShutdown() = 0;
+        /** @brief Polls finite native/CPU inventories; only Drained permits releasing the owning composition. */
+        [[nodiscard]] virtual Result<RenderBackendDrainProgress> PollDrain() = 0;
     };
 
     /** @brief Inert factory seam for constructing a runtime without acquiring native resources. */

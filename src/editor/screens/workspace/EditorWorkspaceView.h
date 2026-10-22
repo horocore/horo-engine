@@ -9,10 +9,12 @@
 #include "editor/source_editor/SourceEditorSession.h"
 #include "editor/source_editor/SourceEditorWidget.h"
 
+#include <array>
 #include <cstdint>
 #include <imgui.h>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace Horo::Editor {
     struct GuiContentRegion;
@@ -154,6 +156,15 @@ namespace Horo::Editor {
         /** @brief Draws the active registered PCG document using immutable source and workspace-only state. */
         bool DrawPCGDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
         bool DrawSequenceDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws source-only controls and the isolated stage using shared themed components. */
+        bool DrawPrefabDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Refreshes transient widget drafts only when their immutable source publication changes. */
+        void RefreshPrefabNameDrafts(const PrefabDocumentSnapshot &source) const;
+        /** @brief Emits source-local edits from persistent bounded widget buffers. */
+        void DrawPrefabSourceFields(const PrefabDocumentSnapshot &source, EditorWorkspaceViewCommandData &outCommand) const;
+        mutable std::optional<PrefabDocumentFence> m_prefabNameFence;
+        mutable std::string m_prefabNameScope;
+        mutable std::vector<std::array<char, Prefab::MaximumPrefabObjectNameBytes + 1>> m_prefabNameDrafts;
         void DrawDocumentTabs(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand);
         /** @brief Calculates clamped dock geometry from native and extension visibility without mutating layout or submitting UI. */
         [[nodiscard]] WorkspaceLayoutGeometry CalculateWorkspaceGeometry(const EditorWorkspaceViewModel &viewModel, const ImVec2 &display,

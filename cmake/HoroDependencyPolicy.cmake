@@ -148,6 +148,12 @@ horo_allow_target_dependencies(TARGET HoroXRInputBindings DEPENDENCIES HoroXRApi
 if(HORO_BUILD_XR_OPENXR)
     horo_allow_target_dependencies(TARGET HoroXROpenXRHostInterface DEPENDENCIES HoroXRRuntime HoroXRInputBindings HoroPlatform)
     horo_allow_target_dependencies(TARGET HoroXROpenXR DEPENDENCIES HoroXROpenXRHostInterface)
+    if (HORO_BUILD_RENDER_VULKAN)
+        horo_allow_target_dependencies(TARGET HoroXROpenXRVulkanHostInterface
+            DEPENDENCIES HoroXROpenXRHostInterface HoroRenderVulkanExternalImagesInterface)
+        horo_allow_target_dependencies(TARGET HoroXROpenXRVulkan
+            DEPENDENCIES HoroXROpenXRVulkanHostInterface HoroXROpenXR HoroRenderFrontend HoroRenderVulkan)
+    endif ()
 endif()
 
 option(HORO_VERIFY_XR_DISABLED "Verify that the optional native XR graph and SDK population are absent" OFF)
@@ -155,7 +161,7 @@ if(HORO_VERIFY_XR_DISABLED)
     if(HORO_BUILD_XR_OPENXR)
         message(FATAL_ERROR "XR-disabled verification requires HORO_BUILD_XR_OPENXR=OFF")
     endif()
-    foreach(target HoroXROpenXR HoroXROpenXRHostInterface HoroOpenXRHeaders)
+    foreach(target HoroXROpenXR HoroXROpenXRHostInterface HoroOpenXRHeaders HoroXROpenXRVulkan HoroXROpenXRVulkanHostInterface)
         if(TARGET ${target})
             message(FATAL_ERROR "Native XR target is present in the disabled graph: ${target}")
         endif()
@@ -207,14 +213,16 @@ horo_allow_target_dependencies(TARGET HoroSceneRenderExtraction DEPENDENCIES Hor
 horo_allow_target_dependencies(TARGET HoroShaderCompilerToolchain DEPENDENCIES HoroRenderApi HoroPlatform)
 horo_allow_target_dependencies(TARGET HoroShaderBuild DEPENDENCIES HoroFoundation HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderBackendRegistry DEPENDENCIES HoroRenderApi)
+horo_allow_target_dependencies(TARGET HoroRenderExternalImagesInterface DEPENDENCIES HoroRenderApi)
+horo_allow_target_dependencies(TARGET HoroRenderVulkanExternalImagesInterface DEPENDENCIES HoroRenderExternalImagesInterface)
 horo_allow_target_dependencies(TARGET HoroRenderFrontend
-    DEPENDENCIES HoroRenderApi HoroRenderBackendRegistry HoroRuntimeUi)
+    DEPENDENCIES HoroRenderApi HoroRenderBackendRegistry HoroRuntimeUi HoroRenderExternalImagesInterface)
 horo_allow_target_dependencies(TARGET HoroSceneModel DEPENDENCIES HoroFoundation HoroGameplayApi HoroRuntimeUi HoroAudioApi)
 horo_allow_target_dependencies(TARGET HoroRenderNull DEPENDENCIES HoroRenderApi)
 horo_allow_target_dependencies(TARGET HoroRenderOpenGL)
 horo_allow_target_dependencies(TARGET HoroOpenGLHostAdmissionInternal)
 horo_allow_target_dependencies(TARGET HoroRenderMetal)
-horo_allow_target_dependencies(TARGET HoroRenderVulkan)
+horo_allow_target_dependencies(TARGET HoroRenderVulkan DEPENDENCIES HoroRenderVulkanExternalImagesInterface)
 horo_allow_target_dependencies(TARGET HoroRenderD3D12 DEPENDENCIES HoroRenderApi)
 
 horo_allow_target_dependencies(TARGET HoroSceneSourceModel
@@ -243,7 +251,7 @@ horo_allow_target_dependencies(TARGET HoroEditorRenderExtraction
     DEPENDENCIES HoroEditorModel HoroEditorViewportScene)
 horo_allow_target_dependencies(TARGET HoroEditorPlaySceneHostInternal DEPENDENCIES HoroRuntimeScene HoroGameplayRuntime)
 horo_allow_target_dependencies(TARGET HoroEditorServices
-    DEPENDENCIES HoroFoundationJsonInternal HoroNavigationBakeAutomation HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource
+    DEPENDENCIES HoroFoundationJsonInternal HoroNavigationBakeAutomation HoroPrefabHierarchyInternal HoroProjectSettings HoroPCG HoroAudioApi HoroAudioFrontend HoroProjectMutationGuard HoroProjectCollisionSettings HoroSceneRuntimeConversion HoroSceneSource HoroProjectReadFilesApi HoroWorldBakeApplication
         HoroFoundation HoroHostErrors HoroCinematicRuntime
         HoroNetworkApi
         HoroNetworkDebuggerApplication
@@ -297,6 +305,7 @@ horo_allow_target_dependencies(TARGET HoroExtensionAuthorCiStage
     DEPENDENCIES HoroExtensionSdkValidatorStage HoroExtensionSdkConformanceStage HoroExtensionSdkPackageStage)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES HoroEditorUiStyleHostInternal
+        HoroPlatformProjectReadFiles
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo
         HoroEditorSceneProductHost
@@ -403,3 +412,4 @@ horo_allow_target_dependencies(TARGET HoroMcpNavigationAdapters DEPENDENCIES Hor
 horo_allow_target_dependencies(TARGET HoroUiStyleWorkspaceApplication DEPENDENCIES HoroRuntimeUi HoroAssets)
 horo_allow_target_dependencies(TARGET HoroEditorUiStyleHostInternal
     DEPENDENCIES HoroEditorServices HoroUiStyleWorkspaceApplication HoroPlatformImmutableFileStorage HoroPlatform HoroProjectMutationGuard)
+horo_allow_target_dependencies(TARGET HoroWorldBakeApplication DEPENDENCIES HoroEditorModel HoroSceneCellPayload HoroWorldStreaming HoroSceneRuntimeConversion HoroFoundation HoroAssets HoroProjectReadFilesApi HoroProjectMutationGuard)

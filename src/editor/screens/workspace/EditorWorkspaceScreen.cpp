@@ -63,6 +63,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (auto initialized = InitializeController(projectRoot); initialized.HasError())
             return initialized;
         sourceCommands_.BeginSession();
+        workspaceControllerLifetime_ = std::make_shared<int>(0);
         snackbarHost_ = std::make_unique<EditorSnackbarHost>(controller_->DataBus());
         host_.SetCurrentProjectRoot(controller_->ViewModel().projectRoot);
         LoadProjectInputProfile(controller_->ViewModel().projectRoot);
@@ -114,6 +115,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (projectServices_.assetRegistry != nullptr) {
                 controller_->RefreshAssets(projectServices_.assetRegistry->Snapshot());
             }
+            controller_->UpdateWorldBake();
             controller_->UpdateContentBrowser();
             controller_->SynchronizeRuntimeScenePreview();
             controller_->UpdateFps(ImGui::GetIO().Framerate);
@@ -155,6 +157,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
         using enum EditorWorkspaceViewCommand;
         EditorWorkspaceViewCommandData command;
+        controller_->RefreshWorldDocumentProjection();
         view_.Draw(controller_->ViewModel(), command, contentRegion);
 
         if (command.command == None && !command.menuInvocation.has_value()) {
@@ -166,10 +169,14 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
 
         if (command.command != None) {
-            if (command.command == OpenPlayTopologyProfiles) {
+            if (command.command == OpenCreateWorldLayer && command.worldLayerIntent) {
+                OpenWorldLayerCreation(command.worldLayerIntent->expected);
+            } else if (command.command == OpenPlayTopologyProfiles) {
                 OpenPlayTopologyProfilesModal();
             } else if (command.command == CompareExternalScene) {
                 OpenSceneComparison();
+            } else if (command.command == CreatePrefabFromSelection && command.objectPayload) {
+                OpenPrefabCreationModal(*command.objectPayload);
             } else if (command.command == CreateLuaBehavior || command.command == CreateNativeBehavior) {
                 using enum GameplayBehaviorKind;
                 const GameplayBehaviorKind kind = command.command == CreateNativeBehavior ? Native : Lua;

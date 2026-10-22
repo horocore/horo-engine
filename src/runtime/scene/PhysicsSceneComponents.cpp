@@ -1,16 +1,20 @@
 #include "Horo/Runtime/Scene/PhysicsSceneComponents.h"
 
 #include "Horo/Physics/PhysicsErrors.h"
+#include "PhysicsReferenceValidation.h"
 
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <limits>
 #include <string>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace Horo::Runtime {
+    using PhysicsValidationDetail::BodyReferenceDomain;
+
     namespace {
         struct ObjectLocalKey final {
             std::uint64_t object{};
@@ -30,8 +34,11 @@ namespace Horo::Runtime {
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::DescriptorInvalid, std::move(message)));
         }
 
-        [[nodiscard]] bool IsValid(const PhysicsBodyReference reference) noexcept {
-            return reference.object.IsValid() && reference.body.IsValid();
+        [[nodiscard]] bool IsValid(const PhysicsBodyReference reference,
+                                   const BodyReferenceDomain domain = BodyReferenceDomain::Scene) noexcept {
+            const bool object = domain == BodyReferenceDomain::Scene ? reference.object.IsValid()
+                                                                     : reference.object.value <= std::numeric_limits<std::uint32_t>::max();
+            return object && reference.body.IsValid();
         }
 
         [[nodiscard]] bool IsValid(const AuthoredPhysicsPose &pose) noexcept {
@@ -113,10 +120,10 @@ namespace Horo::Runtime {
                    component.maximumAngularSpeed > 0.0F && component.maximumAngularSpeed <= 100.0F;
         }
 
-        [[nodiscard]] bool HasValidColliderIdentity(const ColliderComponent &component) noexcept {
+        [[nodiscard]] bool HasValidColliderIdentity(const ColliderComponent &component, const BodyReferenceDomain domain) noexcept {
             return component.id.IsValid() && component.collider.IsValid() &&
-                   component.schemaVersion == PhysicsSceneComponentSchemaVersion && component.generation != 0 && IsValid(component.body) &&
-                   component.collisionProfile.IsValid();
+                   component.schemaVersion == PhysicsSceneComponentSchemaVersion && component.generation != 0 &&
+                   IsValid(component.body, domain) && component.collisionProfile.IsValid();
         }
 
         [[nodiscard]] bool HasValidColliderTransform(const ColliderComponent &component) noexcept {
@@ -124,10 +131,11 @@ namespace Horo::Runtime {
                    component.scale.y > 0.0F && component.scale.z > 0.0F;
         }
 
-        [[nodiscard]] bool HasValidConstraintIdentity(const PhysicsConstraintComponent &component) noexcept {
+        [[nodiscard]] bool HasValidConstraintIdentity(const PhysicsConstraintComponent &component,
+                                                      const BodyReferenceDomain domain) noexcept {
             return component.id.IsValid() && component.constraint.IsValid() &&
                    component.schemaVersion == PhysicsSceneComponentSchemaVersion && component.generation != 0 &&
-                   IsValid(component.first.body) && IsValid(component.first.localFrame);
+                   IsValid(component.first.body, domain) && IsValid(component.first.localFrame);
         }
 
         [[nodiscard]] Result<void> ValidateColliderSource(const ColliderComponent &component) {
@@ -147,9 +155,10 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         }
 
-        [[nodiscard]] Result<void> ValidateConstraintEndpoint(const PhysicsConstraintComponent &component) {
+        [[nodiscard]] Result<void> ValidateConstraintEndpoint(const PhysicsConstraintComponent &component,
+                                                              const BodyReferenceDomain domain) {
             if (const auto *body = std::get_if<PhysicsConstraintBodyEndpoint>(&component.second)) {
-                if (!IsValid(body->body) || !IsValid(body->localFrame) || body->body == component.first.body)
+                if (!IsValid(body->body, domain) || !IsValid(body->localFrame) || body->body == component.first.body)
                     return Failure("Physics constraint body endpoints must be valid, explicit, and distinct.");
             } else if (!IsValid(std::get<PhysicsConstraintWorldEndpoint>(component.second).frame)) {
                 return Failure("Physics constraint world endpoints require a valid explicit world-frame pose.");
@@ -286,9 +295,9 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    /** @copydoc ValidateColliderComponent */
-    Result<void> ValidateColliderComponent(const ColliderComponent &component) {
-        if (!HasValidColliderIdentity(component) || !HasValidColliderTransform(component))
+    /** @copydoc PhysicsValidationDetail::ValidateCollider */
+    Result<void> PhysicsValidationDetail::ValidateCollider(const ColliderComponent &component, const BodyReferenceDomain domain) {
+        if (!HasValidColliderIdentity(component, domain) || !HasValidColliderTransform(component))
             return Failure(
                 "Physics colliders require stable identities, schema, body/profile references, pose, and positive finite scale.");
         if (Result<void> source = ValidateColliderSource(component); source.HasError())
@@ -296,13 +305,24 @@ namespace Horo::Runtime {
         return ValidateMaterialBindings(component.materials);
     }
 
-    /** @copydoc ValidatePhysicsConstraintComponent */
-    Result<void> ValidatePhysicsConstraintComponent(const PhysicsConstraintComponent &component) {
-        if (!HasValidConstraintIdentity(component))
+    /** @copydoc PhysicsValidationDetail::ValidateConstraint */
+    Result<void> PhysicsValidationDetail::ValidateConstraint(const PhysicsConstraintComponent &component,
+                                                             const BodyReferenceDomain domain) {
+        if (!HasValidConstraintIdentity(component, domain))
             return Failure("Physics constraints require stable identities, schema, generation, and a valid first body endpoint.");
-        if (Result<void> endpoint = ValidateConstraintEndpoint(component); endpoint.HasError())
+        if (Result<void> endpoint = ValidateConstraintEndpoint(component, domain); endpoint.HasError())
             return endpoint;
         return ValidateConstraintParameters(component);
+    }
+
+    /** @copydoc ValidateColliderComponent */
+    Result<void> ValidateColliderComponent(const ColliderComponent &component) {
+        return PhysicsValidationDetail::ValidateCollider(component, BodyReferenceDomain::Scene);
+    }
+
+    /** @copydoc ValidatePhysicsConstraintComponent */
+    Result<void> ValidatePhysicsConstraintComponent(const PhysicsConstraintComponent &component) {
+        return PhysicsValidationDetail::ValidateConstraint(component, BodyReferenceDomain::Scene);
     }
 
     /** @copydoc ValidatePhysicsSceneComponentViews */

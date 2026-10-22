@@ -3686,7 +3686,31 @@ def open_pr_main(argv=None) -> int:
     return execute_subprocess(command)
 
 
-TOOL_COMMANDS = {"setup": setup_main, "open-pr": open_pr_main, 'ci-cache-identity': ci_cache_main, 'release-notes': notes_main, 'verify-release-archive': archive_main, 'verify-release-notes': release_main, 'pr-annotations': pr_main, 'qualify-scene': scene_main, 'qualify-character': character_main, 'qualify-extension': extension_main, 'qualify-save': save_main}
+def select_manifest(package_paths: list[str]) -> Path:
+    """Require one installed lavapipe manifest, without a GPU fallback."""
+    candidates = sorted({Path(path) for path in package_paths
+                         if Path(path).name.startswith("lvp_icd") and Path(path).suffix == ".json"
+                         and Path(path).is_file()})
+    if len(candidates) != 1:
+        raise ValueError(f"Expected exactly one installed lavapipe ICD manifest, found {len(candidates)}")
+    selected = candidates[0].resolve(strict=True)
+    manifest = json.loads(selected.read_text(encoding="utf-8"))
+    if not isinstance(manifest.get("ICD", {}).get("library_path"), str) or not manifest["ICD"]["library_path"]:
+        raise ValueError("Installed lavapipe ICD manifest has no library path")
+    return selected
+
+
+def select_lavapipe_main(argv=None) -> int:
+    """Print the Mesa package's actual lavapipe path for native qualification."""
+    parser = argparse.ArgumentParser(description=select_lavapipe_main.__doc__)
+    parser.parse_args(argv)
+    inventory = subprocess.run(["dpkg-query", "-L", "mesa-vulkan-drivers"], check=True,
+                               capture_output=True, text=True)
+    print(select_manifest(inventory.stdout.splitlines()))
+    return 0
+
+
+TOOL_COMMANDS = {"select-lavapipe-icd": select_lavapipe_main, "setup": setup_main, "open-pr": open_pr_main, 'ci-cache-identity': ci_cache_main, 'release-notes': notes_main, 'verify-release-archive': archive_main, 'verify-release-notes': release_main, 'pr-annotations': pr_main, 'qualify-scene': scene_main, 'qualify-character': character_main, 'qualify-extension': extension_main, 'qualify-save': save_main}
 
 
 def main(argv=None) -> int:

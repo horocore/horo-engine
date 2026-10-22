@@ -1,21 +1,21 @@
 #include "EditorWorkspaceScreen.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Editor/EditorSettingsStore.h"
-#include "Horo/Editor/NativeAssetRegistrySource.h"
 #include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
+#include "Horo/Editor/WorkspaceReadSources.h"
 #include "Horo/Extensions/EditorActivityHost.h"
 #include "Horo/Extensions/EditorInspectorHost.h"
 #include "Horo/Extensions/EditorViewportHost.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
-#include "Horo/Platform/SecureRandom.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "PCGPreviewWorkspace.h"
 
 #include <array>
 #include <span>
+#include <utility>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
@@ -39,18 +39,6 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             };
         }
 
-        /** @brief Issues one never-reused host incarnation before workspace document composition. */
-        Result<Assets::AssetId> CreateDocumentSessionOwner() {
-            std::array<std::uint8_t, 16> sessionBytes{};
-            const auto entropy = Platform::CreateNativeSecureRandomSource();
-            if (const auto generated = entropy->Fill(std::as_writable_bytes(std::span(sessionBytes))); generated.HasError())
-                return Result<Assets::AssetId>::Failure(generated.ErrorValue());
-            const auto sessionOwner = Assets::AssetId::FromBytes(sessionBytes);
-            if (!sessionOwner.IsValid())
-                return Result<Assets::AssetId>::Failure(MakeError(PCGDocumentError(PCGDocumentCommandFailureReason::Unauthorized)));
-            return Result<Assets::AssetId>::Success(sessionOwner);
-        }
-
         /** @brief Owns the capability catalog and disposable preview inputs admitted together by the workspace host. */
         struct WorkspacePCGComposition final {
             PCGEditorCatalog catalog;
@@ -70,6 +58,25 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (pcgPreview.HasError())
                 return Result<WorkspacePCGComposition>::Failure(pcgPreview.ErrorValue());
             return Result<WorkspacePCGComposition>::Success({std::move(pcgCatalog), std::move(pcgPreview).Value()});
+        }
+
+        /** @brief Compose one explicit resource lease without replacing the prior controller capability. */
+        Result<std::unique_ptr<UiInspectorResources>> PrepareUiInspectorResources(const EditorServiceRegistry &services,
+                                                                                  const std::filesystem::path &root,
+                                                                                  const Assets::AssetId owner) {
+            if (const auto *factory = services.TryGet<UiInspectorResourcesFactory>())
+                return (*factory)(root, owner);
+            return Result<std::unique_ptr<UiInspectorResources>>::Success(nullptr);
+        }
+
+        /** @brief Capture gameplay borrows and the selected play factory at the host composition boundary. */
+        EditorWorkspaceGameplayServices BindGameplayServices(const EditorServiceRegistry &services, GuiScreenHost &host,
+                                                             EditorPlaySceneFactory sceneFactory) {
+            const auto *environment = services.TryGet<Application::GameplayBuildEnvironment>();
+            return {.builds = services.TryGet<Application::GameplayBuildService>(),
+                    .environment = environment ? *environment : Application::GameplayBuildEnvironment{},
+                    .retirements = host.GameplayRetirements(),
+                    .sceneFactory = std::move(sceneFactory)};
         }
 
     }  // namespace
@@ -115,34 +122,26 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return playSceneFactory;
     }
 
-    /** @copydoc EditorWorkspaceScreen::PrepareUiInspectorResources */
-    Result<std::unique_ptr<UiInspectorResources>> EditorWorkspaceScreen::PrepareUiInspectorResources(const std::filesystem::path &root,
-                                                                                                     const Assets::AssetId owner) {
-        if (const auto *factory = services_.TryGet<UiInspectorResourcesFactory>())
-            return (*factory)(root, owner);
-        return Result<std::unique_ptr<UiInspectorResources>>::Success(nullptr);
-    }
-
-    /** @copydoc EditorWorkspaceScreen::BindGameplayServices */
-    EditorWorkspaceGameplayServices EditorWorkspaceScreen::BindGameplayServices(const std::filesystem::path &projectRoot) {
-        const auto *environment = services_.TryGet<Application::GameplayBuildEnvironment>();
-        return {.builds = services_.TryGet<Application::GameplayBuildService>(),
-                .environment = environment ? *environment : Application::GameplayBuildEnvironment{},
-                .retirements = host_.GameplayRetirements(),
-                .sceneFactory = BindPlayFactory(projectRoot)};
+    /** @copydoc EditorWorkspaceScreen::BindPrefabStageFactory */
+    EditorPlaySceneFactory EditorWorkspaceScreen::BindPrefabStageFactory(const std::filesystem::path &projectRoot) const {
+        const auto *factory = services_.TryGet<EditorProjectPrefabStageFactory>();
+        if (!factory || !factory->create)
+            return {};
+        return [create = factory->create, root = projectRoot](Runtime::SceneRuntimeId identity,
+                                                              const Runtime::RuntimeSceneDefinition &definition) {
+            return create(root, identity, definition);
+        };
     }
 
     /** @copydoc EditorWorkspaceScreen::InitializeController */
     Result<void> EditorWorkspaceScreen::InitializeController(const std::filesystem::path &projectRoot) {
         const Assets::AssetRegistrySnapshot assetSnapshot =
             projectServices_.assetRegistry ? projectServices_.assetRegistry->Snapshot() : Assets::AssetRegistrySnapshot{};
-        const auto session = CreateDocumentSessionOwner();
-        if (session.HasError())
-            return Result<void>::Failure(session.ErrorValue());
-        auto registrySource = CreateNativeAssetRegistrySource(std::filesystem::path{projectRoot}, session.Value().ToString(), 1);
-        if (registrySource.HasError())
-            return Result<void>::Failure(registrySource.ErrorValue());
-        auto resources = PrepareUiInspectorResources(projectRoot, session.Value());
+        auto capturedSources = CaptureWorkspaceReadSources(services_.TryGetConst<WorkspaceReadSourceFactory>(), projectRoot);
+        if (capturedSources.HasError())
+            return Result<void>::Failure(capturedSources.ErrorValue());
+        auto sources = std::move(capturedSources).Value();
+        auto resources = PrepareUiInspectorResources(services_, projectRoot, sources.owner);
         if (resources.HasError())
             return Result<void>::Failure(resources.ErrorValue());
         auto uiInspectorResources = std::move(resources).Value();
@@ -151,30 +150,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<void>::Failure(std::move(pcgComposition).ErrorValue());
         auto pcg = std::move(pcgComposition).Value();
         view_.ResetSourceSession();
-        controller_ =
-            std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
-                                                        EditorWorkspaceDependencies{
-                                                            .mutableAssetRegistry = projectServices_.assetRegistry,
-                                                            .uiInspectorResources = uiInspectorResources.get(),
-                                                            .collision = {.inventory = projectServices_.collisionInventory,
-                                                                          .activation = projectServices_.collisionActivation,
-                                                                          .previewReceipt = projectServices_.previewCollisionReceipt},
-                                                            .mutations = projectServices_.mutations,
-                                                            .durableFiles = projectServices_.durableFiles,
-                                                            .assetRegistrySource = std::move(registrySource).Value(),
-                                                            .importerCatalog = projectServices_.importerCatalog,
-                                                            .jobs = &services_.Get<JobSystem>(),
-                                                            .gameplay = BindGameplayServices(projectRoot),
-                                                            .localization = &context_.localization,
-                                                            .engineEvents = &context_.engineEvents,
-                                                            .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
-                                                            .documentSessionOwner = session.Value(),
-                                                            .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
-                                                            .audioPreview = services_.TryGet<IAudioComponentPreview>(),
-                                                            .prefabSources = PrefabCapture(projectRoot, projectServices_.mutations),
-                                                            .pcg = std::move(pcg.catalog),
-                                                            .pcgPreviewInputs = std::move(pcg.previewInputs),
-                                                        });
+        controller_ = std::make_unique<EditorWorkspaceController>(projectRoot, runtimeScene_, assetSnapshot,
+                                                                  BindControllerDependencies(projectRoot, uiInspectorResources.get(),
+                                                                                             std::move(sources), std::move(pcg.catalog),
+                                                                                             std::move(pcg.previewInputs)));
         if (controller_->InitializationError().has_value()) {
             const Error error = *controller_->InitializationError();
             controller_.reset();
@@ -182,6 +161,44 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         }
         uiInspectorResources_ = std::move(uiInspectorResources);
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceScreen::BindControllerDependencies */
+    EditorWorkspaceDependencies EditorWorkspaceScreen::BindControllerDependencies(const std::filesystem::path &projectRoot,
+                                                                                  UiInspectorResources *uiInspectorResources,
+                                                                                  WorkspaceReadSources &&sources,
+                                                                                  PCGEditorCatalog &&catalog,
+                                                                                  PCGPreviewInputs &&previewInputs) const {
+        const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
+        return EditorWorkspaceDependencies{
+            .mutableAssetRegistry = projectServices_.assetRegistry,
+            .uiInspectorResources = uiInspectorResources,
+            .collision = {.inventory = projectServices_.collisionInventory,
+                          .activation = projectServices_.collisionActivation,
+                          .previewReceipt = projectServices_.previewCollisionReceipt},
+            .mutations = projectServices_.mutations,
+            .durableFiles = projectServices_.durableFiles,
+            .assetRegistrySource = std::move(sources.registry),
+            .importerCatalog = projectServices_.importerCatalog,
+            .jobs = &services_.Get<JobSystem>(),
+            .worldBakeOperations = services_.TryGet<OperationStore>(),
+            .worldBakeOutput = services_.TryGet<BuildOutputStore>(),
+            .worldBakeDependencies = bakeDependencies ? std::optional{*bakeDependencies} : std::nullopt,
+            .gameplay = BindGameplayServices(services_, host_, BindPlayFactory(projectRoot)),
+            .localization = &context_.localization,
+            .engineEvents = &context_.engineEvents,
+            .networkDebugger = services_.TryGet<Application::NetworkDebuggerService>(),
+            .streamingPreviewPolicy = services_.TryGetConst<WorldStreamingPreviewRuntimePolicy>(),
+            .streamingPreview = services_.TryGet<WorldStreamingPreviewHost>(),
+            .worldSourceFiles = std::move(sources.world),
+            .documentSessionOwner = sources.owner,
+            .inspectorHost = services_.TryGet<Extensions::EditorInspectorHost>(),
+            .audioPreview = services_.TryGet<IAudioComponentPreview>(),
+            .prefab = {.sources = PrefabCapture(projectRoot, projectServices_.mutations),
+                       .stageFactory = BindPrefabStageFactory(projectRoot)},
+            .pcg = std::move(catalog),
+            .pcgPreviewInputs = std::move(previewInputs),
+        };
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */
@@ -219,7 +236,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             LOG_WARN("editor.workspace", "Cannot admit workspace surface state: %s", restored.ErrorValue().message.c_str());
             return;
         }
-        workspacePersistenceAdmitted_ = true;
+        contributions_.workspacePersistenceAdmitted = true;
         activities->Update();
         while (const auto destination = view_.UpdateExtensionActivities())
             controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::ChangeActivePanel,
@@ -230,7 +247,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::SaveExtensionWorkspace */
     void EditorWorkspaceScreen::SaveExtensionWorkspace() {
         auto *const activities = services_.TryGet<Extensions::EditorActivityHost>();
-        if (!activities || !controller_ || !workspacePersistenceAdmitted_)
+        if (!activities || !controller_ || !contributions_.workspacePersistenceAdmitted)
             return;
         auto layout = controller_->ViewModel().workspacePanelHost.Layout();
         layout.surfaces.clear();
@@ -251,7 +268,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             LOG_WARN("editor.workspace", "Cannot confirm workspace state publication: %s", error.c_str());
             return;
         }
-        workspacePersistenceAdmitted_ = false;
+        contributions_.workspacePersistenceAdmitted = false;
     }
 
     /** @copydoc EditorWorkspaceScreen::LoadProjectInputProfile */

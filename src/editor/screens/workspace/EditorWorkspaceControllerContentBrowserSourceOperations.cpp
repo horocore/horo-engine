@@ -37,6 +37,20 @@ namespace Horo::Editor {
 
     void EditorWorkspaceController::OpenSourceFile(const SourceOpenRequest &request) {
         m_viewModel.contentBrowserOperationError.clear();
+        if (request.path.extension() == ".horoworld") {
+            const auto relative =
+                request.path.is_absolute() ? request.path.lexically_relative(m_sourceOpenService.ProjectRoot()) : request.path;
+            const auto spelling = relative.generic_u8string();
+            const std::string portable{spelling.begin(), spelling.end()};
+            const auto current = WorldDocuments().Snapshot();
+            const auto opened =
+                OpenWorldCompositionSource(portable, current.HasValue() ? std::optional{current.Value()->fence} : std::nullopt);
+            if (opened.HasError()) {
+                m_viewModel.worldDocumentError = opened.ErrorValue();
+                m_viewModel.contentBrowserOperationError = "workspace.world.error";
+            }
+            return;
+        }
         const Result<SourceOpenResult> opened = m_sourceOpenService.Open(request);
         if (opened.HasError()) {
             if (const std::string_view code = opened.ErrorValue().code.Value(); code == SourceOpenErrors::Missing.code.Value())

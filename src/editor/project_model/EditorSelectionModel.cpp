@@ -80,12 +80,23 @@ namespace Horo::Editor {
 
     /** @copydoc EditorSelectionModel::Clear */
     void EditorSelectionModel::Clear() {
-        if (current_.objects.empty() && !current_.primary.has_value()) {
-            return;
-        }
+        if (ClearForTransaction())
+            NotifyTransactionClear();
+    }
+
+    /** @copydoc EditorSelectionModel::ClearForTransaction */
+    bool EditorSelectionModel::ClearForTransaction() noexcept {
+        if (current_.objects.empty() && !current_.primary)
+            return false;
         current_.objects.clear();
         current_.primary.reset();
-        Publish(SelectionChangeKind::Cleared);
+        ++current_.revision.value;
+        return true;
+    }
+
+    /** @copydoc EditorSelectionModel::NotifyTransactionClear */
+    void EditorSelectionModel::NotifyTransactionClear() {
+        events_->Publish(SelectionChangedEvent{current_.revision, SelectionChangeKind::Cleared});
     }
 
     /** @copydoc EditorSelectionModel::Publish */

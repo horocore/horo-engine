@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <new>
 #include <utility>
 
@@ -76,7 +77,7 @@ namespace Horo {
             ReadHandle &operator=(const ReadHandle &) = delete;
 
             /** @brief Returns regular-file metadata from the retained cursor, rejecting redirects and special objects. */
-            Result<ReadSnapshot> Snapshot() const {
+            Result<ReadSnapshot> Snapshot(const bool requireSingleLink = true) const {
 #if defined(_WIN32)
                 BY_HANDLE_FILE_INFORMATION info{};
                 if (value_ == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(value_, &info))
@@ -113,9 +114,27 @@ namespace Horo {
                                                        static_cast<std::uint64_t>(changed.tv_nsec),
                                                        static_cast<std::uint64_t>(info.st_mode), 0}};
 #endif
-                if (!result.regular || result.links != 1U)
+                if (!result.regular || (requireSingleLink && result.links != 1U))
                     return Result<ReadSnapshot>::Failure(MakeError(FileStorageErrors::UnsafeObject));
                 return Result<ReadSnapshot>::Success(result);
+            }
+
+            /** @brief Retains full native ownership identity; unavailable IDs cannot authorize cleanup. */
+            std::optional<FileEntryIdentity> EntryIdentity(const ReadSnapshot &snapshot) const noexcept {
+#if defined(_WIN32)
+                FILE_ID_INFO info{};
+                if (!GetFileInformationByHandleEx(value_, FileIdInfo, &info, sizeof(info)))
+                    return std::nullopt;
+                // ReFS needs all 128 file-ID bits and the full volume serial; the read snapshot's legacy ID is insufficient.
+                auto identity = snapshot.identity;
+                identity[0] = info.VolumeSerialNumber;
+                const auto fileId = std::bit_cast<std::array<std::uint64_t, 2>>(info.FileId);
+                identity[1] = fileId[0];
+                identity[2] = fileId[1];
+                return FileEntryIdentity{identity};
+#else
+                return FileEntryIdentity{snapshot.identity};
+#endif
             }
 
             /** @brief Performs one bounded transfer without retrying an interrupted OS call. */
@@ -279,12 +298,21 @@ namespace Horo {
             info.kind = FileEntryKind::Directory;
         else if (std::filesystem::is_regular_file(status)) {
             info.kind = FileEntryKind::RegularFile;
-            info.sizeBytes = std::filesystem::file_size(path, error);
-            if (error)
-                return Result<std::optional<FileEntryInfo>>::Failure(MakeError(FileStorageErrors::IoFailed));
-            info.hardLinks = std::filesystem::hard_link_count(path, error);
-            if (error)
-                return Result<std::optional<FileEntryInfo>>::Failure(MakeError(FileStorageErrors::IoFailed));
+            const ReadHandle handle{path};
+            const auto snapshot = handle.Snapshot(false);
+            if (snapshot.HasValue()) {
+                info.sizeBytes = snapshot.Value().length;
+                info.hardLinks = snapshot.Value().links;
+                info.identity = handle.EntryIdentity(snapshot.Value());
+            } else {
+                // Metadata inspection does not require content-read authority. Missing identity remains explicitly unavailable.
+                info.sizeBytes = std::filesystem::file_size(path, error);
+                if (error)
+                    return Result<std::optional<FileEntryInfo>>::Failure(MakeError(FileStorageErrors::IoFailed));
+                info.hardLinks = std::filesystem::hard_link_count(path, error);
+                if (error)
+                    return Result<std::optional<FileEntryInfo>>::Failure(MakeError(FileStorageErrors::IoFailed));
+            }
         }
         return Result<std::optional<FileEntryInfo>>::Success(info);
     }

@@ -11,6 +11,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <vector>
 
 namespace Horo::WorldStreaming {
@@ -104,6 +105,9 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] StreamingCellStateLedgerLifecycle Lifecycle() const noexcept;
         /** @brief Returns current and retiring attempts plus bounded generation tombstones. @return Tracked record count. */
         [[nodiscard]] std::size_t TrackedAttemptCount() const noexcept;
+        /** @brief Borrows actual owner-lane records for immutable diagnostic capture.
+         * @return Ledger-owned attempts, including retiring generations; expires on Apply or ledger destruction. */
+        [[nodiscard]] std::span<const StreamingCellStateRecord> Records() const noexcept;
 
     private:
         StreamingCellStateLedger(const StreamingCellStateLedgerConfig &config, std::vector<StreamingCellStateRecord> records) noexcept;

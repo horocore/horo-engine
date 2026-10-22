@@ -46,6 +46,8 @@ namespace Horo::Render::Detail {
                 continue;
             }
 
+            if (pass.primaryOutput->outputColor)
+                return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
             if (!pass.primaryOutput->IsValid()) {
                 return Result<void>::Failure(
                     MakeError(OpenGLBackendErrors::InvalidExecutionPlan, "Primary output attachment operations are invalid."));

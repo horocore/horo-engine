@@ -74,9 +74,18 @@ namespace {
         "workspace.global_dock.localization.fonts",
     };
     constexpr std::array contentBrowserKeys{
-        "workspace.content_browser.loading",   "workspace.content_browser.unavailable",      "workspace.content_browser.no_results",
-        "workspace.content_browser.search",    "workspace.content_browser.filter.all_types", "workspace.content_browser.sort.name",
+        "workspace.content_browser.loading",
+        "workspace.content_browser.unavailable",
+        "workspace.content_browser.no_results",
+        "workspace.content_browser.search",
+        "workspace.content_browser.filter.all_types",
+        "workspace.content_browser.sort.name",
         "workspace.content_browser.sort.type",
+        "workspace.content_browser.asset.unregistered",
+        "workspace.content_browser.prefab.type",
+        "workspace.content_browser.preview.queued",
+        "workspace.content_browser.preview.unavailable",
+        "workspace.content_browser.prefab.migration_required",
     };
     constexpr std::array recoveryKeys{
         "workspace.recovery.available",
@@ -271,6 +280,10 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Project asset dock"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "This folder is empty."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
+        CHECK(service.Get("editor", "workspace.prefab_document.undo") == "Undo source edit");
+        CHECK(service.Get("editor", "workspace.prefab_document.discard_recovery").find("keep source edits") != std::string::npos);
+        CHECK(service.Get("editor", "workspace.prefab_document.source_controls").find("Scene viewport") != std::string::npos);
+        CHECK(service.Get("editor", "workspace.prefab_document.preview_unavailable").find("isolated runtime") != std::string::npos);
         CHECK(service.Get("editor", "render_graph.title") == "Render Graph");
         CHECK(service.Get("editor", "render_graph.unavailable") == "Unavailable");
         CHECK(service.Get("editor", "render_graph.next") == "Next page");
@@ -522,6 +535,32 @@ namespace {
             REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
             REQUIRE(service.ActivatePrepared(&error));
             RequireCatalogKeys(service, PCGAuthoringKeys);
+        }
+    }
+
+    TEST_CASE("World layer outliner messages resolve in both shipped locales", "[unit][editor][localization][layers]") {
+        const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+        Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{"en-US"}};
+        Horo::Editor::LocalizationError error;
+        for (const auto locale : {"en-US", "tr-TR"})
+            REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+        for (const auto locale : {"en-US", "tr-TR"}) {
+            REQUIRE(service.Prepare(Horo::Editor::LocaleTag{locale}, &error));
+            REQUIRE(service.ActivatePrepared(&error));
+            for (const auto key : {
+                     "workspace.world_layers.title",          "workspace.world_layers.create",      "workspace.world_layers.undo",
+                     "workspace.world_layers.redo",           "workspace.world_layers.filter",      "workspace.world_layers.all_owners",
+                     "workspace.world_layers.streaming",      "workspace.world_layers.gameplay",    "workspace.world_layers.network",
+                     "workspace.world_layers.current",        "workspace.world_layers.set_current", "workspace.world_layers.clear_current",
+                     "workspace.world_layers.move_up",        "workspace.world_layers.move_down",   "workspace.world_layers.empty",
+                     "workspace.world_layers.current_hidden", "workspace.world_layers.name",        "workspace.world_layers.name_hint",
+                     "workspace.world_layers.cancel",         "workspace.world_layers.stale",       "workspace.world_layers.rejected",
+                 }) {
+                INFO(locale);
+                INFO(key);
+                CHECK_FALSE(service.Get("editor", key).empty());
+                CHECK(service.Get("editor", key) != key);
+            }
         }
     }
 }  // namespace

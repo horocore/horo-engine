@@ -469,6 +469,7 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
             }
             REQUIRE(registry.OperationResult(parent.Value().operation).HasValue());
             if (allocationFailed) {
+                CHECK(registry.OperationState(ResourceOperationId{parent.Value().operation.value + 1}).HasError());
                 const auto retried = registry.Reserve(RenderResourceClass::Texture, dependencies);
                 REQUIRE(retried.HasValue());
                 admitted = retried.Value();
@@ -476,6 +477,8 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
                 successfulAdmissionObserved = true;
             }
             REQUIRE(admitted.has_value());
+            CHECK(admitted->identity.slot == parent.Value().identity.slot + 1);
+            CHECK(admitted->identity.generation == 1);
             CHECK(admitted->operation.value == parent.Value().operation.value + 1);
             REQUIRE(registry.Publish(RenderResourceClass::Texture, admitted->identity, 91).HasValue());
             REQUIRE(registry.Release(RenderResourceClass::Buffer, parent.Value().identity).HasValue());
@@ -487,6 +490,42 @@ namespace {  // NOSONAR(cpp:S1000) File-local registry fixtures intentionally ha
                 break;
         }
         REQUIRE(successfulAdmissionObserved);
+    }
+
+    TEST_CASE("Dependency retirement consumes newly eligible parents within the configured work budget",
+              "[unit][runtime][renderer][resource][retirement]") {
+        for (const std::uint32_t budget : {1U, 3U}) {
+            const auto owner = AcquireRenderResourceOwnerId();
+            REQUIRE(owner.HasValue());
+            ReleasedBackendResources released;
+            auto registry = MakeRegistry(owner.Value(), released, {.maximumSlots = 3, .retirementDrainBudget = budget});
+            const auto parent = registry.Reserve(RenderResourceClass::Buffer);
+            REQUIRE(parent.HasValue());
+            REQUIRE(registry.Publish(RenderResourceClass::Buffer, parent.Value().identity, 11).HasValue());
+            const std::array parentDependency{parent.Value().identity};
+            const auto child = registry.Reserve(RenderResourceClass::Texture, parentDependency);
+            REQUIRE(child.HasValue());
+            REQUIRE(registry.Publish(RenderResourceClass::Texture, child.Value().identity, 22).HasValue());
+            const std::array childDependency{child.Value().identity};
+            const auto leaf = registry.Reserve(RenderResourceClass::TextureView, childDependency);
+            REQUIRE(leaf.HasValue());
+            REQUIRE(registry.Publish(RenderResourceClass::TextureView, leaf.Value().identity, 33).HasValue());
+            REQUIRE(registry.Release(RenderResourceClass::Buffer, parent.Value().identity).HasValue());
+            REQUIRE(registry.Release(RenderResourceClass::Texture, child.Value().identity).HasValue());
+            CHECK(registry.DrainRetirements() == 0);
+            REQUIRE(registry.Release(RenderResourceClass::TextureView, leaf.Value().identity).HasValue());
+            CHECK(registry.DrainRetirements() == budget);
+            if (budget == 1) {
+                CHECK(released.count == 1);
+                CHECK(registry.DrainRetirements() == 1);
+                CHECK(registry.DrainRetirements() == 1);
+            }
+            CHECK(released.count == 3);
+            CHECK(released.instances[0] == 33);
+            CHECK(released.instances[1] == 22);
+            CHECK(released.instances[2] == 11);
+            CHECK(registry.DrainRetirements() == 0);
+        }
     }
 
     TEST_CASE("Failure and shutdown preserve terminal operation results", "[unit][runtime][renderer][resource]") {

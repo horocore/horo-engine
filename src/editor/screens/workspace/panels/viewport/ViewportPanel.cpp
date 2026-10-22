@@ -5,6 +5,7 @@
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "ViewportOverlay.h"
+#include "ViewportStreamingPreview.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
 #include "visualizers/light/LightMarkerLayer.h"
 
@@ -103,6 +104,7 @@ namespace Horo::Editor {
 
     /** @copydoc ViewportPanel::OnDetach */
     void ViewportPanel::OnDetach() {
+        worldSourceTool_.Cancel();
         interaction_.Detach();
         contributions_ = nullptr;
         activeContribution_ = {};
@@ -117,6 +119,7 @@ namespace Horo::Editor {
 
     /** @copydoc ViewportPanel::OnPresentationHidden */
     void ViewportPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &command) {
+        worldSourceTool_.Cancel();
         if (!activeContribution_)
             return;
         interaction_.CancelContribution();
@@ -164,6 +167,19 @@ namespace Horo::Editor {
         const bool hasRenderedViewport = viewportRenderer_ != nullptr && viewportRenderer_->IsReady() && textureView.IsValid();
         DrawViewportSurface(drawList, surfaceLayout, textureView, hasRenderedViewport);
 
+        if (std::ranges::any_of(viewModel.prefabDocuments, [&](const auto &entry) {
+            return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        })) {
+            OnPresentationHidden(command);
+            // Source-local controls own this stage. Scene picking, overlays and drag/drop
+            // cannot bind its isolated runtime projection to the containing Scene document.
+            if (!hasRenderedViewport)
+                DrawMissingRendererMessage(centerX, origin.y, height, context);
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            return;
+        }
+
         if (navigationOverlays_ && hasRenderedViewport)
             navigationLayer_.Draw(*navigationOverlays_, {.projectRoot = navigationProjectRoot_,
                                                          .scenePath = viewModel.navigationScenePath,
@@ -178,9 +194,10 @@ namespace Horo::Editor {
             static_cast<void>(interaction_.ConsumePendingCancellation(command));
             activeContribution_ = {};
         }
-        if (hasRenderedViewport && width > 0.0F && height > 0.0F)
+        if (hasRenderedViewport && width > 0.0F && height > 0.0F) {
             DrawInteractiveViewport(drawList, surfaceLayout, viewModel, command, context, viewportRenderer_->ClipDepthRange());
-        else
+            DrawViewportStreamingPreview(drawList, origin, {width, height}, viewModel, context, viewportRenderer_->ClipDepthRange());
+        } else
             interaction_.CancelForUnavailableSurface(command);
 
         const ViewportOverlayAction overlay =
@@ -221,7 +238,11 @@ namespace Horo::Editor {
             .visible = gridOverride_.value_or(context.settings.settings.gridOverlay),
         });
         EditorViewportLightVisualizerOptions lightVisualizer;
-        if (viewModel.primarySelection.has_value()) {
+        if (const bool prefab = std::ranges::any_of(viewModel.prefabDocuments,
+                                                    [&](const auto &entry) {
+            return entry.identity.instance == viewModel.workspacePanelHost.ActiveDocument();
+        });
+            !prefab && viewModel.primarySelection.has_value()) {
             const auto selected =
                 std::ranges::find(viewModel.viewportLights, *viewModel.primarySelection, &ViewportLightPresentation::object);
             if (selected != viewModel.viewportLights.end())
@@ -278,6 +299,7 @@ namespace Horo::Editor {
             .aspect = layout.width / layout.height,
             .depthRange = depthRange,
             .documentRevision = viewModel.documentRevision,
+            .fence = payload->fence,
         };
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             CancelAssetPlacementPreview(command);
@@ -384,6 +406,13 @@ namespace Horo::Editor {
                                  surfaceHovered && !interaction_.IsActive() && ImGui::GetDragDropPayload() == nullptr);
         const bool assetDragActive =
             inputEligible && surfaceInteractive && AcceptViewportAssetDrop(drawList, layout, viewModel, command, context, depthRange);
+        const WorldSourceViewportTool::Frame sourceFrame{drawList,
+                                                         layout.origin,
+                                                         ImVec2(layout.width, layout.height),
+                                                         viewModel,
+                                                         depthRange,
+                                                         inputEligible && !interaction_.IsActive() && !assetDragActive};
+        const bool sourceToolActive = worldSourceTool_.Draw(sourceFrame, command, context);
         const Result<std::optional<SceneObjectId>> clickedLight =
             DrawViewportLightMarkers({.drawList = drawList,
                                       .origin = layout.origin,
@@ -391,13 +420,13 @@ namespace Horo::Editor {
                                       .height = layout.height,
                                       .camera = viewModel.viewportCamera,
                                       .depthRange = depthRange,
-                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !contributedPick &&
-                                                     viewModel.selectedColliders.empty()},
+                                      .acceptInput = surfaceHovered && !interaction_.IsActive() && !assetDragActive && !sourceToolActive &&
+                                                     !contributedPick && viewModel.selectedColliders.empty()},
                                      viewModel.viewportLights, viewModel.primarySelection);
         if (!inputEligible)
             static_cast<void>(interaction_.ConsumePendingCancellation(command));
         if (ResolveLightMarkerInteraction(clickedLight, lightMarkerFailureReported_, command) && inputEligible && surfaceInteractive &&
-            !assetDragActive) {
+            !assetDragActive && !sourceToolActive) {
             interaction_.Draw({.drawList = drawList,
                                .origin = layout.origin,
                                .width = layout.width,

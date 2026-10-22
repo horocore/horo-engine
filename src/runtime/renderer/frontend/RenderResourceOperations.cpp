@@ -28,7 +28,8 @@ namespace Horo::Render {
         }
 
         [[nodiscard]] Result<std::uint64_t> RealizeMeshRequest(IRenderBackend &backend, const Detail::RenderResourceRegistry &registry,
-                                                               const RenderMeshDescriptor &descriptor) {
+                                                               const RenderMeshDescriptor &descriptor,
+                                                               RenderResourceNativeLifetime lifetime) {
             const auto vertex = registry.BackendInstance(Detail::RenderResourceClass::Buffer, Identity(descriptor.vertexBuffer));
             if (vertex.HasError()) {
                 return Result<std::uint64_t>::Failure(vertex.ErrorValue());
@@ -37,21 +38,23 @@ namespace Horo::Render {
             if (index.HasError()) {
                 return Result<std::uint64_t>::Failure(index.ErrorValue());
             }
-            return backend.CreateMesh(descriptor, vertex.Value(), index.Value());
+            return backend.CreateMesh(descriptor, vertex.Value(), index.Value(), std::move(lifetime));
         }
 
         [[nodiscard]] Result<std::uint64_t> RealizeTextureViewRequest(IRenderBackend &backend,
                                                                       const Detail::RenderResourceRegistry &registry,
-                                                                      const RenderTextureViewDescriptor &descriptor) {
+                                                                      const RenderTextureViewDescriptor &descriptor,
+                                                                      RenderResourceNativeLifetime lifetime) {
             const auto texture = registry.BackendInstance(Detail::RenderResourceClass::Texture, Identity(descriptor.texture));
             if (texture.HasError())
                 return Result<std::uint64_t>::Failure(texture.ErrorValue());
-            return backend.CreateTextureView(descriptor, texture.Value());
+            return backend.CreateTextureView(descriptor, texture.Value(), std::move(lifetime));
         }
 
         [[nodiscard]] Result<std::uint64_t> RealizeRenderTargetRequest(IRenderBackend &backend,
                                                                        const Detail::RenderResourceRegistry &registry,
-                                                                       const RenderTargetDescriptor &descriptor) {
+                                                                       const RenderTargetDescriptor &descriptor,
+                                                                       RenderResourceNativeLifetime lifetime) {
             std::uint64_t colorInstance = 0;
             if (descriptor.colorAttachment.IsValid()) {
                 const auto color = registry.BackendInstance(Detail::RenderResourceClass::TextureView, Identity(descriptor.colorAttachment));
@@ -66,30 +69,9 @@ namespace Horo::Render {
                     return Result<std::uint64_t>::Failure(depth.ErrorValue());
                 depthInstance = depth.Value();
             }
-            return backend.CreateRenderTarget(descriptor, colorInstance, depthInstance);
+            return backend.CreateRenderTarget(descriptor, colorInstance, depthInstance, std::move(lifetime));
         }
 
-        void DestroyResourceInstance(IRenderBackend &backend, const Detail::RenderResourceClass resourceClass,
-                                     const std::uint64_t backendInstance) noexcept {
-            using enum Detail::RenderResourceClass;
-            if (resourceClass == Buffer) {
-                backend.DestroyBuffer(backendInstance);
-                return;
-            }
-            if (resourceClass == Mesh) {
-                backend.DestroyMesh(backendInstance);
-                return;
-            }
-            if (resourceClass == Texture) {
-                backend.DestroyTexture(backendInstance);
-                return;
-            }
-            if (resourceClass == TextureView) {
-                backend.DestroyTextureView(backendInstance);
-                return;
-            }
-            backend.DestroyRenderTarget(backendInstance);
-        }
     }  // namespace
 
     Detail::RenderResourceIdentity Identity(const RenderBufferHandle handle) noexcept {
@@ -137,21 +119,27 @@ namespace Horo::Render {
                static_cast<std::size_t>(elementSize) * elementCount <= bufferSize;
     }
 
-    Result<std::uint64_t> RealizeResourceRequest(IRenderBackend &backend, const Detail::RenderResourceRegistry &registry,
-                                                 const UploadRequest &request, const std::span<const std::byte> initialData) {
+    Result<std::uint64_t> RealizeResourceRequest(IRenderBackend &backend, RenderMemoryBudget &memoryBudget,
+                                                 Detail::RenderResourceRegistry &registry, const UploadRequest &request,
+                                                 const std::span<const std::byte> initialData) {
+        auto prepared =
+            registry.PrepareNativeLifetime(ResourceClassFor(request.kind), request.identity, request.memoryReservation, &memoryBudget);
+        if (prepared.HasError())
+            return Result<std::uint64_t>::Failure(std::move(prepared).ErrorValue());
+        auto lifetime = std::move(prepared).Value();
         try {
             using enum UploadRequestKind;
             switch (request.kind) {
                 case Buffer:
-                    return backend.CreateBuffer(request.buffer, initialData, request.memoryPlacement);
+                    return backend.CreateBuffer(request.buffer, initialData, request.memoryPlacement, std::move(lifetime));
                 case Mesh:
-                    return RealizeMeshRequest(backend, registry, request.mesh);
+                    return RealizeMeshRequest(backend, registry, request.mesh, std::move(lifetime));
                 case Texture:
-                    return backend.CreateTexture(request.texture, initialData, request.memoryPlacement);
+                    return backend.CreateTexture(request.texture, initialData, request.memoryPlacement, std::move(lifetime));
                 case TextureView:
-                    return RealizeTextureViewRequest(backend, registry, request.textureView);
+                    return RealizeTextureViewRequest(backend, registry, request.textureView, std::move(lifetime));
                 case RenderTarget:
-                    return RealizeRenderTargetRequest(backend, registry, request.renderTarget);
+                    return RealizeRenderTargetRequest(backend, registry, request.renderTarget, std::move(lifetime));
             }
             return Result<std::uint64_t>::Failure(
                 MakeError(FrontendErrors::ResourceBackendException, "Renderer resource request kind is invalid."));
@@ -161,35 +149,41 @@ namespace Horo::Render {
         }
     }
 
-    void CompleteResourceRequest(IRenderBackend &backend, RenderMemoryBudget &memoryBudget, Detail::RenderResourceRegistry &registry,
+    void CompleteResourceRequest(IRenderBackend &, RenderMemoryBudget &memoryBudget, Detail::RenderResourceRegistry &registry,
                                  const UploadRequest &request, const Result<std::uint64_t> &created) {
         const Detail::RenderResourceClass resourceClass = ResourceClassFor(request.kind);
         if (created.HasError()) {
-            if (request.memoryReservation.IsValid())
+            if (request.memoryReservation.IsValid() && !registry.HasNativeLifetime(request.identity))
                 static_cast<void>(memoryBudget.Cancel(request.memoryReservation));
             static_cast<void>(registry.Fail(resourceClass, request.identity, created.ErrorValue()));
             return;
         }
 
+        if (created.Value() == 0) {
+            if (request.memoryReservation.IsValid() && !registry.HasNativeLifetime(request.identity))
+                static_cast<void>(memoryBudget.Cancel(request.memoryReservation));
+            static_cast<void>(registry.Fail(resourceClass, request.identity,
+                                            MakeError(FrontendErrors::ResourceBackendInstanceInvalid,
+                                                      "Native resource creation returned an empty instance.")));
+            return;
+        }
+        // Own the returned instance before commit/publication can fail; retirement keeps its original lease/charge.
+        if (registry.AttachNativeCreation(resourceClass, request.identity, created.Value()).HasError())
+            std::terminate();
         std::optional<RenderMemoryAllocation> allocation;
         if (request.memoryReservation.IsValid()) {
             auto committed = memoryBudget.Commit(request.memoryReservation);
             if (committed.HasError()) {
-                DestroyResourceInstance(backend, resourceClass, created.Value());
-                static_cast<void>(memoryBudget.Cancel(request.memoryReservation));
                 static_cast<void>(registry.Fail(resourceClass, request.identity, committed.ErrorValue()));
                 return;
             }
             allocation = committed.Value();
         }
         const std::optional<RenderMemoryAllocationId> allocationId = allocation.has_value() ? std::optional{allocation->id} : std::nullopt;
+        if (registry.AttachNativeCreation(resourceClass, request.identity, created.Value(), allocationId).HasError())
+            std::terminate();
         if (const Result<void> published = registry.Publish(resourceClass, request.identity, created.Value(), allocationId);
             published.HasError()) {
-            DestroyResourceInstance(backend, resourceClass, created.Value());
-            if (allocation.has_value()) {
-                static_cast<void>(memoryBudget.BeginRetire(allocation->id));
-                static_cast<void>(memoryBudget.AcknowledgeRetirement(allocation->id));
-            }
             static_cast<void>(registry.Fail(resourceClass, request.identity, published.ErrorValue()));
             return;
         }

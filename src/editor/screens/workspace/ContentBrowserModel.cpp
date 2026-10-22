@@ -191,6 +191,7 @@ namespace Horo::Editor {
             entry.assetId = record.id.ToString();
             entry.assetType = record.type.Value();
             entry.registered = true;
+            entry.registeredType = record.type;
             entry.absoluteMetadataPath = NormalizeAbsolute(Foundation::Paths::Resolve(projectRoot, record.metadataPath)).string();
             auto metadata = Assets::ReadAssetImportMetadata(entry.absoluteMetadataPath);
             if (!metadata.HasValue()) {

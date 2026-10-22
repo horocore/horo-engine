@@ -302,9 +302,10 @@ namespace Horo::Editor {
                     request.drawList.AddLine({request.minimum.x, y}, {request.maximum.x, y}, targetColor, 3.0F);
                     request.drawList.AddCircleFilled({request.minimum.x + 2.0F, y}, 3.0F, targetColor);
                 }
-                if (policy.canInstantiate && accepted->IsDelivery()) {
-                    delivered = true;
-                    request.command.command = EditorWorkspaceViewCommand::InstantiateAsset;
+                if (policy.canInstantiate && (accepted->IsDelivery() || std::string_view{payload->assetType.data()} == "core.prefab")) {
+                    delivered = accepted->IsDelivery();
+                    request.command.command =
+                        delivered ? EditorWorkspaceViewCommand::InstantiateAsset : EditorWorkspaceViewCommand::PreviewAssetPlacement;
                     request.command.assetSceneDrop = AssetSceneDropRequest{
                         .assetId = payload->assetId.data(),
                         .assetType = payload->assetType.data(),
@@ -312,6 +313,7 @@ namespace Horo::Editor {
                         .parent = request.parent,
                         .target = request.target,
                         .documentRevision = request.revision,
+                        .fence = payload->fence,
                     };
                 }
             }
@@ -576,6 +578,13 @@ namespace Horo::Editor {
                                     .c_str(),
                                 nullptr, context.theme.fonts))
             command = HierarchyEditSession::DuplicateCommand(frame.node.id);
+        if (editable &&
+            Ui::ContextMenuItem((context.localization.Get("editor", "workspace.prefab.create.action") + "###hierarchy_create_prefab")
+                                    .c_str(),
+                                nullptr, context.theme.fonts)) {
+            command.command = EditorWorkspaceViewCommand::CreatePrefabFromSelection;
+            command.objectPayload = SceneObjectId{frame.node.id};
+        }
         Ui::ContextMenuSeparator();
         if (editable &&
             Ui::ContextMenuItem((context.localization.Get("editor", "workspace.hierarchy.delete") + "###hierarchy_action_delete").c_str(),
@@ -885,6 +894,8 @@ namespace Horo::Editor {
                                   const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
                                   const EditorGuiContext &context) {
         bool pendingDelete = false;
+        if (viewModel.prefabPostCommitError)
+            Ui::ErrorText(viewModel.prefabPostCommitError->message.c_str(), context.theme.fonts);
         if (viewModel.prefabHierarchyUnavailable) {
             Ui::ErrorText(viewModel.prefabHierarchyError
                               ? viewModel.prefabHierarchyError->message.c_str()

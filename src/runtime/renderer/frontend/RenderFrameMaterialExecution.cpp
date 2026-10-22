@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/MaterialBinding.h"
+#include "Horo/Runtime/Render/MaterialBindingErrors.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "RenderFrontendErrors.h"
 #include "RenderGraphResourceLeasePool.h"
@@ -11,6 +12,11 @@
 
 namespace Horo::Render {
     namespace {
+        /** @brief Checks the bounded immutable draw envelope before any frontend lease is acquired. */
+        bool ValidMaterialDrawEnvelope(const RenderMaterialPass &pass) {
+            return pass.color.IsValid() && !pass.draws.empty() && pass.draws.size() <= RenderMaterialPass::MaximumDraws;
+        }
+
         /** @brief Allocation-free evidence that execution unwound after its frame cleanup. */
         struct MaterialExecutionExceptionTag {};
     }  // namespace
@@ -75,10 +81,13 @@ namespace Horo::Render {
         try {
             if (const auto admitted = ValidateExecutionAdmission(); admitted.HasError())
                 return MaterialExecutionOutcome{admitted};
-            if (!owner_->IsLiveTarget(pass.target, pass.extent) || !pass.color.IsValid() || pass.draws.empty() ||
-                pass.draws.size() > RenderMaterialPass::MaximumDraws) {
+            if (!owner_->IsLiveTarget(pass.target, pass.extent) || !ValidMaterialDrawEnvelope(pass)) {
                 Abort();
                 return MaterialExecutionOutcome{Result<void>::Failure(MakeError(FrontendErrors::ResourceNotReady))};
+            }
+            if (pass.submission.has_value() && !backend_->Capabilities().supportsExplicitMaterialSubmissions) {
+                Abort();
+                return MaterialExecutionOutcome{Result<void>::Failure(MakeError(MaterialBindingErrors::Unsupported))};
             }
             const auto target = owner_->BackendInstance(pass.target);
             if (target.HasError()) {
@@ -96,9 +105,9 @@ namespace Horo::Render {
                 Abort();
                 return MaterialExecutionOutcome{Result<void>::Failure(retained.ErrorValue())};
             }
-            if (const auto consumed =
-                    ExecuteMaterialRequest({frame_, target.Value(), pass.extent, pass.color, pass.depthClear,
-                                            std::span{instances.draws}.first(pass.draws.size()), retained.Value(), nullptr});
+            if (const auto consumed = ExecuteMaterialRequest({frame_, target.Value(), pass.extent, pass.color, pass.depthClear,
+                                                              std::span{instances.draws}.first(pass.draws.size()), retained.Value(),
+                                                              nullptr, pass.submission});
                 consumed.HasError())
                 return MaterialExecutionOutcome{consumed};
             executed_ = true;
