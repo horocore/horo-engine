@@ -20,6 +20,8 @@
 #include "editor/screens/workspace/GameplayBehaviorRequest.h"
 #include "editor/screens/workspace/InspectorExtensionEdit.h"
 #include "editor/screens/workspace/PCGWorkspace.h"
+#include "editor/screens/workspace/prefab/PrefabCreation.h"
+#include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchyCommand.h"
 
 #include <filesystem>
@@ -72,8 +74,21 @@ namespace Horo::Editor {
         Render::RenderLight light;
     };
 
+    /** @brief Closed prefab application intents; destructive decisions are explicit. */
+    enum class PrefabDocumentAction {
+        Save,
+        Undo,
+        Redo,
+        Reload,
+        DiscardAndReload,
+        Recover,
+        DiscardRecovery,
+        DiscardAndClose
+    };
+
     enum class EditorWorkspaceViewCommand {
         None,
+        PrefabDocument,
         FocusWorkspaceDocument,
         CloseWorkspaceDocument,
         MoveWorkspaceDocument,
@@ -111,6 +126,7 @@ namespace Horo::Editor {
         DeleteSelectedObjects,
         SelectObject,
         PrefabHierarchy,
+        CreatePrefabFromSelection,
         PickViewport,
         NavigateViewport,
         AlignViewportToAxis,
@@ -276,6 +292,10 @@ namespace Horo::Editor {
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<DocumentInstanceId> documentMoveBefore;
+        std::optional<PrefabDocumentFence> prefabFence;
+        std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
+        std::optional<PrefabSourceEdit> prefabEdit;
+        PrefabDocumentAction prefabAction{PrefabDocumentAction::Save};
         std::optional<SourceEditingCommand> sourceInteraction;
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
@@ -285,6 +305,7 @@ namespace Horo::Editor {
         std::optional<EditorMenuInvocation> menuInvocation = std::nullopt;
         std::optional<ObjectSelectionRequest> objectSelection = std::nullopt;
         std::optional<PrefabHierarchyCommand> prefabHierarchy;
+        std::optional<PrefabCreationIntent> prefabCreation;
         std::optional<int> targetIndex = std::nullopt;
         std::optional<SceneObjectId> objectPayload = std::nullopt;
         std::optional<Runtime::PrimitiveId> primitivePayload = std::nullopt;
@@ -362,6 +383,7 @@ namespace Horo::Editor {
         bool contentBrowserCanNavigateBack{false};
         bool contentBrowserCanNavigateForward{false};
         DocumentRevision documentRevision;
+        AssetSceneDropFence assetDropFence;
         std::uint64_t inspectorDocumentGeneration{};
         std::uint64_t inspectorBehaviorRegistryRevision{};
         std::uint64_t inspectorApprovalRevision{};
@@ -379,6 +401,8 @@ namespace Horo::Editor {
         std::shared_ptr<const PrefabHierarchyProjection> prefabHierarchy; /**< Owner-published bounded cache; no Draw I/O. */
         std::optional<PrefabHierarchyTarget> prefabSelection;
         std::optional<Error> prefabHierarchyError;
+        std::shared_ptr<const PrefabCreationOutcome> prefabCreationOutcome;
+        std::optional<Error> prefabPostCommitError;
         bool prefabHierarchyUnavailable{}; /**< Preparation failed; retained rows are inspection-only, never a fresh publication. */
         std::vector<Gameplay::BehaviorDescriptor> availableBehaviors;
         std::optional<SceneObjectId> hierarchyRevealObject;
@@ -420,6 +444,10 @@ namespace Horo::Editor {
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::vector<PrefabDocumentSnapshot> prefabDocuments;
+        std::optional<Error> prefabDocumentError;
+        bool prefabRecoveryAvailable{};
+        std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
         std::vector<SourceHistoryState> sourceHistory;
         std::optional<Result<SourceEditingPublication>> sourceEditingResult;
 

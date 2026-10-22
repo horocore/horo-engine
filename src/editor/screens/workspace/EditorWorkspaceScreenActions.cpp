@@ -7,14 +7,40 @@
 #include "editor/modals/gameplay_behavior/GameplayBehaviorFilenameModal.h"
 #include "editor/modals/packages/PackageModal.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
+#include "editor/modals/prefab_creation/PrefabCreationModal.h"
 #include "editor/modals/scene_compare/SceneConflictCompareModal.h"
 #include "editor/modals/source_document/SourceDocumentCloseModal.h"
 
+#include <algorithm>
 #include <format>
 #include <portable-file-dialogs.h>
+#include <span>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
+        /** @brief Formats bounded creation diagnostics after the workspace lifetime fence passes. */
+        std::string PrefabCreationFailureMessage(const PrefabCreationOutcome *outcome, const ILocalizationService &localization) {
+            std::string message = localization.Get("editor", "workspace.prefab.create.failed");
+            if (!outcome)
+                return message;
+            if (outcome->error)
+                message += std::format("\n{}", outcome->error->message);
+            constexpr std::size_t maximumVisibleBoundaries{32};
+            const auto count = std::min(outcome->boundaries.size(), maximumVisibleBoundaries);
+            for (const auto &boundary : std::span{outcome->boundaries}.first(count)) {
+                message += std::format("\n{}: {}", boundary.source.value, boundary.property);
+                if (boundary.target)
+                    message += std::format(" -> {}", boundary.target->value);
+            }
+            if (count < outcome->boundaries.size())
+                message += std::format("\n{} {}", outcome->boundaries.size() - count,
+                                       localization.Get("editor", "workspace.prefab.create.more_diagnostics"));
+            for (const auto &receipt : outcome->files)
+                if (receipt.recoveryError)
+                    message += std::format("\n{}: {}", receipt.path.generic_string(), receipt.recoveryError->message);
+            return message;
+        }
+
         /** @brief Resolves an existing path where possible while retaining lexical fallback on canonicalization errors. */
         [[nodiscard]] std::filesystem::path NormalizeAbsolutePath(const std::filesystem::path &path) {
             std::error_code error;
@@ -249,6 +275,36 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (opened.HasError()) {
             LOG_WARN("editor.scene_document", "External scene comparison modal could not open: %s", opened.ErrorValue().message.c_str());
         }
+    }
+
+    /** @copydoc EditorWorkspaceScreen::OpenPrefabCreationModal */
+    void EditorWorkspaceScreen::OpenPrefabCreationModal(const SceneObjectId root) {
+        const auto captured = controller_->CapturePrefabCreationIntent(root);
+        if (captured.HasError())
+            return;
+        auto opened = modalHost_.OpenRoot(
+            std::make_unique<PrefabCreationModal>(context_, captured.Value(), controller_->ViewModel().projectRoot,
+                                                  [controller = controller_.get(), localization = &context_.localization,
+                                                   lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_},
+                                                   expired = context_.localization.Get("editor", "workspace.prefab.create.expired")](
+                                                      PrefabCreationIntent intent) -> std::optional<std::string> {
+            if (lifetime.expired())
+                return expired;
+            if (const auto admission = controller->CapturePrefabCreationIntent(intent.root);
+                admission.HasError() || admission.Value().documentRevision != intent.documentRevision ||
+                admission.Value().replacementEpoch != intent.replacementEpoch)
+                return expired;
+            EditorWorkspaceViewCommandData command;
+            command.command = EditorWorkspaceViewCommand::CreatePrefabFromSelection;
+            command.prefabCreation = std::move(intent);
+            controller->ProcessCommand(command);
+            const auto &outcome = controller->ViewModel().prefabCreationOutcome;
+            if (outcome && outcome->committed)
+                return {};
+            return PrefabCreationFailureMessage(outcome.get(), *localization);
+        }));
+        if (opened.HasError())
+            LOG_WARN("editor.prefab", "Creation modal could not open: %s", opened.ErrorValue().message.c_str());
     }
 
     /** @copydoc EditorWorkspaceScreen::OpenGameplayBehaviorModal */

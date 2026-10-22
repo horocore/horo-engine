@@ -10,6 +10,7 @@
 #include "Horo/Assets/AssetRegistry.h"
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -46,6 +47,14 @@ namespace Horo::Editor {
         std::string absolutePath; /**< Canonical absolute directory selected by this segment. */
     };
 
+    /** @brief Thumbnail progress is presentation state, independent of saved source/document validity. */
+    enum class ContentBrowserPreviewState : std::uint8_t {
+        Unrequested,
+        Queued,
+        Ready,
+        Unavailable
+    };
+
     /** @brief One direct child of the current absolute Content Browser directory. */
     struct ContentBrowserEntry {  // NOSONAR(cpp:S1820) Aggregate directory entry representation
         ContentBrowserEntryKind kind{ContentBrowserEntryKind::Asset};
@@ -64,17 +73,26 @@ namespace Horo::Editor {
         std::string absoluteImportSourcePath;                     /**< Absolute source path retained for reproducible reimport. */
         std::string sourceHash;                                   /**< Canonical source hash captured by the last import. */
         std::vector<Assets::AssetImportReason> lastImportReasons; /**< Reasons recorded by the last import. */
-        bool canReimport{false};                /**< True when source provenance and the exact importer remain available. */
-        bool sourceChanged{false};              /**< Cheap source timestamp/size indication; reimport confirms by hash. */
-        bool importerChanged{false};            /**< Active importer contribution version differs from metadata. */
-        bool moduleChanged{false};              /**< Active module identity/version differs from metadata. */
-        std::string absoluteMetadataPath;       /**< Existing absolute identity-sidecar path, when available. */
-        std::uintmax_t byteSize{};              /**< Source payload size; zero for directories or unavailable values. */
-        std::size_t containedItemCount{};       /**< Direct non-sidecar children for directory cards. */
-        std::size_t dependencyCount{};          /**< Direct dependencies recorded by this asset's import metadata. */
-        bool registered{false};                 /**< Whether the authoritative Asset Registry owns this asset. */
+        bool canReimport{false};                           /**< True when source provenance and the exact importer remain available. */
+        bool sourceChanged{false};                         /**< Cheap source timestamp/size indication; reimport confirms by hash. */
+        bool importerChanged{false};                       /**< Active importer contribution version differs from metadata. */
+        bool moduleChanged{false};                         /**< Active module identity/version differs from metadata. */
+        std::string absoluteMetadataPath;                  /**< Existing absolute identity-sidecar path, when available. */
+        std::uintmax_t byteSize{};                         /**< Source payload size; zero for directories or unavailable values. */
+        std::size_t containedItemCount{};                  /**< Direct non-sidecar children for directory cards. */
+        std::size_t dependencyCount{};                     /**< Direct dependencies recorded by this asset's import metadata. */
+        bool registered{false};                            /**< Whether the authoritative Asset Registry owns this asset. */
+        std::optional<Assets::AssetTypeId> registeredType; /**< Exact typed identity copied from the registry publication. */
+        ContentBrowserPreviewState previewState{ContentBrowserPreviewState::Unrequested};
+        std::optional<Error> previewError;      /**< Preserved typed source/migration/thumbnail diagnostic for repair. */
         Assets::AssetPreviewImage previewImage; /**< Optional module-produced RGBA8 card preview. */
         Assets::AssetPreviewFallback previewFallback{Assets::AssetPreviewFallback::Automatic};
+
+        /** @brief Classifies only an exact registered AssetTypeId; names and legacy hints grant no prefab authority. */
+        [[nodiscard]] bool IsPrefab() const {
+            static const auto prefabType = Assets::AssetTypeId::Parse("core.prefab").Value();
+            return kind == ContentBrowserEntryKind::Asset && registered && registeredType && *registeredType == prefabType;
+        }
     };
 
     /** @brief Complete immutable presentation snapshot for one absolute asset directory. */

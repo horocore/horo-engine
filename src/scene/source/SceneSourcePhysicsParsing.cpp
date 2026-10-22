@@ -1,12 +1,16 @@
+#include "Horo/Prefab/PrefabErrors.h"
 #include "SceneSourceInternal.h"
 
 #include <functional>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 
 namespace Horo::SceneSource::Detail {
+    using Runtime::PhysicsValidationDetail::BodyReferenceDomain;
+
     [[nodiscard]] Result<Runtime::AuthoredPhysicsPose> ParsePhysicsPose(const Json &value) {
         if (!value.is_object() || !value.contains("translation") || !value.contains("rotation"))
             return Result<Runtime::AuthoredPhysicsPose>::Failure(PersistenceError(SceneInvalid, "Physics pose is incomplete."));
@@ -17,12 +21,14 @@ namespace Horo::SceneSource::Detail {
         return Result<Runtime::AuthoredPhysicsPose>::Success({translation.Value(), rotation.Value()});
     }
 
-    [[nodiscard]] Result<Runtime::PhysicsBodyReference> ParsePhysicsBodyReference(const Json &value) {
+    [[nodiscard]] Result<Runtime::PhysicsBodyReference> ParsePhysicsBodyReference(const Json &value, const BodyReferenceDomain domain) {
         if (!value.is_object() || !value.contains("object") || !value["object"].is_number_unsigned() || !value.contains("body") ||
             !value["body"].is_number_unsigned())
             return Result<Runtime::PhysicsBodyReference>::Failure(PersistenceError(SceneInvalid, "Physics body reference is incomplete."));
         Runtime::PhysicsBodyReference reference{{value["object"].get<std::uint64_t>()}, {value["body"].get<std::uint64_t>()}};
-        if (!reference.object.IsValid() || !reference.body.IsValid())
+        if (domain == BodyReferenceDomain::PrefabLocal && reference.object.value > std::numeric_limits<std::uint32_t>::max())
+            return Result<Runtime::PhysicsBodyReference>::Failure(MakeError(Prefab::PrefabErrors::ReferenceRewriteInvalid));
+        if (!reference.body.IsValid() || (domain == BodyReferenceDomain::Scene && !reference.object.IsValid()))
             return Result<Runtime::PhysicsBodyReference>::Failure(PersistenceError(SceneInvalid, "Physics body reference is invalid."));
         return Result<Runtime::PhysicsBodyReference>::Success(reference);
     }
@@ -153,12 +159,14 @@ namespace Horo::SceneSource::Detail {
         return Result<std::vector<Runtime::PhysicsColliderMaterialBinding>>::Success(std::move(materials));
     }
 
-    [[nodiscard]] Result<Runtime::ColliderComponent> ParseCollider(const Json &value) {
+    [[nodiscard]] Result<Runtime::ColliderComponent> ParseCollider(const Json &value, const BodyReferenceDomain domain) {
         if (!HasFields(value, {"body", "source", "localPose", "scale", "collisionProfile", "materials"}) ||
             !HasUnsignedFields(value, {"id", "collider", "schemaVersion", "generation"}) || !value["collisionProfile"].is_string() ||
             !value["materials"].is_array())
             return Result<Runtime::ColliderComponent>::Failure(PersistenceError(SceneInvalid, "Collider schema is incomplete."));
-        auto body = ParsePhysicsBodyReference(value["body"]);
+        auto body = ParsePhysicsBodyReference(value["body"], domain);
+        if (body.HasError())
+            return Result<Runtime::ColliderComponent>::Failure(body.ErrorValue());
         auto source = ParsePhysicsColliderSource(value["source"]);
         auto pose = ParsePhysicsPose(value["localPose"]);
         auto scale = ParseVec3(value["scale"]);
@@ -180,18 +188,18 @@ namespace Horo::SceneSource::Detail {
                                             .materials = std::move(materials).Value(),
                                             .sensor = value.value("sensor", false),
                                             .enabled = value.value("enabled", true)};
-        if (Runtime::ValidateColliderComponent(collider).HasError())
+        if (Runtime::PhysicsValidationDetail::ValidateCollider(collider, domain).HasError())
             return Result<Runtime::ColliderComponent>::Failure(PersistenceError(SceneInvalid, "Collider payload is invalid."));
         return Result<Runtime::ColliderComponent>::Success(std::move(collider));
     }
 
-    [[nodiscard]] Result<std::vector<Runtime::ColliderComponent>> ParseColliders(const Json &value) {
+    [[nodiscard]] Result<std::vector<Runtime::ColliderComponent>> ParseColliders(const Json &value, const BodyReferenceDomain domain) {
         if (!value.is_array() || value.size() > Runtime::MaximumPhysicsCollidersPerBody)
             return Result<std::vector<Runtime::ColliderComponent>>::Failure(PersistenceError(SceneInvalid, "Collider list is invalid."));
         std::vector<Runtime::ColliderComponent> result;
         result.reserve(value.size());
         for (const Json &entry : value) {
-            auto collider = ParseCollider(entry);
+            auto collider = ParseCollider(entry, domain);
             if (collider.HasError())
                 return Result<std::vector<Runtime::ColliderComponent>>::Failure(collider.ErrorValue());
             result.push_back(std::move(collider).Value());
@@ -199,22 +207,26 @@ namespace Horo::SceneSource::Detail {
         return Result<std::vector<Runtime::ColliderComponent>>::Success(std::move(result));
     }
 
-    [[nodiscard]] Result<Runtime::PhysicsConstraintBodyEndpoint> ParseConstraintBodyEndpoint(const Json &value) {
+    [[nodiscard]] Result<Runtime::PhysicsConstraintBodyEndpoint> ParseConstraintBodyEndpoint(const Json &value,
+                                                                                             const BodyReferenceDomain domain) {
         if (!value.is_object() || !value.contains("body") || !value.contains("frame"))
             return Result<Runtime::PhysicsConstraintBodyEndpoint>::Failure(
                 PersistenceError(SceneInvalid, "Constraint endpoint is incomplete."));
-        auto body = ParsePhysicsBodyReference(value["body"]);
+        auto body = ParsePhysicsBodyReference(value["body"], domain);
+        if (body.HasError())
+            return Result<Runtime::PhysicsConstraintBodyEndpoint>::Failure(body.ErrorValue());
         auto frame = ParsePhysicsPose(value["frame"]);
-        if (body.HasError() || frame.HasError())
+        if (frame.HasError())
             return Result<Runtime::PhysicsConstraintBodyEndpoint>::Failure(
                 PersistenceError(SceneInvalid, "Constraint endpoint is invalid."));
         return Result<Runtime::PhysicsConstraintBodyEndpoint>::Success({body.Value(), frame.Value()});
     }
 
-    [[nodiscard]] Result<Runtime::PhysicsConstraintSecondEndpoint> ParseConstraintSecondEndpoint(const Json &value) {
+    [[nodiscard]] Result<Runtime::PhysicsConstraintSecondEndpoint> ParseConstraintSecondEndpoint(const Json &value,
+                                                                                                 const BodyReferenceDomain domain) {
         const std::string kind = value.value("kind", "");
         if (kind == "body") {
-            auto endpoint = ParseConstraintBodyEndpoint(value);
+            auto endpoint = ParseConstraintBodyEndpoint(value, domain);
             if (endpoint.HasError())
                 return Result<Runtime::PhysicsConstraintSecondEndpoint>::Failure(endpoint.ErrorValue());
             return Result<Runtime::PhysicsConstraintSecondEndpoint>::Success(endpoint.Value());
@@ -242,14 +254,18 @@ namespace Horo::SceneSource::Detail {
             PersistenceError(SceneInvalid, "Constraint parameters are invalid."));
     }
 
-    [[nodiscard]] Result<Runtime::PhysicsConstraintComponent> ParsePhysicsConstraint(const Json &value) {
+    [[nodiscard]] Result<Runtime::PhysicsConstraintComponent> ParsePhysicsConstraint(const Json &value, const BodyReferenceDomain domain) {
         if (!HasFields(value, {"first", "second", "parameters"}) ||
             !HasUnsignedFields(value, {"id", "constraint", "schemaVersion", "generation"}) || !value["second"].is_object() ||
             !value["parameters"].is_object())
             return Result<Runtime::PhysicsConstraintComponent>::Failure(
                 PersistenceError(SceneInvalid, "Physics constraint schema is incomplete."));
-        auto first = ParseConstraintBodyEndpoint(value["first"]);
-        auto second = ParseConstraintSecondEndpoint(value["second"]);
+        auto first = ParseConstraintBodyEndpoint(value["first"], domain);
+        if (first.HasError())
+            return Result<Runtime::PhysicsConstraintComponent>::Failure(first.ErrorValue());
+        auto second = ParseConstraintSecondEndpoint(value["second"], domain);
+        if (second.HasError())
+            return Result<Runtime::PhysicsConstraintComponent>::Failure(second.ErrorValue());
         auto parameters = ParseConstraintParameters(value["parameters"]);
         if (!AllSucceeded({first.HasValue(), second.HasValue(), parameters.HasValue()}))
             return Result<Runtime::PhysicsConstraintComponent>::Failure(
@@ -262,20 +278,21 @@ namespace Horo::SceneSource::Detail {
                                                        .second = std::move(second).Value(),
                                                        .parameters = std::move(parameters).Value(),
                                                        .enabled = value.value("enabled", true)};
-        if (Runtime::ValidatePhysicsConstraintComponent(constraint).HasError())
+        if (Runtime::PhysicsValidationDetail::ValidateConstraint(constraint, domain).HasError())
             return Result<Runtime::PhysicsConstraintComponent>::Failure(
                 PersistenceError(SceneInvalid, "Physics constraint payload is invalid."));
         return Result<Runtime::PhysicsConstraintComponent>::Success(std::move(constraint));
     }
 
-    [[nodiscard]] Result<std::vector<Runtime::PhysicsConstraintComponent>> ParsePhysicsConstraints(const Json &value) {
+    [[nodiscard]] Result<std::vector<Runtime::PhysicsConstraintComponent>> ParsePhysicsConstraints(const Json &value,
+                                                                                                   const BodyReferenceDomain domain) {
         if (!value.is_array() || value.size() > Runtime::MaximumPhysicsConstraintsPerObject)
             return Result<std::vector<Runtime::PhysicsConstraintComponent>>::Failure(
                 PersistenceError(SceneInvalid, "Physics constraint list is invalid."));
         std::vector<Runtime::PhysicsConstraintComponent> result;
         result.reserve(value.size());
         for (const Json &entry : value) {
-            auto constraint = ParsePhysicsConstraint(entry);
+            auto constraint = ParsePhysicsConstraint(entry, domain);
             if (constraint.HasError())
                 return Result<std::vector<Runtime::PhysicsConstraintComponent>>::Failure(constraint.ErrorValue());
             result.push_back(std::move(constraint).Value());

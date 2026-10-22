@@ -1716,6 +1716,12 @@ target_link_libraries(HoroTriggerVolumeConversionPublicHeaderConsumer PRIVATE Ho
 add_test(NAME HoroTriggerVolumeConversionPublicHeaderConsumer COMMAND HoroTriggerVolumeConversionPublicHeaderConsumer)
 set_tests_properties(HoroTriggerVolumeConversionPublicHeaderConsumer PROPERTIES LABELS "unit;physics;scene;headless;ci-windows")
 
+# Compile-only private boundary contract: this source receives exactly the narrow validation bridge and its model.
+add_library(HoroPhysicsReferenceValidationInternalConsumer OBJECT support/PhysicsReferenceValidationInternalContract.cpp)
+target_compile_features(HoroPhysicsReferenceValidationInternalConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPhysicsReferenceValidationInternalConsumer PRIVATE
+        HoroEngine::PhysicsModel HoroPhysicsReferenceValidationInternal)
+
 add_executable(HoroSceneRuntimeConversionTests unit/scene/SceneRuntimeConversionTests.cpp unit/scene/CookedSceneDefinitionTests.cpp
         unit/scene/ScenePrefabExpansionTests.cpp unit/scene/ScenePrefabExpansionOwnerTests.cpp
         unit/scene/ScenePrefabCanonicalWireTests.cpp unit/scene/ScenePrefabValueOverrideTests.cpp support/AllocationProbe.cpp)
@@ -2676,6 +2682,9 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/EditorWorkspaceControllerAssetTransferTests.cpp
             unit/editor/EditorWorkspaceControllerSourceNavigationTests.cpp
             unit/editor/EditorWorkspaceControllerPrefabTests.cpp
+            unit/editor/EditorWorkspaceControllerPrefabAssetDropTests.cpp
+            unit/editor/EditorWorkspaceControllerPrefabAuthoringTests.cpp
+            unit/editor/EditorWorkspaceControllerPrefabCreationTests.cpp
             unit/editor/EditorWorkspaceControllerSequenceTests.cpp
             unit/editor/EditorWorkspaceControllerPCGTests.cpp
             unit/editor/EditorWorkspacePCGAuthoringTests.cpp
@@ -2786,7 +2795,8 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroHierarchyPanelRenderTests PRIVATE
             ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
     )
-    target_sources(HoroHierarchyPanelRenderTests PRIVATE unit/editor/PrefabHierarchyPanelRenderTests.cpp)
+    target_sources(HoroHierarchyPanelRenderTests PRIVATE unit/editor/PrefabHierarchyPanelRenderTests.cpp
+        unit/editor/PrefabCreationModalTests.cpp)
     target_compile_definitions(HoroHierarchyPanelRenderTests PRIVATE
             HORO_TEST_LOCALIZATION_DIR="${PROJECT_SOURCE_DIR}/assets/localization/editor")
     target_link_libraries(HoroHierarchyPanelRenderTests
@@ -2841,6 +2851,7 @@ if (HORO_BUILD_EDITOR_GUI)
             unit/editor/GlobalDockBuildOutputPaneTests.cpp
             unit/editor/GlobalDockBuildOutputToolbarRenderTests.cpp
             unit/editor/GlobalDockPanelRenderTests.cpp
+            unit/editor/PrefabAssetBrowserRenderTests.cpp
             unit/editor/GlobalDockNetworkPaneTests.cpp
             unit/editor/PlayTopologyModalTests.cpp
             unit/editor/NavigationBakeRenderTests.cpp
@@ -3227,8 +3238,17 @@ add_executable(HoroSceneDocumentTests
         unit/editor/SceneDocumentPrefabValueTests.cpp
         unit/editor/PrefabHierarchyProjectionTests.cpp
         unit/editor/PrefabHierarchySourcesTests.cpp
+        unit/editor/PrefabCreationTests.cpp
+        unit/editor/PrefabCreationSchemaTests.cpp
+        unit/editor/PrefabDocumentSessionTests.cpp
+        unit/editor/PrefabDocumentSessionByteBoundaryTests.cpp
+        unit/editor/PrefabAssetPreviewTests.cpp
 )
 
+add_library(HoroPrefabCreationPublicHeaderConsumer OBJECT support/PrefabCreationPublicContract.cpp)
+target_compile_features(HoroPrefabCreationPublicHeaderConsumer PRIVATE cxx_std_20)
+target_link_libraries(HoroPrefabCreationPublicHeaderConsumer PRIVATE HoroEngine::EditorModel)
+target_sources(HoroSceneDocumentTests PRIVATE $<TARGET_OBJECTS:HoroPrefabCreationPublicHeaderConsumer>)
 target_compile_features(HoroSceneDocumentTests PRIVATE cxx_std_20)
 target_link_libraries(HoroSceneDocumentTests PRIVATE HoroEngine::EditorRenderExtraction HoroEngine::SceneCook HoroEngine::EditorServices HoroPrefabHierarchyInternal)
 target_include_directories(HoroSceneDocumentTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)

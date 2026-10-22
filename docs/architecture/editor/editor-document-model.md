@@ -337,6 +337,63 @@ Intermediate transaction state is not observable by tabs or panels until the
 transaction commits, unless the transaction is explicitly marked as a preview
 transaction.
 
+## Prefab Document Sessions And Stages
+
+`PrefabDocumentSession` owns the sole editable `PrefabDocument` for one shared
+`DocumentIdentityRegistry` open key of kind `Prefab`. The persistent key is the
+canonical project-relative source path; the sidecar/registry AssetId remains the
+asset authority. Workspace incarnation plus instance and monotonic command
+revision fence all edits. Canonical source digest, accepted on-disk byte identity,
+saved-state digest, recovery capture revision and successful preview generation
+are separate values. Undo/redo stores bounded semantic name/transform deltas,
+never runtime entities or full-document history snapshots.
+
+The workspace routes durable source edits and persistence through typed commands,
+`ProjectMutationCoordinator`, `PublishAssetSource` and `DocumentRecoveryService`.
+Host source capture and isolated-stage factories are grouped in the private
+`EditorWorkspacePrefabServices` dependency value (`sources`, `stageFactory`); callers
+migrate the former individual dependency fields together. Session factories retain
+a private construction key, and command admission borrows immutable fences.
+A native replacement whose directory durability cannot be confirmed keeps the
+source dirty and requires reconciliation. External changes reject saves; malformed
+reload and rejected dirty close retain the complete source/history/stage. Recovery
+acceptance requires the exact inspected record and unchanged source base. An explicit
+discard-candidate command can remove a foreign or obsolete record while preserving
+current source edits and history; exact-record comparison prevents a stale UI command
+from deleting a newer candidate. Autosave then publishes a new owned recovery record.
+
+The authoring stage replaces the captured resolver root with the current immutable
+in-memory source, then uses canonical resolution, identity remapping, built-in
+component projection and prefab subtree expansion to construct an isolated runtime
+scene. It never changes the Scene document or starts gameplay callbacks. The
+reserved `0x4000000000000000` runtime identity namespace is separate from ordinary
+scene previews and Play; a workspace advances identities for each attempt. Stage resources and
+renderer extraction leases retire on edit, switch, reload, close and shutdown.
+Retained immutable source snapshots remain readable. Source widgets retain bounded
+transient name buffers per publication rather than copying/resizing strings on every
+draw. Scene hierarchy/inspector controls are inactive while the isolated source stage
+is focused; navigation, document switching and workspace layout remain available.
+Failed required component or
+asset preparation produces an explicit unavailable preview, preserving source and
+recovery rather than publishing a partial hierarchy. The application explicitly
+injects the same project/native/committed-asset composition used by Scene into a
+separate authoring-stage capability and identity range. Bounded owner-lane ticks
+advance pending asset preparation; preview revision advances only after complete
+Scene activation. Cancellation and host shutdown retire prepared and resident
+resources. No behavior runtime or fixed update is started. Unknown portable project
+components remain typed opaque runtime payloads. An omitted factory admits only
+assetless test compositions; it cannot invent asset leases or select a backend.
+
+Migration: `.prefab` now routes through `SourceFileOpenService` as a typed authored
+document rather than generic text/external fallback. Existing text source save-as
+cannot target it. `DocumentKind::Prefab` appends the stable `prefab` wire spelling;
+existing kind values and open keys retain their meanings. The shared source public
+consumer and document-identity round-trip coverage protect this additive change.
+The session header is a non-installed exact-header internal contract, staged by
+`HoroPrefabDocumentSessionInternal`; the pure hierarchy/model target does not
+inherit the stage host capability. No public ownership or repository-wide include
+root is added.
+
 ## Preview Edits
 
 Continuous tools may maintain preview state during an interaction. Preview state

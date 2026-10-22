@@ -74,9 +74,18 @@ namespace {
         "workspace.global_dock.localization.fonts",
     };
     constexpr std::array contentBrowserKeys{
-        "workspace.content_browser.loading",   "workspace.content_browser.unavailable",      "workspace.content_browser.no_results",
-        "workspace.content_browser.search",    "workspace.content_browser.filter.all_types", "workspace.content_browser.sort.name",
+        "workspace.content_browser.loading",
+        "workspace.content_browser.unavailable",
+        "workspace.content_browser.no_results",
+        "workspace.content_browser.search",
+        "workspace.content_browser.filter.all_types",
+        "workspace.content_browser.sort.name",
         "workspace.content_browser.sort.type",
+        "workspace.content_browser.asset.unregistered",
+        "workspace.content_browser.prefab.type",
+        "workspace.content_browser.preview.queued",
+        "workspace.content_browser.preview.unavailable",
+        "workspace.content_browser.prefab.migration_required",
     };
     constexpr std::array recoveryKeys{
         "workspace.recovery.available",
@@ -271,6 +280,10 @@ namespace {
         REQUIRE((service.Get("editor", "workspace.content_browser.project_asset_dock") == "Project asset dock"));
         REQUIRE((service.Get("editor", "workspace.content_browser.empty") == "This folder is empty."));
         REQUIRE((service.Get("editor", "workspace.global_dock.tab.assets") == "Assets"));
+        CHECK(service.Get("editor", "workspace.prefab_document.undo") == "Undo source edit");
+        CHECK(service.Get("editor", "workspace.prefab_document.discard_recovery").find("keep source edits") != std::string::npos);
+        CHECK(service.Get("editor", "workspace.prefab_document.source_controls").find("Scene viewport") != std::string::npos);
+        CHECK(service.Get("editor", "workspace.prefab_document.preview_unavailable").find("isolated runtime") != std::string::npos);
         CHECK(service.Get("editor", "render_graph.title") == "Render Graph");
         CHECK(service.Get("editor", "render_graph.unavailable") == "Unavailable");
         CHECK(service.Get("editor", "render_graph.next") == "Next page");

@@ -58,6 +58,9 @@ namespace Horo::Editor {
         if (!result.document || result.route != SourceOpenRoute::EmbeddedWorkspace)
             return false;
         switch (result.classification.kind) {
+            case Prefab:
+                OpenEmbeddedPrefabSource(result);
+                return true;
             case PCGGraph:
                 OpenEmbeddedPCGSource(result);
                 return true;

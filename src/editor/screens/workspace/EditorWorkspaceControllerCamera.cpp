@@ -43,6 +43,10 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
+        // Preview providers may borrow host project authority. Join them before any document/service retirement.
+        if (m_assetPreviews)
+            m_assetPreviews->Shutdown();
+        m_pendingContentBrowserPreviews.clear();
         StopAudioPreview();
         m_prefabCancellation.RequestCancellation();
         RetirePrefabHierarchy();
