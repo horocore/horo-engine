@@ -12,13 +12,13 @@ namespace Horo::WorldStreaming::Detail {
             ledger.revision_ = StreamingFeatureBudgetRevision::Create(next).Value();
         }
     };
-}
+}  // namespace Horo::WorldStreaming::Detail
 
 namespace Horo::WorldStreaming {
     namespace {
         using namespace FinalizationTestSupport;
-        using TestSupport::RequireError;
         using Detail::StreamingFeatureBudgetRevisionTestAccess;
+        using TestSupport::RequireError;
         using enum StreamingCellOperationTransition;
 
         struct Fixture final {
@@ -36,12 +36,14 @@ namespace Horo::WorldStreaming {
             StreamingCellDirectionOwner Create() {
                 participant = &DirectionTestSupport::Add(participants, log, config, 1);
                 return StreamingCellDirectionOwner::Create(ledger, config, Plan(Feature::Terrain, Amounts(12)),
-                                                            config.operation.Handle().fence, participants).Value();
+                                                           config.operation.Handle().fence, participants)
+                    .Value();
             }
 
             StreamingOwnerFrameBudget Frame() const {
-                return StreamingOwnerFrameBudget::Create({ledger.Runtime().Scheduler().Owner(),
-                    IdentityFrom<StreamingOwnerWorkRevision>(1), IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000}).Value();
+                return StreamingOwnerFrameBudget::Create({ledger.Runtime().Scheduler().Owner(), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                          IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                    .Value();
             }
 
             void Activating() {
@@ -53,16 +55,29 @@ namespace Horo::WorldStreaming {
         class Receipt final : public IStreamingCellActivationReceipt {
         public:
             explicit Receipt(Fixture &fixture, std::function<void()> callback = {}) : fixture_(fixture), callback_(std::move(callback)) {}
+
             StreamingCellActivationRequirement Requirement() const noexcept override {
                 return DirectionTestSupport::Requirement(1);
             }
-            StreamingCellOperationHandle Operation() const noexcept override { return fixture_.owner.Operation().Handle(); }
-            std::uint64_t MaximumPublicationNanoseconds() const noexcept override { return 10; }
+
+            StreamingCellOperationHandle Operation() const noexcept override {
+                return fixture_.owner.Operation().Handle();
+            }
+
+            std::uint64_t MaximumPublicationNanoseconds() const noexcept override {
+                return 10;
+            }
+
             void PublishPrepared() noexcept override {
                 fixture_.log.published = true;
-                if (callback_) callback_();
+                if (callback_)
+                    callback_();
             }
-            void RollbackPrepared() noexcept override { fixture_.log.rolledBack = true; }
+
+            void RollbackPrepared() noexcept override {
+                fixture_.log.rolledBack = true;
+            }
+
         private:
             Fixture &fixture_;
             std::function<void()> callback_;
@@ -73,7 +88,10 @@ namespace Horo::WorldStreaming {
             receipts.push_back(std::make_unique<Receipt>(fixture, std::move(callback)));
             const std::array required{DirectionTestSupport::Requirement(1)};
             return StreamingCellActivationTransaction::Prepare({IdentityFrom<StreamingCellActivationId>(1), fixture.owner.Operation(), 1,
-                StreamingCellActivationLifecycle::Active, fixture.ledger.Runtime().Scheduler().Owner()}, required, std::move(receipts)).Value();
+                                                                StreamingCellActivationLifecycle::Active,
+                                                                fixture.ledger.Runtime().Scheduler().Owner()},
+                                                               required, std::move(receipts))
+                .Value();
         }
 
         TEST_CASE("Aggregate finalization releases load at the last publication", "[unit][world_streaming][fix1]") {
@@ -113,7 +131,8 @@ namespace Horo::WorldStreaming {
             auto frame = fixture.Frame();
             StreamingFeatureBudgetRevisionTestAccess::LeavePublications(fixture.ledger, 0);
             RequireError(fixture.owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
-                frame, 0), WorldStreamingErrors::GenerationExhausted);
+                                                        frame, 0),
+                         WorldStreamingErrors::GenerationExhausted);
             CHECK_FALSE(fixture.log.published);
             CHECK(fixture.log.rolledBack);
             CHECK(transaction.State() == StreamingCellActivationState::RolledBack);
@@ -133,8 +152,8 @@ namespace Horo::WorldStreaming {
             });
             auto frame = fixture.Frame();
             StreamingFeatureBudgetRevisionTestAccess::LeavePublications(fixture.ledger, 1);
-            CHECK(fixture.owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges,
-                frame, 0).HasValue());
+            CHECK(fixture.owner.CommitActivation(transaction, StreamingCellActivationCommitPoint::CommitDeferredLifecycleChanges, frame, 0)
+                      .HasValue());
             CHECK(shutdownRejected);
             CHECK(interruptionRejected);
             CHECK(fixture.log.published);
@@ -145,5 +164,5 @@ namespace Horo::WorldStreaming {
             CHECK(fixture.owner.TakeTerminalResult().HasValue());
             CHECK(fixture.owner.TakeSucceededParticipants().HasValue());
         }
-    }
-}
+    }  // namespace
+}  // namespace Horo::WorldStreaming

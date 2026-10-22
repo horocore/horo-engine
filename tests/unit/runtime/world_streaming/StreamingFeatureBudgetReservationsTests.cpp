@@ -186,9 +186,10 @@ namespace Horo::WorldStreaming {
             REQUIRE(ledger.Used(Axis::CpuResidentBytes).Value() == 12);
             DirectionTestSupport::Forward(owner, StreamingCellOperationTransition::BeginPreparation);
             DirectionTestSupport::Demand(owner, StreamingDesiredResidency::Unloaded);
-            auto frame = StreamingOwnerFrameBudget::Create({ledger.Runtime().Scheduler().Owner(),
-                                                            IdentityFrom<StreamingOwnerWorkRevision>(1),
-                                                            IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000}).Value();
+            auto frame =
+                StreamingOwnerFrameBudget::Create({ledger.Runtime().Scheduler().Owner(), IdentityFrom<StreamingOwnerWorkRevision>(1),
+                                                   IdentityFrom<StreamingOwnerFrameId>(1), 10000, 1000})
+                    .Value();
             REQUIRE(owner.PollRetirement(frame, 0).Value().State() == StreamingCellOperationState::Retiring);
             REQUIRE(ledger.Used(Axis::CpuResidentBytes).Value() == 12);
             REQUIRE(ledger.Runtime().Scheduler().ReservedCount() == 1);
