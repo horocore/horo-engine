@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "EditorPageModal.h"
 
 #include "Horo/Editor/EditorSettingsService.h"
@@ -49,7 +50,7 @@ namespace Horo::Editor {
     Result<void> EditorPageModal::OnOpen(EditorModalContext &context) {
         modals_ = &context.modals;
         if (!view_.Current())
-            return Result<void>::Failure(MakeError(Extensions::ExtensionErrors::CapabilityRevoked));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Extensions::ExtensionErrors::CapabilityRevoked>()));
         return Result<void>::Success();
     }
 

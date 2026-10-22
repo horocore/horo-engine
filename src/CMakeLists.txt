@@ -3098,6 +3098,7 @@ target_include_directories(HoroPrefabDocumentSessionInternal INTERFACE "$<BUILD_
 target_link_libraries(HoroPrefabDocumentSessionInternal INTERFACE HoroEditorPlaySceneHostInternal)
 
 add_library(HoroEditorServices STATIC
+        editor/navigation/NavigationBakeWorkspace.cpp
         editor/document/WorkspaceReadSources.cpp
         editor/navigation/NavigationViewportSnapshot.cpp
         editor/screens/workspace/prefab/PrefabHierarchySources.cpp
@@ -3332,6 +3333,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/design_system/icons/EditorIcons.cpp
             editor/design_system/components/EditorSnackbarHost.cpp
             editor/app/EditorTheme.cpp
+            editor/app/EditorThemeLiveReload.cpp
             editor/menu/EditorMenuPlatform.cpp
             editor/status_bar/EditorStatusBar.cpp
             editor/modals/settings/SettingsModal.cpp

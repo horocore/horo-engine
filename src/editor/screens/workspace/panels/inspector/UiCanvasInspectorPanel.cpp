@@ -1,6 +1,7 @@
 #include "editor/screens/workspace/panels/inspector/UiCanvasInspectorPanel.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
+#include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 
 #include <algorithm>
@@ -39,7 +40,7 @@ namespace Horo::Editor {
             const auto parsed = Assets::AssetId::Parse(std::string_view{text.bytes.data()});
             text.valid = parsed.HasValue() && parsed.Value().IsValid();
             if (text.valid) {
-                const auto typed = T::Create(parsed.Value().Bytes());
+                const auto typed = GuiLive::HostSymbol<&T::Create>()(parsed.Value().Bytes());
                 text.valid = typed.HasValue();
                 if (text.valid)
                     value = typed.Value();

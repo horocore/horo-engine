@@ -244,6 +244,7 @@ if(HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditor
         HoroEditor/main.cpp
         HoroEditor/app/HoroEditorApp.cpp
+        HoroEditor/app/EditorGuiLiveReload.cpp
         HoroEditor/app/EditorNavigationBakeHost.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
@@ -256,6 +257,9 @@ if(HORO_BUILD_EDITOR_GUI)
     )
 
     target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles)
+    if(HORO_EDITOR_LIVE_UI)
+        include(HoroEditorLiveUi)
+    endif()
 
     if(APPLE)
         # SDL_GetBasePath resolves to Contents/Resources for an application bundle.

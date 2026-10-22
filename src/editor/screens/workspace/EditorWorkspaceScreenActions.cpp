@@ -28,7 +28,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (outcome->error)
                 message += std::format("\n{}", outcome->error->message);
             constexpr std::size_t maximumVisibleBoundaries{32};
-            const auto count = std::min(outcome->boundaries.size(), maximumVisibleBoundaries);
+            const auto count = (std::min)(outcome->boundaries.size(), maximumVisibleBoundaries);
             for (const auto &boundary : std::span{outcome->boundaries}.first(count)) {
                 message += std::format("\n{}: {}", boundary.source.value, boundary.property);
                 if (boundary.target)

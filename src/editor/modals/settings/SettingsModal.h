@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Horo/Editor/EditorGuiContext.h"
+
 #include "Horo/Editor/EditorModalHost.h"
 #include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorTheme.h"
@@ -14,6 +16,6 @@ namespace Horo::Editor {
      * @return A close request for explicit Cancel or header-close controls, otherwise no action.
      */
     [[nodiscard]] ModalFrameResult DrawSettingsModalPresentation(SettingsState &state, EditorSettingsService &settings,
-                                                                 LocalizationService &localization, const Theme::Fonts &fonts,
+                                                                 const EditorGuiContext &ctx,
                                                                  ImTextureID logo);
 }  // namespace Horo::Editor

@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "SourceDocumentCloseModal.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
@@ -42,7 +43,7 @@ namespace Horo::Editor {
             return Result<bool>::Success(true);
         if (lifetime_.expired()) {
             failed_ = true;
-            return Result<bool>::Failure(MakeError(SourceDocumentErrors::Stale));
+            return Result<bool>::Failure(MakeError(GuiLive::HostSymbol<&SourceDocumentErrors::Stale>()));
         }
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::CloseSourceDocument;
@@ -51,7 +52,7 @@ namespace Horo::Editor {
         controller_->ProcessCommand(command);
         const auto &outcome = controller_->SourceCloseOutcome();
         failed_ = !outcome || outcome->HasError() || !outcome->Value();
-        return outcome ? *outcome : Result<bool>::Failure(MakeError(SourceDocumentErrors::Invalid));
+        return outcome ? *outcome : Result<bool>::Failure(MakeError(GuiLive::HostSymbol<&SourceDocumentErrors::Invalid>()));
     }
 
     /** @copydoc SourceDocumentCloseModal::Text */

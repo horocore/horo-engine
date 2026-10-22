@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "editor/modals/play_topology/PlayTopologyModal.h"
 
 #include "Horo/Editor/EditorTheme.h"
@@ -32,16 +33,16 @@ namespace Horo::Editor {
             profile.serverCount = 1;
             profile.clientCount = static_cast<std::uint8_t>(clients);
             profile.port = static_cast<std::uint16_t>(port);
-            profile.transport = Network::NetworkTransportProviderId::Create(*provider).Value();
+            profile.transport = GuiLive::HostSymbol<&Network::NetworkTransportProviderId::Create>()(*provider).Value();
             profile.simulationPreset = *preset;
             return true;
         }
 
         /** @brief Map declared errors to localized UI copy without rendering private filesystem diagnostics. */
         const char *ErrorKey(const Error &error) {
-            if (error.code.Value() == Application::PlayTopologyErrors::Stale.code.Value())
+            if (error.code.Value() == GuiLive::HostSymbol<&Application::PlayTopologyErrors::Stale>().code.Value())
                 return "stale";
-            if (error.code.Value() == Application::PlayTopologyErrors::Invalid.code.Value())
+            if (error.code.Value() == GuiLive::HostSymbol<&Application::PlayTopologyErrors::Invalid>().code.Value())
                 return "invalid";
             return "storage";
         }
@@ -65,7 +66,7 @@ namespace Horo::Editor {
 
     Result<void> PlayTopologyModal::OnOpen(EditorModalContext &) {
         if (!store_)
-            return Result<void>::Failure(MakeError(Application::PlayTopologyErrors::Disabled));
+            return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Application::PlayTopologyErrors::Disabled>()));
         auto loaded = store_->Reload();
         loaded_ = loaded.HasValue();
         if (loaded_) {

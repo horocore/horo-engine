@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserGrid.h"
 
 #include "Horo/Editor/EditorGuiContext.h"
@@ -153,7 +154,7 @@ namespace Horo::Editor {
                 return std::format("{} {}", entry.containedItemCount, unit);
             }
             if (entry.previewError) {
-                const auto &migration = Prefab::PrefabErrors::MigrationRequired;
+                const auto &migration = GuiLive::HostSymbol<&Prefab::PrefabErrors::MigrationRequired>();
                 const bool needsMigration = entry.previewError->domain.Value() == migration.domain.Value() &&
                                             entry.previewError->code.Value() == migration.code.Value();
                 return localization.Get("editor", needsMigration ? "workspace.content_browser.prefab.migration_required"

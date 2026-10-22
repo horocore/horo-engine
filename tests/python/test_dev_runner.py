@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import struct
 import sys
 from collections.abc import Sequence
 from contextlib import contextmanager, nullcontext
@@ -224,6 +225,42 @@ def test_editor_executable_paths_are_platform_specific(tmp_path: Path) -> None:
     assert dev.editor_executable(tmp_path, "win32") == tmp_path / "apps/HoroEditor.exe"
 
 
+@pytest.mark.parametrize("live_ui", [False, True])
+def test_development_theme_and_live_ui_are_explicit_launch_options(monkeypatch, tmp_path, live_ui, capsys):
+    theme = tmp_path / "theme with spaces.json"
+    theme.write_text('{"colors":{"WindowBg":"#112233"}}', encoding="utf-8")
+    executable = tmp_path / "HoroEditor.exe"
+    executable.touch()
+    calls = []
+    monkeypatch.setattr(dev.sys, "platform", "win32")
+    monkeypatch.setattr(dev, "editor_executable", lambda *_: executable)
+    monkeypatch.setattr(dev, "execute_subprocess", lambda command, **kwargs: calls.append((list(command), kwargs)) or 0)
+    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
+    assert dev.run_editor(settings, [], tmp_path, theme_file=theme, live_ui=live_ui) == 0
+    assert f"-DHORO_EDITOR_LIVE_UI={'ON' if live_ui else 'OFF'}" in calls[0][0]
+    assert calls[-1][1]["env"]["HORO_THEME_OVERRIDE"] == str(theme.resolve())
+    assert calls[-1][0] == [str(executable)]
+    output = capsys.readouterr().out
+    assert ("ON / RCC++" in output) is live_ui
+    assert "ON / JSON" in output
+    assert "[3/3] LAUNCH" in output
+    assert "\033[" not in output
+
+
+def test_missing_development_theme_stops_before_configure(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(dev, "execute_subprocess", lambda *_args, **_kwargs: pytest.fail("unexpected build"))
+    settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
+    assert dev.run_editor(settings, [], theme_file=tmp_path / "missing.json") == 2
+    assert "theme file not found" in capsys.readouterr().err
+
+
+def test_run_parser_keeps_development_flags_out_of_editor_arguments(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(dev, "run_editor", lambda settings, arguments, **kwargs: calls.append((arguments, kwargs)) or 0)
+    assert dev.main(["run", "editor", "--theme-file", str(tmp_path / "theme.json"), "--live-ui", "--", "--exit-after-first-frame"]) == 0
+    assert calls == [(["--exit-after-first-frame"], {"theme_file": tmp_path / "theme.json", "live_ui": True})]
+
+
 def test_run_editor_configures_builds_and_forwards_arguments_without_a_shell(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -254,7 +291,7 @@ def test_run_editor_configures_builds_and_forwards_arguments_without_a_shell(
     assert "will continue with local diagnostics only" in capsys.readouterr().err
 
 
-def test_configure_failure_prevents_build_and_launch(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configure_failure_prevents_build_and_launch(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     calls: list[list[str]] = []
 
     def fake_run(arguments: list[str], **_: object) -> int:
@@ -266,6 +303,10 @@ def test_configure_failure_prevents_build_and_launch(monkeypatch: pytest.MonkeyP
 
     assert dev.run_editor(settings, []) == 9
     assert len(calls) == 1
+    output = capsys.readouterr().out
+    assert "[FAIL 9] Configure" in output
+    assert "[2/3] BUILD" not in output
+    assert "[3/3] LAUNCH" not in output
 
 
 def test_missing_cmake_returns_command_not_found_exit_code(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,7 +344,8 @@ def test_cli_run_supports_all_argument_variations(monkeypatch: pytest.MonkeyPatc
     settings = dev.DeveloperSettings(False, dev.validate_endpoint("http://127.0.0.1:4318"))
     monkeypatch.setattr(dev, 'load_settings', lambda: settings)
 
-    def fake_run_editor(_: object, arguments: list[str]) -> int:
+    def fake_run_editor(_: object, arguments: list[str], **options: object) -> int:
+        assert options == {"theme_file": None, "live_ui": False}
         forwarded.append(arguments)
         return 0
 
@@ -757,3 +799,59 @@ def test_default_observability_keeps_engine_local_without_external_services(monk
 def test_example_configuration_keeps_external_export_opt_in() -> None:
     settings = dev.load_settings(dev.REPOSITORY_ROOT / ".env.example", {})
     assert not settings.otel_export_enabled
+
+
+def _gui_coff(names, bigobj=False):
+    header = bytearray(56 if bigobj else 20)
+    records = bytearray()
+    strings = bytearray(b"\0\0\0\0")
+    for name, kind in names:
+        offset = len(strings)
+        strings.extend(name.encode() + b"\0")
+        record = bytearray(struct.pack("<II", 0, offset))
+        record.extend(struct.pack("<IiHBB" if bigobj else "<IhHBB", 0, 0, kind, 2, 0))
+        records.extend(record)
+    struct.pack_into("<I", strings, 0, len(strings))
+    if bigobj:
+        header[:4] = b"\0\0\xff\xff"
+    struct.pack_into("<II", header, 48 if bigobj else 8, len(header), len(names))
+    return header + records + strings
+
+
+@pytest.mark.parametrize("bigobj", [False, True])
+def test_reads_compiler_external_symbols(tmp_path, bigobj):
+    path = tmp_path / "source.obj"
+    names = [("?Draw@Editor@Horo@@YAXXZ", 0x20), ("?GImGui@@3PEAUImGuiContext@@EA", 0)]
+    path.write_bytes(_gui_coff(names, bigobj))
+    assert list(dev._gui_live_symbols(path)) == [(name, kind, True) for name, kind in names]
+
+
+def test_exports_host_functions_without_marking_executable_as_dll(tmp_path):
+    obj = tmp_path / "GUI object.obj"
+    clipper_constructor = "??0ImGuiListClipper@@QEAA@XZ"
+    clipper_destructor = "??1ImGuiListClipper@@QEAA@XZ"
+    obj.write_bytes(_gui_coff([("?Draw@Editor@Horo@@YAXXZ", 0x20), ("?ImHashStr@@YAXXZ", 0x20),
+                              (clipper_constructor, 0x20), (clipper_destructor, 0x20), ("__imp_CreateWindow", 0x20)]))
+    database = tmp_path / "compile_commands.json"
+    database.write_text(json.dumps([{"directory": str(tmp_path), "file": "Gui.cpp", "command": f'cl -DDEBUG /Fo"{obj.name}" HoroGui.dir/Gui.cpp'}]))
+    output = tmp_path / "host.def"
+    assert dev.main(["gui-live-bridge", "--compile-commands", str(database), "--output", str(output), "--image", "host.exe"]) == 0
+    exports = output.read_text()
+    assert exports.startswith("EXPORTS\n")
+    assert "LIBRARY" not in exports
+    assert "?Draw@Editor@Horo@@YAXXZ" in exports
+    assert "?ImHashStr@@YAXXZ" in exports
+    assert clipper_constructor in exports
+    assert clipper_destructor in exports
+    assert "?GImGui@@3PEAUImGuiContext@@EA DATA" in exports
+    assert "CreateWindow" not in exports
+    flags = output.with_suffix(".rsp").read_text()
+    assert "/DHORO_GUI_RUNTIME_COMPILATION=1" in flags
+    assert "-DDEBUG" in flags
+
+
+def test_rejects_another_targets_compile_database(tmp_path):
+    database = tmp_path / "compile_commands.json"
+    database.write_text("[]")
+    with pytest.raises(ValueError, match="No HoroGui"):
+        dev._generate_gui_live_bridge(database, tmp_path / "host.def", "host.exe")

@@ -1,4 +1,5 @@
 #include "Horo/Editor/EditorModalHost.h"
+#include "Horo/Editor/GuiLiveReload.h"
 
 #include "Horo/Foundation/Logging/Logger.h"
 #include "editor/EditorServiceErrors.h"
@@ -155,10 +156,10 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorModalHost::Draw */
-    void EditorModalHost::Draw() {
+    void EditorModalHost::Draw(const GuiLive::IRegistry *liveReload) {
         CommitPendingOpens();
         if (!m_stack.empty() && m_stack.back().opened) {
-            const ModalFrameResult result = m_stack.back().modal->Draw();
+            const ModalFrameResult result = GuiLive::InvokeVirtual<&EditorModal::Draw>(liveReload, *m_stack.back().modal);
             if (const std::optional<ModalCloseReason> close = result.CloseRequest(); close.has_value())
                 (void)RequestClose(m_stack.back().modal->Id(), *close);
         }

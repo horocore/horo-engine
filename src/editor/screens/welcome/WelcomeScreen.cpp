@@ -71,7 +71,8 @@ namespace Horo::Editor {
                     return;
                 }
                 const WelcomeViewResult result =
-                    DrawWelcomeView(viewModel_, viewState_, context_, WelcomeViewAssets{(ImTextureID)logoTexture_}, contentRegion);
+                    GuiLive::Invoke<&DrawWelcomeView>(context_.theme.liveReload, viewModel_, viewState_, context_,
+                                                      WelcomeViewAssets{(ImTextureID)logoTexture_}, contentRegion);
                 if (modalHost_.HasOpenModal()) {
                     // A modal owns interaction — ignore any commands the view emits this frame.
                     return;

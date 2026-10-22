@@ -1,3 +1,4 @@
+#include "Horo/Editor/GuiLiveReload.h"
 #include "editor/modals/world_layer/CreateWorldLayerModal.h"
 
 #include "Horo/Editor/EditorUiComponents.h"
@@ -28,7 +29,7 @@ namespace Horo::Editor {
 
     /** @copydoc CreateWorldLayerModal::OnOpen */
     Result<void> CreateWorldLayerModal::OnOpen(EditorModalContext &) {
-        return create_ ? Result<void>::Success() : Result<void>::Failure(MakeError(WorldDocumentErrors::Lifecycle));
+        return create_ ? Result<void>::Success() : Result<void>::Failure(MakeError(GuiLive::HostSymbol<&WorldDocumentErrors::Lifecycle>()));
     }
 
     /** @copydoc CreateWorldLayerModal::CanClose */
@@ -82,7 +83,7 @@ namespace Horo::Editor {
             if (result.HasValue())
                 return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
             const auto &code = result.ErrorValue().code.Value();
-            failureKey_ = code == WorldDocumentErrors::Stale.code.Value() || code == WorldDocumentErrors::Lifecycle.code.Value()
+            failureKey_ = code == GuiLive::HostSymbol<&WorldDocumentErrors::Stale>().code.Value() || code == GuiLive::HostSymbol<&WorldDocumentErrors::Lifecycle>().code.Value()
                               ? "workspace.world_layers.stale"
                               : "workspace.world_layers.rejected";
         }
