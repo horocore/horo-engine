@@ -245,7 +245,11 @@ namespace Horo::Editor {
         CHECK(model.prefabDocuments.front().dirty);
         workspace.project.WriteSource("External source");
         owner.RefreshAssets(workspace.project.registry.Snapshot());
-        CHECK(model.prefabDocuments.front().externalConflict);
+        const bool unchangedPublicationIgnored = !model.prefabDocuments.front().externalConflict;
+        const auto publication = workspace.project.registry.Publish({workspace.project.record});
+        owner.RefreshAssets(workspace.project.registry.Snapshot());
+        CHECK((unchangedPublicationIgnored && publication.status == Assets::AssetRegistryBuildStatus::Complete &&
+               model.prefabDocuments.front().externalConflict));
         workspace.Action(PrefabDocumentAction::Save);
         CHECK(model.prefabDocumentError.has_value());
         workspace.Action(PrefabDocumentAction::DiscardAndReload);

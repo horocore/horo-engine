@@ -419,6 +419,10 @@ namespace Horo::Editor {
             iconCfg.OversampleV = 2;
             iconCfg.RasterizerDensity = rasterizerDensity;
             const std::span iconRanges = Ui::UiIconRegistry::MaterialSymbolGlyphRanges();
+            f.monospace = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf").c_str(),
+                                                       Theme::FontPx::Sans, &sansCfg, ranges);
+            f.monospaceEmphasis = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-SemiBold.ttf").c_str(),
+                                                               Theme::FontPx::Sans, &sansCfg, ranges);
             f.icon = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/MaterialSymbolsOutlined.ttf").c_str(), Theme::FontPx::Icon, &iconCfg,
                                                   iconRanges.data());
             if (f.sans)

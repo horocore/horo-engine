@@ -1,5 +1,6 @@
 #include "Horo/Editor/SequenceDocument.h"
 #include "Horo/Editor/SourceDocumentService.h"
+#include "Horo/Editor/SourceEditingCommands.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 
 #include <type_traits>
@@ -34,3 +35,18 @@ void QualifySourceSavePublicContract(Horo::Editor::SourceFileOpenService &open, 
 }
 
 static_assert(static_cast<unsigned>(Horo::Editor::DocumentKind::Prefab) > static_cast<unsigned>(Horo::Editor::DocumentKind::PCGGraph));
+
+/** @brief Qualifies source history and editing plans through the owning staged public surface. */
+void QualifySourceHistoryPublicContract(Horo::Editor::SourceDocumentService &documents,
+                                        const Horo::Editor::SourceDocumentSnapshot &snapshot) {
+    const auto instance = snapshot.Identity().instance;
+    static_cast<void>(documents.History(instance));
+    static_cast<void>(documents.Undo(instance, snapshot.Revision()));
+    static_cast<void>(documents.Redo(instance, snapshot.Revision()));
+    static_cast<void>(Horo::Editor::NavigateSourceLine(snapshot, 1));
+    static_cast<void>(Horo::Editor::PlanSourceReplacement(snapshot, {}, "text"));
+    static_cast<void>(Horo::Editor::PlanSourceNewline(snapshot, {}));
+    static_cast<void>(Horo::Editor::PlanSourceIndentation(snapshot, {}, 4, false));
+    static_cast<void>(Horo::Editor::FindSourceText(snapshot, {}, "text", Horo::Editor::SourceSearchDirection::Forward, true));
+    static_cast<void>(Horo::Editor::PlanSourceReplaceAll(snapshot, {}, "text", "replacement"));
+}

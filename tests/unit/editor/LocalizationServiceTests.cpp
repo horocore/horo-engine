@@ -124,6 +124,25 @@ namespace {
 
     /** @brief Requires the localized controls and close decisions belonging to persistent document tabs. */
     void RequireDocumentCatalogKeys(const Horo::Editor::LocalizationService &service) {
+        constexpr std::array sourceEditingKeys{
+            "workspace.source_edit.undo",
+            "workspace.source_edit.redo",
+            "workspace.source_edit.find",
+            "workspace.source_edit.replace",
+            "workspace.source_edit.replace_all",
+            "workspace.source_edit.next",
+            "workspace.source_edit.previous",
+            "workspace.source_edit.go_to",
+            "workspace.source_edit.query",
+            "workspace.source_edit.replacement",
+            "workspace.source_edit.line",
+            "workspace.source_edit.no_match",
+            "workspace.source_edit.invalid",
+            "workspace.source_edit.history_evicted",
+            "workspace.source_edit.history_oversized",
+            "workspace.source_edit.close_search",
+        };
+        RequireCatalogKeys(service, sourceEditingKeys);
         constexpr std::array documentKeys{"workspace.documents.close",         "workspace.documents.move_left",
                                           "workspace.documents.move_right",    "workspace.documents.save",
                                           "workspace.documents.preview",       "workspace.documents.preview_limit",

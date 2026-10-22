@@ -516,3 +516,28 @@ TEST_CASE("Source Save As honors disabled symlink policy and canonical destinati
     REQUIRE(missing.HasValue());
     CHECK(missing.Value().snapshot.Identity().key.source.Value() == "new.cpp");
 }
+
+TEST_CASE("Source undo retains the latest durable save base and dirty close cancellation retains history", "[source][save][history]") {
+    Project project;
+    project.Put("code.cpp", "base\n");
+    SourceFileOpenService open(project.root);
+    Files files;
+    const auto edited = OpenEdit(open);
+    const auto id = edited.Identity().instance;
+    const auto saved = open.Documents().Save(Request(edited), files);
+    REQUIRE(saved.HasValue());
+    const auto undone = open.Documents().Undo(id, saved.Value().snapshot.Revision());
+    REQUIRE(undone.HasValue());
+    CHECK(undone.Value().snapshot.Text() == "base\n");
+    CHECK(undone.Value().snapshot.DiskBase() == edited.Text());
+    CHECK(undone.Value().snapshot.Dirty());
+    CHECK(project.Read("code.cpp") == edited.Text());
+    const auto cancel = open.ResolveClose(Request(undone.Value().snapshot), SourceCloseDecision::Cancel, files);
+    REQUIRE(cancel.HasValue());
+    CHECK_FALSE(cancel.Value());
+    CHECK(open.Documents().History(id).Value().redoEntries == 1);
+    const auto redone = open.Documents().Redo(id, undone.Value().snapshot.Revision());
+    REQUIRE(redone.HasValue());
+    CHECK_FALSE(redone.Value().snapshot.Dirty());
+    CHECK(redone.Value().snapshot.BaseRevision() == saved.Value().snapshot.BaseRevision());
+}
