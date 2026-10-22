@@ -63,6 +63,11 @@ namespace Horo::Application::WorldBakeDetail {
         if (scene.Entities().size() != page.objects.size())
             return Result<Runtime::RuntimeSceneDefinition>::Failure(
                 MakeError(WorldBakeErrors::Conflict, "Expanded Scene membership differs from the authored placement capture."));
+        // RuntimeEntityDefinition cannot represent imported meshes; a dependency alone would still discard authored geometry.
+        if (std::ranges::any_of(sourceView.objects, [](const auto &object) {
+            return object.meshAsset.has_value();
+        }))
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(WorldBakeErrors::Unsupported));
         return Result<Runtime::RuntimeSceneDefinition>::Success(std::move(scene));
     }
 }  // namespace Horo::Application::WorldBakeDetail

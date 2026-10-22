@@ -3215,7 +3215,10 @@ add_executable(HoroEditorViewportSceneTests
 
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
-add_executable(HoroWorldBakeApplicationTests unit/application/WorldBakeApplicationTests.cpp)
+add_executable(HoroWorldBakeApplicationTests
+        unit/application/WorldBakeApplicationTests.cpp
+        unit/application/WorldBakeNativeSourceTests.cpp
+)
 target_include_directories(HoroWorldBakeApplicationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
 target_link_libraries(HoroWorldBakeApplicationTests PRIVATE
         HoroEngine::WorldBakeApplication HoroEngine::PlatformProjectReadFiles HoroEngine::Platform)
